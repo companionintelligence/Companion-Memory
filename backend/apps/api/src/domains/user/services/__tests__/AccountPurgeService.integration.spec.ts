@@ -43,6 +43,8 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
   let scratch: ScratchDatabase;
   let service: AccountPurgeService;
   let deletedObjects: Array<{ bucket: string; keys: string[] }>;
+  /** Chunks of ci.position the fixture compressed. */
+  let compressedChunks: number;
 
   /** The account being deleted. */
   const victim = randomUUID();
@@ -176,6 +178,20 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       [bystander],
     );
 
+    // The six-month-old chunk compressed, as the compression policy leaves old
+    // position data on an appliance. A compressed chunk refuses `ctid`
+    // ("transparent decompression only supports tableoid system column"), so the
+    // purge has to reach those rows another way.
+    compressedChunks = (
+      await query(
+        `SELECT compress_chunk(c) FROM show_chunks('ci.position') c
+          WHERE c IN (SELECT format('%I.%I', chunk_schema, chunk_name)::regclass
+                        FROM timescaledb_information.chunks
+                       WHERE hypertable_schema = 'ci' AND hypertable_name = 'position'
+                         AND range_end <= '2026-07-01' AND range_start >= '2026-05-01')`,
+      )
+    ).length;
+
     // ── User-scoped with no foreign key whatsoever ─────────────────────────
     // The vector form of the user's memories. A cascade would never touch it.
     await query(`INSERT INTO ci_search.embeddings (id, user_id) VALUES ($1, $2)`, [randomUUID(), victim]);
@@ -292,6 +308,11 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
 
     it('empties a hypertable across all of its chunks', async () => {
       expect(await countWhere('ci.position', 'user_id = $1', [victim])).toBe(0);
+    });
+
+    it('reaches the rows in a compressed chunk', async () => {
+      expect(compressedChunks).toBe(1);
+      expect(await countWhere('ci.position', `user_id = $1 AND time >= '2026-05-01'`, [victim])).toBe(0);
     });
 
     it('removes the blocking child that has no user column of its own', async () => {

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
@@ -129,5 +129,43 @@ describe('TimelineJsHost', () => {
     expect(await languageFor('h12')).toMatch(/locale\/en\.json$/);
     // …and the 24-hour patterns only when asked for.
     expect(await languageFor('h23')).toMatch(/locale\/en-h23\.json$/);
+  });
+
+  it('fetches the script again on Try again after it failed to load once', async () => {
+    delete (window as unknown as { TL?: unknown }).TL;
+    render(<TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey="retry" />);
+
+    const failed = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+    expect(failed).not.toBeNull();
+    act(() => {
+      failed?.dispatchEvent(new Event('error'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load TimelineJS script');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    // A new tag, not the dead one: a script element fetches only when it is
+    // inserted, so the failed one could never load.
+    const retried = await waitFor(() => {
+      const tag = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+      expect(tag).not.toBe(failed);
+
+      return tag;
+    });
+
+    expect(failed?.isConnected).toBe(false);
+    expect(document.querySelectorAll('script[data-timelinejs]')).toHaveLength(1);
+
+    (window as unknown as { TL: unknown }).TL = { Timeline: FakeTimeline };
+    act(() => {
+      retried?.dispatchEvent(new Event('load'));
+    });
+    releaseStylesheet();
+
+    await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
+    retried?.remove();
   });
 });

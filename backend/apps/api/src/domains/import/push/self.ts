@@ -71,8 +71,31 @@ export interface SelfIdentity {
    * ("liam.broza" → "liam broza") as a display name, exactly too.
    */
   email: string | null;
-  /** Phones on the self Person (`properties.phones` / `.phone`), for exact owner match. */
+  /**
+   * Every other address the owner's own Person holds (`properties.emails` /
+   * `.email`, and its `ci.entity_identifiers` email rows, which is where Edit
+   * Person adds one). Matched as addresses exactly, like {@link email}, and
+   * never read as a name: a work or alias local part ("info", "home") is not
+   * evidence of who someone is.
+   */
+  emails?: string[];
+  /** Phones on the self Person (`properties.phones` / `.phone`, and its phone identifiers), for exact owner match. */
   phones: string[];
+}
+
+/** The owner's addresses, normalized: the account's and the self Person's. */
+function ownerEmails(identity: SelfIdentity): Set<string> {
+  const out = new Set<string>();
+
+  for (const raw of [identity.email, ...(identity.emails ?? [])]) {
+    const normalized = raw ? normalizeEmail(raw) : null;
+
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -97,7 +120,7 @@ export interface SelfIdentityReader {
  * the owner.
  */
 const SELF_IDENTITY_SQL = `
-  SELECT u.name AS name, u.email AS email, NULL::jsonb AS phones_json
+  SELECT u.name AS name, u.email AS email, NULL::jsonb AS phones_json, NULL::jsonb AS emails_json
     FROM ci.users u
    WHERE u.id = $1::uuid
   UNION ALL
@@ -106,22 +129,38 @@ const SELF_IDENTITY_SQL = `
            WHEN jsonb_typeof(e.properties->'phones') = 'array' THEN e.properties->'phones'
            WHEN COALESCE(e.properties->>'phone', '') <> '' THEN jsonb_build_array(e.properties->>'phone')
            ELSE '[]'::jsonb
-         END AS phones_json
+         END AS phones_json,
+         CASE
+           WHEN jsonb_typeof(e.properties->'emails') = 'array' THEN e.properties->'emails'
+           WHEN COALESCE(e.properties->>'email', '') <> '' THEN jsonb_build_array(e.properties->>'email')
+           ELSE '[]'::jsonb
+         END AS emails_json
     FROM ci.entities e
    WHERE e.owner_user_id = $1::uuid
+     AND e.entity_type = 'Person'
+     AND e.merged_into_entity_id IS NULL
+     AND (e.is_self IS TRUE OR e.properties ->> 'is_self' = 'true')
+  UNION ALL
+  SELECT NULL::text AS name, NULL::text AS email,
+         CASE WHEN i.kind = 'phone' THEN jsonb_build_array(i.value_normalized) ELSE '[]'::jsonb END AS phones_json,
+         CASE WHEN i.kind = 'email' THEN jsonb_build_array(i.value_normalized) ELSE '[]'::jsonb END AS emails_json
+    FROM ci.entity_identifiers i
+    JOIN ci.entities e ON e.entity_id = i.entity_id
+   WHERE i.owner_user_id = $1::uuid
+     AND i.kind IN ('email', 'phone')
      AND e.entity_type = 'Person'
      AND e.merged_into_entity_id IS NULL
      AND (e.is_self IS TRUE OR e.properties ->> 'is_self' = 'true')`;
 
 /** Read the owner's names. Callers decide what a failure means — see PushStage. */
 export async function readSelfIdentity(db: SelfIdentityReader, userId: string): Promise<SelfIdentity> {
-  const rows = await db.query<Array<{ name: string | null; email: string | null; phones_json: unknown }>>(
-    SELF_IDENTITY_SQL,
-    [userId],
-  );
+  const rows = await db.query<
+    Array<{ name: string | null; email: string | null; phones_json: unknown; emails_json?: unknown }>
+  >(SELF_IDENTITY_SQL, [userId]);
 
   const names: string[] = [];
   const phones: string[] = [];
+  const emails: string[] = [];
   let email: string | null = null;
 
   for (const row of rows) {
@@ -141,9 +180,18 @@ export async function readSelfIdentity(db: SelfIdentityReader, userId: string): 
         }
       }
     }
+
+    const rawEmails = row.emails_json;
+    if (Array.isArray(rawEmails)) {
+      for (const address of rawEmails) {
+        if (typeof address === 'string' && address.trim().length > 0 && !emails.includes(address)) {
+          emails.push(address);
+        }
+      }
+    }
   }
 
-  return { names, email, phones };
+  return { names, email, emails, phones };
 }
 
 /**
@@ -323,9 +371,7 @@ export function matchOwnerIdentifier(
   }
 
   if (kind === 'email') {
-    const ownerEmail = identity.email ? normalizeEmail(identity.email) : null;
-
-    return ownerEmail != null && ownerEmail === valueNormalized
+    return ownerEmails(identity).has(valueNormalized)
       ? { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: valueNormalized }
       : null;
   }
@@ -378,8 +424,7 @@ export function matchOwner(identity: SelfIdentity, raw: string): OwnerMatch | nu
   }
 
   const emailNorm = normalizeEmail(trimmed);
-  const ownerEmail = identity.email ? normalizeEmail(identity.email) : null;
-  if (emailNorm != null && ownerEmail != null && emailNorm === ownerEmail) {
+  if (emailNorm != null && ownerEmails(identity).has(emailNorm)) {
     return { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: trimmed };
   }
 
@@ -449,6 +494,40 @@ export function shouldMapContactToSelf(
   }
 
   return trustMode !== 'cautious';
+}
+
+/**
+ * Whether a contact the push is about to mint is the owner, so it maps onto the
+ * self Person instead of becoming a Person of its own.
+ *
+ * The rule {@link matchParticipantOwner} applies to a message's participants,
+ * over a contact's handles. A contact that carries an email or a phone is the
+ * owner only when one of them IS the owner's: its display name is whatever the
+ * sender typed, so a mail from `"<owner name>" <x@elsewhere>` stays somebody
+ * else. Matched on the name, it became the owner, the push filed the mail as
+ * sent by them, and a SENT edge from the owner was projected that nothing
+ * later took back. Only a contact with no handle at all (a chat display name)
+ * is matched by name, and {@link shouldMapContactToSelf} gates that on trust.
+ */
+export function isOwnerContact(
+  identity: SelfIdentity,
+  contact: { name?: string | null; emails: readonly string[]; phones: readonly string[] },
+  trustMode: 'cautious' | 'balanced' | 'hands_off',
+): boolean {
+  const handleMatches = [
+    ...contact.emails.map((email) => matchOwnerIdentifier(identity, 'email', normalizeEmail(email) ?? '')),
+    ...contact.phones.map((phone) => matchOwnerIdentifier(identity, 'phone', normalizePhone(phone) ?? '')),
+  ];
+
+  if (handleMatches.some((match) => shouldMapContactToSelf(match, trustMode))) {
+    return true;
+  }
+
+  if (contact.emails.length > 0 || contact.phones.length > 0 || !contact.name) {
+    return false;
+  }
+
+  return shouldMapContactToSelf(matchOwner(identity, contact.name), trustMode);
 }
 
 /**

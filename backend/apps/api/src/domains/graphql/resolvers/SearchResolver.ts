@@ -84,6 +84,12 @@ const FETCH_MULTIPLIER = 4;
 // a single page is never truncated — the old 25 cap fell short of the 30-row
 // client page, capping plain-text search and disabling load-more.
 const QUERY_CANDIDATE_LIMIT = 300;
+// Per-type pool for a name sort on the timed browse. A name has no place in the
+// SQL keyset, which walks time, so "Name (A-Z)" with no search text is paged
+// in memory like the query path: each type's newest rows up to this many,
+// sorted by name, sliced against the cursor. Below this many rows of a type the
+// list is complete; above it, only the newest rows of that type are in it.
+const NAME_SORT_CANDIDATE_LIMIT = 500;
 /**
  * Pin caps for the map read (`mapPins`).
  *
@@ -692,7 +698,11 @@ export class SearchResolver {
       // the same top-N rows). Fall back to the legacy inclusive window (endTime when
       // reading down, startTime when reading up) when the cursor lacks a decodable id
       // (older cursors).
-      const keyset = afterCursor?.time != null && afterCursor.id != null;
+      // A name sort cannot window by the cursor's time: the cursor is the last row of a
+      // name-ordered page, not the oldest row read so far, so a time keyset skipped rows and
+      // ended early. It reads one fixed pool every page and lets the Paginator find the cursor.
+      const byName = input.sortBy === 'name';
+      const keyset = !byName && afterCursor?.time != null && afterCursor.id != null;
       // With no filters at all, bound to "now" so we return recent items, not the entire
       // history. This is the *filter's* upper bound — stable across pages — as opposed to
       // the legacy `afterCursor?.time` window fallback below, which is a pagination artifact
@@ -715,7 +725,7 @@ export class SearchResolver {
       // Without a decodable id the cursor can only bound the walk by its time, inclusively. That
       // bound belongs to the edge of the window the walk has already left behind: the upper edge
       // when reading down, the lower edge when reading up.
-      const legacyBound = keyset ? undefined : afterCursor?.time;
+      const legacyBound = keyset || byName ? undefined : afterCursor?.time;
 
       [identifiers, timedTotalCount] = await Promise.all([
         this.searchByTimedEntities(serviceContext, {
@@ -726,7 +736,7 @@ export class SearchResolver {
           afterTime: keyset ? afterCursor!.time : undefined,
           afterId: keyset ? afterCursor!.id! : undefined,
           // Over-fetch per type so the merged page holds the globally first `first` rows in `order`.
-          limit: first * FETCH_MULTIPLIER,
+          limit: byName ? NAME_SORT_CANDIDATE_LIMIT : first * FETCH_MULTIPLIER,
         }),
         this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
       ]);
@@ -1340,6 +1350,15 @@ export class SearchResolver {
           return null;
         }
 
+        // A person the user asked Memory to forget is archived (is_active false)
+        // and un-indexed, but an index row written before or after that (see
+        // PersonSearchIndexListener) must not bring them back: every search
+        // surface, the header box, the Add relationship picker and the note `[[`
+        // menu, reads its rows from here.
+        if (entry.type === 'person' && (entry.entity as { isActive?: boolean }).isActive === false) {
+          return null;
+        }
+
         // People/places date-filter by first real activity in the window. The
         // identifier carries that instant as sortTime; copy it onto the loaded
         // entity as appearedAt so getEntityTimestamp, the cursor, and the
@@ -1489,9 +1508,28 @@ export class SearchResolver {
     }
 
     if (effective === 'name') {
-      return [...entries].sort(
-        (a, b) => direction * SearchResolver.getEntityName(a).localeCompare(SearchResolver.getEntityName(b)),
-      );
+      // Rows with no name go last either way, rather than heading an A-Z list. Equal names
+      // fall back to the raw id so the order, and with it the cursor's place, is the same on
+      // every request.
+      return [...entries].sort((a, b) => {
+        const aName = SearchResolver.getEntityName(a);
+        const bName = SearchResolver.getEntityName(b);
+
+        if ((aName === '') !== (bName === '')) {
+          return aName === '' ? 1 : -1;
+        }
+
+        const byName = aName.localeCompare(bName);
+
+        if (byName !== 0) {
+          return direction * byName;
+        }
+
+        const aId = String((a.entity as { id?: unknown }).id ?? '');
+        const bId = String((b.entity as { id?: unknown }).id ?? '');
+
+        return direction * aId.localeCompare(bId);
+      });
     }
 
     return [...entries].sort((a, b) => {
@@ -1600,11 +1638,22 @@ export class SearchResolver {
     return typeof value === 'string' && value.length > 0 ? value : null;
   }
 
+  /**
+   * What a name sort orders by: the first non-blank of the fields the rows show
+   * as their title. A message's is its subject, or for chat-style sources with
+   * none, its preview, as CommunicationRow shows it; reading only name/title/
+   * summary gave every message an empty name and stacked them at the top.
+   */
   private static getEntityName(entry: ResolvedEntity): string {
     const entity = entry.entity as Record<string, unknown>;
-    const value = entity.name ?? entity.title ?? entity.summary ?? '';
 
-    return typeof value === 'string' ? value : '';
+    for (const value of [entity.name, entity.title, entity.subject, entity.summary, entity.preview]) {
+      if (typeof value === 'string' && value.trim() !== '') {
+        return value.trim();
+      }
+    }
+
+    return '';
   }
 
   private toSearchResult(resolved: ResolvedEntity): SearchResult {

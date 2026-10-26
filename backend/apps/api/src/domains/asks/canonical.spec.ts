@@ -1,4 +1,4 @@
-import { canonicalDataClass, canonicalQueryType } from './canonical';
+import { canonicalDataClass, canonicalQueryType, hasInvisibleCharacters, normalizeText } from './canonical';
 
 /**
  * The shared normalizer for the two asker-supplied strings the consent gate
@@ -61,6 +61,29 @@ describe('canonicalQueryType', () => {
   it('is the SAME normalizer, so the two halves of a grant key cannot drift', () => {
     for (const value of ['Photos', '  photos ', 'pho​tos', 42, null]) {
       expect(canonicalQueryType(value)).toEqual(canonicalDataClass(value));
+    }
+  });
+});
+
+describe('hasInvisibleCharacters', () => {
+  it('is true exactly when normalizeText would strip a character that renders as nothing', () => {
+    for (const value of ['lake\u200b photos', 'soft\u00adhyphen', '\ufeffbom', 'word\u2060joiner']) {
+      expect(hasInvisibleCharacters(value)).toBe(true);
+      expect(normalizeText(value)?.length).toBeLessThan(value.length);
+    }
+
+    for (const value of ['lake photos', '  padded\u00a0space  ', 'Café', '']) {
+      expect(hasInvisibleCharacters(value)).toBe(false);
+    }
+  });
+
+  it('answers the same on every call (the shared class is a global regex)', () => {
+    expect([1, 2, 3].map(() => hasInvisibleCharacters('pho\u200btos'))).toEqual([true, true, true]);
+  });
+
+  it('is false for anything that is not a string', () => {
+    for (const value of [42, null, undefined, { toString: () => '\u200b' }]) {
+      expect(hasInvisibleCharacters(value)).toBe(false);
     }
   });
 });

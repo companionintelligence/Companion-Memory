@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
     off?: string[];
   },
   signOutPrompt: { open: false, unsentCaptures: 0 },
+  signedIn: true,
 }));
 
 vi.mock('@/common/feature', () => ({
@@ -39,8 +40,8 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => [
     {
       expired: false,
-      authToken: 'test-token',
-      authenticated: true,
+      authToken: h.signedIn ? 'test-token' : null,
+      authenticated: h.signedIn,
       loading: false,
       initializing: false,
       error: null,
@@ -52,7 +53,7 @@ vi.mock('@/hooks/useAuth', () => ({
 
 vi.mock('@/hooks/useCurrentUser', () => ({
   useCurrentUser: () => ({
-    user: { id: '1', name: 'Test', email: 'test@example.com', onboarded: true },
+    user: h.signedIn ? { id: '1', name: 'Test', email: 'test@example.com', onboarded: true } : null,
     loading: false,
     error: null,
     refetch: vi.fn(),
@@ -134,6 +135,7 @@ function notFound() {
 beforeEach(() => {
   h.features = { loading: true, enabled: false };
   h.signOutPrompt = { open: false, unsentCaptures: 0 };
+  h.signedIn = true;
 });
 
 describe('signing out with captures that have not uploaded', () => {
@@ -219,6 +221,21 @@ describe('App routing', () => {
 
     await waitFor(() => expect(notFound()).toBeInTheDocument());
   });
+
+  // Signed out, only the global flags are known, so the gated routes are not in the table.
+  it.each(['/self', '/memory/chat', '/jobs'])(
+    'sends a signed-out visitor at %s to Log In, keeping the path, instead of 404',
+    async (path) => {
+      h.signedIn = false;
+      h.features = { loading: false, enabled: false };
+
+      renderAt(path);
+
+      await waitFor(() => expect(window.location.pathname).toBe('/login'));
+      expect(window.history.state?.usr).toEqual({ from: path });
+      expect(notFound()).not.toBeInTheDocument();
+    },
+  );
 
   it('renders 404 for an unknown path once the flags have loaded', async () => {
     h.features = { loading: false, enabled: true };

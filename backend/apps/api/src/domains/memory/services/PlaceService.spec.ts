@@ -125,6 +125,78 @@ describe('PlaceService single create still emits', () => {
   });
 });
 
+describe('PlaceService.create next to another place', () => {
+  function makeCreateService(occupant: string | null) {
+    const query = jest.fn(async () => (occupant ? [{ name: occupant }] : []));
+    const repository = {
+      create: jest.fn((partial: Partial<PlaceEntity>) => Object.assign(new PlaceEntity(), partial)),
+      save: jest.fn(async () => {
+        throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+      }),
+      manager: { query },
+    };
+    const send = jest.fn(async () => []);
+    const service = new PlaceService(repository as never, { send } as never, {} as never);
+
+    return { service, query, send };
+  }
+
+  const point = { type: 'Point' as const, coordinates: [-122.4602, 37.8102] };
+
+  it('names the place already saved in the same spot instead of failing with an internal error', async () => {
+    const { service, query, send } = makeCreateService('Spot A');
+
+    const attempt = service.create(CONTEXT, { name: 'Spot B', locationPoint: point });
+
+    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+    await expect(attempt).rejects.toThrow('"Spot A" is already saved at this spot.');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ST_SnapToGrid'), [USER, -122.4602, 37.8102]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('still answers with a conflict when the place holding the spot cannot be named', async () => {
+    const { service } = makeCreateService(null);
+
+    await expect(service.create(CONTEXT, { name: 'Spot B', locationPoint: point })).rejects.toThrow(
+      'Another place is already saved at this spot.',
+    );
+  });
+
+  it('rethrows a unique violation on a place without a point unchanged', async () => {
+    const { service, query } = makeCreateService('Spot A');
+
+    await expect(service.create(CONTEXT, { name: 'Spot B' })).rejects.not.toBeInstanceOf(ConflictException);
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlaceService.findAll', () => {
+  it('leaves out places that were merged into another', async () => {
+    const wheres: string[] = [];
+    const qb: Record<string, jest.Mock> = {};
+    qb.leftJoinAndSelect = jest.fn(() => qb);
+    qb.where = jest.fn((sql: string) => {
+      wheres.push(sql);
+
+      return qb;
+    });
+    qb.andWhere = jest.fn((sql: string) => {
+      wheres.push(sql);
+
+      return qb;
+    });
+    qb.orderBy = jest.fn(() => qb);
+    qb.addOrderBy = jest.fn(() => qb);
+    qb.getMany = jest.fn(async () => []);
+    const service = new PlaceService({ createQueryBuilder: () => qb } as never, {} as never, {} as never);
+
+    await service.findAll(CONTEXT);
+
+    expect(wheres).toContain('place.merged_into_entity_id IS NULL');
+    expect(wheres).toContain('place.is_active IS DISTINCT FROM FALSE');
+  });
+});
+
 describe('PlaceService.update', () => {
   const PLACE_ID = '00000000-0000-0000-0000-0000000000bb';
 
@@ -212,5 +284,65 @@ describe('PlaceService.update', () => {
       BadRequestException,
     );
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlaceService Change History', () => {
+  it('records a place added by hand', async () => {
+    const { service } = makeService();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const deltas = (service as any).graphDeltaWriter;
+
+    await service.create(CONTEXT, { id: 'pl1', name: 'Corner Cafe' });
+
+    expect(deltas.entityCreated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'pl1',
+        entityType: 'Location',
+        name: 'Corner Cafe',
+        changeSource: 'PlaceService.create',
+      }),
+    );
+  });
+
+  it('records only what a place edit changed', async () => {
+    const existing = Object.assign(new PlaceEntity(), {
+      id: 'pl1',
+      entityType: 'Location',
+      name: 'Cafe',
+      description: null,
+      placeKind: null,
+      parentPlaceId: null,
+      locationPoint: { type: 'Point', coordinates: [-122.41, 37.8] },
+      properties: { type: 'venue' },
+    });
+    const entityUpdated = jest.fn(async () => undefined);
+    const repository = {
+      update: jest.fn(async () => ({ affected: 1 })),
+      findOne: jest.fn(async () => existing),
+      metadata: { target: PlaceEntity, columns: { length: 8 } },
+    };
+    const service = new PlaceService(
+      repository as never,
+      { send: jest.fn(async () => []) } as never,
+      {
+        entityUpdated,
+      } as never,
+    );
+
+    await service.update(CONTEXT, 'pl1', {
+      name: 'Corner Cafe',
+      latitude: 37.8,
+      longitude: -122.41,
+      properties: { type: 'venue' },
+    });
+
+    expect(entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'pl1',
+        changeSource: 'PlaceService.update',
+        changedFields: { name: { old: 'Cafe', new: 'Corner Cafe' } },
+      }),
+    );
   });
 });

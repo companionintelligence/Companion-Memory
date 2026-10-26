@@ -1572,9 +1572,17 @@ export class GraphUtilityService {
    *                                 in record metadata ("LinkedIn", "vCard").
    *                                 Convention, not contract — it covers rows
    *                                 from importer versions predating the stamp.
-   *  4. `linked_table`            — the origin table / import route, minus the
+   *  4. `ci.record_sources`       — the provenance ledger. Imported events,
+   *                                 content, items and messages carry neither
+   *                                 property, only a bare `linked_table`, so
+   *                                 without this they all read as derived ("Worked
+   *                                 out on this device"). The record's earliest
+   *                                 arrival names its platform (or source
+   *                                 system); a File entity reads it through the
+   *                                 content row that names the file.
+   *  5. `linked_table`            — the origin table / import route, minus the
    *                                 content-free values in {@link GENERIC_SOURCE_KEYS}.
-   *  5. `properties.importerType` — the *record shape* ("contact"), not an
+   *  6. `properties.importerType` — the *record shape* ("contact"), not an
    *                                 origin. Last resort: better than nothing,
    *                                 but it answers a different question.
    *
@@ -1604,26 +1612,59 @@ export class GraphUtilityService {
     const rows: Array<{ source: string; kind: EntitySourceKind; count: number }> =
       await this.entityRepo.manager.query(
         `
-        WITH candidates AS (
+        WITH file_sources AS (
+          -- A stored photo or document is a ci.files row; the content row the
+          -- import made for it names the file in external_id and has the ledger
+          -- arrival. One source per file, the earliest arrival.
+          SELECT DISTINCT ON (c.external_id)
+                 c.external_id AS file_id,
+                 COALESCE(NULLIF(rs.platform, ''), NULLIF(rs.source_system, '')) AS src
+          FROM ci.content c
+          JOIN ci.record_sources rs
+            ON rs.user_id = c.user_id AND rs.record_table = 'content' AND rs.record_id = c.id
+          WHERE c.user_id = $1
+            AND c.external_id_kind = 'file'
+          ORDER BY c.external_id, rs.first_seen ASC
+        ),
+        candidates AS (
           SELECT CASE WHEN properties ->> 'is_self' = 'true' THEN $2 END AS self_src,
                  COALESCE(
                    NULLIF(properties ->> 'data_source', ''),
                    NULLIF(properties ->> 'Source', '')
                  ) AS prop_src,
+                 -- Spelled as the import route the people from the same import
+                 -- are filed under (linked_table 'import:venmo'), so a Venmo
+                 -- payment and the Venmo contact it names count as one source.
+                 'import:' || COALESCE(ledger.src, fs.src) AS ledger_src,
                  CASE
                    WHEN linked_table = ANY($4::text[]) THEN NULL
                    ELSE NULLIF(linked_table, '')
                  END AS linked_src,
                  NULLIF(properties ->> 'importerType', '') AS shape_src
-          FROM ci.entities
+          FROM ci.entities e
+          LEFT JOIN LATERAL (
+            -- The provenance ledger every import and sync writes. An entity
+            -- that mirrors a record (linked_table = the record's table, same
+            -- id) arrived the way that record did.
+            SELECT COALESCE(NULLIF(rs.platform, ''), NULLIF(rs.source_system, '')) AS src
+            FROM ci.record_sources rs
+            WHERE rs.user_id = e.owner_user_id
+              AND rs.record_table = e.linked_table
+              AND rs.record_id = e.entity_id
+            ORDER BY rs.first_seen ASC
+            LIMIT 1
+          ) ledger ON true
+          LEFT JOIN file_sources fs
+            ON e.linked_table = 'files' AND fs.file_id = e.linked_id::text
           WHERE is_active = true
             AND owner_user_id = $1
         ),
         resolved AS (
-          SELECT COALESCE(self_src, prop_src, linked_src, shape_src, $3) AS source,
+          SELECT COALESCE(self_src, prop_src, ledger_src, linked_src, shape_src, $3) AS source,
                  CASE
                    WHEN self_src IS NOT NULL THEN 'self'
                    WHEN prop_src IS NOT NULL THEN 'imported'
+                   WHEN ledger_src IS NOT NULL THEN 'imported'
                    WHEN linked_src IS NOT NULL THEN
                      CASE
                        WHEN linked_src = ANY($5::text[]) THEN 'derived'

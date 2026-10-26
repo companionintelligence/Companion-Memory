@@ -112,6 +112,13 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
       return false;
     }
 
+    // Nothing was changed, so closing edit mode is all Save has to do. Writing
+    // the stored values back reached Change History as an edit: the event page's
+    // unchanged title, saved next to its description, read as a rename.
+    if (Object.keys(values).every((key) => values[key] === liveValues[key])) {
+      return true;
+    }
+
     setSaving(true);
     setSaveError(null);
 
@@ -130,7 +137,7 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
     } finally {
       setSaving(false);
     }
-  }, [onSave, toast, values]);
+  }, [liveValues, onSave, toast, values]);
 
   const state: EntityFieldsEditorState = { values, setValue, saving, saveError, save, reset };
 

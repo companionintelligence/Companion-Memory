@@ -113,3 +113,20 @@ describe('FeedModal — mobile action chat', () => {
     expect(screen.getByTestId('action-chat')).toHaveAttribute('data-autofocus', 'true');
   });
 });
+
+describe('FeedModal — desktop action window', () => {
+  beforeEach(() => {
+    setViewport(false);
+  });
+
+  it('does not open with focus on the Close button, whose tooltip would eat the first Esc', async () => {
+    renderWithProviders(<FeedModal />, { path: '/today/:id', route: '/today/a1' });
+
+    const dialog = await screen.findByRole('dialog');
+    const close = screen.getByRole('button', { name: /close/i });
+
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(close).not.toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+});

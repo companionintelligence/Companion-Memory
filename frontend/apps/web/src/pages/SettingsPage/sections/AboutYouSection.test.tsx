@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AboutYouView, HowYoudDoItResult } from '@/api/usePersonaCompose';
 
-import { AboutYouSection } from './AboutYouSection';
+import { AboutYouSection, familyRoleLabel } from './AboutYouSection';
 
 const view: AboutYouView = {
   name: 'Bennett',
@@ -85,6 +85,36 @@ describe('AboutYouSection', () => {
     expect(screen.getByText('Mornings')).toBeInTheDocument();
     expect(screen.getByText('Evening calls')).toBeInTheDocument();
     expect(screen.getByText('Balanced')).toBeInTheDocument();
+  });
+
+  it('renders a Markdown dossier as formatted text, not as asterisks', async () => {
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      dossier: { summary: '**Personality:** Curious and methodical.\n\n- Early riser' },
+    });
+    await renderSection();
+
+    const label = await screen.findByText('Personality:');
+    expect(label.tagName).toBe('STRONG');
+    expect(screen.getByText('Early riser').tagName).toBe('LI');
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  });
+
+  it('names family by what they are to you, not by the graph type', async () => {
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      family: [
+        { entityId: 'f1', name: 'Jordan Lee', relationship: 'SIBLING_OF', direction: 'incoming' },
+        { entityId: 'f2', name: 'Morgan Lee', relationship: 'PARENT_OF', direction: 'incoming', age: 61 },
+        { entityId: 'f3', name: 'Riley Lee', relationship: 'PARENT_OF', direction: 'outgoing' },
+      ],
+    });
+    await renderSection();
+
+    expect(await screen.findByText('Jordan Lee (sibling)')).toBeInTheDocument();
+    expect(screen.getByText('Morgan Lee (parent, 61)')).toBeInTheDocument();
+    expect(screen.getByText('Riley Lee (child)')).toBeInTheDocument();
+    expect(screen.queryByText(/SIBLING_OF|PARENT_OF/)).not.toBeInTheDocument();
   });
 
   it('composes a personalized approach from a task', async () => {
@@ -317,5 +347,25 @@ describe('AboutYouSection — "Recent answers" after an answer changes elsewhere
     await act(async () => {
       reload.resolve(view);
     });
+  });
+});
+
+describe('familyRoleLabel', () => {
+  const member = (relationship: string, direction?: 'outgoing' | 'incoming') => ({
+    entityId: 'x',
+    name: 'X',
+    relationship,
+    direction,
+  });
+
+  it('reads CHILD_OF the opposite way to PARENT_OF', () => {
+    expect(familyRoleLabel(member('CHILD_OF', 'outgoing'))).toBe('parent');
+    expect(familyRoleLabel(member('CHILD_OF', 'incoming'))).toBe('child');
+    expect(familyRoleLabel(member('SPOUSE', 'outgoing'))).toBe('spouse');
+  });
+
+  it('falls back to a readable form when it cannot tell, never the raw enum', () => {
+    expect(familyRoleLabel(member('PARENT_OF'))).toBe('parent of');
+    expect(familyRoleLabel(member('STEP_PARENT_OF', 'incoming'))).toBe('step parent of');
   });
 });

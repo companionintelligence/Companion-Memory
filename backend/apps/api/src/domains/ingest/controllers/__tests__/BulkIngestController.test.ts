@@ -508,6 +508,70 @@ describe('BulkIngestController', () => {
     });
   });
 
+  describe('the reason a batch the database refused is reported with', () => {
+    /** What TypeORM throws for a failed statement: the driver's fields copied onto the error. */
+    function queryFailed(message: string, fields: { code: string; constraint?: string }): Error {
+      return Object.assign(new Error(message), fields, { driverError: { ...fields, message } });
+    }
+
+    const fix = { time: '2026-10-23T09:05:00.000Z', source: 'gps' as const };
+
+    it('explains a position with no location instead of echoing the chunk name', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed('new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"', {
+          code: '23514',
+          constraint: 'valid_positioning',
+        }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toEqual({
+        ingested: 0,
+        duplicate: 0,
+        rejected: [
+          {
+            index: 0,
+            reason:
+              'A position needs a location, or a reference_entity_id with relative_coordinates that include x.',
+          },
+        ],
+      });
+    });
+
+    it('answers any other database error with its SQLSTATE, not the driver text', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed('null value in column "source" of relation "_hyper_13_2_chunk" violates not-null constraint', {
+          code: '23502',
+        }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [{ index: 0, reason: 'The database refused this batch (SQLSTATE 23502).' }],
+      });
+      expect(JSON.stringify(res)).not.toContain('_hyper_');
+    });
+
+    it('carries the same reason down the NDJSON path', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed('new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"', {
+          code: '23514',
+          constraint: 'valid_positioning',
+        }),
+      );
+
+      const res = await controller.ingestPositions(ctx, ndjsonReq(`${JSON.stringify(fix)}\n`), undefined);
+
+      expect(JSON.stringify(res)).toContain('A position needs a location');
+      expect(JSON.stringify(res)).not.toContain('_hyper_');
+    });
+  });
+
   describe('POST /v1/notes (durable capture outbox replay)', () => {
     const note = (id: string, capturedAt = '2026-08-13T10:00:00.000Z') => ({
       id,

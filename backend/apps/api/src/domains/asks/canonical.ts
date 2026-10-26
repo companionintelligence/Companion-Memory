@@ -100,6 +100,20 @@ export function normalizeText(value: unknown): string | null {
 }
 
 /**
+ * Whether {@link normalizeText} would strip anything from this string as a
+ * character that renders as nothing.
+ *
+ * The ask input layer stores the prompt without them, so by the time the
+ * owner's review card renders it there is nothing left to detect. This is
+ * what lets the card still say the text was altered (see
+ * `AskQuery.promptHiddenCharactersRemoved`). Same character class as the
+ * strip, so the two cannot disagree about what counts.
+ */
+export function hasInvisibleCharacters(value: unknown): boolean {
+  return typeof value === 'string' && value.search(INVISIBLE) !== -1;
+}
+
+/**
  * The shared normalizer plus case folding — the COMPARISON form.
  *
  * Lowercasing is last, so it applies to whatever NFKC produced.

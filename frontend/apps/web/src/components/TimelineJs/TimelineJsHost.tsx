@@ -154,7 +154,14 @@ function loadTimelineScript(): Promise<TimelineCtor> {
       return;
     }
 
-    const script = existing ?? document.createElement('script');
+    // A tag left without `window.TL` is one whose load already failed (while a
+    // load is in flight, `timelineLoad` keeps us from getting here). A script
+    // element fetches once, when it is inserted, and setting the same `src`
+    // again does nothing, so reusing it left Try again on "Loading timeline…"
+    // for good. Swap in a fresh tag, which fetches again.
+    existing?.remove();
+
+    const script = document.createElement('script');
     script.dataset.timelinejs = '1';
     script.src = timelineJsUrl;
     script.async = true;
@@ -172,9 +179,7 @@ function loadTimelineScript(): Promise<TimelineCtor> {
       reject(new Error('Failed to load TimelineJS script'));
     };
 
-    if (!existing) {
-      document.head.appendChild(script);
-    }
+    document.head.appendChild(script);
   });
 }
 

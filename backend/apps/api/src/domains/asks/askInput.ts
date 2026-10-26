@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 
 import { ASK_ARCHETYPES, type AskArchetype } from './askGrammar';
-import { canonicalQueryType, normalizeText } from './canonical';
+import { canonicalQueryType, hasInvisibleCharacters, normalizeText } from './canonical';
 import { DISCLOSURE_RUNGS } from './policy';
 import type { AskActor, AskActorKind, AskQuery, DisclosureRung, GrantMode } from './types';
 
@@ -230,6 +230,9 @@ export function parseAskQueryInput(raw: {
   return {
     queryType,
     prompt,
+    // `parseAskPrompt` strips these, and the owner is owed being told that the
+    // text they are consenting on was altered on the way in.
+    ...(hasInvisibleCharacters(raw.prompt) ? { promptHiddenCharactersRemoved: true } : {}),
     ...(dataClass == null ? {} : { dataClass }),
     ...(actor == null ? {} : { actor }),
   };

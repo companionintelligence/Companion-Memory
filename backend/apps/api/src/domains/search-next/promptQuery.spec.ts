@@ -1,4 +1,4 @@
-import { buildPromptQuery } from './promptQuery';
+import { buildPromptQuery, promptAsksForPhotos } from './promptQuery';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -45,7 +45,6 @@ describe('buildPromptQuery', () => {
       // Groups come back in prompt order; the SQL side decides which are
       // required and which are alternatives, not the order they appear in.
       expect(buildPromptQuery('Do you have photos of Zerbcorpolis Fnargle?')).toEqual([
-        { kind: 'term', text: 'photos' },
         { kind: 'phrase', text: 'Zerbcorpolis Fnargle' },
       ]);
     });
@@ -53,9 +52,9 @@ describe('buildPromptQuery', () => {
     it('leaves a lone capitalised word an alternative', () => {
       // Requiring every sentence-initial capital would narrow every prompt that
       // starts with one. Only ADJACENCY between two names is evidence.
-      expect(buildPromptQuery('Photos of the lake')).toEqual([
-        { kind: 'term', text: 'Photos' },
-        { kind: 'term', text: 'lake' },
+      expect(buildPromptQuery('Lake photos of Tahoe')).toEqual([
+        { kind: 'term', text: 'Lake' },
+        { kind: 'term', text: 'Tahoe' },
       ]);
     });
 
@@ -138,5 +137,57 @@ describe('buildPromptQuery', () => {
       expect(buildPromptQuery(prompt)).toEqual([]);
       expect(buildPromptQuery(prompt, { subjectIsName: true })).toEqual([]);
     });
+  });
+});
+
+/**
+ * "Do you have any photos of the volcano?" answered "at least one matching
+ * item" for anyone with photos: 'photo' is on every photo event and the terms
+ * are OR-joined, so the kind word alone satisfied the query. And a photos ask
+ * naming a photo by its file name never matched, because the name was cut into
+ * `pxl`, `20261021`, … while Postgres indexes it as one lexeme.
+ */
+describe('photo asks', () => {
+  it('does not let the kind word count as a match', () => {
+    expect(buildPromptQuery('Do you have any photos of the volcano?')).toEqual([
+      { kind: 'term', text: 'volcano' },
+    ]);
+    expect(buildPromptQuery('Any pictures or images of the lake?')).toEqual([{ kind: 'term', text: 'lake' }]);
+    // Nothing named but the kind: no subject, so nothing to match.
+    expect(buildPromptQuery('Do you have any photos?')).toEqual([]);
+  });
+
+  it('keeps the word when it is part of a capitalised name', () => {
+    expect(buildPromptQuery('my Google Photos backup')).toEqual([
+      { kind: 'phrase', text: 'Google Photos' },
+      { kind: 'term', text: 'backup' },
+    ]);
+  });
+
+  it('keeps a file name one word, as Postgres indexes it', () => {
+    expect(buildPromptQuery('Do you have photos of PXL_20261021_115500_010.jpg?')).toEqual([
+      { kind: 'term', text: 'PXL_20261021_115500_010.jpg' },
+    ]);
+    expect(buildPromptQuery('the turquoise-lighthouse.pdf')).toEqual([
+      { kind: 'term', text: 'turquoise-lighthouse.pdf' },
+    ]);
+  });
+
+  it('still ends a word at a sentence’s closing full stop or at a lone underscore', () => {
+    expect(buildPromptQuery('photos of the lake.')).toEqual([{ kind: 'term', text: 'lake' }]);
+    expect(buildPromptQuery('lake_ house')).toEqual([
+      { kind: 'term', text: 'lake' },
+      { kind: 'term', text: 'house' },
+    ]);
+  });
+
+  it('reports a standalone kind word, which the ask executor turns into the photos class', () => {
+    expect(promptAsksForPhotos('Do you have any photos of the volcano?')).toBe(true);
+    expect(promptAsksForPhotos('Pictures from Tahoe?')).toBe(true);
+    expect(promptAsksForPhotos('my Google Photos backup')).toBe(false);
+    expect(promptAsksForPhotos('the lake trip')).toBe(false);
+    // A name ask is about a person; a kind word there is part of the name.
+    expect(promptAsksForPhotos('do you know pic jones')).toBe(false);
+    expect(promptAsksForPhotos('photos smith', { subjectIsName: true })).toBe(false);
   });
 });

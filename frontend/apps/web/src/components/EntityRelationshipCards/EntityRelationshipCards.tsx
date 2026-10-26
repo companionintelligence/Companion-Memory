@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { gql as apolloGql, useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
@@ -336,7 +336,10 @@ export function EntityRelationshipCards({
 }: Props) {
   const apolloClient = useApolloClient();
   const fmt = useDateTimeFormat();
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  // A callback ref held in state, not a ref object: the card returns null until
+  // its graph arrives, so on the first render there is no element, and an effect
+  // keyed on nothing ran once against that null and never measured the row.
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
   const [expanded, setExpanded] = useState(false);
   const [tagsByEntityKey, setTagsByEntityKey] = useState<Record<string, string[]>>({});
@@ -349,8 +352,7 @@ export function EntityRelationshipCards({
   });
 
   useEffect(() => {
-    const element = containerRef.current;
-    if (!element) {
+    if (!container) {
       return;
     }
 
@@ -360,11 +362,11 @@ export function EntityRelationshipCards({
       }
     });
 
-    observer.observe(element);
-    setVisibleCardCount(getVisibleCardCount(element.clientWidth));
+    observer.observe(container);
+    setVisibleCardCount(getVisibleCardCount(container.clientWidth));
 
     return () => observer.disconnect();
-  }, []);
+  }, [container]);
 
   const relationshipCards = useMemo<RelationshipCard[]>(() => {
     if (!data) {
@@ -557,7 +559,7 @@ export function EntityRelationshipCards({
   );
 
   return (
-    <div ref={containerRef} className="space-y-3">
+    <div ref={setContainer} className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{heading}</h2>
         {!loading && sortedCards.length > 0 && (

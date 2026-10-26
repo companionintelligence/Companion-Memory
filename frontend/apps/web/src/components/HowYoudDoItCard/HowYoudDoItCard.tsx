@@ -2,6 +2,7 @@ import { Button, cn } from '@ci/shadcn';
 import { Loader2, Sparkles } from '@ci/shadcn/icons';
 
 import type { HowYoudDoItResult } from '@/api/usePersonaCompose';
+import { Markdown } from '@/components/Markdown';
 
 interface HowYoudDoItCardProps {
   result: HowYoudDoItResult;
@@ -48,7 +49,10 @@ export function HowYoudDoItCard({
         </span>
       </div>
 
-      <p className="mb-3 text-[13px] leading-relaxed text-foreground/90">{result.personaBrief}</p>
+      {/* Model-written from the dossier, so it arrives as Markdown too. */}
+      <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-foreground/90 prose-p:my-1 prose-p:text-[13px] prose-p:leading-relaxed prose-ul:my-1 prose-li:my-0 prose-li:text-[13px]">
+        <Markdown>{result.personaBrief}</Markdown>
+      </div>
 
       {result.approach.length > 0 ? (
         <ol className="mb-3 space-y-2">

@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+
+import { useLocation } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
@@ -31,6 +33,14 @@ import { ReceiptRow } from './rows/ReceiptRow';
 import { ThreadRow } from './rows/ThreadRow';
 
 /**
+ * Where the list was scrolled to, per history entry (`location.key`), for the
+ * life of the tab. The list scrolls inside its own box rather than the window,
+ * so the browser's own scroll restoration never sees it, and opening a full
+ * page unmounts it. Back to the same entry puts the list where it was.
+ */
+const scrollTopByHistoryEntry = new Map<string, number>();
+
+/**
  * The scrolling result list every list-shaped explorer view is built on: the
  * per-type rows, cursor paging on scroll, and the skeleton / error / empty
  * states. `grouped` puts date headings between runs of same-day rows and
@@ -48,6 +58,38 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Remember the scroll position under the history entry it belongs to, and
+  // give it back when that entry is shown again (Back from a full page). The
+  // position is saved as the entry is left, from the last scroll seen, because
+  // the scroll box is already gone by the time an unmount's cleanup runs.
+  const { key: historyKey } = useLocation();
+  const lastScrollTopRef = useRef(0);
+  const pendingRestoreRef = useRef<number | null>(scrollTopByHistoryEntry.get(historyKey) ?? null);
+
+  useEffect(() => {
+    return () => {
+      scrollTopByHistoryEntry.set(historyKey, lastScrollTopRef.current);
+    };
+  }, [historyKey]);
+
+  // Re-applied as pages arrive, until the list is tall enough to reach the
+  // saved position or there is nothing more to load.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const target = pendingRestoreRef.current;
+
+    if (!el || target == null || data.length === 0) {
+      return;
+    }
+
+    el.scrollTop = target;
+    lastScrollTopRef.current = el.scrollTop;
+
+    if (el.scrollTop >= target - 1 || !hasNextPage) {
+      pendingRestoreRef.current = null;
+    }
+  }, [data.length, hasNextPage]);
 
   // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
   useEffect(() => {
@@ -179,7 +221,14 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
   }
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      data-list-scroll=""
+      onScroll={(event) => {
+        lastScrollTopRef.current = event.currentTarget.scrollTop;
+      }}
+    >
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (

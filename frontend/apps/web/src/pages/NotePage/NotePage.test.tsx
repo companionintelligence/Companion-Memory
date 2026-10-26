@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 
 import { GlobalUID } from '@ci/common';
 import { act, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -308,6 +308,235 @@ describe('NotePage — offline capture', () => {
     expect(
       await screen.findByText('Queued — this note is waiting to sync and cannot be edited until it does.'),
     ).toBeInTheDocument();
+  });
+
+  it('stops saying "Saved offline" once a later save reaches the appliance', async () => {
+    const noteGlobalId = GlobalUID.encode('note', 'abc-uuid');
+
+    common.captureNote.mockImplementation(async (record: { captured_at: string }) => ({
+      status: 'queued',
+      record,
+      id: 'row-4',
+    }));
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        {
+          request: { query: GET_NOTE, variables: { id: noteGlobalId } },
+          result: {
+            data: {
+              note: {
+                __typename: 'NoteType',
+                id: noteGlobalId,
+                title: 'Old title',
+                content: '<p>Old content</p>',
+                updatedAt: '2026-08-01T00:00:00.000Z',
+              },
+            },
+          },
+        },
+        {
+          request: {
+            query: UPDATE_NOTE,
+            variables: {
+              input: { id: noteGlobalId, content: '<p>Meeting notes</p>', title: 'Meeting notes' },
+            },
+          },
+          error: new Error('appliance unreachable'),
+        },
+        {
+          request: {
+            query: UPDATE_NOTE,
+            variables: {
+              input: { id: noteGlobalId, content: '<p>Meeting notes v2</p>', title: 'Meeting notes v2' },
+            },
+          },
+          result: { data: { updateNote: { success: true, note: null } } },
+        },
+      ],
+    });
+
+    await waitFor(() => expect(editorState.onUpdate).toBeDefined());
+    type('<p>Meeting notes</p>');
+    await flushAutosave();
+
+    expect(await screen.findByText('Saved offline')).toBeInTheDocument();
+
+    type('<p>Meeting notes v2</p>');
+    await flushAutosave();
+
+    await waitFor(() => expect(screen.queryByText('Saved offline')).not.toBeInTheDocument());
+    expect(common.captureNote).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('NotePage — a save that hangs', () => {
+  const SLOW_SAVE_MS = 8000;
+  const noteGlobalId = GlobalUID.encode('note', 'abc-uuid');
+
+  const loadedNote = {
+    request: { query: GET_NOTE, variables: { id: noteGlobalId } },
+    result: {
+      data: {
+        note: {
+          __typename: 'NoteType',
+          id: noteGlobalId,
+          title: 'Trip ideas',
+          content: '<p>Trip ideas</p>',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+        },
+      },
+    },
+  };
+
+  // One paragraph per note here, so its text is also the title the page derives.
+  function savedAfter(content: string, delay: number) {
+    return {
+      request: {
+        query: UPDATE_NOTE,
+        variables: { input: { id: noteGlobalId, content, title: content.replace(/<[^>]+>/g, '') } },
+      },
+      delay,
+      result: { data: { updateNote: { success: true, note: null } } },
+    };
+  }
+
+  // Fake clock that still moves on its own, so `findBy*` and the mocked query keep
+  // working, while the long waits below are jumped instead of sat through.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it('stops saying "Saving" once a save has gone unanswered for a while', async () => {
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      // Behind the gateway, a stopped Memory leaves the request open for 30 s or more.
+      mocks: [loadedNote, savedAfter('<p>Trip ideas in May</p>', Infinity)],
+    });
+
+    await screen.findByTestId('chat-menu');
+    type('<p>Trip ideas in May</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+
+    expect(await screen.findByText('Saving')).toBeInTheDocument();
+    expect(screen.queryByText(/not saved yet/i)).not.toBeInTheDocument();
+
+    await advance(SLOW_SAVE_MS);
+
+    expect(screen.getByText('Not saved yet.')).toHaveTextContent(
+      "Not saved yet. Your Companion isn't answering.",
+    );
+    expect(screen.queryByText('Saving')).not.toBeInTheDocument();
+    // Nothing failed yet, so nothing is queued; the text is still in the editor.
+    expect(common.captureNote).not.toHaveBeenCalled();
+  });
+
+  it('drops the warning once the save is finally answered', async () => {
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, savedAfter('<p>Trip ideas in May</p>', SLOW_SAVE_MS + 2000)],
+    });
+
+    await screen.findByTestId('chat-menu');
+    type('<p>Trip ideas in May</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await advance(SLOW_SAVE_MS);
+
+    expect(screen.getByText('Not saved yet.')).toBeInTheDocument();
+
+    await advance(2000);
+
+    expect(screen.queryByText(/not saved yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Saving')).not.toBeInTheDocument();
+  });
+
+  it('does not call a slow but answering Companion stuck when saves overlap', async () => {
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        loadedNote,
+        savedAfter('<p>Trip ideas in May</p>', 7000),
+        savedAfter('<p>Trip ideas in June</p>', Infinity),
+      ],
+    });
+
+    await screen.findByTestId('chat-menu');
+
+    // The first save goes out at about 1 s and is answered at about 8 s. The second
+    // goes out at about 7 s, while the first is still open, so Apollo's `loading`
+    // never drops in between.
+    type('<p>Trip ideas in May</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await advance(5000);
+    type('<p>Trip ideas in June</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+
+    // 8.5 s after the first save went out: it was answered, so this is not stuck.
+    await advance(2400);
+
+    expect(screen.getByText('Saving')).toBeInTheDocument();
+    expect(screen.queryByText(/not saved yet/i)).not.toBeInTheDocument();
+
+    // 8 s after that answer with nothing else back, it is.
+    await advance(SLOW_SAVE_MS);
+
+    expect(screen.getByText('Not saved yet.')).toBeInTheDocument();
+  });
+
+  it('queues a save that fails late with the time it was sent, so it cannot outrank a newer save', async () => {
+    // Date too, so the 30 s jump below shows up in the timestamp the page writes. A
+    // second `useFakeTimers` while the clock is already fake is a no-op, so drop it first.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], shouldAdvanceTime: true });
+    common.captureNote.mockImplementation(async (record: { captured_at: string }) => ({
+      status: 'queued',
+      record,
+      id: 'row-3',
+    }));
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        loadedNote,
+        {
+          ...savedAfter('<p>Trip ideas in May</p>', 30_000),
+          result: undefined,
+          error: new Error('502 Bad Gateway'),
+        },
+      ],
+    });
+
+    await screen.findByTestId('chat-menu');
+    const typedAt = Date.now();
+
+    type('<p>Trip ideas in May</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await advance(30_000);
+
+    await waitFor(() => expect(common.captureNote).toHaveBeenCalledTimes(1));
+    const record = common.captureNote.mock.calls[0][0] as { captured_at: string };
+
+    // Sent about 1 s after typing and refused 30 s later. Stamped with the refusal, the
+    // snapshot would look newer than a save that landed in between, and its drain would
+    // put this older text back over that one.
+    expect(Date.parse(record.captured_at) - typedAt).toBeLessThan(5000);
+    expect(await screen.findByText('Saved offline')).toBeInTheDocument();
   });
 });
 

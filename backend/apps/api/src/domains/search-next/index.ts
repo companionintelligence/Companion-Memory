@@ -74,7 +74,7 @@ export {
   DEVICE_RECORD_VERSION,
   entityDeviceRecordSql,
 } from './entityDeviceRecord';
-export { buildPromptQuery, hasNameSubjectFrame } from './promptQuery';
+export { buildPromptQuery, hasNameSubjectFrame, promptAsksForPhotos } from './promptQuery';
 export { resolveAutoMode } from './services/SearchService';
 export {
   queryTokenCount,

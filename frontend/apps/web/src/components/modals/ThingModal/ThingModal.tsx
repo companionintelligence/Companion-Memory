@@ -302,7 +302,12 @@ function toInput(value: number | null | undefined): string {
   return value == null ? '' : String(value);
 }
 
-/** The `YYYY-MM-DD` a date input needs, from whatever the API returned. */
+/**
+ * The `YYYY-MM-DD` a date input needs, from whatever the API returned: the day
+ * it was where the person is, which is the day the thing's page shows
+ * (`toLocaleDateString`). The UTC day was a day early or late for an importer's
+ * real timestamp.
+ */
 function toDateInput(value: string | null | undefined): string {
   if (!value) {
     return '';
@@ -310,7 +315,14 @@ function toDateInput(value: string | null | undefined): string {
 
   const date = new Date(value);
 
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 /** A blank field means "no value", never 0 — the server rejects 0 measurements. */
@@ -326,8 +338,19 @@ function toNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * The start of the picked day where the person is. `new Date('2026-10-01')`
+ * parses a bare date as UTC midnight, which west of UTC is still September 30,
+ * so the thing's page showed the day before the one picked.
+ */
 function toDate(value: string): string | null {
-  return value.trim() === '' ? null : new Date(value).toISOString();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+
+  if (!match) {
+    return value.trim() === '' ? null : new Date(value).toISOString();
+  }
+
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toISOString();
 }
 
 /** Comma-separated text → the term array the API takes; empty means "none recorded". */

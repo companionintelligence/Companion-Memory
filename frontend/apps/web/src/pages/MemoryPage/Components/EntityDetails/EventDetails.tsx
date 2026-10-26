@@ -140,38 +140,6 @@ function formatCoordinates(coords: { lat: number; lng: number } | null): string 
   return coords ? `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}` : null;
 }
 
-function formatPropertyValue(value: unknown): string | null {
-  if (value == null || value === '') {
-    return null;
-  }
-
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-
-  if (typeof value === 'string' || typeof value === 'number') {
-    return String(value);
-  }
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-}
-
-function extraLocationDetails(properties: LocationProperties): DetailItem[] {
-  const hidden = new Set(['address', 'latitude', 'longitude']);
-
-  return Object.entries(properties)
-    .filter(([key]) => !hidden.has(key))
-    .map(([key, value]) => ({
-      label: formatTitleCase(key) ?? key,
-      value: formatPropertyValue(value),
-    }))
-    .filter((item): item is DetailItem => Boolean(item.value));
-}
-
 function DetailSection({ title, items }: { title: string; items: DetailItem[] }) {
   if (items.length === 0) {
     return null;
@@ -214,7 +182,9 @@ export function EventDetails({ entity }: Props) {
     { label: 'Place', value: data.location?.name ?? data.locationName ?? eventFields.locationName ?? '' },
     { label: 'Address', value: props.address ?? '' },
     { label: 'Coordinates', value: formatCoordinates(coordinates) ?? '' },
-    ...extraLocationDetails(props),
+    // Nothing else from the place's properties: the rest of that bag is the
+    // pipeline's bookkeeping (`promote`, `source`, `place_id`, the rounded
+    // `lat`/`lng`), and listing it printed raw JSON in the drawer.
   ].filter((item) => item.value);
 
   // Photo/video events: the ORIGINAL is what renders (a 300px PREVIEW upscaled

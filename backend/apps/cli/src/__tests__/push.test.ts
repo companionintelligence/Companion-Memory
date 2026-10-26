@@ -41,6 +41,21 @@ describe('ci push', () => {
     expect(ctx.term.text()).toContain('2 run(s) queued for push.');
   });
 
+  it('refuses a bad --timeout before pushing anything', async () => {
+    const asked: Array<string[] | undefined> = [];
+    const ctx = harness({
+      listUnpushed: async () => [unpushed('run-1')],
+      startPush: async (runIds?: string[]) => {
+        asked.push(runIds);
+
+        return { runs: [unpushed('run-1')] };
+      },
+    });
+
+    await expect(pushCommand(ctx, { wait: true, timeout: 'abc' })).rejects.toBeInstanceOf(CliError);
+    expect(asked).toEqual([]);
+  });
+
   it('“nothing to push” is a state, not an error', async () => {
     const ctx = harness({ listUnpushed: async () => [] });
 

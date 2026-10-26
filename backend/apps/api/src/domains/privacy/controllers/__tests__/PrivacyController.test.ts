@@ -11,7 +11,12 @@ import { PrivacyController } from '../PrivacyController';
 function makeController(result: AccountDeletionResult, email = 'owner@example.com') {
   const deleteAccount = jest.fn(async () => result);
   const dataDeletionService = { deleteAccount };
-  const handOverAdministration = jest.fn(async () => undefined);
+  // Runs the deletion it is handed inside the (here imaginary) handover transaction, as the real
+  // one does.
+  const handOverAdministration = jest.fn(
+    async (_context: unknown, _id: string, _options: unknown, andThen?: () => Promise<unknown>) =>
+      andThen ? andThen() : undefined,
+  );
   const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })), handOverAdministration };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
@@ -70,12 +75,40 @@ describe('PrivacyController.deleteMyAccount', () => {
       successorEmail: 'member@example.com',
     });
 
-    expect(handOverAdministration).toHaveBeenCalledWith({ userId: 'user-1' }, 'user-1', {
-      successorEmail: 'member@example.com',
-    });
+    expect(handOverAdministration).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'user-1',
+      { successorEmail: 'member@example.com' },
+      expect.any(Function),
+    );
     expect(handOverAdministration.mock.invocationCallOrder[0]).toBeLessThan(
       deleteAccount.mock.invocationCallOrder[0],
     );
+  });
+
+  it('deletes only from inside the handover, so a failed delete takes the handover back with it', async () => {
+    const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
+    // A handover that never runs the work it was given: nothing may be deleted around it.
+    handOverAdministration.mockImplementation(async () => undefined);
+
+    await controller
+      .deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, { confirmEmail: 'owner@example.com' })
+      .catch(() => undefined);
+
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('passes a failed delete through untouched', async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
+    const purgeFailure = new Error('column "user_id" does not exist');
+    deleteAccount.mockRejectedValue(purgeFailure);
+
+    await expect(
+      controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+        confirmEmail: 'owner@example.com',
+        successorEmail: 'member@example.com',
+      }),
+    ).rejects.toBe(purgeFailure);
   });
 
   it.each([

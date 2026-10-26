@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
+import { Button, Card } from '@ci/shadcn';
 import { Navigate, useLocation } from 'react-router-dom';
 
 import { useAuth, useCurrentUser } from '@/hooks';
@@ -19,8 +20,8 @@ export function ProtectedRoute({
   fallback?: ReactNode;
 }) {
   const location = useLocation();
-  const [{ expired, loading: authLoading, authToken }, { refresh }] = useAuth();
-  const { user, loading: userLoading } = useCurrentUser();
+  const [{ expired, loading: authLoading, authToken, unreachable: sessionUnreachable }, { refresh }] = useAuth();
+  const { user, loading: userLoading, unreachable: profileUnreachable, refetch } = useCurrentUser();
   const [triedRecover, setTriedRecover] = useState(false);
   // Once the signed-in app has been shown, a later `me` refetch must not swap
   // this route for the loader or the login redirect. That unmounts onboarding
@@ -70,6 +71,23 @@ export function ProtectedRoute({
     return <LoadingPage />;
   }
 
+  // Memory did not answer for the session or the profile. That is an outage, not a
+  // sign-out: say so, and let the retries in useAuth and useCurrentUser bring the page
+  // back, instead of sending a signed-in person to Log In.
+  if (!user && (sessionUnreachable || profileUnreachable)) {
+    return (
+      <MemoryUnreachable
+        onRetry={() => {
+          if (profileUnreachable) {
+            void refetch?.();
+          } else if (canRecover) {
+            void refresh();
+          }
+        }}
+      />
+    );
+  }
+
   // A phone session stays valid when `me` blips to empty (no JWT to expire).
   // Sending that through the signed-out redirect reloads onboarding.
   if ((expired || !user) && !(shown.current && !expired)) {
@@ -83,4 +101,24 @@ export function ProtectedRoute({
   }
 
   return <Suspense fallback={fallback}>{children}</Suspense>;
+}
+
+function MemoryUnreachable({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex h-lvh w-full items-center justify-center p-6 md:p-10">
+      <Card className="w-full max-w-md rounded-2xl border">
+        <Card.Header>
+          <Card.Title className="text-center">Can't reach Memory</Card.Title>
+        </Card.Header>
+        <Card.Content className="space-y-4 text-center">
+          <p className="text-muted-foreground">
+            You're still signed in. This page opens as soon as Memory answers again.
+          </p>
+          <Button variant="outline" onClick={onRetry}>
+            Try again
+          </Button>
+        </Card.Content>
+      </Card>
+    </div>
+  );
 }

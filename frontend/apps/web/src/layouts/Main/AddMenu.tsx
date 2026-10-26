@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useState, type PointerEvent } from 'react';
 
 import { useApolloClient } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
@@ -68,6 +68,19 @@ export function AddMenu() {
 
   const [, { upload, reset: resetUploader }] = useUploadFile();
 
+  // Choosing an entry closes the menu and opens its form in the same click, and
+  // the form's dialog then slides under the pointer. Radix reads that as the
+  // pointer leaving the item and focuses the closing menu, which takes focus
+  // off the field the form had just focused (`autoFocus`), and the dialog has
+  // nothing to return it to: Person, Place, Event and Scan opened with nothing
+  // focused. Once the menu is closed, a pointer leaving an item is not a reason
+  // to move focus anywhere.
+  const keepFormFocus = (event: PointerEvent<HTMLDivElement>) => {
+    if (!menuOpen) {
+      event.preventDefault();
+    }
+  };
+
   const overlayOpen =
     isCaptureModalOpen ||
     isUploadModalOpen ||
@@ -108,6 +121,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={() => navigate('/notes/new')}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -123,6 +137,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={openAddPersonModal}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -138,6 +153,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={openAddConceptModal}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -153,6 +169,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={openItemModal}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -168,6 +185,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={openAddEventModal}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -183,6 +201,7 @@ export function AddMenu() {
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
+                      onPointerLeave={keepFormFocus}
                       onSelect={openAddPlaceModal}
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
@@ -201,6 +220,7 @@ export function AddMenu() {
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
                       <DropdownMenu.Item
+                        onPointerLeave={keepFormFocus}
                         onSelect={openUploadModal}
                         className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
                       >
@@ -216,6 +236,7 @@ export function AddMenu() {
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
                       <DropdownMenu.Item
+                        onPointerLeave={keepFormFocus}
                         onSelect={openCaptureModal}
                         className="h-16 w-16 flex flex-col items-center justify-center gap-2 cursor-pointer rounded-md p-1"
                       >
@@ -231,6 +252,7 @@ export function AddMenu() {
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
                       <DropdownMenu.Item
+                        onPointerLeave={keepFormFocus}
                         onSelect={openScanModal}
                         className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                       >
@@ -246,6 +268,7 @@ export function AddMenu() {
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
                       <DropdownMenu.Item
+                        onPointerLeave={keepFormFocus}
                         onSelect={() => navigate('/sources')}
                         className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                       >
@@ -261,6 +284,7 @@ export function AddMenu() {
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
                       <DropdownMenu.Item
+                        onPointerLeave={keepFormFocus}
                         onSelect={async (e) => {
                           e.preventDefault();
                           const status = await trigger();

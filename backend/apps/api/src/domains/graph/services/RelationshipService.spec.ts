@@ -429,3 +429,123 @@ describe('RelationshipService.upsert', () => {
     expect(result?.strength).toBe(3);
   });
 });
+
+describe('RelationshipService Change History', () => {
+  function withDeltas() {
+    const repo = { ...makeRepo(), delete: jest.fn(async () => ({ affected: 1 })) };
+    const { service } = makeService(repo);
+    const record = jest.fn(async () => undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).graphDeltaWriter = { record };
+
+    return { service, repo, record };
+  }
+
+  it('records a link added in the app on both ends', async () => {
+    const { service, record } = withDeltas();
+
+    await service.create(ownerCtx, {
+      fromNodeId: 'p1',
+      fromNodeType: 'person',
+      toNodeId: 'p2',
+      toNodeType: 'person',
+      type: 'KNOWS',
+    });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeType: 'relationship',
+        changeType: 'created',
+        relationshipType: 'KNOWS',
+        fromEntityId: 'p1',
+        toEntityId: 'p2',
+        ownerUserId: 'owner-1',
+        changeSource: 'RelationshipService.create',
+      }),
+    );
+  });
+
+  it('records a link removed in the app', async () => {
+    const { service, repo, record } = withDeltas();
+    repo.findOne.mockResolvedValue({
+      id: 'r1',
+      fromNodeId: 'p1',
+      toNodeId: 'p2',
+      type: 'KNOWS',
+      userId: 'owner-1',
+      properties: {},
+    });
+
+    await expect(service.delete(ownerCtx, 'r1')).resolves.toBe(true);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeType: 'deleted',
+        relationshipId: 'r1',
+        changeSource: 'RelationshipService.delete',
+      }),
+    );
+  });
+
+  it('records nothing when there was no link to remove', async () => {
+    const { service, repo, record } = withDeltas();
+    repo.findOne.mockResolvedValue(null);
+    repo.delete.mockResolvedValue({ affected: 0 });
+
+    await expect(service.delete(ownerCtx, 'r1')).resolves.toBe(false);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('records an edit of a link with what moved and both ends', async () => {
+    const { service, repo, record } = withDeltas();
+    repo.findOne.mockResolvedValue({
+      id: 'r1',
+      fromNodeId: 'p1',
+      toNodeId: 'p2',
+      type: 'KNOWS',
+      strength: 1,
+      isBidirectional: true,
+      startDate: null,
+      endDate: null,
+      userId: 'owner-1',
+      properties: {},
+    });
+
+    await service.update(ownerCtx, 'r1', { strength: 0.4, startDate: new Date('2019-06-01T00:00:00Z') });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeType: 'relationship',
+        changeType: 'updated',
+        relationshipId: 'r1',
+        fromEntityId: 'p1',
+        toEntityId: 'p2',
+        changeSource: 'RelationshipService.update',
+        changedFields: {
+          strength: { old: 1, new: 0.4 },
+          start_date: { old: null, new: '2019-06-01' },
+        },
+      }),
+    );
+  });
+
+  it('records nothing for an edit that changes nothing', async () => {
+    const { service, repo, record } = withDeltas();
+    repo.findOne.mockResolvedValue({
+      id: 'r1',
+      fromNodeId: 'p1',
+      toNodeId: 'p2',
+      type: 'KNOWS',
+      strength: 1,
+      isBidirectional: true,
+      startDate: '2019-06-01',
+      endDate: null,
+      userId: 'owner-1',
+      properties: {},
+    });
+
+    await service.update(ownerCtx, 'r1', { strength: 1, startDate: new Date('2019-06-01T00:00:00Z') });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+});

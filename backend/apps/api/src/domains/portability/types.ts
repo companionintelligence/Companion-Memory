@@ -56,6 +56,12 @@ export interface UserScopedTable {
    * closed (no row for that table can be imported).
    */
   columns: readonly string[];
+  /**
+   * Columns the database computes (`GENERATED ALWAYS AS (…) STORED`). An export
+   * carries their values, but an INSERT naming one is refused, so the import
+   * leaves them out and lets the database compute them again.
+   */
+  generatedColumns?: readonly string[];
 }
 
 export interface ImportResult {

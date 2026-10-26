@@ -718,6 +718,9 @@ interface DecisionHarness {
   update(): { sql: string; params: unknown[] } | undefined;
 }
 
+/** The projection statement `writeProjection` issues for communications. */
+const PROJECTION = /UPDATE ci\.communications c\s+SET from_entity_id/i;
+
 /**
  * The stage over a fake `DataSource` that models the four statements, INCLUDING
  * a tiny `ci.identifier_claims` so the projection is genuinely read back out of
@@ -837,7 +840,8 @@ function makeDecisionHarness(options: {
     stage: new PersonLinkStage({ query } as never, makeLogger() as never),
     statements,
     claims,
-    update: () => statements.find((statement) => /^UPDATE ci\.communications/i.test(statement.sql)),
+    // The projection: an UPDATE of the link columns, behind the CTE that retracts a replaced sender's edge.
+    update: () => statements.find((statement) => PROJECTION.test(statement.sql)),
   };
 }
 
@@ -938,6 +942,9 @@ describe('run() answers for every id, and never anonymously', () => {
     // The column's existing ids come first, in their order; this run's answers
     // are appended only when absent. No arm of the statement can shorten it.
     expect(update!.sql).toMatch(/WHEN u\.plural_ids IS NULL THEN c\.to_entity_ids/);
+    // The sender it replaces loses the SENT edge it was given, in the same statement.
+    expect(update!.sql).toMatch(/^WITH superseded AS \(\s*DELETE FROM ci\.relationships r/);
+    expect(update!.sql).toContain(`r.properties ->> 'rule' = 'communication.sent'`);
     expect(update!.sql).toMatch(
       /unnest\(COALESCE\(c\.to_entity_ids, '\{\}'::uuid\[\]\) \|\| u\.plural_ids\) WITH ORDINALITY/,
     );
@@ -1052,7 +1059,7 @@ describe('run() answers for every id, and never anonymously', () => {
     const harness = makeDecisionHarness({
       rows: [commLoaded(1, { from: 'dana@example.com' })],
       index: { 'email:dana@example.com': { entity_id: personId(1) } },
-      failOn: /^UPDATE ci\.communications/i,
+      failOn: PROJECTION,
     });
 
     expect((await outcomes(harness, [subjectId(1)])).get(subjectId(1))).toMatchObject({

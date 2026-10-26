@@ -195,6 +195,33 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
     });
   });
 
+  describe('photo asks', () => {
+    it('does not answer "photos of <topic>" from the word photo alone', async () => {
+      // Every photo event carries 'photo'; the OR of terms let that answer
+      // "at least one" to "photos of the volcano" for anyone with photos.
+      await seed(owner, 'event', 'Photo Oct 22 2026 Google Pixel 9');
+      await seed(owner, 'file', 'holiday photos from the coast');
+
+      const result = await service.searchPrompt(context, {
+        prompt: 'Do you have any photos of the volcano?',
+      });
+
+      expect(result.items).toEqual([]);
+    });
+
+    it('finds a photo by its file name, which Postgres indexes as one word', async () => {
+      const photo = await seed(owner, 'file', 'PXL_20261021_115500_010.jpg image/jpeg');
+      await seed(owner, 'file', 'PXL_20261020_094600_001.jpg image/jpeg');
+
+      const result = await service.searchPrompt(context, {
+        prompt: 'Do you have photos of PXL_20261021_115500_010.jpg?',
+        includeTypes: ['file'],
+      });
+
+      expect(result.items.map((item) => item.id)).toEqual([photo]);
+    });
+  });
+
   describe('a real question still gets a real answer', () => {
     it('finds the person the asker actually named, and only them', async () => {
       const steve = await seed(owner, 'person', 'Steve Miller');
@@ -241,7 +268,9 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
         await seed(owner, 'file', `beach photo number ${index}`);
       }
 
-      const result = await service.searchPrompt(context, { prompt: 'photo', maxResults: 3 });
+      // 'beach', not 'photo': a kind word is no longer a match on its own (see
+      // promptQuery's PHOTO_KIND_WORDS).
+      const result = await service.searchPrompt(context, { prompt: 'beach', maxResults: 3 });
 
       expect(result.items).toHaveLength(3);
       expect(result.totalMatches).toBe(7);
@@ -253,7 +282,7 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
       await seed(owner, 'file', 'beach photo one');
       await seed(owner, 'file', 'beach photo two');
 
-      const result = await service.searchPrompt(context, { prompt: 'photo', maxResults: 2 });
+      const result = await service.searchPrompt(context, { prompt: 'beach', maxResults: 2 });
 
       expect(result.items).toHaveLength(2);
       expect(result.totalMatches).toBe(2);

@@ -87,6 +87,13 @@ class FileKeyMap {
   }
 }
 
+/** The "You" person an archive's manifest names, when it names one. */
+function profileEntityId(profile: Record<string, unknown> | null): string | null {
+  const entityId = profile?.entityId;
+
+  return typeof entityId === 'string' && entityId.length > 0 ? entityId : null;
+}
+
 @Injectable()
 export class UserDataPortabilityService {
   constructor(
@@ -164,6 +171,7 @@ export class UserDataPortabilityService {
     let filesRestored = 0;
     let started = false;
     let keyMap: FileKeyMap | null = null;
+    let selfEntityIds: Array<string | null> = [];
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
@@ -181,6 +189,8 @@ export class UserDataPortabilityService {
           // Must precede the deletes: "owned" means owned before this import
           // touched anything, and the archive has no say in it.
           keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
+
+          selfEntityIds = [profileEntityId(record.profile), await this.detachSelfEntity(queryRunner, context.userId)];
 
           for (const table of [...tables].reverse()) {
             await this.deleteUserRows(queryRunner, context.userId, table);
@@ -256,6 +266,7 @@ export class UserDataPortabilityService {
         throw new BadRequestException('Archive is missing one or more file chunks');
       }
 
+      await this.reattachSelfEntity(queryRunner, context.userId, selfEntityIds);
       await this.setReplicationRole(queryRunner, 'origin');
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -314,6 +325,10 @@ export class UserDataPortabilityService {
       const tables = await this.discoverUserTables();
       // Before the deletes — see FileKeyMap.
       const keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
+      const selfEntityIds = [
+        archive.profile?.entityId ?? null,
+        await this.detachSelfEntity(queryRunner, context.userId),
+      ];
 
       for (const table of [...tables].reverse()) {
         await this.deleteUserRows(queryRunner, context.userId, table);
@@ -323,6 +338,8 @@ export class UserDataPortabilityService {
         const rows = archive.tables[qualifiedName(table)] ?? [];
         rowsImported += await this.insertUserRows(queryRunner, context.userId, table, rows, keyMap);
       }
+
+      await this.reattachSelfEntity(queryRunner, context.userId, selfEntityIds);
 
       filesRestored = await this.restoreFileBlobs(context, archive.fileBlobs, keyMap);
 
@@ -565,6 +582,11 @@ export class UserDataPortabilityService {
   ): Record<string, unknown> {
     const normalized: Record<string, unknown> = { ...row, [table.userColumn]: userId };
 
+    // Computed by the database, which refuses a value for them.
+    for (const column of table.generatedColumns ?? []) {
+      delete normalized[column];
+    }
+
     // Every other user column too, or the archive decides it. A null stays null:
     // on these tables the second column is an attribution ("detected owner")
     // that may be unknown, and the importer is the only account a non-null
@@ -680,6 +702,57 @@ export class UserDataPortabilityService {
     }
 
     return restored;
+  }
+
+  /**
+   * Clear the account's pointer to its own "You" person before the deletes.
+   *
+   * `ci.users.entity_id -> ci.entities` is NO ACTION and not deferrable, and
+   * `ci.users` is not one of the tables an import replaces, so deleting the
+   * account's entities with the pointer in place fails the whole import
+   * (`users_entity_id_fkey`). Every onboarded account has that person.
+   * `session_replication_role = replica` would skip the check, but the app's
+   * role cannot set it (see {@link setReplicationRole}). Returns the id it
+   * cleared, for {@link reattachSelfEntity}.
+   */
+  private async detachSelfEntity(queryRunner: QueryRunner, userId: string): Promise<string | null> {
+    const rows = (await queryRunner.query(`SELECT entity_id FROM ci.users WHERE id = $1 FOR UPDATE`, [
+      userId,
+    ])) as Array<{ entity_id: string | null }> | undefined;
+
+    await queryRunner.query(`UPDATE ci.users SET entity_id = NULL WHERE id = $1`, [userId]);
+
+    return rows?.[0]?.entity_id ?? null;
+  }
+
+  /**
+   * Point the account back at its "You" person once the archive's rows are in:
+   * the first candidate (the archive's own profile, then the pointer the
+   * account had before) that the import left as an entity this account owns.
+   * With neither, the pointer stays empty rather than naming someone else.
+   */
+  private async reattachSelfEntity(
+    queryRunner: QueryRunner,
+    userId: string,
+    candidates: Array<string | null>,
+  ): Promise<void> {
+    for (const entityId of candidates) {
+      if (!entityId) {
+        continue;
+      }
+
+      // node-postgres via TypeORM answers an UPDATE with [rows, affectedCount].
+      const result = (await queryRunner.query(
+        `UPDATE ci.users SET entity_id = $2
+          WHERE id = $1
+            AND EXISTS (SELECT 1 FROM ci.entities WHERE entity_id = $2 AND owner_user_id = $1)`,
+        [userId, entityId],
+      )) as [unknown, number] | undefined;
+
+      if ((result?.[1] ?? 0) > 0) {
+        return;
+      }
+    }
   }
 
   private async setReplicationRole(queryRunner: QueryRunner, role: 'replica' | 'origin'): Promise<void> {

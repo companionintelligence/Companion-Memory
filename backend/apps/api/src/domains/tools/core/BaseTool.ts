@@ -87,6 +87,9 @@ export abstract class BaseTool<TInput = any, TOutput = any> {
         userId: context.userId,
         error: toolError,
         originalError: error instanceof Error ? error.message : String(error),
+        // The stack stays here, in the server's log. It is not in `toolError`,
+        // which goes back to the caller.
+        stack: error instanceof Error ? error.stack : undefined,
       });
 
       return {
@@ -102,7 +105,12 @@ export abstract class BaseTool<TInput = any, TOutput = any> {
   }
 
   /**
-   * Convert errors to standardized ToolError format
+   * Convert errors to standardized ToolError format.
+   *
+   * What this returns goes back to whoever called the tool (an MCP client, the
+   * REST tools route), so it carries no stack trace: that named the server's
+   * own file paths and dependencies for every failing tool. `execute` logs the
+   * stack instead.
    */
   protected handleError(error: unknown): ToolError {
     if (error instanceof Error) {
@@ -112,7 +120,6 @@ export abstract class BaseTool<TInput = any, TOutput = any> {
         retryable: true,
         details: {
           name: error.name,
-          stack: error.stack,
         },
       };
     }

@@ -224,6 +224,28 @@ export class ActionService {
   }
 
   /**
+   * Point an action at the chat thread opened about it, when it has none.
+   *
+   * The Today window chats about an action by continuing `action.threadId`.
+   * Actions the engines derive (Confirm home, metric suggestions) are created
+   * without a thread, so the first turn about one starts a new thread; linking
+   * it here is what makes the next visit continue that conversation. An action
+   * that already has a thread keeps it.
+   */
+  async attachThread(context: UserServiceContext, id: string, threadId: string): Promise<boolean> {
+    const result = await this.actionRepository
+      .createQueryBuilder()
+      .update(ActionEntity)
+      .set({ threadId })
+      .where('id = :id', { id })
+      .andWhere('user_id = :userId', { userId: context.userId })
+      .andWhere('thread_id IS NULL')
+      .execute();
+
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
    * Mark an action as dismissed.
    */
   async markAsDismissed(context: ServiceContext, id: string): Promise<Action | null> {

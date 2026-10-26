@@ -8,19 +8,30 @@ const USER = '00000000-0000-0000-0000-0000000000aa';
 
 const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
 
-function makeInsertBuilder(record: { values?: unknown[]; inserted: boolean }) {
+/**
+ * `takenIds` stands in for rows already in `ci.notes`: under `orIgnore()` an insert of
+ * one of those ids returns no row, which is how Postgres reports ON CONFLICT DO NOTHING.
+ */
+function makeInsertBuilder(
+  record: { values?: unknown; inserted: boolean },
+  takenIds: ReadonlySet<string> = new Set(),
+) {
   const qb: Record<string, unknown> = {};
   qb.insert = jest.fn(() => qb);
   qb.into = jest.fn(() => qb);
-  qb.values = jest.fn((v: unknown[]) => {
+  qb.orIgnore = jest.fn(() => qb);
+  qb.values = jest.fn((v: unknown) => {
     record.values = v;
 
     return qb;
   });
   qb.execute = jest.fn(async () => {
-    record.inserted = true;
+    const rows = ([] as Array<{ id: string }>).concat(record.values as Array<{ id: string }>);
+    const written = rows.filter((row) => !takenIds.has(row.id));
 
-    return { raw: [] };
+    record.inserted = written.length > 0;
+
+    return { raw: written.map((row) => ({ id: row.id })) };
   });
 
   return qb;
@@ -85,7 +96,8 @@ function makeQuery(stored: StoredRow[]) {
 }
 
 function makeService(stored: StoredRow[] = [], findOneResult: NoteEntity | null = null) {
-  const insertRecord = { inserted: false } as { values?: unknown[]; inserted: boolean };
+  const insertRecord = { inserted: false } as { values?: unknown; inserted: boolean };
+  const takenIds = new Set(findOneResult ? [findOneResult.id] : []);
   const created: NoteEntity[] = [];
   const { query, seen } = makeQuery(stored);
 
@@ -99,7 +111,12 @@ function makeService(stored: StoredRow[] = [], findOneResult: NoteEntity | null 
 
   const save = jest.fn(async (entity: NoteEntity) => entity);
   const find = jest.fn(async () => created);
-  const findOne = jest.fn(async () => findOneResult);
+  // Honors an owner filter, so a lookup scoped to this user cannot see a stranger's row.
+  const findOne = jest.fn(async (options?: { where?: { userId?: string } }) => {
+    const userId = options?.where?.userId;
+
+    return findOneResult && (userId === undefined || findOneResult.userId === userId) ? findOneResult : null;
+  });
 
   const repository = {
     create,
@@ -110,7 +127,7 @@ function makeService(stored: StoredRow[] = [], findOneResult: NoteEntity | null 
     // 6 persisted columns, matching repository.metadata.columns.length; drives
     // computeChunkSize in createMany.
     metadata: { target: NoteEntity, columns: { length: 6 } },
-    createQueryBuilder: jest.fn(() => makeInsertBuilder(insertRecord)),
+    createQueryBuilder: jest.fn(() => makeInsertBuilder(insertRecord, takenIds)),
   };
 
   const send = jest.fn<Promise<string[]>, [string, Record<string, unknown>]>(async () => []);
@@ -357,5 +374,84 @@ describe('NoteService single create still emits', () => {
     await service.create(CONTEXT, { id: 'n1', title: 'One', content: 'a' }, { emitCreated: false });
 
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('mints an id when the caller passes id: undefined (GraphQL createNote with no client id)', async () => {
+    const { service, insert, send } = makeService();
+
+    const note = await service.create(CONTEXT, {
+      id: undefined,
+      title: 'Shopping list',
+      content: '<p>eggs</p>',
+    });
+
+    const written = insert.values as NoteEntity;
+    expect(written.id).toEqual(expect.any(String));
+    expect(note?.id).toBe(written.id);
+    expect(send.mock.calls[0][1]).toEqual({ noteId: written.id });
+  });
+
+  it('keeps a client-minted id', async () => {
+    const { service, insert } = makeService();
+
+    await service.create(CONTEXT, { id: 'client-id', title: 'One', content: 'a' });
+
+    expect((insert.values as NoteEntity).id).toBe('client-id');
+  });
+
+  it('never goes through save(), which would UPDATE an existing row whoever owns it', async () => {
+    const { service, save } = makeService();
+
+    await service.create(CONTEXT, { id: 'client-id', title: 'One', content: 'a' });
+
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("refuses a client-minted id that belongs to another user's note", async () => {
+    const stranger = Object.assign(new NoteEntity(), { id: 'client-id', userId: 'someone-else' });
+    const { service, insert, send } = makeService([], stranger);
+
+    const note = await service.create(CONTEXT, { id: 'client-id', title: 'Mine', content: 'a' });
+
+    expect(note).toBeNull();
+    expect(insert.inserted).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('returns the stored note unchanged when the caller replays its own create', async () => {
+    const stored = Object.assign(new NoteEntity(), {
+      id: 'client-id',
+      userId: USER,
+      title: 'Edited since',
+      content: 'newer',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+    });
+    const { service, insert } = makeService([], stored);
+
+    const note = await service.create(CONTEXT, { id: 'client-id', title: 'Offline', content: 'older' });
+
+    expect(insert.inserted).toBe(false);
+    expect(note?.title).toBe('Edited since');
+    expect(note?.content).toBe('newer');
+    expect(note?.createdAt).toEqual(stored.createdAt);
+  });
+
+  it('does not look up an owner when the server mints the id', async () => {
+    const { service, findOne } = makeService();
+
+    await service.create(CONTEXT, { id: undefined, title: 'One', content: 'a' });
+
+    expect(findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('NoteService createMany ids', () => {
+  it('mints an id for a row that passes id: undefined', async () => {
+    const { service, insert } = makeService();
+
+    await service.createMany(CONTEXT, [{ id: undefined, title: 'One', content: 'a' }]);
+
+    expect((insert.values as NoteEntity[])[0].id).toEqual(expect.any(String));
   });
 });

@@ -72,7 +72,15 @@ function presetFor(config: { backend: LlmBackendKind; port: number; basePath?: s
 export function ModelSection() {
   const { ready, headers } = useSessionAuth();
   const [
-    { selectedModel, thinkingSupported, thinkingEnabled, toolsSupported, toolsEnabled, error: modelsError },
+    {
+      selectedModel,
+      chatModelRevision,
+      thinkingSupported,
+      thinkingEnabled,
+      toolsSupported,
+      toolsEnabled,
+      error: modelsError,
+    },
     { toggleThinking, toggleTools, refetch: refetchModels },
   ] = useModel();
 
@@ -155,7 +163,9 @@ export function ModelSection() {
     return () => {
       cancelled = true;
     };
-  }, [headers, ready]);
+    // `chatModelRevision`: the setting is per model, so a model switch made on
+    // this page has to show the new model's value, not the one loaded on mount.
+  }, [headers, ready, chatModelRevision]);
 
   useEffect(() => {
     if (!ready) {

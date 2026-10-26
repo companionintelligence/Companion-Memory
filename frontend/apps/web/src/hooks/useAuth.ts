@@ -246,6 +246,22 @@ async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }
   }
 }
 
+/** How often the session check is repeated while Memory does not answer it. */
+const UNREACHABLE_RETRY_MS = 5000;
+
+/**
+ * Whether a failed session call means Memory did not answer, rather than that it
+ * answered "no session": a network failure, or a 5xx from Memory or the gateway in
+ * front of it. A 4xx is an answer.
+ */
+function isUnansweredAuthError(err: unknown): boolean {
+  if (err instanceof FetchJsonError) {
+    return err.status >= 500;
+  }
+
+  return err instanceof TypeError;
+}
+
 async function refreshSession(): Promise<AuthResponse | undefined> {
   if (!getCsrfToken()) {
     await primeCsrfCookie();
@@ -502,6 +518,13 @@ type ReturnValue = [
      * error the response was meant to surface.
      */
     initializing: boolean;
+    /**
+     * True while the session could not be checked because Memory did not answer (a
+     * network failure or a 5xx from `/authenticate/refresh`, for example while its
+     * database is down). That is not "signed out": route gates show that Memory cannot
+     * be reached instead of Log In, and the check is retried until Memory answers.
+     */
+    unreachable: boolean;
     error: unknown | null;
     /**
      * The question a phone sign-out asks when captures are still queued after its last
@@ -553,6 +576,7 @@ function useAuth(): ReturnValue {
   const [loginError, setLoginError] = useState<unknown | null>(null);
   const [refreshError, setRefreshError] = useState<unknown | null>(null);
   const [initializing, setInitializing] = useState<boolean>(true);
+  const [unreachable, setUnreachable] = useState<boolean>(false);
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   // Native-only: present once the keystore API key is loaded/minted. Drives the
@@ -733,6 +757,7 @@ function useAuth(): ReturnValue {
       await clearOutboxAfterSignOut();
       setNativeApiKey(null);
       setAccessToken(null);
+      setUnreachable(false);
       setLoginLoading(false);
       setLoginError(null);
       navigate('/');
@@ -752,6 +777,7 @@ function useAuth(): ReturnValue {
     // Enrichment this account still owes must not be requested under the next one.
     resetIngestFinishState();
     setAccessToken(null);
+    setUnreachable(false);
     setLoginLoading(false);
     setLoginError(null);
 
@@ -879,6 +905,14 @@ function useAuth(): ReturnValue {
         }
       }
 
+      if (isUnansweredAuthError(err)) {
+        // Memory did not answer. Keep the token: it may still be good, and an outage is
+        // not a sign-out. The retry below asks again until Memory answers.
+        setUnreachable(true);
+
+        return;
+      }
+
       setRefreshError(err);
       setAccessToken(null);
     }
@@ -926,13 +960,41 @@ function useAuth(): ReturnValue {
           const data = await refreshSession();
           setAccessToken(data?.accessToken ?? null);
         }
-      } catch {
-        // No valid session cookie, user will need to log in
+      } catch (err: unknown) {
+        // No valid session cookie, user will need to log in. Unless Memory did not
+        // answer at all, which says nothing about the session: retry instead.
+        if (isUnansweredAuthError(err)) {
+          setUnreachable(true);
+        }
       } finally {
         setInitializing(false);
       }
     })();
   }, []);
+
+  // While the session check goes unanswered, ask again until Memory answers either way.
+  useEffect(() => {
+    if (!unreachable) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      refreshSession()
+        .then((data) => {
+          setAccessToken(data?.accessToken ?? null);
+          setUnreachable(false);
+        })
+        .catch((err: unknown) => {
+          if (!isUnansweredAuthError(err)) {
+            // Memory answered: there is no session after all.
+            setAccessToken(null);
+            setUnreachable(false);
+          }
+        });
+    }, UNREACHABLE_RETRY_MS);
+
+    return () => clearInterval(timer);
+  }, [unreachable]);
 
   useAutoRefreshToken(accessToken, refresh);
 
@@ -1105,6 +1167,7 @@ function useAuth(): ReturnValue {
       authenticated: Boolean(accessToken) || Boolean(nativeApiKey),
       loading: loginLoading || initializing,
       initializing,
+      unreachable,
       error: loginError ?? refreshError,
       signOutPrompt,
     },

@@ -9,7 +9,7 @@ import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
-import { emailDirection, isDraft } from './email_direction';
+import { emailDirection, emailDirectionBasis, isDraft } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import { emailThreadId } from './email_thread';
 import { isHumanCorrespondence } from './human_correspondence';
@@ -390,6 +390,7 @@ export class GmailFileImporter implements FileImporter {
     // canonical mapping reads `Direction` (mapping.ts#directionFor), so the
     // communication row carries it through to CI-Server.
     const direction = emailDirection(headersMap);
+    const directionBasis = emailDirectionBasis(headersMap);
     // Body snippet so the canonical mapping carries text to CI-Server; capped to
     // keep metadata/embeddings sane (full body still lives in content.data).
     // From/To ride along too so the comms mapping can fill participants_metadata.
@@ -442,6 +443,7 @@ export class GmailFileImporter implements FileImporter {
       To: to,
       Cc: cc,
       Direction: direction,
+      DirectionBasis: directionBasis,
       MessageID: cleanMsgID,
       InReplyTo: inReply?.replace(/[<>]/g, ''),
       References: refs?.replace(/[<>]/g, ' '),

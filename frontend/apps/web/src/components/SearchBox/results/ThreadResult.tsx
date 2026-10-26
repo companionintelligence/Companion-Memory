@@ -18,5 +18,5 @@ interface Props {
 export function ThreadResult({ thread }: Props) {
   const data = useFragment(THREAD_FRAGMENT, thread);
 
-  return <SearchResultRow icon={<ThreadIcon />} title={data.name} kind="Thread" />;
+  return <SearchResultRow icon={<ThreadIcon />} title={data.name?.trim() || 'Untitled chat'} kind="Thread" />;
 }

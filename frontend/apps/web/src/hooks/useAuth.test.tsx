@@ -117,6 +117,83 @@ describe('useAuth', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
     expect(result.current[0].authToken).toBeNull();
     expect(result.current[0].expired).toBe(true); // no token decodes as expired
+    expect(result.current[0].unreachable).toBe(false);
+  });
+
+  describe('when Memory does not answer the session check', () => {
+    it('reports Memory unreachable instead of signed out, and signs in once it answers', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      try {
+        let memoryUp = false;
+
+        setFetch((url) => {
+          if (url.endsWith('/api/authenticate/refresh')) {
+            // The database is down: Memory (or the gateway) answers 500 / 502.
+            return memoryUp ? jsonResponse({ accessToken: 'back' }) : emptyResponse(false, 502);
+          }
+
+          return emptyResponse();
+        });
+
+        const { result } = renderHook(() => useAuth(), { wrapper });
+
+        await waitFor(() => expect(result.current[0].initializing).toBe(false));
+        expect(result.current[0].unreachable).toBe(true);
+        expect(result.current[0].authenticated).toBe(false);
+
+        memoryUp = true;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+
+        await waitFor(() => expect(result.current[0].authToken).toBe('back'));
+        expect(result.current[0].unreachable).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats a network failure the same way', async () => {
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          throw new TypeError('Failed to fetch');
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].unreachable).toBe(true);
+    });
+
+    it('keeps the token when a later refresh goes unanswered', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      let refreshCalls = 0;
+
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          refreshCalls += 1;
+
+          return refreshCalls === 1 ? jsonResponse({ accessToken: 'initial-token' }) : emptyResponse(false, 500);
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
+
+      await act(async () => {
+        await result.current[1].refresh();
+      });
+
+      expect(result.current[0].authToken).toBe('initial-token');
+      expect(result.current[0].unreachable).toBe(true);
+      expect(result.current[0].error).toBeNull();
+    });
   });
 
   it('logs in, sending the CSRF token from the cookie', async () => {

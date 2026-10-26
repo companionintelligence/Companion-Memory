@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { ErrorPage, LoadingPage, useDeviceLayout } from '@ci/common';
 import { Dialog, IconButton, cn } from '@ci/shadcn';
@@ -91,11 +91,19 @@ export function FeedModal({ onClose }: Props) {
 
   const [{ data: action, loading: actionLoading, error: actionError }] = useActionService(actionId ?? null);
   const [{ thread }] = useThreadService(action?.threadId ?? null);
+  // An action an engine derived (Confirm home, a metric suggestion) has no
+  // thread. The first turn about it starts one, which the server opens with the
+  // action and links to it (`actionId` below). Later turns in this window
+  // continue that thread; it is not loaded here, because the turns already on
+  // screen are this window's own, and a reload reads it through the action.
+  const [startedThreadId, setStartedThreadId] = useState<string | null>(null);
   const [
     { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving },
     { submit: submitChatRequest, stop: stopChatRequest, attach: attachChatStream, detach: detachChatStream },
   ] = useChatRequester({
-    threadId: thread?.id ?? null,
+    threadId: thread?.id ?? startedThreadId,
+    actionId: action?.id ?? null,
+    onNewThread: setStartedThreadId,
   });
 
   useEffect(() => {
@@ -272,6 +280,18 @@ export function FeedModal({ onClose }: Props) {
       <Dialog.Content
         className="h-[calc(100%-2rem)] md:max-w-[70vw] md:h-[70vh] p-0 flex flex-col gap-0"
         showCloseButton={false}
+        // Radix focuses the first focusable element, the Close button, whose
+        // tooltip opens on focus; the first Esc then only closed the tooltip.
+        // Start in the chat box instead, or on the window itself while the
+        // action is still loading and the box is disabled.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+
+          const content = event.currentTarget as HTMLElement | null;
+          const input = content?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
+
+          (input ?? content)?.focus();
+        }}
       >
         <Dialog.Header
           className={cn(

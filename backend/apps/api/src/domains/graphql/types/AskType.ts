@@ -63,6 +63,14 @@ export class AskQueryType {
   prompt!: string;
 
   /**
+   * Whether characters that render as nothing were removed from the prompt
+   * when the ask was made. `prompt` is stored without them, so a client cannot
+   * find them itself; this is what lets the review card say so.
+   */
+  @Field(() => Boolean)
+  promptHiddenCharactersRemoved!: boolean;
+
+  /**
    * What made this ask, when the asker declared it. Null means they did not —
    * which is itself the reason a delegation-restricted grant will not
    * auto-answer it.
@@ -86,6 +94,7 @@ export class AskQueryType {
       queryType: query.queryType,
       dataClass: query.dataClass ?? null,
       prompt: query.prompt,
+      promptHiddenCharactersRemoved: query.promptHiddenCharactersRemoved === true,
       actor: query.actor ? { kind: query.actor.kind, label: query.actor.label ?? null } : null,
       // Only a string counts. `filters` is jsonb and a non-string there is not
       // a purpose somebody stated — rendering `[object Object]` beside "they

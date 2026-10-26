@@ -84,6 +84,28 @@ export function renderBatchedNull(
   );
 }
 
+/**
+ * One unbatched delete, for a compressed TimescaleDB chunk.
+ *
+ * A compressed chunk has no `ctid` to batch on (TimescaleDB answers
+ * "transparent decompression only supports tableoid system column"), but it
+ * does take an ordinary `DELETE … WHERE`, decompressing only the batches the
+ * predicate touches. One chunk is one time slice of one hypertable, so the
+ * statement is bounded by the chunk rather than by a `LIMIT`.
+ */
+export function renderUnbatchedDelete(target: TableRef, scope: PurgeScope): string {
+  return countingWrapper(`DELETE FROM ${quoteTable(target)} WHERE ${renderScope(scope)}`);
+}
+
+/** {@link renderBatchedNull} for a compressed chunk; see {@link renderUnbatchedDelete}. */
+export function renderUnbatchedNull(target: TableRef, column: string, scope: PurgeScope): string {
+  const quotedColumn = quoteIdentifier(column);
+
+  return countingWrapper(
+    `UPDATE ${quoteTable(target)} SET ${quotedColumn} = NULL WHERE ${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`,
+  );
+}
+
 /** The final statement. Unbatched — it is exactly one row. */
 export function renderDeleteUser(target: TableRef): string {
   return countingWrapper(`DELETE FROM ${quoteTable(target)} WHERE ${quoteIdentifier('id')} = $1`);

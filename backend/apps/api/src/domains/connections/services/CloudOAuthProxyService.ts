@@ -331,9 +331,12 @@ export class CloudOAuthProxyService {
     }
 
     try {
+      // Companion Portal reads a device on this route from `x-device-key` alone (its
+      // `deviceOrUserAuthMiddleware`). The Basic header the OAuth routes take was ignored here, and
+      // the call answered 401, so no installed agent counted as installed until it was connected.
       const response = await fetch(`${this.baseUrl}/api/devices/applications`, {
         headers: {
-          Authorization: this.authorizationHeader,
+          'x-device-key': this.apiKey,
         },
       });
 

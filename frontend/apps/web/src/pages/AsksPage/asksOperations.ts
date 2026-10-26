@@ -28,6 +28,7 @@ export const ASK_INBOX = gql(`
         queryType
         dataClass
         prompt
+        promptHiddenCharactersRemoved
         purpose
         actor {
           kind
@@ -291,6 +292,7 @@ export const ASK_DISCLOSURE_HISTORY = gql(`
           queryType
           dataClass
           prompt
+          promptHiddenCharactersRemoved
           purpose
           actor {
             kind

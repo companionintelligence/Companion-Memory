@@ -37,7 +37,9 @@ const SERVER_PROPS_TTL_MS = 5 * 60_000;
  *   parts with data URLs.
  * - Reasoning: Ollama uses `think: true`. vLLM/Qwen uses
  *   `chat_template_kwargs.enable_thinking` plus `reasoning_content` deltas,
- *   which we map onto Ollama's `message.thinking`.
+ *   which we map onto Ollama's `message.thinking`. Ollama's own `/v1` reads
+ *   neither and takes `reasoning_effort: "none"` for thinking off; see
+ *   {@link thinkingBody}.
  * - Tools: Ollama returns structured `message.tool_calls`. vLLM only does that
  *   when `--tool-call-parser` matches the model's markup; Qwen3.6 often dumps
  *   `<toolcall><function=…>` into `content` instead (same finding as
@@ -52,6 +54,46 @@ export function vllmThinkingExtraBody(enableThinking?: boolean): {
   return {
     chat_template_kwargs: { enable_thinking: enableThinking === true },
   };
+}
+
+/**
+ * The thinking switch for every OpenAI-compatible backend: vLLM's
+ * `chat_template_kwargs`, plus `reasoning_effort: "none"` whenever thinking is
+ * off. Ollama's `/v1` ignores `chat_template_kwargs` (and a top-level `think`),
+ * so on Ollama, and on a Hub pool in front of it, a thinking model reasoned
+ * anyway: background jobs that ask for thinking off and cap the reply spent
+ * the whole cap on reasoning and got empty content back (answer inference on
+ * qwen3.5:9b, 800 of 800 tokens; image descriptions on gemma4:e2b, 256 of
+ * 256). Ollama maps `reasoning_effort: "none"` to `think: false`. Not sent
+ * once this backend has refused it (vLLM accepts only low, medium or high);
+ * see {@link isReasoningEffortRejection}.
+ */
+export function thinkingBody(
+  enableThinking: boolean | undefined,
+  reasoningEffortRejected = false,
+): ReturnType<typeof vllmThinkingExtraBody> & { reasoning_effort?: 'none' } {
+  return {
+    ...vllmThinkingExtraBody(enableThinking),
+    ...(enableThinking !== true && !reasoningEffortRejected && { reasoning_effort: 'none' as const }),
+  };
+}
+
+/**
+ * A 4xx that blames `reasoning_effort`: how a backend that validates the field
+ * refuses "none" (vLLM's request model allows only low, medium and high).
+ */
+export function isReasoningEffortRejection(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+
+  if (typeof status !== 'number' || status < 400 || status >= 500) {
+    return false;
+  }
+
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+  return ['reasoning_effort', 'reasoning effort', 'invalid reasoning value'].some((marker) =>
+    message.includes(marker),
+  );
 }
 
 type ResponseFormat =
@@ -106,6 +148,9 @@ export class OpenAiCompatChatDriver {
 
   /** Set once this endpoint has refused a `json_schema` response format; see {@link toResponseFormat}. */
   private jsonSchemaRejected = false;
+
+  /** Set once this endpoint has refused `reasoning_effort: "none"`; see {@link thinkingBody}. */
+  private reasoningEffortRejected = false;
 
   /** The last `/props` answer (a `null` answer is remembered too) and when it was taken. */
   private serverPropsCache: { at: number; value: ServerProps | null } | null = null;
@@ -201,7 +246,6 @@ export class OpenAiCompatChatDriver {
     /** Deadline for the response, in ms; absent uses `llm.firstResponseTimeoutMs`. */
     timeoutMs?: number;
   }): Promise<ChatResponse> {
-    const extraBody = vllmThinkingExtraBody(request.enableThinking);
     const create = (format: ResponseFormat | undefined) =>
       this.client.chat.completions.create(
         {
@@ -210,7 +254,7 @@ export class OpenAiCompatChatDriver {
           ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
           ...(format && { response_format: format }),
           ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-          ...extraBody,
+          ...thinkingBody(request.enableThinking, this.reasoningEffortRejected),
         },
         {
           signal: request.signal,
@@ -219,20 +263,31 @@ export class OpenAiCompatChatDriver {
         },
       );
 
-    const format = toResponseFormat(request.format, this.jsonSchemaRejected);
-    let response: Awaited<ReturnType<typeof create>>;
+    let format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    let response: Awaited<ReturnType<typeof create>> | undefined;
 
-    try {
-      response = await create(format);
-    } catch (err) {
-      if (format?.type !== 'json_schema' || !isResponseFormatRejection(err)) {
-        throw err;
+    // At most one retry per kind of refusal: each flag below is set before its retry and stops
+    // that field being sent again, so the loop cannot run more than three times.
+    while (response === undefined) {
+      try {
+        response = await create(format);
+      } catch (err) {
+        if (format?.type === 'json_schema' && isResponseFormatRejection(err)) {
+          // Remembered for this driver's life (one per configured endpoint), so a backend without
+          // schema support costs one rejected request, not one per structured call.
+          this.jsonSchemaRejected = true;
+          format = { type: 'json_object' };
+        } else if (
+          request.enableThinking !== true &&
+          !this.reasoningEffortRejected &&
+          isReasoningEffortRejection(err)
+        ) {
+          // The same for a backend that validates `reasoning_effort` and refuses "none".
+          this.reasoningEffortRejected = true;
+        } else {
+          throw err;
+        }
       }
-
-      // Remembered for this driver's life (one per configured endpoint), so a backend without
-      // schema support costs one rejected request, not one per structured call.
-      this.jsonSchemaRejected = true;
-      response = await create({ type: 'json_object' });
     }
 
     const choice = response.choices[0];
@@ -296,18 +351,35 @@ export class OpenAiCompatChatDriver {
      */
     maxTokens?: number;
   }): AsyncGenerator<ChatResponse> {
-    const extraBody = vllmThinkingExtraBody(request.enableThinking);
-    const stream = await this.client.chat.completions.create(
-      {
-        model: request.model,
-        messages: toOpenAiMessages(request.messages),
-        stream: true,
-        ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
-        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-        ...extraBody,
-      },
-      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
-    );
+    const open = () =>
+      this.client.chat.completions.create(
+        {
+          model: request.model,
+          messages: toOpenAiMessages(request.messages),
+          stream: true,
+          ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
+          ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
+          ...thinkingBody(request.enableThinking, this.reasoningEffortRejected),
+        },
+        { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
+      );
+    let stream: Awaited<ReturnType<typeof open>>;
+
+    try {
+      stream = await open();
+    } catch (err) {
+      if (
+        request.enableThinking === true ||
+        this.reasoningEffortRejected ||
+        !isReasoningEffortRejection(err)
+      ) {
+        throw err;
+      }
+
+      // See chat(): a backend that refuses `reasoning_effort: "none"` is asked without it from now on.
+      this.reasoningEffortRejected = true;
+      stream = await open();
+    }
 
     // Streamed tool calls arrive fragmented: an entry with id+name at some
     // index, then argument string fragments for that index. Accumulate by index.

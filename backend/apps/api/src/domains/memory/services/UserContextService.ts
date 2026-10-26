@@ -38,6 +38,12 @@ export interface UserContext {
     entityId: string;
     name: string;
     relationship: string;
+    /**
+     * Which way `relationship` points: `outgoing` is "the user PARENT_OF this
+     * person" (they are the user's child), `incoming` is "this person
+     * PARENT_OF the user" (their parent). Only the asymmetric types need it.
+     */
+    direction?: 'outgoing' | 'incoming';
     age?: number;
     properties?: Record<string, unknown>;
   }>;
@@ -134,6 +140,7 @@ export class UserContextService {
           entityId: member.entityId,
           name: member.name,
           relationship: member.relationship,
+          direction: member.direction,
           age: member.age,
           properties: this.pickImportantProperties(member.properties ?? {}),
         })),
@@ -423,6 +430,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       relationship: string;
+      direction: 'outgoing' | 'incoming';
       age?: number;
       properties?: Record<string, unknown>;
     }>
@@ -439,6 +447,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       relationship: string;
+      direction: 'outgoing' | 'incoming';
       age?: number;
       properties?: Record<string, unknown>;
     }> = [];
@@ -452,6 +461,9 @@ export class UserContextService {
           entityId: relatedNode.entity_id,
           name: relatedNode.name ?? 'Unknown',
           relationship: edge.relationship_type,
+          // Kept because `relationship` alone cannot tell a parent from a
+          // child: both are PARENT_OF, pointing opposite ways.
+          direction: edge.from_entity_id === userEntityId ? 'outgoing' : 'incoming',
           age: relatedNode.properties?.['age'] as number | undefined,
           properties: relatedNode.properties ?? {},
         });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryFailedError } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -13,6 +13,8 @@ import {
   CommunicationService,
   ContentService,
   CalendarEventService,
+  changedFieldsBetween,
+  GraphDeltaWriter,
   ItemService,
   PersonService,
   PlaceService,
@@ -27,6 +29,23 @@ import {
   RelationshipType,
   RelationshipMap,
 } from '../types';
+
+/**
+ * A `date` column as `YYYY-MM-DD`, however it arrives: TypeORM reads one back
+ * as that string, and `updateRelationship` hands in the GraphQL `Date` scalar's
+ * value, a Date at UTC midnight of the day.
+ */
+function dateOnly(value: Date | string | null | undefined): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10);
+  }
+
+  return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+}
 
 @Injectable()
 export class RelationshipService {
@@ -43,6 +62,9 @@ export class RelationshipService {
     private readonly placeService: PlaceService,
     private readonly threadService: ThreadService,
     private readonly logger: LoggerService,
+    // Change History. Optional so unit harnesses that build the service by hand
+    // keep working; MemoryModule always provides it.
+    @Optional() private readonly graphDeltaWriter?: GraphDeltaWriter,
   ) {
     this.logger.setContext(RelationshipService.name);
   }
@@ -201,6 +223,8 @@ export class RelationshipService {
     try {
       const entity = await this.relationshipRepository.save(record);
 
+      await this.recordDelta(entity, 'created', 'RelationshipService.create');
+
       return RelationshipEntity.toEgressType(entity);
     } catch (err: unknown) {
       // There is a uniqueness constraint on relationships to prevent duplicates
@@ -345,6 +369,9 @@ export class RelationshipService {
       return null;
     }
 
+    // As it was, for Change History: `record` is mutated in place below.
+    const before = { ...record };
+
     Object.assign(record, withoutUndefined(data));
 
     const updatedEntity = await this.relationshipRepository.save(record);
@@ -363,17 +390,97 @@ export class RelationshipService {
     // #2703, where the same class of bug shipped without this safety net).
     const entity = await this.findById(context, updatedEntity.id);
 
+    await this.recordUpdate(before, updatedEntity);
+
     return RelationshipEntity.toEgressType(entity!);
   }
 
+  /**
+   * The Change History row for a link edited in the app (`updateRelationship`):
+   * what moved among its type, strength, dates and properties, with both ends so
+   * both people's histories show it. Nothing when nothing moved.
+   */
+  private async recordUpdate(before: RelationshipEntity, after: RelationshipEntity): Promise<void> {
+    const fields = (row: RelationshipEntity) => ({
+      relationship_type: row.type,
+      strength: row.strength,
+      is_bidirectional: row.isBidirectional,
+      start_date: dateOnly(row.startDate),
+      end_date: dateOnly(row.endDate),
+      properties: row.properties ?? {},
+    });
+    const changedFields = changedFieldsBetween(fields(before), fields(after), [
+      'relationship_type',
+      'strength',
+      'is_bidirectional',
+      'start_date',
+      'end_date',
+      'properties',
+    ]);
+
+    if (Object.keys(changedFields).length === 0) {
+      return;
+    }
+
+    await this.graphDeltaWriter?.record({
+      nodeType: 'relationship',
+      changeType: 'updated',
+      relationshipId: after.id,
+      relationshipType: after.type,
+      fromEntityId: after.fromNodeId,
+      toEntityId: after.toNodeId,
+      ownerUserId: after.userId,
+      changeSource: 'RelationshipService.update',
+      changedByUserId: after.userId,
+      changedFields,
+    });
+  }
+
   async delete(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.relationshipRepository.delete({
+    const where = {
       id,
       ...(context.userId !== SYSTEM_USER && {
         userId: context.userId,
       }),
-    });
+    };
+    const existing = this.graphDeltaWriter ? await this.relationshipRepository.findOne({ where }) : null;
+    const result = await this.relationshipRepository.delete(where);
+    const deleted = result.affected != null && result.affected > 0;
 
-    return result.affected != null && result.affected > 0;
+    if (deleted && existing) {
+      await this.recordDelta(existing, 'deleted', 'RelationshipService.delete');
+    }
+
+    return deleted;
+  }
+
+  /**
+   * The Change History row for a link made or removed in the app. Both people's
+   * histories read it, through its from and to entity ids.
+   */
+  private async recordDelta(
+    relationship: RelationshipEntity,
+    changeType: 'created' | 'deleted',
+    changeSource: string,
+  ): Promise<void> {
+    const side = changeType === 'created' ? 'new' : 'old';
+
+    await this.graphDeltaWriter?.record({
+      nodeType: 'relationship',
+      changeType,
+      relationshipId: relationship.id,
+      relationshipType: relationship.type,
+      fromEntityId: relationship.fromNodeId,
+      toEntityId: relationship.toNodeId,
+      ownerUserId: relationship.userId,
+      changeSource,
+      changedByUserId: relationship.userId,
+      changedFields: {
+        relationship_type: { [side]: relationship.type },
+        from_entity_id: { [side]: relationship.fromNodeId },
+        to_entity_id: { [side]: relationship.toNodeId },
+        properties: { [side]: relationship.properties ?? {} },
+      },
+    });
   }
 }

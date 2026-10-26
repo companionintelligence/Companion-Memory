@@ -72,13 +72,14 @@ async function buildApp(
   monitor: ReturnType<typeof makeMonitorService>,
   query: ReturnType<typeof makeQueryService> = makeQueryService(),
   adminGuard: unknown = AlwaysAllowGuard,
+  controls: unknown = {},
 ) {
   const module = await Test.createTestingModule({
     controllers: [JobsController],
     providers: [
       { provide: JobMonitorService, useValue: monitor },
       { provide: JobQueryService, useValue: query },
-      { provide: JobControlsService, useValue: {} },
+      { provide: JobControlsService, useValue: controls },
     ],
   })
     .overrideGuard(JwtOrApiKeyAuthGuard)
@@ -309,6 +310,53 @@ describe('POST /jobs/clear', () => {
  * sessions, so all three need the principal check, and asserting it on one of
  * them would leave the other two to be re-litigated later.
  */
+/**
+ * `PUT /jobs/controls` with a concurrency out of range. The Jobs page shows the
+ * 400's `message` and nothing else, so the reason has to be in it: the route's
+ * zod pipe used to refuse 100 as a bare "Validation failed" before
+ * `JobControlsService.checkConcurrency` could say what the range is.
+ */
+describe('PUT /jobs/controls', () => {
+  let app: INestApplication;
+  let repository: { query: jest.Mock };
+
+  beforeEach(async () => {
+    repository = { query: jest.fn() };
+    app = await buildApp(
+      AlwaysAllowGuard,
+      makeMonitorService(),
+      makeQueryService(),
+      AlwaysAllowGuard,
+      new JobControlsService(repository as never),
+    );
+  });
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  it.each([
+    ['100 for the whole appliance', { global: { concurrency: 100 } }],
+    ['0 per queue', { global: { perQueueConcurrency: 0 } }],
+    ['2.5 for the whole appliance', { global: { concurrency: 2.5 } }],
+  ])('explains the 1 to 64 range when given %s, and writes nothing', async (_label, body) => {
+    const response = await request(app.getHttpServer()).put('/jobs/controls').send(body).expect(400);
+
+    expect(response.body.message).toMatch(/^Concurrency must be a whole number between 1 and 64\./);
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  it('still refuses a concurrency that is not a number at the pipe', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/jobs/controls')
+      .send({ global: { concurrency: 'lots' } })
+      .expect(400);
+
+    expect(response.body.message).toBe('Validation failed');
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('the appliance-wide control plane declares BOTH axes', () => {
   const ROUTES: ReadonlyArray<[name: string, handler: unknown]> = [
     ['clearTerminal', JobsController.prototype.clearTerminal],

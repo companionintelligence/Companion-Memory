@@ -6,8 +6,8 @@ import { isolateFromMap, registerMap } from './mapIsolation';
 /*
  * The contract Radix's dismissable layer needs: a press on an isolated
  * control still bubbles up to `document` (mousedown, touchstart, click), while
- * the map's own reactions — drag, click, double-click zoom, the context menu —
- * are kept off some other way.
+ * the map's own reactions (drag, click, double-click zoom) are kept off some
+ * other way. A right-click bubbles too, for the cards' own context menus.
  */
 
 function fakeMap(container: HTMLElement, { draggingOn = true } = {}) {
@@ -121,11 +121,16 @@ describe('isolateFromMap', () => {
     expect(reaches('mousedown', control)).toBe(true);
   });
 
-  it('keeps double-click and the context menu from the map, which the dismissable layer does not watch', () => {
+  it('keeps double-click from the map, which the dismissable layer does not watch', () => {
     const { inner } = mount();
 
     expect(reaches('dblclick', inner)).toBe(false);
-    expect(reaches('contextmenu', inner)).toBe(false);
+  });
+
+  it('lets a right-click bubble, so React’s root listener can open a card’s context menu', () => {
+    const { inner } = mount();
+
+    expect(reaches('contextmenu', inner)).toBe(true);
   });
 
   it("sets the click flag Leaflet's Map reads instead of stopping the click", () => {

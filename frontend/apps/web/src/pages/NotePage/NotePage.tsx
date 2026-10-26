@@ -39,6 +39,13 @@ import { useEntityReference } from './useEntityReference';
 const AUTOSAVE_THROTTLE_MS = 1000;
 
 /**
+ * How long a save may stay unanswered before the toolbar stops saying "Saving".
+ * Behind the Hub's gateway a request to a stopped Memory hangs for 30 s or more
+ * before it fails. Until then the spinner was all the page showed.
+ */
+const SLOW_SAVE_MS = 8000;
+
+/**
  * The save status's words ("Saving", "Saved offline", "5m"). A phone's toolbar has
  * no room left beside the formatting buttons, so there only the icon shows and the
  * words stay in the accessible name; wider screens show both, as before.
@@ -179,6 +186,28 @@ export function RemoteNotePage() {
 
   const note = data?.note;
 
+  const saving = updating || creating;
+  const [savingTooLong, setSavingTooLong] = useState(false);
+
+  // Counts every save the appliance answered, landed or failed. Apollo keeps `loading`
+  // true until the LATEST of overlapping saves settles, so without this an earlier save
+  // landing would not restart the clock below, and a slow but working link would be
+  // reported as not answering.
+  const [answeredSaves, setAnsweredSaves] = useState(0);
+  const countAnswer = () => setAnsweredSaves((count) => count + 1);
+
+  useEffect(() => {
+    setSavingTooLong(false);
+
+    if (!saving) {
+      return;
+    }
+
+    const timer = setTimeout(() => setSavingTooLong(true), SLOW_SAVE_MS);
+
+    return () => clearTimeout(timer);
+  }, [saving, answeredSaves]);
+
   // One editor for a draft and the id it mints. A new route id would otherwise
   // remount the editor and focus it at the start, which is the same moment the
   // chat control appears.
@@ -197,30 +226,38 @@ export function RemoteNotePage() {
    * The id is always the raw uuid from the route (or the freshly minted one), never
    * `note.id` — that is the base64 global id the GraphQL layer speaks, and `/v1/notes`
    * keys on the real uuid.
+   *
+   * `capturedAtMs` is when the save that failed was SENT. A request can hang for 30 s
+   * and fail after a newer save has already landed; stamping the snapshot with the
+   * failure time would make it look newer than that save, and the drain would put the
+   * older text back over it.
    */
-  const queueSnapshot = useCallback(async (noteId: string, title: string, content: string) => {
-    const outcome = await captureNote(buildNoteRecord({ id: noteId, title, content }));
+  const queueSnapshot = useCallback(
+    async (noteId: string, title: string, content: string, capturedAtMs?: number) => {
+      const outcome = await captureNote(buildNoteRecord({ id: noteId, title, content }, capturedAtMs));
 
-    if (outcome.status === 'queued') {
-      setAuthoredContent(content);
-      setLocalTitle(title);
-      setQueuedAt(outcome.record.captured_at);
-      setSaveError(null);
-      setIsDirty(false);
+      if (outcome.status === 'queued') {
+        setAuthoredContent(content);
+        setLocalTitle(title);
+        setQueuedAt(outcome.record.captured_at);
+        setSaveError(null);
+        setIsDirty(false);
 
-      return true;
-    }
+        return true;
+      }
 
-    // Nothing was stored anywhere. Say so — the one thing this path must never do is
-    // let the editor keep looking saved.
-    setSaveError(
-      outcome.status === 'unavailable'
-        ? 'Not saved — your Companion is unreachable and this device has no offline queue.'
-        : `Not saved — ${outcome.message}`,
-    );
+      // Nothing was stored anywhere. Say so — the one thing this path must never do is
+      // let the editor keep looking saved.
+      setSaveError(
+        outcome.status === 'unavailable'
+          ? 'Not saved — your Companion is unreachable and this device has no offline queue.'
+          : `Not saved — ${outcome.message}`,
+      );
 
-    return false;
-  }, []);
+      return false;
+    },
+    [],
+  );
 
   useEffect(() => {
     // The appliance served this note back, so the drain landed and its id is no longer
@@ -310,6 +347,8 @@ export function RemoteNotePage() {
 
         isCreatingRef.current = true;
 
+        const sentAt = Date.now();
+
         try {
           const result = await createNote({
             variables: {
@@ -318,7 +357,7 @@ export function RemoteNotePage() {
                 title,
               },
             },
-          });
+          }).finally(countAnswer);
 
           if (result.data?.createNote?.note?.id) {
             const newId = GlobalUID.parse('note', result.data.createNote.note.id);
@@ -341,7 +380,7 @@ export function RemoteNotePage() {
           // and nothing has to be swapped when the drain succeeds.
           const localId = newNoteId();
 
-          if (await queueSnapshot(localId, title, content)) {
+          if (await queueSnapshot(localId, title, content, sentAt)) {
             if (editorSessionRef.current) {
               claimMintedNote(editorSessionRef.current, localId);
             }
@@ -360,6 +399,8 @@ export function RemoteNotePage() {
       }
 
       if (note?.id) {
+        const sentAt = Date.now();
+
         try {
           await updateNote({
             variables: {
@@ -369,16 +410,20 @@ export function RemoteNotePage() {
                 title,
               },
             },
-          });
+          }).finally(countAnswer);
 
           setIsDirty(false);
           setSaveError(null);
+          // The appliance holds this text now. A snapshot queued by an earlier failed
+          // save is older than it (see `queueSnapshot`), so "Saved offline" no longer
+          // describes the note; nothing else clears it while the note id stays the same.
+          setQueuedAt(null);
         } catch (e) {
           console.error('Failed to save note', e);
 
           // Safe to queue: the appliance served this note, so the editor is holding its
           // true content and a snapshot cannot overwrite anything with less than it had.
-          await queueSnapshot(id, title, content);
+          await queueSnapshot(id, title, content, sentAt);
         }
 
         return;
@@ -432,7 +477,17 @@ export function RemoteNotePage() {
                     <TriangleAlert className="text-destructive h-4 w-4" strokeWidth={1.5} />
                     <div>{saveError}</div>
                   </>
-                ) : updating || creating ? (
+                ) : saving && savingTooLong ? (
+                  // The text stays in the editor. The save can still land, or fail into
+                  // the offline queue or the "Not saved" error above; until then, say it
+                  // is stuck. A phone's toolbar only has room for the first sentence.
+                  <>
+                    <TriangleAlert className="text-amber-300 h-4 w-4" strokeWidth={1.5} />
+                    <div>
+                      Not saved yet.<span className={STATUS_WORDS}> Your Companion isn't answering.</span>
+                    </div>
+                  </>
+                ) : saving ? (
                   <>
                     <Spinner size={12} variant="circle" color="rgb(6,108,128)" />
                     <div className={STATUS_WORDS}>Saving</div>

@@ -571,6 +571,11 @@ export interface FindObjectObservationsFilter {
   /** `true` = only rows linked to an owned unit; `false` = only unlinked. */
   resolved?: boolean;
   confirmedByUser?: boolean;
+  /**
+   * `true` = only sightings a person has answered (`resolution_method = 'user'`,
+   * either way); `false` = only those nobody has.
+   */
+  reviewedByUser?: boolean;
   observedFrom?: Date;
   observedTo?: Date;
   limit?: number;

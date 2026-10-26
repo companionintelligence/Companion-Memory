@@ -83,9 +83,12 @@ export class FacebookFriendsTransformService {
             const currentProperties = (existingEntity.properties as Record<string, unknown>) ?? {};
             const mergedProperties = { ...currentProperties, ...properties };
 
-            await this.personService.update({ userId }, existingEntity.id, {
-              properties: mergedProperties,
-            });
+            await this.personService.update(
+              { userId },
+              existingEntity.id,
+              { properties: mergedProperties },
+              { source: 'TransformFacebookFriends.transform' },
+            );
           } else {
             const newPerson = await this.personService.create(
               { userId },

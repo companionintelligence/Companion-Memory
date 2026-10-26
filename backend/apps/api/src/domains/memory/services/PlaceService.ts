@@ -25,7 +25,7 @@ import {
   placeAppearanceListSql,
 } from './appearanceBrowse';
 import { EVENT_HAPPENED_SQL } from './eventHappened';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
 
 /**
@@ -35,6 +35,37 @@ import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
  * owner's settings live under `planner` (the autonomy dial among them).
  */
 const PLACE_ENTITY_TYPES = In([...GRAPH_ENTITY_TYPES.place]);
+
+/**
+ * How near a place a photo must have been taken to count as taken there when
+ * nothing links it to the place: the stay radius the Places page clusters
+ * photos and positions with (`DEFAULT_STAY_RADIUS_M`), so every photo of a
+ * cluster someone named is at the place they named.
+ */
+export const PHOTO_AT_PLACE_METERS = 150;
+
+/** Lowercased words joined by single spaces, for matching a place name inside a query. */
+function placeNameWords(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * Whether `query` names the place `name`: the whole name, as whole words,
+ * anywhere in the query. "Blue Bottle Coffee", "photos from blue bottle
+ * coffee" and "Blue Bottle Coffee, SF" name "Blue Bottle Coffee"; "Blue
+ * Bottle" and "coffee" do not, and stay a search of the photos' text.
+ */
+export function queryNamesPlace(query: string, name: string): boolean {
+  const words = placeNameWords(name);
+
+  return words.length >= 3 && ` ${placeNameWords(query)} `.includes(` ${words} `);
+}
 
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
@@ -687,6 +718,88 @@ export class PlaceService {
   }
 
   /**
+   * Photos and videos taken at a place the query names ({@link queryNamesPlace}),
+   * newest first, for `media.findPhotos`.
+   *
+   * A photo's text never names the place it was taken at: its search row is
+   * its file name and, once described, what it shows. So "photos from Blue
+   * Bottle Coffee" found none of the seven photos the place was named from on
+   * the Places page, because their events carry GPS and no
+   * `location_entity_id`. A photo is at a place when its event is linked to the
+   * place, lies inside the place's boundary, or was taken within
+   * {@link PHOTO_AT_PLACE_METERS} of its point. Imported photos reach their
+   * event through `metadata.FileId`, captured ones through `files.event_id`.
+   */
+  async photosAtNamedPlace(
+    context: UserServiceContext,
+    query: string,
+  ): Promise<{ places: Array<{ id: string; name: string }>; fileIds: string[] }> {
+    const trimmed = query.trim();
+
+    if (trimmed.length < 3) {
+      return { places: [], fileIds: [] };
+    }
+
+    const candidates: Array<{ id: string; name: string }> = await this.placeRepository.manager.query(
+      `SELECT entity_id AS id, name
+         FROM ci.entities
+        WHERE entity_type = 'Location'
+          AND owner_user_id = $1
+          AND is_active
+          AND merged_into_entity_id IS NULL
+          AND length(btrim(name)) >= 3
+          AND strpos(lower($2), lower(btrim(name))) > 0`,
+      [context.userId, trimmed],
+    );
+    const places = candidates.filter((place) => queryNamesPlace(trimmed, place.name));
+
+    if (places.length === 0) {
+      return { places: [], fileIds: [] };
+    }
+
+    const rows: Array<{ file_id: string }> = await this.placeRepository.manager.query(
+      `WITH place AS (
+         SELECT entity_id, location_point, location_boundary
+           FROM ci.entities
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
+       ),
+       at_place AS (
+         SELECT e.event_id, e.start_time, e.metadata->>'FileId' AS file_id
+           FROM ci.events e
+           JOIN place p
+             ON e.location_entity_id = p.entity_id
+             OR (e.location_coordinates IS NOT NULL AND (
+                  (p.location_boundary IS NOT NULL AND ST_Covers(p.location_boundary, e.location_coordinates))
+                  OR (p.location_point IS NOT NULL
+                      AND ST_DWithin(e.location_coordinates, p.location_point, $3))))
+          WHERE e.user_id = $1
+            AND NOT e.is_deleted
+       ),
+       linked AS (
+         SELECT f.id, a.start_time
+           FROM at_place a
+           JOIN ci.files f ON f.id::text = a.file_id
+         UNION ALL
+         SELECT f.id, a.start_time
+           FROM at_place a
+           JOIN ci.files f ON f.event_id = a.event_id
+       )
+       SELECT l.id AS file_id
+         FROM linked l
+         JOIN ci.files f ON f.id = l.id
+        WHERE f.user_id = $1
+          AND f.deleted_at IS NULL
+          AND f.variant = 'ORIGINAL'
+          AND (f.content_type LIKE 'image/%' OR f.content_type LIKE 'video/%')
+        GROUP BY l.id
+        ORDER BY MAX(l.start_time) DESC`,
+      [context.userId, places.map((place) => place.id), PHOTO_AT_PLACE_METERS],
+    );
+
+    return { places, fileIds: rows.map((row) => row.file_id) };
+  }
+
+  /**
    * Aggregated visit stats for a batch of places from events.location_entity_id
    * (indexed by events_location_entity_idx). One grouped query per batch.
    *
@@ -803,7 +916,17 @@ export class PlaceService {
           },
         });
 
-        const placeResult = await this.placeRepository.save(place);
+        let placeResult: PlaceEntity;
+
+        try {
+          placeResult = await this.placeRepository.save(place);
+        } catch (err) {
+          if (isUniqueViolation(err) && place.locationPoint) {
+            throw await this.nearbyPlaceConflict(context, place.locationPoint.coordinates);
+          }
+
+          throw err;
+        }
 
         if (emitCreated) {
           await this.eventService.send(PlaceCreatedEvent, {
@@ -816,8 +939,52 @@ export class PlaceService {
         // they were just persisted. Populate them from the saved row.
         placeResult.loadPropertiesFromJsonb();
 
+        await this.graphDeltaWriter.entityCreated({
+          entityId: placeResult.id,
+          entityType: 'Location',
+          name: placeResult.name,
+          description: placeResult.description,
+          properties: placeResult.properties,
+          ownerUserId: context.userId,
+          changeSource: 'PlaceService.create',
+          changedByUserId: context.userId,
+        });
+
         return PlaceEntity.toEgressType(placeResult);
       }),
+    );
+  }
+
+  /**
+   * The error for a new place whose point lands in the same 0.001-degree cell
+   * as one the owner already has. `entities_location_snap_dedup_uniq` allows one
+   * Location per cell (about 110 m), so the INSERT fails with 23505, which the
+   * GraphQL layer would otherwise mask as "Internal server error". Name the place
+   * that holds the cell so the person knows which one to edit instead.
+   */
+  private async nearbyPlaceConflict(
+    context: UserServiceContext,
+    coordinates: number[],
+  ): Promise<ConflictException> {
+    const [lng, lat] = coordinates;
+    const rows: Array<{ name: string | null }> = await this.placeRepository.manager.query(
+      `SELECT name
+         FROM ci.entities
+        WHERE entity_type = 'Location'
+          AND owner_user_id = $1
+          AND merged_into_entity_id IS NULL
+          AND location_point IS NOT NULL
+          AND ST_SnapToGrid(location_point::geometry, 0.001) =
+              ST_SnapToGrid(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.001)
+        LIMIT 1`,
+      [context.userId, lng, lat],
+    );
+    const name = rows[0]?.name?.trim();
+
+    return new ConflictException(
+      name
+        ? `"${name}" is already saved at this spot. Memory keeps one place per spot about 100 m across, so edit that place instead, or move this one farther away.`
+        : 'Another place is already saved at this spot. Memory keeps one place per spot about 100 m across, so move this one farther away.',
     );
   }
 
@@ -886,7 +1053,11 @@ export class PlaceService {
       .createQueryBuilder('place')
       .leftJoinAndSelect('place.user', 'user')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
-      .andWhere('place.owner_user_id = :userId', { userId: context.userId });
+      .andWhere('place.owner_user_id = :userId', { userId: context.userId })
+      // A place merged into another stays as a tombstone row pointing at the
+      // kept one; it is not a place of its own any more.
+      .andWhere('place.merged_into_entity_id IS NULL')
+      .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
     const query = options.query?.trim();
     if (query) {
@@ -1169,6 +1340,43 @@ export class PlaceService {
 
       if (result.affected === 0) {
         return null;
+      }
+
+      // Only what moved: the place form sends every field back on each save.
+      const changedFields = {
+        ...changedFieldsBetween(
+          { name: place.name, description: place.description },
+          { name: rest.name ?? place.name, description: rest.description ?? place.description },
+          ['name', 'description'],
+        ),
+        ...changedFieldsBetween(
+          {
+            coordinates: place.locationPoint?.coordinates ?? null,
+            place_kind: place.placeKind,
+            parent_place_id: place.parentPlaceId,
+          },
+          {
+            coordinates: typed.locationPoint
+              ? typed.locationPoint.coordinates
+              : (place.locationPoint?.coordinates ?? null),
+            place_kind: typed.placeKind !== undefined ? typed.placeKind : place.placeKind,
+            parent_place_id: typed.parentPlaceId !== undefined ? typed.parentPlaceId : place.parentPlaceId,
+          },
+          ['coordinates', 'place_kind', 'parent_place_id'],
+        ),
+        ...changedFieldsBetween(place.properties ?? {}, props, Object.keys(properties ?? {})),
+      };
+
+      if (Object.keys(changedFields).length > 0) {
+        await this.graphDeltaWriter.entityUpdated({
+          entityId: id,
+          entityType: 'Location',
+          name: rest.name ?? place.name,
+          changedFields,
+          ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+          changeSource: 'PlaceService.update',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+        });
       }
 
       await this.eventService.send(PlaceUpdatedEvent, {

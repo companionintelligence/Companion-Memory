@@ -186,6 +186,9 @@ export class PeerLinkService {
     // it coherent. Refusing every unrelated edit to such a row would turn a
     // legacy inconsistency into an outage.
     const touchesIdentity = peerIssuer !== undefined || peerSubject !== undefined;
+    // Re-activating a revoked link puts its stored binding back into the live
+    // identity index, so it can clash there without naming an identity at all.
+    const reactivates = existing?.revokedAt != null && record.revokedAt == null;
 
     if (touchesIdentity && (record.peerIssuer == null) !== (record.peerSubject == null)) {
       throw new BadRequestException(
@@ -203,7 +206,7 @@ export class PeerLinkService {
       // is the only place that cannot be lost to a race, so the check lives
       // there and this catch exists to give it an honest status code instead of
       // the bare 500 an unhandled `23505` becomes.
-      if (touchesIdentity && isIdentityConflict(err)) {
+      if ((touchesIdentity || reactivates) && isIdentityConflict(err)) {
         throw new ConflictException(
           'Another active peer link already claims that (peerIssuer, peerSubject) — ' +
             'revoke it first, or re-bind that link instead',

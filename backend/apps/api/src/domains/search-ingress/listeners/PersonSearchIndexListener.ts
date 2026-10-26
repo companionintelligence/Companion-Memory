@@ -103,6 +103,22 @@ export class PersonSearchIndexListener {
       return;
     }
 
+    // The same for a person the user asked Memory to forget (memory.forget in
+    // archive mode sets is_active false and un-indexes them). Any later write to
+    // the row (an edit, an import that touches it, a relationship upsert) sends
+    // PersonUpdatedEvent, and indexing it then put the forgotten person back in
+    // search, the Add relationship picker and the note `[[` menu.
+    if (person.isActive === false) {
+      this.logger.log('Person is archived, removing from search index', {
+        personId: person.id,
+      });
+
+      await this.embeddingService.remove(context, { entityType: 'person', entityId: person.id });
+      await this.vectorService.remove(context, { entityType: 'person', entityId: person.id });
+
+      return;
+    }
+
     if (person.userId == null) {
       this.logger.warn('Person has no associated user, cannot index');
 

@@ -161,6 +161,19 @@ export function stripStorageAddress(file: SignedFile): ModelFile {
 }
 
 /**
+ * Drop the account record a hit carries. Threads and answers are loaded with
+ * their `user` relation, which is the whole account row: email, role,
+ * onboarding state, `passwordSetAt`, `emailProvenAt`. Every hit is the caller's
+ * own, so it tells the model nothing, it spends the tool-result budget, and an
+ * email address and password timestamps have no place in a prompt.
+ */
+export function stripOwnerRecord<T extends object>(entity: T): Omit<T, 'user'> {
+  const { user: _user, ...rest } = entity as T & { user?: unknown };
+
+  return rest;
+}
+
+/**
  * The page each entity type opens at, by raw id. Types absent here have no
  * page (a thread, a browser visit, a file chunk, a product model) and get no
  * link. A file is the odd one: it has no page of its own, its content row does,
@@ -486,6 +499,18 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     };
   }
 
+  /**
+   * Files by id as search hits (type, link, no object-store address), in the
+   * order given, for a caller that found them some other way than the index:
+   * media.findPhotos' photos taken at a named place.
+   */
+  async resolveFileHits(context: ToolExecutionContext, fileIds: string[]): Promise<SearchResultItem[]> {
+    return this.resolveEntities(
+      toServiceContext(context),
+      fileIds.map((id) => ({ type: 'file' as const, id })),
+    );
+  }
+
   private async resolveEntities(
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity>[],
@@ -600,7 +625,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
 
       const link = itemLink(result.type, result.id, contentIdsByFile);
 
-      return [{ ...entity, type: result.type, ...(link && { link }) }];
+      return [{ ...(stripOwnerRecord(entity) as SearchResult), type: result.type, ...(link && { link }) }];
     });
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and

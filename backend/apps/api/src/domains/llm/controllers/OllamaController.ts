@@ -2,8 +2,10 @@ import {
   Body,
   ConflictException,
   Controller,
+  forwardRef,
   Get,
   HttpCode,
+  Inject,
   NotFoundException,
   Param,
   Post,
@@ -15,12 +17,13 @@ import {
 import type { Response } from 'express';
 import { z } from 'zod';
 
-import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { Context, type RequestContext, toServiceContext, type UserServiceContext } from '@ci/common/context';
 import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { MessageService, ThreadService, type Thread } from '@ci/domains/conversations';
+import { ActionService } from '@ci/domains/intelligence';
 
 import { isActiveGenerationStatus } from '../constants';
 import { ChatGenerationBroker } from '../services/ChatGenerationBroker';
@@ -35,6 +38,7 @@ const promptSchema = z.object({
   enableTools: z.boolean().default(true),
   enableThinking: z.boolean().default(true),
   fileIds: z.array(z.string()).optional(),
+  actionId: z.string().uuid().optional(),
 });
 const modelCapabilitiesSchema = z.object({
   model: z.string().min(1),
@@ -49,6 +53,9 @@ export class OllamaController {
     private readonly broker: ChatGenerationBroker,
     private readonly chatTurnService: ChatTurnService,
     private readonly logger: LoggerService,
+    // Same forwardRef as ChatTurnService: intelligence and llm import each other.
+    @Inject(forwardRef(() => ActionService))
+    private readonly actionService?: ActionService,
   ) {
     this.logger.setContext(OllamaController.name);
   }
@@ -106,9 +113,7 @@ export class OllamaController {
 
       thread = maybeThread;
     } else {
-      thread = await this.threadService.create(serviceContext, {
-        model: initialModel,
-      });
+      thread = await this.startThread(serviceContext, initialModel, input.actionId);
     }
 
     if (isActiveGenerationStatus(thread.generationStatus)) {
@@ -194,5 +199,56 @@ export class OllamaController {
     if (isActiveGenerationStatus(thread.generationStatus)) {
       await this.chatTurnService.setGenerationStatus(serviceContext, threadId, 'idle');
     }
+  }
+
+  /**
+   * A new thread for a turn that has none yet.
+   *
+   * From the Today action window the turn is ABOUT an action, and the action
+   * derived by an engine (Confirm home, a metric suggestion) has no thread of
+   * its own. Starting a bare thread lost that: the model saw "Why do you
+   * suggest this?" with nothing before it, and the action never pointed at the
+   * thread, so a reload showed the bare action again. So the thread opens with
+   * the action's own text as the assistant's first message (what the window
+   * already shows as the first bubble), takes the action's title, and the
+   * action is linked to it. An action that already has a thread is continued.
+   */
+  private async startThread(
+    context: UserServiceContext,
+    model: string,
+    actionId: string | undefined,
+  ): Promise<Thread> {
+    const action =
+      actionId && this.actionService ? await this.actionService.findById(context, actionId) : null;
+
+    if (action?.threadId) {
+      const existing = await this.threadService.findById(context, action.threadId);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const thread = await this.threadService.create(context, {
+      model,
+      ...(action?.title ? { name: action.title } : {}),
+    });
+
+    if (action && this.actionService) {
+      if (action.text?.trim()) {
+        await this.messageService.create(context, {
+          model,
+          role: 'assistant',
+          content: action.text,
+          mimetype: 'text/markdown',
+          canceled: false,
+          threadId: thread.id,
+        });
+      }
+
+      await this.actionService.attachThread(context, action.id, thread.id);
+    }
+
+    return thread;
   }
 }

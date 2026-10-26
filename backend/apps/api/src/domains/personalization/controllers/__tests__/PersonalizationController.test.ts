@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 
 import type { PersonalizationService } from '../../services/PersonalizationService';
 import { TRUST_MODES, type TrustMode } from '../../types';
@@ -136,7 +137,10 @@ describe('PersonalizationController body validation', () => {
   it('reads and writes the chat model preference', async () => {
     const { controller, setChatModel } = makeController();
 
-    await expect(controller.getChatModel(ctx)).resolves.toEqual({ chatModel: 'gemma4:e4b' });
+    await expect(controller.getChatModel(ctx)).resolves.toEqual({
+      chatModel: 'gemma4:e4b',
+      defaultChatModel: config.llm.chatModel,
+    });
 
     await expect(controller.updateChatModel(ctx, { chatModel: 'qwen3.6:27b' })).resolves.toEqual({
       chatModel: 'qwen3.6:27b',
@@ -145,6 +149,19 @@ describe('PersonalizationController body validation', () => {
 
     await controller.updateChatModel(ctx, { chatModel: null });
     expect(setChatModel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), null);
+  });
+
+  // The web app showed and sent the first entry of /llm/models when the user had
+  // no override (gemma3:270m on a Hub whose default was qwen3.5:9b), because it
+  // had no way to learn the appliance default.
+  it('names the appliance default chat model alongside a missing override', async () => {
+    const { controller, getChatModel } = makeController();
+    getChatModel.mockResolvedValueOnce(null);
+
+    await expect(controller.getChatModel(ctx)).resolves.toEqual({
+      chatModel: null,
+      defaultChatModel: config.llm.chatModel,
+    });
   });
 
   it('reads and writes the tools and thinking preferences independently', async () => {

@@ -1,4 +1,4 @@
-import { type CSSProperties, useMemo } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 
 import { Button, Tooltip } from '@ci/shadcn';
 import { useTranslation } from 'react-i18next';
@@ -22,10 +22,13 @@ export function TexturePicker() {
   const { themeState } = useTheme();
   const { backgroundState, setTexture, setTextureOpacity } = useBackground();
 
-  const texturePalette = useMemo(
-    () => readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE,
-    [themeState.mode, themeState.colorTheme],
-  );
+  // Read in an effect, after ThemeProvider's layout effect has swapped the
+  // root variables. Reading during render (it used to be a useMemo) picked up
+  // the theme being left, so the tiles showed light swatches on a dark page.
+  const [texturePalette, setTexturePalette] = useState(() => readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE);
+  useEffect(() => {
+    setTexturePalette(readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE);
+  }, [themeState.mode, themeState.colorTheme, themeState.colorOverrides]);
   const textureOpacity = backgroundState.textureOpacity;
 
   const texturePreviews = useMemo<Record<string, CSSProperties>>(() => {

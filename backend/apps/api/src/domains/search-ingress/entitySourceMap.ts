@@ -145,7 +145,8 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     table: 'entities',
     idColumn: 'entity_id',
     discriminator: { column: 'entity_type', value: 'Person' },
-    backfillPredicate: 's.merged_into_entity_id IS NULL',
+    // Archived (forgotten) people are kept out on purpose, like merge tombstones.
+    backfillPredicate: 's.merged_into_entity_id IS NULL AND s.is_active IS NOT FALSE',
   },
   place: {
     schema: 'ci',

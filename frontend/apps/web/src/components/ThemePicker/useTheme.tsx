@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useLayoutEffect, useState } from 'react';
 
 type Theme = 'dark' | 'light' | 'system';
 
@@ -503,7 +503,13 @@ export function ThemeProvider({
     return colors[variable];
   };
 
-  useEffect(() => {
+  // A layout effect, not a passive one: everything below rewrites the root's
+  // colour variables, and anything that reads them back with getComputedStyle
+  // (the Surface Texture previews, the page texture) does so in its own effect.
+  // Passive effects run child first, so with a plain useEffect those readers
+  // ran before this and kept the palette of the theme just left. Layout
+  // effects all finish before any passive effect starts.
+  useLayoutEffect(() => {
     const root = window.document.documentElement;
 
     // Remove any existing theme classes

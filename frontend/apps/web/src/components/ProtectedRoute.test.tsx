@@ -1,17 +1,32 @@
 import { lazy } from 'react';
 
 import { FetchJsonError } from '@ci/common';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProtectedRoute } from './ProtectedRoute';
 
 // ProtectedRoute reads useAuth + useCurrentUser from the @/hooks barrel.
+interface AuthState {
+  authToken: string | null;
+  expired: boolean;
+  loading: boolean;
+  error: null;
+  unreachable?: boolean;
+}
+
+interface UserState {
+  user: { id: string } | null;
+  loading: boolean;
+  unreachable?: boolean;
+  refetch?: () => Promise<unknown>;
+}
+
 const h = vi.hoisted(() => ({
-  auth: { authToken: null as string | null, expired: true, loading: false, error: null },
+  auth: { authToken: null, expired: true, loading: false, error: null } as AuthState,
   actions: {} as { refresh?: () => Promise<void> },
-  user: { user: null as { id: string } | null, loading: false },
+  user: { user: null, loading: false } as UserState,
   isNative: false,
 }));
 
@@ -75,6 +90,30 @@ describe('ProtectedRoute', () => {
     renderProtected();
 
     expect(screen.getByText('login page')).toBeInTheDocument();
+  });
+
+  it('says Memory cannot be reached, instead of Log In, when the profile query goes unanswered', () => {
+    const refetch = vi.fn().mockResolvedValue(undefined);
+    h.auth = { authToken: 'tok', expired: false, loading: false, error: null, unreachable: false };
+    h.user = { user: null, loading: false, unreachable: true, refetch };
+
+    renderProtected();
+
+    expect(screen.getByText("Can't reach Memory")).toBeInTheDocument();
+    expect(screen.queryByText('login page')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('says Memory cannot be reached when the session check itself goes unanswered', () => {
+    h.auth = { authToken: null, expired: true, loading: false, error: null, unreachable: true };
+    h.user = { user: null, loading: false, unreachable: false, refetch: undefined };
+
+    renderProtected();
+
+    expect(screen.getByText("Can't reach Memory")).toBeInTheDocument();
+    expect(screen.queryByText('login page')).not.toBeInTheDocument();
   });
 
   it('redirects to /login when expired or unauthenticated on web', () => {

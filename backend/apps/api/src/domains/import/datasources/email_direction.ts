@@ -82,16 +82,32 @@ export function isDraft(headers: Record<string, string>): boolean {
     .some((l) => l.trim() === 'draft' || l.trim() === 'drafts');
 }
 
-/** Derive 'outbound' | 'inbound' from a message's parsed headers. */
-export function emailDirection(headers: Record<string, string>): 'outbound' | 'inbound' {
+/**
+ * What a message's direction was read from, carried to the push as item
+ * metadata `DirectionBasis`:
+ *  - `sent_label` — Gmail filed it as Sent: the owner's own mail, final;
+ *  - `delivery_trace` — a receiving MTA stamped it: delivered, so inbound;
+ *  - `no_delivery_trace` — neither. Read as outbound (a sent copy), but it is
+ *    only an absence, and the push may overrule it once it knows the sender
+ *    is somebody else writing to the owner (PushStage, `directionAfterSender`).
+ */
+export type EmailDirectionBasis = 'sent_label' | 'delivery_trace' | 'no_delivery_trace';
+
+/** Which of the {@link EmailDirectionBasis} signals a message's parsed headers carry. */
+export function emailDirectionBasis(headers: Record<string, string>): EmailDirectionBasis {
   if (hasSentLabel(headerValue(headers, 'x-gmail-labels'))) {
-    return 'outbound';
+    return 'sent_label';
   }
 
   const keys = new Set(Object.keys(headers).map((k) => k.toLowerCase()));
   if (DELIVERY_TRACE_HEADERS.some((h) => keys.has(h))) {
-    return 'inbound';
+    return 'delivery_trace';
   }
 
-  return 'outbound';
+  return 'no_delivery_trace';
+}
+
+/** Derive 'outbound' | 'inbound' from a message's parsed headers. */
+export function emailDirection(headers: Record<string, string>): 'outbound' | 'inbound' {
+  return emailDirectionBasis(headers) === 'delivery_trace' ? 'inbound' : 'outbound';
 }

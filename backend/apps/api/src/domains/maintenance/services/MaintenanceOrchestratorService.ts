@@ -12,6 +12,7 @@ import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 import { EmbeddingEntity, IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
+import { MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, MEDIA_DIMENSIONS_STAGE_ID } from '../mediaDimensionsCandidates';
 
 import {
   type CommunicationLinkBackfillOptions,
@@ -567,16 +568,10 @@ export class MaintenanceOrchestratorService {
   ): Promise<{ jobId: string | null; estimatedFileCount: number; status: 'enqueued' | 'noop' }> {
     const limit = opts.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
 
-    const rows = await this.dataSource.query<Array<{ count: string }>>(
-      `SELECT COUNT(*)::bigint AS count
-         FROM ci.files
-        WHERE user_id = $1
-          AND variant = $2
-          AND key IS NOT NULL
-          AND width IS NULL
-          AND (content_type LIKE 'image/%' OR content_type LIKE 'video/%')`,
-      [userId, 'ORIGINAL'],
-    );
+    const rows = await this.dataSource.query<Array<{ count: string }>>(MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, [
+      userId,
+      MEDIA_DIMENSIONS_STAGE_ID,
+    ]);
 
     const candidateCount = Number(rows[0]?.count ?? 0);
     const estimatedFileCount = Math.min(candidateCount, limit);

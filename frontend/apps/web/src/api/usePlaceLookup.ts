@@ -18,8 +18,23 @@ const PLACE_LOOKUP = gql(`
   }
 `);
 
+/**
+ * At or below this the provider only placed the name in an area: Google's
+ * APPROXIMATE, a city or region centroid (`GeocodeService.confidenceForLocationType`
+ * maps it to 0.4, and `LOW_CONFIDENCE_THRESHOLD` there is the same line). "Blue
+ * Bottle Coffee, San Francisco" comes back as the middle of San Francisco.
+ */
+const APPROXIMATE_CONFIDENCE = 0.4;
+
 export type PlaceLookupResult =
-  | { status: 'ok'; latitude: number; longitude: number; address: string | null }
+  | {
+      status: 'ok';
+      latitude: number;
+      longitude: number;
+      address: string | null;
+      /** The match is an area around the name (a city, a region), not the place itself. */
+      approximate: boolean;
+    }
   | { status: 'none' }
   /** This appliance has no geocoding provider set up (see Places). */
   | { status: 'unconfigured' }
@@ -57,6 +72,7 @@ export function usePlaceLookup(): PlaceLookup {
             latitude: match.latitude,
             longitude: match.longitude,
             address: match.normalizedAddress ?? null,
+            approximate: match.confidence != null && match.confidence <= APPROXIMATE_CONFIDENCE,
           };
         }
 

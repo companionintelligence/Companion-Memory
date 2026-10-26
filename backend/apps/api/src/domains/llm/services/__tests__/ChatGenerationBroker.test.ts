@@ -1,6 +1,17 @@
 import { Channel } from '@ci/common/rpc';
 
-import { ChatGenerationBroker } from '../ChatGenerationBroker';
+import { ChatGenerationBroker, KEEPALIVE_INTERVAL_MS } from '../ChatGenerationBroker';
+
+/** The channel of each whole frame in `raw` (`[channel<<6|flags][UInt32 BE length][payload]`). */
+function frameChannels(raw: Buffer): number[] {
+  const channels: number[] = [];
+
+  for (let offset = 0; offset + 5 <= raw.length; offset += 5 + raw.readUInt32BE(offset + 1)) {
+    channels.push(raw[offset] >> 6);
+  }
+
+  return channels;
+}
 
 function mockResponse() {
   const chunks: Buffer[] = [];
@@ -50,6 +61,57 @@ describe('ChatGenerationBroker', () => {
       }),
     );
     expect(res.flushHeaders).toHaveBeenCalled();
+  });
+
+  // Cloudflare's tunnel holds the response headers until the first body byte. With no body until
+  // the model's first token, a reply through a Hub's public address neither streamed nor could be
+  // stopped: `fetch()` resolved only when the whole wait was over.
+  it('writes a keep-alive frame as soon as a viewer attaches to a turn with nothing to replay', () => {
+    const broker = new ChatGenerationBroker();
+    broker.ensure('thread-1');
+    const { res, chunks } = mockResponse();
+
+    broker.pipeToResponse(res as never, 'thread-1');
+
+    expect(frameChannels(Buffer.concat(chunks))).toEqual([Channel.KEEPALIVE]);
+  });
+
+  it('repeats the keep-alive while the model is quiet, and stops once the turn ends', () => {
+    jest.useFakeTimers();
+
+    try {
+      const broker = new ChatGenerationBroker();
+      broker.ensure('thread-1');
+      const { res, chunks } = mockResponse();
+
+      broker.pipeToResponse(res as never, 'thread-1');
+      jest.advanceTimersByTime(KEEPALIVE_INTERVAL_MS * 2);
+      broker.publish('thread-1', { channel: Channel.TEXT, text: 'Hi' });
+      broker.complete('thread-1');
+      jest.advanceTimersByTime(KEEPALIVE_INTERVAL_MS * 3);
+
+      expect(frameChannels(Buffer.concat(chunks))).toEqual([Channel.KEEPALIVE, Channel.KEEPALIVE, Channel.KEEPALIVE, Channel.TEXT]);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stops the keep-alive when the viewer goes away', () => {
+    jest.useFakeTimers();
+
+    try {
+      const broker = new ChatGenerationBroker();
+      broker.ensure('thread-1');
+      const { res, closeHandlers } = mockResponse();
+
+      broker.pipeToResponse(res as never, 'thread-1');
+      closeHandlers.forEach((handler) => handler());
+
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not abort the generation signal when an HTTP viewer disconnects', () => {
@@ -108,5 +170,7 @@ describe('ChatGenerationBroker', () => {
 
     expect(raw).toContain('Let me look.');
     expect(raw.indexOf('Let me look.')).toBeLessThan(raw.indexOf('places_find'));
+    // The replay is the first body byte already, so no keep-alive goes ahead of it.
+    expect(frameChannels(Buffer.concat(chunks))).toEqual([Channel.TEXT, Channel.TOOL]);
   });
 });

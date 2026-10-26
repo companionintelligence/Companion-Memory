@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { Context, type RequestContext } from '@ci/common/context/';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { MAX_CONCURRENCY } from '@ci/common/job-controls';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { JobControlsDto, JobControlsService } from '../services/JobControlsService';
@@ -27,8 +26,14 @@ import { JOB_CATEGORIES, JOB_TYPES } from '../taxonomy';
  * to change a queue's mode without also wiping its cap, and impossible to undo a
  * cap at all. `.nullable()` accepts the first; the schema being non-strict about
  * missing keys gives the second.
+ *
+ * Only the type is checked here. The range (whole numbers, 1 to
+ * `MAX_CONCURRENCY`) is `JobControlsService.checkConcurrency`'s, which
+ * says what the range is and why. Checking it here as well answered 100 with a
+ * bare "Validation failed", the only text the Jobs page shows, before the
+ * service's explanation could run.
  */
-const concurrencyField = z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional();
+const concurrencyField = z.number().nullable().optional();
 
 const jobControlsSchema = z.object({
   global: z

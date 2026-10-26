@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
+import { useTheme } from './useTheme';
+
 interface TexturePalette {
   background: string;
   accent: string;
@@ -654,10 +656,15 @@ export function BackgroundProvider({
     readStoredGlow(glowStorageKey, defaultGlowEnabled),
   );
 
+  // The texture is drawn in the theme's colours, read off the root when it is
+  // applied, so it is redrawn when the theme changes too. ThemeProvider swaps
+  // the root variables in a layout effect, which has run by the time this
+  // passive effect does.
+  const { themeState } = useTheme();
   useEffect(() => {
     const root = window.document.documentElement;
     applyTextureToRoot(root, backgroundState.textureId, backgroundState.textureOpacity);
-  }, [backgroundState]);
+  }, [backgroundState, themeState.mode, themeState.colorTheme, themeState.colorOverrides]);
 
   const setTexture = (textureId: string) => {
     const resolved = resolveTexturePattern(textureId).id;

@@ -4,8 +4,9 @@
  *
  * `chatStream` allows `maxToolRounds` generations, executing whatever tool
  * calls each one produces. When the follow-up round ALSO came back as tool
- * calls (salvage can produce them with no tools advertised), the loop executed
- * those calls and then broke at the cap — so the turn's last message was a
+ * calls (salvage can produce them with no tools advertised, and a model can
+ * repeat a call it already made), the loop executed those calls and then broke
+ * at the cap — so the turn's last message was a
  * role:'tool' row and the viewer's stream closed without one visible
  * character. Measured live: two knowledge_search rounds that both returned
  * `[]`, then nothing, read by the user as "the chat froze".
@@ -255,11 +256,23 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(driver.chatStream).toHaveBeenCalledTimes(2);
   });
 
-  it('salvages tool markup only in the round that offered tools', async () => {
-    // The follow-up round offers no tools, so text the model writes there is its answer. When it
+  it('salvages tool markup only in the rounds that offered tools', async () => {
+    // The closing round offers no tools, so text the model writes there is its answer. When it
     // quotes an email or invite carrying tool markup, salvaging it would run a call nobody asked
     // for; the driver is told to strip that markup and emit no calls instead.
-    const { service, driver } = await setup([[toolCallChunk()], [proseChunk('Here is your answer.')]]);
+    const otherSearch = {
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'something else' } } }],
+      },
+    };
+    const { service, driver } = await setup([
+      [toolCallChunk()],
+      [otherSearch],
+      [proseChunk('Here is your answer.')],
+    ]);
 
     const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
       model: MODEL,
@@ -267,11 +280,13 @@ describe('OllamaService.chatStream forced prose round', () => {
     });
     await drain(stream);
 
-    const [toolRound, followUp] = driver.calls;
+    const [toolRound, secondToolRound, followUp] = driver.calls;
 
-    expect(toolRound.tools).toBeDefined();
-    expect(toolRound.salvageTools).toBe(true);
-    expect(toolRound.discardToolMarkup).toBe(false);
+    for (const round of [toolRound, secondToolRound]) {
+      expect(round.tools).toBeDefined();
+      expect(round.salvageTools).toBe(true);
+      expect(round.discardToolMarkup).toBe(false);
+    }
 
     expect(followUp.tools).toBeUndefined();
     expect(followUp.salvageTools).toBe(false);

@@ -30,6 +30,8 @@ export interface InboxOptions {
 
 /** What is waiting in the inbox folder — and, on request, importing it. */
 export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}): Promise<void> {
+  // Before anything is started, for the reason `importCommand` gives.
+  const timeoutMs = parseTimeout(options.timeout);
   const scan = await ctx.client.scanInbox();
 
   if (!scan.available) {
@@ -174,7 +176,7 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
       ctx.client,
       ctx.term,
       started.map((result) => result.runId as string),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+      { timeoutMs, quiet: options.json },
     );
   }
 

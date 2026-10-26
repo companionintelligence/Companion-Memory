@@ -228,6 +228,24 @@ describe('parseAskQueryInput — the only shape allowed downstream', () => {
     });
   });
 
+  it('records that hidden characters were stripped from the prompt, so the owner can be told', () => {
+    // The stored prompt has no zero-width characters left in it, so the review
+    // card cannot find them itself; this flag is the only trace.
+    const parsed = parseAskQueryInput({ queryType: 'relationship', prompt: 'Do you have the lake​ photos?' });
+
+    expect(parsed).toEqual({
+      queryType: 'relationship',
+      prompt: 'Do you have the lake photos?',
+      promptHiddenCharactersRemoved: true,
+    });
+  });
+
+  it('leaves the flag off when nothing was stripped (whitespace tidying does not count)', () => {
+    expect(
+      parseAskQueryInput({ queryType: 'relationship', prompt: '  Do you have the lake photos?  ' }),
+    ).not.toHaveProperty('promptHiddenCharactersRemoved');
+  });
+
   it('omits dataClass entirely when the ask names none', () => {
     expect(parseAskQueryInput({ queryType: 'relationship', prompt: 'do you know Alice?' })).toEqual({
       queryType: 'relationship',

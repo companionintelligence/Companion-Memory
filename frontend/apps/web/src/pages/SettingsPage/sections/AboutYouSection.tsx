@@ -10,7 +10,9 @@ import {
   type AboutYouView,
 } from '@/api/usePersonaCompose';
 import { HowYoudDoItCard } from '@/components/HowYoudDoItCard';
+import { Markdown } from '@/components/Markdown';
 import { useAuth } from '@/hooks';
+import { humanizeEnum } from '@/lib/utils';
 
 /** Keys onboarding's TimeAndPlaceStep writes onto `properties.schedule`. */
 const SCHEDULE_FIELDS: Array<[string, string]> = [
@@ -25,6 +27,34 @@ const TRUST_MODE_LABELS: Record<string, string> = {
   balanced: 'Balanced',
   hands_off: 'Hands-off — acts on its own',
 };
+
+/**
+ * What a family member is to you, in a word: "sibling", "parent", "child".
+ *
+ * The graph type alone can't say: PARENT_OF names your parent when it points
+ * at you and your child when it points away, so `direction` decides. A type
+ * this does not know falls back to its readable form rather than the raw enum.
+ */
+export function familyRoleLabel(member: AboutYouView['family'][number]): string {
+  switch (member.relationship) {
+    case 'SPOUSE':
+      return 'spouse';
+    case 'SIBLING_OF':
+      return 'sibling';
+    case 'PARENT_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'parent' : 'child';
+      }
+      break;
+    case 'CHILD_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'child' : 'parent';
+      }
+      break;
+  }
+
+  return humanizeEnum(member.relationship)?.toLowerCase() ?? member.relationship;
+}
 
 interface AboutYouSectionProps {
   /**
@@ -217,7 +247,10 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
       {view?.dossier && (
         <section className="mb-6 space-y-2">
           <h3 className="text-sm font-medium">Dossier</h3>
-          <p className="text-sm leading-relaxed text-foreground/90">{view.dossier.summary}</p>
+          {/* Model-written, and the model writes Markdown ("**Personality:** …"). */}
+          <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90 prose-p:my-1 prose-p:text-sm prose-p:leading-relaxed prose-ul:my-1 prose-li:my-0 prose-li:text-sm">
+            <Markdown>{view.dossier.summary}</Markdown>
+          </div>
           {view.dossier.tone && <p className="text-xs text-muted-foreground">Tone: {view.dossier.tone}</p>}
           {view.dossier.personalityTraits && view.dossier.personalityTraits.length > 0 && (
             <p className="text-xs text-muted-foreground">
@@ -288,7 +321,7 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
           <ul className="space-y-1 text-sm text-muted-foreground">
             {view.family.map((member) => (
               <li key={member.entityId}>
-                {member.name} ({member.relationship}
+                {member.name} ({familyRoleLabel(member)}
                 {member.age != null ? `, ${member.age}` : ''})
               </li>
             ))}

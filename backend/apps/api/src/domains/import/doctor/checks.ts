@@ -203,7 +203,9 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'resolved server-side), so re-ingesting an existing triple leaves them as they are. The parser ' +
       'fixes that stage participant edges (imessage.ts outbound fan-out, googlevoice.ts ' +
       'counterpartEdges) apply to rows written for the first time; migration 20260819000959 is the ' +
-      'repair for rows already stored, and it too reads ci_import.staged_items.',
+      'repair for rows already stored, and it too reads ci_import.staged_items. Agent chat turns ' +
+      "(`POST /memory/turn`, category 'agent-turn') are not counted: they are the owner talking to an " +
+      'agent, and there is no person on the other end to link.',
     mirrors: null,
     sql: String.raw`
       WITH bad AS (
@@ -211,6 +213,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
           FROM ci.communications
          WHERE from_entity_id IS NULL
            AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
+           -- An agent chat turn (MemoryController.turn, TURN_MESSAGE_CATEGORY)
+           -- is the owner talking to an agent: no Person is on the other end,
+           -- so an empty participant set is the honest value.
+           AND category IS DISTINCT FROM 'agent-turn'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,

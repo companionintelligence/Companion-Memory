@@ -117,6 +117,14 @@ export interface AskQuery {
   /** The natural-language question as composed by the asker (shown back to both sides). */
   prompt: string;
   /**
+   * True when characters that render as nothing (zero-width spaces, bidi
+   * marks, soft hyphens) were stripped from the asker's prompt before it was
+   * stored. The stored prompt no longer holds them, so this is the only record
+   * the owner's review card has that the text it shows is not byte for byte
+   * what was sent. Absent means nothing was removed.
+   */
+  promptHiddenCharactersRemoved?: boolean;
+  /**
    * What is making this ask, when the asker declares it.
    *
    * A FIRST-CLASS FIELD rather than one more key in `filters`: it is matched by

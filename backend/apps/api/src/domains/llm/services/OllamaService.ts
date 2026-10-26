@@ -98,6 +98,21 @@ export const TOOL_QUEUED_NOTE =
 export const PROMPT_MODEL = config.llm.chatModel;
 
 /**
+ * How many generations of one chat turn are offered tools. Two, so a turn can
+ * look something up and then act on what it found: "Forget everything about
+ * Test Café Delete" needs `knowledge_search` to find the entity and then
+ * `memory_forget` on it, and with one round the model searched, was handed no
+ * tools for the follow-up, and could only say it couldn't delete. One more
+ * generation without tools always follows, so the turn ends in prose.
+ */
+export const TOOL_OFFER_ROUNDS = 2;
+
+/** A tool call's identity within a turn: the same tool with the same arguments is the same call. */
+function toolCallKey(call: ToolCall): string {
+  return `${call.function.name}:${JSON.stringify(call.function.arguments ?? {})}`;
+}
+
+/**
  * The model BACKGROUND work should use — extraction, classification, anything
  * whose output is parsed rather than read.
  *
@@ -897,12 +912,18 @@ export class OllamaService implements OnModuleInit {
     const thinkChunks: string[] = [];
     const toolCalls: ToolCall[] = [];
     const accumulatedMessages: OllamaMessage[] = [];
-    // One tool round, then a prose follow-up. Re-advertising tools after a
-    // failed/partial remember made Qwen retry for minutes on a 2-slot vLLM.
-    // Tool XML the model writes into its text is salvaged in the tool round
-    // only (salvageTools); the follow-up's markup is stripped, never run.
-    const maxToolRounds = 2;
+    // Up to TOOL_OFFER_ROUNDS rounds offer tools, then a prose follow-up. A
+    // later round is offered tools only while every call so far succeeded and
+    // none repeated an earlier one: re-advertising tools after a failed or
+    // partial remember made Qwen retry for minutes on a 2-slot vLLM, and a
+    // model repeating a call is going round in circles. Tool XML the model
+    // writes into its text is salvaged only in a round that offered tools
+    // (salvageTools); any other round's markup is stripped, never run.
+    const maxToolRounds = TOOL_OFFER_ROUNDS + 1;
     let generateRounds = 0;
+    let toolsStillOffered = true;
+    let previousRoundOfferedTools = true;
+    const callsMade = new Set<string>();
     // When the follow-up round ALSO comes back as tool calls (the native
     // engine parses its tool-call tokens even with no tools advertised), the
     // loop used to execute
@@ -942,7 +963,7 @@ export class OllamaService implements OnModuleInit {
         thinkChunks.splice(0, thinkChunks.length);
 
         const iterationToolCalls = toolCalls.splice(0, toolCalls.length);
-        const toolEvaluations = await self.handleToolCalls(
+        const { messages: toolEvaluations, failed: failedCalls } = await self.runToolCalls(
           context,
           iterationToolCalls,
           toolResultByteBudget(numCtx),
@@ -950,13 +971,27 @@ export class OllamaService implements OnModuleInit {
 
         accumulatedMessages.push(...toolEvaluations);
 
+        const repeatedCall = iterationToolCalls.some((call) => callsMade.has(toolCallKey(call)));
+
+        iterationToolCalls.forEach((call) => callsMade.add(toolCallKey(call)));
+
+        if (failedCalls > 0 || repeatedCall) {
+          toolsStillOffered = false;
+        }
+
         if (scheduleForcedProse) {
           // Consume the one blank-follow-up retry before the cap check. The
           // cap would otherwise break: this round has no new tool calls, and
           // generateRounds is already at max after the silent follow-up.
           forcedProseRound = true;
           scheduleForcedProse = false;
-        } else if (generateRounds >= maxToolRounds) {
+        } else if (
+          generateRounds >= maxToolRounds ||
+          // Calls from a round that offered no tools (the native engine
+          // parses tool tokens regardless) ran, or the model repeated a call
+          // it already made: it is looping, so the next round answers.
+          (iterationToolCalls.length > 0 && (!previousRoundOfferedTools || repeatedCall))
+        ) {
           if (iterationToolCalls.length === 0 || forcedProseRound) {
             break;
           }
@@ -966,7 +1001,13 @@ export class OllamaService implements OnModuleInit {
 
         generateRounds += 1;
         const iterationWillCallTools =
-          enableTools && ollamaTools.length > 0 && generateRounds === 1 && !forcedProseRound;
+          enableTools &&
+          ollamaTools.length > 0 &&
+          generateRounds <= TOOL_OFFER_ROUNDS &&
+          toolsStillOffered &&
+          !forcedProseRound;
+
+        previousRoundOfferedTools = iterationWillCallTools;
         // Withholding the tools is not enough to end the tool loop on the
         // native path: Ollama parses the model's tool-call template tokens
         // whether or not tools were advertised, so an eager model just keeps
@@ -1850,12 +1891,25 @@ export class OllamaService implements OnModuleInit {
     toolCalls: ToolCall[],
     resultByteBudget: number,
   ): Promise<OllamaMessage[]> {
+    return (await this.runToolCalls(context, toolCalls, resultByteBudget)).messages;
+  }
+
+  /**
+   * {@link handleToolCalls}, plus how many of the calls did not succeed (an
+   * error, a refusal, or a write queued for approval), which decides whether
+   * the next round of a chat turn is offered tools again.
+   */
+  private async runToolCalls(
+    context: ChatRequestContext,
+    toolCalls: ToolCall[],
+    resultByteBudget: number,
+  ): Promise<{ messages: OllamaMessage[]; failed: number }> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
         userId: context.userId,
       });
 
-      return [];
+      return { messages: [], failed: 0 };
     }
 
     this.logger.debug('Processing tool calls', {
@@ -1936,7 +1990,10 @@ export class OllamaService implements OnModuleInit {
       toolResults.map(({ result }) => boundToolResultForPrompt(result, perCallByteBudget)),
     );
 
-    return contents.map((content) => ({ role: 'tool' as const, content }) satisfies OllamaMessage);
+    return {
+      messages: contents.map((content) => ({ role: 'tool' as const, content }) satisfies OllamaMessage),
+      failed: toolResults.filter(({ success }) => !success).length,
+    };
   }
 
   private convertToOllamaTool(toolSchema: ToolSchema): Tool {

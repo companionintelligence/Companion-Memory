@@ -122,8 +122,10 @@ export function SplashShell({ children }: { children: ReactNode }) {
         className="pointer-events-none absolute -right-1/4 -bottom-1/3 h-[70vmax] w-[70vmax] rounded-full bg-[radial-gradient(circle,var(--info)_0%,transparent_62%)] opacity-[0.10] blur-3xl"
       />
 
+      {/* Above the page's content layer, which is `relative z-10` and fills the screen:
+          at the same z-index the later content won and swallowed every click here. */}
       <div className="absolute top-0 left-0 h-[max(0.5rem,env(safe-area-inset-top))] w-full">
-        <div className="absolute top-full right-2 z-10">
+        <div className="absolute top-full right-2 z-20">
           <ThemeToggle />
         </div>
       </div>

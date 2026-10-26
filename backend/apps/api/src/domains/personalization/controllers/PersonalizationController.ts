@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 import { BrowserActivityInsightPreferenceService } from '@ci/domains/llm/browser-activity-insight-preference.module';
 import { ChatModelPreferenceService } from '@ci/domains/llm/chat-model-preference.module';
 import { ImageDescriptionPreferenceService } from '@ci/domains/llm/image-description-preference.module';
@@ -110,12 +111,17 @@ export class PersonalizationController {
    * chat model specifically — are visible to background vision work
    * (`OllamaService.resolveVisionModel`), not just to the browser tab that
    * set them.
+   *
+   * `defaultChatModel` is the appliance default (`LLM_DEFAULT_CHAT_MODEL`, which
+   * the Hub sets), the model a turn runs on when the user has no override. The
+   * web app needs it to show and send that model instead of whichever entry
+   * `/llm/models` happens to list first.
    */
   @Get('chat-model')
   async getChatModel(@Context() context: RequestContext) {
     const chatModel = await this.chatModelPreference.getChatModel(context.userId!);
 
-    return { chatModel };
+    return { chatModel, defaultChatModel: config.llm.chatModel };
   }
 
   @Post('chat-model')

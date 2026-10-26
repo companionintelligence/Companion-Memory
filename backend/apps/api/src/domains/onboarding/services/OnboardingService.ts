@@ -357,7 +357,12 @@ export class OnboardingService {
       };
     }
 
-    await this.personService.update(context, personId, { properties });
+    await this.personService.update(
+      context,
+      personId,
+      { properties },
+      { source: 'OnboardingService.applySelfEntityPreferences' },
+    );
   }
 
   private async captureFocusAreas(

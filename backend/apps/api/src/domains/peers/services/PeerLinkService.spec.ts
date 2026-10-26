@@ -476,4 +476,46 @@ describe('PeerLinkService — a revoked peer does not authenticate', () => {
     expect(updated.status).toBe('revoked');
     expect(updated.revokedAt).toEqual(revokedTimestamp);
   });
+
+  it('re-adding a revoked link with status=active makes it live again at the tier given', async () => {
+    // What `createPeerLink` sends. The peer resolves again on the next ask,
+    // which is what the owner asked for by adding them back.
+    const rows = [
+      link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z'), trustTier: 'peer' }),
+    ];
+    const { service, repository } = makeServiceOverRows(rows);
+    // `upsert` saves a merged copy rather than the row it read, so store it
+    // back the way Postgres would before asking again.
+    repository.save.mockImplementation((row: FakeRow) => {
+      rows[0] = row;
+
+      return Promise.resolve(row);
+    });
+
+    const relinked = await service.upsert(CTX as never, { ...DTO, trustTier: 'stranger', status: 'active' });
+
+    expect(relinked).toMatchObject({ status: 'active', revokedAt: null, trustTier: 'stranger' });
+    await expect(service.findActiveByPeerIdentity(IDENTITY.issuer, IDENTITY.subject)).resolves.toHaveLength(
+      1,
+    );
+  });
+
+  it('reports a re-activation that clashes on the live identity index as a 409, not a bare 500', async () => {
+    // The revoked link still carries its (iss, sub). If another live link took
+    // that identity meanwhile, bringing this one back trips the partial index
+    // even though the write names no identity.
+    const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
+    const { service, repository } = makeServiceOverRows(rows);
+
+    repository.save.mockRejectedValue(
+      Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: 'peer_links_owner_identity_live_uniq',
+      }),
+    );
+
+    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
 });

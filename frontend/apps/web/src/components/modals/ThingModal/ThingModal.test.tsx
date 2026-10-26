@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -177,5 +177,95 @@ describe('ThingModal', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Name')).toHaveValue('Mug');
+  });
+});
+
+/**
+ * Acquired, Made and Expires are days, stored as instants. The form sent a
+ * picked 2026-10-01 as UTC midnight, which in California is still September 30,
+ * and the thing's page (`toLocaleDateString`) showed the day before.
+ */
+describe('ThingModal dates', () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  });
+
+  const input = {
+    name: 'Grinder',
+    category: null,
+    description: null,
+    brand: null,
+    model: null,
+    currentValue: null,
+    purchasePrice: null,
+    condition: null,
+    acquisitionMethod: null,
+    acquiredFrom: null,
+    manufacturedAt: null,
+    expiresAt: null,
+    colors: null,
+    colorHex: null,
+    materials: null,
+    unitSystem: 'METRIC' as const,
+    lengthMm: null,
+    widthMm: null,
+    heightMm: null,
+    massG: null,
+    volumeMl: null,
+    quantity: null,
+  };
+
+  it('sends the start of the picked day where the person is', async () => {
+    process.env.TZ = 'America/Los_Angeles';
+    const onClose = vi.fn();
+    // Midnight in Los Angeles on Oct 1, not UTC midnight (5 pm on Sep 30 there).
+    const acquiredAt = '2026-10-01T07:00:00.000Z';
+    const created = mockQuery(
+      CREATE_THING,
+      { input: { ...input, acquiredAt } },
+      {
+        createItem: {
+          __typename: 'CreateItemPayload',
+          success: true,
+          item: {
+            __typename: 'ItemType',
+            id: 'item-10',
+            ...input,
+            acquiredAt,
+            lifecycleState: 'ACTIVE' as const,
+            quantity: 1,
+            colors: [],
+            composition: {},
+            tags: [],
+          },
+        },
+      },
+    );
+
+    renderWithProviders(<ThingModal open onClose={onClose} item={null} create />, { mocks: [created] });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Grinder' } });
+    fireEvent.change(screen.getByLabelText('Acquired'), { target: { value: '2026-10-01' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('shows a stored date on the same day the thing page shows it', () => {
+    process.env.TZ = 'America/Los_Angeles';
+
+    // An importer's order time: 8 pm on Sep 30 in Los Angeles, already Oct 1 in UTC.
+    renderWithProviders(
+      <ThingModal
+        open
+        onClose={vi.fn()}
+        item={{ ...CAMERA, acquiredAt: '2026-10-01T03:00:00.000Z' }}
+        create={false}
+      />,
+    );
+
+    expect(screen.getByLabelText('Acquired')).toHaveValue('2026-09-30');
   });
 });

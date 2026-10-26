@@ -66,6 +66,66 @@ describe('useCurrentUser', () => {
     expect(result.current.user).toBeNull();
   });
 
+  describe('when Memory does not answer for the profile', () => {
+    it.each([
+      ['a network failure', { networkError: Object.assign(new Error('Failed to fetch'), {}), graphQLErrors: [] }],
+      ['a gateway 502', { networkError: Object.assign(new Error('502'), { statusCode: 502 }), graphQLErrors: [] }],
+      [
+        'a server error with the database down',
+        { graphQLErrors: [{ message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } }] },
+      ],
+    ])('reports unreachable rather than signed out after %s', (_label, error) => {
+      mockedUseQuery.mockReturnValue({
+        data: { me: null },
+        loading: false,
+        error,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.unreachable).toBe(true);
+    });
+
+    it.each([
+      ['an UNAUTHENTICATED answer', { graphQLErrors: [{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }] }],
+      ['a 401', { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] }],
+    ])('is not unreachable after %s, which is the server saying no', (_label, error) => {
+      mockedUseQuery.mockReturnValue({
+        data: { me: null },
+        loading: false,
+        error,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.unreachable).toBe(false);
+    });
+
+    it('asks again every few seconds until Memory answers', () => {
+      vi.useFakeTimers();
+
+      try {
+        const refetch = vi.fn().mockResolvedValue(undefined);
+        mockedUseQuery.mockReturnValue({
+          data: undefined,
+          loading: false,
+          error: { networkError: new Error('Failed to fetch'), graphQLErrors: [] },
+          refetch,
+        } as unknown as ReturnType<typeof useQuery>);
+
+        renderHook(() => useCurrentUser());
+        vi.advanceTimersByTime(10_000);
+
+        expect(refetch).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('reports loading while authed with no data yet', () => {
     mockedUseQuery.mockReturnValue({
       data: undefined,

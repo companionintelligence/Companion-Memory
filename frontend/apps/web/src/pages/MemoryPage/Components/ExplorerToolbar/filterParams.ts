@@ -102,6 +102,16 @@ export const UNDATED_ENTITY_TYPES: readonly string[] = AVAILABLE_ENTITY_TYPES.fi
   (type) => !DATED_ENTITY_TYPES.includes(type),
 );
 
+/**
+ * Kinds the search returns that no What picker offers and that carry only a
+ * row-write time: a chat thread is dated by its last write, a document excerpt
+ * by its file's. The timed browse never lists them under a date range, but the
+ * text search's date check falls back to that write time, so a When filter
+ * plus search text brought a chat started today back into "Last week". A When
+ * filter sets them aside with {@link UNDATED_ENTITY_TYPES}.
+ */
+export const UNDATED_UNLISTED_TYPES: readonly string[] = ['Thread', 'FileChunk'];
+
 export interface ExplorerTypeResolution {
   includeTypes?: string[];
   excludeTypes?: string[];
@@ -191,7 +201,7 @@ export function resolveExplorerTypes(params: URLSearchParams, pathname?: string)
 
   if (!narrowed) {
     return {
-      excludeTypes: [...UNDATED_ENTITY_TYPES, ...HIDDEN_ENTITY_TYPES],
+      excludeTypes: [...UNDATED_ENTITY_TYPES, ...HIDDEN_ENTITY_TYPES, ...UNDATED_UNLISTED_TYPES],
       droppedByWhen: [],
       nothingLeft: false,
     };

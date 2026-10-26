@@ -2525,6 +2525,26 @@ export class CalendarEventService {
       updateData.isLocked = data.is_locked;
     }
 
+    // A save that hands back the title or description already stored is not an
+    // edit of it: the event page sends the unchanged title with every save.
+    // Dropped here, it neither rewrites the base row nor reaches Change History
+    // as a rename; what is left is recorded with the value it replaced.
+    const storedBase =
+      basePatch.name !== undefined || basePatch.description !== undefined
+        ? await this.eventBaseRepository.findOne({
+            where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+            select: { id: true, name: true, description: true },
+          })
+        : null;
+
+    if (storedBase && basePatch.name === storedBase.name) {
+      delete basePatch.name;
+    }
+
+    if (storedBase && basePatch.description === storedBase.description) {
+      delete basePatch.description;
+    }
+
     // A person's place takes the pipeline's marks on the value it replaces with
     // it (see metadataWithoutSupersededMarks).
     const supersededMarks = metadataWithoutSupersededMarks(data);
@@ -2547,21 +2567,30 @@ export class CalendarEventService {
       {
         withinTx: async ({ manager, before, after }) => {
           previousStart = before.startTime;
-          const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
-          await this.graphDeltaWriter.entityUpdated({
-            entityId: id,
-            entityType: 'Event',
-            name: base?.name ?? null,
-            changedFields: {
-              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
-              ...(basePatch.description !== undefined ? { description: { new: basePatch.description } } : {}),
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
-            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
-            changeSource: 'CalendarEventService.update',
-            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-            manager,
-          });
+          const changedFields = {
+            ...(basePatch.name !== undefined
+              ? { name: { old: storedBase?.name ?? null, new: basePatch.name } }
+              : {}),
+            ...(basePatch.description !== undefined
+              ? { description: { old: storedBase?.description ?? null, new: basePatch.description } }
+              : {}),
+            ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
+          };
+
+          // A patch that changed nothing leaves no Change History row.
+          if (Object.keys(changedFields).length > 0) {
+            const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
+            await this.graphDeltaWriter.entityUpdated({
+              entityId: id,
+              entityType: 'Event',
+              name: base?.name ?? null,
+              changedFields,
+              ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+              changeSource: 'CalendarEventService.update',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              manager,
+            });
+          }
 
           // What the pipeline decided about the old time, and about whether the
           // event happened, taken back in this transaction. Judged against the

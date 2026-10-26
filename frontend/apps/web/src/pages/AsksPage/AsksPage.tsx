@@ -312,6 +312,7 @@ export function AsksPage() {
                 tier={knownAskerLabel(ask.consentBasis)}
                 decision={decision}
                 prompt={ask.query.prompt}
+                promptHiddenCharactersRemoved={ask.query.promptHiddenCharactersRemoved}
                 scopeSummary={scopeSummary(ask.query)}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}

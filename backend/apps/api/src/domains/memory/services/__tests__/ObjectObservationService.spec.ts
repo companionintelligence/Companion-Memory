@@ -1,4 +1,4 @@
-import type { DataSource, Repository } from 'typeorm';
+import { Not, type DataSource, type Repository } from 'typeorm';
 
 import type { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
 import { platformIdentity } from '../../identity';
@@ -607,5 +607,15 @@ describe('ObjectObservationService — reads are user-scoped', () => {
     expect(where.confirmedByUser).toBe(false);
     expect(where.resolvedObjectId).toBeDefined();
     expect(order).toEqual({ observedAt: 'DESC' });
+  });
+
+  it('leaves a sighting a person answered "not a thing" out of the review queue', async () => {
+    const { service, find } = makeService();
+
+    await service.findForReview(ctx());
+
+    // rejectObservation leaves the row unconfirmed and unlinked, so only the
+    // method says a person has already looked at it.
+    expect(find.mock.calls[0][0].where.resolutionMethod).toEqual(Not('user'));
   });
 });

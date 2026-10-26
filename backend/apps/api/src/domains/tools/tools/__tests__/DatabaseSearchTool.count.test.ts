@@ -74,6 +74,11 @@ function makeTool(options: {
   return { tool, file };
 }
 
+/** A PlaceService with no place the query names, so media.findPhotos searches text as before. */
+function noPlaces() {
+  return { photosAtNamedPlace: jest.fn().mockResolvedValue({ places: [], fileIds: [] }) } as never;
+}
+
 describe('DatabaseSearchTool — honest counts', () => {
   it('a cut keyword page reports the exact total and truncated, and the summary names the total', async () => {
     const photo = { id: 'f1', title: 'Rabbit in the garden' } as File;
@@ -225,7 +230,7 @@ describe('DatabaseSearchTool — honest counts', () => {
   it('media.findPhotos passes countOnly through with the file scope fixed, query optional', async () => {
     const count = jest.fn().mockResolvedValue(5);
     const { tool: search } = makeTool({ search: { count } });
-    const photos = new MediaFindPhotosTool(search, logger());
+    const photos = new MediaFindPhotosTool(search, noPlaces(), logger());
 
     const withQuery = await photos.execute(CONTEXT, { query: 'rabbit', countOnly: true });
     const all = await photos.execute(CONTEXT, { countOnly: 'true' });
@@ -249,7 +254,7 @@ describe('DatabaseSearchTool — honest counts', () => {
 
   it('media.findPhotos without countOnly still requires a query', async () => {
     const { tool: search } = makeTool({ search: { searchPage: jest.fn() } });
-    const photos = new MediaFindPhotosTool(search, logger());
+    const photos = new MediaFindPhotosTool(search, noPlaces(), logger());
 
     const result = await photos.execute(CONTEXT, {});
 

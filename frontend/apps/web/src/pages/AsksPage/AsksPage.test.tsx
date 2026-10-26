@@ -1613,4 +1613,57 @@ describe('AsksPage', () => {
     expect(await screen.findByText(/not the whole message they sent/i)).toBeInTheDocument();
     expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
   });
+
+  it('says hidden characters were removed when the SERVER stripped them before storing the prompt', async () => {
+    // A local ask's prompt reaches the inbox already clean (asks/askInput.ts
+    // strips zero-width characters), so the quote has nothing left to detect.
+    // The flag is the only record that the text was altered on the way in.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+              promptHiddenCharactersRemoved: true,
+            },
+          }),
+        ]),
+      ),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('shows no hidden-characters note for a prompt nobody altered', async () => {
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+              promptHiddenCharactersRemoved: false,
+            },
+          }),
+        ]),
+      ),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+  });
 });

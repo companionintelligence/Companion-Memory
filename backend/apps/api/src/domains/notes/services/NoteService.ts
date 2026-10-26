@@ -48,13 +48,44 @@ export class NoteService {
   ): Promise<Note | null> {
     const { emitCreated = true } = options;
 
+    // Fields named one by one: GraphQL createNote passes `id: undefined` when the
+    // client sent no id. A spread of `data` after the minted id would wipe it.
     const record = this.noteRepository.create({
       id: data.id || uuidv7(),
-      ...data,
+      title: data.title ?? null,
+      content: data.content ?? null,
       userId: context.userId,
     });
 
-    const entity = await this.noteRepository.save(record);
+    // INSERT ... ON CONFLICT DO NOTHING rather than `save()`. With the id set,
+    // `save()` UPDATEs whatever row already holds it, unscoped by owner. A
+    // client-minted id (a phone replaying its offline create) can name a row
+    // that exists. The insert is one statement, so no other writer can slip a
+    // row in between a check and the write.
+    const inserted = await this.noteRepository
+      .createQueryBuilder()
+      .insert()
+      .into(this.noteRepository.metadata.target)
+      .values(record)
+      .orIgnore()
+      .execute();
+
+    let entity: NoteEntity | null = record;
+
+    if (!Array.isArray(inserted.raw) || inserted.raw.length === 0) {
+      // The id is taken. If the row is the caller's, this is a replay of a create
+      // that already landed: write nothing and return the note as stored, with
+      // any edits made since. If it is anyone else's, refuse it.
+      entity = await this.noteRepository.findOne({
+        where: { id: record.id, userId: context.userId },
+      });
+
+      if (entity == null) {
+        this.logger.warn('Refused a created note whose id belongs to another user.');
+
+        return null;
+      }
+    }
 
     if (emitCreated) {
       await this.eventService.send(NoteCreatedEvent, {
@@ -84,8 +115,8 @@ export class NoteService {
 
     const entities = data.map((item) =>
       this.noteRepository.create({
-        id: item.id || uuidv7(),
         ...item,
+        id: item.id || uuidv7(),
         userId: context.userId,
       }),
     );
@@ -128,13 +159,14 @@ export class NoteService {
    *    plain INSERT would raise a unique violation, which the client flusher
    *    reads as a 5xx-class transient failure and retries to exhaustion — a
    *    successfully-stored note parked in `needs_attention`. Hence ON CONFLICT.
-   * 2. **A client-supplied id must never reach another user's row.** The
-   *    interactive path is safe by construction (the server mints the id), but
-   *    once the client names it, `repository.save()` is not: with the primary
+   * 2. **A client-supplied id must never reach another user's row.** Once the
+   *    client names the id, `repository.save()` is unsafe: with the primary
    *    key set it UPDATEs whatever row it finds, unscoped by owner, so a
    *    colliding id would rewrite a stranger's note *and* reassign `user_id`.
    *    The `n.user_id = EXCLUDED.user_id` predicate is what makes that
-   *    impossible; conflicted ids are reported, never written.
+   *    impossible; conflicted ids are reported, never written. {@link create}
+   *    takes client ids too (GraphQL createNote) and avoids `save()` for the
+   *    same reason.
    * 3. **A stale snapshot must not clobber newer content.** A note edited on
    *    another client (or online, through `updateNote`) while an older snapshot
    *    sat in the queue is the ordinary case, not the exotic one. The

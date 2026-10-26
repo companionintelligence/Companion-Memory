@@ -1,5 +1,6 @@
 import { GlobalUID } from '@ci/common';
-import { screen } from '@testing-library/react';
+import { sonnerToast } from '@ci/shadcn/src/components/coalescers/sonner';
+import { act, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -105,5 +106,24 @@ describe('ProviderPage — error toast names the provider and the cause', () => 
     expect(toastError).toHaveBeenCalledWith('Could not connect to Google Photos. Invalid API key');
 
     connectService.error = null;
+  });
+});
+
+/**
+ * This page is routed outside MainLayout, which holds the app's only other
+ * Toaster, so every toast it raised (a 409 for Google through Portal, Reddit's
+ * 500) painted nowhere. It mounts its own now. The toast is raised through
+ * sonner itself, because the hook is mocked above.
+ */
+describe('ProviderPage — its toasts are visible', () => {
+  it('shows a toast raised on this page', async () => {
+    renderProvider();
+
+    await screen.findByText('Connect your Companion to Google Photos');
+    act(() => {
+      sonnerToast.error('Could not connect to Reddit. Internal server error');
+    });
+
+    expect(await screen.findByText('Could not connect to Reddit. Internal server error')).toBeInTheDocument();
   });
 });

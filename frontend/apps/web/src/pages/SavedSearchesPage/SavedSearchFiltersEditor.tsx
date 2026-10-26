@@ -9,6 +9,7 @@ import { MapAreaList } from '@/components/SearchBox/MapAreaList';
 import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
 import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
 import { mapAreasLabel } from '@/pages/MemoryPage/bbox';
+import { datePresetLabel, isRollingDatePreset } from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
 
 import {
   addListValue,
@@ -190,17 +191,21 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
     onClear: () => onChange({ ...value, [field]: [] }),
   });
 
+  // A rolling When ("Last month") is stored as `datePreset` and wins over any
+  // dates when the search is opened, so a date set here has to replace it, or
+  // the dates were saved and then ignored.
   const setDate = (field: 'startTime' | 'endTime', dateStr: string) => {
     if (!dateStr) {
-      onChange({ ...value, [field]: undefined });
+      onChange({ ...value, [field]: undefined, datePreset: undefined });
 
       return;
     }
 
     const time = field === 'endTime' ? 'T23:59:59.999' : 'T00:00:00';
 
-    onChange({ ...value, [field]: new Date(`${dateStr}${time}`).toISOString() });
+    onChange({ ...value, [field]: new Date(`${dateStr}${time}`).toISOString(), datePreset: undefined });
   };
+  const rollingWhen = isRollingDatePreset(value.datePreset) ? datePresetLabel(value.datePreset) : null;
 
   return (
     <div className="space-y-4">
@@ -281,6 +286,19 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
             onChange={(event) => setDate('endTime', event.target.value)}
           />
         </div>
+        {rollingWhen && (
+          <p className="text-xs text-muted-foreground" data-testid="filters-rolling-when">
+            When: {rollingWhen}, counted from the day the search is opened. Picking a From or To date replaces
+            it.{' '}
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              onClick={() => onChange({ ...value, datePreset: undefined })}
+            >
+              Remove
+            </button>
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">

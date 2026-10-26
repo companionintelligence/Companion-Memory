@@ -12,6 +12,9 @@ export type ChatGenerationChunk = {
 
 type Listener = (event: { type: 'chunk'; chunk: ChatGenerationChunk } | { type: 'done' }) => void;
 
+/** How often a viewer gets a keep-alive frame while the turn runs; see {@link ChatGenerationBroker.pipeToResponse}. */
+export const KEEPALIVE_INTERVAL_MS = 15_000;
+
 interface Session {
   abort: AbortController;
   text: string;
@@ -171,6 +174,23 @@ export class ChatGenerationBroker {
       return;
     }
 
+    // Body bytes now, not at the model's first token. Cloudflare's tunnel holds the response headers
+    // until the first body byte, so through a Hub's public address `fetch()` did not resolve for the
+    // whole wait (109.5 s on core-7): the reply never streamed and Stop never appeared. Repeated while
+    // the turn runs, so a long tool call or model load does not leave the connection idle.
+    const keepAlive = () => {
+      if (!res.writableEnded) {
+        res.write(Buffer.from(this.encoder.encodeFrame(Channel.KEEPALIVE, '')));
+      }
+    };
+
+    if (session.frames.length === 0) {
+      keepAlive();
+    }
+
+    const keepAliveTimer = setInterval(keepAlive, KEEPALIVE_INTERVAL_MS);
+    keepAliveTimer.unref?.();
+
     const listener: Listener = (event) => {
       if (res.writableEnded) {
         return;
@@ -182,12 +202,14 @@ export class ChatGenerationBroker {
         return;
       }
 
+      clearInterval(keepAliveTimer);
       res.end();
     };
 
     session.listeners.add(listener);
 
     const detach = () => {
+      clearInterval(keepAliveTimer);
       session.listeners.delete(listener);
     };
 

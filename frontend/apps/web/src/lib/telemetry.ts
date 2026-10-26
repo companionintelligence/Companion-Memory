@@ -32,6 +32,17 @@ const CHUNK_LOAD_PATTERNS = [
   /error loading dynamically imported module/i,
 ];
 
+/**
+ * Whether an error is a failed download of one of the app's own code chunks.
+ * The views use it to choose a reload over an in-place retry, which cannot
+ * recover one (see LazyView).
+ */
+export function isChunkLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+
+  return CHUNK_LOAD_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 /** Extension/browser noise the app can neither cause nor fix. */
 const IGNORED_PATTERNS = [
   /ResizeObserver loop/i,

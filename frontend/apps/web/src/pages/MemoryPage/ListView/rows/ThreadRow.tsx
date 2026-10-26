@@ -25,7 +25,10 @@ export function ThreadRow({ thread, time, onClick }: Props) {
   return (
     <EntityRow
       icon={<ThreadIcon />}
-      title={data.name}
+      // A chat's title is written by a background job after the first reply, so
+      // a thread started from Chat has none for a while (or for good, if that
+      // job never ran). Without a fallback the row was only the chat icon.
+      title={data.name?.trim() || 'Untitled chat'}
       subtitle={data.description}
       time={time}
       onClick={onClick}

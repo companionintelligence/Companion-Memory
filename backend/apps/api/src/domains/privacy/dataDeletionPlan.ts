@@ -26,15 +26,24 @@
  *     not depend on cascade for the audit tally.
  *
  * The trailing `ci.users` row itself is deleted separately by the service (it is
- * the final step of an account deletion, not a "data" table).
+ * the final step of an account deletion, not a "data" table). That row points at
+ * the user's own "You" person (`ci.users.entity_id -> ci.entities`, no cascade),
+ * so the service clears that pointer before `ci.entities` is purged.
  */
 
 /** A user-owned table and the column that carries the owning user's id. */
 export interface UserOwnedTable {
   schema: string;
   table: string;
-  /** Column holding the owning user's id (uuid). */
+  /** Column holding the owning user's id (uuid). With `through`, the parent's column. */
   userColumn: string;
+  /**
+   * For a table with no user column of its own: its rows belong to whoever owns
+   * the parent row that `column` points at, so the delete joins the parent on
+   * `parentKey` and matches the parent's `userColumn`. The parent must come
+   * LATER in the plan, so it is still there when this table is purged.
+   */
+  through?: { column: string; parentSchema: string; parentTable: string; parentKey: string };
 }
 
 /**
@@ -43,17 +52,40 @@ export interface UserOwnedTable {
  */
 export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   // --- HBPE (behavioral prediction engine) derived data. These reference
-  // ci.events / ci.content / ci.users with no cascade, so they go first. ---
-  { schema: 'hbpe', table: 'summary_l1_label', userColumn: 'user_id' },
-  { schema: 'hbpe', table: 'l1_event_cluster', userColumn: 'user_id' },
-  { schema: 'hbpe', table: 'l2_content_cluster', userColumn: 'user_id' },
+  // ci.events / ci.content / ci.users with no cascade, so they go first.
+  // summary_l1_label, l1_event_cluster and l2_content_cluster have no user
+  // column: each row goes with the summary, event or content it labels. ---
+  {
+    schema: 'hbpe',
+    table: 'summary_l1_label',
+    userColumn: 'user_id',
+    through: { column: 'summary_id', parentSchema: 'ci', parentTable: 'summaries', parentKey: 'summary_id' },
+  },
+  {
+    schema: 'hbpe',
+    table: 'l1_event_cluster',
+    userColumn: 'user_id',
+    through: { column: 'event_id', parentSchema: 'ci', parentTable: 'events', parentKey: 'event_id' },
+  },
+  {
+    schema: 'hbpe',
+    table: 'l2_content_cluster',
+    userColumn: 'user_id',
+    through: { column: 'content_id', parentSchema: 'ci', parentTable: 'content', parentKey: 'id' },
+  },
   { schema: 'hbpe', table: 'content_context', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'token_stream', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'prediction_log', userColumn: 'user_id' },
+  // These two reference ci.users with no cascade, so leaving them blocks the
+  // user row's delete. prediction_score has no foreign key and would be orphaned.
+  { schema: 'hbpe', table: 'occurrence_log', userColumn: 'user_id' },
+  { schema: 'hbpe', table: 'recurrence_profiles', userColumn: 'user_id' },
+  { schema: 'hbpe', table: 'prediction_score', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'l1_pending_pool', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'l2_pending_pool', userColumn: 'user_id' },
-  { schema: 'hbpe', table: 'l1_clusters', userColumn: 'user_id' },
+  // l2_clusters references l1_clusters (no cascade), so it goes first.
   { schema: 'hbpe', table: 'l2_clusters', userColumn: 'user_id' },
+  { schema: 'hbpe', table: 'l1_clusters', userColumn: 'user_id' },
 
   // --- Search index (ci_search). Keyed by (entity_type, entity_id) but also
   // carries user_id, so we can purge a user's rows directly here; the
@@ -85,6 +117,8 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   // Digests of the identifiers of people memory.forget erased: derived from a user's data, so it goes
   // with it, and counted rather than left to the cascade.
   { schema: 'ci', table: 'forgotten_identifiers', userColumn: 'owner_user_id' },
+  // product_models.product_entity_id references entities with no cascade.
+  { schema: 'ci', table: 'product_models', userColumn: 'user_id' },
   { schema: 'ci', table: 'entities', userColumn: 'owner_user_id' },
 
   // --- Core memory: content references events, so content before events. ---
@@ -107,6 +141,9 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   { schema: 'ci', table: 'threads', userColumn: 'user_id' },
   { schema: 'ci', table: 'saved_searches', userColumn: 'user_id' },
   { schema: 'ci', table: 'devices', userColumn: 'user_id' },
+  // Both reference ci.users with no cascade. A private question is the user's own.
+  { schema: 'ci', table: 'capture_events', userColumn: 'user_id' },
+  { schema: 'ci', table: 'questions', userColumn: 'is_private_to' },
 
   // --- Identity / auth / connection credentials. Connections carry the OAuth
   // tokens; provider_keys the per-user client credentials; sessions + api_keys

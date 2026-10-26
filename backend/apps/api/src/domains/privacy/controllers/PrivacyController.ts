@@ -18,7 +18,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import { LastAdminDeletionRefused, UserService } from '@ci/domains/user';
 
-import { DataDeletionService } from '../services/DataDeletionService';
+import { type AccountDeletionResult, DataDeletionService } from '../services/DataDeletionService';
 
 /**
  * Full account deletion asks the caller to retype the account's email, the same
@@ -106,15 +106,20 @@ export class PrivacyController {
     // Before anything is purged: the appliance's last administrator does not leave the other
     // people on it without one, whichever route deletes the account (`DELETE /account` applies
     // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
+    // The purge runs inside the handover's transaction, so if it fails the successor is not
+    // left an administrator beside the caller.
+    let result: AccountDeletionResult;
+
     try {
-      await this.userService.handOverAdministration(serviceContext, serviceContext.userId, {
-        successorEmail: body.successorEmail,
-      });
+      result = await this.userService.handOverAdministration(
+        serviceContext,
+        serviceContext.userId,
+        { successorEmail: body.successorEmail },
+        () => this.dataDeletionService.deleteAccount(serviceContext),
+      );
     } catch (error) {
       throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
-
-    const result = await this.dataDeletionService.deleteAccount(serviceContext);
 
     return {
       status: 'deleted',

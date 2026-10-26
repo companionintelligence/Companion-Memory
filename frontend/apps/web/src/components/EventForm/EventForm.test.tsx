@@ -88,6 +88,35 @@ describe('EventForm — looking a place up', () => {
     expect(onChange).toHaveBeenCalledWith({ ...draft, latitude: '37.7955', longitude: '-122.3937' });
   });
 
+  it('leaves the coordinates alone when the match is only the area around the name', async () => {
+    // What the provider answered for a café: the middle of the city, at APPROXIMATE confidence.
+    const onChange = vi.fn();
+    const lookupPlace = vi.fn().mockResolvedValue({
+      status: 'ok',
+      latitude: 37.7749295,
+      longitude: -122.4194155,
+      address: 'San Francisco, CA, USA',
+      approximate: true,
+    });
+    const draft = { ...emptyEventDraft(), locationName: 'Blue Bottle Coffee, San Francisco' };
+    render(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /Only found San Francisco, CA, USA, not that exact place, so the coordinates were not filled in/,
+      ),
+    );
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Still one click away for someone who does mean the city.
+    fireEvent.click(screen.getByRole('button', { name: 'use this area' }));
+
+    expect(onChange).toHaveBeenCalledWith({ ...draft, latitude: '37.7749295', longitude: '-122.4194155' });
+    expect(screen.getByRole('status')).toHaveTextContent(/Matched San Francisco, CA, USA/);
+  });
+
   it('says when nothing matched, when lookups are not set up, and when the lookup itself failed', async () => {
     const draft = { ...emptyEventDraft(), locationName: 'Nowhere' };
     const lookupPlace = vi

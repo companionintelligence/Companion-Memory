@@ -119,6 +119,28 @@ describe('ci import', () => {
     expect(ctx.term.errorText()).toContain("--stages omits 'media'");
   });
 
+  it('refuses a bad --timeout before uploading or starting anything', async () => {
+    const archive = path.join(dir, 'contacts.vcf');
+
+    await writeFile(archive, 'x');
+
+    const uploaded: string[] = [];
+    const ctx = harness({
+      upload: async (file: string) => {
+        uploaded.push(file);
+
+        return [{ dropId: 'd', originalFilename: 'contacts.vcf', sizeBytes: 1, status: 'staged', expiresAt: null }];
+      },
+      startRun: async () => runDetail('run-4'),
+    });
+
+    await expect(importCommand(ctx, [archive], { wait: true, timeout: 'abc' })).rejects.toThrow(
+      '--timeout takes a number of seconds, not "abc"',
+    );
+    expect(uploaded).toEqual([]);
+    expect(ctx.term.text()).not.toContain('run(s) started');
+  });
+
   it('follows the runs with --wait', async () => {
     const archive = path.join(dir, 'a.zip');
 

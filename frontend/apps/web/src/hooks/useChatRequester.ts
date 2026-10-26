@@ -26,6 +26,12 @@ import { useSessionAuth } from './useSessionAuth';
 type Opts = {
   threadId: string | null;
   onNewThread?: (threadId: string) => void;
+  /**
+   * The action this conversation is about (the Today action window). Sent only
+   * with a turn that starts a new thread, so the server can open the thread
+   * with the action and link the action to it.
+   */
+  actionId?: string | null;
 };
 
 type ReturnType = [
@@ -121,7 +127,7 @@ function pipeMonitor(
   return body.pipeThrough(monitor);
 }
 
-export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
+export function useChatRequester({ threadId, onNewThread, actionId }: Opts): ReturnType {
   const { headers: sessionHeaders } = useSessionAuth();
   const [{ selectedModel, thinkingEnabled, toolsEnabled, activeModels }] = useModel();
   const { toast } = useToast();
@@ -129,6 +135,8 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
   const abortControllerRef = useRef<AbortController | null>(null);
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
+  const actionIdRef = useRef(actionId);
+  actionIdRef.current = actionId;
   const activeThreadIdRef = useRef<string | null>(threadId);
   if (threadId) {
     activeThreadIdRef.current = threadId;
@@ -512,6 +520,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
             prompt,
             model: selectedModel,
             threadId: threadIdRef.current,
+            ...(threadIdRef.current == null && actionIdRef.current ? { actionId: actionIdRef.current } : {}),
             enableTools: toolsEnabled,
             enableThinking: thinkingEnabled,
             fileIds: data.fileIds,

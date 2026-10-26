@@ -546,6 +546,9 @@ export class ObjectObservationService {
           resolvedObjectId: filter.resolved ? Not(IsNull()) : IsNull(),
         }),
         ...(filter.confirmedByUser != null && { confirmedByUser: filter.confirmedByUser }),
+        ...(filter.reviewedByUser != null && {
+          resolutionMethod: filter.reviewedByUser ? 'user' : Not('user' as const),
+        }),
         ...(filter.observedFrom != null &&
           filter.observedTo != null && {
             observedAt: Between(filter.observedFrom, filter.observedTo),
@@ -566,10 +569,20 @@ export class ObjectObservationService {
    * newest first.
    *
    * Matches `object_observations_review_idx` exactly — the partial index the
-   * migration added for this one query.
+   * migration added for this one query. It also leaves out sightings a person
+   * already answered "not a thing" (`rejectObservation`: unconfirmed, unlinked,
+   * method `user`). They match the index predicate too, so they stayed at the
+   * top of the queue however often they were rejected, and the resolution sweep
+   * that reads this queue could link them again.
    */
   async findForReview(context: ServiceContext, limit = 100, offset = 0): Promise<ObjectObservation[]> {
-    return this.find(context, { confirmedByUser: false, resolved: false, limit, offset });
+    return this.find(context, {
+      confirmedByUser: false,
+      resolved: false,
+      reviewedByUser: false,
+      limit,
+      offset,
+    });
   }
 
   /**

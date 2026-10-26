@@ -298,8 +298,9 @@ export const ConfigSchema = z.object({
       hubOrigins: z.string().optional().default(''),
       // Docker-network origin Memory uses to ring Hub's targeted wake. The
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
-      // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
-      hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+      // appliance-local hop. Override with CI_HUB_INTERNAL_URL; unset, it is
+      // worked out after parsing (see `resolveHubInternalUrl`).
+      hubInternalUrl: z.string().optional().default(''),
 
       /**
        * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
@@ -1644,6 +1645,40 @@ export const UTILITY_MODEL_EXPLICITLY_CONFIGURED =
 if (!parsed.llm.utilityModel) {
   parsed.llm.utilityModel = DEFAULT_UTILITY_MODEL;
 }
+
+/**
+ * Where Memory rings the Hub's wake endpoint (`HubDoorbellService`): `CI_HUB_INTERNAL_URL` when set,
+ * else the origin of `HUB_INFERENCE_URL`, else {@link DEFAULT_HUB_INTERNAL_URL}.
+ *
+ * No Hub sets `CI_HUB_INTERNAL_URL`. Every Hub does hand its apps `HUB_INFERENCE_URL`, built from its
+ * own container name and API port (`http://ci-hub:5002/api/inference/v1` on Hub 0.3.7), so its origin
+ * is the Hub as this container reaches it. The old default, `http://ci-os-hub:3000`, named a port the
+ * Hub does not listen on: every Dispatch rang a refused connection, OpenClaw never heard it, and the
+ * thread said "OpenClaw did not check in" two minutes later.
+ */
+export const DEFAULT_HUB_INTERNAL_URL = 'http://ci-os-hub:5002';
+
+export function resolveHubInternalUrl(configured: string | undefined, hubInferenceUrl: string | undefined): string {
+  const explicit = configured?.trim();
+
+  if (explicit) {
+    return explicit;
+  }
+
+  try {
+    const url = new URL(hubInferenceUrl?.trim() ?? '');
+
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    // Unset or not a URL: the Hub's default address.
+  }
+
+  return DEFAULT_HUB_INTERNAL_URL;
+}
+
+parsed.auth.connect.hubInternalUrl = resolveHubInternalUrl(parsed.auth.connect.hubInternalUrl, process.env.HUB_INFERENCE_URL);
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's

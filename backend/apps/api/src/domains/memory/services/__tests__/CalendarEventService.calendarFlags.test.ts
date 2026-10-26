@@ -49,7 +49,10 @@ describe('CalendarEventService — calendar flags survive create and update', ()
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
 
+  let deltas: ReturnType<typeof noopGraphDeltaWriter>;
+
   beforeEach(async () => {
+    deltas = noopGraphDeltaWriter();
     baseRepo = {
       create: jest.fn((x: Partial<EventBaseEntity>) => x),
       save: jest.fn(async (x: Partial<EventBaseEntity>) => x),
@@ -81,7 +84,7 @@ describe('CalendarEventService — calendar flags survive create and update', ()
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
-        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: GraphDeltaWriter, useValue: deltas },
       ],
     }).compile();
 
@@ -211,6 +214,23 @@ describe('CalendarEventService — calendar flags survive create and update', ()
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { category: 'social' });
 
       expect(patched()).toEqual({ category: 'social' });
+    });
+
+    it('does not rewrite or record a title that came back unchanged', async () => {
+      // The event page sends the stored title with every save of its description.
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Standup' });
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('records a real rename with the title it replaced', async () => {
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Team standup' });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { name: 'Team standup' });
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { name: { old: 'Standup', new: 'Team standup' } } }),
+      );
     });
 
     it('refuses to clear the tombstone — un-deleting is restore(), not a field patch', async () => {

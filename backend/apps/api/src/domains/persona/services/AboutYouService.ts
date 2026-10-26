@@ -30,6 +30,8 @@ export interface AboutYouView {
     entityId: string;
     name: string;
     relationship: string;
+    /** See `UserContext.familyMembers`: which way `relationship` points from the user. */
+    direction?: 'outgoing' | 'incoming';
     age?: number;
   }>;
   recentAnswers: Array<{

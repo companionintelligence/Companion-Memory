@@ -135,6 +135,38 @@ describe('useChatRequester', () => {
     expect(result.current[0].stream).not.toBeNull();
   });
 
+  it('names the action only on the turn that starts a thread', async () => {
+    // The Today action window: the server opens the new thread with the action
+    // and links it, so the action id rides on the first turn and no other.
+    const fetchMock = vi.fn((_input: RequestInfo, _init?: RequestInit) =>
+      Promise.resolve(streamResponse('t-1')),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string | null }) => useChatRequester({ threadId, actionId: 'action-1' }),
+      { initialProps: { threadId: null as string | null } },
+    );
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'Why do you suggest this?', fileIds: [] });
+    });
+
+    rerender({ threadId: 't-1' });
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'And then?', fileIds: [] });
+    });
+
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/llm/generate'))
+      .map(([, init]) => JSON.parse(String(init?.body)));
+
+    expect(bodies[0]).toMatchObject({ threadId: null, actionId: 'action-1' });
+    expect(bodies[1].threadId).toBe('t-1');
+    expect(bodies[1]).not.toHaveProperty('actionId');
+  });
+
   it('stop() tears down the active stream', async () => {
     const fetchMock = vi.fn((input: RequestInfo) => {
       const url = String(input);

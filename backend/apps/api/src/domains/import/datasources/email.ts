@@ -9,7 +9,7 @@ import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
-import { emailDirection, isDraft } from './email_direction';
+import { emailDirection, emailDirectionBasis, isDraft } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import { emailThreadId } from './email_thread';
 import {
@@ -327,6 +327,7 @@ export class EmailFileImporter implements FileImporter {
     // submission has none → outbound. The canonical mapping reads `Direction`
     // (mapping.ts#directionFor).
     const direction = emailDirection(headers);
+    const directionBasis = emailDirectionBasis(headers);
     // Attachments ride the communication itself as metadata.MediaAttachments —
     // the descriptor lane the push's comms media leg reads (upload + content
     // row + the message's attachments column; see graphql.ts
@@ -384,6 +385,7 @@ export class EmailFileImporter implements FileImporter {
         To: headers.To,
         Cc: headers.Cc,
         Direction: direction,
+        DirectionBasis: directionBasis,
         MessageID: cleanMsgID,
         InReplyTo: headers['In-Reply-To']?.replace(/[<>]/g, ''),
         References: headers.References?.replace(/[<>]/g, ' '),

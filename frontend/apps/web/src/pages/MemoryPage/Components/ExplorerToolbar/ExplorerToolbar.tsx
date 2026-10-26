@@ -995,9 +995,22 @@ export function DateControl({
       setDraftToDate(value);
     }
 
-    if (isCompleteDateValue(value)) {
-      applyDate(part, value);
+    if (!isCompleteDateValue(value)) {
+      return;
     }
+
+    // A date field reports a complete date after every keystroke, so typing
+    // 02/15 over an end of 03/08 passes through 02/08 and 02/01 on the way.
+    // Applied as they come, the ones before the start dragged the start along
+    // (see applyDate) and left it on a day nobody typed. A date that crosses
+    // the other end waits for the field to be committed (blur or Enter).
+    const other = part === 'from' ? toDateValue : fromDateValue;
+
+    if (other && (part === 'from' ? value > other : value < other)) {
+      return;
+    }
+
+    applyDate(part, value);
   };
 
   // Leaving the field (or Enter) settles it. Emptied on purpose, that end of

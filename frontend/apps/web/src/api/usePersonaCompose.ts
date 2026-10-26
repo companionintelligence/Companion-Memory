@@ -56,6 +56,8 @@ export interface AboutYouView {
     entityId: string;
     name: string;
     relationship: string;
+    /** Which way `relationship` points from you: `outgoing` is "you PARENT_OF them". */
+    direction?: 'outgoing' | 'incoming';
     age?: number;
   }>;
   recentAnswers: Array<{

@@ -33,6 +33,20 @@ export function DataPortabilitySection() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Every way out of the dialog clears what was chosen and typed, Cancel included (it used to only
+  // hide the dialog, so reopening showed the same file and email with Replace my data already live).
+  // The hidden file input is emptied too, or choosing the same file again would not fire onChange.
+  const closeImportDialog = () => {
+    setImportOpen(false);
+    setConfirmEmail('');
+    setSelectedFile(null);
+    setError(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const email = user?.email ?? '';
   const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
   // Export and import stream one very large file each way, and the native shell can do neither: it
@@ -73,9 +87,7 @@ export function DataPortabilitySection() {
       setSuccess(
         `Import complete — ${result.rowsImported.toLocaleString()} rows across ${result.tablesImported} tables, ${result.filesRestored.toLocaleString()} files restored.`,
       );
-      setImportOpen(false);
-      setConfirmEmail('');
-      setSelectedFile(null);
+      closeImportDialog();
     } catch {
       setError('Could not import that archive. Check the file and confirmation email, then try again.');
     } finally {
@@ -154,12 +166,10 @@ export function DataPortabilitySection() {
       <Dialog
         open={importOpen}
         onOpenChange={(next) => {
-          setImportOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setSelectedFile(null);
-            setError(null);
+          if (next) {
+            setImportOpen(true);
+          } else {
+            closeImportDialog();
           }
         }}
       >
@@ -194,7 +204,7 @@ export function DataPortabilitySection() {
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setImportOpen(false)} disabled={importing}>
+            <Button variant="outline" onClick={closeImportDialog} disabled={importing}>
               Cancel
             </Button>
             <Button

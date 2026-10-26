@@ -6,6 +6,7 @@ import { EventService } from '@ci/domains/events';
 import { ImageDescriptionBackfillRequestEvent } from '@ci/domains/files';
 import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
+import { ChatModelPreferenceService } from './ChatModelPreferenceService';
 import { OllamaService } from './OllamaService';
 
 /**
@@ -31,7 +32,17 @@ import { OllamaService } from './OllamaService';
  */
 @Injectable()
 export class ImageDescriptionPreferenceService {
-  private readonly cache = new Map<string, { enabled: boolean; expiresAt: number }>();
+  /**
+   * `chatModel` is the user's stored chat-model choice the value was read
+   * under. The default and the override both belong to a model, so a value read
+   * for one model must not answer for another: it used to, for up to the full
+   * 60 s after a switch, and flipping the switch in that window stored the
+   * opposite of what the person meant for the new model.
+   */
+  private readonly cache = new Map<
+    string,
+    { enabled: boolean; chatModel: string | null; expiresAt: number }
+  >();
 
   constructor(
     private readonly personService: PersonService,
@@ -44,6 +55,13 @@ export class ImageDescriptionPreferenceService {
      * it a user who has no self entity gets the old error rather than a new one.
      */
     @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * Read to tell when the cached value belongs to a different chat model.
+     * It keeps its own cache, cleared in this process when the choice is set,
+     * so the check costs no extra round trip. Optional so hand-built services
+     * (the unit tests) still construct; without it the cache only expires.
+     */
+    @Optional() private readonly chatModelPreference?: ChatModelPreferenceService,
   ) {}
 
   invalidate(userId: string): void {
@@ -51,13 +69,14 @@ export class ImageDescriptionPreferenceService {
   }
 
   async isEnabled(userId: string): Promise<boolean> {
+    const chatModel = (await this.chatModelPreference?.getChatModel(userId)) ?? null;
     const cached = this.cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.chatModel === chatModel && cached.expiresAt > Date.now()) {
       return cached.enabled;
     }
 
     const enabled = await this.readEnabled(userId);
-    this.cache.set(userId, { enabled, expiresAt: Date.now() + 60_000 });
+    this.cache.set(userId, { enabled, chatModel, expiresAt: Date.now() + 60_000 });
 
     return enabled;
   }

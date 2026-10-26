@@ -63,7 +63,24 @@ export const DISCOVER_USER_TABLES_SQL = `
              FROM information_schema.columns cc
             WHERE cc.table_schema = c.table_schema
               AND cc.table_name = c.table_name
-         ) AS columns
+         ) AS columns,
+         (
+           SELECT array_agg(cc.column_name::text ORDER BY cc.ordinal_position)
+             FROM information_schema.columns cc
+            WHERE cc.table_schema = c.table_schema
+              AND cc.table_name = c.table_name
+              AND cc.is_generated = 'ALWAYS'
+         ) AS generated,
+         (
+           SELECT array_agg(DISTINCT pn.nspname || '.' || p.relname)
+             FROM pg_constraint k
+             JOIN pg_class p ON p.oid = k.confrelid
+             JOIN pg_namespace pn ON pn.oid = p.relnamespace
+            WHERE k.contype = 'f'
+              AND k.conrelid = format('%I.%I', c.table_schema, c.table_name)::regclass
+              AND k.confrelid <> k.conrelid
+              AND NOT k.condeferred
+         ) AS parents
   FROM information_schema.columns c
   JOIN information_schema.tables t
     ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -99,11 +116,16 @@ export interface DiscoveredUserColumn {
   table: string;
   user_column: string;
   columns?: string[] | null;
+  /** Columns the database computes; see {@link UserScopedTable.generatedColumns}. */
+  generated?: string[] | null;
+  /** Tables this one references through a foreign key that is checked at once (not deferred). */
+  parents?: string[] | null;
 }
 
 /**
  * Fold discovery's one-row-per-(table, user column) output into one entry per
- * table, minus {@link EXCLUDED_TABLES}, in discovery order.
+ * table, minus {@link EXCLUDED_TABLES}, with every table after the tables it
+ * references (see {@link orderParentsFirst}) and otherwise in discovery order.
  *
  * Five tables carry both columns (`ci.objects`, `ci.receipts`,
  * `ci.receipt_line_items`, `ci.object_observations`, `ci.product_models`).
@@ -121,10 +143,15 @@ export interface DiscoveredUserColumn {
  */
 export function groupUserTables(rows: readonly DiscoveredUserColumn[]): UserScopedTable[] {
   const byName = new Map<string, UserScopedTable>();
+  const parents = new Map<string, string[]>();
 
   for (const row of rows) {
     if (isExcluded(row)) {
       continue;
+    }
+
+    if (Array.isArray(row.parents)) {
+      parents.set(qualifiedName(row), row.parents);
     }
 
     const column = row.user_column as UserColumn;
@@ -149,8 +176,44 @@ export function groupUserTables(rows: readonly DiscoveredUserColumn[]): UserScop
       userColumns: [column],
       // Fail closed: a row without a column list can accept no imported rows.
       columns: Array.isArray(row.columns) ? row.columns : [],
+      generatedColumns: Array.isArray(row.generated) ? row.generated : [],
     });
   }
 
-  return [...byName.values()];
+  return orderParentsFirst([...byName.values()], parents);
+}
+
+/**
+ * Put every table after the tables it references, keeping discovery order
+ * wherever the foreign keys leave a choice.
+ *
+ * Export writes tables in this order and import inserts rows in the order the
+ * archive gives them (and deletes in the reverse). Import can only switch
+ * foreign-key checks off with `session_replication_role`, which the app's role
+ * may not set, so a child written before its parent failed the whole import:
+ * alphabetically `ci.messages` comes before `ci.threads`, and
+ * `ci_search.mobile_search_documents` before `ci_search.vectors`. Deferred
+ * constraints are checked at commit and do not count. A cycle, if one ever
+ * appears, falls back to discovery order for the tables in it.
+ */
+export function orderParentsFirst(
+  tables: readonly UserScopedTable[],
+  parents: ReadonlyMap<string, readonly string[]>,
+): UserScopedTable[] {
+  const names = new Set(tables.map(qualifiedName));
+  const placed = new Set<string>();
+  const ordered: UserScopedTable[] = [];
+  const pending = [...tables];
+
+  while (pending.length > 0) {
+    const ready = pending.findIndex((table) =>
+      (parents.get(qualifiedName(table)) ?? []).every((parent) => !names.has(parent) || placed.has(parent)),
+    );
+    const [next] = pending.splice(ready === -1 ? 0 : ready, 1);
+
+    ordered.push(next);
+    placed.add(qualifiedName(next));
+  }
+
+  return ordered;
 }

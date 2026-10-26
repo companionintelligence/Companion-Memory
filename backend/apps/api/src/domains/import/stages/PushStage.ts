@@ -80,11 +80,10 @@ import {
 import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
+  isOwnerContact,
   makeIsSelf,
-  matchOwner,
   NOBODY_IS_SELF,
   readSelfIdentity,
-  shouldMapContactToSelf,
   type SelfIdentity,
 } from '../push/self';
 import {
@@ -293,6 +292,44 @@ export const DESTINATION_ORDER: readonly Destination[] = [
 const PRODUCT_IDENTIFIER_SOURCE = 'import';
 
 /** One staged row's journey through a batch: what it is, where it goes, what happened. */
+/**
+ * A mail's direction once its sender is known.
+ *
+ * The email parsers read a message with no receiving-MTA headers as outbound
+ * (`DirectionBasis: 'no_delivery_trace'`, email_direction.ts): on a real export
+ * that is the owner's sent copy. It is only an absence, though, and the parser
+ * cannot know who the owner is. Here the push does: when the sender resolved to
+ * somebody other than the owner, the From carries an address (so it is that
+ * person's, not the owner's: an owner address maps to the self Person), and the
+ * owner is among the To/Cc, it is mail somebody sent the owner, so inbound.
+ *
+ * A Gmail Sent label (`sent_label`) and delivery headers (`delivery_trace`) are
+ * the parser's own evidence and are never overruled. Mail the owner sent from
+ * an address Memory does not know to a third party stays outbound: the owner is
+ * not a recipient.
+ */
+export function directionAfterSender<D extends string | undefined>(
+  direction: D,
+  record: CanonicalRecord,
+  participants: Map<string, string[]>,
+  from: string | undefined,
+  selfEntityId: string | null,
+): D | 'inbound' {
+  const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+
+  if (direction !== 'outbound' || metadata.DirectionBasis !== 'no_delivery_trace' || selfEntityId == null) {
+    return direction;
+  }
+
+  const sender = typeof metadata.From === 'string' ? metadata.From : '';
+  const senderIsSomeoneElse = from != null && from !== selfEntityId && /[^\s<>"]+@[^\s<>"]+/.test(sender);
+  const ownerIsRecipient = [...(participants.get('to') ?? []), ...(participants.get('cc') ?? [])].includes(
+    selfEntityId,
+  );
+
+  return senderIsSomeoneElse && ownerIsRecipient ? 'inbound' : direction;
+}
+
 interface RowPlan {
   row: StagedItem;
   record: CanonicalRecord;
@@ -2122,39 +2159,20 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
   ): boolean {
     const props = input.properties ?? {};
-    const candidates: string[] = [];
-    if (typeof input.name === 'string') {
-      candidates.push(input.name);
-    }
+    const strings = (single: unknown, list: unknown): string[] =>
+      [single, ...(Array.isArray(list) ? list : [])].filter(
+        (value): value is string => typeof value === 'string' && value.trim().length > 0,
+      );
 
-    if (typeof props.email === 'string') {
-      candidates.push(props.email);
-    }
-
-    for (const email of Array.isArray(props.emails) ? props.emails : []) {
-      if (typeof email === 'string') {
-        candidates.push(email);
-      }
-    }
-
-    if (typeof props.phone === 'string') {
-      candidates.push(props.phone);
-    }
-
-    for (const phone of Array.isArray(props.phones) ? props.phones : []) {
-      if (typeof phone === 'string') {
-        candidates.push(phone);
-      }
-    }
-
-    for (const candidate of candidates) {
-      const match = matchOwner(identity, candidate);
-      if (shouldMapContactToSelf(match, trustMode)) {
-        return true;
-      }
-    }
-
-    return false;
+    return isOwnerContact(
+      identity,
+      {
+        name: typeof input.name === 'string' ? input.name : null,
+        emails: strings(props.email, props.emails),
+        phones: strings(props.phone, props.phones),
+      },
+      trustMode,
+    );
   }
 
   /**
@@ -2766,6 +2784,14 @@ export class PushStage implements ImportStageRunner {
 
           const { from, to } = this.resolveCorrespondents(plan.participants, input.direction, selfEntityId);
 
+          input.direction = directionAfterSender(
+            input.direction,
+            plan.record,
+            plan.participants,
+            from,
+            selfEntityId,
+          );
+
           if (from) {
             input.from_entity_id = from;
           }
@@ -3015,6 +3041,8 @@ export class PushStage implements ImportStageRunner {
         // `stripSelf` had nothing to strip. A retried batch produced quietly
         // different rows from a batch that happened to succeed.
         const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
+
+        input.direction = directionAfterSender(input.direction, record, participants, from, selfEntityId);
 
         if (from) {
           input.from_entity_id = from;

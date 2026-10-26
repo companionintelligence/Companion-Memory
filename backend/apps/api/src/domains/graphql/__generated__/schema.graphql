@@ -311,6 +311,7 @@ type AskQueryType {
   actor: AskActorType
   dataClass: String
   prompt: String!
+  promptHiddenCharactersRemoved: Boolean!
   purpose: String
   queryType: String!
 }

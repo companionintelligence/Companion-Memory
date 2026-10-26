@@ -192,6 +192,7 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
     | { kind: 'idle' }
     | { kind: 'busy' }
     | { kind: 'found'; address: string | null }
+    | { kind: 'approximate'; address: string | null; latitude: number; longitude: number }
     | { kind: 'none' }
     | { kind: 'unconfigured' }
     | { kind: 'error' };
@@ -206,7 +207,17 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
     setLookup({ kind: 'busy' });
     const result = await lookupPlace(value.locationName.trim());
 
-    if (result.status === 'ok') {
+    if (result.status === 'ok' && result.approximate) {
+      // Only the area around the name (a café looked up as "…, San Francisco"
+      // comes back as the middle of the city). Filling that in would put the
+      // event in the wrong spot without a word, so it waits for a yes.
+      setLookup({
+        kind: 'approximate',
+        address: result.address,
+        latitude: result.latitude,
+        longitude: result.longitude,
+      });
+    } else if (result.status === 'ok') {
       // Both at once: two `set` calls would each spread the same stale value.
       onChange({ ...value, latitude: String(result.latitude), longitude: String(result.longitude) });
       setLookup({ kind: 'found', address: result.address });
@@ -334,6 +345,30 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
         {lookup.kind === 'found' && (
           <p role="status" className="text-xs text-muted-foreground">
             {lookup.address ? `Matched ${lookup.address} — coordinates filled in.` : 'Coordinates filled in.'}
+          </p>
+        )}
+        {lookup.kind === 'approximate' && (
+          <p role="status" className="text-xs text-muted-foreground">
+            Only found {lookup.address ?? 'the area around it'}, not that exact place, so the coordinates were
+            not filled in. Add a street address and look it up again, or{' '}
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              disabled={disabled}
+              onClick={() => {
+                onChange({
+                  ...value,
+                  latitude: String(lookup.latitude),
+                  longitude: String(lookup.longitude),
+                });
+                setLookup({ kind: 'found', address: lookup.address });
+              }}
+            >
+              use this area
+            </Button>
+            .
           </p>
         )}
         {lookup.kind === 'none' && (

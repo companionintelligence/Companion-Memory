@@ -74,3 +74,26 @@ export function isApplianceOutage(
 
   return status !== 401 && status !== 403;
 }
+
+/**
+ * Whether a failed `me` query leaves it unknown who is signed in, as opposed to the server
+ * saying this credential is no good. Wider than {@link isApplianceOutage}, which decides
+ * when a phone may answer with a kept profile: here a server that answers with a GraphQL
+ * error that is not about the credential (the database is down, so `me` fails with
+ * INTERNAL_SERVER_ERROR) has not said anyone is signed out either.
+ */
+export function isProfileUnanswered(
+  error: Pick<ApolloError, 'networkError' | 'graphQLErrors'> | undefined,
+): boolean {
+  if (!error) {
+    return false;
+  }
+
+  if (error.networkError) {
+    return isApplianceOutage(error);
+  }
+
+  const codes = (error.graphQLErrors ?? []).map((graphQLError) => graphQLError.extensions?.code);
+
+  return codes.length > 0 && !codes.some((code) => code === 'UNAUTHENTICATED' || code === 'FORBIDDEN');
+}

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { EmailFileImporter } from '../email';
-import { emailDirection, hasSentLabel, isDraft } from '../email_direction';
+import { emailDirection, emailDirectionBasis, hasSentLabel, isDraft } from '../email_direction';
 import { GmailFileImporter } from '../gmail';
 import type { DirEntry } from '../registry';
 import type { Graph, ImportParams } from '../timeline';
@@ -34,6 +34,14 @@ describe('email_direction helpers', () => {
     expect(emailDirection({ From: 'Me <me@x.io>', To: 'them@x.io', Subject: 'hi' })).toBe('outbound');
     // DKIM alone is NOT inbound evidence — providers sign outbound mail at submission.
     expect(emailDirection({ From: 'me@x.io', 'DKIM-Signature': 'v=1; d=x.io' })).toBe('outbound');
+  });
+
+  it('names what the direction was read from, so the push can tell a Sent label from missing headers', () => {
+    expect(emailDirectionBasis({ 'X-Gmail-Labels': 'Sent', 'Return-Path': '<me@example.com>' })).toBe(
+      'sent_label',
+    );
+    expect(emailDirectionBasis({ 'Return-Path': '<alice@example.com>' })).toBe('delivery_trace');
+    expect(emailDirectionBasis({ From: 'Alice <alice@example.com>' })).toBe('no_delivery_trace');
   });
 
   it('hasSentLabel matches the Sent label among comma-separated labels', () => {
@@ -74,6 +82,7 @@ describe('email datasource surfaces Direction + From/To in metadata', () => {
     } as unknown as ImportParams);
     const item = pipeline.find((p) => p.item)!.item;
     expect(item.metadata.Direction).toBe('inbound');
+    expect(item.metadata.DirectionBasis).toBe('delivery_trace');
     expect(item.metadata.From).toContain('alice@example.com');
     expect(item.metadata.To).toContain('bob@example.com');
   });
@@ -92,6 +101,7 @@ describe('email datasource surfaces Direction + From/To in metadata', () => {
     } as unknown as ImportParams);
     const item = pipeline.find((p) => p.item)!.item;
     expect(item.metadata.Direction).toBe('outbound');
+    expect(item.metadata.DirectionBasis).toBe('no_delivery_trace');
   });
 
   it('email.ts skips Thunderbird drafts entirely', async () => {

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 
 import { fireEvent, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import type { EditableFilters } from './savedSearchFiltersEdit';
+import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
 import { SavedSearchFiltersEditor } from './SavedSearchFiltersEditor';
 
 const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -52,5 +52,47 @@ describe('SavedSearchFiltersEditor dates', () => {
     renderWithProviders(<Host initial={{ endTime: '2026-10-01T06:59:59.999Z' }} />);
 
     expect(screen.getByLabelText('To')).toHaveValue('2026-09-30');
+  });
+});
+
+describe('SavedSearchFiltersEditor rolling When', () => {
+  it('says a rolling preset is stored, and a picked date replaces it instead of being ignored', () => {
+    const onChange = vi.fn();
+
+    function Spy({ initial }: { initial: EditableFilters }) {
+      const [value, setValue] = useState<EditableFilters>(initial);
+
+      return (
+        <SavedSearchFiltersEditor
+          value={value}
+          onChange={(next) => {
+            onChange(next);
+            setValue(next);
+          }}
+        />
+      );
+    }
+
+    renderWithProviders(<Spy initial={{ datePreset: 'last-month' }} />);
+
+    expect(screen.getByTestId('filters-rolling-when')).toHaveTextContent('When: Last month');
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-01' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-10-23' } });
+
+    const saved = toFiltersInput(onChange.mock.calls.at(-1)?.[0] as EditableFilters);
+
+    expect(saved?.datePreset).toBeUndefined();
+    expect(saved?.startTime).toBeDefined();
+    expect(saved?.endTime).toBeDefined();
+    expect(screen.queryByTestId('filters-rolling-when')).not.toBeInTheDocument();
+  });
+
+  it('removes the rolling preset on its own', () => {
+    renderWithProviders(<Host initial={{ datePreset: 'last-week', people: ['Jane Smith'] }} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(screen.queryByTestId('filters-rolling-when')).not.toBeInTheDocument();
   });
 });

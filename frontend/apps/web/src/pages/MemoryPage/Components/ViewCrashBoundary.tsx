@@ -4,7 +4,7 @@ interface Props {
   children: ReactNode;
   /** Clear a captured error when the user moves to a different entity / query. */
   resetKey?: string;
-  fallback: ReactNode | ((retry: () => void) => ReactNode);
+  fallback: ReactNode | ((retry: () => void, error: Error) => ReactNode);
 }
 
 interface State {
@@ -40,7 +40,7 @@ export class ViewCrashBoundary extends Component<Props, State> {
     if (this.state.error) {
       const { fallback } = this.props;
 
-      return typeof fallback === 'function' ? fallback(this.retry) : fallback;
+      return typeof fallback === 'function' ? fallback(this.retry, this.state.error) : fallback;
     }
 
     return this.props.children;

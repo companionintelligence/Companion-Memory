@@ -571,6 +571,36 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       }
     });
 
+    it('opens the clicked dot’s card once its neighbourhood has loaded', async () => {
+      // The real fetch takes a moment; until it lands the focus canvas is empty, and the
+      // selection must survive that wait for the card to open.
+      let focusLoaded = false;
+
+      useNodeGraphServiceMock.mockImplementation(({ entityId, skip }) =>
+        skip || !entityId
+          ? { data: null, loading: false, error: null, refresh: vi.fn() }
+          : focusLoaded
+            ? { data: FOCUS_SUBGRAPH, loading: false, error: null, refresh: vi.fn() }
+            : { data: null, loading: true, error: null, refresh: vi.fn() },
+      );
+
+      const { rerender } = renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+
+      await waitFor(() => expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument());
+      expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+
+      focusLoaded = true;
+      rerender(
+        <MemoryRouter initialEntries={['/']}>
+          <GraphTabPanel variant="desktop" />
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Frida Friend');
+    });
+
     it('expands a clicked dot straight into focus mode', async () => {
       renderShell(['/']);
 

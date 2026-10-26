@@ -217,11 +217,42 @@ const ASK_FRAME_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Words that say what KIND of thing is asked about, not what it shows.
+ *
+ * "Do you have any photos of the volcano?" used to answer "at least one" for
+ * anyone with photos and no volcano: 'photo' is on every photo event, so the
+ * OR of terms was satisfied by the kind word alone. As a loose term it is not
+ * evidence of anything the asker named. It is dropped from the terms and the
+ * ask executor turns it into a photos type filter instead (see
+ * {@link promptAsksForPhotos}).
+ *
+ * Only ever dropped as a loose TERM: inside a run of capitalised words
+ * ("Google Photos") or in a name ask it stays, because there it is part of
+ * what has to match.
+ */
+const PHOTO_KIND_WORDS: ReadonlySet<string> = new Set([
+  'photo',
+  'photos',
+  'picture',
+  'pictures',
+  'pic',
+  'pics',
+  'image',
+  'images',
+]);
+
+/**
  * Characters that may sit INSIDE one word. Everything else separates words and
  * ends a capitalised run, so "Alice, Bob" is two names rather than the phrase
  * `'alice' <-> 'bob'` that would match neither of them.
+ *
+ * A `.` or `_` counts as inside a word only between two letters or digits, so
+ * a file name ("PXL_20261021_115500_010.jpg") stays one word. Postgres reads it
+ * as one lexeme too, which is how the file's own name is indexed; split into
+ * `pxl`, `20261021`, … it could never match it. A sentence's closing `.` is
+ * followed by nothing, so it still ends the word.
  */
-const WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+const WORD_PATTERN = /[\p{L}\p{N}](?:[\p{L}\p{N}'’-]|[._](?=[\p{L}\p{N}]))*/gu;
 
 /** A word is "named" if it opens with an uppercase letter. */
 function isCapitalised(word: string): boolean {
@@ -319,7 +350,9 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
 
     while (index < run.length) {
       if (!isCapitalised(run[index])) {
-        groups.push({ kind: 'term', text: run[index] });
+        if (!PHOTO_KIND_WORDS.has(run[index].toLowerCase())) {
+          groups.push({ kind: 'term', text: run[index] });
+        }
         index += 1;
         continue;
       }
@@ -332,7 +365,9 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
       // A lone capitalised word carries no adjacency to enforce — it is just a
       // word, and requiring it would silently narrow every sentence-initial one.
       if (end - index === 1) {
-        groups.push({ kind: 'term', text: run[index] });
+        if (!PHOTO_KIND_WORDS.has(run[index].toLowerCase())) {
+          groups.push({ kind: 'term', text: run[index] });
+        }
       } else {
         groups.push({ kind: 'phrase', text: run.slice(index, end).join(' ') });
       }
@@ -342,4 +377,35 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
   }
 
   return groups;
+}
+
+/**
+ * Does a topic ask say it is about photos ("photos of …", "any pictures …")?
+ *
+ * True when a {@link PHOTO_KIND_WORDS} word stands on its own, which is
+ * exactly when {@link buildPromptQuery} drops it from the terms. The ask
+ * executor reads it as the photos class so the kind still narrows the search
+ * once it stops counting as a match. A name ask, or the word inside a
+ * capitalised name, says nothing about kind and answers false.
+ */
+export function promptAsksForPhotos(prompt: string, options: BuildPromptQueryOptions = {}): boolean {
+  if (options.subjectIsName || hasNameSubjectFrame(prompt)) {
+    return false;
+  }
+
+  return toAdjacentRuns(prompt).some((run) =>
+    run.some((word, index) => {
+      if (!PHOTO_KIND_WORDS.has(word.toLowerCase())) {
+        return false;
+      }
+
+      // Part of a capitalised run of two or more ("Google Photos"): a name.
+      const inName =
+        isCapitalised(word) &&
+        ((index > 0 && isCapitalised(run[index - 1])) ||
+          (index < run.length - 1 && isCapitalised(run[index + 1])));
+
+      return !inName;
+    }),
+  );
 }

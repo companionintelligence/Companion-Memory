@@ -668,7 +668,7 @@ function readIdentifierText(item: unknown): string | null {
  * Everything that differs between the two stages. One value per source table,
  * and nothing else in this file branches on which one it has.
  */
-interface SubjectDescriptor {
+export interface SubjectDescriptor {
   stageId: string;
   /** Ledger `entity_type` AND `ci.identifier_claims.subject_type`. */
   subjectType: string;
@@ -745,7 +745,35 @@ export const EVENT_PERSON_LINK_SOURCE: StageSource = {
     `   OR s.metadata ? 'to' OR s.metadata ? 'To' )`,
 };
 
-const COMMUNICATION_SUBJECT: SubjectDescriptor = {
+/**
+ * `DELETE` of the edges a projection is about to orphan: for each `$2` id whose
+ * `$3` singular id is a DIFFERENT entity than the row's stored one, the edge
+ * the deterministic edge rule `rule` drew from the stored entity to that row.
+ * Matched on the rule that wrote it, so an edge a person or another rule wrote
+ * between the same two nodes stays. `$1` is the owner, as in the UPDATE it
+ * runs beside.
+ */
+export function supersededEdgeSql(
+  table: string,
+  idColumn: string,
+  userColumn: string,
+  singularColumn: string,
+  rule: string,
+): string {
+  return `DELETE FROM ci.relationships r
+           USING ${table} s, unnest($2::uuid[], $3::uuid[]) AS t(id, singular_id)
+           WHERE s.${userColumn} = $1::uuid
+             AND s.${idColumn} = t.id
+             AND t.singular_id IS NOT NULL
+             AND s.${singularColumn} IS NOT NULL
+             AND s.${singularColumn} <> t.singular_id
+             AND r.owner_user_id = $1::uuid
+             AND r.from_entity_id = s.${singularColumn}
+             AND r.to_entity_id = s.${idColumn}
+             AND r.properties ->> 'rule' = '${rule}'`;
+}
+
+export const COMMUNICATION_SUBJECT: SubjectDescriptor = {
   stageId: ENRICH_PERSON_LINK_STAGE_ID,
   subjectType: COMMUNICATION_SUBJECT_TYPE,
   source: PERSON_LINK_SOURCE,
@@ -765,7 +793,16 @@ const COMMUNICATION_SUBJECT: SubjectDescriptor = {
   // every one of them returns. The cc/bcc claims are still written, so promoting
   // them later is a projection-generation bump and not a re-parse.
   pluralRole: 'to',
-  projectSql: `UPDATE ci.communications c
+  // The CTE takes back the SENT edge `promote.edge_communication` projected from
+  // the sender this statement replaces: that projection only ever inserts, so
+  // the old sender kept "sent" a message it did not send (a display-name
+  // lookalike first filed as the owner's, K-303). Both run on the same snapshot,
+  // so it reads the sender as it was. The recipients only ever gain members, so
+  // no RECEIVED edge goes stale here.
+  projectSql: `WITH superseded AS (
+                 ${supersededEdgeSql('ci.communications', 'id', 'user_id', 'from_entity_id', 'communication.sent')}
+               )
+               UPDATE ci.communications c
                   SET from_entity_id = COALESCE(u.singular_id, c.from_entity_id),
                       to_entity_ids  = CASE
                                          WHEN u.plural_ids IS NULL THEN c.to_entity_ids
@@ -790,7 +827,7 @@ const COMMUNICATION_SUBJECT: SubjectDescriptor = {
                   AND c.id = u.id`,
 };
 
-const EVENT_SUBJECT: SubjectDescriptor = {
+export const EVENT_SUBJECT: SubjectDescriptor = {
   stageId: ENRICH_EVENT_PERSON_LINK_STAGE_ID,
   subjectType: EVENT_SUBJECT_TYPE,
   source: EVENT_PERSON_LINK_SOURCE,
@@ -804,7 +841,12 @@ const EVENT_SUBJECT: SubjectDescriptor = {
   read: readEventObservations,
   singularRole: 'organizer',
   pluralRole: 'participant',
-  projectSql: `UPDATE ci.events e
+  // Same as the communication subject's: a replaced organizer loses the
+  // `event.organized` edge it was given for this event.
+  projectSql: `WITH superseded AS (
+                 ${supersededEdgeSql('ci.events', 'event_id', 'user_id', 'organizer_entity_id', 'event.organized')}
+               )
+               UPDATE ci.events e
                   SET organizer_entity_id    = COALESCE(u.singular_id, e.organizer_entity_id),
                       participant_entity_ids = CASE
                                                  WHEN u.plural_ids IS NULL THEN e.participant_entity_ids

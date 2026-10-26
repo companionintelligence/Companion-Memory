@@ -28,7 +28,7 @@ describe('OllamaController generate attach', () => {
   const context = { userId: 'user-1' };
   const thread = { id: 'thread-1', generationStatus: 'idle', name: null };
 
-  function buildController(overrides: Record<string, unknown> = {}) {
+  function buildController(overrides: Record<string, unknown> = {}, actionService?: unknown) {
     const broker = new ChatGenerationBroker();
     const messageService = {
       create: jest
@@ -55,9 +55,10 @@ describe('OllamaController generate attach', () => {
       (overrides.broker ?? broker) as never,
       (overrides.chatTurnService ?? chatTurnService) as never,
       logger as never,
+      actionService as never,
     );
 
-    return { controller, broker, chatTurnService, threadService };
+    return { controller, broker, chatTurnService, threadService, messageService };
   }
 
   it('enqueues a chat.generate job and does not abort when the SSE client disconnects', async () => {
@@ -125,6 +126,104 @@ describe('OllamaController generate attach', () => {
       'thread-1',
       'idle',
     );
+  });
+
+  describe('a first turn about a Today action', () => {
+    const ACTION_ID = '01a17800-0000-7000-8000-0000000000c1';
+
+    function actionService(action: Record<string, unknown> | null) {
+      return {
+        findById: jest.fn(async () => action),
+        attachThread: jest.fn(async () => true),
+      };
+    }
+
+    it('opens the thread with the action, names it after the action and links the action to it', async () => {
+      // A derived action (Confirm home) has no thread. Without this the model
+      // saw "Why do you suggest this?" with nothing before it and answered
+      // "I'm not sure what 'this' you're referring to".
+      const messageService = {
+        create: jest
+          .fn()
+          .mockResolvedValueOnce({ id: 'action-msg' })
+          .mockResolvedValueOnce({ id: 'user-msg' })
+          .mockResolvedValueOnce({ id: 'assistant-msg' }),
+      };
+      const actions = actionService({
+        id: ACTION_ID,
+        title: 'Confirm home',
+        text: 'Is Mint Plaza home?',
+        threadId: null,
+      });
+      const { controller, threadService, chatTurnService } = buildController({ messageService }, actions);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'Why do you suggest this?', threadId: null, actionId: ACTION_ID } as never,
+        res as never,
+        {} as never,
+      );
+
+      expect(threadService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1' }),
+        expect.objectContaining({ name: 'Confirm home' }),
+      );
+      expect(messageService.create.mock.calls.map(([, data]) => [data.role, data.content])).toEqual([
+        ['assistant', 'Is Mint Plaza home?'],
+        ['user', 'Why do you suggest this?'],
+        ['assistant', ''],
+      ]);
+      expect(actions.attachThread).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1' }),
+        ACTION_ID,
+        'thread-1',
+      );
+      expect(chatTurnService.enqueueGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({ promptMessageId: 'user-msg', assistantMessageId: 'assistant-msg' }),
+      );
+    });
+
+    it('continues the thread an action already has instead of starting another', async () => {
+      const actions = actionService({
+        id: ACTION_ID,
+        title: 'Confirm home',
+        text: 'x',
+        threadId: 'thread-1',
+      });
+      const { controller, threadService } = buildController({}, actions);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'And now?', threadId: null, actionId: ACTION_ID } as never,
+        res as never,
+        {} as never,
+      );
+
+      expect(threadService.create).not.toHaveBeenCalled();
+      expect(threadService.findById).toHaveBeenCalledWith(expect.anything(), 'thread-1');
+      expect(actions.attachThread).not.toHaveBeenCalled();
+    });
+
+    it('starts a plain thread when the action is not the caller’s', async () => {
+      const actions = actionService(null);
+      const { controller, threadService, messageService } = buildController({}, actions);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'hello', threadId: null, actionId: ACTION_ID } as never,
+        res as never,
+        {} as never,
+      );
+
+      expect(threadService.create).toHaveBeenCalledWith(expect.anything(), {
+        model: 'Qwen3.8-27B-Uncensored',
+      });
+      expect(messageService.create.mock.calls.map(([, data]) => data.role)).toEqual(['user', 'assistant']);
+      expect(actions.attachThread).not.toHaveBeenCalled();
+    });
   });
 
   it('GET stream returns 204 when the thread is idle and nothing is in flight', async () => {

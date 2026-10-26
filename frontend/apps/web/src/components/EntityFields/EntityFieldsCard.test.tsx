@@ -78,6 +78,21 @@ describe('EntityFieldsCard', () => {
     expect(onEditModeChange).toHaveBeenCalledWith(false);
   });
 
+  it('closes without writing when nothing was changed', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onEditModeChange = vi.fn();
+
+    render(<EntityFieldsCard fields={FIELDS} editMode onSave={onSave} onEditModeChange={onEditModeChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(onEditModeChange).toHaveBeenCalledWith(false);
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('stays open with the typed text intact when the write is rejected', async () => {
     const onSave = vi.fn().mockRejectedValue(new Error('Update was rejected'));
     const onEditModeChange = vi.fn();

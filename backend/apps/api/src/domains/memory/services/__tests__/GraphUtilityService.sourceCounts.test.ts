@@ -97,6 +97,29 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
     expect(source).toBeGreaterThan(dataSource);
   });
 
+  it('consults the provenance ledger after the properties and before the bare linked_table', async () => {
+    // Imported events, content, items and messages carry no data_source or
+    // Source property, only a bare linked_table ('events', 'content'), which
+    // classifies as derived. The ledger is what says they were imported.
+    const sql = await sqlOf();
+
+    expect(sql).toContain('FROM ci.record_sources rs');
+    expect(sql).toContain('rs.record_table = e.linked_table AND rs.record_id = e.entity_id');
+    expect(sql).toContain('COALESCE(self_src, prop_src, ledger_src, linked_src, shape_src, $3)');
+    expect(sql).toContain("WHEN ledger_src IS NOT NULL THEN 'imported'");
+    // A File entity reaches the ledger through the content row naming the file.
+    expect(sql).toContain("c.external_id_kind = 'file'");
+    expect(sql).toContain("e.linked_table = 'files' AND fs.file_id = e.linked_id::text");
+  });
+
+  it('spells a ledger source as the import route, so one importer is one row', async () => {
+    // People from an import are filed under linked_table 'import:venmo'; the
+    // payments' ledger platform is 'venmo'. Same prefix, same bucket.
+    const sql = await sqlOf();
+
+    expect(sql).toContain("'import:' || COALESCE(ledger.src, fs.src) AS ledger_src");
+  });
+
   it('returns the driver rows unchanged', async () => {
     // COUNT(*)::int is already a number, so nothing re-parses it; a mapping
     // layer here would be the place a bigint-as-string regression hid.

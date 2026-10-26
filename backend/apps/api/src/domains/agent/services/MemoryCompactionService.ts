@@ -164,6 +164,54 @@ function normalizeEntityType(raw: string | undefined): string | null {
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
+/**
+ * Words of `text` for {@link isNameGrounded}: lowercased, accents dropped,
+ * anything that is not a letter or digit treated as a space.
+ * "Foster + Partners" -> ["foster", "partners"]; "user's" -> ["user", "s"].
+ */
+function groundingWords(text: string): string[] {
+  return text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+/** Words a name may carry that the fragment need not ("The Beatles" from "saw the beatles" or "saw Beatles"). */
+const GROUNDING_FILLER_WORDS = new Set(['the', 'a', 'an', 'of', 'and', 'at', 'in', 'on', 'for', 'to', 'my']);
+
+/**
+ * Whether an extracted entity name is written in the fragments the model was
+ * shown. Every word of the name has to occur there, in any order and with a
+ * plural "s" either way ("flat white with oat milk" grounds "oat milk flat
+ * white"; "flowerpots" grounds "flowerpot"), ignoring filler words.
+ *
+ * Exported for tests. Nothing checked this before: a small utility model
+ * (gemma3:270m, which the Hub hands out) answered four notes about a coffee
+ * order, two towns and a spare key with the prompt's own few-shot example,
+ * and compaction stored "Anita" as the user's sister, working at
+ * "Foster + Partners" in "London". None of those words is in the notes.
+ */
+export function isNameGrounded(name: string, fragmentsText: string): boolean {
+  const nameWords = groundingWords(name);
+  const significant = nameWords.filter((word) => !GROUNDING_FILLER_WORDS.has(word));
+  const required = significant.length > 0 ? significant : nameWords;
+
+  if (required.length === 0) {
+    return false;
+  }
+
+  const textWords = new Set(groundingWords(fragmentsText));
+
+  return required.every(
+    (word) =>
+      textWords.has(word) ||
+      textWords.has(`${word}s`) ||
+      (word.endsWith('s') && textWords.has(word.slice(0, -1))),
+  );
+}
+
 /** Maximum characters per fragment sent to the LLM. */
 const MAX_FRAGMENT_CHARS = 600;
 
@@ -324,15 +372,19 @@ export class MemoryCompactionService {
 
     for (const batch of batches) {
       const outcome = await this.extractBatch(batch, userId);
+      const grounded =
+        outcome.status === 'completed'
+          ? this.keepGroundedExtraction(outcome.result, this.batchText(batch), selfAliases, userId)
+          : null;
 
-      if (outcome.status === 'completed') {
+      if (grounded) {
         for (const fragment of batch) {
           this.extractionAttempts.delete(fragment.id);
           processedIds.push(fragment.id);
         }
 
         await this.upsertEntities(
-          outcome.result.entities,
+          grounded.entities,
           userId,
           context,
           entityMap,
@@ -340,15 +392,17 @@ export class MemoryCompactionService {
           self?.entityId ?? null,
           selfAliases,
         );
-        await this.upsertRelationships(outcome.result.relationships, userId, entityMap, context);
+        await this.upsertRelationships(grounded.relationships, userId, entityMap, context);
 
         continue;
       }
 
       // ----------------------------------------------------------------
-      // The batch produced NO extraction result — either the call threw
-      // (Ollama down, UTILITY_MODEL missing) or the model's output was
-      // truncated / not JSON. Neither is an empty extraction, so leave
+      // The batch produced NO usable extraction result — the call threw
+      // (Ollama down, UTILITY_MODEL missing), the model's output was
+      // truncated / not JSON, or every name it gave is absent from the
+      // fragments (it answered with something else, such as the prompt's
+      // own example). None of these is an empty extraction, so leave
       // processed_at unset and let the next run retry, bounded by
       // MAX_EXTRACTION_ATTEMPTS so a permanently-unparseable fragment
       // cannot be re-fed to the LLM forever.
@@ -403,8 +457,9 @@ export class MemoryCompactionService {
   // Extraction helpers (split out of compactForUser for readability)
   // ---------------------------------------------------------------------------
 
-  private async extractBatch(batch: AgentMemory[], userId: string): Promise<BatchOutcome> {
-    const fragmentsText = batch
+  /** The fragments exactly as the model is shown them, labels and truncation included. */
+  private batchText(batch: AgentMemory[]): string {
+    return batch
       .map((f, index) => {
         const label = f.title ?? (f.source ? `[${f.source}]` : `[Fragment ${index + 1}]`);
         const body = f.content;
@@ -413,6 +468,64 @@ export class MemoryCompactionService {
         return `${label}\n${truncated}`;
       })
       .join('\n\n---\n\n');
+  }
+
+  /**
+   * Drop every entity whose name is not written in the fragments
+   * ({@link isNameGrounded}) and every relationship with such an endpoint.
+   * References to the user ("the user", their name) are kept: the prompt asks
+   * for them by that name whether or not a fragment uses it.
+   *
+   * Returns null when names were dropped and nothing but the user is left:
+   * the model answered something other than these notes, and the caller
+   * retries the batch instead of marking the notes processed with nothing
+   * kept.
+   */
+  private keepGroundedExtraction(
+    result: ExtractionResult,
+    fragmentsText: string,
+    selfAliases: Set<string>,
+    userId: string,
+  ): ExtractionResult | null {
+    const refersToUser = (name: string) => {
+      const lower = name.trim().toLowerCase();
+
+      return lower === 'the user' || selfAliases.has(lower);
+    };
+
+    const named = (name: unknown): name is string => typeof name === 'string' && name.trim() !== '';
+    const keepName = (name: unknown) =>
+      named(name) && (refersToUser(name) || isNameGrounded(name, fragmentsText));
+
+    // A nameless entry is skipped by upsertEntities as before; only a real name counts as dropped.
+    const entities = result.entities.filter((entity) => !named(entity.name) || keepName(entity.name));
+    const relationships = result.relationships.filter(
+      (relationship) => keepName(relationship.fromName) && keepName(relationship.toName),
+    );
+    const droppedNames = result.entities
+      .filter((entity) => !entities.includes(entity))
+      .map((entity) => entity.name);
+
+    if (droppedNames.length > 0 || relationships.length < result.relationships.length) {
+      this.logger.warn('Dropped extracted names that are not in the memory fragments', {
+        userId,
+        droppedEntities: droppedNames,
+        droppedRelationships: result.relationships.length - relationships.length,
+      });
+    }
+
+    if (
+      droppedNames.length > 0 &&
+      !entities.some((entity) => named(entity.name) && !refersToUser(entity.name))
+    ) {
+      return null;
+    }
+
+    return { entities, relationships };
+  }
+
+  private async extractBatch(batch: AgentMemory[], userId: string): Promise<BatchOutcome> {
+    const fragmentsText = this.batchText(batch);
 
     const messages: OllamaMessage[] = [
       { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
@@ -886,7 +999,12 @@ export class MemoryCompactionService {
     }
 
     try {
-      await this.personService.update(context, node.id, { name: incomingName });
+      await this.personService.update(
+        context,
+        node.id,
+        { name: incomingName },
+        { source: 'MemoryCompactionService.promotePersonName' },
+      );
       node.name = incomingName;
     } catch {
       // Promotion is cosmetic; the merge (shared id) is the real win.

@@ -5,8 +5,11 @@ import { getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common
 
 import { gql } from '@/graphql';
 
-import { isApplianceOutage, recallUser, rememberUser } from './rememberedUser';
+import { isApplianceOutage, isProfileUnanswered, recallUser, rememberUser } from './rememberedUser';
 import { useAuth } from './useAuth';
+
+/** How often the profile is asked for again while Memory is not answering. */
+const UNANSWERED_RETRY_MS = 5000;
 
 const USER_DATA_QUERY = gql(`
   query GetUserData {
@@ -58,10 +61,28 @@ export function useCurrentUser() {
   const remembered =
     native && !skip && !me && isApplianceOutage(error) ? recallUser<typeof me>(origin) : null;
 
+  // Signed in, but Memory did not answer `me`: that says nothing about who is signed in, so
+  // ProtectedRoute must not read it as signed out. Ask again until it answers.
+  const unreachable = !skip && !me && remembered == null && isProfileUnanswered(error);
+
+  useEffect(() => {
+    if (!unreachable) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      refetch().catch(() => undefined);
+    }, UNANSWERED_RETRY_MS);
+
+    return () => clearInterval(timer);
+  }, [unreachable, refetch]);
+
   return {
     user: me ?? remembered,
     /** True when `user` is the profile kept from an earlier session because the appliance did not answer. */
     remembered: remembered != null,
+    /** True when there is a session but Memory did not answer for its profile (and nothing kept stands in). */
+    unreachable,
     loading: loading || (authenticated && !skip && data == null && !error),
     error,
     refetch,

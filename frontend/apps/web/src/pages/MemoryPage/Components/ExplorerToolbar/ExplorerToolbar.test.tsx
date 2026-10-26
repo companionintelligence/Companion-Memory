@@ -200,6 +200,11 @@ describe('ExplorerToolbar', () => {
       const label = `${new Date(from).toLocaleDateString()} – ${new Date(to).toLocaleDateString()}`;
       const param = (name: string) =>
         new URLSearchParams(screen.getByTestId('params').textContent ?? '').get(name);
+      const routeFor = (start: Date, end: Date) => {
+        const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
+
+        return `/?when=custom&from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(endOfDay.toISOString())}`;
+      };
 
       it('shows the range in the Start / End date fields and applies a typed date as a whole local day', () => {
         renderToolbar(<MemoryExplorerFilterControls />, { route });
@@ -241,7 +246,13 @@ describe('ExplorerToolbar', () => {
         renderToolbar(<MemoryExplorerFilterControls />, { route });
         fireEvent.click(screen.getByRole('button', { name: label }));
 
-        fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-05-10' } });
+        const start = screen.getByLabelText('Start date');
+
+        fireEvent.change(start, { target: { value: '2026-05-10' } });
+        // Past the end, it waits for the field to be left rather than moving the end per keystroke.
+        expect(param('from')).toBe(from);
+        expect(param('to')).toBe(to);
+        fireEvent.blur(start);
 
         expect(param('from')).toBe(new Date(2026, 4, 10, 0, 0, 0, 0).toISOString());
         expect(param('to')).toBe(new Date(2026, 4, 10, 23, 59, 59, 999).toISOString());
@@ -253,6 +264,27 @@ describe('ExplorerToolbar', () => {
 
         expect(param('from')).toBe(new Date(2026, 4, 10, 0, 0, 0, 0).toISOString());
         expect(param('to')).toBeNull();
+      });
+
+      it('leaves the start alone while an earlier end is typed digit by digit, then starts the range there', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) });
+        fireEvent.click(screen.getByRole('button', { name: /3\/1\/2025|1\/3\/2025/ }));
+
+        const end = screen.getByLabelText('End date');
+        const fromBefore = param('from');
+
+        // What the field reports while 02152025 is typed over 03/08/2025 from its month part:
+        // every one is a complete date, and all of them fall before the start.
+        for (const value of ['2025-02-08', '2025-02-01', '2025-02-15', '2025-02-15']) {
+          fireEvent.change(end, { target: { value } });
+          expect(param('from')).toBe(fromBefore);
+        }
+
+        fireEvent.blur(end);
+
+        // Committed before the start, the end begins a new one-day range on the day typed.
+        expect(param('from')).toBe(new Date(2025, 1, 15, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(new Date(2025, 1, 15, 23, 59, 59, 999).toISOString());
       });
 
       it('offers month and year dropdowns on the calendar and turns it to a typed date', async () => {
@@ -410,7 +442,7 @@ describe('ExplorerToolbar', () => {
       const stale = screen.getByRole('option', { name: 'Myspace' });
 
       expect(stale).toHaveAttribute('aria-selected', 'true');
-      expect(stale.querySelector('svg.text-warning-foreground')).not.toBeNull();
+      expect(stale.querySelector('svg.text-warning')).not.toBeNull();
 
       fireEvent.click(stale);
       expect(screen.getByTestId('params').textContent).not.toContain('connectors=');

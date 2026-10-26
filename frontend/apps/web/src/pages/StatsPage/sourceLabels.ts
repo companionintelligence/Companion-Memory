@@ -18,6 +18,8 @@ const PROVENANCE_LABELS: Readonly<Record<string, string>> = {
   'import:self': 'Your own profile',
   'import:graph_llm': 'Extracted concepts',
   'import:communications:participant': 'Message participants',
+  // The catch-all importer: photos and documents added as plain files.
+  'import:generic': 'Files you added',
 };
 
 /** Section order on the page: where things came from, then what we made of it. */

@@ -224,6 +224,39 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
     );
   }
 
+  /**
+   * A run whose unpack failed, closed by `failStage` itself: the run `failed`
+   * and finished, the stages after the unpack left `queued` for a retry.
+   * Nothing is staged, because nothing was extracted. Then aged.
+   */
+  async function failedUnpackRun(daysAgo: number): Promise<string> {
+    const { run, stages } = await harness.startRunForDrop(await harness.stageDrop('truncated.zip'), [
+      'unpack',
+      'parse',
+      'push',
+    ]);
+    const unpack = stages.find((stage) => stage.kind === 'unpack');
+    const at = new Date(Date.now() - daysAgo * DAY_MS);
+
+    await harness.service.failStage(unpack!.id, 'cannot unpack truncated.zip: the file is truncated');
+    await dataSource.query(
+      `UPDATE ci_import.import_runs SET finished_at = $2, updated_at = $2 WHERE id = $1::uuid`,
+      [run.id, at],
+    );
+
+    return run.id;
+  }
+
+  /** The run's stage statuses, in pipeline order. */
+  async function stageStatuses(runId: string): Promise<string[]> {
+    const rows = await dataSource.query<Array<{ status: string }>>(
+      `SELECT status FROM ci_import.import_stages WHERE run_id = $1::uuid ORDER BY seq`,
+      [runId],
+    );
+
+    return rows.map((row) => row.status);
+  }
+
   /** A drained, closed, aged run — the ordinary retention candidate. */
   async function retiredRun(daysAgo: number, status = 'completed'): Promise<string> {
     const runId = await seedRun();
@@ -414,6 +447,19 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       // pin a payload open forever.
       setRetention({});
       await retention.sweep();
+      expect(await counts(runId)).toEqual(GONE);
+    });
+
+    it('collects a run whose unpack failed — the stages queued after it are leftovers', async () => {
+      const runId = await failedUnpackRun(200);
+
+      // The premise: `failStage` closes the run and leaves the later stages
+      // `queued`, where a retry can pick them up. No worker will reach them.
+      expect(await runStatus(runId)).toBe('failed');
+      expect(await stageStatuses(runId)).toEqual(['failed', 'queued', 'queued']);
+
+      await retention.sweep();
+
       expect(await counts(runId)).toEqual(GONE);
     });
 
@@ -806,6 +852,18 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
 
       await expect(retention.discardRun({ userId }, runId)).rejects.toBeInstanceOf(ConflictException);
       expect(await counts(runId)).toEqual(FULL);
+    });
+
+    it('does not call a run whose unpack failed "still working" — it says there is nothing to discard', async () => {
+      const runId = await failedUnpackRun(0);
+      const refusal = retention.discardRun({ userId }, runId);
+
+      // The later stages are still `queued`, but the run is over: the refusal
+      // is the honest one (no parse to release), not "cancel it first" for a
+      // run that cancel answers 404 about.
+      await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+      await expect(refusal).rejects.toThrow(/has no parse waiting to be pushed/);
+      expect(await runStatus(runId)).toBe('failed');
     });
 
     it('refuses a run whose stages are still live, whatever the status column says', async () => {

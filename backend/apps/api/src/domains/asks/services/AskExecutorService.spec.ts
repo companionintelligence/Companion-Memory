@@ -67,6 +67,37 @@ describe('AskExecutorService.execute', () => {
     );
   });
 
+  it('reads "photos of …" in a class-less ask as the photos class', async () => {
+    // buildPromptQuery no longer lets the word 'photos' match (it matched every
+    // photo event, so "photos of the volcano" answered "at least one" for
+    // anyone with photos). The kind it named becomes the type filter instead.
+    const { service, searchService } = makeService();
+
+    await service.execute(
+      fakeAsk({ query: { queryType: 'content', prompt: 'Do you have any photos of the volcano?' } }),
+    );
+
+    expect(searchService.searchPrompt).toHaveBeenCalledWith(
+      { userId: 'responder-1' },
+      {
+        prompt: 'Do you have any photos of the volcano?',
+        subjectIsName: false,
+        maxResults: 50,
+        includeTypes: ['file'],
+      },
+    );
+  });
+
+  it('does not read a kind into a name ask or a capitalised name', async () => {
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'relationship', prompt: 'photos smith' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'content', prompt: 'my Google Photos backup' } }));
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).not.toHaveProperty('includeTypes');
+    expect(searchService.searchPrompt.mock.calls[1][1]).not.toHaveProperty('includeTypes');
+  });
+
   it('leaves an unknown data class unfiltered (still responder-scoped)', async () => {
     const { service, searchService } = makeService();
 

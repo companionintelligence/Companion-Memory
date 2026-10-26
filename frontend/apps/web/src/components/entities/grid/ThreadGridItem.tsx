@@ -26,7 +26,7 @@ export function ThreadGridItem({ thread, onClick }: Props) {
       <EntityGridItem.Header>
         <ThreadIcon className="shrink-0" />
 
-        <div className="text-md font-semibold truncate">{data.name}</div>
+        <div className="text-md font-semibold truncate">{data.name?.trim() || 'Untitled chat'}</div>
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>

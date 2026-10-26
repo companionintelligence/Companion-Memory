@@ -31,7 +31,19 @@ describe('activityTimelineFiltersFromSearchParams', () => {
     const when = 'from=2026-01-01T00:00:00.000Z&to=2026-01-31T23:59:59.999Z';
 
     expect(activityTimelineFiltersFromSearchParams(new URLSearchParams(when))).toEqual({
-      excludeTypes: ['content', 'file', 'note', 'person', 'place', 'product', 'item', 'answer', 'concept'],
+      excludeTypes: [
+        'content',
+        'file',
+        'note',
+        'person',
+        'place',
+        'product',
+        'item',
+        'answer',
+        'concept',
+        'thread',
+        'file-chunk',
+      ],
     });
     expect(
       activityTimelineFiltersFromSearchParams(

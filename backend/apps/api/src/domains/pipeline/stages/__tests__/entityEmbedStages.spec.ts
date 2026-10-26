@@ -476,6 +476,8 @@ describe('PersonEmbedStage', () => {
     // stage actually ships, which is what a slice replayed from a dead letter
     // reads.
     expect(INDEX_EMBED_PERSON_SOURCE.predicate).toContain('merged_into_entity_id IS NULL');
+    // Nor a person the user asked Memory to forget.
+    expect(INDEX_EMBED_PERSON_SOURCE.predicate).toContain('is_active IS NOT FALSE');
   });
 });
 

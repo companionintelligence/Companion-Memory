@@ -87,4 +87,9 @@ printf '%s\n' "$blocks" | grep -F 'location ~ ^/api/graphql/?$ {' | grep -q 'cli
 printf '%s\n' "$blocks" | grep -F 'location /v1/ {' | grep -q 'client_max_body_size 10m;' \
   || fail "/v1/ lost its 10m limit"
 
+# ── nginx.conf: a stopped api answers fast. The api is on the same network, so a
+# connect that takes seconds means it is gone; 60s left a sign-in spinning a minute.
+slow=$(printf '%s\n' "$blocks" | grep -F 'proxy_pass http://api;' | grep -v 'proxy_connect_timeout 5s;' || true)
+[ -z "$slow" ] || fail "an api location waits longer than 5s to connect: ${slow%% |*}"
+
 echo "gateway: ok"

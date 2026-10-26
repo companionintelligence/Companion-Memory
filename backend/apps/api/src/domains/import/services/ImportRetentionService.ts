@@ -26,7 +26,10 @@ import { SOURCE_STATUSES_SPENT_WITH_RUN, UPLOAD_TTL_MS } from './StagedSourceSer
  */
 const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'partial', 'cancelled'] as const;
 
-/** A stage in either of these has work that has not finished. */
+/**
+ * A stage in either of these has work that has not finished: a `queued` one
+ * only while its run is still open (see {@link liveStageExistsSql}).
+ */
 const LIVE_STAGE_STATUSES = ['queued', 'running'] as const;
 
 /** The staging tables the payload sweep empties, in cascade-safe order. */
@@ -55,7 +58,10 @@ interface RetentionCandidate {
 interface DiscardCandidate extends RetentionCandidate {
   /** {@link pushableRunSql} — is the Sync card still offering this payload? */
   readonly pushable: boolean;
-  /** No stage `queued` or `running`. The stage rows, not the status cache. */
+  /**
+   * No stage `running`, and none `queued` in a run that is still open
+   * ({@link liveStageExistsSql}). The stage rows, not the status cache.
+   */
   readonly quiet: boolean;
   /**
    * {@link unstoredMediaExistsSql} — does a staged media row still name bytes
@@ -561,9 +567,7 @@ export class ImportRetentionService {
       const [candidate] = await manager.query<DiscardCandidate[]>(
         `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt",
                 ${pushableRunSql('r')} AS pushable,
-                NOT EXISTS (
-                      SELECT 1 FROM ci_import.import_stages s
-                       WHERE s.run_id = r.id AND s.status = ANY($2::text[])) AS quiet,
+                NOT ${liveStageExistsSql('r', '$2')} AS quiet,
                 ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
@@ -948,9 +952,28 @@ const TERMINAL_AND_QUIET = `
   AND r.finished_at IS NOT NULL
   AND r.finished_at < $1::timestamptz
   AND r.updated_at < $1::timestamptz
-  AND NOT EXISTS (
+  AND NOT ${liveStageExistsSql('r', '$3')}`;
+
+/**
+ * "This run still has a stage with work ahead of it": one `running`, or one
+ * `queued` while the run itself is still open. `statusesParam` holds
+ * {@link LIVE_STAGE_STATUSES}.
+ *
+ * A `queued` stage in a FINISHED run is a leftover, not work. `failStage`
+ * closes the run when a stage fails and leaves the stages after it `queued`,
+ * which is what lets `retryStage` carry the import on from there (it reopens
+ * the run along with the stage it requeues). Counting those leftovers as live
+ * made a run whose unpack failed refuse a discard as "still working" while
+ * cancel answered "not in flight", and kept it out of both sweeps for good.
+ * `ImportRunService.retryFailedPush` already reads them the same way.
+ */
+function liveStageExistsSql(runRef: string, statusesParam: string): string {
+  return `EXISTS (
         SELECT 1 FROM ci_import.import_stages s
-         WHERE s.run_id = r.id AND s.status = ANY($3::text[]))`;
+         WHERE s.run_id = ${runRef}.id
+           AND s.status = ANY(${statusesParam}::text[])
+           AND (s.status <> 'queued' OR ${runRef}.finished_at IS NULL))`;
+}
 
 function cutoff(now: Date, days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);

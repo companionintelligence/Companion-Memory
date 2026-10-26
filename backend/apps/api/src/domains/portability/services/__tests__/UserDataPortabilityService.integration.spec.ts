@@ -115,6 +115,10 @@ describeWithDatabase(
       await dataSource.query('DELETE FROM ci.receipts WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.federated_identities WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.mcp_server_configs WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.messages WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.threads WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1::uuid[])', [users]);
     };
 
     afterAll(async () => {
@@ -380,6 +384,125 @@ describeWithDatabase(
       expect(identities.n).toBe(0);
       expect(servers.n).toBe(0);
       expect(await notesFor()).toEqual([{ id: noteId, title: 'kept' }]);
+    });
+
+    it('restores a row before the rows that reference it, though they sort first', async () => {
+      // ci.messages.thread_id -> ci.threads is checked at once, and "messages" < "threads".
+      const threadId = randomUUID();
+      const messageId = randomUUID();
+
+      await service.importArchive({ userId: testUserId } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables: {
+          'ci.messages': [{ message_id: messageId, thread_id: threadId, role: 'user', content: 'hello' }],
+          'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
+        },
+        fileBlobs: [],
+      } as UserDataArchive);
+
+      const [row] = await dataSource.query('SELECT thread_id FROM ci.messages WHERE message_id = $1::uuid', [
+        messageId,
+      ]);
+      expect(row.thread_id).toBe(threadId);
+    });
+
+    it('restores a row whose export carries a value for a generated column', async () => {
+      // ci.messages.total_tokens is GENERATED ALWAYS; an INSERT that names it is refused.
+      const threadId = randomUUID();
+      const messageId = randomUUID();
+
+      await service.importArchive({ userId: testUserId } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables: {
+          'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
+          'ci.messages': [
+            {
+              message_id: messageId,
+              thread_id: threadId,
+              role: 'user',
+              content: 'hello',
+              total_tokens: 12,
+              search_vector: "'hello':1",
+            },
+          ],
+        },
+        fileBlobs: [],
+      } as UserDataArchive);
+
+      const [row] = await dataSource.query('SELECT content FROM ci.messages WHERE message_id = $1::uuid', [
+        messageId,
+      ]);
+      expect(row.content).toBe('hello');
+    });
+
+    describe('the person the account itself is', () => {
+      // Every onboarded account has one, and ci.users.entity_id points at it with a
+      // NO ACTION foreign key that the app's role cannot defer or switch off.
+      const selfId = randomUUID();
+      const selfRow = {
+        entity_id: selfId,
+        entity_type: 'Person',
+        owner_user_id: testUserId,
+        name: 'Jane',
+      };
+
+      const selfPointer = async (): Promise<string | null> => {
+        const [row] = await dataSource.query('SELECT entity_id FROM ci.users WHERE id = $1::uuid', [testUserId]);
+
+        return row.entity_id;
+      };
+
+      beforeEach(async () => {
+        noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Person', $2::uuid, 'Jane')`,
+          [selfId, testUserId],
+        );
+        await dataSource.query('UPDATE ci.users SET entity_id = $2::uuid WHERE id = $1::uuid', [testUserId, selfId]);
+      });
+
+      it('imports an export of the same account and points the account back at that person', async () => {
+        const result = await service.importNdjsonStream(
+          { userId: testUserId } as never,
+          streamOf([
+            { ...manifest(), profile: { id: testUserId, entityId: selfId } },
+            { type: 'row', table: 'ci.entities', row: selfRow },
+          ]),
+          'jane@example.com',
+        );
+
+        expect(result.rowsImported).toBeGreaterThanOrEqual(1);
+        expect(await selfPointer()).toBe(selfId);
+      });
+
+      it('does the same on the legacy json path', async () => {
+        await service.importArchive({ userId: testUserId } as never, {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          userId: testUserId,
+          profile: { entityId: selfId } as never,
+          tables: { 'ci.entities': [selfRow] },
+          fileBlobs: [],
+        } as UserDataArchive);
+
+        expect(await selfPointer()).toBe(selfId);
+      });
+
+      it('leaves the pointer empty when the archive does not bring that person back', async () => {
+        await service.importNdjsonStream(
+          { userId: testUserId } as never,
+          streamOf([manifest(), { type: 'row', table: 'ci.notes', row: { id: randomUUID(), title: 'n' } }]),
+          'jane@example.com',
+        );
+
+        expect(await selfPointer()).toBeNull();
+      });
     });
 
     it('keeps the sign-in links the account already has across an import', async () => {

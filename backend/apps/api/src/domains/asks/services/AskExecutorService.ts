@@ -9,6 +9,7 @@ import {
   type PromptSearchResult,
   SearchService,
   hasNameSubjectFrame,
+  promptAsksForPhotos,
 } from '@ci/domains/search-next';
 
 import { type Ask } from '../entities/AskEntity';
@@ -124,17 +125,18 @@ export class AskExecutorService {
     }
 
     const responderContext: UserServiceContext = { userId: ask.responderUserId };
-    const includeTypes = toIncludeTypes(ask.query);
+    // The archetype the asker declared — OR a relationship/person-recognition
+    // question frame in the prompt itself (closing G1) — decides whether the
+    // prompt is a NAME or a topic. `subjectIsName` can only ever narrow: it
+    // turns an OR of loose words into one required phrase.
+    const subjectIsName =
+      NAME_SUBJECT_QUERY_TYPES.has(ask.query.queryType.toLowerCase()) ||
+      hasNameSubjectFrame(ask.query.prompt);
+    const includeTypes = toIncludeTypes(ask.query, subjectIsName);
 
     const result = await this.searchService.searchPrompt(responderContext, {
       prompt: ask.query.prompt,
-      // The archetype the asker declared — OR a relationship/person-recognition
-      // question frame in the prompt itself (closing G1) — decides whether the
-      // prompt is a NAME or a topic. `subjectIsName` can only ever narrow: it
-      // turns an OR of loose words into one required phrase.
-      subjectIsName:
-        NAME_SUBJECT_QUERY_TYPES.has(ask.query.queryType.toLowerCase()) ||
-        hasNameSubjectFrame(ask.query.prompt),
+      subjectIsName,
       maxResults: options.maxResults ?? DEFAULT_MAX_RESULTS,
       ...(includeTypes ? { includeTypes } : {}),
     });
@@ -160,14 +162,20 @@ export class AskExecutorService {
  */
 export type AskExecution = PromptSearchResult;
 
-function toIncludeTypes(query: AskQuery): IndexableEntity[] | undefined {
-  if (query.dataClass == null) {
-    return undefined;
-  }
-
+function toIncludeTypes(query: AskQuery, subjectIsName: boolean): IndexableEntity[] | undefined {
   // Same canonical form the grant evaluator matched on — if these diverged, a
   // peer could satisfy one and evade the other.
-  const canonical = canonicalDataClass(query.dataClass);
+  //
+  // With no class named, "photos of …" in the prompt stands in for the photos
+  // class. `buildPromptQuery` no longer lets the word 'photos' count as a match
+  // (it matched every photo event), so the kind is carried here, as a filter,
+  // instead. Only ever narrows: an ask with no class searched every type.
+  const canonical =
+    query.dataClass != null
+      ? canonicalDataClass(query.dataClass)
+      : promptAsksForPhotos(query.prompt, { subjectIsName })
+        ? 'photos'
+        : null;
   if (canonical == null) {
     return undefined;
   }

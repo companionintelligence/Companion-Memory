@@ -32,6 +32,44 @@ export interface RecordGraphDeltaInput {
   manager?: EntityManager;
 }
 
+/** A value with its object keys sorted, so two jsonb reads of one bag compare equal. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : v,
+  );
+}
+
+/**
+ * The `changedFields` of an edit: each of `keys` whose value differs between
+ * `before` and `after`, as `{ old, new }`. Missing, null and '' are all "empty",
+ * so a form that sends every field back unchanged records nothing.
+ */
+export function changedFieldsBetween(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  keys: Iterable<string>,
+): Record<string, GraphDeltaChangedField> {
+  const isEmpty = (value: unknown) => value === undefined || value === null || value === '';
+  const changed: Record<string, GraphDeltaChangedField> = {};
+
+  for (const key of keys) {
+    const was = before[key];
+    const now = after[key];
+
+    if ((isEmpty(was) && isEmpty(now)) || sortedJson(was) === sortedJson(now)) {
+      continue;
+    }
+
+    changed[key] = { old: isEmpty(was) ? null : was, new: isEmpty(now) ? null : now };
+  }
+
+  return changed;
+}
+
 /**
  * App-written trail into `ci.graph_deltas`.
  * Replaces statement-level DB triggers so writers are visible in app code

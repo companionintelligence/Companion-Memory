@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { fetchJson, FetchJsonError } from '@ci/common';
 import { Button, Card, Dialog, Input, Label, PasswordInput } from '@ci/shadcn';
@@ -74,6 +74,17 @@ export function AccountSection() {
   // Set once the server says this is the last administrator: the dialog then asks who takes over.
   const [needsSuccessor, setNeedsSuccessor] = useState(false);
   const [successorEmail, setSuccessorEmail] = useState('');
+
+  // Every way out of the dialog (Cancel, Escape, the close button, a click outside) clears what was
+  // typed. Cancel used to only hide it, so reopening showed the email still filled in and the
+  // destructive button already live.
+  const closeDeleteDialog = () => {
+    setOpen(false);
+    setConfirmEmail('');
+    setError(null);
+    setNeedsSuccessor(false);
+    setSuccessorEmail('');
+  };
 
   const email = user?.email ?? '';
   // Mirrors the server's comparison so the button is only live when the request would
@@ -154,6 +165,14 @@ export function AccountSection() {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSavedNote, setPasswordSavedNote] = useState<string | null>(null);
+
+  // An error is about the values it was shown for. Editing a field clears it: the browser's own
+  // checks (a too-short password) stop the next submit before handleChangePassword runs, so
+  // "New passwords do not match." otherwise stayed beside a message about something else.
+  const editPasswordField = (set: (value: string) => void) => (e: ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value);
+    setPasswordError(null);
+  };
 
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
@@ -361,7 +380,7 @@ export function AccountSection() {
                       id="passwordCurrentPassword"
                       autoComplete="current-password"
                       value={passwordCurrentPassword}
-                      onChange={(e) => setPasswordCurrentPassword(e.target.value)}
+                      onChange={editPasswordField(setPasswordCurrentPassword)}
                       disabled={passwordSaving}
                       required
                     />
@@ -375,7 +394,7 @@ export function AccountSection() {
                     autoComplete="new-password"
                     minLength={MIN_PASSWORD_LENGTH}
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    onChange={editPasswordField(setNewPassword)}
                     disabled={passwordSaving}
                     required
                   />
@@ -387,7 +406,7 @@ export function AccountSection() {
                     id="confirmNewPassword"
                     autoComplete="new-password"
                     value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    onChange={editPasswordField(setConfirmNewPassword)}
                     disabled={passwordSaving}
                     required
                   />
@@ -474,13 +493,10 @@ export function AccountSection() {
       <Dialog
         open={open}
         onOpenChange={(next: boolean) => {
-          setOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setError(null);
-            setNeedsSuccessor(false);
-            setSuccessorEmail('');
+          if (next) {
+            setOpen(true);
+          } else {
+            closeDeleteDialog();
           }
         }}
       >
@@ -526,7 +542,7 @@ export function AccountSection() {
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={loading}>
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={!matches || loading}>
