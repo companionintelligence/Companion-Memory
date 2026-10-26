@@ -136,8 +136,10 @@ describe('toGraphEntity', () => {
     expect(input?.key).toContain('alice@example.com');
   });
 
-  it('moves a parser\'s description onto the row instead of leaving it in the bag', () => {
-    const input = toGraphEntity(staged({ metadata: { description: 'Met at the climbing gym', nickname: 'Al' } }));
+  it("moves a parser's description onto the row instead of leaving it in the bag", () => {
+    const input = toGraphEntity(
+      staged({ metadata: { description: 'Met at the climbing gym', nickname: 'Al' } }),
+    );
 
     expect(input?.description).toBe('Met at the climbing gym');
     expect(input?.properties).not.toHaveProperty('description');

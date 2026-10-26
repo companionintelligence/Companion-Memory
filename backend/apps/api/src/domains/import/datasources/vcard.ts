@@ -888,7 +888,9 @@ export function birthDateFromBday(value: string, omitYear?: string): string {
 
   const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
 
-  return date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day) ? `${year}-${month}-${day}` : '';
+  return date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day)
+    ? `${year}-${month}-${day}`
+    : '';
 }
 
 /** ADR components → one human line (po;ext;street;locality;region;postal;country). */
