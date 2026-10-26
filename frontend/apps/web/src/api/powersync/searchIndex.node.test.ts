@@ -338,7 +338,7 @@ describe('ensureSearchIndex', () => {
 
   it('accepts the triggers as SQLite records them, without the IF NOT EXISTS the CREATE statements carry', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL });
-    const { getAll } = db as unknown as { getAll: ReturnType<typeof vi.fn> };
+    const { getAll } = db as unknown as { getAll: (sql: string) => Promise<unknown> };
 
     await expect(ensureSearchIndex(db)).resolves.toBe(false);
     expect(executed).toEqual([]);
