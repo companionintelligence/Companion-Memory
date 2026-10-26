@@ -239,12 +239,13 @@ describe('eventDisplayTitle', () => {
  * had no test at all before this: everything above exercises only the pure
  * `getSearchDocument` / `eventDisplayTitle` helpers via a no-op instance.
  */
-function makeFullListener(event: Record<string, unknown> | null = null) {
+function makeFullListener(event: Record<string, unknown> | null = null, embeddedIds: string[] = []) {
   const eventService = { findById: jest.fn().mockResolvedValue(event) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
+    existingEntityIds: jest.fn().mockResolvedValue(new Set<string>(embeddedIds)),
   };
   const vectorService = {
     upsert: jest.fn().mockResolvedValue(null),
@@ -260,7 +261,7 @@ function makeFullListener(event: Record<string, unknown> | null = null) {
     logger as never,
   );
 
-  return { listener, eventService, embeddingService, vectorService, logger };
+  return { listener, eventService, embeddingGenerationService, embeddingService, vectorService, logger };
 }
 
 describe('EventSearchIndexListener.unindexEvent', () => {
@@ -335,6 +336,58 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'event', entityId: 'event-1' }),
     );
+  });
+
+  // The maintenance sweep re-drives `event.created` for rows that had no
+  // embedding when it ran, while the pipeline's index.embed_event stage embeds
+  // the same rows. On a 123k-event import 99.8% of the completed jobs found the
+  // vector already there and paid an Ollama call to overwrite it.
+  it('keeps an existing embedding on a created event, but still refreshes the tsvector', async () => {
+    const { listener, embeddingGenerationService, embeddingService, vectorService } = makeFullListener(
+      { id: 'event-1', userId: 'user-1', title: 'Dinner with Liam', description: 'Catching up over ramen' },
+      ['event-1'],
+    );
+
+    await listener.indexEvent({ eventId: 'event-1' } as never);
+
+    expect(embeddingService.existingEntityIds).toHaveBeenCalledWith({ userId: 'user-1' }, 'event', [
+      'event-1',
+    ]);
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ entityType: 'event', entityId: 'event-1' }),
+    );
+  });
+
+  it('embeds a created event that has no embedding yet', async () => {
+    const { listener, embeddingGenerationService, embeddingService } = makeFullListener({
+      id: 'event-1',
+      userId: 'user-1',
+      title: 'Dinner with Liam',
+      description: 'Catching up over ramen',
+    });
+
+    await listener.indexEvent({ eventId: 'event-1' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsert).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      { entityType: 'event', entityId: 'event-1', embedding: [0.1, 0.2] },
+    );
+  });
+
+  it('re-embeds an UPDATED event even when an embedding exists (its text changed)', async () => {
+    const { listener, embeddingGenerationService, embeddingService } = makeFullListener(
+      { id: 'event-1', userId: 'user-1', title: 'Dinner with Liam', description: 'Moved to Thursday' },
+      ['event-1'],
+    );
+
+    await listener.updateEvent({ eventId: 'event-1' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
   });
 
   it('skips both embedding and vectorization for an event with no searchable content', async () => {

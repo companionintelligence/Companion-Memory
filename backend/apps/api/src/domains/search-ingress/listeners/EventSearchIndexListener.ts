@@ -40,7 +40,11 @@ export class EventSearchIndexListener {
       eventId: payload.eventId,
     });
 
-    await this.upsertEvent(payload);
+    // A created event is re-driven by the maintenance sweep for rows that had no
+    // embedding when it ran, and the pipeline's `index.embed_event` stage embeds
+    // those same rows concurrently. By the time the job runs the vector is
+    // usually there, so keep it: only an update changes the text it was made from.
+    await this.upsertEvent(payload, { keepExistingEmbedding: true });
   }
 
   @OnEvent(EventUpdatedEvent, { queue: 'search-index' })
@@ -77,7 +81,10 @@ export class EventSearchIndexListener {
     this.logger.log('Removed tsvector for event');
   }
 
-  private async upsertEvent(payload: EventCreatedPayload | EventUpdatedPayload) {
+  private async upsertEvent(
+    payload: EventCreatedPayload | EventUpdatedPayload,
+    options: { keepExistingEmbedding?: boolean } = {},
+  ) {
     const context = {
       userId: SYSTEM_USER,
     } satisfies ServiceContext;
@@ -114,6 +121,10 @@ export class EventSearchIndexListener {
         eventId: event.id,
         skipReason,
       });
+    } else if (options.keepExistingEmbedding && (await this.hasEmbedding(event.userId, event.id))) {
+      this.logger.log('Event already embedded, keeping its embedding', {
+        eventId: event.id,
+      });
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
@@ -149,6 +160,12 @@ export class EventSearchIndexListener {
 
       this.logger.log('Generated tsvector for event');
     }
+  }
+
+  private async hasEmbedding(userId: string, eventId: string): Promise<boolean> {
+    const embedded = await this.embeddingService.existingEntityIds({ userId }, 'event', [eventId]);
+
+    return embedded.has(eventId);
   }
 
   private getSearchEvent(event: Event): WeightedText[] {

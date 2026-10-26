@@ -2,12 +2,13 @@ import { SYSTEM_USER } from '@ci/common/context';
 
 import { ContentSearchIndexListener } from '../ContentSearchIndexListener';
 
-function makeListener(content: Record<string, unknown> | null = null) {
+function makeListener(content: Record<string, unknown> | null = null, embeddedIds: string[] = []) {
   const contentService = { findById: jest.fn().mockResolvedValue(content) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
+    existingEntityIds: jest.fn().mockResolvedValue(new Set<string>(embeddedIds)),
   };
   const indexSkipService = {
     recordSkip: jest.fn().mockResolvedValue(undefined),
@@ -28,7 +29,15 @@ function makeListener(content: Record<string, unknown> | null = null) {
     logger as never,
   );
 
-  return { listener, contentService, embeddingService, indexSkipService, vectorService, logger };
+  return {
+    listener,
+    contentService,
+    embeddingGenerationService,
+    embeddingService,
+    indexSkipService,
+    vectorService,
+    logger,
+  };
 }
 
 const SUBSTANTIVE = {
@@ -218,6 +227,39 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
     );
+  });
+
+  // Same sweep-vs-pipeline re-drive race as the event listener: keep a vector
+  // that already exists on a created content row, re-embed on an update.
+  it('keeps an existing embedding on a created content row, but still refreshes the tsvector', async () => {
+    const { listener, embeddingGenerationService, embeddingService, vectorService } = makeListener(
+      { ...SUBSTANTIVE, userId: 'user-1' },
+      ['content-1'],
+    );
+
+    await listener.indexContent({ contentId: 'content-1' } as never);
+
+    expect(embeddingService.existingEntityIds).toHaveBeenCalledWith({ userId: 'user-1' }, 'content', [
+      'content-1',
+    ]);
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
+    );
+  });
+
+  it('re-embeds UPDATED content even when an embedding exists (its text changed)', async () => {
+    const { listener, embeddingGenerationService, embeddingService } = makeListener(
+      { ...SUBSTANTIVE, userId: 'user-1' },
+      ['content-1'],
+    );
+
+    await listener.updateContent({ contentId: 'content-1' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
   });
 
   it('skips both embedding and vectorization when there is no searchable content at all', async () => {
