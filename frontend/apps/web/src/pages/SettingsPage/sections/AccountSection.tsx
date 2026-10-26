@@ -516,6 +516,10 @@ export function AccountSection() {
               <Input
                 id="confirmEmail"
                 autoComplete="off"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={email}
                 value={confirmEmail}
                 onChange={(e) => setConfirmEmail(e.target.value)}

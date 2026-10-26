@@ -148,6 +148,20 @@ describe('AccountSection — delete', () => {
     await waitFor(() => expect(confirmButton()).toBeEnabled());
   });
 
+  it('keeps iOS from autocorrecting the retyped address, without making it a type=email field', () => {
+    render(<AccountSection />);
+    openDialog();
+
+    const field = screen.getByLabelText(/to confirm/i);
+    expect(field).toHaveAttribute('inputmode', 'email');
+    expect(field).toHaveAttribute('autocapitalize', 'none');
+    expect(field).toHaveAttribute('autocorrect', 'off');
+    expect(field).toHaveAttribute('spellcheck', 'false');
+    expect(field).toHaveAttribute('autocomplete', 'off');
+    // A mismatch only disables the button; type=email would add a browser validation bubble.
+    expect(field).not.toHaveAttribute('type', 'email');
+  });
+
   it('clears the typed address when Cancel is clicked, so reopening starts disabled', async () => {
     render(<AccountSection />);
     openDialog();

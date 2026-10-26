@@ -105,6 +105,19 @@ describe('DataPortabilitySection', () => {
     expect(replaceButton()).toBeEnabled();
   });
 
+  it('keeps iOS from autocorrecting the retyped address, without making it a type=email field', () => {
+    render(<DataPortabilitySection />);
+    openImportDialog();
+
+    const field = screen.getByLabelText(/to confirm/i);
+    expect(field).toHaveAttribute('inputmode', 'email');
+    expect(field).toHaveAttribute('autocapitalize', 'none');
+    expect(field).toHaveAttribute('autocorrect', 'off');
+    expect(field).toHaveAttribute('spellcheck', 'false');
+    expect(field).toHaveAttribute('autocomplete', 'off');
+    expect(field).not.toHaveAttribute('type', 'email');
+  });
+
   it('accepts the confirmation email case- and whitespace-insensitively', async () => {
     render(<DataPortabilitySection />);
     openImportDialog();

@@ -196,6 +196,10 @@ export function DataPortabilitySection() {
               <Input
                 id="importConfirmEmail"
                 autoComplete="off"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={email}
                 value={confirmEmail}
                 onChange={(event) => setConfirmEmail(event.target.value)}
