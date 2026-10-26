@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';

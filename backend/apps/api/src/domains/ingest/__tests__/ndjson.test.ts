@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 
 import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { NDJSON_MAX_REJECTED_DETAILS, ingestNdjsonStream, isNdjsonRequest } from '../ndjson';
 

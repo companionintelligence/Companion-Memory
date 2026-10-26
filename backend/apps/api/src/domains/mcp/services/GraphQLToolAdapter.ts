@@ -19,7 +19,7 @@ import {
   isEnumType,
   printSchema,
 } from 'graphql';
-import { z, type ZodTypeAny } from 'zod';
+import { z, type ZodTypeAny } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';

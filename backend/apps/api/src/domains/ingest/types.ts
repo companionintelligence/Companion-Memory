@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { MAX_BULK_INPUT_SIZE } from '@ci/common/pipes';
 import { createBrowserActivitySchemaRoot } from '@ci/domains/browser-activity';

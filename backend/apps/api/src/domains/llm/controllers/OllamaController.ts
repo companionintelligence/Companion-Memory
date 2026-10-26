@@ -15,7 +15,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext, type UserServiceContext } from '@ci/common/context';
 import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';

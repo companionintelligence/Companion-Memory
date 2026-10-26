@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Optional, Post, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext } from '@ci/common/context';
 import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';

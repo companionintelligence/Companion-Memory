@@ -17,7 +17,7 @@ import {
 import { Request, Response } from 'express';
 import type { EntityManager } from 'typeorm';
 import { Agent, fetch as undiciFetch } from 'undici';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';

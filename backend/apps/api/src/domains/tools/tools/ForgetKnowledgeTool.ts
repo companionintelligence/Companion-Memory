@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { isIntegrityConstraintViolation } from '@ci/common/constants';
 import { normalizeEmbeddableType } from '@ci/common/embeddings';

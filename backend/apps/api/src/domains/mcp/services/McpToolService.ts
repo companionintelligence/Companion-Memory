@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
-import { z, type ZodTypeAny } from 'zod';
+import { z, type ZodTypeAny } from 'zod/v3';
 
 import { ContextService } from '@ci/common/context';
 import { INTENTS_SCOPE, type ApiKeyCapability } from '@ci/common/decorators';

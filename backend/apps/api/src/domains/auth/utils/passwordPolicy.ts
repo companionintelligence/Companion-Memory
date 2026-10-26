@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * The shortest password a new or changed one may be: signup, `PATCH /account/password` and the

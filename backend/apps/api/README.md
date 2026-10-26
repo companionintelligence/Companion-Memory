@@ -107,7 +107,7 @@ src/
 |---|---|
 | `guards/` | `JwtOrApiKeyAuthGuard` (Bearer JWT ∥ api key, as `x-api-key` or Bearer ∥ Portal OIDC) and friends. No global guard: a route with no guard is public. See [auth-and-conventions.md](../../../docs/api/auth-and-conventions.md). |
 | `context/` | AsyncLocalStorage request context — auth strategies set `{ userId }`, services read it via `toServiceContext()`, which throws if unauthenticated |
-| `pipes/` | zod-based `ValidationPipe` (the codebase validates with zod, not class-validator) |
+| `pipes/` | zod-based `ValidationPipe` (the codebase validates with zod, not class-validator). Import zod as `zod/v3` — the zod 3 API, which zod 4 still ships — never bare `zod`, which is the v4 API with different `.default()`, `z.record()` and `.uuid()` semantics (ESLint enforces it) |
 | `middleware/` | `BodyParserMiddleware` — `main.ts` boots with `bodyParser: false` and this applies per-route limits (default 100 KB; `/graphql` gets 10 MB for bulk mutations) |
 | `persistence/` | **`bulkInsertIdempotent`** (`bulkUpsert.ts`) — the set-based `INSERT … ON CONFLICT` engine behind every bulk-ingest path: one transaction, provenance-triple arbiter, optional self-heal columns (`ingestRefreshColumns.ts`), hypertable time-bounding, and **internal chunking** via `computeChunkSize` (bind-param-budget-sized sub-batches, so callers never hit the 65535-parameter cliff — chunking is not the caller's job) |
 | `embeddings/` | `EmbeddingGenerationService` — batched `nomic-embed-text` (768-dim) via Ollama; config block `embedding` |

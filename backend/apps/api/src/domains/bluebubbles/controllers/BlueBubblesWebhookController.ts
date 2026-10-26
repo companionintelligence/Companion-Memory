@@ -1,5 +1,5 @@
 import { Body, Controller, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';

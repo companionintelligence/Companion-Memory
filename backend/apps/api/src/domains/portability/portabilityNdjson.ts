@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /** Same content type as bulk ingest — BodyParserMiddleware leaves the stream raw. */
 export const PORTABILITY_NDJSON_CONTENT_TYPE = 'application/x-ndjson';

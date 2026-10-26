@@ -1,5 +1,5 @@
 import type { Point } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ObjectLifecycleState, Item } from './entities/ItemEntity';
 import type {

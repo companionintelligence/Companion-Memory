@@ -3,7 +3,7 @@ import './bootstrap';
 import path from 'node:path';
 
 import config from 'config';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { enforceNoCommittedSecrets } from './common/committedSecrets';
 import { isDeclaredEmbedModel } from './common/embeddings/embedModelIdentity';
