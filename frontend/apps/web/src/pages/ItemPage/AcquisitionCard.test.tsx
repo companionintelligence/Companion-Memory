@@ -132,7 +132,7 @@ describe('AcquisitionCard', () => {
     });
 
     const receiptDate = new Date('2026-05-01T00:00:00.000Z').toLocaleDateString();
-    const itemDate = new Date('2019-01-01T00:00:00.000Z').toLocaleDateString();
+    const itemDate = new Date(2019, 0, 1).toLocaleDateString();
 
     expect(await screen.findByText(receiptDate)).toBeInTheDocument();
     expect(screen.queryByText(itemDate)).toBeNull();
@@ -149,6 +149,19 @@ describe('AcquisitionCard', () => {
 
     expect(await screen.findByText('A friend')).toBeInTheDocument();
     expect(screen.getByText('Gift')).toBeInTheDocument();
+  });
+
+  it('shows a legacy UTC-midnight acquired date as the day it names, west of UTC', async () => {
+    const original = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+
+    try {
+      renderWithProviders(<AcquisitionCard acquiredFrom="A friend" acquiredAt="2024-03-02T00:00:00.000Z" />);
+
+      expect(await screen.findByText(new Date(2024, 2, 2).toLocaleDateString())).toBeInTheDocument();
+    } finally {
+      process.env.TZ = original ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    }
   });
 
   it('shows a quantity only when more than one unit came off the line', async () => {

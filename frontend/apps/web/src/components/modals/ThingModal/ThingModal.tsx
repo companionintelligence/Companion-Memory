@@ -24,6 +24,7 @@ import {
   volumeFromMl,
   volumeToMl,
 } from '@/lib/measurements';
+import { toThingDateInput } from '@/lib/thingDate';
 
 export interface ThingModalItem {
   id: string;
@@ -302,29 +303,6 @@ function toInput(value: number | null | undefined): string {
   return value == null ? '' : String(value);
 }
 
-/**
- * The `YYYY-MM-DD` a date input needs, from whatever the API returned: the day
- * it was where the person is, which is the day the thing's page shows
- * (`toLocaleDateString`). The UTC day was a day early or late for an importer's
- * real timestamp.
- */
-function toDateInput(value: string | null | undefined): string {
-  if (!value) {
-    return '';
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
 /** A blank field means "no value", never 0 — the server rejects 0 measurements. */
 function toNumber(value: string): number | null {
   const trimmed = value.trim();
@@ -387,11 +365,11 @@ function fromForm(item: ThingModalItem): ItemForm {
     colors: item.colors?.join(', ') ?? '',
     colorHex: item.colorHex ?? '',
     materials: item.materials?.join(', ') ?? '',
-    acquiredAt: toDateInput(item.acquiredAt),
+    acquiredAt: toThingDateInput(item.acquiredAt),
     acquisitionMethod: (item.acquisitionMethod as ItemAcquisitionMethod | null) ?? '',
     acquiredFrom: item.acquiredFrom ?? '',
-    manufacturedAt: toDateInput(item.manufacturedAt),
-    expiresAt: toDateInput(item.expiresAt),
+    manufacturedAt: toThingDateInput(item.manufacturedAt),
+    expiresAt: toThingDateInput(item.expiresAt),
   };
 }
 

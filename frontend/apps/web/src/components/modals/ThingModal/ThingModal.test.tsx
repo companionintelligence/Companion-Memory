@@ -268,4 +268,52 @@ describe('ThingModal dates', () => {
 
     expect(screen.getByLabelText('Acquired')).toHaveValue('2026-09-30');
   });
+
+  // CI runs in UTC, where a UTC midnight and a local midnight are the same
+  // instant, so the zone is chosen here rather than inherited.
+  it.each(['UTC', 'Pacific/Honolulu', 'America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Kiritimati'])(
+    'shows the day a legacy UTC-midnight date names in %s',
+    (zone) => {
+      process.env.TZ = zone;
+
+      // What the app stored before it wrote the start of the picked day: the picked
+      // day as UTC midnight. West of UTC that instant is still the day before.
+      renderWithProviders(
+        <ThingModal
+          open
+          onClose={vi.fn()}
+          item={{
+            ...CAMERA,
+            acquiredAt: '2024-03-02T00:00:00.000Z',
+            manufacturedAt: '2023-12-31T00:00:00.000Z',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+          }}
+          create={false}
+        />,
+      );
+
+      expect(screen.getByLabelText('Acquired')).toHaveValue('2024-03-02');
+      expect(screen.getByLabelText('Made')).toHaveValue('2023-12-31');
+      expect(screen.getByLabelText('Expires')).toHaveValue('2030-01-01');
+    },
+  );
+
+  it.each(['UTC', 'Pacific/Honolulu', 'America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Kiritimati'])(
+    'shows the day a new start-of-local-day date names in %s',
+    (zone) => {
+      process.env.TZ = zone;
+
+      // What the form stores now: midnight where the person is.
+      renderWithProviders(
+        <ThingModal
+          open
+          onClose={vi.fn()}
+          item={{ ...CAMERA, acquiredAt: new Date(2024, 2, 2).toISOString() }}
+          create={false}
+        />,
+      );
+
+      expect(screen.getByLabelText('Acquired')).toHaveValue('2024-03-02');
+    },
+  );
 });

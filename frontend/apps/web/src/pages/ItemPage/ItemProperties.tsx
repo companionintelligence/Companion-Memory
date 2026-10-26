@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 
 import { type UnitSystem, formatDimensions, formatMass, formatTerm, formatVolume } from '@/lib/measurements';
+import { formatThingDate } from '@/lib/thingDate';
 
 /** Everything this panel can show. All optional — an item may know none of it. */
 export interface ItemPhysicalProperties {
@@ -38,16 +39,6 @@ function humanize(value: string | null | undefined): string | null {
   const words = value.toLowerCase().replace(/_/g, ' ');
 
   return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function formatDate(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString();
 }
 
 /** `{cotton: 0.8}` → `Cotton 80%`, in descending order of how much of the object it is. */
@@ -120,13 +111,13 @@ export function ItemProperties({ item }: { item: ItemPhysicalProperties }) {
   // Composition is the stricter statement of the same fact, so it replaces the
   // plain material list whenever the proportions are known.
   push('Made of', formatComposition(item.composition) ?? item.materials?.map(formatTerm).join(', '));
-  push('Acquired', formatDate(item.acquiredAt));
+  push('Acquired', formatThingDate(item.acquiredAt));
   push('How', humanize(item.acquisitionMethod));
   push('From', item.acquiredFrom);
   push('Paid', item.purchasePrice == null ? null : `$${item.purchasePrice}`);
   push('Worth', item.currentValue == null ? null : `$${item.currentValue}`);
-  push('Made', formatDate(item.manufacturedAt));
-  push('Expires', formatDate(item.expiresAt));
+  push('Made', formatThingDate(item.manufacturedAt));
+  push('Expires', formatThingDate(item.expiresAt));
 
   if (rows.length === 0) {
     return null;
