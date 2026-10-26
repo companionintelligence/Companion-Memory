@@ -1,5 +1,5 @@
 import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -55,6 +55,12 @@ const receiptMock = (overrides: Record<string, unknown> = {}) =>
   );
 
 describe('AcquisitionCard', () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  });
+
   it('renders nothing at all when the thing knows nothing about where it came from', () => {
     const { container } = renderWithProviders(<AcquisitionCard />);
 
@@ -152,16 +158,11 @@ describe('AcquisitionCard', () => {
   });
 
   it('shows a legacy UTC-midnight acquired date as the day it names, west of UTC', async () => {
-    const original = process.env.TZ;
     process.env.TZ = 'America/Los_Angeles';
 
-    try {
-      renderWithProviders(<AcquisitionCard acquiredFrom="A friend" acquiredAt="2024-03-02T00:00:00.000Z" />);
+    renderWithProviders(<AcquisitionCard acquiredFrom="A friend" acquiredAt="2024-03-02T00:00:00.000Z" />);
 
-      expect(await screen.findByText(new Date(2024, 2, 2).toLocaleDateString())).toBeInTheDocument();
-    } finally {
-      process.env.TZ = original ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-    }
+    expect(await screen.findByText(new Date(2024, 2, 2).toLocaleDateString())).toBeInTheDocument();
   });
 
   it('shows a quantity only when more than one unit came off the line', async () => {
