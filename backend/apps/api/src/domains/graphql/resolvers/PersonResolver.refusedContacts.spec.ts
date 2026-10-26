@@ -140,6 +140,7 @@ describe('PersonResolver.updatePerson — contacts the shared rule refuses', () 
       expect.anything(),
       PERSON,
       expect.objectContaining({ name: 'Dana Okafor (renamed)' }),
+      { handEdit: true },
     );
   });
 

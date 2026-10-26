@@ -16,6 +16,8 @@ import {
   mergeIngestedProperties,
   stableJson,
   unionKeysFor,
+  userEditedKeys,
+  userEditedSql,
 } from '../utils/ingestedProperties';
 
 import { type EntityIdentifierBatchEntry, EntityIdentifierService } from './EntityIdentifierService';
@@ -228,10 +230,13 @@ export interface GraphIngestResult {
  */
 function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly string[]): boolean {
   const merged = mergeIngestedProperties(current.properties, incoming.properties, unionKeys);
+  const handSet = userEditedKeys(current.properties);
 
   return (
-    (incoming.name != null && incoming.name !== current.name) ||
-    (incoming.description != null && incoming.description !== current.description) ||
+    (incoming.name != null && incoming.name !== current.name && !handSet.includes('name')) ||
+    (incoming.description != null &&
+      incoming.description !== current.description &&
+      !handSet.includes('description')) ||
     stableJson(merged) !== stableJson(current.properties ?? {})
   );
 }
@@ -241,9 +246,11 @@ function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly 
  * properties are MERGED with the incoming ones rather than replaced — see
  * `utils/ingestedProperties.ts` — and its name and description take the
  * incoming value unless that is null, the rule bulkUpsert's ingest refreshes
- * already follow. The importer never sends a description at all, so the plain
+ * already follow. Most importers send no description at all, so the plain
  * `description = EXCLUDED.description` this replaced erased whatever a merge
- * or a person edit had written there on every refresh.
+ * or a person edit had written there on every refresh. A name or description a
+ * person set by hand (listed in `properties.user_edited_keys`) is kept whatever
+ * arrives, like the hand-set properties the merge skips.
  *
  * The merge runs in the statement, against the row as it stands once the
  * conflict has locked it, so a person merge (or any other writer) that
@@ -256,8 +263,10 @@ function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly 
  */
 const ENTITY_CONFLICT_ACTION =
   '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL ' +
-  'DO UPDATE SET name = COALESCE(EXCLUDED."name", "entities"."name"), ' +
-  'description = COALESCE(EXCLUDED."description", "entities"."description"), ' +
+  `DO UPDATE SET name = CASE WHEN ${userEditedSql('"entities"."properties"', "'name'")} ` +
+  'THEN "entities"."name" ELSE COALESCE(EXCLUDED."name", "entities"."name") END, ' +
+  `description = CASE WHEN ${userEditedSql('"entities"."properties"', "'description'")} ` +
+  'THEN "entities"."description" ELSE COALESCE(EXCLUDED."description", "entities"."description") END, ' +
   `properties = ${mergedPropertiesSql('"entities"."properties"', 'EXCLUDED."properties"', ':unionKeys::text[]')}, ` +
   'updated_at = now() ' +
   'WHERE "entities"."merged_into_entity_id" IS NULL';

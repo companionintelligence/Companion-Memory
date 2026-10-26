@@ -164,6 +164,7 @@ describe('PersonResolver.updatePerson — a contact another person already holds
       expect.anything(),
       DANA,
       expect.objectContaining({ name: 'Dana Okafor-Reyes' }),
+      { handEdit: true },
     );
     expect(
       table.rows
