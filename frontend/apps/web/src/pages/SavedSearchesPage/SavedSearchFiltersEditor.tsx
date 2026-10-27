@@ -9,7 +9,10 @@ import { MapAreaList } from '@/components/SearchBox/MapAreaList';
 import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
 import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
 import { mapAreasLabel } from '@/pages/MemoryPage/bbox';
-import { datePresetLabel, isRollingDatePreset } from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
+import {
+  datePresetLabel,
+  isRollingDatePreset,
+} from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
 
 import {
   addListValue,

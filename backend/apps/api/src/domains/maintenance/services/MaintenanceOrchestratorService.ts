@@ -12,7 +12,10 @@ import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 import { EmbeddingEntity, IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
-import { MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, MEDIA_DIMENSIONS_STAGE_ID } from '../mediaDimensionsCandidates';
+import {
+  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
+  MEDIA_DIMENSIONS_STAGE_ID,
+} from '../mediaDimensionsCandidates';
 
 import {
   type CommunicationLinkBackfillOptions,

@@ -301,9 +301,7 @@ describe('ExportStep', () => {
       stages: ['unpack', 'parse', 'media'],
       declaredSources: ['spotify'],
     });
-    await waitFor(() =>
-      expect(onRunsStarted).toHaveBeenLastCalledWith('spotify', ['run-drop-spotify.zip']),
-    );
+    await waitFor(() => expect(onRunsStarted).toHaveBeenLastCalledWith('spotify', ['run-drop-spotify.zip']));
     expect(screen.getByText('Spotify (3 files).zip')).toBeInTheDocument();
   });
 

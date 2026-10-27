@@ -16,7 +16,11 @@ function setup(config: { enabled: boolean } | null) {
   };
   const syncService = { ingestWebhookMessage: jest.fn(async () => undefined) };
   const logger = { setContext: jest.fn(), error: jest.fn() };
-  const controller = new BlueBubblesWebhookController(configService as never, syncService as never, logger as never);
+  const controller = new BlueBubblesWebhookController(
+    configService as never,
+    syncService as never,
+    logger as never,
+  );
 
   return { controller, configService, syncService };
 }
@@ -35,10 +39,12 @@ describe('BlueBubblesWebhookController', () => {
   it('refuses a delivery while BlueBubbles is switched off, like a wrong secret, and records nothing', async () => {
     const { controller, configService, syncService } = setup({ enabled: false });
 
-    await expect(controller.handle(SECRET, { type: 'typing-indicator' })).rejects.toBeInstanceOf(NotFoundException);
-    await expect(controller.handle(SECRET, { type: 'new-message', data: { guid: 'm1' } })).rejects.toBeInstanceOf(
+    await expect(controller.handle(SECRET, { type: 'typing-indicator' })).rejects.toBeInstanceOf(
       NotFoundException,
     );
+    await expect(
+      controller.handle(SECRET, { type: 'new-message', data: { guid: 'm1' } }),
+    ).rejects.toBeInstanceOf(NotFoundException);
     expect(configService.recordWebhookReceived).not.toHaveBeenCalled();
     expect(syncService.ingestWebhookMessage).not.toHaveBeenCalled();
   });

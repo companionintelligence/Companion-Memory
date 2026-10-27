@@ -90,7 +90,12 @@ describe('ChatGenerationBroker', () => {
       broker.complete('thread-1');
       jest.advanceTimersByTime(KEEPALIVE_INTERVAL_MS * 3);
 
-      expect(frameChannels(Buffer.concat(chunks))).toEqual([Channel.KEEPALIVE, Channel.KEEPALIVE, Channel.KEEPALIVE, Channel.TEXT]);
+      expect(frameChannels(Buffer.concat(chunks))).toEqual([
+        Channel.KEEPALIVE,
+        Channel.KEEPALIVE,
+        Channel.KEEPALIVE,
+        Channel.TEXT,
+      ]);
       expect(jest.getTimerCount()).toBe(0);
     } finally {
       jest.useRealTimers();

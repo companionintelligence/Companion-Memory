@@ -187,7 +187,9 @@ describe('useAuth', () => {
         if (url.endsWith('/api/authenticate/refresh')) {
           refreshCalls += 1;
 
-          return refreshCalls === 1 ? jsonResponse({ accessToken: 'initial-token' }) : emptyResponse(false, 500);
+          return refreshCalls === 1
+            ? jsonResponse({ accessToken: 'initial-token' })
+            : emptyResponse(false, 500);
         }
 
         return emptyResponse();

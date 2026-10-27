@@ -230,6 +230,7 @@ describeWithDb(`updatePerson contact conflicts, in Postgres (${availability.targ
       expect.anything(),
       dana,
       expect.objectContaining({ name: 'Dana Okafor-Reyes' }),
+      { handEdit: true },
     );
 
     const rows: Array<{ entity_id: string; kind: string; value_normalized: string; label: string | null }> =

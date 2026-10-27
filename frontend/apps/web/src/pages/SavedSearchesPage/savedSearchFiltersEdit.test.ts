@@ -136,7 +136,9 @@ describe('savedSearchFiltersEdit', () => {
       // A city-sized area gets two.
       expect(describeBbox([-122.52, 37.7, -122.35, 37.83])).toBe('37.70°N–37.83°N, 122.52°W–122.35°W');
       // A single point has no span to size against, so it shows what the URL keeps.
-      expect(describeBbox([2.3522, 48.8566, 2.3522, 48.8566])).toBe('48.856600°N–48.856600°N, 2.352200°E–2.352200°E');
+      expect(describeBbox([2.3522, 48.8566, 2.3522, 48.8566])).toBe(
+        '48.856600°N–48.856600°N, 2.352200°E–2.352200°E',
+      );
     });
   });
 });

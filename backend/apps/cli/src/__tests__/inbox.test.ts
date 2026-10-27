@@ -74,7 +74,9 @@ describe('ci inbox', () => {
       },
     });
 
-    await expect(inboxCommand(ctx, { start: true, wait: true, timeout: 'abc' })).rejects.toBeInstanceOf(CliError);
+    await expect(inboxCommand(ctx, { start: true, wait: true, timeout: 'abc' })).rejects.toBeInstanceOf(
+      CliError,
+    );
     expect(requested).toEqual([]);
   });
 

@@ -11,7 +11,14 @@ const names = (tables: UserScopedTable[]) => tables.map((t) => `${t.schema}.${t.
 
 describe('orderParentsFirst', () => {
   it('puts each table after the tables it references, and leaves the rest in discovery order', () => {
-    const discovered = ['ci.events', 'ci.messages', 'ci.notes', 'ci.threads', 'ci_search.mobile_search_documents', 'ci_search.vectors'].map(table);
+    const discovered = [
+      'ci.events',
+      'ci.messages',
+      'ci.notes',
+      'ci.threads',
+      'ci_search.mobile_search_documents',
+      'ci_search.vectors',
+    ].map(table);
     const parents = new Map([
       ['ci.messages', ['ci.threads']],
       ['ci_search.mobile_search_documents', ['ci_search.vectors']],
@@ -28,7 +35,9 @@ describe('orderParentsFirst', () => {
   });
 
   it('follows a chain of references', () => {
-    const discovered = ['ci.object_observations', 'ci.objects', 'ci.receipt_line_items', 'ci.receipts'].map(table);
+    const discovered = ['ci.object_observations', 'ci.objects', 'ci.receipt_line_items', 'ci.receipts'].map(
+      table,
+    );
     const parents = new Map([
       ['ci.object_observations', ['ci.objects']],
       ['ci.objects', ['ci.receipt_line_items', 'ci.receipts']],
@@ -58,7 +67,13 @@ describe('orderParentsFirst', () => {
 describe('groupUserTables', () => {
   it('orders by the parents discovery reports', () => {
     const tables = groupUserTables([
-      { schema: 'ci', table: 'messages', user_column: 'user_id', columns: ['user_id'], parents: ['ci.threads', 'ci.users'] },
+      {
+        schema: 'ci',
+        table: 'messages',
+        user_column: 'user_id',
+        columns: ['user_id'],
+        parents: ['ci.threads', 'ci.users'],
+      },
       { schema: 'ci', table: 'threads', user_column: 'user_id', columns: ['user_id'], parents: ['ci.users'] },
     ]);
 

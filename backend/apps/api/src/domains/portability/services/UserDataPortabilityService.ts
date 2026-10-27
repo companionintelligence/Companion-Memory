@@ -190,7 +190,10 @@ export class UserDataPortabilityService {
           // touched anything, and the archive has no say in it.
           keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
 
-          selfEntityIds = [profileEntityId(record.profile), await this.detachSelfEntity(queryRunner, context.userId)];
+          selfEntityIds = [
+            profileEntityId(record.profile),
+            await this.detachSelfEntity(queryRunner, context.userId),
+          ];
 
           for (const table of [...tables].reverse()) {
             await this.deleteUserRows(queryRunner, context.userId, table);

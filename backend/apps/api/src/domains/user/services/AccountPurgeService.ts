@@ -102,7 +102,8 @@ export interface PurgeRunSummary {
  * Four properties, in the order they constrain the design:
  *
  * - **Batched.** Every delete is `ctid IN (… LIMIT n)`, so no statement locks a
- *   million-row table.
+ *   million-row table. The exception is a compressed hypertable chunk, which
+ *   has no `ctid`: it gets one statement per chunk (see `renderUnbatchedDelete`).
  * - **Resumable.** Each batch is its own transaction and commits. A crash, a
  *   restart or a statement timeout costs one batch, not the run.
  * - **Idempotent.** Every statement is scoped by "belongs to this account", so
@@ -321,7 +322,7 @@ export class AccountPurgeService {
             ? renderUnbatchedDelete(table, step.scope)
             : renderUnbatchedNull(table, step.column, step.scope);
 
-        total += await this.runCounting(runner, sql, [userId]);
+        total += await this.runDecompressing(runner, sql, [userId]);
 
         continue;
       }
@@ -358,6 +359,38 @@ export class AccountPurgeService {
     }
 
     throw new Error(`Purge step ${stepId} exceeded ${MAX_BATCHES_PER_STEP} batches; aborting`);
+  }
+
+  /**
+   * One statement against a compressed chunk, in a transaction of its own with
+   * TimescaleDB's decompression cap lifted.
+   *
+   * The counting wrapper's `RETURNING` makes TimescaleDB decompress every batch
+   * the statement touches, and the default cap
+   * (`timescaledb.max_tuples_decompressed_per_dml_transaction`, 100,000) aborts
+   * it past that. A month of dense GPS history in one `ci.position` chunk is
+   * over the cap, so without this the purge failed on every retry.
+   * `PlaceMergeService` lifts the same cap the same way. The compression policy
+   * recompresses the chunk later.
+   */
+  private async runDecompressing(runner: QueryRunner, sql: string, parameters: unknown[]): Promise<number> {
+    await runner.startTransaction();
+
+    try {
+      await runner.query('SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
+
+      const affected = await this.runCounting(runner, sql, parameters);
+
+      await runner.commitTransaction();
+
+      return affected;
+    } catch (err) {
+      if (runner.isTransactionActive) {
+        await runner.rollbackTransaction();
+      }
+
+      throw err;
+    }
   }
 
   private async runCounting(runner: QueryRunner, sql: string, parameters: unknown[]): Promise<number> {

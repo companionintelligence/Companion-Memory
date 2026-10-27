@@ -49,7 +49,12 @@ function buildRows(): Row[] {
     // (j * 37) % 150 scatters the names across time.
     const label = String((j * 37) % 150).padStart(3, '0');
 
-    rows.push({ id: uuid(next++), type: 'event', time: new Date(FIRST_MS + j * HOUR_MS), fields: { title: `Event ${label}` } });
+    rows.push({
+      id: uuid(next++),
+      type: 'event',
+      time: new Date(FIRST_MS + j * HOUR_MS),
+      fields: { title: `Event ${label}` },
+    });
   }
 
   for (let j = 0; j < 12; j++) {
@@ -57,16 +62,29 @@ function buildRows(): Row[] {
       id: uuid(next++),
       type: 'communication',
       time: new Date(FIRST_MS + (j * 13 + 5) * HOUR_MS),
-      fields: j % 2 === 0 ? { subject: `Re: plan ${j}`, preview: 'see below' } : { subject: null, preview: `chat line ${j}` },
+      fields:
+        j % 2 === 0
+          ? { subject: `Re: plan ${j}`, preview: 'see below' }
+          : { subject: null, preview: `chat line ${j}` },
     });
   }
 
   for (let j = 0; j < 6; j++) {
-    rows.push({ id: uuid(next++), type: 'note', time: new Date(FIRST_MS + (j * 29 + 3) * HOUR_MS), fields: { title: `Note ${j}` } });
+    rows.push({
+      id: uuid(next++),
+      type: 'note',
+      time: new Date(FIRST_MS + (j * 29 + 3) * HOUR_MS),
+      fields: { title: `Note ${j}` },
+    });
   }
 
   for (let j = 0; j < 3; j++) {
-    rows.push({ id: uuid(next++), type: 'event', time: new Date(FIRST_MS + (j * 41 + 7) * HOUR_MS), fields: { title: null } });
+    rows.push({
+      id: uuid(next++),
+      type: 'event',
+      time: new Date(FIRST_MS + (j * 41 + 7) * HOUR_MS),
+      fields: { title: null },
+    });
   }
 
   return rows;
@@ -75,7 +93,8 @@ function buildRows(): Row[] {
 const ROWS = buildRows();
 
 const nameOf = (row: Row) =>
-  [row.fields.title, row.fields.subject, row.fields.preview].find((value) => value != null && value !== '') ?? '';
+  [row.fields.title, row.fields.subject, row.fields.preview].find((value) => value != null && value !== '') ??
+  '';
 
 /** The order the list must come out in: by name, unnamed rows last, ties by id. */
 function expectedOrder(direction: 1 | -1): Row[] {
@@ -203,14 +222,17 @@ describe('SearchResolver timed browse, sorted by name', () => {
   it.each([
     ['asc', 1],
     ['desc', -1],
-  ] as const)('pages every row in name order (%s), unnamed rows last, nothing repeated or missed', async (sortOrder, sign) => {
-    const { rows, totalCount } = await walk(makeResolver(), { first: 30, sortBy: 'name', sortOrder });
+  ] as const)(
+    'pages every row in name order (%s), unnamed rows last, nothing repeated or missed',
+    async (sortOrder, sign) => {
+      const { rows, totalCount } = await walk(makeResolver(), { first: 30, sortBy: 'name', sortOrder });
 
-    expect(rows.map((row) => row.id)).toEqual(expectedOrder(sign).map((row) => row.id));
-    expect(totalCount).toBe(ROWS.length);
-  });
+      expect(rows.map((row) => row.id)).toEqual(expectedOrder(sign).map((row) => row.id));
+      expect(totalCount).toBe(ROWS.length);
+    },
+  );
 
-  it("names a message by its subject, or by its preview when it has none, as the list shows it", async () => {
+  it('names a message by its subject, or by its preview when it has none, as the list shows it', async () => {
     const { rows } = await walk(makeResolver(), { first: 30, sortBy: 'name', sortOrder: 'asc' });
     const names = rows.map(nameOf);
 

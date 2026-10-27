@@ -25,7 +25,12 @@ describe('hubNamesSomeoneElse', () => {
     const signedIn = { id: GlobalUID.encode('user', accountId), email: 'old@example.com' };
 
     expect(hubNamesSomeoneElse(signedIn, { username: 'old@example.com', accountId })).toBe(false);
-    expect(hubNamesSomeoneElse(signedIn, { username: 'old@example.com', accountId: '01a1769a-0000-7000-8000-000000000000' })).toBe(true);
+    expect(
+      hubNamesSomeoneElse(signedIn, {
+        username: 'old@example.com',
+        accountId: '01a1769a-0000-7000-8000-000000000000',
+      }),
+    ).toBe(true);
   });
 
   it('compares addresses, ignoring case, when the Hub sends no stable id', () => {

@@ -77,10 +77,9 @@ export function renderBatchedNull(
 ): string {
   const table = quoteTable(target);
   const quotedColumn = quoteIdentifier(column);
-  const predicate = `${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`;
 
   return countingWrapper(
-    `UPDATE ${table} SET ${quotedColumn} = NULL WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${predicate} LIMIT ${assertBatchSize(batchSize)})`,
+    `UPDATE ${table} SET ${quotedColumn} = NULL WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${nullPredicate(quotedColumn, scope)} LIMIT ${assertBatchSize(batchSize)})`,
   );
 }
 
@@ -102,7 +101,7 @@ export function renderUnbatchedNull(target: TableRef, column: string, scope: Pur
   const quotedColumn = quoteIdentifier(column);
 
   return countingWrapper(
-    `UPDATE ${quoteTable(target)} SET ${quotedColumn} = NULL WHERE ${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`,
+    `UPDATE ${quoteTable(target)} SET ${quotedColumn} = NULL WHERE ${nullPredicate(quotedColumn, scope)}`,
   );
 }
 
@@ -122,6 +121,11 @@ export function renderDeleteUser(target: TableRef): string {
  */
 function countingWrapper(statement: string): string {
   return `WITH purge_batch AS (${statement} RETURNING 1) SELECT count(*)::int AS count FROM purge_batch`;
+}
+
+/** The rows a null step still has to touch; see {@link renderBatchedNull} for why the guard matters. */
+function nullPredicate(quotedColumn: string, scope: PurgeScope): string {
+  return `${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`;
 }
 
 function assertBatchSize(batchSize: number): number {

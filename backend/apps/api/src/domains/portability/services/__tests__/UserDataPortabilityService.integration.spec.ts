@@ -391,17 +391,20 @@ describeWithDatabase(
       const threadId = randomUUID();
       const messageId = randomUUID();
 
-      await service.importArchive({ userId: testUserId } as never, {
-        version: 1,
-        exportedAt: new Date().toISOString(),
-        userId: testUserId,
-        profile: null,
-        tables: {
-          'ci.messages': [{ message_id: messageId, thread_id: threadId, role: 'user', content: 'hello' }],
-          'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
-        },
-        fileBlobs: [],
-      } as UserDataArchive);
+      await service.importArchive(
+        { userId: testUserId } as never,
+        {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          userId: testUserId,
+          profile: null,
+          tables: {
+            'ci.messages': [{ message_id: messageId, thread_id: threadId, role: 'user', content: 'hello' }],
+            'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
+          },
+          fileBlobs: [],
+        } as UserDataArchive,
+      );
 
       const [row] = await dataSource.query('SELECT thread_id FROM ci.messages WHERE message_id = $1::uuid', [
         messageId,
@@ -414,26 +417,29 @@ describeWithDatabase(
       const threadId = randomUUID();
       const messageId = randomUUID();
 
-      await service.importArchive({ userId: testUserId } as never, {
-        version: 1,
-        exportedAt: new Date().toISOString(),
-        userId: testUserId,
-        profile: null,
-        tables: {
-          'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
-          'ci.messages': [
-            {
-              message_id: messageId,
-              thread_id: threadId,
-              role: 'user',
-              content: 'hello',
-              total_tokens: 12,
-              search_vector: "'hello':1",
-            },
-          ],
-        },
-        fileBlobs: [],
-      } as UserDataArchive);
+      await service.importArchive(
+        { userId: testUserId } as never,
+        {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          userId: testUserId,
+          profile: null,
+          tables: {
+            'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
+            'ci.messages': [
+              {
+                message_id: messageId,
+                thread_id: threadId,
+                role: 'user',
+                content: 'hello',
+                total_tokens: 12,
+                search_vector: "'hello':1",
+              },
+            ],
+          },
+          fileBlobs: [],
+        } as UserDataArchive,
+      );
 
       const [row] = await dataSource.query('SELECT content FROM ci.messages WHERE message_id = $1::uuid', [
         messageId,
@@ -453,7 +459,9 @@ describeWithDatabase(
       };
 
       const selfPointer = async (): Promise<string | null> => {
-        const [row] = await dataSource.query('SELECT entity_id FROM ci.users WHERE id = $1::uuid', [testUserId]);
+        const [row] = await dataSource.query('SELECT entity_id FROM ci.users WHERE id = $1::uuid', [
+          testUserId,
+        ]);
 
         return row.entity_id;
       };
@@ -464,7 +472,10 @@ describeWithDatabase(
           `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Person', $2::uuid, 'Jane')`,
           [selfId, testUserId],
         );
-        await dataSource.query('UPDATE ci.users SET entity_id = $2::uuid WHERE id = $1::uuid', [testUserId, selfId]);
+        await dataSource.query('UPDATE ci.users SET entity_id = $2::uuid WHERE id = $1::uuid', [
+          testUserId,
+          selfId,
+        ]);
       });
 
       it('imports an export of the same account and points the account back at that person', async () => {
@@ -482,14 +493,17 @@ describeWithDatabase(
       });
 
       it('does the same on the legacy json path', async () => {
-        await service.importArchive({ userId: testUserId } as never, {
-          version: 1,
-          exportedAt: new Date().toISOString(),
-          userId: testUserId,
-          profile: { entityId: selfId } as never,
-          tables: { 'ci.entities': [selfRow] },
-          fileBlobs: [],
-        } as UserDataArchive);
+        await service.importArchive(
+          { userId: testUserId } as never,
+          {
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            userId: testUserId,
+            profile: { entityId: selfId } as never,
+            tables: { 'ci.entities': [selfRow] },
+            fileBlobs: [],
+          } as UserDataArchive,
+        );
 
         expect(await selfPointer()).toBe(selfId);
       });

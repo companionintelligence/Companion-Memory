@@ -39,6 +39,14 @@ if (!availability.available) {
 /** Enough rows to make the batch loop go round more than once. */
 const POSITION_ROWS = 1_200;
 
+/**
+ * Rows in the compressed chunk: one past TimescaleDB's default cap on tuples a
+ * single statement may decompress (`timescaledb.max_tuples_decompressed_per_dml_transaction`,
+ * 100,000), so a purge that leaves the cap in place fails here as it would on
+ * an appliance with a month of dense GPS history.
+ */
+const COMPRESSED_POSITION_ROWS = 100_001;
+
 describeWithDatabase(`account purge, against the real schema (${availability.target})`, () => {
   let scratch: ScratchDatabase;
   let service: AccountPurgeService;
@@ -162,14 +170,23 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       positions.push(`($${parameters.length}, $1, 'gps', ST_SetSRID(ST_MakePoint(0, 0), 4326))`);
     }
 
-    // A second chunk, six months along: the batch loop has to visit every chunk,
+    // A second chunk, two months along: the batch loop has to visit every chunk,
     // not just the one holding most of the rows.
-    parameters.push(new Date(Date.UTC(2026, 5, 1)));
+    parameters.push(new Date(Date.UTC(2026, 2, 1)));
     positions.push(`($${parameters.length}, $1, 'gps', ST_SetSRID(ST_MakePoint(0, 0), 4326))`);
 
     await query(
       `INSERT INTO ci.position (time, user_id, source, location) VALUES ${positions.join(', ')}`,
       parameters,
+    );
+
+    // A third chunk, five months along, compressed below.
+    await query(
+      `INSERT INTO ci.position (time, user_id, source, location)
+       SELECT TIMESTAMPTZ '2026-06-01 00:00:00+00' + g * INTERVAL '1 second', $1, 'gps',
+              ST_SetSRID(ST_MakePoint(0, 0), 4326)
+         FROM generate_series(0, $2::int - 1) g`,
+      [victim, COMPRESSED_POSITION_ROWS],
     );
 
     await query(
@@ -178,7 +195,7 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       [bystander],
     );
 
-    // The six-month-old chunk compressed, as the compression policy leaves old
+    // The June chunk compressed, as the compression policy leaves old
     // position data on an appliance. A compressed chunk refuses `ctid`
     // ("transparent decompression only supports tableoid system column"), so the
     // purge has to reach those rows another way.
@@ -214,6 +231,18 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       `INSERT INTO ci.files (id, user_id, content_type, bucket, key, filename)
        VALUES ($1, $2, 'image/png', 'companion', $3, 'seed.png')`,
       [victimFile, victim, victimObjectKey],
+    );
+
+    // ── Appliance-wide settings the account last changed ───────────────────
+    // updated_by is each table's only reference to ci.users (SET NULL). It says
+    // who changed the switch, not whose it is: the switch stays for everyone.
+    await query(
+      `INSERT INTO ci.outbound_settings (key, enabled, updated_at, updated_by) VALUES ('crash_reports', false, NOW(), $1)`,
+      [victim],
+    );
+    await query(
+      `INSERT INTO ci.job_settings (kind, key, mode, updated_at, updated_by) VALUES ('queue', 'seed-queue', 'paused', NOW(), $1)`,
+      [victim],
     );
 
     // ── Deletion requested, grace period already over ──────────────────────
@@ -342,6 +371,25 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
     it('detaches the account that provisioned it rather than deleting it', async () => {
       expect(await countWhere('ci.users', 'id = $1 AND created_by IS NULL', [bystander])).toBe(1);
     });
+
+    it('keeps the appliance settings it last changed, with who changed them cleared', async () => {
+      // Deleting these rows would turn the crash-report upload back on and
+      // unpause the queue for every account still here.
+      expect(
+        await countWhere(
+          'ci.outbound_settings',
+          "key = 'crash_reports' AND enabled = false AND updated_by IS NULL",
+          [],
+        ),
+      ).toBe(1);
+      expect(
+        await countWhere(
+          'ci.job_settings',
+          "key = 'seed-queue' AND mode = 'paused' AND updated_by IS NULL",
+          [],
+        ),
+      ).toBe(1);
+    });
   });
 
   describe('the record it leaves', () => {
@@ -362,7 +410,7 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       expect(record.deleted_objects).toBe(1);
 
       // Counts, per table — the evidence behind "your data was deleted".
-      expect(record.deleted_rows['ci.position']).toBe(POSITION_ROWS + 1);
+      expect(record.deleted_rows['ci.position']).toBe(POSITION_ROWS + 1 + COMPRESSED_POSITION_ROWS);
       expect(record.deleted_rows['ci.users']).toBe(1);
       expect(record.deleted_rows['ci_search.embeddings']).toBe(1);
     });
@@ -379,6 +427,9 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
 
       expect(record.deleted_rows['ci.users']).toBe(1);
       expect(record.detached_rows['ci.users']).toBe(2);
+      expect(record.detached_rows['ci.outbound_settings']).toBe(1);
+      expect(record.detached_rows['ci.job_settings']).toBe(1);
+      expect(record.deleted_rows['ci.outbound_settings']).toBeUndefined();
     });
   });
 

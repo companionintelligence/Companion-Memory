@@ -129,7 +129,9 @@ describe('ci import', () => {
       upload: async (file: string) => {
         uploaded.push(file);
 
-        return [{ dropId: 'd', originalFilename: 'contacts.vcf', sizeBytes: 1, status: 'staged', expiresAt: null }];
+        return [
+          { dropId: 'd', originalFilename: 'contacts.vcf', sizeBytes: 1, status: 'staged', expiresAt: null },
+        ];
       },
       startRun: async () => runDetail('run-4'),
     });

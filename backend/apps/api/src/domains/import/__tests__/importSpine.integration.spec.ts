@@ -307,12 +307,16 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
       // The runner moved on to `extracting`, but that write fell inside the
       // progress throttle. The failure's context is what knows where it was.
-      await service.failStage(stages[0].id, 'unpack [phase=extracting file=export.zip] cannot unpack export.zip', {
-        stage: 'unpack',
-        phase: 'extracting',
-        file: 'export.zip',
-        message: 'cannot unpack export.zip',
-      });
+      await service.failStage(
+        stages[0].id,
+        'unpack [phase=extracting file=export.zip] cannot unpack export.zip',
+        {
+          stage: 'unpack',
+          phase: 'extracting',
+          file: 'export.zip',
+          message: 'cannot unpack export.zip',
+        },
+      );
 
       expect((await service.getStage(stages[0].id))?.phase).toBe('extracting');
     });
