@@ -25,6 +25,21 @@ describe('headersFromGmailApi', () => {
     expect(headers['X-Gmail-Labels']).toBe('CATEGORY PROMOTIONS,INBOX');
     expect(headers['List-Unsubscribe']).toBe('<mailto:unsub@shop.example>');
   });
+
+  it('takes labelIds over an X-Gmail-Labels the sender wrote into the mail', () => {
+    const headers = headersFromGmailApi({
+      headers: [
+        { name: 'From', value: 'Eve <eve@evil.example>' },
+        { name: 'x-gmail-labels', value: 'Sent' },
+      ],
+      labelIds: ['INBOX', 'UNREAD'],
+    });
+
+    expect(headers).toEqual({ From: 'Eve <eve@evil.example>', 'X-Gmail-Labels': 'INBOX,UNREAD' });
+    expect(
+      headersFromGmailApi({ headers: [{ name: 'X-Gmail-Labels', value: 'Sent' }], labelIds: [] }),
+    ).toEqual({});
+  });
 });
 
 describe('headersFromOutlookMessage', () => {
@@ -50,6 +65,15 @@ describe('headersFromOutlookMessage', () => {
 
     expect(headers['X-Gmail-Labels'].toLowerCase()).toContain('category updates');
     expect(headers['X-Gmail-Labels'].toLowerCase()).toContain('important');
+  });
+
+  it('drops an X-Gmail-Labels the sender wrote: Outlook writes none', () => {
+    const headers = headersFromOutlookMessage({
+      subject: 'Hello',
+      internetMessageHeaders: [{ name: 'X-Gmail-Labels', value: 'Sent' }],
+    });
+
+    expect(headers['X-Gmail-Labels']).toBeUndefined();
   });
 });
 

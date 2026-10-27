@@ -47,6 +47,107 @@ function headerValue(headers: Record<string, string>, name: string): string | un
   return undefined;
 }
 
+/**
+ * Headers a relaying or receiving MTA prepends on the way to the mailbox. A
+ * header written BELOW one of these was already in the message when that hop
+ * saw it, so the sender (or an earlier hop) wrote it.
+ */
+const TRANSPORT_HEADERS = new Set([
+  'received',
+  'x-received',
+  'arc-seal',
+  'arc-message-signature',
+  'arc-authentication-results',
+  ...DELIVERY_TRACE_HEADERS,
+]);
+
+/** What {@link trustedGmailLabels} made of a message's `X-Gmail-Labels` headers. */
+export interface GmailLabelsVerdict {
+  /** The labels Google wrote, or undefined when no header can be Google's. */
+  labels: string | undefined;
+  /**
+   * True when a header the sender could have written claimed the `Sent` label
+   * and was ignored: the one header's value, or any header after the first.
+   */
+  sentLabelRefused: boolean;
+}
+
+/**
+ * The `X-Gmail-Labels` value Google wrote, read from a message's raw (unfolded)
+ * header block.
+ *
+ * `X-Gmail-Labels` is an ordinary header, so anybody can put one in a mail they
+ * send. Takeout prepends its own, with `X-GM-THRID`, above every header the
+ * message arrived with, and every MTA on the way prepends its `Received` above
+ * whatever the sender wrote. So only the FIRST `X-Gmail-Labels` can be
+ * Google's, and only when no transport header comes before it: one written
+ * below a `Received` was in the mail before delivery. A Takeout of a mail that
+ * carries a forged `X-Gmail-Labels: Sent` has Google's `Inbox` header first and
+ * the forgery further down, and a parsed header map that joins duplicates (or
+ * keeps the last) hands the forgery to every reader.
+ */
+export function trustedGmailLabels(
+  headersRaw: string,
+  decode: (value: string) => string = (value) => value,
+): GmailLabelsVerdict {
+  let labels: string | undefined;
+  let seenLabels = false;
+  let seenTransport = false;
+  let sentLabelRefused = false;
+
+  for (const line of headersRaw.split(/\r?\n/)) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) {
+      continue;
+    }
+
+    const name = line.slice(0, idx).trim().toLowerCase();
+
+    if (name === 'x-gmail-labels') {
+      const value = decode(line.slice(idx + 1).trim());
+      if (!seenLabels && !seenTransport) {
+        labels = value;
+      } else if (hasSentLabel(value)) {
+        sentLabelRefused = true;
+      }
+
+      seenLabels = true;
+    } else if (TRANSPORT_HEADERS.has(name)) {
+      seenTransport = true;
+    }
+  }
+
+  return { labels, sentLabelRefused };
+}
+
+/**
+ * Replace every `X-Gmail-Labels` entry of a parsed header map with the one
+ * {@link trustedGmailLabels} reads from the same raw header block, so the
+ * direction, draft and bulk readers only ever see Google's labels. Returns the
+ * verdict, whose `sentLabelRefused` the importers carry to the push. `decode`
+ * is the importer's encoded-word decoder, so the value matches what its own
+ * header parser stores.
+ */
+export function keepTrustedGmailLabels(
+  headers: Record<string, string>,
+  headersRaw: string,
+  decode?: (value: string) => string,
+): GmailLabelsVerdict {
+  const verdict = trustedGmailLabels(headersRaw, decode);
+
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === 'x-gmail-labels') {
+      delete headers[k];
+    }
+  }
+
+  if (verdict.labels !== undefined) {
+    headers['X-Gmail-Labels'] = verdict.labels;
+  }
+
+  return verdict;
+}
+
 /** True when the X-Gmail-Labels header contains the `Sent` label. */
 export function hasSentLabel(labelsHeader: string | undefined): boolean {
   if (!labelsHeader) {
