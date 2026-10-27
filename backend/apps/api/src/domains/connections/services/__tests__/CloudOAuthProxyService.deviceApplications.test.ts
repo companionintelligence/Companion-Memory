@@ -19,7 +19,12 @@ import type { LoggerService } from '@ci/common/logging';
 import { CloudOAuthProxyService } from '../CloudOAuthProxyService';
 
 describe('CloudOAuthProxyService.getDeviceApplications', () => {
-  const logger = { setContext: jest.fn(), warn: jest.fn(), debug: jest.fn(), log: jest.fn() } as unknown as LoggerService;
+  const logger = {
+    setContext: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+  } as unknown as LoggerService;
   const fetchMock = jest.fn();
   const realFetch = global.fetch;
 
@@ -36,7 +41,9 @@ describe('CloudOAuthProxyService.getDeviceApplications', () => {
   // Basic auth, the key was ignored and the call answered 401, so every installed agent that was
   // not connected yet counted as not installed.
   it('sends the device key the way Companion Portal reads it on this route', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ applications: [{ name: 'ci-hermes' }] }), { status: 200 }));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ applications: [{ name: 'ci-hermes' }] }), { status: 200 }),
+    );
 
     const apps = await new CloudOAuthProxyService(logger).getDeviceApplications();
 
@@ -47,9 +54,14 @@ describe('CloudOAuthProxyService.getDeviceApplications', () => {
   });
 
   it('answers an empty list when Companion Portal refuses', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: 'Invalid Device Key' }), { status: 401 }));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Invalid Device Key' }), { status: 401 }),
+    );
 
     await expect(new CloudOAuthProxyService(logger).getDeviceApplications()).resolves.toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith('CI Portal device applications request failed', expect.objectContaining({ status: 401 }));
+    expect(logger.warn).toHaveBeenCalledWith(
+      'CI Portal device applications request failed',
+      expect.objectContaining({ status: 401 }),
+    );
   });
 });

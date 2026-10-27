@@ -196,7 +196,10 @@ export async function readFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
  * Returns `[target]` unchanged when TimescaleDB is not installed, which is what
  * makes the same code path work against a test database without the extension.
  */
-export async function expandToPhysicalTables(executor: SqlExecutor, target: TableRef): Promise<PhysicalTable[]> {
+export async function expandToPhysicalTables(
+  executor: SqlExecutor,
+  target: TableRef,
+): Promise<PhysicalTable[]> {
   const table = { schema: target.schema, table: target.table, compressed: false };
   const installed = (await executor.query(
     `SELECT 1 AS present FROM pg_extension WHERE extname = 'timescaledb'`,
@@ -215,6 +218,10 @@ export async function expandToPhysicalTables(executor: SqlExecutor, target: Tabl
   )) as Array<{ schema: string; table: string; compressed: boolean }>;
 
   return chunks.length > 0
-    ? chunks.map((chunk) => ({ schema: chunk.schema, table: chunk.table, compressed: chunk.compressed === true }))
+    ? chunks.map((chunk) => ({
+        schema: chunk.schema,
+        table: chunk.table,
+        compressed: chunk.compressed === true,
+      }))
     : [table];
 }

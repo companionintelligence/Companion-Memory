@@ -100,11 +100,21 @@ describe('useCurrentUser', () => {
     });
 
     it.each([
-      ['a network failure', { networkError: Object.assign(new Error('Failed to fetch'), {}), graphQLErrors: [] }],
-      ['a gateway 502', { networkError: Object.assign(new Error('502'), { statusCode: 502 }), graphQLErrors: [] }],
+      [
+        'a network failure',
+        { networkError: Object.assign(new Error('Failed to fetch'), {}), graphQLErrors: [] },
+      ],
+      [
+        'a gateway 502',
+        { networkError: Object.assign(new Error('502'), { statusCode: 502 }), graphQLErrors: [] },
+      ],
       [
         'a server error with the database down',
-        { graphQLErrors: [{ message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } }] },
+        {
+          graphQLErrors: [
+            { message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+          ],
+        },
       ],
     ])('reports unreachable rather than signed out after %s', (_label, error) => {
       mockedUseQuery.mockReturnValue({
@@ -121,7 +131,10 @@ describe('useCurrentUser', () => {
     });
 
     it.each([
-      ['an UNAUTHENTICATED answer', { graphQLErrors: [{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }] }],
+      [
+        'an UNAUTHENTICATED answer',
+        { graphQLErrors: [{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }] },
+      ],
       ['a 401', { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] }],
     ])('is not unreachable after %s, which is the server saying no', (_label, error) => {
       mockedUseQuery.mockReturnValue({

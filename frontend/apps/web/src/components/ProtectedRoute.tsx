@@ -20,7 +20,8 @@ export function ProtectedRoute({
   fallback?: ReactNode;
 }) {
   const location = useLocation();
-  const [{ expired, loading: authLoading, authToken, unreachable: sessionUnreachable }, { refresh }] = useAuth();
+  const [{ expired, loading: authLoading, authToken, unreachable: sessionUnreachable }, { refresh }] =
+    useAuth();
   const { user, loading: userLoading, unreachable: profileUnreachable, refetch } = useCurrentUser();
   const [triedRecover, setTriedRecover] = useState(false);
   // Once the signed-in app has been shown, a later `me` refetch must not swap

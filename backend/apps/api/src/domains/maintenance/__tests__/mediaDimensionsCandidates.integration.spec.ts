@@ -6,7 +6,10 @@ import { STAGE_IDS } from '@ci/domains/pipeline';
 
 import { createSyntheticTestUser } from '../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../__tests__/support/databaseConnection';
-import { MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, MEDIA_DIMENSIONS_STAGE_ID } from '../mediaDimensionsCandidates';
+import {
+  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
+  MEDIA_DIMENSIONS_STAGE_ID,
+} from '../mediaDimensionsCandidates';
 
 /**
  * The count behind `backfill-media-dimensions` and the nightly leg, against the
@@ -64,7 +67,14 @@ describeWithDatabase(`media-dimensions candidate count (${availability.target})`
     await dataSource.query(
       `INSERT INTO ci.pipeline_state (entity_type, entity_id, stage, stage_version, status, reason, next_attempt_at, user_id)
        VALUES ('file', $1::uuid, $2, 1, $3, $4, $5, $6::uuid)`,
-      [fileId, MEDIA_DIMENSIONS_STAGE_ID, status, status === 'skipped' ? 'probe_failed' : null, nextAttemptAt, userId],
+      [
+        fileId,
+        MEDIA_DIMENSIONS_STAGE_ID,
+        status,
+        status === 'skipped' ? 'probe_failed' : null,
+        nextAttemptAt,
+        userId,
+      ],
     );
   };
 

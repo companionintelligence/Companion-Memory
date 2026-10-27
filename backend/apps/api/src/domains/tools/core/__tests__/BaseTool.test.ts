@@ -51,7 +51,10 @@ describe('BaseTool error handling', () => {
   it('still logs the stack on the server', async () => {
     const log = logger();
 
-    await new ThrowingTool(log as unknown as LoggerService).execute({ userId: 'user-1' } as RequestContext, {});
+    await new ThrowingTool(log as unknown as LoggerService).execute(
+      { userId: 'user-1' } as RequestContext,
+      {},
+    );
 
     expect(log.error).toHaveBeenCalledWith(
       'Tool execution failed',

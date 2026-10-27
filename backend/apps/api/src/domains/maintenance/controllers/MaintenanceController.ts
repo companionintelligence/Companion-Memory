@@ -45,7 +45,10 @@ import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-nex
 
 import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
-import { MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, MEDIA_DIMENSIONS_STAGE_ID } from '../mediaDimensionsCandidates';
+import {
+  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
+  MEDIA_DIMENSIONS_STAGE_ID,
+} from '../mediaDimensionsCandidates';
 import {
   type CommunicationLinkBackfillProgress,
   type CommunicationLinkBackfillResult,

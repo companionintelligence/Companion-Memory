@@ -519,10 +519,13 @@ describe('BulkIngestController', () => {
     it('explains a position with no location instead of echoing the chunk name', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockRejectedValueOnce(
-        queryFailed('new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"', {
-          code: '23514',
-          constraint: 'valid_positioning',
-        }),
+        queryFailed(
+          'new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"',
+          {
+            code: '23514',
+            constraint: 'valid_positioning',
+          },
+        ),
       );
 
       const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
@@ -543,9 +546,12 @@ describe('BulkIngestController', () => {
     it('answers any other database error with its SQLSTATE, not the driver text', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockRejectedValueOnce(
-        queryFailed('null value in column "source" of relation "_hyper_13_2_chunk" violates not-null constraint', {
-          code: '23502',
-        }),
+        queryFailed(
+          'null value in column "source" of relation "_hyper_13_2_chunk" violates not-null constraint',
+          {
+            code: '23502',
+          },
+        ),
       );
 
       const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
@@ -559,10 +565,13 @@ describe('BulkIngestController', () => {
     it('carries the same reason down the NDJSON path', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockRejectedValueOnce(
-        queryFailed('new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"', {
-          code: '23514',
-          constraint: 'valid_positioning',
-        }),
+        queryFailed(
+          'new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"',
+          {
+            code: '23514',
+            constraint: 'valid_positioning',
+          },
+        ),
       );
 
       const res = await controller.ingestPositions(ctx, ndjsonReq(`${JSON.stringify(fix)}\n`), undefined);

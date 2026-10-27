@@ -267,7 +267,9 @@ describe('ExplorerToolbar', () => {
       });
 
       it('leaves the start alone while an earlier end is typed digit by digit, then starts the range there', () => {
-        renderToolbar(<MemoryExplorerFilterControls />, { route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) });
+        renderToolbar(<MemoryExplorerFilterControls />, {
+          route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)),
+        });
         fireEvent.click(screen.getByRole('button', { name: /3\/1\/2025|1\/3\/2025/ }));
 
         const end = screen.getByLabelText('End date');

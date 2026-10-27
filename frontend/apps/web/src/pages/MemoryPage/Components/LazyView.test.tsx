@@ -36,7 +36,9 @@ describe('LazyView', () => {
     // Chromium keeps a failed module fetch in the document's module map, so a
     // fresh import() of the same chunk rejects without a request. Only a reload
     // fetches it again.
-    const { load, calls } = failingOnce(new Error('Failed to fetch dynamically imported module: /assets/MapView.js'));
+    const { load, calls } = failingOnce(
+      new Error('Failed to fetch dynamically imported module: /assets/MapView.js'),
+    );
 
     render(<LazyView viewKey="map" load={load} />);
 

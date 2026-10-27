@@ -1658,7 +1658,10 @@ if (!parsed.llm.utilityModel) {
  */
 export const DEFAULT_HUB_INTERNAL_URL = 'http://ci-os-hub:5002';
 
-export function resolveHubInternalUrl(configured: string | undefined, hubInferenceUrl: string | undefined): string {
+export function resolveHubInternalUrl(
+  configured: string | undefined,
+  hubInferenceUrl: string | undefined,
+): string {
   const explicit = configured?.trim();
 
   if (explicit) {
@@ -1678,7 +1681,10 @@ export function resolveHubInternalUrl(configured: string | undefined, hubInferen
   return DEFAULT_HUB_INTERNAL_URL;
 }
 
-parsed.auth.connect.hubInternalUrl = resolveHubInternalUrl(parsed.auth.connect.hubInternalUrl, process.env.HUB_INFERENCE_URL);
+parsed.auth.connect.hubInternalUrl = resolveHubInternalUrl(
+  parsed.auth.connect.hubInternalUrl,
+  process.env.HUB_INFERENCE_URL,
+);
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's

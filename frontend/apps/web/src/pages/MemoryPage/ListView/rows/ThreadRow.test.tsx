@@ -1,8 +1,14 @@
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { ThreadGridItem, THREAD_FRAGMENT as GRID_THREAD_FRAGMENT } from '@/components/entities/grid/ThreadGridItem';
-import { ThreadResult, THREAD_FRAGMENT as RESULT_THREAD_FRAGMENT } from '@/components/SearchBox/results/ThreadResult';
+import {
+  ThreadGridItem,
+  THREAD_FRAGMENT as GRID_THREAD_FRAGMENT,
+} from '@/components/entities/grid/ThreadGridItem';
+import {
+  ThreadResult,
+  THREAD_FRAGMENT as RESULT_THREAD_FRAGMENT,
+} from '@/components/SearchBox/results/ThreadResult';
 import { makeFragmentData } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -23,12 +29,16 @@ describe('untitled chat threads', () => {
   });
 
   it('treats a blank title as untitled and keeps a real one', () => {
-    const { unmount } = renderWithProviders(<ThreadRow thread={makeFragmentData(thread('  '), THREAD_FRAGMENT)} />);
+    const { unmount } = renderWithProviders(
+      <ThreadRow thread={makeFragmentData(thread('  '), THREAD_FRAGMENT)} />,
+    );
 
     expect(screen.getByText('Untitled chat')).toBeInTheDocument();
     unmount();
 
-    renderWithProviders(<ThreadRow thread={makeFragmentData(thread('Spring cafe plans'), THREAD_FRAGMENT)} />);
+    renderWithProviders(
+      <ThreadRow thread={makeFragmentData(thread('Spring cafe plans'), THREAD_FRAGMENT)} />,
+    );
 
     expect(screen.getByText('Spring cafe plans')).toBeInTheDocument();
     expect(screen.queryByText('Untitled chat')).not.toBeInTheDocument();

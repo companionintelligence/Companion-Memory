@@ -183,7 +183,9 @@ describe('Chat', () => {
       },
     });
 
-    const { container } = renderWithProviders(<Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />);
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
 
     await waitFor(() => expect(container.textContent).toContain('Hello there.'));
     expect(warn).not.toHaveBeenCalledWith('Ignored unsupported chunk channel:', expect.anything());

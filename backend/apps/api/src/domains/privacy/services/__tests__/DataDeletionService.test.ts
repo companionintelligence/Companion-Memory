@@ -462,22 +462,22 @@ describe('DataDeletionService.deleteAccount', () => {
     const { service, store, query } = makeService({
       connections: [],
       store: {
-          'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-          'ci.summaries': [
-            { id: 's1', user: 'user-1' },
-            { id: 's2', user: 'user-2' },
-          ],
-          'ci.events': [
-            { id: 'e1', user: 'user-1' },
-            { id: 'e2', user: 'user-2' },
-          ],
-          'ci.content': [
-            { id: 'c1', user: 'user-1' },
-            { id: 'c2', user: 'user-2' },
-          ],
-          'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
-          'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
-          'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.summaries': [
+          { id: 's1', user: 'user-1' },
+          { id: 's2', user: 'user-2' },
+        ],
+        'ci.events': [
+          { id: 'e1', user: 'user-1' },
+          { id: 'e2', user: 'user-2' },
+        ],
+        'ci.content': [
+          { id: 'c1', user: 'user-1' },
+          { id: 'c2', user: 'user-2' },
+        ],
+        'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
+        'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
+        'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
       },
     });
 
