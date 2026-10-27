@@ -118,10 +118,12 @@ export interface AskQuery {
   prompt: string;
   /**
    * True when characters that render as nothing (zero-width spaces, bidi
-   * marks, soft hyphens) were stripped from the asker's prompt before it was
+   * controls, soft hyphens) were stripped from the asker's prompt before it was
    * stored. The stored prompt no longer holds them, so this is the only record
-   * the owner's review card has that the text it shows is not byte for byte
-   * what was sent. Absent means nothing was removed.
+   * the owner's review card has of that removal. Absent means none were
+   * removed. It does NOT cover the other rewrites `normalizeText` makes: the
+   * NFKC fold (fullwidth letters, ligatures, superscripts) and the whitespace
+   * collapse also change the stored text and leave this unset.
    */
   promptHiddenCharactersRemoved?: boolean;
   /**

@@ -16,6 +16,14 @@ describe('canonicalDataClass', () => {
     expect(canonicalDataClass('ｐｈｏｔｏｓ')).toBe('photos');
   });
 
+  it('folds the bidi controls too, which render as nothing between two letters', () => {
+    // Each of these displays as `photos` in the owner's Grant Manager, so each
+    // must canonicalize to it, or a `photos` block does not fire.
+    for (const control of ['\u202a', '\u202e', '\u2066', '\u2069', '\u061c']) {
+      expect(canonicalDataClass(`pho${control}tos`)).toBe('photos');
+    }
+  });
+
   it('answers null — never an empty string — for a value that names no class', () => {
     // The callers read "no class named" off a nullish value; `''` is not a
     // class the owner wrote down.
@@ -67,7 +75,15 @@ describe('canonicalQueryType', () => {
 
 describe('hasInvisibleCharacters', () => {
   it('is true exactly when normalizeText would strip a character that renders as nothing', () => {
-    for (const value of ['lake\u200b photos', 'soft\u00adhyphen', '\ufeffbom', 'word\u2060joiner']) {
+    for (const value of [
+      'lake\u200b photos',
+      'soft\u00adhyphen',
+      '\ufeffbom',
+      'word\u2060joiner',
+      'right\u202eoverride',
+      'iso\u2066late\u2069',
+      'arabic\u061cmark',
+    ]) {
       expect(hasInvisibleCharacters(value)).toBe(true);
       expect(normalizeText(value)?.length).toBeLessThan(value.length);
     }

@@ -31,9 +31,12 @@
  * word into two.
  *
  * Zero-width space / non-joiner / joiner, word joiner, soft hyphen, the
- * bidi/isolate formatting marks, and the BOM.
+ * bidi marks (U+061C, U+200E/F), the bidi embedding and override controls
+ * (U+202A to U+202E), the bidi isolates (U+2066 to U+2069) and the deprecated
+ * formatting characters beside them, and the BOM. The same set the review
+ * card's `promptSafety.ts` treats as invisible or bidi.
  */
-const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\u206a-\u206f\ufeff]/gu;
+const INVISIBLE = /[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
 
 /**
  * Every Unicode character that reads as a space, mapped onto the ASCII one.

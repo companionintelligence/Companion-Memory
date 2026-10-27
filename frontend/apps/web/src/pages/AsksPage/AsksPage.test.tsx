@@ -45,6 +45,7 @@ function askRow(overrides: Record<string, unknown> = {}) {
       queryType: 'photos',
       dataClass: 'photos',
       prompt: 'Lake trip photos?',
+      promptHiddenCharactersRemoved: false,
     },
     ...overrides,
   };
@@ -107,6 +108,7 @@ function auditRow(overrides: Record<string, unknown> = {}) {
       queryType: 'photos',
       dataClass: 'photos',
       prompt: 'Lake trip photos?',
+      promptHiddenCharactersRemoved: false,
     },
     ...overrides,
   };
@@ -1637,6 +1639,35 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
     ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('says hidden characters were removed in the disclosure history too', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+      ...repeated(
+        historyOk([
+          auditRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+              promptHiddenCharactersRemoved: true,
+            },
+          }),
+        ]),
+      ),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
 
     expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
     expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
