@@ -13,7 +13,12 @@ import type {
 import type { AgentMemory } from '../entities/AgentMemoryEntity';
 
 import type { AgentMemoryService } from './AgentMemoryService';
-import { MemoryCompactionService, isNameGrounded } from './MemoryCompactionService';
+import {
+  EXTRACTION_SYSTEM_PROMPT,
+  MemoryCompactionService,
+  isNameGrounded,
+  isPromptExampleEcho,
+} from './MemoryCompactionService';
 
 /**
  * gemma3:270m, the utility model the Hub hands out, answered four agent notes
@@ -175,6 +180,30 @@ describe('isNameGrounded', () => {
     expect(isNameGrounded('the spare key', text)).toBe(true);
     expect(isNameGrounded('Foster + Partners', 'She works at Foster + Partners.')).toBe(true);
     expect(isNameGrounded('Zoë', 'lunch with Zoe')).toBe(true);
+    expect(isNameGrounded('box', 'two boxes in the attic')).toBe(true);
+    expect(isNameGrounded('party', 'she throws great parties')).toBe(true);
+  });
+
+  it("finds a name whose word only differs from the note's by an ending", () => {
+    expect(isNameGrounded('Vegetarianism', "I'm a vegetarian.")).toBe(true);
+    expect(isNameGrounded('Climbing', 'I climb on Tuesdays.')).toBe(true);
+    expect(isNameGrounded('Rock climbing', 'We went climbing at the rock gym.')).toBe(true);
+    expect(isNameGrounded('Photography', 'I photograph birds.')).toBe(true);
+    // Short words never stretch: "art" is not "artist", and "Anita" stays absent.
+    expect(isNameGrounded('Art', 'my brother is an artist')).toBe(false);
+    expect(isNameGrounded('Anita', 'Anitya is a word I like')).toBe(false);
+  });
+
+  it('finds "the user\'s ..." names in a first-person note', () => {
+    expect(isNameGrounded("the user's sister", 'My sister Mara is a doctor.')).toBe(true);
+    expect(isNameGrounded("the user's mother", 'My mother is a nurse.')).toBe(true);
+  });
+
+  it('finds names in scripts written without spaces between words', () => {
+    expect(isNameGrounded('北京', '我住在北京。')).toBe(true);
+    expect(isNameGrounded('東京', '来月東京に行きます')).toBe(true);
+    expect(isNameGrounded('서울', '저는 서울에 살아요')).toBe(true);
+    expect(isNameGrounded('上海', '我住在北京。')).toBe(false);
   });
 
   it('refuses names that are not there, in whole or in part', () => {
@@ -202,6 +231,38 @@ describe('MemoryCompactionService keeps only names that are in the notes', () =>
         droppedRelationships: 2,
       }),
     );
+  });
+
+  it('drops the echoed example even when a note names Anita or London but keeps the real names', async () => {
+    const notes = [...NOTES, 'Anita called about the invoice.', 'I spent a week in London.'];
+    const mixed = {
+      entities: [...REAL_EXTRACTION.entities, ...PROMPT_EXAMPLE.entities],
+      relationships: [...REAL_EXTRACTION.relationships, ...PROMPT_EXAMPLE.relationships],
+    };
+    const { service, created, relationshipService } = makeService([mixed]);
+
+    await service.compactForUser(
+      CONTEXT,
+      notes.map((content, i) => makeFragment(`frag-${i}`, content)),
+    );
+
+    expect(created).toEqual(['oat milk flat white', 'Brackenfold', 'Tullowmere', 'spare key']);
+    expect(relationshipService.upsert).toHaveBeenCalledTimes(1);
+    expect(relationshipService.upsert).not.toHaveBeenCalledWith(
+      CONTEXT,
+      expect.objectContaining({ type: 'SIBLING_OF' }),
+    );
+  });
+
+  it('recognises the example by its descriptions while the prompt shows it unchanged', () => {
+    expect(isPromptExampleEcho(PROMPT_EXAMPLE)).toBe(true);
+    expect(isPromptExampleEcho(REAL_EXTRACTION)).toBe(false);
+    expect(
+      isPromptExampleEcho({
+        entities: [{ name: 'Anita', description: 'a colleague who called about the invoice' }],
+      }),
+    ).toBe(false);
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain(`Example output: ${JSON.stringify(PROMPT_EXAMPLE)}\n`);
   });
 
   it('marks the notes processed once the retry budget is spent, still without storing the example', async () => {
@@ -240,6 +301,54 @@ describe('MemoryCompactionService keeps only names that are in the notes', () =>
 
     expect(created).toEqual(['oat milk flat white', 'Brackenfold', 'Tullowmere', 'spare key']);
     expect(relationshipService.upsert).toHaveBeenCalledTimes(1);
+    expect(processed(markProcessed)).toEqual(['frag-0', 'frag-1', 'frag-2', 'frag-3']);
+  });
+
+  it('retries an answer made only of relationships to names that are not in the notes', async () => {
+    const { service, created, relationshipService, markProcessed } = makeService([
+      { entities: [], relationships: PROMPT_EXAMPLE.relationships },
+    ]);
+
+    await service.compactForUser(CONTEXT, fragments());
+
+    expect(created).toEqual([]);
+    expect(relationshipService.upsert).not.toHaveBeenCalled();
+    expect(processed(markProcessed)).toEqual([]);
+  });
+
+  it('skips entries with a null, numeric or missing field instead of throwing', async () => {
+    const malformed = {
+      entities: [
+        null,
+        'Brackenfold',
+        { type: 'place', name: 42 },
+        { type: 7, name: 'Tullowmere' },
+        { type: 'place', name: 'Brackenfold' },
+      ],
+      relationships: [
+        null,
+        {
+          fromName: 'the user',
+          fromType: 5,
+          toName: 'Brackenfold',
+          toType: 'place',
+          relationshipType: 'LIVES_IN',
+        },
+        {
+          fromName: 'the user',
+          fromType: 'person',
+          toName: 'Brackenfold',
+          toType: 'place',
+          relationshipType: 9,
+        },
+      ],
+    };
+    const { service, created, relationshipService, markProcessed } = makeService([malformed]);
+
+    await expect(service.compactForUser(CONTEXT, fragments())).resolves.toBeUndefined();
+
+    expect(created).toEqual(['Brackenfold']);
+    expect(relationshipService.upsert).not.toHaveBeenCalled();
     expect(processed(markProcessed)).toEqual(['frag-0', 'frag-1', 'frag-2', 'frag-3']);
   });
 
