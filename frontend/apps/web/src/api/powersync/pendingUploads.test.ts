@@ -6,8 +6,8 @@ const h = vi.hoisted(() => ({
   error: undefined as Error | undefined,
 }));
 
-vi.mock('@powersync/react', () => ({
-  useQuery: () => ({ data: h.data, isLoading: false, error: h.error }),
+vi.mock('./replicaQuery', () => ({
+  useReplicaQuery: () => ({ data: h.data, isLoading: false, error: h.error, refresh: () => {} }),
 }));
 
 import { PENDING_UPLOADS_SQL, usePendingUploadsByTable } from './pendingUploads';
@@ -33,7 +33,7 @@ describe('usePendingUploadsByTable', () => {
 
   it('is empty where there is no database to ask (a browser, a replica still opening)', () => {
     h.data = [];
-    h.error = new Error('PowerSync not configured.');
+    h.error = undefined;
 
     expect(renderHook(() => usePendingUploadsByTable()).result.current).toEqual({});
   });

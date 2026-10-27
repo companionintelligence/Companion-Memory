@@ -16,8 +16,8 @@ const h = vi.hoisted(() => ({
   onUpdate: null as null | ((content: string) => void),
 }));
 
-vi.mock('@powersync/react', () => ({
-  useQuery: () => ({ data: h.note ? [h.note] : [], isLoading: false, error: undefined }),
+vi.mock('@/api/powersync/replicaQuery', () => ({
+  useReplicaQuery: () => ({ data: h.note ? [h.note] : [], isLoading: false, error: undefined, refresh: () => {} }),
 }));
 
 vi.mock('@/api/powersync/session', () => {

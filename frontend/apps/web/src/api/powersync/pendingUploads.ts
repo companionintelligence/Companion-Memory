@@ -7,10 +7,11 @@
  * offline counts as waiting the same way a position fix does. Each queue row's `data` is
  * JSON whose `type` is the table name (the SDK's `CrudEntry.fromRow`).
  *
- * Off native, or before the replica is open, there is no database in context and the
- * query hook answers with an error and no rows, which reads as nothing waiting.
+ * Off native, or before the replica is open, there is no replica to ask and the hook answers
+ * with no rows, which reads as nothing waiting (replicaQuery.ts: its hook order does not change
+ * when the replica opens, which matters here because the lock mirror is always mounted).
  */
-import { useQuery } from '@powersync/react';
+import { useReplicaQuery } from './replicaQuery';
 
 export const PENDING_UPLOADS_SQL =
   "SELECT json_extract(data, '$.type') AS tbl, count(*) AS n FROM ps_crud GROUP BY tbl";
@@ -22,7 +23,7 @@ interface PendingUploadRow {
 
 /** Rows waiting to upload, keyed by table name; kept current as the queue drains. */
 export function usePendingUploadsByTable(): Record<string, number> {
-  const { data } = useQuery<PendingUploadRow>(PENDING_UPLOADS_SQL);
+  const { data } = useReplicaQuery<PendingUploadRow>(PENDING_UPLOADS_SQL);
   const counts: Record<string, number> = {};
 
   for (const row of data ?? []) {

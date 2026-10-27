@@ -14,8 +14,9 @@
  * the device never writes `is_public` or `share_token`, it only shows them.
  */
 import { GlobalUID } from '@ci/common';
-import { useQuery } from '@powersync/react';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
+
+import { useReplicaQuery } from './replicaQuery';
 
 /** The filter set a saved search stores (mirrors the server's `SavedSearchFilters`). */
 export interface LocalSavedSearchFilters {
@@ -157,7 +158,7 @@ export function useLocalSavedSearches(options: { query?: string; isSeed?: boolea
   isLoading: boolean;
   error: Error | undefined;
 } {
-  const { data, isLoading, error } = useQuery<LocalSavedSearchRow>(LOCAL_SAVED_SEARCHES_SQL);
+  const { data, isLoading, error } = useReplicaQuery<LocalSavedSearchRow>(LOCAL_SAVED_SEARCHES_SQL);
   const searches = (data ?? [])
     .map(toLocalSavedSearch)
     .filter((search) => options.isSeed === undefined || search.isSeed === options.isSeed)
@@ -172,7 +173,7 @@ export function useLocalSavedSearch(id: string | null | undefined): {
   isLoading: boolean;
 } {
   const enabled = Boolean(id);
-  const { data, isLoading } = useQuery<LocalSavedSearchRow>(
+  const { data, isLoading } = useReplicaQuery<LocalSavedSearchRow>(
     enabled ? LOCAL_SAVED_SEARCH_SQL : 'SELECT 1 WHERE 0',
     enabled ? [id] : [],
   );

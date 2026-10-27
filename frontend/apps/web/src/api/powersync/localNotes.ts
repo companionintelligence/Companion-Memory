@@ -11,8 +11,9 @@
  * `user_id` is left for the server: the replica is one user's, and the row
  * PowerSync writes back carries it.
  */
-import { useQuery } from '@powersync/react';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
+
+import { useReplicaQuery } from './replicaQuery';
 
 /** A note as the device holds it (the `notes` table, sync-rules.yaml). */
 export interface LocalNote {
@@ -32,14 +33,14 @@ export const LOCAL_NOTE_SQL = `SELECT ${LOCAL_NOTE_COLUMNS} FROM notes WHERE id 
 
 /** Every note on the phone, kept current as the table changes. */
 export function useLocalNotes() {
-  return useQuery<LocalNote>(LOCAL_NOTES_SQL);
+  return useReplicaQuery<LocalNote>(LOCAL_NOTES_SQL);
 }
 
 /** One note, kept current; `id` undefined or `new` reads nothing. */
 export function useLocalNote(id: string | undefined) {
   const enabled = Boolean(id) && id !== 'new';
 
-  return useQuery<LocalNote>(enabled ? LOCAL_NOTE_SQL : 'SELECT 1 WHERE 0', enabled ? [id] : []);
+  return useReplicaQuery<LocalNote>(enabled ? LOCAL_NOTE_SQL : 'SELECT 1 WHERE 0', enabled ? [id] : []);
 }
 
 /** An ISO instant the way PowerSync will write it back: it sorts with the server's. */

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@powersync/react', () => ({ useQuery: vi.fn() }));
+vi.mock('./replicaQuery', () => ({ useReplicaQuery: vi.fn() }));
 
 import { createLocalNote, deleteLocalNote, LOCAL_NOTES_SQL, updateLocalNote } from './localNotes';
 

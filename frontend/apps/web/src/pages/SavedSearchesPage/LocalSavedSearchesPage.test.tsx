@@ -16,8 +16,8 @@ vi.mock('@/common/feature', async () => {
 vi.mock('@/api/powersync/session', () => ({
   getReplicaDatabase: () => ({ execute: h.execute }),
 }));
-vi.mock('@powersync/react', () => ({
-  useQuery: () => ({ data: h.rows, isLoading: false, error: undefined }),
+vi.mock('@/api/powersync/replicaQuery', () => ({
+  useReplicaQuery: () => ({ data: h.rows, isLoading: false, error: undefined, refresh: () => {} }),
 }));
 
 import { LocalSavedSearchesPage } from './LocalSavedSearchesPage';
