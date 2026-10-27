@@ -141,7 +141,8 @@ describe('AskAuditService SAID anchoring', () => {
 
     const said = service.computeSaid(payload);
     expect(said).toBeDefined();
-    expect(said).toMatch(/^E[A-Za-z0-9_-]{43}$/);
+    // Plain base64url of SHA-256, with no CESR code: it is not a KERI SAID (see auditSaid.ts).
+    expect(said).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     expect(service.verifySaid(payload, said)).toBe(true);
 

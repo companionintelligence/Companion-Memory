@@ -25,6 +25,7 @@ import { PeerAskService } from '../services/PeerAskService';
 import { PeerLinkService } from '../services/PeerLinkService';
 import { PeerRateLimitService } from '../services/PeerRateLimitService';
 import { PeerSignatureService } from '../services/PeerSignatureService';
+import { isSovereignKeyId, sovereignPublicJwk } from '../sovereignKeyId';
 
 /**
  * `/agent/v1` — the peer-facing surface, and the ONLY route another Companion
@@ -151,19 +152,16 @@ export class PeerAskController {
 
     const token = extractBearer(authorization);
     if (!token || token.toLowerCase() === 'keri') {
-      if (request?.headers['signature-input'] != null) {
-        try {
-          const { params } = parseSignatureHeaders(
-            header(request, 'signature-input'),
-            header(request, 'signature'),
-          );
-          if (params.keyid && params.keyid.startsWith('did:keri:')) {
-            return { issuer: 'did:keri', subject: params.keyid };
-          }
-        } catch {
-          // fall through to token check/rejection
-        }
+      // A SOVEREIGN peer: no Portal token, only a signature whose keyid is the
+      // self-certifying `did:keri:D<x>` (see `sovereignKeyId.ts`). This returns
+      // the CLAIMED identity and proves nothing yet: `assertSignature` must then
+      // find a `did:keri` link the owner made for exactly that AID and verify the
+      // signature, and every caller runs it before using the identity.
+      const keyid = request ? claimedKeyId(request) : null;
+      if (keyid != null && isSovereignKeyId(keyid)) {
+        return { issuer: SOVEREIGN_ISSUER, subject: keyid };
       }
+
       throw new UnauthorizedException('Missing bearer token');
     }
 
@@ -272,40 +270,22 @@ export class PeerAskController {
     // THE KEY AND THE TOKEN MUST AGREE ABOUT WHO THIS IS. Accepting any link
     // that merely holds the key would let peer A's signature authorize a
     // request carrying peer B's token — two halves of two different identities
-    // combining into one that neither party holds.
-    const link = links.find((candidate) => {
-      if (candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject) {
-        return true;
-      }
-      if (identity.issuer === 'did:keri') {
-        const rawAid = identity.subject.replace(/^did:keri:/, '');
-        if (
-          candidate.peerIssuer === 'did:keri' &&
-          (candidate.peerSubject === identity.subject || candidate.peerSubject === rawAid)
-        ) {
-          return true;
-        }
-        if (
-          candidate.peerKeyThumbprint === keyid ||
-          (candidate.peerKeyJwk as Record<string, unknown> | null)?.kid === keyid ||
-          (candidate.peerKeyJwk as Record<string, unknown> | null)?.aid === keyid
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
+    // combining into one that neither party holds. A sovereign peer has no
+    // token, so its identity is `did:keri` + the AID it signed with, and the
+    // same exact match applies: only a `did:keri` link naming that very AID
+    // (the full `did:keri:` form `PeerAskService` resolves it by) answers. A
+    // link the owner made for a Portal identity never answers a bare signature.
+    const sovereign = identity.issuer === SOVEREIGN_ISSUER;
+    const link = links.find(
+      (candidate) => candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject,
+    );
 
-    const peerKeyJwk =
-      link?.peerKeyJwk ??
-      (keyid.startsWith('did:keri:D')
-        ? {
-            kty: 'OKP',
-            crv: 'Ed25519',
-            x: keyid.slice('did:keri:D'.length),
-            kid: keyid,
-          }
-        : null);
+    // The key the link records always wins: an AID whose link holds a different
+    // key is refused, never verified against the key the AID spells out. Only a
+    // sovereign link with no key recorded falls back to that spelled-out key,
+    // which is the whole point of a self-certifying identifier — and only for
+    // the documented `did:keri:D<x>` form, never a CESR prefix or an `E` AID.
+    const peerKeyJwk = link?.peerKeyJwk ?? (sovereign && link ? sovereignPublicJwk(keyid) : null);
 
     if (link == null || peerKeyJwk == null) {
       this.logger.warn(`peer ask refused: no link binds key ${keyid} to ${identity.issuer}`);
@@ -370,6 +350,27 @@ function originOf(endpoint: string | undefined): string | null {
     return new URL(trimmed).origin;
   } catch {
     return null;
+  }
+}
+
+/** The issuer a sovereign peer link carries: its subject is the peer's `did:keri:` AID. */
+const SOVEREIGN_ISSUER = 'did:keri';
+
+/** The keyid a request's signature names, unverified; null when there is none to read. */
+function claimedKeyId(request: RawBodyRequest): string | null {
+  if (request.headers['signature-input'] == null) {
+    return null;
+  }
+
+  try {
+    return parseSignatureHeaders(header(request, 'signature-input'), header(request, 'signature')).params
+      .keyid;
+  } catch (error) {
+    if (error instanceof SignatureFormatError) {
+      return null;
+    }
+
+    throw error;
   }
 }
 

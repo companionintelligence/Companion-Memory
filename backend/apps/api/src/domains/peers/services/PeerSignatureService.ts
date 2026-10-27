@@ -23,6 +23,7 @@ import {
   verifyContentDigest,
   verifySignatureBase,
 } from '../httpSignature';
+import { sovereignKeyIdFor } from '../sovereignKeyId';
 
 /**
  * How far a peer's clock may be ahead of ours before a signature is refused.
@@ -173,20 +174,14 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unknown-key' };
     }
 
-    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH (or its KERI AID).
-    // Without this the `keyid` is decorative: a sender could name any key at all
-    // and still be verified against whichever one the link happens to hold.
-    const jwkObj = request.peerPublicJwk as Record<string, unknown>;
-    const isKeriAid = parsed.params.keyid.startsWith('did:keri:');
-    const aid = isKeriAid ? parsed.params.keyid.slice('did:keri:'.length) : '';
+    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH: its thumbprint, or
+    // the sovereign `did:keri:D<x>` that spells out this very key. Without this
+    // the `keyid` is decorative: a sender could name any key at all and still be
+    // verified against whichever one the link happens to hold. A label on the
+    // stored JWK (`kid`, `aid`) is not the key, so it never counts.
     const matchesKey =
       parsed.params.keyid === thumbprint ||
-      (isKeriAid && (
-        jwkObj.kid === parsed.params.keyid ||
-        jwkObj.aid === parsed.params.keyid ||
-        jwkObj.kid === aid ||
-        (aid.startsWith('D') && jwkObj.x === aid.slice(1))
-      ));
+      parsed.params.keyid === sovereignKeyIdFor(request.peerPublicJwk as Record<string, unknown>);
 
     if (!matchesKey) {
       return { ok: false, reason: 'unknown-key' };
@@ -318,7 +313,10 @@ export class PeerSignatureService {
       // The thumbprint identifies the PUBLIC half; `d` is dropped by taking
       // only the three required OKP members.
       const thumbprint = jwkThumbprint(jwk as Record<string, unknown>);
-      const keyid = typeof jwk.kid === 'string' ? jwk.kid : (typeof jwk.aid === 'string' ? jwk.aid : undefined);
+      // A `kid` changes the outbound keyid only when it is the sovereign AID of
+      // this very key. Any other `kid` (a label, a CESR prefix) is left out, as
+      // it always was: peers verify the keyid, and would refuse it.
+      const keyid = typeof jwk.kid === 'string' && jwk.kid === sovereignKeyIdFor(jwk) ? jwk.kid : undefined;
 
       this.cachedSigningKey = { key, thumbprint, ...(keyid ? { keyid } : {}) };
     } catch (error) {

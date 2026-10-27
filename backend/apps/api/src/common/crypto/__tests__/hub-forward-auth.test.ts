@@ -113,6 +113,28 @@ describe('hub-forward-auth stable id', () => {
     });
   });
 
+  it('carries the KERI headers beside the signed id only as unsigned hints, and drops malformed ones', () => {
+    // No signature covers these: changing them leaves the result verified, which is exactly why
+    // nothing may treat them as identity (see UnsignedKeriHints).
+    const aid = 'did:keri:EAnyoneCanTypeThis_0000000000000000000000000';
+    const result = verifyForwardAuthHeaders(
+      SECRET,
+      {
+        ...stableHeadersFor('alice@example.com', NOW),
+        userAid: aid,
+        hubAid: 'did:keri:short',
+        kelDigest: 'not a digest',
+      },
+      { now: NOW },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      username: 'alice@example.com',
+      stableId: { issuer: ISSUER, subject: USER_ID, unsignedKeri: { userAid: aid } },
+    });
+  });
+
   it('is signature-compatible with the canonical id message the Hub signs', () => {
     // Mirror of CI-Hub packages/backend/src/modules/auth/utils/forward-auth-signing.ts
     expect(buildForwardAuthUserIdMessage(ISSUER, USER_ID, 'alice', NOW)).toBe(
@@ -520,6 +542,9 @@ describe('readForwardAuthHeaders', () => {
       userId: null,
       userIdSignature: null,
       assertion: `2.${NONCE}.sig`,
+      userAid: null,
+      hubAid: null,
+      kelDigest: null,
     });
   });
 });

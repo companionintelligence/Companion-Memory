@@ -74,10 +74,43 @@ export interface ForwardAuthHeaders {
   userIdSignature?: string | null;
   /** `2.<nonce>.<signature>`, from a Hub that gave this app a key of its own. */
   assertion?: string | null;
+  /** Unsigned: see {@link UnsignedKeriHints}. */
   userAid?: string | null;
+  /** Unsigned: see {@link UnsignedKeriHints}. */
   hubAid?: string | null;
+  /** Unsigned: see {@link UnsignedKeriHints}. */
   kelDigest?: string | null;
 }
+
+/**
+ * The KERI identifiers a Hub sends beside a stable id: `X-CI-Hub-User-AID`, `X-CI-Hub-AID` and
+ * `X-CI-Hub-KEL-Digest`.
+ *
+ * ═══ NOTHING HERE IS SIGNED ═══
+ *
+ * No signature covers these headers: not the stable-id HMAC, not the bound assertion (the Hub's
+ * `buildForwardAuthAssertionMessage` signs audience, nonce, timestamp, username, issuer and id,
+ * and nothing else). Nor does the Hub's Traefik list them in `authResponseHeaders`, so a
+ * visitor's own copy reaches this app untouched. Each is whatever the browser chose to send.
+ *
+ * An AID is a public identifier, so treating one as an identity would let anyone signed in to
+ * the Hub name somebody else's and be signed in as them. They are kept only as hints: format
+ * checked, never looked up ahead of the signed (issuer, subject), never bound to an account.
+ * Binding a person's AID needs the Hub to sign it first (a new assertion version).
+ */
+interface UnsignedKeriHints {
+  /** The person's KERI AID, `did:keri:<44 base64url characters>`. Unsigned. */
+  userAid?: string;
+  /** The Hub appliance's KERI AID, same form. Unsigned. */
+  hubAid?: string;
+  /** Digest of the latest event in the person's KEL, 44 base64url characters. Unsigned. */
+  kelDigest?: string;
+}
+
+/** A KERI AID as a DID: a 44-character qb64 prefix, nothing else. */
+const KERI_AID_DID_PATTERN = /^did:keri:[A-Za-z0-9_-]{44}$/;
+/** A 256-bit digest in qb64: 44 base64url characters. */
+const KEL_DIGEST_PATTERN = /^[A-Za-z0-9_-]{44}$/;
 
 /** A Hub person's stable identity: the (issuer, subject) pair `ci.federated_identities` binds. */
 export interface HubStableId {
@@ -85,12 +118,11 @@ export interface HubStableId {
   issuer: string;
   /** The Hub user's `public_id`: minted once per person, unchanged by any rename, never reused. */
   subject: string;
-  /** KERI Autonomic Identifier for user (`did:keri:...`). */
-  userAid?: string;
-  /** KERI Autonomic Identifier for Hub appliance (`did:keri:...`). */
-  hubAid?: string;
-  /** KEL latest event digest. */
-  kelDigest?: string;
+  /**
+   * KERI identifiers sent beside the stable id, only those well-formed. NOT covered by any
+   * signature: see {@link UnsignedKeriHints} before reading one.
+   */
+  unsignedKeri?: UnsignedKeriHints;
 }
 
 export type ForwardAuthVerifyResult =
@@ -221,18 +253,29 @@ export function verifyForwardAuthHeaders(
     return { ok: false, reason: 'bad_signature' };
   }
 
-  const { userAid, hubAid, kelDigest } = headers;
-  return {
-    ok: true,
-    username,
-    stableId: {
-      issuer,
-      subject: userId,
-      ...(userAid ? { userAid } : {}),
-      ...(hubAid ? { hubAid } : {}),
-      ...(kelDigest ? { kelDigest } : {}),
-    },
-  };
+  return { ok: true, username, stableId: withUnsignedKeriHints({ issuer, subject: userId }, headers) };
+}
+
+/**
+ * The stable id with whichever KERI hints are well-formed, the rest dropped. They were not part
+ * of anything verified above; see {@link UnsignedKeriHints}.
+ */
+function withUnsignedKeriHints(stableId: HubStableId, headers: ForwardAuthHeaders): HubStableId {
+  const hints: UnsignedKeriHints = {};
+
+  if (headers.userAid && KERI_AID_DID_PATTERN.test(headers.userAid)) {
+    hints.userAid = headers.userAid;
+  }
+
+  if (headers.hubAid && KERI_AID_DID_PATTERN.test(headers.hubAid)) {
+    hints.hubAid = headers.hubAid;
+  }
+
+  if (headers.kelDigest && KEL_DIGEST_PATTERN.test(headers.kelDigest)) {
+    hints.kelDigest = headers.kelDigest;
+  }
+
+  return Object.keys(hints).length > 0 ? { ...stableId, unsignedKeri: hints } : stableId;
 }
 
 /**
@@ -396,17 +439,10 @@ function verifyBoundAssertion(
     return { ok: false, reason: 'bad_signature' };
   }
 
-  const { userAid, hubAid, kelDigest } = headers;
   return {
     ok: true,
     username,
-    stableId: issuer && userId ? {
-      issuer,
-      subject: userId,
-      ...(userAid ? { userAid } : {}),
-      ...(hubAid ? { hubAid } : {}),
-      ...(kelDigest ? { kelDigest } : {}),
-    } : null,
+    stableId: issuer && userId ? withUnsignedKeriHints({ issuer, subject: userId }, headers) : null,
     bound: true,
     replayKey: nonce,
     expiresAt: timestampMs + maxSkewMs,

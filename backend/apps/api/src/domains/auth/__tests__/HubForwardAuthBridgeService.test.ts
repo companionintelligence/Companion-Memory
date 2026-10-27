@@ -918,42 +918,113 @@ describe('HubForwardAuthBridgeService', () => {
       expect(service.verifyIdentity(requestWith(headers, null))).toBeNull();
     });
 
-    it('binds and locates user by sovereign did:keri AID when userAid header is present', async () => {
-      const { service, federatedIdentityService, userService } = makeService();
-      const userAid = 'did:keri:Duser-aid-12345';
-      const headers = {
-        ...boundHeaders('alice@lifescope.io'),
-        'x-ci-hub-user-aid': userAid,
-        'x-ci-hub-aid': 'did:keri:Dhub-aid-67890',
-        'x-ci-hub-kel-digest': 'Ekel-digest-abcde',
-      };
+    describe('the KERI headers, which no signature covers', () => {
+      // 44 base64url characters after `did:keri:`, the only form kept.
+      const VICTIM_AID = 'did:keri:EVictimAid_000000000000000000000000000000000';
+      const HUB_AID = 'did:keri:EHubAid_000000000000000000000000000000000000';
+      const KEL_DIGEST = 'EKelDigest_000000000000000000000000000000000';
 
-      const user = account('usr-1', 'alice@lifescope.io');
-      userService.findAccountByEmail.mockResolvedValue(user);
+      /** Signed in as the Hub person DIRECTORY#HUB_ID, plus whatever KERI headers the browser added. */
+      function withKeri(username: string, keri: Record<string, string>) {
+        return { ...boundHeaders(username), ...keri };
+      }
 
-      const res = await service.alignSession(requestWith(headers, null), response());
-      expect(res.replaced).toBe(true);
+      it('keeps the well-formed ones beside the signed stable id, marked unsigned', () => {
+        const { service } = makeService();
+        const headers = withKeri('hello@lifescope.io', {
+          'x-ci-hub-user-aid': VICTIM_AID,
+          'x-ci-hub-aid': HUB_AID,
+          'x-ci-hub-kel-digest': KEL_DIGEST,
+        });
 
-      // Verify that did:keri binding was created
-      expect(federatedIdentityService.bind).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'usr-1',
-          issuer: 'did:keri',
-          subject: userAid,
-        }),
-      );
-
-      // Now verify locate finds by did:keri first
-      federatedIdentityService.findUserId.mockImplementation((issuer: string, subject: string) => {
-        if (issuer === 'did:keri' && subject === userAid) return Promise.resolve('usr-1');
-        return Promise.resolve(null);
+        expect(service.verifyIdentity(requestWith(headers, null))).toEqual({
+          username: 'hello@lifescope.io',
+          stableId: {
+            issuer: DIRECTORY,
+            subject: HUB_ID,
+            unsignedKeri: { userAid: VICTIM_AID, hubAid: HUB_AID, kelDigest: KEL_DIGEST },
+          },
+        });
       });
-      userService.findById.mockResolvedValue(user);
 
-      const described = await service.describeIdentity(requestWith(headers, null));
-      expect(described).toEqual({
-        username: 'alice@lifescope.io',
-        accountId: 'usr-1',
+      it('drops malformed ones', () => {
+        const { service } = makeService();
+        const headers = withKeri('hello@lifescope.io', {
+          'x-ci-hub-user-aid': 'did:keri:Duser-aid-12345',
+          'x-ci-hub-aid': `${HUB_AID}\nx`,
+          'x-ci-hub-kel-digest': 'not a digest',
+        });
+
+        expect(service.verifyIdentity(requestWith(headers, null))).toEqual({
+          username: 'hello@lifescope.io',
+          stableId: { issuer: DIRECTORY, subject: HUB_ID },
+        });
+      });
+
+      it('SECURITY: signs in as the signed identity, never as the account an AID header names', async () => {
+        // An AID is public. Were the header an identity, anyone signed in to the Hub could name
+        // someone else's and be signed in as them.
+        const { service, userService, authService, federatedIdentityService } = makeService();
+        federatedIdentityService.findUserId.mockImplementation(async (issuer: string, subject: string) => {
+          if (issuer === 'did:keri' && subject === VICTIM_AID) {
+            return 'user-victim';
+          }
+
+          return issuer === DIRECTORY && subject === HUB_ID ? 'user-a' : null;
+        });
+        userService.findById.mockImplementation(async (_ctx: unknown, id: string) =>
+          account(id, id === 'user-a' ? 'hello@lifescope.io' : 'victim@lifescope.io'),
+        );
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await expect(service.alignSession(requestWith(headers, null), response())).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          replaced: true,
+          accessToken: 'access-hello',
+        });
+        expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
+        expect(authService.issueSessionToken).not.toHaveBeenCalledWith('user-victim', expect.anything());
+        expect(federatedIdentityService.findUserId).not.toHaveBeenCalledWith('did:keri', expect.anything());
+        expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+        await expect(service.describeIdentity(requestWith(headers, null))).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: 'user-a',
+        });
+      });
+
+      it("SECURITY: never binds an AID header to the account, so nobody can squat someone else's", async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        // First sight, adopted by address.
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await service.alignSession(requestWith(headers, null), response());
+
+        expect(federatedIdentityService.bind).toHaveBeenCalledTimes(1);
+        expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user-a', issuer: DIRECTORY, subject: HUB_ID }),
+        );
+      });
+
+      it('never binds an AID header to an account it creates either', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        const created = account('user-new', 'hello@lifescope.io');
+        userService.create.mockImplementation(
+          async (_ctx: unknown, _dto: unknown, alongside: (m: unknown, u: unknown) => Promise<unknown>) => {
+            await alongside({ marker: 'txn' }, created);
+
+            return created;
+          },
+        );
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await service.alignSession(requestWith(headers, null), response());
+
+        expect(federatedIdentityService.bind).toHaveBeenCalledTimes(1);
+        expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user-new', issuer: DIRECTORY, subject: HUB_ID }),
+          expect.anything(),
+        );
       });
     });
   });

@@ -14,6 +14,7 @@ import {
   type PeerLinkStatus,
   type PeerTrustTier,
 } from '../entities/PeerLinkEntity';
+import { isSovereignKeyId } from '../sovereignKeyId';
 
 export interface CreatePeerLinkDto {
   peerHandle: string;
@@ -374,12 +375,15 @@ export class PeerLinkService {
       { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
     ];
 
-    if (thumbprint.startsWith('did:keri:')) {
-      const rawAid = thumbprint.slice('did:keri:'.length);
-      whereConditions.push(
-        { peerIssuer: 'did:keri', peerSubject: thumbprint, status: 'active', revokedAt: IsNull() },
-        { peerIssuer: 'did:keri', peerSubject: rawAid, status: 'active', revokedAt: IsNull() },
-      );
+    // A sovereign keyid IS the peer's AID, so the link that names it is found by
+    // its identity, whether or not it records the key (see `sovereignKeyId.ts`).
+    if (isSovereignKeyId(thumbprint)) {
+      whereConditions.push({
+        peerIssuer: 'did:keri',
+        peerSubject: thumbprint,
+        status: 'active',
+        revokedAt: IsNull(),
+      });
     }
 
     const rows = await this.repository.find({

@@ -228,34 +228,127 @@ describe('PeerAskController — signatures required', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
-  it('authenticates sovereign KERI peer directly without Portal token', async () => {
-    const raw = JSON.stringify(BODY);
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    const pubJwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
-    const keriAid = `did:keri:D${pubJwk.x}`;
-    const privJwk = { ...privateKey.export({ format: 'jwk' }), kid: keriAid };
+  describe('a sovereign peer: no Portal token, a did:keri:D<x> keyid', () => {
+    /** A peer key, its self-certifying AID, and the headers a peer signing under that AID sends. */
+    function signSovereign(rawBody: string | undefined, method = 'POST', targetUri = `${ENDPOINT}/ask`) {
+      const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+      const publicJwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+      const aid = `did:keri:D${publicJwk.x as string}`;
+      peersConfig.signingKeyJwk = JSON.stringify({ ...privateKey.export({ format: 'jwk' }), kid: aid });
+      const signer = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
+      const headers = signer.signOutbound({ method, targetUri, body: rawBody }) as Record<string, string>;
+      delete peersConfig.signingKeyJwk;
 
-    peersConfig.signingKeyJwk = JSON.stringify(privJwk);
-    const signer = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
-    const headers = signer.signOutbound({ method: 'POST', targetUri: `${ENDPOINT}/ask`, body: raw }) as Record<string, string>;
-    delete peersConfig.signingKeyJwk;
+      return { publicJwk, aid, headers };
+    }
 
-    const keriLink = {
-      peerHandle: 'sovereign-peer',
-      peerIssuer: 'did:keri',
-      peerSubject: keriAid,
-      peerKeyJwk: pubJwk,
-    };
+    function sovereignLink(aid: string, peerKeyJwk: Record<string, unknown> | null) {
+      return { peerHandle: 'sovereign-peer', peerIssuer: 'did:keri', peerSubject: aid, peerKeyJwk };
+    }
 
-    const { controller, peerAskService, portalTokenVerifier } = makeController([keriLink]);
+    it('is authenticated by its signature, against the key its link records', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      expect(peer.headers['signature-input']).toContain(`keyid="${peer.aid}"`);
+      const { controller, peerAskService, portalTokenVerifier } = makeController([
+        sovereignLink(peer.aid, peer.publicJwk),
+      ]);
 
-    const res = await controller.ask('Bearer keri', request(headers, raw), BODY);
-    expect(res).toEqual({ askId: 'abc12345', status: 'pending' });
-    expect(portalTokenVerifier.verifyClaims).not.toHaveBeenCalled();
-    expect(peerAskService.handle).toHaveBeenCalledWith(
-      { issuer: 'did:keri', subject: keriAid },
-      BODY,
-      expect.objectContaining({ covered: expect.any(Array) }),
-    );
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).resolves.toEqual({
+        askId: 'abc12345',
+        status: 'pending',
+      });
+      expect(portalTokenVerifier.verifyClaims).not.toHaveBeenCalled();
+      expect(peerAskService.handle).toHaveBeenCalledWith(
+        { issuer: 'did:keri', subject: peer.aid },
+        BODY,
+        expect.objectContaining({ covered: expect.any(Array) }),
+      );
+    });
+
+    it('verifies against the key the AID spells out when its link records none', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const { controller, peerAskService } = makeController([sovereignLink(peer.aid, null)]);
+
+      await controller.ask(undefined, request(peer.headers, raw), BODY);
+
+      expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a tampered signature', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const signature = peer.headers.signature;
+      // Flip one character inside the base64 signature, keeping it well-formed.
+      const at = signature.indexOf(':') + 5;
+      const flipped = signature[at] === 'A' ? 'B' : 'A';
+      const tampered = {
+        ...peer.headers,
+        signature: `${signature.slice(0, at)}${flipped}${signature.slice(at + 1)}`,
+      };
+      const { controller, peerAskService } = makeController([sovereignLink(peer.aid, null)]);
+
+      await expect(controller.ask('Bearer keri', request(tampered, raw), BODY)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
+
+    it('refuses an AID nobody linked', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const { controller, peerAskService } = makeController([]);
+
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
+
+    it("refuses an AID whose link records a different key, rather than trusting the AID's own", async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const recorded = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<
+        string,
+        unknown
+      >;
+      const { controller, peerAskService } = makeController([sovereignLink(peer.aid, recorded)]);
+
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
+
+    it('is never answered by a link the owner made for a Portal identity, even one holding the key', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const { controller, peerAskService } = makeController([
+        link(peer.publicJwk),
+        link({}, { peerKeyJwk: null }),
+      ]);
+
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
+
+    it('refuses a did:keri keyid in any other form (a CESR prefix, an E AID): no bare signature for those', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = signSovereign(raw);
+      const eAid = 'did:keri:EAskerSovereignAID_0000000000000000000000000';
+      const headers = {
+        ...peer.headers,
+        'signature-input': peer.headers['signature-input'].replace(peer.aid, eAid),
+      };
+      const { controller, peerAskService } = makeController([sovereignLink(eAid, peer.publicJwk)]);
+
+      await expect(controller.ask('Bearer keri', request(headers, raw), BODY)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
   });
 });

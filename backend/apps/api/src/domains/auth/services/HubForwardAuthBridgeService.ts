@@ -408,22 +408,6 @@ export class HubForwardAuthBridgeService {
 
       try {
         if (placement.kind === 'linked') {
-          if (userAid) {
-            const hasKeri = await this.federatedIdentityService.findUserId('did:keri', userAid);
-            if (!hasKeri) {
-              try {
-                await this.federatedIdentityService.bind({
-                  userId: placement.user.id,
-                  issuer: 'did:keri',
-                  subject: userAid,
-                  email: username,
-                  bindMethod: 'sub',
-                });
-              } catch {
-                // race or unique violation safe to ignore
-              }
-            }
-          }
           return { kind: 'account', user: placement.user };
         }
 
@@ -439,20 +423,6 @@ export class HubForwardAuthBridgeService {
             email: username,
             bindMethod: 'email_link',
           });
-
-          if (userAid) {
-            try {
-              await this.federatedIdentityService.bind({
-                userId: placement.user.id,
-                issuer: 'did:keri',
-                subject: userAid,
-                email: username,
-                bindMethod: 'sub',
-              });
-            } catch {
-              // race or unique violation safe to ignore
-            }
-          }
 
           // `bind` returns an existing (issuer, subject) row as it finds it: a racer linked them first.
           if (binding.userId === placement.user.id) {
@@ -472,18 +442,11 @@ export class HubForwardAuthBridgeService {
           const created = await this.userService.create(
             { userId: SYSTEM_USER },
             this.accountFor(username),
-            async (manager, user) => {
-              await this.federatedIdentityService.bind(
+            (manager, user) =>
+              this.federatedIdentityService.bind(
                 { userId: user.id, issuer, subject, email: username, bindMethod: 'sub' },
                 manager,
-              );
-              if (userAid) {
-                await this.federatedIdentityService.bind(
-                  { userId: user.id, issuer: 'did:keri', subject: userAid, email: username, bindMethod: 'sub' },
-                  manager,
-                );
-              }
-            },
+              ),
           );
 
           this.logger.log(
@@ -524,20 +487,11 @@ export class HubForwardAuthBridgeService {
    */
   private async locate(
     username: string,
-    stableId: HubStableId,
+    { issuer, subject }: HubStableId,
     signedInAs: SignedInAs = SIGNED_IN_AS_NOBODY,
   ): Promise<Placement> {
-    const { issuer, subject, userAid } = stableId;
-
-    if (userAid) {
-      const keriUserId = await this.federatedIdentityService.findUserId('did:keri', userAid);
-      if (keriUserId) {
-        const linked = await this.userService.findById({ userId: SYSTEM_USER }, keriUserId);
-
-        return linked ? { kind: 'linked', user: linked } : { kind: 'refused', reason: 'account_unavailable' };
-      }
-    }
-
+    // Only the signed (issuer, subject) and username decide the account. The KERI AID the Hub
+    // sends beside them is unsigned (see `UnsignedKeriHints`), so it never takes part here.
     const linkedUserId = await this.federatedIdentityService.findUserId(issuer, subject);
     if (linkedUserId) {
       const linked = await this.userService.findById({ userId: SYSTEM_USER }, linkedUserId);

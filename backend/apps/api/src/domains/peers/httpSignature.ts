@@ -6,6 +6,8 @@ import {
   type KeyObject,
 } from 'node:crypto';
 
+import { isSovereignKeyId } from './sovereignKeyId';
+
 /**
  * RFC 9421 HTTP Message Signatures, profiled for the peer-ask surface — plus
  * the RFC 9530 `Content-Digest` that binds a signature to a body.
@@ -294,7 +296,9 @@ function parseParams(raw: string): SignatureParams {
   const alg = params.get('alg') ?? '';
   const nonce = params.get('nonce') ?? '';
 
-  if (!KEYID_PATTERN.test(keyid)) {
+  // A JWK thumbprint, or the one KERI-shaped form this box understands (`did:keri:D<x>`, see
+  // `sovereignKeyId.ts`). Any other `did:` keyid is refused here rather than half-understood later.
+  if (!KEYID_PATTERN.test(keyid) && !isSovereignKeyId(keyid)) {
     throw new SignatureFormatError('bad keyid');
   }
 
