@@ -23,15 +23,33 @@ export interface GeofencePolygon {
 
 export type Geofence = GeofenceRadius | GeofencePolygon;
 
+/**
+ * A WGS 84 point: `x` is the longitude, `y` the latitude.
+ *
+ * The column is `geography(Point, 4326)`, and PostGIS WRAPS an out-of-range
+ * point instead of refusing it: `{x: 500, y: 200}` was stored as
+ * `POINT(140 -20)` and `{y: 91}` as `POINT(-122.4 89)`, a fix on the other side
+ * of the planet answered `ingested`. A coordinate outside the range is a client
+ * bug (swapped axes, degrees×1e7, radians ...), so it is refused with a reason
+ * that says which one and why.
+ */
+export const wgs84PointSchema = z.object({
+  x: z
+    .number()
+    .finite()
+    .min(-180, 'location.x is a longitude and must be between -180 and 180')
+    .max(180, 'location.x is a longitude and must be between -180 and 180'),
+  y: z
+    .number()
+    .finite()
+    .min(-90, 'location.y is a latitude and must be between -90 and 90')
+    .max(90, 'location.y is a latitude and must be between -90 and 90'),
+});
+
 export const createPositionSchemaRoot = z.object({
   time: z.string().datetime(),
   device_id: z.string().uuid().optional(),
-  location: z
-    .object({
-      x: z.number(),
-      y: z.number(),
-    })
-    .optional(),
+  location: wgs84PointSchema.optional(),
   altitude_meters: z.number().optional(),
   accuracy_meters: z.number().positive().optional(),
   hdop: z.number().optional(),
@@ -64,12 +82,7 @@ export const createPositionSchema = z.array(createPositionSchemaRoot);
 export const updatePositionSchema = z.object({
   time: z.string().datetime().optional(),
   device_id: z.string().uuid().optional(),
-  location: z
-    .object({
-      x: z.number(),
-      y: z.number(),
-    })
-    .optional(),
+  location: wgs84PointSchema.optional(),
   altitude_meters: z.number().optional(),
   accuracy_meters: z.number().positive().optional(),
   hdop: z.number().optional(),
