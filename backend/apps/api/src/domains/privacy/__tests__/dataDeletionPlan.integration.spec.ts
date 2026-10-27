@@ -51,11 +51,14 @@ const ACCOUNT_COLUMN_NAME = '(^|_)users?(_ids?)?$|_by$|^is_private_to$';
 
 /**
  * Party words, for uuid and uuid[] columns only (`owner_ref`, `grantee`,
- * `member_ids`, …): in text columns they are mostly prose (an email's
- * `subject`, a link preview's `author_name`).
+ * `member_ids`, `account_id`, `principal_id`, `uid`, `created_for`, …): in text
+ * columns they are mostly prose (an email's `subject`, a link preview's
+ * `author_name`) or a provider's own account id. No uuid column in today's
+ * schema matches `account`, `principal`, `uid` or `_for`, so they cost nothing
+ * until a column that names an account under one of them lands.
  */
 const PARTY_COLUMN_NAME =
-  '^(owner|grantee|member|asker|responder|recipient|subject|actor|issuer|invitee|inviter|assignee|author|participant|viewer|reviewer)s?(_|$)';
+  '^(owner|grantee|member|asker|responder|recipient|subject|actor|issuer|invitee|inviter|assignee|author|participant|viewer|reviewer|account|principal)s?(_|$)|(^|_)uid$|_for$';
 
 /** Every column that can name an account: by foreign key to ci.users, or by name. */
 const ACCOUNT_COLUMNS_SQL = `
@@ -81,6 +84,60 @@ const ACCOUNT_COLUMNS_SQL = `
      )
    ORDER BY 1
 `;
+
+/**
+ * Every application table, each with the tables it cascades from. A partition
+ * is its parent's; TimescaleDB chunks live in schemas the filter drops.
+ */
+const TABLES_SQL = `
+  SELECT ns.nspname || '.' || c.relname AS ref,
+         coalesce(
+           array_agg(pns.nspname || '.' || p.relname) FILTER (WHERE k.confdeltype = 'c'),
+           '{}'
+         ) AS cascades_from
+    FROM pg_class c
+    JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    LEFT JOIN pg_constraint k ON k.contype = 'f' AND k.conrelid = c.oid
+    LEFT JOIN pg_class p ON p.oid = k.confrelid
+    LEFT JOIN pg_namespace pns ON pns.oid = p.relnamespace
+   WHERE c.relkind IN ('r', 'p')
+     AND NOT c.relispartition
+     AND ns.nspname NOT LIKE ALL (ARRAY['pg\\_%', 'information\\_schema', '\\_timescaledb%', 'timescaledb\\_%', 'pipeline\\_scratch'])
+   GROUP BY 1
+   ORDER BY 1
+`;
+
+/**
+ * Tables the purge deletes nothing from, by any route, each with the reason.
+ *
+ * The column inventory above cannot see a table with no account column and no
+ * foreign key: `hbpe.summary_l1_label` was one (keyed by a summary id, with no
+ * constraint), and the purge left a deleted account's labels behind until the
+ * implicit edge in `purgeCatalog.ts` was added. So every table is accounted for:
+ * one the plan deletes from, one that cascades from such a table, or one listed
+ * here. A new table that is none of these fails here, the day it is added.
+ */
+const OUTSIDE_THE_PURGE: ReadonlyMap<string, string> = new Map([
+  ['ci.users', "the account rows; the plan's last step deletes the account's own"],
+  ['ci.account_purges', 'proof of deletion'],
+  ['ci.data_deletion_audit', 'proof of deletion'],
+  ['ci.ask_audit', 'removeFromAskAudit takes the account out of it'],
+  ['ci.job_settings', 'appliance-wide; updated_by is nulled'],
+  ['ci.outbound_settings', 'appliance-wide; updated_by is nulled'],
+  ['ci.providers', 'the connector catalog'],
+  ['ci.cron_runs', 'scheduler bookkeeping'],
+  ['ci.job_metrics', 'queue depth samples, no ids'],
+  ['ci.job_category_metrics', 'queue depth samples, no ids'],
+  ['ci.retrieval_policy', 'appliance-wide ranking settings'],
+  ['ci.retrieval_health_snapshots', 'appliance-wide index coverage counts'],
+  ['ci.consumed_nonces', 'replay guard keys, swept on expiry (ConsumptionSweepCron)'],
+  ['ci.consumption_windows', 'rate-limit windows, swept when idle (ConsumptionSweepCron)'],
+  ['ci.geocode_cache', 'appliance-wide geocoding cache keyed by query, shared by every account'],
+  ['ci_search.index_skips', 'entity ids the indexer skipped; no account column, no foreign key'],
+  ['hbpe.kind_l0_map', 'static classification table'],
+  ['public.schema_migrations', 'migration bookkeeping'],
+  ['public.spatial_ref_sys', 'PostGIS reference data'],
+]);
 
 /**
  * Columns that name an account and stay after its delete, each with the reason.
@@ -199,6 +256,48 @@ describeWithDatabase(`account deletion coverage, against real Postgres (${availa
     expect([...KEPT.keys()].filter((ref) => !all.includes(ref))).toEqual([]);
   });
 
+  it('accounts for every table: purged, cascading from a purged one, or listed with a reason', async () => {
+    const plan = await planFor(scratch.dataSource);
+    const tables =
+      await scratch.dataSource.query<Array<{ ref: string; cascades_from: string[] }>>(TABLES_SQL);
+    const purged = new Set(plan.purgedTables);
+    const reached = (table: { ref: string; cascades_from: string[] }) =>
+      purged.has(table.ref) || table.cascades_from.some((parent) => purged.has(parent));
+
+    expect(tables.length).toBeGreaterThan(100);
+    expect(tables.filter((table) => !reached(table) && !OUTSIDE_THE_PURGE.has(table.ref))).toEqual([]);
+    // And no stale entry: a table listed here that the purge now reaches, or that is gone.
+    expect(
+      [...OUTSIDE_THE_PURGE.keys()].filter(
+        (ref) => !tables.some((table) => table.ref === ref && !reached(table)),
+      ),
+    ).toEqual([]);
+  });
+
+  it('reaches hbpe.summary_l1_label, which has no account column and no foreign key', async () => {
+    // Pinned on its own, because dropping the implicit edge in purgeCatalog.ts
+    // would otherwise only move the table into the list above.
+    expect((await planFor(scratch.dataSource)).purgedTables).toContain('hbpe.summary_l1_label');
+  });
+
+  it('nulls every account pointer into the purged entities, not just its own', async () => {
+    // ci.users.entity_id of another account naming one of the purged entities.
+    // Deleting through it removed that account; scoping it to `id = $1` left
+    // the purge failing on the foreign key for good.
+    const detach = (await planFor(scratch.dataSource)).steps.filter(
+      (step) => step.kind === 'null' && step.target.table === 'users' && step.column === 'entity_id',
+    );
+
+    expect(detach).toEqual([
+      expect.objectContaining({
+        scope: expect.objectContaining({
+          kind: 'referencesPurged',
+          parent: { schema: 'ci', table: 'entities', column: 'entity_id' },
+        }),
+      }),
+    ]);
+  });
+
   it('fails for a new account column the purge would not reach, whatever its shape', async () => {
     const runner = scratch.dataSource.createQueryRunner();
     await runner.connect();
@@ -215,7 +314,9 @@ describeWithDatabase(`account deletion coverage, against real Postgres (${availa
           ADD COLUMN member_ids uuid[],
           ADD COLUMN grantee uuid REFERENCES ci.users (id)`);
       await runner.query(
-        `CREATE TABLE ci.zz_guard_probe (id uuid PRIMARY KEY, owner_ref uuid, user_ids text[])`,
+        `CREATE TABLE ci.zz_guard_probe (
+           id uuid PRIMARY KEY, owner_ref uuid, user_ids text[],
+           account_id uuid, principal_id uuid, uid uuid, created_for uuid)`,
       );
 
       const { left } = await uncoveredAccountColumns(runner);
@@ -223,7 +324,11 @@ describeWithDatabase(`account deletion coverage, against real Postgres (${availa
       expect(left).toEqual([
         'ci.notes.member_ids',
         'ci.notes.reviewer_user_id',
+        'ci.zz_guard_probe.account_id',
+        'ci.zz_guard_probe.created_for',
         'ci.zz_guard_probe.owner_ref',
+        'ci.zz_guard_probe.principal_id',
+        'ci.zz_guard_probe.uid',
         'ci.zz_guard_probe.user_ids',
       ]);
       expect(coverage(await planFor(runner)).deletedBy).toContain('ci.notes.grantee');

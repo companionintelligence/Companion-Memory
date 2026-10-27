@@ -1,9 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { DataSource } from 'typeorm';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
+import { SavedSearchEntity } from '@ci/domains/files/entities/SavedSearchEntity';
+import { SavedSearchService } from '@ci/domains/files/services/SavedSearchService';
+import { PeerLinkEntity } from '@ci/domains/peers/entities/PeerLinkEntity';
+import { PeerLinkService } from '@ci/domains/peers/services/PeerLinkService';
 import { AccountPurgeService, LastAdminDeletionRefused, UserEntity, UserService } from '@ci/domains/user';
 
 import {
@@ -130,7 +135,7 @@ describeWithDatabase(`immediate account delete, against the real schema (${avail
       username: admin.username,
       password: admin.password,
       database: scratch.name,
-      entities: [DataDeletionAuditEntity, UserEntity],
+      entities: [DataDeletionAuditEntity, UserEntity, SavedSearchEntity, PeerLinkEntity],
       synchronize: false,
       logging: false,
       extra: { max },
@@ -505,6 +510,94 @@ describeWithDatabase(`immediate account delete, against the real schema (${avail
       const record = await audits(victim);
       expect(record.map((row) => row.status)).toEqual(['started', 'completed']);
       expect(record[1].deleted_counts).toMatchObject({ 'ci.notes': 1, 'ci.users': 1 });
+    });
+  });
+
+  describe('what other people can read through the account', () => {
+    // A share link runs the saved search as its owner from the token alone, and an inbound peer
+    // ask is answered as the owner of the live peer link that matches the peer. Neither resolves
+    // the owner through the hidden user row, so both kept serving the account's memory until the
+    // purge reached their tables: hours into an immediate delete of a large account, and the whole
+    // grace period of `DELETE /account`. The purge is held off here (switched off, or not yet due)
+    // so that what is checked is the end of the account and not the purge.
+    const shared = async () => {
+      const owner = await addUser('Sharer');
+      const reader = await addUser('Reader');
+      const searchId = randomUUID();
+      const token = randomBytes(16).toString('hex');
+      const issuer = 'https://portal.example.test';
+      const subject = `peer-${randomUUID()}`;
+      const thumbprint = randomBytes(32).toString('base64url');
+
+      await query(
+        `INSERT INTO ci.saved_searches (id, user_id, name, entity_types, is_public, share_token)
+         VALUES ($1, $2, 'Trips', '{}', true, $3)`,
+        [searchId, owner, token],
+      );
+      await query(
+        `INSERT INTO ci.ask_grants (owner_user_id, grantee_user_id, query_type, mode, resource_type, resource_id)
+         VALUES ($1, $2, 'saved_search', 'auto', 'saved_search', $3)`,
+        [owner, reader, searchId],
+      );
+      await query(
+        `INSERT INTO ci.peer_links
+           (owner_user_id, peer_handle, memory_endpoint, peer_issuer, peer_subject, peer_key_jwk, peer_key_thumbprint)
+         VALUES ($1, 'friend', 'https://friend.example.test', $2, $3, '{"kty":"OKP"}', $4)`,
+        [owner, issuer, subject, thumbprint],
+      );
+
+      const searches = new SavedSearchService(dataSource.getRepository(SavedSearchEntity), {} as never);
+      const links = new PeerLinkService(
+        dataSource.getRepository(PeerLinkEntity),
+        new LoggerService(),
+        {} as never,
+      );
+
+      const reachable = async () => ({
+        shareLink: (await searches.findByShareToken(token)) != null,
+        peerByIdentity: (await links.findActiveByPeerIdentity(issuer, subject)).length,
+        peerByKey: (await links.findActiveByKeyThumbprint(thumbprint)).length,
+        liveGrants: await count('ci.ask_grants', 'owner_user_id = $1 AND revoked_at IS NULL', [owner]),
+      });
+
+      // Reachable before, or the checks below would prove nothing.
+      expect(await reachable()).toEqual({ shareLink: true, peerByIdentity: 1, peerByKey: 1, liveGrants: 1 });
+
+      return { owner, reachable };
+    };
+
+    const closed = { shareLink: false, peerByIdentity: 0, peerByKey: 0, liveGrants: 0 };
+
+    it('closes them when the immediate delete ends the account, before the purge reaches them', async () => {
+      const { owner, reachable } = await shared();
+      const enabled = config.accountDeletion.purge.enabled;
+      config.accountDeletion.purge.enabled = false;
+
+      try {
+        const result = await service.deleteAccount(OWN(owner));
+
+        expect(result.status).toBe('deleting');
+      } finally {
+        config.accountDeletion.purge.enabled = enabled;
+      }
+
+      expect(await reachable()).toEqual(closed);
+      // The rows are still there: it is the end of the account that closed them, not the purge.
+      expect(await count('ci.saved_searches', 'user_id = $1', [owner])).toBe(1);
+      expect(await count('ci.peer_links', 'owner_user_id = $1', [owner])).toBe(1);
+
+      expect((await purgeService.purgeAccount(owner, new Date(), new Date())).status).toBe('purged');
+    });
+
+    it('closes them when DELETE /account ends the account, for the whole grace period', async () => {
+      const { owner, reachable } = await shared();
+
+      expect(await userService.requestDeletion(OWN(owner), owner)).toBe(true);
+
+      expect(await reachable()).toEqual(closed);
+      expect(await count('ci.saved_searches', 'user_id = $1', [owner])).toBe(1);
+
+      expect((await purgeService.purgeAccount(owner, new Date(), new Date())).status).toBe('purged');
     });
   });
 

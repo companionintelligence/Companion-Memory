@@ -543,4 +543,153 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       expect(await countWhere('ci.account_purges', 'user_id = $1', [selfErasing])).toBe(0);
     }, 120_000);
   });
+
+  /** An account ended with its purge due, and an entity it owns. */
+  const addDueAccount = async (name: string): Promise<{ id: string; entity: string }> => {
+    const id = randomUUID();
+    const entity = randomUUID();
+
+    await query(`INSERT INTO ci.users (id, email, name) VALUES ($1, $2, $3)`, [
+      id,
+      `${name.toLowerCase()}-${id}@example.test`,
+      name,
+    ]);
+    await query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Person', $2, 'seed')`,
+      [entity, id],
+    );
+    await query(
+      `UPDATE ci.users SET deleted_at = NOW() - INTERVAL '30 days', purge_after = NOW() - INTERVAL '1 hour'
+        WHERE id = $1`,
+      [id],
+    );
+
+    return { id, entity };
+  };
+
+  describe("another account pointing at the account's entities", () => {
+    // `ci.users.entity_id` of a different account naming one of this account's entities. The purge
+    // used to delete that account through it; then it stopped, and failed on the foreign key on
+    // every retry instead, leaving the ended account unpurged and its address taken for good.
+    it('nulls the pointer, keeps that account, and finishes', async () => {
+      const victim = await addDueAccount('Pointed-at');
+      const pointer = randomUUID();
+
+      await query(`INSERT INTO ci.users (id, email, name, entity_id) VALUES ($1, $2, 'Pointer', $3)`, [
+        pointer,
+        `pointer-${pointer}@example.test`,
+        victim.entity,
+      ]);
+      await query(`INSERT INTO ci.notes (id, user_id, content) VALUES ($1, $2, 'kept')`, [
+        randomUUID(),
+        pointer,
+      ]);
+
+      const outcome = await service.purgeAccount(victim.id, new Date(), new Date());
+
+      expect(outcome).toMatchObject({ status: 'purged' });
+      expect(await countWhere('ci.users', 'id = $1', [victim.id])).toBe(0);
+      expect(await countWhere('ci.entities', 'entity_id = $1', [victim.entity])).toBe(0);
+      expect(await countWhere('ci.users', 'id = $1 AND entity_id IS NULL', [pointer])).toBe(1);
+      expect(await countWhere('ci.notes', 'user_id = $1', [pointer])).toBe(1);
+      // The other account's pointer, counted as detached, not deleted.
+      expect(outcome.detachedRows['ci.users']).toBe(1);
+    }, 120_000);
+  });
+
+  describe("a deleted account's summary labels", () => {
+    // `hbpe.summary_l1_label` has no user column and no foreign key to ci.summaries, so only the
+    // implicit edge in purgeCatalog.ts leads the purge to it.
+    it("removes the account's labels and keeps another account's", async () => {
+      const victim = await addDueAccount('Labelled');
+      const victimSummary = randomUUID();
+      const bystanderSummary = randomUUID();
+
+      for (const [summary, owner] of [
+        [victimSummary, victim.id],
+        [bystanderSummary, bystander],
+      ]) {
+        await query(
+          `INSERT INTO ci.summaries (summary_id, user_id, period_start, period_end, period_type, source_types)
+           VALUES ($1, $2, '2026-01-01', '2026-01-02', 'daily', '{}')`,
+          [summary, owner],
+        );
+        await query(`INSERT INTO hbpe.summary_l1_label (summary_id, l0_class) VALUES ($1, 'seed')`, [
+          summary,
+        ]);
+      }
+
+      const outcome = await service.purgeAccount(victim.id, new Date(), new Date());
+
+      expect(outcome.status).toBe('purged');
+      expect(outcome.deletedRows['hbpe.summary_l1_label']).toBe(1);
+      expect(await countWhere('hbpe.summary_l1_label', 'summary_id = $1', [victimSummary])).toBe(0);
+      expect(await countWhere('hbpe.summary_l1_label', 'summary_id = $1', [bystanderSummary])).toBe(1);
+    }, 120_000);
+  });
+
+  describe('an object store that is down', () => {
+    // The bytes go first, so an unreachable store keeps every row of the account. That has to
+    // say which dependency failed, and reach someone, rather than retry quietly for ever.
+    it('names the store in the failure and reports the account as stalled once it is overdue', async () => {
+      const victim = await addDueAccount('Stored');
+
+      await query(
+        `INSERT INTO ci.files (id, user_id, content_type, bucket, key, filename)
+         VALUES ($1, $2, 'image/png', 'companion', $3, 'seed.png')`,
+        [randomUUID(), victim.id, randomUUID()],
+      );
+
+      const logger = new LoggerService();
+      const down = new AccountPurgeService(scratch.dataSource, logger, {
+        deleteObjects: async () => {
+          throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
+        },
+      });
+
+      const outcome = await down.purgeAccount(victim.id, new Date(), new Date());
+
+      expect(outcome.status).toBe('failed');
+      expect(outcome.error).toMatch(/^Object store unavailable.*ECONNREFUSED/);
+      expect(await countWhere('ci.users', 'id = $1', [victim.id])).toBe(1);
+
+      const [record] = await query<{ last_error: string }>(
+        `SELECT last_error FROM ci.account_purges WHERE user_id = $1`,
+        [victim.id],
+      );
+      expect(record.last_error).toMatch(/^Object store unavailable/);
+
+      // Not stalled yet: it was due an hour ago.
+      expect((await down.findStalledPurges()).oldest.map((row) => row.userId)).not.toContain(victim.id);
+
+      // Two days later it is, and every run says so at error level.
+      const later = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+      try {
+        const summary = await down.purgeDueAccounts(later);
+
+        expect(summary.stalled).toBeGreaterThanOrEqual(1);
+        expect(error).toHaveBeenCalledWith(
+          'Ended accounts are still not purged long after their deadline',
+          expect.objectContaining({
+            oldest: expect.arrayContaining([
+              expect.objectContaining({
+                userId: victim.id,
+                lastError: expect.stringMatching(/^Object store unavailable/),
+              }),
+            ]),
+          }),
+        );
+      } finally {
+        error.mockRestore();
+      }
+
+      // The store back: the next run finishes it, and it is no longer reported.
+      expect((await service.purgeAccount(victim.id, new Date(), new Date())).status).toBe('purged');
+      expect((await service.findStalledPurges(later)).oldest.map((row) => row.userId)).not.toContain(
+        victim.id,
+      );
+    }, 120_000);
+  });
 });

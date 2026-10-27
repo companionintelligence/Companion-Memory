@@ -122,7 +122,18 @@ async function deleteStoredObjects(
   let deleted = 0;
 
   for (const [bucket, keys] of byBucket) {
-    await withDeadline(store.deleteObjects(bucket, keys), deadlineMs);
+    try {
+      await withDeadline(store.deleteObjects(bucket, keys), deadlineMs);
+    } catch (err) {
+      // Named, because it stops the whole purge: the rows that hold the keys stay
+      // until the bytes are gone, so an unreachable store keeps every row of the
+      // account. `ci.account_purges.last_error` and the stalled-purge report
+      // should say which dependency to go and look at.
+      const message = err instanceof Error ? err.message : String(err);
+
+      throw new Error(`Object store unavailable; the purge stopped before the rows: ${message}`);
+    }
+
     deleted += keys.length;
   }
 

@@ -211,8 +211,6 @@ export function buildPurgePlan(input: {
     }
   }
 
-  const deleteTableKeys = new Set(deleteTargets.map((target) => tableKey(target.target)));
-
   // ── 3. Break references we must not follow, before anything is deleted ──
 
   const nullSteps: PurgeStep[] = [];
@@ -250,9 +248,14 @@ export function buildPurgePlan(input: {
     }
   }
 
-  // References pointing *out* of the ci.users row into rows we are about to
-  // delete — `ci.users.entity_id` is one, and it makes users<->entities a cycle
-  // that nothing else can break.
+  // References pointing *out* of ci.users into rows we are about to delete —
+  // `ci.users.entity_id` is one, and it makes users<->entities a cycle that
+  // nothing else can break. Nulled on EVERY account row that points into the
+  // doomed rows, not only this account's: another account whose `entity_id`
+  // names one of this account's entities would otherwise fail the entities
+  // delete on the foreign key on every retry, and the purge would never finish.
+  // Nulling it is what `ON DELETE SET NULL` would do; the other account keeps
+  // its row and loses only a pointer to data that is no longer there.
   for (const edge of edges) {
     if (edge.deleteAction !== 'a' && edge.deleteAction !== 'r') {
       continue;
@@ -262,18 +265,23 @@ export function buildPurgePlan(input: {
       continue;
     }
 
-    if (!deleteTableKeys.has(tableKey({ schema: edge.parentSchema, table: edge.parentTable }))) {
-      continue;
-    }
+    const parentKey = tableKey({ schema: edge.parentSchema, table: edge.parentTable });
 
-    nullSteps.push({
-      kind: 'null',
-      id: `detach:${usersKey}:${edge.childColumn}`,
-      target: users,
-      column: edge.childColumn,
-      scope: { kind: 'owned', column: 'id' },
-      reason: `${edge.constraintName} points from ${usersKey} into purged rows`,
-    });
+    for (const target of deleteTargets.filter((candidate) => tableKey(candidate.target) === parentKey)) {
+      nullSteps.push({
+        kind: 'null',
+        id: `detach:${usersKey}:${edge.childColumn}->${parentKey}:${scopeId(target.scope)}`,
+        target: users,
+        column: edge.childColumn,
+        scope: {
+          kind: 'referencesPurged',
+          column: edge.childColumn,
+          parent: { ...target.target, column: edge.parentColumn },
+          parentScope: target.scope,
+        },
+        reason: `${edge.constraintName} points from ${usersKey} into purged rows`,
+      });
+    }
   }
 
   // ── 4. Order the deletes: children before parents ──

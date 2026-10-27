@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import {
   BaseOAuth2Client,
   ClientFactory,
@@ -284,9 +285,17 @@ export class DataDeletionService {
    * Why not one transaction: that held the sign-up lock for the whole purge (a
    * graph-heavy account ran past 49 minutes in review, every sign-up waiting),
    * and an interruption anywhere threw all of it away, which is the reason the
-   * 30-day purge is batched (`purge/purgePlan.ts`). Once step 2 commits the
-   * account cannot come back, so a partial purge is never a partial live
-   * account: it is an ended account with rows still to delete.
+   * 30-day purge is batched (`purge/purgePlan.ts`). Once step 2 commits nobody
+   * can sign in to the account, and its share links, peer links and grants are
+   * closed (`UserService.endAccount`), so a partial purge is never a partial live
+   * account: it is an ended account with rows still to delete. The operator undo
+   * that `DELETE /account` has inside its grace period (clearing `deleted_at` and
+   * `purge_after`) does not apply here: it would revive an account whose purge
+   * may already have removed part of it.
+   *
+   * With `accountDeletion.purge.enabled` off (the operator's stop for an
+   * irreversible job), step 3 does not run: the account is ended, the answer is
+   * `deleting`, and the rows wait for the purge to be switched back on.
    */
   async deleteAccount(
     context: UserServiceContext,
@@ -377,6 +386,9 @@ export class DataDeletionService {
    * resolves through it; these go further, so nothing holding a session, a key or
    * a provider token keeps writing for the account while its purge runs. None of
    * these tables has a foreign key pointing into it, so the deletes are cheap.
+   * What other people could read through the account (share links, peer links,
+   * grants) is closed by `UserService.endAccount` in the same transaction, for
+   * this delete and `DELETE /account` alike.
    *
    * @returns the id of the `started` audit row.
    */
@@ -415,13 +427,26 @@ export class DataDeletionService {
    * after its table was purged (a job that was already running when the account
    * ended) refuses the user row's delete, and a second pass removes it. Past that,
    * the hourly purge retries. Then the search-index sweep, which reads the whole
-   * appliance's index. Never rejects.
+   * appliance's index; a purge the hourly run finishes leaves the sweep to
+   * `OrphanCleanupCron`. Never rejects.
+   *
+   * Not run at all while `accountDeletion.purge.enabled` is off: that switch is
+   * the operator's stop for the purge, and it holds here as it does for the
+   * hourly run.
    */
   private async purgeEndedAccount(
     userId: string,
     requestedAt: Date,
     purgeAfter: Date,
   ): Promise<AccountPurgeOutcome | null> {
+    if (!config.accountDeletion.purge.enabled) {
+      this.logger.warn('Account ended; its purge waits because the account purge is switched off', {
+        userId,
+      });
+
+      return null;
+    }
+
     try {
       let outcome = await this.accountPurgeService.purgeAccount(userId, requestedAt, purgeAfter);
 

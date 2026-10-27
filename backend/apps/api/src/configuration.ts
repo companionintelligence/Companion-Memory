@@ -869,7 +869,10 @@ export const ConfigSchema = z.object({
        * Off leaves `purge_after` unenforced — deletion revokes access and keeps
        * the data. Any deployment that tells its users their data is deleted must
        * leave this on; it exists so an operator mid-incident can stop an
-       * irreversible job without editing code.
+       * irreversible job without editing code. It stops every purge: the hourly
+       * run and the one `POST /users/me/delete` starts inline. Deletion requests
+       * still end accounts (access, share links and peer links are closed); their
+       * rows wait until it is switched back on.
        */
       enabled: booleanStringSchema.default(true),
       /**

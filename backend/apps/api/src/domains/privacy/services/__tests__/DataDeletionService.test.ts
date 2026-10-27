@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 
+import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections';
 import { LastAdminDeletionRefused } from '@ci/domains/user';
 
@@ -619,6 +620,26 @@ describe('DataDeletionService.deleteAccount', () => {
     await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(NotFoundException);
     expect(purgeAccount).not.toHaveBeenCalled();
     expect(savedAudits).toEqual([]);
+  });
+
+  it('ends the account but runs no purge while the purge is switched off', async () => {
+    // `accountDeletion.purge.enabled` is the operator's stop for an irreversible
+    // job; it held for the hourly purge and was bypassed by this inline one.
+    const enabled = config.accountDeletion.purge.enabled;
+    config.accountDeletion.purge.enabled = false;
+
+    try {
+      const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+
+      const result = await service.deleteAccount(OWN);
+
+      expect(userService.endAccountNow).toHaveBeenCalledTimes(1);
+      expect(purgeAccount).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'deleting', totalDeleted: 0, userDeleted: false });
+      expect(savedAudits).toEqual([expect.objectContaining({ status: 'started' })]);
+    } finally {
+      config.accountDeletion.purge.enabled = enabled;
+    }
   });
 
   it('answers deleting when the purge outlasts the wait, and lets it finish (and sweep) on its own', async () => {

@@ -18,14 +18,25 @@ path knowing the feature exists: every repository read on `UserEntity` filters t
 row out, which covers `findById` (JWT *and* API key), `validatePassword` and
 `findByEmail` at once, and covers whatever the next auth path turns out to be.
 
+What other people can read through the account is closed in the same transaction
+(`UserService.endAccount`, shared by both deletes): its saved searches are unshared
+(`share_token` cleared, so every share link resolves to nothing), its peer links are
+revoked (so an inbound peer ask or a poll for an earlier answer is refused), and the
+grants it gave are revoked. None of these resolves the owner through the hidden user
+row: a share link runs the search as its owner from the token alone, and a peer ask is
+answered as the owner of whichever live peer link matches. Before this they kept
+serving the account's memory until the purge reached their tables.
+
 `purge_after` is stamped at request time rather than computed by the job. That is
 deliberate: it is a commitment to a specific person on a specific date, and if the
 job derived it from config, editing `accountDeletion.graceDays` would retroactively
 move a deadline already promised to someone who has left.
 
 The grace period is also the only undo. Within it an operator can clear `deleted_at`
-and `purge_after` and the account is whole again; after it, nothing brings the data
-back.
+and `purge_after` and the account's data is whole again; after it, nothing brings the
+data back. The undo does not reopen what ending the account closed: its owner shares
+the searches and links the peers again (sharing again rotates the token, so an old
+link stays dead). It does not apply to the immediate delete at all (below).
 
 ## The last administrator
 
@@ -57,7 +68,8 @@ revokes every OAuth grant first. It uses the same two halves, with the deadline 
 2. **End the account** in one short transaction under the lock every sign-up takes
    (`UserService.endAccountNow`): the rule asked again for real, the successor
    promoted, `deleted_at` and `purge_after = now()` stamped, the unused invitations,
-   sessions and API keys deleted, the connections' provider tokens cleared, and a
+   sessions and API keys deleted, the share links, peer links and grants closed, the
+   connections' provider tokens cleared, and a
    `started` row written to `ci.data_deletion_audit`. All of it or none of it; a
    failure writes a `failed` row after the rollback and changes nothing else.
 3. **Purge the rows** through `AccountPurgeService.purgeAccount`, inline: batched,
@@ -69,17 +81,22 @@ revokes every OAuth grant first. It uses the same two halves, with the deadline 
    last row, inline or the hourly cron after an interruption, appends the
    `completed` audit row. Its counts are that run's: rows an interrupted run
    removed before it stopped are not in them (the same holds for
-   `ci.account_purges.deleted_rows`).
+   `ci.account_purges.deleted_rows`). The search-index sweep runs when the inline
+   purge finishes; for a purge the hourly cron finishes, `OrphanCleanupCron` does it.
 
 Until #3241 this was one transaction for everything, held under the sign-up lock. On
 a graph-heavy account that ran for more than 49 minutes with every sign-up waiting,
-and any interruption rolled all of it back. Once step 2 commits the account cannot
-come back, so a purge that stops part way leaves an ended account with rows still to
-delete, never a live account with some of its data gone. That is also why the bytes go
-before the rows here, as in the 30-day purge, and not after them.
+and any interruption rolled all of it back. Once step 2 commits nobody can sign in to
+the account or read through it, so a purge that stops part way leaves an ended account
+with rows still to delete, never a live account with some of its data gone. Nothing in
+the code stops an operator clearing `deleted_at` on it, though, and the grace-period
+undo above must not be used here: it would revive an account the purge may already
+have partly removed. That is also why the bytes go before the rows here, as in the
+30-day purge, and not after them.
 
-`accountDeletion.purge.enabled = false` stops the cron, so it also stops an
-interrupted immediate delete from being finished until it is switched back on.
+`accountDeletion.purge.enabled = false` stops every purge, this inline one included:
+the route still ends the account (step 2) and answers `deleting`, and the rows wait
+until the switch is turned back on.
 
 ## Why not `ON DELETE CASCADE`
 
@@ -193,6 +210,11 @@ content.
 If no object store is wired in, the purge logs a warning naming the count it could
 not delete. It does not fail — but it does not stay quiet either.
 
+If a store is wired in and fails (down, misconfigured, past the 60 s per call), the
+purge stops before any row: the rows hold the keys. `last_error` says
+`Object store unavailable; …`, the account is retried after the backoff, and once it is
+a day overdue it is in the stalled-purge report (below) on every hourly run.
+
 ## The record it leaves
 
 `ci.account_purges` has no foreign key to `ci.users`, because the row it describes is
@@ -240,7 +262,11 @@ And the residue, which they must not paper over:
 - **Multi-account edge case.** If a row owned by a *different* account holds a
   blocking reference to a row being purged, the purge stops with the constraint
   name rather than deleting that other account's row. Deliberately loud: it needs a
-  human, and it cannot happen on a single-user appliance.
+  human, and it cannot happen on a single-user appliance. The one such reference the
+  plan knows how to break is `ci.users.entity_id`: another account whose self-Person
+  pointer names one of this account's entities has the pointer nulled (what
+  `ON DELETE SET NULL` would do), counted in `detached_rows['ci.users']`. Until
+  that, the purge failed on `users_entity_id_fkey` on every retry.
 
 ## Operating it
 
@@ -252,6 +278,12 @@ And the residue, which they must not paper over:
 | `accountDeletion.purge.maxAccountsPerRun` | 5 | A backlog drains across ticks. |
 | `accountDeletion.purge.retryBackoffMinutes` | 60 | |
 | `accountDeletion.purge.excludedColumns` | `[]` | Needs a justification per entry. |
+
+**Stuck purges.** An ended account whose purge is still unfinished 24 hours after its
+`purge_after` is logged at error level on every hourly run (`Ended accounts are still
+not purged long after their deadline`, with the oldest ten, their attempts and
+`last_error`), also while the purge is switched off. `AccountPurgeService.findStalledPurges()`
+answers the same question. Until it is purged, the account's address stays taken.
 
 The cron runs hourly (`AccountPurgeCron`). An appliance is often switched off, and
 `purge_after` is a deadline rather than a schedule, so hourly means a box that is up
@@ -280,7 +312,10 @@ production.
 - `privacy/__tests__/dataDeletionPlan.integration.spec.ts` — every column that can
   name an account (by foreign key under any name, or by name in uuid, uuid[] or
   text) must be one the purge deletes by, one it nulls, or listed with the reason it
-  stays. It adds such columns to the schema to prove it notices them.
+  stays. It adds such columns to the schema to prove it notices them. Every table,
+  too, must be purged, cascade from a purged one, or be listed with a reason: that is
+  what catches a child with no account column and no foreign key, the class
+  `hbpe.summary_l1_label` was in.
 
 ## Still outstanding
 

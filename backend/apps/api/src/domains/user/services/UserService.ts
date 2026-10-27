@@ -581,6 +581,8 @@ export class UserService {
 
       await manager.query(`DELETE FROM ci.signup_code WHERE issued_by = $1 AND used = false`, [id]);
 
+      await this.closeSharedAccess(manager, id);
+
       return { successorId: handedOver.successorId, result: await alongside?.(manager) };
     });
 
@@ -600,6 +602,42 @@ export class UserService {
   }
 
   /**
+   * Close every way another person reads account `id`'s memory without signing in as it, in the
+   * transaction that ends the account. Hiding the user row stops the account's own sign-ins, but
+   * these paths never resolve the owner through it: a shared saved search runs as its owner from the
+   * token alone (`SavedSearchService.findByShareToken`), and an inbound peer ask is answered as the
+   * owner of whichever live `ci.peer_links` row matches the peer (`PeerAskService.resolveLink`).
+   * Left alone they kept answering until the purge reached those tables, which is hours into an
+   * immediate delete of a large account and the whole 30-day grace period of `DELETE /account`.
+   *
+   * Each write is the one the owner's own control makes: unsharing (`setSharing(false)`), revoking a
+   * peer link, revoking a grant. They are not undone by an operator restoring the account inside
+   * the grace period; its owner shares and links again, which also rotates the share tokens.
+   * Raw SQL for the reason the invitations above are: those tables belong to domains that depend on
+   * this one.
+   */
+  private async closeSharedAccess(manager: EntityManager, id: string): Promise<void> {
+    await manager.query(
+      `UPDATE ci.saved_searches
+          SET is_public = false, share_token = NULL, share_max_disclosure = NULL, share_expires_at = NULL
+        WHERE user_id = $1 AND (is_public OR share_token IS NOT NULL)`,
+      [id],
+    );
+    await manager.query(
+      `UPDATE ci.peer_links
+          SET status = 'revoked', revoked_at = now(), updated_at = now()
+        WHERE owner_user_id = $1 AND revoked_at IS NULL`,
+      [id],
+    );
+    await manager.query(
+      `UPDATE ci.ask_grants
+          SET revoked_at = now(), revocation_reason = 'revoked', updated_at = now()
+        WHERE owner_user_id = $1 AND revoked_at IS NULL`,
+      [id],
+    );
+  }
+
+  /**
    * Under the lock every account creation takes: find live account `id` (null when there is none)
    * and, when it is the last live administrator, promote the successor {@link successorFor} names.
    * Throws {@link LastAdminDeletionRefused} before writing anything.
@@ -612,7 +650,10 @@ export class UserService {
     await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
 
     // FOR UPDATE: a row written for this account from here on (a foreign key takes KEY SHARE on
-    // this row) waits for this transaction, and then finds the account ended.
+    // this row) waits for this transaction to commit. It then succeeds: the foreign key checks
+    // only that the row exists, not `deleted_at`. Such a row is left to the purge, which runs a
+    // second pass when one blocks the account row's delete (`DataDeletionService.purgeEndedAccount`)
+    // and otherwise is retried by the hourly purge.
     const [target] = await manager.query<Array<{ id: string; role: string }>>(
       `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
       [id],

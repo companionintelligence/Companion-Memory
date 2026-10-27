@@ -85,6 +85,24 @@ function makeService(appliance: Partial<Appliance> = {}) {
         return Promise.resolve([[], 0]);
       }
 
+      if (sql.includes('UPDATE ci.saved_searches')) {
+        journal.push('unshare-searches');
+
+        return Promise.resolve([[], 0]);
+      }
+
+      if (sql.includes('UPDATE ci.peer_links')) {
+        journal.push('revoke-peer-links');
+
+        return Promise.resolve([[], 0]);
+      }
+
+      if (sql.includes('UPDATE ci.ask_grants')) {
+        journal.push('revoke-grants');
+
+        return Promise.resolve([[], 0]);
+      }
+
       return Promise.reject(new Error(`unexpected statement in the deletion transaction: ${sql}`));
     }),
     update: jest.fn((_entity: unknown, _id: string, _patch: Record<string, unknown>) => {
@@ -195,7 +213,40 @@ describe('UserService — account deletion', () => {
 
       await service.requestDeletion(OWN, 'user-1');
 
-      expect(journal).toEqual(['lock', 'read-target', 'soft-delete', 'drop-invitations', 'commit']);
+      expect(journal).toEqual([
+        'lock',
+        'read-target',
+        'soft-delete',
+        'drop-invitations',
+        'unshare-searches',
+        'revoke-peer-links',
+        'revoke-grants',
+        'commit',
+      ]);
+    });
+
+    it("closes the account's share links, peer links and grants in the same transaction", async () => {
+      // None of these resolves the owner through the hidden user row: a share token runs the
+      // search as its owner, a peer link answers as its owner. Left alone they kept serving the
+      // account's memory until the purge reached their tables.
+      const { service, queries } = makeService();
+
+      await service.requestDeletion(OWN, 'user-1');
+
+      const unshare = queries.find((q) => q.sql.includes('UPDATE ci.saved_searches'));
+      expect(unshare?.sql).toMatch(/SET is_public = false, share_token = NULL/);
+      expect(unshare?.sql).toMatch(/WHERE user_id = \$1/);
+      expect(unshare?.params).toEqual(['user-1']);
+
+      const links = queries.find((q) => q.sql.includes('UPDATE ci.peer_links'));
+      expect(links?.sql).toMatch(/SET status = 'revoked', revoked_at = now\(\)/);
+      expect(links?.sql).toMatch(/WHERE owner_user_id = \$1 AND revoked_at IS NULL/);
+      expect(links?.params).toEqual(['user-1']);
+
+      const grants = queries.find((q) => q.sql.includes('UPDATE ci.ask_grants'));
+      expect(grants?.sql).toMatch(/SET revoked_at = now\(\), revocation_reason = 'revoked'/);
+      expect(grants?.sql).toMatch(/WHERE owner_user_id = \$1 AND revoked_at IS NULL/);
+      expect(grants?.params).toEqual(['user-1']);
     });
 
     it("drops the account's unused invitations in the same transaction", async () => {
@@ -379,6 +430,9 @@ describe('UserService — account deletion', () => {
         'promote-successor',
         'soft-delete',
         'drop-invitations',
+        'unshare-searches',
+        'revoke-peer-links',
+        'revoke-grants',
         'caller-writes',
         'commit',
       ]);

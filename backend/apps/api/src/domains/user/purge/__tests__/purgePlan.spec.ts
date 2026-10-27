@@ -191,9 +191,38 @@ describe('buildPurgePlan', () => {
         ],
       });
 
-      expect(indexOf(plan, 'detach:ci.users:entity_id')).toBeLessThan(
+      expect(indexOf(plan, 'detach:ci.users:entity_id->ci.entities:owner_user_id')).toBeLessThan(
         indexOf(plan, 'delete:ci.entities:owner_user_id'),
       );
+    });
+
+    it('breaks that reference on every account pointing into the doomed rows, not only its own', () => {
+      // Scoped by "points at one of this account's entities", not by `id = $1`:
+      // another account whose `entity_id` names one of them would otherwise fail
+      // the entities delete on the foreign key on every retry, and the purge
+      // would never finish. Nulling is what ON DELETE SET NULL would do.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.entities', 'owner_user_id', 'n')],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.users', 'entity_id', 'ci.entities', 'a', 'entity_id'),
+        ],
+      });
+
+      const detach = plan.steps.find((step) => step.id.startsWith('detach:ci.users:entity_id'));
+
+      expect(detach).toMatchObject({
+        kind: 'null',
+        target: USERS,
+        column: 'entity_id',
+        scope: {
+          kind: 'referencesPurged',
+          column: 'entity_id',
+          parent: { schema: 'ci', table: 'entities', column: 'entity_id' },
+          parentScope: { kind: 'owned', column: 'owner_user_id' },
+        },
+      });
     });
 
     it('never deletes another account row through such a reference', () => {

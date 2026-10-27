@@ -64,10 +64,10 @@ export function renderBatchedDelete(target: TableRef, scope: PurgeScope, batchSi
 /**
  * One bounded null-out.
  *
- * The `IS NOT NULL` guard is load-bearing, not tidiness: `ci.users.entity_id` is
- * nulled with the scope `id = $1`, which still matches the row afterwards.
- * Without the guard the batch loop would keep matching the same row, always
- * report a full batch, and never terminate.
+ * The `IS NOT NULL` guard is load-bearing, not tidiness: a null step whose scope
+ * is not the column it nulls (`ci.users.entity_id` was once nulled by `id = $1`)
+ * still matches the row afterwards. Without the guard the batch loop would keep
+ * matching the same row, always report a full batch, and never terminate.
  */
 export function renderBatchedNull(
   target: TableRef,
