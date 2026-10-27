@@ -1,6 +1,15 @@
 import type { FkEdge, PurgePlan, PurgeScope, PurgeStep, TableRef, UserRefColumn } from './types';
 
 /**
+ * A column that records who made or changed a row: `updated_by`,
+ * `changed_by_user_id` and the like. Under `SET NULL` it is attribution, never
+ * ownership (see the rules on {@link buildPurgePlan}). The verbs are spelled out
+ * so a column such as `owned_by` is not caught by accident and its rows left
+ * behind.
+ */
+const PROVENANCE_COLUMN = /^(created|updated|changed|modified|issued)_by(_user_id)?$/;
+
+/**
  * Build the ordered list of statements that removes one account's data.
  *
  * ## Why this exists rather than `ON DELETE CASCADE`
@@ -51,6 +60,13 @@ import type { FkEdge, PurgePlan, PurgeScope, PurgeStep, TableRef, UserRefColumn 
  *   the user's memories and graph edges, owned solely via `owner_user_id`);
  *   `ci.receipts.owner_user_id` does not, because `ci.receipts.user_id` already
  *   owns the row.
+ * - A `SET NULL` column named for who made or changed a row (`updated_by`,
+ *   `changed_by_user_id`) is never ownership, even when it is the only user
+ *   reference on its table: it is nulled. `ci.job_settings` and
+ *   `ci.outbound_settings` are appliance-wide rows whose `updated_by` says which
+ *   administrator last changed them. Deleting them with that administrator put
+ *   every job control and outbound switch back to its default, so a crash-report
+ *   upload they had switched off came back on for everyone else.
  * - A user reference **on `ci.users` itself** is never a delete root. Treating
  *   `ci.users.created_by` as one would delete every account this user created.
  * - Tables that are not user-scoped but hold a blocking (`NO ACTION`/`RESTRICT`)
@@ -93,25 +109,34 @@ export function buildPurgePlan(input: {
   }
 
   const roots: UserRefColumn[] = [];
-  const detached: UserRefColumn[] = [];
+  const detached: Array<{ column: UserRefColumn; reason: string }> = [];
 
   for (const column of userColumns) {
     // A reference on ci.users is always nulled, never followed. `created_by`
     // points at the account that provisioned another account: deleting through
     // it would take out unrelated, live users.
     if (tableKey(column) === usersKey) {
-      detached.push(column);
+      detached.push({ column, reason: `${column.column} attributes a different account's row` });
 
       continue;
     }
 
     if (column.deleteAction === 'n' || column.deleteAction === 'd') {
+      if (PROVENANCE_COLUMN.test(column.column)) {
+        detached.push({ column, reason: `${column.column} records who changed the row, not whose it is` });
+
+        continue;
+      }
+
       const ownedByAnotherColumn = (columnsByTable.get(tableKey(column)) ?? []).some(
         (other) => other.column !== column.column && other.deleteAction !== 'n' && other.deleteAction !== 'd',
       );
 
       if (ownedByAnotherColumn) {
-        detached.push(column);
+        detached.push({
+          column,
+          reason: `ON DELETE SET NULL, and ${tableKey(column)} is owned through another column`,
+        });
 
         continue;
       }
@@ -260,16 +285,13 @@ export function buildPurgePlan(input: {
 
   // ── 5. Detach what survives, then the account row itself ──
 
-  const detachSteps: PurgeStep[] = detached.map((column) => ({
+  const detachSteps: PurgeStep[] = detached.map(({ column, reason }) => ({
     kind: 'null',
     id: `detach:${tableKey(column)}:${column.column}`,
     target: { schema: column.schema, table: column.table },
     column: column.column,
     scope: { kind: 'owned', column: column.column },
-    reason:
-      tableKey(column) === usersKey
-        ? `${column.column} attributes a different account's row`
-        : `ON DELETE SET NULL, and ${tableKey(column)} is owned through another column`,
+    reason,
   }));
 
   const steps: PurgeStep[] = [
@@ -282,7 +304,7 @@ export function buildPurgePlan(input: {
   return {
     steps,
     purgedTables: [...new Set(ordered.map((target) => tableKey(target.target)))].sort(),
-    detachedColumns: detached.map((column) => `${tableKey(column)}.${column.column}`).sort(),
+    detachedColumns: detached.map(({ column }) => `${tableKey(column)}.${column.column}`).sort(),
     warnings,
   };
 }

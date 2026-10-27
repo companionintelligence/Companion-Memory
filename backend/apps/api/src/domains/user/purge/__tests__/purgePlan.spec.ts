@@ -113,6 +113,46 @@ describe('buildPurgePlan', () => {
     });
   });
 
+  describe('who changed a row is not whose it is', () => {
+    it('nulls updated_by on an appliance-wide row instead of deleting the row', () => {
+      // ci.outbound_settings: one row per outbound switch for the whole appliance,
+      // and updated_by is its only reference to ci.users. Deleting the row puts
+      // the switch back to its default (on) for everyone else.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [
+          userColumn('ci.outbound_settings', 'updated_by', 'n'),
+          userColumn('ci.job_settings', 'updated_by', 'n'),
+        ],
+        edges: [
+          fk('ci.outbound_settings', 'updated_by', 'ci.users', 'n'),
+          fk('ci.job_settings', 'updated_by', 'ci.users', 'n'),
+        ],
+      });
+
+      expect(plan.purgedTables).toEqual([]);
+      expect(plan.detachedColumns).toEqual(['ci.job_settings.updated_by', 'ci.outbound_settings.updated_by']);
+      expect(stepIds(plan)).toEqual([
+        'detach:ci.job_settings:updated_by',
+        'detach:ci.outbound_settings:updated_by',
+        'delete:ci.users',
+      ]);
+    });
+
+    it('still deletes a row a provenance-named column owns by cascade', () => {
+      // ci.signup_code.issued_by is ON DELETE CASCADE: the invitations the
+      // account issued go with it, as they always did.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.signup_code', 'issued_by', 'c')],
+        edges: [fk('ci.signup_code', 'issued_by', 'ci.users', 'c')],
+      });
+
+      expect(plan.purgedTables).toEqual(['ci.signup_code']);
+      expect(plan.detachedColumns).toEqual([]);
+    });
+  });
+
   describe('the account row itself', () => {
     it('never treats a reference on ci.users as something to delete through', () => {
       // ci.users.created_by points at the account that provisioned another
