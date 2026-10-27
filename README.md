@@ -789,8 +789,8 @@ yarn lint:fix               # Auto-fix frontend linting issues
 |---|---|
 | Local development stack | `make dev` and the local development section below |
 | Architecture and request routing | [Architecture at a glance](#architecture-at-a-glance) and Caddy routing |
-| Configuration and deployment | [Docs directory](docs/) |
-| Security review | [Security guidance](docs/security.md) |
+| Configuration and deployment | [Documentation index](docs/README.md) |
+| Security review | [Security guidance](SECURITY.md) |
 
 For issue reports, include the deployment mode (Hub, standalone, or local development), the service involved, and redacted request/health output. Never include API keys or captured memory content in public issue text.
 
