@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { validate as isUuid } from 'uuid';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -600,7 +601,7 @@ export class AskResolver {
 
   /** One of the caller's own peer links, or a 404. Never another owner's. */
   private async requirePeerLink(context: UserServiceContext, id: string): Promise<PeerLink> {
-    const link = await this.peerLinkService.findById(context, id);
+    const link = await this.peerLinkService.findById(context, peerLinkIdFrom(id));
     if (link == null) {
       throw new NotFoundException(`Peer link ${id} not found`);
     }
@@ -1290,6 +1291,37 @@ function toPeerAskRequest(input: SendPeerAskInput): PeerAskRequest {
     default:
       throw new BadRequestException(`Unsupported ask archetype: ${input.archetype}`);
   }
+}
+
+/**
+ * The `ci.peer_links.id` a client named, from either spelling the API hands
+ * out: the raw uuid (`AskGrantType.granteePeerLinkId`) or the `peer-link`
+ * global id (`PeerLinkType.id`, what `createPeerLink` and `peerLinks` return).
+ *
+ * The global id used to go straight to the uuid column and came back as a 500
+ * (`invalid input syntax for type uuid`), so the id `createPeerLink` returns
+ * could not be used to grant that peer anything. Anything else, including a
+ * global id of another type, is a 400 that says what to pass.
+ */
+export function peerLinkIdFrom(value: string): string {
+  if (isUuid(value)) {
+    return value;
+  }
+
+  let decoded: { type: string; id: string } | null = null;
+  try {
+    decoded = GlobalUID.decode(value);
+  } catch {
+    decoded = null;
+  }
+
+  if (decoded?.type === 'peer-link' && isUuid(decoded.id)) {
+    return decoded.id;
+  }
+
+  throw new BadRequestException(
+    'granteePeerLinkId is not a peer link id: pass the id createPeerLink or peerLinks returns',
+  );
 }
 
 /**
