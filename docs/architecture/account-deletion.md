@@ -67,7 +67,9 @@ revokes every OAuth grant first. It uses the same two halves, with the deadline 
    once (a row written for the account by a job that was already running when it
    ended refuses the user row's delete the first time). Whichever run removes the
    last row, inline or the hourly cron after an interruption, appends the
-   `completed` audit row with the counts.
+   `completed` audit row. Its counts are that run's: rows an interrupted run
+   removed before it stopped are not in them (the same holds for
+   `ci.account_purges.deleted_rows`).
 
 Until #3241 this was one transaction for everything, held under the sign-up lock. On
 a graph-heavy account that ran for more than 49 minutes with every sign-up waiting,
