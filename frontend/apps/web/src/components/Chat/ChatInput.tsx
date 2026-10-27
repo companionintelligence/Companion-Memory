@@ -98,6 +98,12 @@ interface Props {
    * which never uploads.
    */
   blockUploads?: boolean;
+  /**
+   * Give the textarea focus back each time it is enabled again. It is disabled while a turn loads or streams, while
+   * a file uploads and whenever `disabled` is set. A browser drops focus from a disabled control to <body>, so
+   * without this the next message needs a click first. Left alone when the person has moved focus elsewhere.
+   */
+  refocusWhenEnabled?: boolean;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
 }
@@ -112,11 +118,25 @@ function ChatInput(
     showModelControls = true,
     localImages: localImagesMode = false,
     blockUploads = false,
+    refocusWhenEnabled = false,
     onSubmit,
     onStop,
   }: Props,
   forwardedRef: ForwardedRef<HTMLTextAreaElement>,
 ) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const setTextareaRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      textareaRef.current = el;
+
+      if (typeof forwardedRef === 'function') {
+        forwardedRef(el);
+      } else if (forwardedRef) {
+        forwardedRef.current = el;
+      }
+    },
+    [forwardedRef],
+  );
   const SendIcon = streaming ? Square : Send;
   const sendIconClassName = streaming ? '' : 'left-[-0.5px] top-[0.5px]';
   const { toast } = useToast();
@@ -286,6 +306,28 @@ function ChatInput(
   );
 
   const inputDisabled = loading || streaming || disabled || uploading;
+  const wasDisabledRef = useRef(inputDisabled);
+
+  useEffect(() => {
+    const wasDisabled = wasDisabledRef.current;
+    wasDisabledRef.current = inputDisabled;
+
+    const input = textareaRef.current;
+
+    if (!refocusWhenEnabled || !wasDisabled || inputDisabled || !input) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+
+      if (active == null || active === document.body) {
+        input.focus();
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [inputDisabled, refocusWhenEnabled]);
 
   return (
     <Tooltip.Provider>
@@ -332,7 +374,7 @@ function ChatInput(
               render={({ field }) => (
                 <Textarea
                   {...field}
-                  ref={forwardedRef}
+                  ref={setTextareaRef}
                   placeholder={placeholder}
                   disabled={inputDisabled}
                   className="

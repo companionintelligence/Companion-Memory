@@ -126,6 +126,7 @@ export class PrivacyController {
       userDeleted: result.userDeleted,
       totalDeleted: result.totalDeleted,
       deletedCounts: result.deletedCounts,
+      deletedObjects: result.deletedObjects,
       connectionsRevoked: result.revocations.filter((r) => r.tokenRevoked).length,
       connectionsProcessed: result.revocations.length,
       auditId: result.auditId,

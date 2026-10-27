@@ -12,7 +12,7 @@ import {
   GraphIngestService,
 } from '@ci/domains/graph';
 import { ActionService, AnswerService, QuestionService } from '@ci/domains/intelligence';
-import { ConceptService, PersonService } from '@ci/domains/memory';
+import { ConceptService, type Person, PersonService } from '@ci/domains/memory';
 import { UserService } from '@ci/domains/user';
 
 import {
@@ -109,6 +109,9 @@ const RELATIONSHIP_MAP: Record<
  * takes a pointer that keeps moving, or an account row that is gone.
  */
 const SELF_POINTER_ATTEMPTS = 3;
+
+/** The description onboarding gives the owner's self Person. */
+const SELF_DESCRIPTION = 'This is you!';
 
 const DEFAULT_PROGRESS: OnboardingProgressResponse = {
   stepKey: 'intro',
@@ -301,7 +304,7 @@ export class OnboardingService {
       id,
       name: displayName,
       properties,
-      description: 'This is you!',
+      description: SELF_DESCRIPTION,
       ...GraphIngestService.selfEntityLink(user.id),
     });
 
@@ -314,6 +317,16 @@ export class OnboardingService {
 
       if (pointer === person.id && person.id === id) {
         // The usual signup: this call made the Person, and the account points at it.
+        //
+        // Unless an import's provisioner reached the row between the create and
+        // the pointer write: its upsert lands on this key too, and replaces the
+        // name the owner typed with the account's. Read the row back once and
+        // put onboarding's details back if so.
+        const stored = await this.personService.findById(context, person.id);
+        if (stored && stored.name !== displayName) {
+          await this.patchSelfPerson(context, stored, displayName, properties);
+        }
+
         await this.claimSelfIdentifiers(context.userId!, person.id, displayName, user.email);
         if (user.email) {
           await this.entityIdentifierService.repointToEntity(
@@ -336,7 +349,13 @@ export class OnboardingService {
         if (adopted) {
           if (adopted.id !== person.id) {
             // Not this key's row: something outside the shared upsert set the
-            // pointer. Nothing is deleted; the warning names both rows.
+            // pointer. The row this call made stops claiming to be the owner,
+            // so the account is left with one is_self Person, not two. Nothing
+            // is deleted; the warning names both rows.
+            if (person.id === id) {
+              await this.personService.patch(context, person.id, { propertiesPatch: { is_self: false } });
+            }
+
             this.logger.warn('The account was pointed at another self Person during onboarding', {
               userId: user.id,
               selfEntityId: person.id,
@@ -354,7 +373,10 @@ export class OnboardingService {
       expected = pointer;
     }
 
-    throw new Error('Could not point the account at its self Person');
+    throw new Error(
+      `Could not point the account at its self Person (user ${context.userId}, ` +
+        `pointer last read ${expected ?? 'null'})`,
+    );
   }
 
   /**
@@ -373,13 +395,7 @@ export class OnboardingService {
       return null;
     }
 
-    await this.personService.patch(context, existing.id, {
-      name: displayName,
-      propertiesPatch: {
-        ...(existing.properties ?? {}),
-        ...properties,
-      },
-    });
+    await this.patchSelfPerson(context, existing, displayName, properties);
     await this.claimSelfIdentifiers(context.userId!, existing.id, displayName, email);
     await this.entityIdentifierService.repointToEntity(
       context.userId!,
@@ -390,6 +406,28 @@ export class OnboardingService {
     );
 
     return existing;
+  }
+
+  /**
+   * Write onboarding's details onto a self Person it did not create, or one an
+   * import rewrote: the name the owner typed, the properties onboarding
+   * gathered, and — when the row has none — the description onboarding creates
+   * its own self Person with.
+   */
+  private async patchSelfPerson(
+    context: UserServiceContext,
+    existing: Pick<Person, 'id' | 'description' | 'properties'>,
+    displayName: string,
+    properties: Record<string, unknown>,
+  ): Promise<void> {
+    await this.personService.patch(context, existing.id, {
+      name: displayName,
+      ...(existing.description ? {} : { description: SELF_DESCRIPTION }),
+      propertiesPatch: {
+        ...(existing.properties ?? {}),
+        ...properties,
+      },
+    });
   }
 
   private async claimSelfIdentifiers(

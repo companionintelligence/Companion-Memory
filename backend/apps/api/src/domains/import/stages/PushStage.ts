@@ -2145,9 +2145,10 @@ export class PushStage implements ImportStageRunner {
    * finishing afterwards finds the pointer and reuses that Person
    * (`OnboardingService.createPersonForUser`). Onboarding running at the same
    * time creates its self Person under the same key, so it is handed that same
-   * row rather than making a second. An account that already has a
-   * pointer is returned as it is, untouched: nothing is provisioned, claimed or
-   * re-marked for it.
+   * row rather than making a second; and an account left with an `is_self`
+   * Person but no pointer has that Person adopted, not joined by another. An
+   * account that already has a pointer is returned as it is, untouched: nothing
+   * is provisioned, claimed or re-marked for it.
    *
    * Fail-soft on anything but the database being away: a provisioning error
    * leaves the run on the null-owner behaviour it always had, logged, rather

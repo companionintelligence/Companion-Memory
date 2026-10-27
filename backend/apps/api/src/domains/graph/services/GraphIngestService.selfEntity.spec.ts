@@ -18,7 +18,7 @@ const CONCEPT_KEY = 'graph_llm:concept:cuisine:italian';
  * ingest provisions a `Person` for the owner and links ci.users.entity_id to it
  * before wiring the edge. Exercises the set-based upsert path.
  */
-function makeService(opts: { selfExists: boolean; pointerSetElsewhere?: string }) {
+function makeService(opts: { selfExists: boolean; pointerSetElsewhere?: string; unpointedSelf?: string }) {
   // The owner's self entity, as resolveSelfEntity's JOIN would return it. Starts
   // empty on a fresh graph; the provisioned Person fills it in.
   let selfRows: Array<{ entity_id: string; entity_type: string }> = opts.selfExists
@@ -40,6 +40,11 @@ function makeService(opts: { selfExists: boolean; pointerSetElsewhere?: string }
 
     if (sql.includes('name, email')) {
       return Promise.resolve([{ name: 'Liam', email: 'liam@ci.computer' }]);
+    }
+
+    // The oldest live is_self Person, looked up when the account has no pointer.
+    if (sql.includes('ORDER BY created_at ASC')) {
+      return Promise.resolve(opts.unpointedSelf ? [{ entity_id: opts.unpointedSelf }] : []);
     }
 
     if (sql.includes('UPDATE ci.users')) {
@@ -182,8 +187,67 @@ describe('GraphIngestService self-entity provisioning', () => {
       .map(([, params]) => params);
     expect(marks).toContainEqual([ELSEWHERE, USER]);
 
+    // The row it provisioned stops claiming to be the owner, so one is_self
+    // Person is left, not two. It is not deleted.
+    const unmarks = node.repo.manager.query.mock.calls
+      .filter(([sql]) => String(sql).includes('SET is_self = FALSE'))
+      .map(([sql, params]) => ({ params, alsoTheProperty: String(sql).includes("'is_self', FALSE") }));
+    expect(unmarks).toEqual([{ params: [selfRow!.entityId, USER], alsoTheProperty: true }]);
+    expect(node.repo.manager.query.mock.calls.some(([sql]) => /DELETE/i.test(String(sql)))).toBe(false);
+
     // The edge anchors on the Person the account points at.
     expect(rel.inserted[0].fromNodeId).toBe(ELSEWHERE);
+  });
+
+  it('adopts the is_self Person an account with no pointer already has, rather than minting a second', async () => {
+    // Onboarding made the owner's Person before it used the shared key and
+    // stopped before pointing the account at it (or an operator cleared the
+    // pointer): an is_self row exists, the pointer is NULL.
+    const UNPOINTED = '00000000-0000-0000-0000-0000000000c3';
+    const { service, node, rel, usersUpdate, entityIdentifierService } = makeService({
+      selfExists: false,
+      unpointedSelf: UNPOINTED,
+    });
+
+    const result = await service.ingest({ userId: USER }, PREFERENCE_BATCH);
+
+    expect(result.errors).toEqual([]);
+    expect(node.inserted.some((row) => (row.properties as Record<string, unknown>)?.is_self)).toBe(false);
+    // Pointed at it with the same guarded write, never over a pointer already set.
+    expect(usersUpdate).toHaveBeenCalledTimes(1);
+    expect(usersUpdate).toHaveBeenCalledWith([USER, UNPOINTED]);
+    const pointerWrite = node.repo.manager.query.mock.calls.find(([sql]) =>
+      String(sql).includes('UPDATE ci.users'),
+    );
+    expect(pointerWrite?.[0]).toContain('entity_id IS NULL');
+
+    expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
+    expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(USER, UNPOINTED, expect.anything());
+    expect(entityIdentifierService.repointToEntity).toHaveBeenCalledWith(
+      USER,
+      UNPOINTED,
+      'email',
+      'liam@ci.computer',
+      'self',
+    );
+    expect(rel.inserted[0].fromNodeId).toBe(UNPOINTED);
+  });
+
+  it('looks for an unpointed self Person the way the dossier does', async () => {
+    const { service, node } = makeService({ selfExists: false });
+
+    await service.ingest({ userId: USER }, PREFERENCE_BATCH);
+
+    const lookup = node.repo.manager.query.mock.calls.find(([sql]) =>
+      String(sql).includes('ORDER BY created_at ASC'),
+    );
+    const sql = String(lookup?.[0]).replace(/\s+/g, ' ');
+    // UserContextService.resolveUserEntity's fallback: live, unmerged, is_self on either column.
+    expect(sql).toContain("entity_type = 'Person'");
+    expect(sql).toContain('merged_into_entity_id IS NULL');
+    expect(sql).toContain('is_active IS DISTINCT FROM FALSE');
+    expect(sql).toContain("(is_self IS TRUE OR properties ->> 'is_self' = 'true')");
+    expect(lookup?.[1]).toEqual([USER]);
   });
 
   it('reuses an existing self entity without provisioning or relinking', async () => {

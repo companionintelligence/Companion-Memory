@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -15,6 +15,7 @@ import {
   type Connection,
 } from '@ci/domains/connections';
 import { OrphanCleanupService } from '@ci/domains/search-ingress';
+import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '@ci/domains/user';
 
 import {
   CONNECTION_SCOPED_TABLES,
@@ -23,6 +24,18 @@ import {
   type UserOwnedTable,
 } from '../dataDeletionPlan';
 import { DataDeletionAuditEntity } from '../entities/DataDeletionAuditEntity';
+
+/** Objects read and deleted per page: one S3 DeleteObjects call's worth. */
+const OBJECT_PAGE_SIZE = 1000;
+
+/**
+ * How long an account delete waits on the object store. The S3 client sets no
+ * timeout of its own, and the delete runs while `handOverAdministration` holds
+ * the lock every account creation takes, so a hung store must not hold that
+ * lock for good. The same bound a file purge uses
+ * (`STORED_OBJECT_DELETE_DEADLINE_MS` in `memory/services/filePurge.ts`).
+ */
+export const OBJECT_DELETE_DEADLINE_MS = 60_000;
 
 /** Result of a single per-connection disconnect + purge. */
 export interface DisconnectResult {
@@ -51,6 +64,8 @@ export interface AccountDeletionResult {
   /** Per-table row counts purged across every user-owned table. */
   deletedCounts: Record<string, number>;
   totalDeleted: number;
+  /** Stored file objects removed from the object store. */
+  deletedObjects: number;
   /** True once the ci.users row itself has been removed. */
   userDeleted: boolean;
   auditId: string;
@@ -89,6 +104,8 @@ export class DataDeletionService {
     private readonly providerKeyService: ProviderKeyService,
     private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly logger: LoggerService,
+    /** The bytes behind `ci.files` rows. Optional so a module without the files domain still builds. */
+    @Optional() @Inject(PURGE_OBJECT_STORE) private readonly objectStore?: PurgeObjectStore,
   ) {
     this.logger.setContext(DataDeletionService.name);
   }
@@ -236,12 +253,14 @@ export class DataDeletionService {
       });
     }
 
-    // 2) Purge every user-owned table, children before parents.
-    const deletedCounts: Record<string, number> = {};
+    // 2) The bytes of the account's files, before the rows that point at them,
+    // as the 30-day purge does: if the purge below stops part way, the rows are
+    // still there to find the keys again, while the other order would strand
+    // the bytes in the bucket for good.
+    const deletedObjects = await this.deleteFileObjects(userId);
 
-    // The user row points at the account's own "You" person, which ci.entities
-    // below deletes; clear the pointer first or that delete is refused.
-    await this.dataSource.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
+    // 3) Purge every user-owned table, children before parents.
+    const deletedCounts: Record<string, number> = {};
 
     // Special-case: ci_search.entity_tag has no user_id; delete its rows that
     // reference this user's tags BEFORE we delete ci_search.tags.
@@ -251,13 +270,18 @@ export class DataDeletionService {
     }
 
     for (const table of USER_OWNED_TABLES) {
-      const count = await this.deleteUserOwned(table, userId);
+      // The user row points at the account's own "You" person, which this
+      // deletes; see deleteEntitiesUnlinkingSelf.
+      const count =
+        table.schema === 'ci' && table.table === 'entities'
+          ? await this.deleteEntitiesUnlinkingSelf(userId)
+          : await this.deleteUserOwned(table, userId);
       if (count > 0) {
         deletedCounts[`${table.schema}.${table.table}`] = count;
       }
     }
 
-    // 3) Delete the user row itself. With every RESTRICT child already gone and
+    // 4) Delete the user row itself. With every RESTRICT child already gone and
     // the CASCADE children handled above, this now succeeds (previously it would
     // fail on the first RESTRICT FK — the bug this feature fixes).
     const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId);
@@ -266,7 +290,7 @@ export class DataDeletionService {
       deletedCounts['ci.users'] = userDeletedCount;
     }
 
-    // 4) Reap any search-index rows whose source rows we deleted.
+    // 5) Reap any search-index rows whose source rows we deleted.
     await this.cleanupSearchIndex();
 
     const totalDeleted = sumCounts(deletedCounts);
@@ -286,10 +310,11 @@ export class DataDeletionService {
       userId,
       connectionsRevoked: revocations.length,
       totalDeleted,
+      deletedObjects,
       userDeleted,
     });
 
-    return { userId, revocations, deletedCounts, totalDeleted, userDeleted, auditId };
+    return { userId, revocations, deletedCounts, totalDeleted, deletedObjects, userDeleted, auditId };
   }
 
   /**
@@ -643,6 +668,64 @@ export class DataDeletionService {
     return affectedRows(result);
   }
 
+  /**
+   * Remove from the object store the bytes of every file only this account
+   * points at. File rows are deduplicated on content, so an object another
+   * account's row also names stays: deleting it would lose that account's file.
+   */
+  private async deleteFileObjects(userId: string): Promise<number> {
+    try {
+      if (!this.objectStore) {
+        const [{ count }] = (await this.dataSource.query(
+          `SELECT count(*)::int AS count FROM "ci"."files" WHERE user_id = $1 AND key IS NOT NULL`,
+          [userId],
+        )) as Array<{ count: number }>;
+
+        if (count > 0) {
+          this.logger.warn('No object store wired into account deletion; stored file objects will remain', {
+            userId,
+            objects: count,
+          });
+        }
+
+        return 0;
+      }
+
+      // Nothing in the database is touched yet, so giving up here leaves the
+      // account whole apart from any objects already gone; deleting again is safe.
+      return await withDeadline(
+        deleteSoleOwnedObjects(this.dataSource, this.objectStore, userId, OBJECT_PAGE_SIZE),
+        OBJECT_DELETE_DEADLINE_MS,
+      );
+    } catch (error) {
+      // Same tolerance as the table purge: a deployment without ci.files has no objects.
+      if (isUndefinedTableError(error)) {
+        return 0;
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * ci.entities, once the user row no longer points into it. `ci.users.entity_id`
+   * names the account's own "You" person with no cascade, so the pointer has to
+   * be cleared first or the delete is refused. Both statements share one
+   * transaction: the UPDATE holds the user row's lock until the delete commits,
+   * so a graph ingest still running for this account (`ensureSelfEntity` sets the
+   * pointer whenever it finds it NULL) waits instead of re-linking it in between
+   * and failing the delete after most of the account is already gone.
+   */
+  private async deleteEntitiesUnlinkingSelf(userId: string): Promise<number> {
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
+
+      const result = await manager.query(`DELETE FROM "ci"."entities" WHERE "owner_user_id" = $1`, [userId]);
+
+      return affectedRows(result);
+    });
+  }
+
   /** Delete ci_search.entity_tag rows referencing this user's tags. */
   private async deleteEntityTagsForUser(userId: string): Promise<number> {
     const result = await this.dataSource.query(
@@ -717,6 +800,21 @@ function affectedRows(result: unknown): number {
   }
 
   return 0;
+}
+
+/** `work`, or a rejection once `ms` have passed without it settling. */
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`The object store did not answer within ${ms / 1000} s`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /** True for Postgres error 42P01 (undefined_table) / 3F000 (invalid_schema). */

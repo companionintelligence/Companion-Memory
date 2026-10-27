@@ -1159,9 +1159,15 @@ export class GraphIngestService {
    * so a pointer a concurrent writer won is honoured — and claimed for — over
    * the row we created. Returns null only when there is no ci.users row to
    * anchor (a non-user context).
+   *
+   * An account with no pointer but a live `is_self` Person off that key (one
+   * onboarding made before it used the key, and crashed before pointing the
+   * account at it; or a pointer an operator cleared) has that Person adopted
+   * instead of a second one minted beside it.
    */
   private async ensureSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
-    const existing = await this.resolveSelfEntity(ownerId);
+    const existing =
+      (await this.resolveSelfEntity(ownerId)) ?? (await this.adoptUnpointedSelfEntity(ownerId));
     if (existing) {
       const users: Array<{ name: string | null; email: string | null }> =
         await this.nodeRepository.manager.query(`SELECT name, email FROM ci.users WHERE id = $1`, [ownerId]);
@@ -1227,6 +1233,11 @@ export class GraphIngestService {
     const self = (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
     if (self.id !== selfEntityId) {
       await this.markSelfEntity(ownerId, self.id);
+      // Two live is_self rows would leave the owner's identity ambiguous for
+      // every reader that takes one (PersonService.findSelf) and hide this one
+      // from the duplicate and self-collation passes, which skip is_self rows.
+      // Nothing is deleted; the warning names both rows.
+      await this.unmarkSelfEntity(ownerId, selfEntityId);
       this.logger.warn('Provisioned a self entity, but the account was pointed at another one', {
         ownerId,
         selfEntityId,
@@ -1257,6 +1268,64 @@ export class GraphIngestService {
           AND owner_user_id = $2::uuid`,
       [entityId, ownerId],
     );
+  }
+
+  /** {@link markSelfEntity} undone: the row stays, no longer claiming to be the owner. */
+  private async unmarkSelfEntity(ownerId: string, entityId: string): Promise<void> {
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.entities
+          SET is_self = FALSE,
+              properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('is_self', FALSE),
+              updated_at = now()
+        WHERE entity_id = $1::uuid
+          AND owner_user_id = $2::uuid`,
+      [entityId, ownerId],
+    );
+  }
+
+  /**
+   * Point an account that has no pointer at the `is_self` Person it already
+   * has, and return the Person the account points at afterwards: that one, or
+   * the one a concurrent writer pointed it at first. Null when the account has
+   * no live `is_self` Person, or still resolves to none (a pointer naming no
+   * row, which the guarded write leaves alone).
+   *
+   * The lookup is the one `UserContextService.resolveUserEntity` falls back on —
+   * the oldest live `is_self` Person — so the import and the dossier settle on
+   * the same row.
+   */
+  private async adoptUnpointedSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
+    const [selfRow]: Array<{ entity_id: string }> = await this.nodeRepository.manager.query(
+      `SELECT entity_id
+         FROM ci.entities
+        WHERE owner_user_id = $1::uuid
+          AND entity_type = 'Person'
+          AND merged_into_entity_id IS NULL
+          AND is_active IS DISTINCT FROM FALSE
+          AND (is_self IS TRUE OR properties ->> 'is_self' = 'true')
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [ownerId],
+    );
+    if (!selfRow?.entity_id) {
+      return null;
+    }
+
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`,
+      [ownerId, selfRow.entity_id],
+    );
+
+    const self = await this.resolveSelfEntity(ownerId);
+    if (self) {
+      this.logger.log('Pointed the account at the self Person it already had', {
+        ownerId,
+        selfEntityId: selfRow.entity_id,
+        pointer: self.id,
+      });
+    }
+
+    return self;
   }
 
   /**

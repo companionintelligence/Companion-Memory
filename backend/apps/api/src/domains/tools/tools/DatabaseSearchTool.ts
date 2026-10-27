@@ -134,10 +134,13 @@ export type SearchResult =
  * host the appliance is served from. The prompt tells the model to copy it
  * verbatim and never to build one from an id.
  */
-export type SearchResultItem = SearchResult & {
+export type SearchResultItem = WithoutOwner<SearchResult> & {
   type: IndexableEntity;
   link?: string;
 };
+
+/** `T` minus its `user` relation, member by member when `T` is a union (plain `Omit` keeps only the shared keys). */
+type WithoutOwner<T> = T extends unknown ? Omit<T, 'user'> : never;
 
 /**
  * A file hit as the model may see it: {@link SignedFile} minus its object-store
@@ -161,16 +164,18 @@ export function stripStorageAddress(file: SignedFile): ModelFile {
 }
 
 /**
- * Drop the account record a hit carries. Threads and answers are loaded with
- * their `user` relation, which is the whole account row: email, role,
- * onboarding state, `passwordSetAt`, `emailProvenAt`. Every hit is the caller's
- * own, so it tells the model nothing, it spends the tool-result budget, and an
- * email address and password timestamps have no place in a prompt.
+ * Drop the account record a hit carries. Threads, answers and places are loaded
+ * with their `user` relation, which is the whole account row: email, role,
+ * onboarding state, `passwordSetAt`, `emailProvenAt`. A browser visit is worse:
+ * `BrowserActivityEntity.toEgressType` passes the raw `UserEntity` through, so
+ * its `user` also holds the password hash. Every hit is the caller's own, so the
+ * record tells the model nothing and only spends the tool-result budget. None
+ * of it belongs in a prompt.
  */
-export function stripOwnerRecord<T extends object>(entity: T): Omit<T, 'user'> {
+export function stripOwnerRecord<T extends object>(entity: T): WithoutOwner<T> {
   const { user: _user, ...rest } = entity as T & { user?: unknown };
 
-  return rest;
+  return rest as WithoutOwner<T>;
 }
 
 /**
@@ -625,7 +630,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
 
       const link = itemLink(result.type, result.id, contentIdsByFile);
 
-      return [{ ...(stripOwnerRecord(entity) as SearchResult), type: result.type, ...(link && { link }) }];
+      return [{ ...stripOwnerRecord(entity), type: result.type, ...(link && { link }) }];
     });
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
