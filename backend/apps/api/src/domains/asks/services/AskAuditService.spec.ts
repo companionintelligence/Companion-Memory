@@ -128,3 +128,25 @@ describe('AskAuditEntity.toEgressType', () => {
     expect(AskAuditEntity.toEgressType(entity).disclosedCount).toBe(7);
   });
 });
+
+describe('AskAuditService SAID anchoring', () => {
+  it('computes and verifies deterministic SAID for an audit record', () => {
+    const { service } = makeService();
+    const payload = dto({
+      askId: 'ask-1',
+      askerUserId: 'asker-1',
+      disclosedEntities: ['doc-1', 'doc-2'],
+      disclosedCount: 2,
+    });
+
+    const said = service.computeSaid(payload);
+    expect(said).toBeDefined();
+    expect(said).toMatch(/^E[A-Za-z0-9_-]{43}$/);
+
+    expect(service.verifySaid(payload, said)).toBe(true);
+
+    // Tampered payload fails verification
+    const tampered = { ...payload, disclosedCount: 99 };
+    expect(service.verifySaid(tampered, said)).toBe(false);
+  });
+});

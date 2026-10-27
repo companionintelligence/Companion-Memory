@@ -370,8 +370,20 @@ export class PeerLinkService {
       return [];
     }
 
+    const whereConditions: Array<Record<string, unknown>> = [
+      { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
+    ];
+
+    if (thumbprint.startsWith('did:keri:')) {
+      const rawAid = thumbprint.slice('did:keri:'.length);
+      whereConditions.push(
+        { peerIssuer: 'did:keri', peerSubject: thumbprint, status: 'active', revokedAt: IsNull() },
+        { peerIssuer: 'did:keri', peerSubject: rawAid, status: 'active', revokedAt: IsNull() },
+      );
+    }
+
     const rows = await this.repository.find({
-      where: { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
+      where: whereConditions,
     });
 
     return rows.map(PeerLinkEntity.toEgressType);

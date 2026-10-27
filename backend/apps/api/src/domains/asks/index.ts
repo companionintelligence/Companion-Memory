@@ -169,6 +169,11 @@ export {
   rungForForm,
 } from './policy';
 export {
+  AUDIT_SAID_PLACEHOLDER,
+  computeAuditSaid,
+  verifyAuditSaid,
+} from './auditSaid';
+export {
   ASK_ARCHETYPES,
   askGrammarSchema,
   dataClassesIn,

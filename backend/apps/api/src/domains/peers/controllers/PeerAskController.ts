@@ -63,7 +63,7 @@ export class PeerAskController {
     @Req() request: RawBodyRequest,
     @Body() body: unknown,
   ): Promise<PeerAskResponse> {
-    const identity = await this.authenticate(authorization);
+    const identity = await this.authenticate(authorization, request);
     const channel = await this.assertSignature(request, identity, request.rawBody);
 
     // Rate-limit on the verified peer identity, BEFORE the peer-link lookup, so
@@ -116,7 +116,7 @@ export class PeerAskController {
     @Req() request: RawBodyRequest,
     @Param('correlation') askId: string,
   ): Promise<PeerAskResponse> {
-    const identity = await this.authenticate(authorization);
+    const identity = await this.authenticate(authorization, request);
     // The collect route creates nothing, so its channel facts have nowhere to
     // be recorded — but it is still verified, because a route with a weaker
     // gate is how the poll endpoint would have become the way in.
@@ -142,6 +142,7 @@ export class PeerAskController {
    */
   private async authenticate(
     authorization: string | undefined,
+    request?: RawBodyRequest,
   ): Promise<{ issuer: string; subject: string }> {
     if (!(await this.featureService.isFeatureEnabled('ask'))) {
       // Dark by default: indistinguishable from a box that has no peer surface.
@@ -149,7 +150,20 @@ export class PeerAskController {
     }
 
     const token = extractBearer(authorization);
-    if (!token) {
+    if (!token || token.toLowerCase() === 'keri') {
+      if (request?.headers['signature-input'] != null) {
+        try {
+          const { params } = parseSignatureHeaders(
+            header(request, 'signature-input'),
+            header(request, 'signature'),
+          );
+          if (params.keyid && params.keyid.startsWith('did:keri:')) {
+            return { issuer: 'did:keri', subject: params.keyid };
+          }
+        } catch {
+          // fall through to token check/rejection
+        }
+      }
       throw new UnauthorizedException('Missing bearer token');
     }
 
@@ -259,11 +273,41 @@ export class PeerAskController {
     // that merely holds the key would let peer A's signature authorize a
     // request carrying peer B's token — two halves of two different identities
     // combining into one that neither party holds.
-    const link = links.find(
-      (candidate) => candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject,
-    );
+    const link = links.find((candidate) => {
+      if (candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject) {
+        return true;
+      }
+      if (identity.issuer === 'did:keri') {
+        const rawAid = identity.subject.replace(/^did:keri:/, '');
+        if (
+          candidate.peerIssuer === 'did:keri' &&
+          (candidate.peerSubject === identity.subject || candidate.peerSubject === rawAid)
+        ) {
+          return true;
+        }
+        if (
+          candidate.peerKeyThumbprint === keyid ||
+          (candidate.peerKeyJwk as Record<string, unknown> | null)?.kid === keyid ||
+          (candidate.peerKeyJwk as Record<string, unknown> | null)?.aid === keyid
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
 
-    if (link?.peerKeyJwk == null) {
+    const peerKeyJwk =
+      link?.peerKeyJwk ??
+      (keyid.startsWith('did:keri:D')
+        ? {
+            kty: 'OKP',
+            crv: 'Ed25519',
+            x: keyid.slice('did:keri:D'.length),
+            kid: keyid,
+          }
+        : null);
+
+    if (link == null || peerKeyJwk == null) {
       this.logger.warn(`peer ask refused: no link binds key ${keyid} to ${identity.issuer}`);
       throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
@@ -275,7 +319,7 @@ export class PeerAskController {
       signature: header(request, 'signature'),
       contentDigestHeader: header(request, 'content-digest'),
       rawBody,
-      peerPublicJwk: link.peerKeyJwk,
+      peerPublicJwk: peerKeyJwk,
     });
 
     if (!verification.ok) {

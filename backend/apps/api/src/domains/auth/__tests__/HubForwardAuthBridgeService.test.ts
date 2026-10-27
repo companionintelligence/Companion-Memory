@@ -917,5 +917,44 @@ describe('HubForwardAuthBridgeService', () => {
 
       expect(service.verifyIdentity(requestWith(headers, null))).toBeNull();
     });
+
+    it('binds and locates user by sovereign did:keri AID when userAid header is present', async () => {
+      const { service, federatedIdentityService, userService } = makeService();
+      const userAid = 'did:keri:Duser-aid-12345';
+      const headers = {
+        ...boundHeaders('alice@lifescope.io'),
+        'x-ci-hub-user-aid': userAid,
+        'x-ci-hub-aid': 'did:keri:Dhub-aid-67890',
+        'x-ci-hub-kel-digest': 'Ekel-digest-abcde',
+      };
+
+      const user = account('usr-1', 'alice@lifescope.io');
+      userService.findAccountByEmail.mockResolvedValue(user);
+
+      const res = await service.alignSession(requestWith(headers, null), response());
+      expect(res.replaced).toBe(true);
+
+      // Verify that did:keri binding was created
+      expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'usr-1',
+          issuer: 'did:keri',
+          subject: userAid,
+        }),
+      );
+
+      // Now verify locate finds by did:keri first
+      federatedIdentityService.findUserId.mockImplementation((issuer: string, subject: string) => {
+        if (issuer === 'did:keri' && subject === userAid) return Promise.resolve('usr-1');
+        return Promise.resolve(null);
+      });
+      userService.findById.mockResolvedValue(user);
+
+      const described = await service.describeIdentity(requestWith(headers, null));
+      expect(described).toEqual({
+        username: 'alice@lifescope.io',
+        accountId: 'usr-1',
+      });
+    });
   });
 });

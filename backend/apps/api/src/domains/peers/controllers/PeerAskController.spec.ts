@@ -227,4 +227,35 @@ describe('PeerAskController — signatures required', () => {
       controller.result('Bearer t', request({}, undefined, url, 'GET'), 'abc12345'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
+
+  it('authenticates sovereign KERI peer directly without Portal token', async () => {
+    const raw = JSON.stringify(BODY);
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const pubJwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+    const keriAid = `did:keri:D${pubJwk.x}`;
+    const privJwk = { ...privateKey.export({ format: 'jwk' }), kid: keriAid };
+
+    peersConfig.signingKeyJwk = JSON.stringify(privJwk);
+    const signer = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
+    const headers = signer.signOutbound({ method: 'POST', targetUri: `${ENDPOINT}/ask`, body: raw }) as Record<string, string>;
+    delete peersConfig.signingKeyJwk;
+
+    const keriLink = {
+      peerHandle: 'sovereign-peer',
+      peerIssuer: 'did:keri',
+      peerSubject: keriAid,
+      peerKeyJwk: pubJwk,
+    };
+
+    const { controller, peerAskService, portalTokenVerifier } = makeController([keriLink]);
+
+    const res = await controller.ask('Bearer keri', request(headers, raw), BODY);
+    expect(res).toEqual({ askId: 'abc12345', status: 'pending' });
+    expect(portalTokenVerifier.verifyClaims).not.toHaveBeenCalled();
+    expect(peerAskService.handle).toHaveBeenCalledWith(
+      { issuer: 'did:keri', subject: keriAid },
+      BODY,
+      expect.objectContaining({ covered: expect.any(Array) }),
+    );
+  });
 });

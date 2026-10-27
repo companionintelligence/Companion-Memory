@@ -17,6 +17,9 @@ import { LoggerService } from '@ci/common/logging';
 import { type DisclosureSummary, summarizeDisclosures } from '../disclosureSummary';
 import { type AskAudit, AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskAuditOutcome, RecordAskAuditDto } from '../types';
+import { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER } from '../auditSaid';
+
+export { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER };
 
 /**
  * The most audit rows one read will load.
@@ -113,6 +116,16 @@ export class AskAuditService {
     const entity = await repository.save(record);
 
     return AskAuditEntity.toEgressType(entity);
+  }
+
+  /** Compute a verifiable SAID digest over an audit entry or DTO. */
+  computeSaid(data: RecordAskAuditDto | AskAudit): string {
+    return computeAuditSaid(data);
+  }
+
+  /** Verify that an audit entry matches the claimed SAID digest. */
+  verifySaid(data: RecordAskAuditDto | AskAudit, expectedSaid: string): boolean {
+    return verifyAuditSaid(data, expectedSaid);
   }
 
   /**

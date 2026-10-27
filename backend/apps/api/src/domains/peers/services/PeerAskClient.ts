@@ -37,7 +37,7 @@ export class PeerAskClient {
     this.logger.setContext(PeerAskClient.name);
   }
 
-  async send(peer: PeerLink, body: PeerAskBody, accessToken: string): Promise<AskerVisiblePeerReply> {
+  async send(peer: PeerLink, body: PeerAskBody, accessToken?: string): Promise<AskerVisiblePeerReply> {
     return this.call(peer, `/ask`, body.askId, accessToken, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -55,7 +55,7 @@ export class PeerAskClient {
    * concatenation is exactly the shape that stops being safe when the field's
    * bounds are relaxed by someone else later.
    */
-  async poll(peer: PeerLink, correlationId: string, accessToken: string): Promise<AskerVisiblePeerReply> {
+  async poll(peer: PeerLink, correlationId: string, accessToken?: string): Promise<AskerVisiblePeerReply> {
     return this.call(peer, `/ask/${encodeURIComponent(correlationId)}`, correlationId, accessToken, {
       method: 'GET',
     });
@@ -65,7 +65,7 @@ export class PeerAskClient {
     peer: PeerLink,
     path: string,
     askId: string,
-    accessToken: string,
+    accessToken: string | undefined,
     init: { method: string; body?: string },
   ): Promise<AskerVisiblePeerReply> {
     const url = `${peer.memoryEndpoint.replace(/\/+$/, '')}${path}`;
@@ -100,10 +100,14 @@ export class PeerAskClient {
     // the ask route, because a second caller that skipped it would reopen the
     // hole for the whole domain.
     try {
+      const authHeader = accessToken?.trim()
+        ? `Bearer ${accessToken.trim()}`
+        : (signature ? 'Bearer keri' : undefined);
+
       const response = await peerEgressFetch(url, {
         method: init.method,
         headers: {
-          authorization: `Bearer ${accessToken}`,
+          ...(authHeader ? { authorization: authHeader } : {}),
           ...(init.body ? { 'content-type': 'application/json' } : {}),
           accept: 'application/json',
           ...(signature ?? {}),

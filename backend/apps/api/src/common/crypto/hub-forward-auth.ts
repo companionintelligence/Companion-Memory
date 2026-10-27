@@ -39,6 +39,9 @@ export const FORWARD_AUTH_USER_ISSUER_HEADER = 'x-ci-hub-user-issuer';
 export const FORWARD_AUTH_USER_ID_HEADER = 'x-ci-hub-user-id';
 export const FORWARD_AUTH_USER_ID_SIGNATURE_HEADER = 'x-ci-hub-user-id-signature';
 export const FORWARD_AUTH_ASSERTION_HEADER = 'x-ci-hub-user-assertion';
+export const FORWARD_AUTH_USER_AID_HEADER = 'x-ci-hub-user-aid';
+export const FORWARD_AUTH_HUB_AID_HEADER = 'x-ci-hub-aid';
+export const FORWARD_AUTH_KEL_DIGEST_HEADER = 'x-ci-hub-kel-digest';
 
 /** The bound assertion's format version, the first field of its header. */
 export const FORWARD_AUTH_ASSERTION_VERSION = '2';
@@ -71,6 +74,9 @@ export interface ForwardAuthHeaders {
   userIdSignature?: string | null;
   /** `2.<nonce>.<signature>`, from a Hub that gave this app a key of its own. */
   assertion?: string | null;
+  userAid?: string | null;
+  hubAid?: string | null;
+  kelDigest?: string | null;
 }
 
 /** A Hub person's stable identity: the (issuer, subject) pair `ci.federated_identities` binds. */
@@ -79,6 +85,12 @@ export interface HubStableId {
   issuer: string;
   /** The Hub user's `public_id`: minted once per person, unchanged by any rename, never reused. */
   subject: string;
+  /** KERI Autonomic Identifier for user (`did:keri:...`). */
+  userAid?: string;
+  /** KERI Autonomic Identifier for Hub appliance (`did:keri:...`). */
+  hubAid?: string;
+  /** KEL latest event digest. */
+  kelDigest?: string;
 }
 
 export type ForwardAuthVerifyResult =
@@ -209,7 +221,18 @@ export function verifyForwardAuthHeaders(
     return { ok: false, reason: 'bad_signature' };
   }
 
-  return { ok: true, username, stableId: { issuer, subject: userId } };
+  const { userAid, hubAid, kelDigest } = headers;
+  return {
+    ok: true,
+    username,
+    stableId: {
+      issuer,
+      subject: userId,
+      ...(userAid ? { userAid } : {}),
+      ...(hubAid ? { hubAid } : {}),
+      ...(kelDigest ? { kelDigest } : {}),
+    },
+  };
 }
 
 /**
@@ -373,10 +396,17 @@ function verifyBoundAssertion(
     return { ok: false, reason: 'bad_signature' };
   }
 
+  const { userAid, hubAid, kelDigest } = headers;
   return {
     ok: true,
     username,
-    stableId: issuer && userId ? { issuer, subject: userId } : null,
+    stableId: issuer && userId ? {
+      issuer,
+      subject: userId,
+      ...(userAid ? { userAid } : {}),
+      ...(hubAid ? { hubAid } : {}),
+      ...(kelDigest ? { kelDigest } : {}),
+    } : null,
     bound: true,
     replayKey: nonce,
     expiresAt: timestampMs + maxSkewMs,
@@ -439,5 +469,8 @@ export function readForwardAuthHeaders(
     userId: value(FORWARD_AUTH_USER_ID_HEADER),
     userIdSignature: value(FORWARD_AUTH_USER_ID_SIGNATURE_HEADER),
     assertion: value(FORWARD_AUTH_ASSERTION_HEADER),
+    userAid: value(FORWARD_AUTH_USER_AID_HEADER),
+    hubAid: value(FORWARD_AUTH_HUB_AID_HEADER),
+    kelDigest: value(FORWARD_AUTH_KEL_DIGEST_HEADER),
   };
 }

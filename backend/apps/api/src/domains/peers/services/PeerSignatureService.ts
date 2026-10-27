@@ -84,7 +84,7 @@ export type VerificationResult =
  */
 @Injectable()
 export class PeerSignatureService {
-  private cachedSigningKey: { key: KeyObject; thumbprint: string } | null | undefined;
+  private cachedSigningKey: { key: KeyObject; thumbprint: string; keyid?: string } | null | undefined;
 
   constructor(
     @Inject(CONSUMPTION_STORE)
@@ -178,9 +178,15 @@ export class PeerSignatureService {
     // and still be verified against whichever one the link happens to hold.
     const jwkObj = request.peerPublicJwk as Record<string, unknown>;
     const isKeriAid = parsed.params.keyid.startsWith('did:keri:');
+    const aid = isKeriAid ? parsed.params.keyid.slice('did:keri:'.length) : '';
     const matchesKey =
       parsed.params.keyid === thumbprint ||
-      (isKeriAid && (jwkObj.kid === parsed.params.keyid || jwkObj.aid === parsed.params.keyid));
+      (isKeriAid && (
+        jwkObj.kid === parsed.params.keyid ||
+        jwkObj.aid === parsed.params.keyid ||
+        jwkObj.kid === aid ||
+        (aid.startsWith('D') && jwkObj.x === aid.slice(1))
+      ));
 
     if (!matchesKey) {
       return { ok: false, reason: 'unknown-key' };
@@ -247,7 +253,7 @@ export class PeerSignatureService {
       components: [...REQUIRED_COMPONENTS, ...(hasBody ? [BODY_COMPONENT] : [])],
       created,
       expires: created + OUTBOUND_LIFETIME_MS / 1000,
-      keyid: signing.thumbprint,
+      keyid: signing.keyid ?? signing.thumbprint,
       alg: PEER_SIGNATURE_ALG,
       // 128 bits, base64url -- comfortably inside NONCE_PATTERN and far beyond
       // any birthday concern over the five minutes a nonce can live.
@@ -270,9 +276,21 @@ export class PeerSignatureService {
     };
   }
 
+  /** Whether this box has a signing key configured. */
+  get hasSigningKey(): boolean {
+    return this.signingKey() != null;
+  }
+
   /** This box's own key thumbprint, for publishing to peers. Null when unconfigured. */
   get publicThumbprint(): string | null {
     return this.signingKey()?.thumbprint ?? null;
+  }
+
+  /** This box's KERI AID if configured in the key. Null when unconfigured. */
+  get publicAid(): string | null {
+    const signing = this.signingKey();
+
+    return signing?.keyid?.startsWith('did:keri:') ? signing.keyid : null;
   }
 
   /**
@@ -282,7 +300,7 @@ export class PeerSignatureService {
    * none" -- so a missing key is resolved once rather than re-parsed and
    * re-warned on every outbound request.
    */
-  private signingKey(): { key: KeyObject; thumbprint: string } | null {
+  private signingKey(): { key: KeyObject; thumbprint: string; keyid?: string } | null {
     if (this.cachedSigningKey !== undefined) {
       return this.cachedSigningKey;
     }
@@ -300,8 +318,9 @@ export class PeerSignatureService {
       // The thumbprint identifies the PUBLIC half; `d` is dropped by taking
       // only the three required OKP members.
       const thumbprint = jwkThumbprint(jwk as Record<string, unknown>);
+      const keyid = typeof jwk.kid === 'string' ? jwk.kid : (typeof jwk.aid === 'string' ? jwk.aid : undefined);
 
-      this.cachedSigningKey = { key, thumbprint };
+      this.cachedSigningKey = { key, thumbprint, ...(keyid ? { keyid } : {}) };
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.
