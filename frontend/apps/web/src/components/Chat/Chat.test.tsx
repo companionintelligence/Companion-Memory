@@ -12,9 +12,11 @@ vi.mock('@/components/ModelSelector', () => ({
   ToolsOffNotice: () => <div data-testid="tools-off-notice" />,
 }));
 
+const uploadState = vi.hoisted(() => ({ loading: false }));
+
 vi.mock('@/api/useUploadFile', () => ({
   useUploadFile: () => [
-    { files: [], loading: false, error: null },
+    { files: [], loading: uploadState.loading, error: null },
     { upload: vi.fn(), reset: vi.fn() },
   ],
 }));
@@ -242,9 +244,9 @@ describe('Chat', () => {
   });
 
   /**
-   * The textarea is disabled while a turn loads and streams, which drops focus to <body>, and the focus calls made
-   * when the stream finished ran while it was still disabled. After a reply the box had no focus, so the next
-   * message needed a click first.
+   * The textarea is disabled while a turn loads and streams, which drops focus to <body>. The focus calls made when
+   * the stream finished ran while it was still disabled. After a reply the box had no focus, so the next message
+   * needed a click first.
    */
   describe('focus after a reply', () => {
     const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
@@ -258,12 +260,11 @@ describe('Chat', () => {
       const textbox = screen.getByRole('textbox');
       await nextFrame();
 
-      // The finished reply lands while `streaming` is still set, so the box is still disabled when the existing
-      // focus calls run. A browser drops focus from a disabled control; jsdom does not, so blur it here.
+      // The finished reply lands while `streaming` is still set, so the box is still disabled when the mount and
+      // `messages` focus calls run. They do nothing.
       rerender(<Chat autoFocus streaming messages={reply} />);
       expect(textbox).toBeDisabled();
       await nextFrame();
-      textbox.blur();
       expect(textbox).not.toHaveFocus();
 
       rerender(<Chat autoFocus messages={reply} />);
@@ -306,6 +307,26 @@ describe('Chat', () => {
 
       await nextFrame();
       expect(elsewhere).toHaveFocus();
+    });
+
+    it('gives it back after a file upload, which disables the box too', async () => {
+      const { rerender } = renderWithProviders(<Chat autoFocus messages={reply} />);
+      const textbox = screen.getByRole('textbox');
+      await waitFor(() => expect(textbox).toHaveFocus());
+
+      textbox.blur();
+
+      try {
+        uploadState.loading = true;
+        rerender(<Chat autoFocus messages={reply} />);
+        expect(textbox).toBeDisabled();
+      } finally {
+        uploadState.loading = false;
+      }
+
+      rerender(<Chat autoFocus messages={reply} />);
+
+      await waitFor(() => expect(textbox).toHaveFocus());
     });
 
     it('does nothing without autoFocus', async () => {

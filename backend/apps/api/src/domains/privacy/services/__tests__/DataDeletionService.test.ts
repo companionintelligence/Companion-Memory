@@ -3,7 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { BaseOAuth2Client } from '@ci/domains/connections';
 
 import { USER_OWNED_TABLES } from '../../dataDeletionPlan';
-import { DataDeletionService } from '../DataDeletionService';
+import { DataDeletionService, OBJECT_DELETE_DEADLINE_MS } from '../DataDeletionService';
 
 /**
  * A tiny in-memory Postgres stand-in for the DataSource used by the service.
@@ -24,6 +24,9 @@ interface Row {
   recordId?: string;
   /** Rows of a table with no user column: the `id` of the parent row they belong to. */
   parentId?: string;
+  /** ci.files rows: where the bytes are stored. */
+  bucket?: string;
+  key?: string;
 }
 
 function makeDataSource(initial: Record<string, Row[]>) {
@@ -34,6 +37,30 @@ function makeDataSource(initial: Record<string, Row[]>) {
 
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     const value = params[0] as string;
+
+    // The objects only this user's file rows point at, a page at a time:
+    // ORDER BY bucket, key LIMIT $2 OFFSET $3.
+    if (sql.includes('SELECT DISTINCT f.bucket')) {
+      const files = store['ci.files'] ?? [];
+      const objects = files.filter(
+        (f) =>
+          f.user === value &&
+          f.bucket != null &&
+          f.key != null &&
+          !files.some((o) => o.bucket === f.bucket && o.key === f.key && o.user !== value),
+      );
+      const distinct = [
+        ...new Map(objects.map((f) => [`${f.bucket}/${f.key}`, { bucket: f.bucket!, key: f.key! }])).values(),
+      ].sort((a, b) => a.bucket.localeCompare(b.bucket) || a.key.localeCompare(b.key));
+      const [limit, offset] = [params[1] as number, params[2] as number];
+
+      return distinct.slice(offset, offset + limit);
+    }
+
+    // SELECT count(*) ... FROM "ci"."files" WHERE user_id = $1 AND key IS NOT NULL
+    if (sql.includes('count(*)') && sql.includes('"ci"."files"')) {
+      return [{ count: (store['ci.files'] ?? []).filter((f) => f.user === value && f.key != null).length }];
+    }
 
     // Ledger arrival removal: DELETE FROM ci.record_sources WHERE user_id = $1 AND connection_id = $2
     if (sql.includes('ci.record_sources WHERE user_id')) {
@@ -143,7 +170,13 @@ function makeDataSource(initial: Record<string, Row[]>) {
     return [[], 0];
   });
 
-  return { dataSource: { query } as never, store, query };
+  // A transaction runs its statements through the same query(), so their order
+  // stays visible in query.mock.calls.
+  const transaction = jest.fn(async (work: (manager: { query: typeof query }) => Promise<unknown>) =>
+    work({ query }),
+  );
+
+  return { dataSource: { query, transaction } as never, store, query, transaction };
 }
 
 /** A fake OAuth2 client whose revoke() we can assert on. */
@@ -196,8 +229,10 @@ function makeService(opts: {
     providerName?: string | null;
     revoke?: jest.Mock;
   };
+  /** The object store behind ci.files. Wired by default; null leaves it out. */
+  objectStore?: { deleteObjects: jest.Mock } | null;
 }) {
-  const { dataSource, store, query } = makeDataSource(opts.store);
+  const { dataSource, store, query, transaction } = makeDataSource(opts.store);
 
   const connectionRepository = {
     findOne: jest.fn(async ({ where }: { where: { id: string; userId: string } }) => {
@@ -263,6 +298,9 @@ function makeService(opts: {
 
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
+  const objectStore =
+    opts.objectStore === undefined ? { deleteObjects: jest.fn(async () => undefined) } : opts.objectStore;
+
   const service = new DataDeletionService(
     dataSource,
     connectionRepository as never,
@@ -272,12 +310,16 @@ function makeService(opts: {
     providerKeyService as never,
     cloudOAuthProxyService as never,
     logger as never,
+    objectStore ?? undefined,
   );
 
   return {
     service,
+    objectStore,
+    logger,
     store,
     query,
+    transaction,
     savedAudits,
     connectionRepository,
     clientFactory,
@@ -462,22 +504,22 @@ describe('DataDeletionService.deleteAccount', () => {
     const { service, store, query } = makeService({
       connections: [],
       store: {
-          'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-          'ci.summaries': [
-            { id: 's1', user: 'user-1' },
-            { id: 's2', user: 'user-2' },
-          ],
-          'ci.events': [
-            { id: 'e1', user: 'user-1' },
-            { id: 'e2', user: 'user-2' },
-          ],
-          'ci.content': [
-            { id: 'c1', user: 'user-1' },
-            { id: 'c2', user: 'user-2' },
-          ],
-          'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
-          'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
-          'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.summaries': [
+          { id: 's1', user: 'user-1' },
+          { id: 's2', user: 'user-2' },
+        ],
+        'ci.events': [
+          { id: 'e1', user: 'user-1' },
+          { id: 'e2', user: 'user-2' },
+        ],
+        'ci.content': [
+          { id: 'c1', user: 'user-1' },
+          { id: 'c2', user: 'user-2' },
+        ],
+        'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
+        'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
+        'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
       },
     });
 
@@ -502,21 +544,132 @@ describe('DataDeletionService.deleteAccount', () => {
     }
   });
 
-  it('clears the user row pointer to its own person before purging ci.entities', async () => {
-    const { service, query } = makeService({
+  it('clears the user row pointer to its own person in the transaction that purges ci.entities', async () => {
+    const { service, query, transaction } = makeService({
       connections: [],
       store: { 'ci.users': [{ user: 'user-1' }], 'ci.entities': [{ user: 'user-1' }] },
     });
 
-    await service.deleteAccount({ userId: 'user-1' });
+    const result = await service.deleteAccount({ userId: 'user-1' });
 
     const statements = query.mock.calls.map(([sql]) => sql as string);
     const cleared = statements.findIndex((sql) => /UPDATE "ci"\."users" SET "entity_id" = NULL/.test(sql));
     const entities = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."entities"'));
 
+    // Straight before the delete, not at the start of the purge: a graph ingest
+    // still running for the account would otherwise re-link the pointer in between.
     expect(cleared).toBeGreaterThanOrEqual(0);
-    expect(cleared).toBeLessThan(entities);
+    expect(entities).toBe(cleared + 1);
     expect(query.mock.calls[cleared][1]).toEqual(['user-1']);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(result.deletedCounts).toMatchObject({ 'ci.entities': 1 });
+  });
+
+  it("deletes the stored bytes of the user's files before the rows, and keeps an object another account shares", async () => {
+    const { service, store, query, objectStore } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.files': [
+          { user: 'user-1', bucket: 'companion', key: 'own-a' },
+          { user: 'user-1', bucket: 'companion', key: 'own-b' },
+          { user: 'user-1', bucket: 'archive', key: 'own-c' },
+          // Deduplicated on content: both accounts point at one object.
+          { user: 'user-1', bucket: 'companion', key: 'shared' },
+          { user: 'user-2', bucket: 'companion', key: 'shared' },
+          { user: 'user-2', bucket: 'companion', key: 'theirs' },
+          // A cloud-drive pointer row holds no bytes.
+          { user: 'user-1' },
+        ],
+      },
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(objectStore?.deleteObjects.mock.calls).toEqual([
+      ['archive', ['own-c']],
+      ['companion', ['own-a', 'own-b']],
+    ]);
+    expect(result.deletedObjects).toBe(3);
+    expect(store['ci.files']).toEqual([
+      { user: 'user-2', bucket: 'companion', key: 'shared' },
+      { user: 'user-2', bucket: 'companion', key: 'theirs' },
+    ]);
+
+    // The keys are read while the rows that name them still exist.
+    const statements = query.mock.calls.map(([sql]) => sql as string);
+    const read = statements.findIndex((sql) => sql.includes('SELECT DISTINCT f.bucket'));
+    const rows = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."files"'));
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(read).toBeLessThan(rows);
+  });
+
+  it('stops before deleting any row when the object store refuses', async () => {
+    const deleteObjects = jest.fn(async () => {
+      throw new Error('object store down');
+    });
+    const { service, store } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }],
+        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
+        'ci.notes': [{ user: 'user-1' }],
+      },
+      objectStore: { deleteObjects },
+    });
+
+    await expect(service.deleteAccount({ userId: 'user-1' })).rejects.toThrow('object store down');
+
+    expect(store['ci.files']).toHaveLength(1);
+    expect(store['ci.notes']).toHaveLength(1);
+    expect(store['ci.users']).toHaveLength(1);
+  });
+
+  it('gives up on an object store that never answers, before deleting any row', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, store } = makeService({
+        connections: [],
+        store: {
+          'ci.users': [{ user: 'user-1' }],
+          'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
+          'ci.notes': [{ user: 'user-1' }],
+        },
+        objectStore: { deleteObjects: jest.fn(() => new Promise<void>(() => undefined)) },
+      });
+
+      const deletion = service.deleteAccount({ userId: 'user-1' });
+      const outcome = expect(deletion).rejects.toThrow('did not answer within 60 s');
+      await jest.advanceTimersByTimeAsync(OBJECT_DELETE_DEADLINE_MS);
+      await outcome;
+
+      expect(store['ci.files']).toHaveLength(1);
+      expect(store['ci.notes']).toHaveLength(1);
+      expect(store['ci.users']).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('warns and goes on when no object store is wired', async () => {
+    const { service, store, logger } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }],
+        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
+      },
+      objectStore: null,
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(result.deletedObjects).toBe(0);
+    expect(result.userDeleted).toBe(true);
+    expect(store['ci.files']).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('stored file objects will remain'),
+      expect.objectContaining({ userId: 'user-1', objects: 1 }),
+    );
   });
 
   it('is idempotent: re-deleting an already-deleted account purges nothing and audits zero', async () => {
@@ -546,6 +699,21 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(order).toContain('ci.provider_keys');
     // The digests memory.forget keeps so a forgotten person is not minted again are the user's data too.
     expect(order).toContain('ci.forgotten_identifiers');
+  });
+
+  it('purges every table that has no user column before the parent its rows are found through', () => {
+    // No foreign key holds this order for summary_l1_label, so the catalog
+    // checks cannot: with its parent gone first, the join finds nothing.
+    const order = USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`);
+    const misplaced = USER_OWNED_TABLES.filter(
+      (t) =>
+        t.through &&
+        order.indexOf(`${t.through.parentSchema}.${t.through.parentTable}`) <=
+          order.indexOf(`${t.schema}.${t.table}`),
+    ).map((t) => `${t.schema}.${t.table}`);
+
+    expect(USER_OWNED_TABLES.some((t) => t.through)).toBe(true);
+    expect(misplaced).toEqual([]);
   });
 });
 

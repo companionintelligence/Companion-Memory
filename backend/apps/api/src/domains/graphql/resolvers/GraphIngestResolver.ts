@@ -11,6 +11,9 @@ import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BulkGraphInput } from '../types/BulkGraphInput';
 import { BulkGraphPayload } from '../types/BulkGraphPayload';
 
+/** The sourceSystem the owner's self Person is keyed under; see GraphIngestService.selfEntityLink. */
+const SELF_SOURCE_SYSTEM = 'self';
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver()
 export class GraphIngestResolver {
@@ -60,6 +63,17 @@ export class GraphIngestResolver {
         throw new BadRequestException(
           `Entity "${entity.key}" carries a "${key}" property. That key holds the owner's settings, ` +
             'which an import cannot write; change them in Settings.',
+        );
+      }
+
+      // And the self Person's row itself: onboarding and the import push make it under sourceSystem
+      // `self` at a key derived from the account id alone (GraphIngestService.selfEntityLink), so
+      // an entity sent under that sourceSystem merges its name and properties into the owner's own
+      // Person. The server writes that row in-process; no client of this mutation sends `self`.
+      if (entity.sourceSystem === SELF_SOURCE_SYSTEM) {
+        throw new BadRequestException(
+          `Entity "${entity.key}" uses sourceSystem "${SELF_SOURCE_SYSTEM}", which holds the owner's own ` +
+            'Person and is written only by the server; send it under your own sourceSystem.',
         );
       }
     }

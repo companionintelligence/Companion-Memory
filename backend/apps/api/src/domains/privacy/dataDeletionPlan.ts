@@ -19,16 +19,22 @@
  *     users with ON DELETE SET NULL, so a plain user delete would ORPHAN them
  *     (owner_user_id NULLed, row retained). We delete them explicitly so the
  *     user's derived graph is actually removed, not just detached.
- *   - api_keys / communications / events / inventory / answers / files /
- *     activities / position / agent_memories / feed_queue / voice_recordings /
- *     communications_source_dedup are ON DELETE CASCADE, but we still delete
+ *   - api_keys / communications / events / objects / answers / files /
+ *     activities / position / agent_memories / feed_queue / voice_recordings
+ *     are ON DELETE CASCADE, but we still delete
  *     them explicitly (and first) so we get an accurate per-table count and do
  *     not depend on cascade for the audit tally.
  *
  * The trailing `ci.users` row itself is deleted separately by the service (it is
  * the final step of an account deletion, not a "data" table). That row points at
  * the user's own "You" person (`ci.users.entity_id -> ci.entities`, no cascade),
- * so the service clears that pointer before `ci.entities` is purged.
+ * so the service clears that pointer in the same transaction as the
+ * `ci.entities` delete.
+ *
+ * The 30-day purge (`domains/user/purge`) finds the same tables by reading the
+ * catalog. `__tests__/dataDeletionPlan.integration.spec.ts` checks this list
+ * against that discovery, so a new user-scoped table that is missing here fails
+ * a test instead of being left behind by an immediate delete.
  */
 
 /** A user-owned table and the column that carries the owning user's id. */
@@ -81,8 +87,6 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   { schema: 'hbpe', table: 'occurrence_log', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'recurrence_profiles', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'prediction_score', userColumn: 'user_id' },
-  { schema: 'hbpe', table: 'l1_pending_pool', userColumn: 'user_id' },
-  { schema: 'hbpe', table: 'l2_pending_pool', userColumn: 'user_id' },
   // l2_clusters references l1_clusters (no cascade), so it goes first.
   { schema: 'hbpe', table: 'l2_clusters', userColumn: 'user_id' },
   { schema: 'hbpe', table: 'l1_clusters', userColumn: 'user_id' },
@@ -102,6 +106,23 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   { schema: 'ci_etl', table: 'connection_sync_jobs', userColumn: 'user_id' },
   { schema: 'ci_etl', table: 'cloud_file_ingests', userColumn: 'user_id' },
   { schema: 'ci_etl', table: 'cloud_folder_exports', userColumn: 'user_id' },
+
+  // --- Archive imports. None of these has a foreign key to ci.users, so the user
+  // row's delete would leave them all. Deleting a run takes its stages, staged
+  // items (with their places and metadata), staged people and relationships by
+  // cascade; staged_sources only has its run_id nulled, so it goes first. ---
+  { schema: 'ci_import', table: 'staged_sources', userColumn: 'user_id' },
+  { schema: 'ci_import', table: 'import_runs', userColumn: 'user_id' },
+
+  // --- Enrichment pipeline bookkeeping, also without a foreign key. Dead letters
+  // and rejected records keep the payload that failed, which is the user's data.
+  // Deleting a run takes its shards by cascade. ---
+  { schema: 'ci', table: 'pipeline_dead_letters', userColumn: 'user_id' },
+  { schema: 'ci', table: 'record_rejections', userColumn: 'user_id' },
+  { schema: 'ci', table: 'pipeline_state', userColumn: 'user_id' },
+  { schema: 'ci', table: 'pipeline_schedule', userColumn: 'user_id' },
+  { schema: 'ci', table: 'pipeline_turns', userColumn: 'user_id' },
+  { schema: 'ci', table: 'pipeline_runs', userColumn: 'user_id' },
 
   // --- Multi-provenance ledger (docs/design/cross-pipeline-identity.md §5).
   // References records only logically (no FK), so position is flexible; it
@@ -124,11 +145,10 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   // --- Core memory: content references events, so content before events. ---
   { schema: 'ci', table: 'content', userColumn: 'user_id' },
   { schema: 'ci', table: 'events', userColumn: 'user_id' },
-  { schema: 'ci', table: 'communications_source_dedup', userColumn: 'user_id' },
   { schema: 'ci', table: 'communications', userColumn: 'user_id' },
   { schema: 'ci', table: 'browser_activity', userColumn: 'user_id' },
   { schema: 'ci', table: 'position', userColumn: 'user_id' },
-  { schema: 'ci', table: 'inventory', userColumn: 'user_id' },
+  { schema: 'ci', table: 'objects', userColumn: 'user_id' },
   { schema: 'ci', table: 'files', userColumn: 'user_id' },
 
   // --- Intelligence / conversations / summaries / notes / agent memory. ---
@@ -144,6 +164,10 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   // Both reference ci.users with no cascade. A private question is the user's own.
   { schema: 'ci', table: 'capture_events', userColumn: 'user_id' },
   { schema: 'ci', table: 'questions', userColumn: 'is_private_to' },
+  // The appliance's one BlueBubbles connector, when this user owns it: it holds
+  // the password to their Mac. The user row's delete would only null the owner
+  // and keep the password; the 30-day purge deletes the row, and so does this.
+  { schema: 'ci', table: 'bluebubbles_config', userColumn: 'owner_user_id' },
 
   // --- Identity / auth / connection credentials. Connections carry the OAuth
   // tokens; provider_keys the per-user client credentials; sessions + api_keys

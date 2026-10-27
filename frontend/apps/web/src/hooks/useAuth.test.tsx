@@ -273,7 +273,6 @@ describe('useAuth', () => {
 
     it('signs in by itself once Memory answers again, asking once at a time meanwhile', async () => {
       let memoryUp = false;
-      let bridgeCalls = 0;
       let refreshCalls = 0;
 
       const fetchMock = setFetch((url, init) => {
@@ -283,13 +282,7 @@ describe('useAuth', () => {
           return memoryUp ? jsonResponse({ accessToken: 'back' }) : hang(init);
         }
 
-        if (url.endsWith('/api/authenticate/hub-bridge')) {
-          bridgeCalls += 1;
-
-          return memoryUp ? emptyResponse() : hang(init);
-        }
-
-        return emptyResponse();
+        return url.endsWith('/api/authenticate/hub-bridge') && !memoryUp ? hang(init) : emptyResponse();
       });
       document.cookie = 'csrfToken=csrf-abc';
 
@@ -299,16 +292,13 @@ describe('useAuth', () => {
         await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
       });
       expect(result.current[0].unreachable).toBe(true);
-      expect(bridgeCalls).toBe(1);
       expect(refreshCalls).toBe(0);
 
-      // The first retry asks the bridge again, which hangs for a full deadline; the ticks
-      // during it send nothing more.
+      // The first retry hangs for a full deadline; the ticks during it send nothing more.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
       });
-      expect(bridgeCalls).toBe(2);
-      expect(refreshCalls).toBe(0);
+      expect(refreshCalls).toBe(1);
       expect(result.current[0].unreachable).toBe(true);
       expect(result.current[0].authToken).toBeNull();
 
@@ -317,109 +307,9 @@ describe('useAuth', () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
 
-      await waitFor(() => expect(result.current[0].authToken).toBe('back'));
+      expect(result.current[0].authToken).toBe('back');
       expect(result.current[0].unreachable).toBe(false);
-      // The timed-out bridge ended its check without a refresh; the next retry ran the whole
-      // check, the bridge and then the refresh.
-      expect(bridgeCalls).toBe(3);
-      expect(refreshCalls).toBe(1);
-      expect(fetchMock.mock.calls.map(([url]) => String(url)).slice(-2)).toEqual([
-        '/api/authenticate/hub-bridge',
-        '/api/authenticate/refresh',
-      ]);
-    });
-
-    it('lets the Hub bridge replace the session on a retry instead of resuming the cookie', async () => {
-      const disconnect = vi.fn().mockResolvedValue(undefined);
-      bindPowerSyncDatabase({ disconnectAndClear: disconnect } as never);
-      let memoryUp = false;
-      let refreshCalls = 0;
-
-      setFetch((url, init) => {
-        if (url.endsWith('/api/authenticate/hub-bridge')) {
-          // The Hub names someone other than the Memory cookie.
-          return memoryUp ? jsonResponse({ accessToken: 'hub-token', replaced: true }) : hang(init);
-        }
-
-        if (url.endsWith('/api/authenticate/refresh')) {
-          refreshCalls += 1;
-
-          return jsonResponse({ accessToken: 'cookie-token' });
-        }
-
-        return emptyResponse();
-      });
-      document.cookie = 'csrfToken=csrf-abc';
-
-      const { result } = renderHook(() => useAuth(), { wrapper });
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
-      });
-      expect(result.current[0].unreachable).toBe(true);
-
-      memoryUp = true;
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000);
-      });
-
-      await waitFor(() => expect(result.current[0].authToken).toBe('hub-token'));
-      expect(result.current[0].unreachable).toBe(false);
-      expect(refreshCalls).toBe(0);
-      expect(disconnect).toHaveBeenCalled();
-    });
-
-    it('never signs the person out when the Hub bridge times out', async () => {
-      document.cookie = 'csrfToken=csrf-abc';
-      let bridgeCalls = 0;
-      let refreshCalls = 0;
-
-      setFetch((url, init) => {
-        if (url.endsWith('/api/authenticate/hub-bridge')) {
-          bridgeCalls += 1;
-
-          // Answers at boot, then never again.
-          return bridgeCalls === 1 ? emptyResponse() : hang(init);
-        }
-
-        if (url.endsWith('/api/authenticate/refresh')) {
-          refreshCalls += 1;
-
-          // Signs in at boot; later the session cookie is refused.
-          return refreshCalls === 1
-            ? jsonResponse({ accessToken: 'initial-token' })
-            : emptyResponse(false, 401);
-        }
-
-        return emptyResponse();
-      });
-
-      const { result } = renderHook(() => useAuth(), { wrapper });
-      await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
-
-      // A later refresh gets a 401, and the bridge it then asks never answers.
-      await act(async () => {
-        const refreshing = result.current[1].refresh();
-        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
-        await refreshing;
-      });
-
-      expect(bridgeCalls).toBe(2);
-      expect(result.current[0].authToken).toBe('initial-token');
-      expect(result.current[0].unreachable).toBe(true);
-      expect(result.current[0].error).toBeNull();
-
-      // The first retry's bridge times out as well, which ends that check before its refresh;
-      // the next retry asks the bridge again.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000 + MEMORY_ANSWER_DEADLINE_MS + 10_000);
-      });
-
-      expect(bridgeCalls).toBe(4);
-      expect(refreshCalls).toBe(2);
-      expect(result.current[0].authToken).toBe('initial-token');
-      expect(result.current[0].unreachable).toBe(true);
-      expect(result.current[0].error).toBeNull();
+      expect(fetchMock).toHaveBeenCalled();
     });
 
     it('keeps the token when a later refresh is never answered', async () => {

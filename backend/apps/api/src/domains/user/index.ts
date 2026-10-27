@@ -58,7 +58,9 @@ import { UserService } from './services/UserService';
       }),
     },
   ],
-  exports: [UserService, AccountPurgeService],
+  // PURGE_OBJECT_STORE also serves the immediate account delete (privacy domain),
+  // which removes the same file objects.
+  exports: [UserService, AccountPurgeService, PURGE_OBJECT_STORE],
 })
 export class UserModule {}
 
@@ -74,7 +76,7 @@ export { UserService, AccountPurgeService };
 export { CLIENT_TIMEZONE_HEADER, ClientTimezoneInterceptor };
 
 // Account purge
-export { PURGE_OBJECT_STORE, type PurgeObjectStore } from './purge/objectStore';
+export { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from './purge/objectStore';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';
 

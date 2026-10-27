@@ -6,7 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
 import config from '@ci/configuration';
 
-import { PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
+import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
 import { expandToPhysicalTables, readFkEdges, readUserRefColumns } from '../purge/purgeCatalog';
 import { buildPurgePlan } from '../purge/purgePlan';
 import {
@@ -61,26 +61,6 @@ const UNPINNED_ACCOUNTS_SQL = `
   SELECT count(*)::int AS count
   FROM ci.users
   WHERE deleted_at IS NOT NULL AND purge_after IS NULL
-`;
-
-/**
- * Objects owned solely by this account. The `NOT EXISTS` clause matters: file
- * rows are deduplicated on content, so two accounts can point at one object.
- * Deleting the bytes out from under the other account would be a data-loss bug
- * caused by a privacy feature.
- */
-const PURGEABLE_OBJECTS_SQL = `
-  SELECT DISTINCT f.bucket AS bucket, f.key AS key
-  FROM ci.files f
-  WHERE f.user_id = $1
-    AND f.bucket IS NOT NULL
-    AND f.key IS NOT NULL
-    AND NOT EXISTS (
-      SELECT 1 FROM ci.files o
-      WHERE o.bucket = f.bucket AND o.key = f.key AND o.user_id <> $1
-    )
-  ORDER BY f.bucket, f.key
-  LIMIT $2 OFFSET $3
 `;
 
 export interface AccountPurgeOutcome {
@@ -386,12 +366,7 @@ export class AccountPurgeService {
     return Number(rows[0]?.count ?? 0);
   }
 
-  /**
-   * Delete the account's objects from the object store.
-   *
-   * Paged with `LIMIT`/`OFFSET` rather than a keyset because the rows are not
-   * being deleted yet — the result set is stable for the length of this loop.
-   */
+  /** Delete the account's objects from the object store ({@link deleteSoleOwnedObjects}). */
   private async purgeObjects(runner: QueryRunner, userId: string): Promise<number> {
     const [{ present }] = (await runner.query(
       `SELECT (to_regclass('ci.files') IS NOT NULL) AS present`,
@@ -419,39 +394,7 @@ export class AccountPurgeService {
       return 0;
     }
 
-    const { batchSize } = config.accountDeletion.purge;
-    let offset = 0;
-    let deleted = 0;
-
-    for (;;) {
-      const page = (await runner.query(PURGEABLE_OBJECTS_SQL, [userId, batchSize, offset])) as Array<{
-        bucket: string;
-        key: string;
-      }>;
-
-      if (page.length === 0) {
-        return deleted;
-      }
-
-      const byBucket = new Map<string, string[]>();
-
-      for (const object of page) {
-        const keys = byBucket.get(object.bucket);
-
-        if (keys) {
-          keys.push(object.key);
-        } else {
-          byBucket.set(object.bucket, [object.key]);
-        }
-      }
-
-      for (const [bucket, keys] of byBucket) {
-        await this.objectStore.deleteObjects(bucket, keys);
-        deleted += keys.length;
-      }
-
-      offset += page.length;
-    }
+    return deleteSoleOwnedObjects(runner, this.objectStore, userId, config.accountDeletion.purge.batchSize);
   }
 
   private async markStarted(

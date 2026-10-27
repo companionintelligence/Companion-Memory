@@ -40,12 +40,14 @@ function makeTool(options: {
   people?: { findByIds: jest.Mock };
   answers?: { findByIds: jest.Mock };
   threads?: { findByIds: jest.Mock };
+  places?: { findByIds: jest.Mock };
+  browserActivities?: { findByIds: jest.Mock };
 }) {
   const noop = emptyResolver();
 
   return new DatabaseSearchTool(
     (options.answers ?? noop) as any, // answerService
-    noop as any, // browserActivityService
+    (options.browserActivities ?? noop) as any, // browserActivityService
     noop as any, // communicationService
     noop as any, // conceptService
     (options.content ?? { ...emptyResolver(), findIdsByFileIds: jest.fn() }) as any,
@@ -55,7 +57,7 @@ function makeTool(options: {
     noop as any, // itemService
     noop as any, // noteService
     (options.people ?? noop) as any,
-    noop as any, // placeService
+    (options.places ?? noop) as any, // placeService
     noop as any, // productModelService
     noop as any, // receiptService
     noop as any, // taskService
@@ -191,10 +193,12 @@ describe('DatabaseSearchTool — item links', () => {
   });
 });
 
-describe('DatabaseSearchTool — the account record', () => {
-  // ThreadService and AnswerService load the `user` relation, so a thread hit
-  // handed the model the whole account row. Seen in a stored tool message
-  // after "Show me photos from Blue Bottle Coffee" matched an earlier thread.
+describe('DatabaseSearchTool drops the account record', () => {
+  // ThreadService, AnswerService and PlaceService load the `user` relation, so a
+  // thread hit handed the model the whole account row. Seen in a stored tool
+  // message after "Show me photos from Blue Bottle Coffee" matched an earlier
+  // thread. BrowserActivityService loads it too and passes the raw entity on,
+  // password hash included.
   const owner = {
     id: CONTEXT.userId,
     name: 'Hb Tester',
@@ -206,7 +210,7 @@ describe('DatabaseSearchTool — the account record', () => {
     emailProvenAt: new Date('2026-10-01T00:00:00Z'),
   };
 
-  it('keeps it out of thread and answer hits, and keeps every other field', async () => {
+  it('keeps it out of thread and answer hits but keeps every other field', async () => {
     const thread = {
       id: 't1',
       name: 'Blue Bottle Coffee',
@@ -238,6 +242,37 @@ describe('DatabaseSearchTool — the account record', () => {
     expect(sent).not.toContain('tester@example.com');
     expect(sent).not.toContain('passwordSetAt');
     expect(sent).not.toContain('emailProvenAt');
+  });
+
+  it('keeps it out of place and browser-visit hits, where the raw row carries the password hash', async () => {
+    const place = { id: 'pl1', name: 'Blue Bottle Coffee', userId: CONTEXT.userId, user: owner };
+    const visit = {
+      id: 'b1',
+      url: 'https://bluebottlecoffee.com',
+      title: 'Blue Bottle Coffee',
+      user_id: CONTEXT.userId,
+      user: { ...owner, password: '$2b$10$not-a-real-hash' },
+    };
+    const tool = makeTool({
+      search: searchOf([
+        { type: 'place', id: 'pl1' },
+        { type: 'browser-activity', id: 'b1' },
+      ]),
+      places: { findByIds: jest.fn().mockResolvedValue([place]) },
+      browserActivities: { findByIds: jest.fn().mockResolvedValue([visit]) },
+    });
+
+    const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
+    const { user: _placeUser, ...placeFields } = place;
+    const { user: _visitUser, ...visitFields } = visit;
+
+    expect(result.data?.items).toEqual([
+      { ...placeFields, type: 'place', link: '/places/pl1' },
+      { ...visitFields, type: 'browser-activity' },
+    ]);
+    const sent = JSON.stringify(result.data);
+    expect(sent).not.toContain('tester@example.com');
+    expect(sent).not.toContain('not-a-real-hash');
   });
 
   it('stripOwnerRecord leaves an entity with no user untouched', () => {

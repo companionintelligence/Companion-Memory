@@ -39,7 +39,8 @@ interface Message {
   toolCalls?: object[] | null;
 }
 
-interface Props extends ChatInputProps {
+interface Props extends Omit<ChatInputProps, 'refocusWhenEnabled'> {
+  /** Focus the box on open and give focus back after each reply (see ChatInput's `refocusWhenEnabled`). */
   autoFocus?: boolean;
   hasStartedReceiving?: boolean | null;
   messages?: Message[];
@@ -329,14 +330,9 @@ export function Chat({
       }
     }
 
-    const input = autoFocusRef.current;
-
-    if (input && autoFocus) {
-      requestAnimationFrame(() => {
-        input.focus();
-      });
-    }
-  }, [flushStream, autoFocus, onResponseFinished]);
+    // No focus call here. The box is still disabled when the stream ends (`streaming` clears after it, then a thread
+    // refetch can disable it again), so ChatInput gives focus back once it is enabled (`refocusWhenEnabled`).
+  }, [flushStream, onResponseFinished]);
 
   // Without this handler a decode failure or exhausted chunk retry was
   // swallowed by createStreamProcessor's catch: the request stayed open, the
@@ -436,34 +432,6 @@ export function Chat({
     }
   }, [autoFocus, messages]);
 
-  // ChatInput disables its textarea while a turn loads and streams, and a
-  // disabled element drops focus to <body>. The focus calls above run while it
-  // can still be disabled (the stream finishes before `streaming` clears, and a
-  // thread refetch disables it again a few seconds later), so they did nothing
-  // and the box never got focus back after a reply. Give it back when the box
-  // is enabled again, unless the person has moved focus somewhere else.
-  const inputLocked = Boolean(loading || streaming || chatInputProps.disabled);
-  const wasInputLockedRef = useRef(inputLocked);
-
-  useEffect(() => {
-    const wasLocked = wasInputLockedRef.current;
-    wasInputLockedRef.current = inputLocked;
-
-    const input = autoFocusRef.current;
-
-    if (!autoFocus || !wasLocked || inputLocked || !input) {
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      const active = document.activeElement;
-
-      if (active == null || active === document.body) {
-        input.focus();
-      }
-    });
-  }, [autoFocus, inputLocked]);
-
   const renderedMessages = useMemo(
     () => messages?.map((message, i) => <ChatMessage key={i} {...message} />),
     [messages],
@@ -504,6 +472,7 @@ export function Chat({
           onSubmit={handleSubmit}
           initialDraft={initialDraft}
           {...chatInputProps}
+          refocusWhenEnabled={autoFocus}
         />
       </div>
     </div>

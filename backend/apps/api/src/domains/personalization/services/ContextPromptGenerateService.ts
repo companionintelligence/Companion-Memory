@@ -96,6 +96,24 @@ type GapRow = {
 
 type RecentHistory = { prompts: string[]; sourceKeys: Set<string> };
 
+/**
+ * A WHERE clause leaving out the owner's own Person, so a prompt never asks
+ * the owner how they know themselves.
+ *
+ * By identity, not by key: an account onboarded before onboarding created its
+ * self Person under the import's `import:self` key holds it with no linked key
+ * at all, so excluding `import:self` alone missed every one of those. The
+ * pointer is compared with IS DISTINCT FROM because it is NULL until the
+ * account has a self Person, and `<> NULL` would leave out every row.
+ */
+function notTheOwnerSql(alias: string, userIdParam: string): string {
+  return (
+    `${alias}.entity_id IS DISTINCT FROM (SELECT u.entity_id FROM ci.users u WHERE u.id = ${userIdParam}) ` +
+    `AND ${alias}.is_self IS NOT TRUE ` +
+    `AND COALESCE(${alias}.linked_table, '') <> 'import:self'`
+  );
+}
+
 @Injectable()
 export class ContextPromptGenerateService {
   constructor(
@@ -339,7 +357,7 @@ export class ContextPromptGenerateService {
       FROM ci.entities
       WHERE owner_user_id = $1
         AND merged_into_entity_id IS NULL
-        AND COALESCE(linked_table, '') <> 'import:self'
+        AND ${notTheOwnerSql('ci.entities', '$1')}
         AND ($2::text IS NULL OR entity_type = $2)
       ORDER BY updated_at DESC
       LIMIT 12
@@ -601,7 +619,7 @@ export class ContextPromptGenerateService {
       WHERE e.owner_user_id = $1
         AND e.merged_into_entity_id IS NULL
         AND e.entity_type = 'Person'
-        AND COALESCE(e.linked_table, '') <> 'import:self'
+        AND ${notTheOwnerSql('e', '$1')}
         AND NOT EXISTS (
           SELECT 1
           FROM ci.relationships r

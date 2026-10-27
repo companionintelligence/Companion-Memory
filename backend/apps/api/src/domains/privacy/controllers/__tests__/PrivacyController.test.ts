@@ -37,6 +37,7 @@ const RESULT: AccountDeletionResult = {
   ],
   deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
   totalDeleted: 4,
+  deletedObjects: 2,
   userDeleted: true,
   auditId: 'audit-1',
 };
@@ -61,6 +62,7 @@ describe('PrivacyController.deleteMyAccount', () => {
       userDeleted: true,
       totalDeleted: 4,
       deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
+      deletedObjects: 2,
       connectionsRevoked: 1, // only c1 was actually revoked
       connectionsProcessed: 2,
       auditId: 'audit-1',
