@@ -780,3 +780,17 @@ yarn typecheck              # Type-check without emitting
 yarn lint                   # Lint frontend code
 yarn lint:fix               # Auto-fix frontend linting issues
 ```
+
+<!-- companion-hub-readme-deep-review -->
+
+## Documentation and local service map
+
+| Need | Start here |
+|---|---|
+| Local development stack | `make dev` and the local development section below |
+| Architecture and request routing | [Architecture at a glance](#architecture-at-a-glance) and Caddy routing |
+| Configuration and deployment | [Docs directory](docs/) |
+| Security review | [Security guidance](docs/security.md) |
+
+For issue reports, include the deployment mode (Hub, standalone, or local development), the service involved, and redacted request/health output. Never include API keys or captured memory content in public issue text.
+
