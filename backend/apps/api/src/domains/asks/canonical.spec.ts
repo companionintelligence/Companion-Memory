@@ -24,6 +24,47 @@ describe('canonicalDataClass', () => {
     }
   });
 
+  /**
+   * #3184 stripped a hand-picked list. Every one of these also renders as
+   * nothing inside `photos`, and each got a blocked asker's `photos` ask into
+   * the owner's review queue (RC2 QA, D2).
+   */
+  it.each([
+    ['U+034F combining grapheme joiner', '\u034f'],
+    ['U+180E Mongolian vowel separator', '\u180e'],
+    ['U+180B Mongolian free variation selector', '\u180b'],
+    ['U+FE0F variation selector 16', '\ufe0f'],
+    ['U+FE00 variation selector 1', '\ufe00'],
+    ['U+E0100 variation selector 17', '\u{e0100}'],
+    ['U+E0070 tag p', '\u{e0070}'],
+    ['U+E0001 language tag', '\u{e0001}'],
+    ['U+E007F cancel tag', '\u{e007f}'],
+    ['U+115F Hangul choseong filler', '\u115f'],
+    ['U+1160 Hangul jungseong filler', '\u1160'],
+    ['U+3164 Hangul filler', '\u3164'],
+    ['U+FFA0 halfwidth Hangul filler', '\uffa0'],
+    ['U+1D173 musical symbol begin beam', '\u{1d173}'],
+    ['U+17B4 Khmer vowel inherent aq', '\u17b4'],
+    ['U+2065 unassigned default-ignorable', '\u2065'],
+    ['U+1BCA0 shorthand format letter overlap', '\u{1bca0}'],
+  ])('folds %s inside a word', (_name, char) => {
+    expect(canonicalDataClass(`pho${char}tos`)).toBe('photos');
+    expect(canonicalDataClass(`${char}photos${char}`)).toBe('photos');
+    expect(canonicalDataClass(`PHO${char}${char}TOS`)).toBe('photos');
+  });
+
+  it('never strips a pictograph-only sequence into a word, and keeps two words two words', () => {
+    // An emoji's own joiner and selectors stay where the emoji puts them…
+    expect(canonicalDataClass('\u{1f469}\u200d\u{1f4bb} photos')).toBe('\u{1f469}\u200d\u{1f4bb} photos');
+    expect(canonicalDataClass('\u2764\ufe0f photos')).toBe('\u2764\ufe0f photos');
+    // …but a joiner between letters, or between a pictograph and a letter, goes.
+    expect(canonicalDataClass('\u{1f4f7}\u200dphotos')).toBe('\u{1f4f7}photos');
+    expect(canonicalDataClass('photo\ufe0f\u{1f4f7}')).toBe('photo\u{1f4f7}');
+    // A real space survives: stripping must not merge distinct words.
+    expect(canonicalDataClass('lake\u034f photos')).toBe('lake photos');
+    expect(canonicalDataClass('lake photos')).not.toBe(canonicalDataClass('lakephotos'));
+  });
+
   it('answers null — never an empty string — for a value that names no class', () => {
     // The callers read "no class named" off a nullish value; `''` is not a
     // class the owner wrote down.
@@ -83,12 +124,26 @@ describe('hasInvisibleCharacters', () => {
       'right\u202eoverride',
       'iso\u2066late\u2069',
       'arabic\u061cmark',
+      'grapheme\u034fjoiner',
+      'pho\u{e0070}tos',
+      'hangul\u3164filler',
+      'heart-less\ufe0f',
     ]) {
       expect(hasInvisibleCharacters(value)).toBe(true);
       expect(normalizeText(value)?.length).toBeLessThan(value.length);
     }
 
-    for (const value of ['lake photos', '  padded\u00a0space  ', 'Café', '']) {
+    // An emoji drawn with its own joiner, selector or flag tags is not hidden text.
+    for (const value of [
+      'lake photos',
+      '  padded\u00a0space  ',
+      'Café',
+      '',
+      'photos of \u2764\ufe0f',
+      'the \u{1f468}\u200d\u{1f469}\u200d\u{1f467} trip',
+      'thumbs \u{1f44d}\u{1f3fd}\u200d\u{1f4bb}',
+      'flag \u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}',
+    ]) {
       expect(hasInvisibleCharacters(value)).toBe(false);
     }
   });

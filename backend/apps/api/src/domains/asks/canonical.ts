@@ -30,13 +30,99 @@
  * whitespace: they have no width, so collapsing them to a space would split one
  * word into two.
  *
- * Zero-width space / non-joiner / joiner, word joiner, soft hyphen, the
- * bidi marks (U+061C, U+200E/F), the bidi embedding and override controls
- * (U+202A to U+202E), the bidi isolates (U+2066 to U+2069) and the deprecated
- * formatting characters beside them, and the BOM. The same set the review
- * card's `promptSafety.ts` treats as invisible or bidi.
+ * The whole Unicode `Default_Ignorable_Code_Point` set, not a hand-picked list.
+ * The list this replaced (zero-width space / non-joiner / joiner, word joiner,
+ * soft hyphen, BOM, the bidi marks, embeddings, overrides and isolates) left
+ * out the combining grapheme joiner U+034F, the Mongolian vowel separator
+ * U+180E and free variation selectors, the variation selectors U+FE00 to U+FE0F
+ * and U+E0100 to U+E01EF, the tag characters U+E0000 to U+E007F, the Hangul
+ * fillers U+115F, U+1160, U+3164 and U+FFA0, and the musical formatting
+ * characters U+1D173 to U+1D17A — and `pho<any of those>tos` got a blocked
+ * asker's ask into the owner's review queue. NFKC removes none of them. The
+ * bidi marks are named again explicitly (they are all in the set) because they
+ * are the ones the review card's `promptSafety.ts` warns about by name.
  */
-const INVISIBLE = /[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
+const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/**
+ * Default-ignorable characters that are part of how an EMOJI is drawn, and so
+ * are kept in that one position: the zero-width joiner between two pictographs
+ * (`👩‍💻`), a variation selector after a pictograph (`❤️`), and the tag run of a
+ * subdivision flag (`🏴` + tags). Stripping them there changes no word — a
+ * pictograph is not a letter — but rewrites what the asker typed and flags every
+ * such prompt as altered on the owner's review card. Anywhere else (between two
+ * letters, at a word edge) they are stripped like the rest.
+ */
+const EXTENDED_PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+const ZWJ = 0x200d;
+const VS15 = 0xfe0e;
+const VS16 = 0xfe0f;
+const BLACK_FLAG = 0x1f3f4;
+const TAG_CANCEL = 0xe007f;
+
+function isPictograph(codePoint: number | undefined): boolean {
+  return codePoint != null && EXTENDED_PICTOGRAPHIC.test(String.fromCodePoint(codePoint));
+}
+
+/** A tag character that spells a subdivision (`gbsct`), not the cancel tag. */
+function isSpellingTag(codePoint: number | undefined): boolean {
+  return codePoint != null && codePoint >= 0xe0020 && codePoint <= 0xe007e;
+}
+
+/** What an emoji's ZWJ may follow: the pictograph, its VS16, or a skin-tone modifier. */
+function endsEmoji(codePoint: number | undefined): boolean {
+  return (
+    isPictograph(codePoint) ||
+    codePoint === VS16 ||
+    (codePoint != null && codePoint >= 0x1f3fb && codePoint <= 0x1f3ff)
+  );
+}
+
+/** Whether the invisible `cp` sits where an emoji sequence puts it — see above. */
+function isEmojiSequencePart(cp: number, previous: number | undefined, next: number | undefined): boolean {
+  if (cp === ZWJ) {
+    return endsEmoji(previous) && isPictograph(next);
+  }
+
+  if (cp === VS15 || cp === VS16) {
+    return isPictograph(previous);
+  }
+
+  if (isSpellingTag(cp)) {
+    return previous === BLACK_FLAG || isSpellingTag(previous);
+  }
+
+  return cp === TAG_CANCEL && isSpellingTag(previous);
+}
+
+/**
+ * Strip {@link INVISIBLE} except where it is part of an emoji sequence. Walks
+ * code points, so a surrogate pair is never split, and reads each character
+ * against the previous one KEPT, so a tag run is judged as a chain.
+ */
+function stripInvisible(value: string): string {
+  if (value.search(INVISIBLE) === -1) {
+    return value;
+  }
+
+  const chars = Array.from(value);
+  const kept: string[] = [];
+  let previous: number | undefined;
+
+  for (let i = 0; i < chars.length; i += 1) {
+    const cp = chars[i].codePointAt(0) as number;
+
+    if (
+      chars[i].search(INVISIBLE) === -1 ||
+      isEmojiSequencePart(cp, previous, chars[i + 1]?.codePointAt(0))
+    ) {
+      kept.push(chars[i]);
+      previous = cp;
+    }
+  }
+
+  return kept.join('');
+}
 
 /**
  * Every Unicode character that reads as a space, mapped onto the ASCII one.
@@ -97,7 +183,7 @@ export function normalizeText(value: unknown): string | null {
     return null;
   }
 
-  const normalized = value.normalize('NFKC').replace(INVISIBLE, '').replace(UNICODE_SPACE, ' ').trim();
+  const normalized = stripInvisible(value.normalize('NFKC')).replace(UNICODE_SPACE, ' ').trim();
 
   return normalized ? normalized : null;
 }
@@ -109,11 +195,12 @@ export function normalizeText(value: unknown): string | null {
  * The ask input layer stores the prompt without them, so by the time the
  * owner's review card renders it there is nothing left to detect. This is
  * what lets the card still say the text was altered (see
- * `AskQuery.promptHiddenCharactersRemoved`). Same character class as the
- * strip, so the two cannot disagree about what counts.
+ * `AskQuery.promptHiddenCharactersRemoved`). Same strip as
+ * {@link normalizeText}, so the two cannot disagree about what counts: an
+ * emoji's own joiner or variation selector is not a hidden character.
  */
 export function hasInvisibleCharacters(value: unknown): boolean {
-  return typeof value === 'string' && value.search(INVISIBLE) !== -1;
+  return typeof value === 'string' && stripInvisible(value.normalize('NFKC')) !== value.normalize('NFKC');
 }
 
 /**
