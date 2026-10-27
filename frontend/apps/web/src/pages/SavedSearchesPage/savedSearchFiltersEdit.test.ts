@@ -139,6 +139,18 @@ describe('savedSearchFiltersEdit', () => {
       expect(describeBbox([2.3522, 48.8566, 2.3522, 48.8566])).toBe(
         '48.856600°N–48.856600°N, 2.352200°E–2.352200°E',
       );
+      // The same 0.1° span gets the same decimals wherever it sits, despite 1.2 - 1.1 < 0.1.
+      expect(describeBbox([0, 1.1, 1, 1.2])).toBe('1.10°N–1.20°N, 0.0°E–1.0°E');
+    });
+
+    it('wraps a world-copy longitude back into range', () => {
+      expect(describeBbox([170, -20, 190, -10])).toBe('20.0°S–10.0°S, 170.0°E–170.0°W');
+      expect(describeBbox([362.25, 48.8, 362.45, 48.9])).toBe('48.80°N–48.90°N, 2.25°E–2.45°E');
+      expect(describeBbox([-200, -60, 560, 60])).toBe('60.0°S–60.0°N, 180.0°W–180.0°E');
+    });
+
+    it('names no hemisphere for a coordinate that rounds to zero', () => {
+      expect(describeBbox([-0.00003, -0.00003, 0.002, 0.002])).toBe('0.0000°N–0.0020°N, 0.0000°E–0.0020°E');
     });
   });
 });

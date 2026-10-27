@@ -49,11 +49,11 @@ export function LazyView({ viewKey, load }: Props) {
           description="This view could not be loaded. Check your connection and try again."
           onRetry={() => {
             // A chunk that failed to download stays failed for the life of the
-            // document: Chromium keeps the failed fetch in its module map, so a
-            // fresh import() of the same URL rejects at once without a request,
-            // and so do the dependencies Vite had already tried to preload.
-            // Once the connection is back only a reload fetches them again, and
-            // the view is in the URL, so the reload lands on the same view.
+            // document. Chromium keeps the failed fetch in its module map, so a
+            // fresh import() of the same URL rejects at once without a request.
+            // The dependencies Vite had already tried to preload stay failed too.
+            // Once the connection is back only a reload fetches them again. The
+            // view is in the URL, so the reload lands on the same view.
             // Still offline, the in-place retry below fails again and keeps
             // this message, which is better than the browser's offline page.
             if (isChunkLoadError(error) && navigator.onLine) {
@@ -62,11 +62,12 @@ export function LazyView({ viewKey, load }: Props) {
               return;
             }
 
-            // A fresh payload for the failed-fetch case; `retry` to clear the
-            // boundary so the new one actually gets rendered. Both land in one
-            // batch. For a plain render crash the module is already in the
-            // browser's cache, so this is just a remount — which is the right
-            // recovery for a component that threw mid-render anyway.
+            // A fresh payload, for a browser that does not keep failed fetches
+            // (Firefox, Safari) when the device reports itself offline; `retry`
+            // to clear the boundary so the new one actually gets rendered. Both
+            // land in one batch. For a plain render crash the module is already
+            // loaded, so this is just a remount. That is the right recovery for
+            // a component that threw mid-render anyway.
             setView(() => lazy(load));
             retry();
           }}

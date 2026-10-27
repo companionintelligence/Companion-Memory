@@ -5,6 +5,7 @@ import {
   Controller,
   Get,
   Headers,
+  Logger,
   NotFoundException,
   Param,
   Post,
@@ -21,6 +22,7 @@ import { z } from 'zod/v3';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { summarizeDatabaseError } from '@ci/common/persistence';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
@@ -30,8 +32,6 @@ import {
   FilePreviewSweepRequestEvent,
   VIDEO_PLAYBACK_SWEEP_QUEUE,
   VideoPlaybackSweepRequestEvent,
-  MediaDimensionsBackfillRequestEvent,
-  MEDIA_DIMENSIONS_QUEUE,
 } from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
@@ -45,10 +45,6 @@ import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-nex
 
 import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
-import {
-  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
-  MEDIA_DIMENSIONS_STAGE_ID,
-} from '../mediaDimensionsCandidates';
 import {
   type CommunicationLinkBackfillProgress,
   type CommunicationLinkBackfillResult,
@@ -465,8 +461,29 @@ const GEOCODE_QUEUE = 'geocode';
 /** Default batch size for the location estimator when the body omits a limit. */
 const ESTIMATE_DEFAULT_LIMIT = 500;
 
-/** Default batch size for the media-dimensions backfill when the body omits a limit. */
-const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
+/**
+ * The `error` line a streamed run ends with when it throws.
+ *
+ * A database error's own message names internal relations and constraints, or
+ * on a connection failure the server's address, and the stream is answered to
+ * any account holding a write key. So a database failure is told by its kind
+ * and code, and its message goes to the log. Anything else (a service's own
+ * message) is passed on as before.
+ */
+function streamErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const summary = summarizeDatabaseError(err);
+
+  if (summary == null) {
+    return message;
+  }
+
+  Logger.error(`A streamed maintenance run failed in the database: ${message}`, 'MaintenanceController');
+
+  return summary.kind === 'unavailable'
+    ? `The database was unavailable during this run (${summary.code}).`
+    : `The database refused a write in this run (SQLSTATE ${summary.code}).`;
+}
 
 /**
  * Operator-facing maintenance endpoints. POST /api/maintenance/geocode-locations
@@ -794,12 +811,16 @@ export class MaintenanceController {
   /**
    * Media-dimensions backfill. Records `ci.files.width`/`height` for ORIGINAL
    * image/video files that still lack them — the existing corpus, ingested
-   * before the preview pass started capturing dimensions. Counts the candidates
-   * (locally-stored ORIGINAL image/video files with NULL width) and emits a
-   * {@link MediaDimensionsBackfillRequestEvent} for the files-domain listener to
-   * process out-of-band. Once recorded, EventType.mediaWidth/mediaHeight and the
-   * drawer "Dimensions" row light up with no frontend change. Idempotent +
-   * resumable: re-run until estimatedFileCount is 0.
+   * before the preview pass started capturing dimensions. Counts the files with
+   * no width that the `enrich.media_dimensions` stage still has work for (no
+   * ledger answer at its current version, or a failed probe whose retry is due)
+   * and emits a `MediaDimensionsBackfillRequestEvent` for the files-domain
+   * listener to process out-of-band. Once recorded, EventType.mediaWidth/
+   * mediaHeight and the drawer "Dimensions" row light up with no frontend
+   * change. Idempotent + resumable: re-run until estimatedFileCount is 0.
+   *
+   * The work is the orchestrator's `media_dimensions` leg, called as is, so the
+   * endpoint and the nightly leg cannot drift apart again.
    */
   @Post('backfill-media-dimensions')
   async backfillMediaDimensions(
@@ -813,33 +834,7 @@ export class MaintenanceController {
       return { jobId: null, estimatedFileCount: 0, status: 'noop' };
     }
 
-    const limit = body.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
-
-    // What the stage would still do, so the estimate matches the work and a
-    // file it could not decode does not keep this at `enqueued` forever.
-    const rows = await this.dataSource.query<Array<{ count: string }>>(MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, [
-      userId,
-      MEDIA_DIMENSIONS_STAGE_ID,
-    ]);
-
-    const candidateCount = Number(rows[0]?.count ?? 0);
-    const estimatedFileCount = Math.min(candidateCount, limit);
-
-    if (estimatedFileCount === 0) {
-      return { jobId: null, estimatedFileCount: 0, status: 'noop' };
-    }
-
-    const jobIds = await this.signallingEventService.send(
-      MediaDimensionsBackfillRequestEvent,
-      { userId, limit },
-      { queue: MEDIA_DIMENSIONS_QUEUE },
-    );
-
-    return {
-      jobId: jobIds[0] ?? null,
-      estimatedFileCount,
-      status: jobIds.length > 0 ? 'enqueued' : 'noop',
-    };
+    return this.maintenanceOrchestratorService.runMediaDimensionsLeg(userId, { limit: body.limit });
   }
 
   /**
@@ -1730,7 +1725,7 @@ export class MaintenanceController {
       const result = await run(emit);
       emit({ type: 'result', ...result });
     } catch (err) {
-      emit({ type: 'error', error: (err as Error).message });
+      emit({ type: 'error', error: streamErrorMessage(err) });
     } finally {
       if (!res.writableEnded) {
         res.end();

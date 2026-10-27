@@ -328,7 +328,9 @@ export class ImportRunsController {
     const runs = await this.runs.listRuns(
       { userId },
       {
-        limit: Number.isFinite(parsed) ? parsed : undefined,
+        // A positive whole number, or the default. `-1` reached the query as
+        // a negative LIMIT and answered 500.
+        limit: Number.isInteger(parsed) && (parsed as number) > 0 ? parsed : undefined,
         before: parseBeforeCursor(beforeCreatedAt, beforeId),
       },
     );

@@ -33,8 +33,10 @@ export async function runsCommand(
 
   const limit = options.limit == null ? undefined : Number(options.limit);
 
-  if (limit != null && !Number.isFinite(limit)) {
-    throw new CliError(`--limit takes a number, not "${options.limit}"`);
+  // A whole number of runs, at least 1. `Number` alone let `-1` through, which
+  // the api answered with a 500 (a negative LIMIT), and `''` became 0.
+  if (limit != null && (options.limit?.trim() === '' || !Number.isInteger(limit) || limit < 1)) {
+    throw new CliError(`--limit takes a whole number of runs, not "${options.limit}"`);
   }
 
   const runs = await ctx.client.listRuns(limit);
@@ -64,6 +66,8 @@ export async function runsCommand(
 }
 
 async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Promise<void> {
+  // Before the stage table prints, as `importCommand` does before it uploads.
+  const timeoutMs = parseTimeout(options.timeout);
   const detail = await ctx.client.getRun(runId);
 
   if (options.json && !options.wait) {
@@ -114,7 +118,7 @@ async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Pr
 
   if (options.wait) {
     const [final] = await waitForRuns(ctx.client, ctx.term, [detail.id], {
-      timeoutMs: parseTimeout(options.timeout),
+      timeoutMs,
       quiet: options.json,
     });
 

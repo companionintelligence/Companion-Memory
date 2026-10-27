@@ -279,25 +279,37 @@ export function FilterValuePicker({
       >
         {listed.map((value) => {
           const selected = includesValue(values, value);
+          const unknown = isUnknown(value);
+          const option = (
+            <button
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onClick={() => toggle(value)}
+              className={cn(
+                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
+                selected && 'font-medium',
+              )}
+            >
+              <Check className={cn('h-4 w-4 shrink-0', selected ? 'opacity-100' : 'opacity-0')} />
+              <span className="truncate">{display(value)}</span>
+              {unknown && <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-warning" />}
+            </button>
+          );
 
+          // The row carries the hint the field variant's chip does, on hover and
+          // on keyboard focus: the icon alone is hidden from screen readers and
+          // says nothing about why the value is flagged.
           return (
             <li key={value}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => toggle(value)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                  selected && 'font-medium',
-                )}
-              >
-                <Check className={cn('h-4 w-4 shrink-0', selected ? 'opacity-100' : 'opacity-0')} />
-                <span className="truncate">{display(value)}</span>
-                {isUnknown(value) && unknownValueHint && (
-                  <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-warning" />
-                )}
-              </button>
+              {unknown && unknownValueHint ? (
+                <Tooltip delayDuration={300}>
+                  <Tooltip.Content>{unknownValueHint}</Tooltip.Content>
+                  <Tooltip.Trigger asChild>{option}</Tooltip.Trigger>
+                </Tooltip>
+              ) : (
+                option
+              )}
             </li>
           );
         })}
@@ -370,10 +382,14 @@ export function FilterValuePicker({
         <div className="flex flex-wrap gap-1.5">
           {values.map((value) => {
             const unknown = isUnknown(value);
+            const hinted = unknown && Boolean(unknownValueHint);
             const chip = (
               <Badge
                 key={value}
                 variant={unknown ? 'outline' : 'secondary'}
+                // Focusable only when it has a hint to show, so a keyboard user can
+                // reach the tooltip; the Remove button is a tab stop either way.
+                tabIndex={hinted ? 0 : undefined}
                 // `text-warning`, not `text-warning-foreground`: the foreground token is
                 // for text ON a warning fill (white in the light theme), and this chip
                 // has no fill, so it would draw white on the dialog's near-white.
@@ -385,14 +401,19 @@ export function FilterValuePicker({
                   type="button"
                   onClick={() => onRemove(value)}
                   aria-label={`Remove ${display(value)}`}
-                  className="hover:bg-background/60 -mr-1 rounded p-0.5"
+                  // The stale chip has no fill, so a background tint on hover would
+                  // match the dialog behind it and show nothing.
+                  className={cn(
+                    '-mr-1 rounded p-0.5',
+                    unknown ? 'hover:bg-warning/15' : 'hover:bg-background/60',
+                  )}
                 >
                   <X className="h-3 w-3" />
                 </button>
               </Badge>
             );
 
-            if (!unknown || !unknownValueHint) {
+            if (!hinted) {
               return chip;
             }
 

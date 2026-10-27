@@ -36,6 +36,25 @@ import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
  */
 const PLACE_ENTITY_TYPES = In([...GRAPH_ENTITY_TYPES.place]);
 
+/** The index that keeps one Location per owner per 0.001-degree cell. */
+const SNAP_CELL_INDEX = 'entities_location_snap_dedup_uniq';
+
+/**
+ * Whether `err` is a unique violation on {@link SNAP_CELL_INDEX}, or on an index
+ * the driver didn't name. A place with a point can also collide on a name or a
+ * provider id, and "another place is at this spot" would be the wrong reason.
+ */
+function isSnapCellViolation(err: unknown): boolean {
+  if (!isUniqueViolation(err)) {
+    return false;
+  }
+
+  const candidate = err as { constraint?: string; driverError?: { constraint?: string } } | null;
+  const constraint = candidate?.driverError?.constraint ?? candidate?.constraint;
+
+  return constraint == null || constraint === SNAP_CELL_INDEX;
+}
+
 /**
  * How near a place a photo must have been taken to count as taken there when
  * nothing links it to the place: the stay radius the Places page clusters
@@ -717,7 +736,8 @@ export class PlaceService {
    *
    * Only places that actually HAVE a footprint can match: a venue known only as
    * a point is not a container. Ordering by area means a park inside a city
-   * outranks the city.
+   * outranks the city. Places merged into another are left out, as in
+   * {@link findAll}.
    */
   async placesContaining(
     context: UserServiceContext,
@@ -730,6 +750,8 @@ export class PlaceService {
          FROM ci.entities
         WHERE entity_type = 'Location'
           AND owner_user_id = $1
+          AND merged_into_entity_id IS NULL
+          AND is_active IS DISTINCT FROM FALSE
           AND location_boundary IS NOT NULL
           AND ST_Covers(location_boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography)
         ORDER BY ST_Area(location_boundary) ASC
@@ -753,6 +775,10 @@ export class PlaceService {
    * Places within `radiusMeters` of a point, nearest first. Runs on the
    * partial GIST index over location_point (geography ST_DWithin measures
    * meters directly).
+   *
+   * A place merged into another keeps its point, so it is left out here as in
+   * {@link findAll}: a capture's place name and a scanned thing's place come
+   * from this, and must not land on the merged-away row.
    */
   async placesNear(
     context: UserServiceContext,
@@ -768,6 +794,8 @@ export class PlaceService {
            FROM ci.entities
           WHERE entity_type = 'Location'
             AND owner_user_id = $1
+            AND merged_into_entity_id IS NULL
+            AND is_active IS DISTINCT FROM FALSE
             AND location_point IS NOT NULL
             AND ST_DWithin(location_point, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)
           ORDER BY distance_meters ASC
@@ -1082,8 +1110,17 @@ export class PlaceService {
         try {
           placeResult = await this.placeRepository.save(place);
         } catch (err) {
-          if (isUniqueViolation(err) && place.locationPoint) {
-            throw await this.nearbyPlaceConflict(context, place.locationPoint.coordinates);
+          if (place.locationPoint && isSnapCellViolation(err)) {
+            throw await this.nearbyPlaceConflict(context.userId, place.locationPoint.coordinates);
+          }
+
+          // Another unique index: in practice entities_admin_place_uniq, a
+          // second city (or region, country) of the same name under the same
+          // parent. Say so the way `update` does instead of an internal error.
+          if (isUniqueViolation(err)) {
+            throw new ConflictException(
+              'A place with that name already exists. Choose a different name, or edit the existing place.',
+            );
           }
 
           throw err;
@@ -1122,31 +1159,74 @@ export class PlaceService {
    * Location per cell (about 110 m), so the INSERT fails with 23505, which the
    * GraphQL layer would otherwise mask as "Internal server error". Name the place
    * that holds the cell so the person knows which one to edit instead.
+   *
+   * A place merged into another keeps its point, so it still holds its cell
+   * although Places no longer lists it. Point at the place it was merged into,
+   * the one the person can find and edit, without claiming that place sits
+   * here: a merge can join places far apart. An archived place is named by
+   * nobody.
+   *
+   * The name is a courtesy: with no user to scope the lookup to (a system
+   * context), or when the lookup itself fails, the conflict still goes out
+   * without one rather than being replaced by the lookup's own error.
    */
-  private async nearbyPlaceConflict(
-    context: UserServiceContext,
-    coordinates: number[],
-  ): Promise<ConflictException> {
-    const [lng, lat] = coordinates;
-    const rows: Array<{ name: string | null }> = await this.placeRepository.manager.query(
-      `SELECT name
-         FROM ci.entities
-        WHERE entity_type = 'Location'
-          AND owner_user_id = $1
-          AND merged_into_entity_id IS NULL
-          AND location_point IS NOT NULL
-          AND ST_SnapToGrid(location_point::geometry, 0.001) =
-              ST_SnapToGrid(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.001)
-        LIMIT 1`,
-      [context.userId, lng, lat],
-    );
-    const name = rows[0]?.name?.trim();
+  private async nearbyPlaceConflict(ownerUserId: unknown, coordinates: number[]): Promise<ConflictException> {
+    const holder = typeof ownerUserId === 'string' ? await this.cellHolder(ownerUserId, coordinates) : null;
+    const rule = 'Memory keeps one place per spot about 100 m across';
+
+    if (holder?.merged) {
+      return new ConflictException(
+        `This spot is held by a place you merged into "${holder.name}". ${rule}, so edit "${holder.name}" instead, or move this one farther away.`,
+      );
+    }
 
     return new ConflictException(
-      name
-        ? `"${name}" is already saved at this spot. Memory keeps one place per spot about 100 m across, so edit that place instead, or move this one farther away.`
-        : 'Another place is already saved at this spot. Memory keeps one place per spot about 100 m across, so move this one farther away.',
+      holder
+        ? `"${holder.name}" is already saved at this spot. ${rule}, so edit that place instead, or move this one farther away.`
+        : `Another place is already saved at this spot. ${rule}, so move this one farther away.`,
     );
+  }
+
+  /**
+   * The place to name for `coordinates`' cell (see {@link nearbyPlaceConflict}):
+   * the one holding it, or the one it was merged into. Null when there is no
+   * name to give or the lookup fails.
+   */
+  private async cellHolder(
+    ownerUserId: string,
+    coordinates: number[],
+  ): Promise<{ name: string; merged: boolean } | null> {
+    const [lng, lat] = coordinates;
+    let rows: Array<{ name: string | null; merged: boolean }>;
+
+    try {
+      rows = await this.placeRepository.manager.query(
+        `SELECT CASE
+                  WHEN held.merged_into_entity_id IS NOT NULL THEN kept.name
+                  WHEN held.is_active IS DISTINCT FROM FALSE THEN held.name
+                END AS name,
+                held.merged_into_entity_id IS NOT NULL AS merged
+           FROM ci.entities held
+           LEFT JOIN ci.entities kept
+             ON kept.entity_id = held.merged_into_entity_id
+            AND kept.owner_user_id = held.owner_user_id
+            AND kept.merged_into_entity_id IS NULL
+            AND kept.is_active IS DISTINCT FROM FALSE
+          WHERE held.entity_type = 'Location'
+            AND held.owner_user_id = $1
+            AND held.location_point IS NOT NULL
+            AND ST_SnapToGrid(held.location_point::geometry, 0.001) =
+                ST_SnapToGrid(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.001)
+          LIMIT 1`,
+        [ownerUserId, lng, lat],
+      );
+    } catch {
+      return null;
+    }
+
+    const name = rows[0]?.name?.trim();
+
+    return name ? { name, merged: rows[0].merged === true } : null;
   }
 
   /**
@@ -1494,6 +1574,12 @@ export class PlaceService {
           },
         );
       } catch (err) {
+        // A new point in another place's 0.001-degree cell: a different name
+        // would not get past entities_location_snap_dedup_uniq, so say what will.
+        if (typed.locationPoint && isSnapCellViolation(err)) {
+          throw await this.nearbyPlaceConflict(context.userId, typed.locationPoint.coordinates);
+        }
+
         if (isUniqueViolation(err)) {
           throw new ConflictException(
             'A place with that name already exists at this location. Choose a different name, or edit the existing place.',

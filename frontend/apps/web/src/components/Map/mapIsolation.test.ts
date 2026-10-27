@@ -110,6 +110,14 @@ describe('isolateFromMap', () => {
     expect(dragging.enable).not.toHaveBeenCalled();
   });
 
+  it('leaves dragging alone on a right press, which never drags the map', () => {
+    const { inner, dragging } = mount();
+
+    inner.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2 }));
+
+    expect(dragging.disable).not.toHaveBeenCalled();
+  });
+
   it('still bubbles a press when no map is registered for the container', () => {
     const container = document.createElement('div');
     const control = document.createElement('div');

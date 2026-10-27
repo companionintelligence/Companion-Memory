@@ -52,7 +52,9 @@ describe('ci push', () => {
       },
     });
 
-    await expect(pushCommand(ctx, { wait: true, timeout: 'abc' })).rejects.toBeInstanceOf(CliError);
+    await expect(pushCommand(ctx, { wait: true, timeout: 'abc' })).rejects.toThrow(
+      '--timeout takes a number of seconds, not "abc"',
+    );
     expect(asked).toEqual([]);
   });
 
@@ -108,6 +110,22 @@ describe('ci push --retry-failed', () => {
   const RUN = '68bffe0a-1dbe-4783-a226-49149f45ec4f';
 
   const detail = (id: string, status: string) => ({ ...unpushed(id, { status }), stages: [] });
+
+  it('refuses a bad --timeout before re-queuing anything', async () => {
+    const asked: string[] = [];
+    const ctx = harness({
+      retryFailedPush: async (runId: string) => {
+        asked.push(runId);
+
+        return { items: 437, entities: 0, requeued: true };
+      },
+    });
+
+    await expect(
+      pushCommand(ctx, { run: [RUN], retryFailed: true, wait: true, timeout: 'abc' }),
+    ).rejects.toThrow('--timeout takes a number of seconds, not "abc"');
+    expect(asked).toEqual([]);
+  });
 
   it('re-queues the named run and says how many rows went back', async () => {
     const asked: string[] = [];

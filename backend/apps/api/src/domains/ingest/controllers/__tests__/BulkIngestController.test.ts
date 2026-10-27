@@ -537,7 +537,7 @@ describe('BulkIngestController', () => {
           {
             index: 0,
             reason:
-              'A position needs a location, or a reference_entity_id with relative_coordinates that include x.',
+              'A position in this batch has neither a location nor a reference_entity_id with relative_coordinates that include x.',
           },
         ],
       });
@@ -576,8 +576,87 @@ describe('BulkIngestController', () => {
 
       const res = await controller.ingestPositions(ctx, ndjsonReq(`${JSON.stringify(fix)}\n`), undefined);
 
-      expect(JSON.stringify(res)).toContain('A position needs a location');
+      expect(JSON.stringify(res)).toContain('A position in this batch has neither a location');
       expect(JSON.stringify(res)).not.toContain('_hyper_');
+    });
+
+    it('says the database was away for a SQLSTATE that means it was restarting', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed('the database system is in recovery mode', { code: '57P03' }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [
+          { index: 0, reason: 'The database was unavailable while this batch was written (57P03).' },
+        ],
+      });
+    });
+
+    it('keeps the server address of a refused connection out of the reason', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('connect ECONNREFUSED 172.18.0.2:5432'), {
+          code: 'ECONNREFUSED',
+          syscall: 'connect',
+        }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [
+          { index: 0, reason: 'The database was unavailable while this batch was written (ECONNREFUSED).' },
+        ],
+      });
+      expect(JSON.stringify(res)).not.toContain('172.18.0.2');
+    });
+
+    it('does not read a broken socket (EPIPE) as a SQLSTATE', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('write EPIPE'), { code: 'EPIPE', syscall: 'write' }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(JSON.stringify(res)).not.toContain('SQLSTATE EPIPE');
+      expect(JSON.stringify(res)).toContain('The database was unavailable');
+    });
+
+    it('swaps the driver text when the capture log INSERT is the statement that failed', async () => {
+      const { controller, dataSource } = makeController();
+      (dataSource.query as jest.Mock).mockRejectedValueOnce(
+        queryFailed('value too long for type character varying(255) in relation "capture_events"', {
+          code: '22001',
+        }),
+      );
+
+      const res = await controller.ingest(ctx, { events: [ev('a')] });
+
+      expect(res).toMatchObject({
+        rejected: [{ index: 0, reason: 'The database refused this batch (SQLSTATE 22001).' }],
+      });
+      expect(JSON.stringify(res)).not.toContain('capture_events');
+    });
+
+    it('swaps the driver text when the materialized_id link UPDATE fails', async () => {
+      const { controller, dataSource } = makeController({ captureInserted: [true] });
+      const query = dataSource.query as jest.Mock;
+      const fallback = query.getMockImplementation()!;
+      query.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (/^\s*UPDATE ci\.capture_events/.test(sql)) {
+          throw queryFailed('deadlock detected on relation "capture_events"', { code: '40P01' });
+        }
+
+        return fallback(sql, params);
+      });
+
+      await expect(controller.ingest(ctx, { events: [ev('a')] })).rejects.toThrow(
+        'The database refused this batch (SQLSTATE 40P01).',
+      );
     });
   });
 

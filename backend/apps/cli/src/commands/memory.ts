@@ -77,7 +77,9 @@ function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
   }
 
   const backend = parseBackend(options.backend);
-  const port = Number.parseInt(options.port ?? '', 10);
+  // `Number`, not `parseInt`: parseInt reads the digits it can and drops the
+  // rest, so `--port 80abc` or `--port 11434.5` saved a port nobody typed.
+  const port = /^\s*\d+\s*$/.test(options.port ?? '') ? Number(options.port) : Number.NaN;
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new CliError('--port must be an integer between 1 and 65535.');

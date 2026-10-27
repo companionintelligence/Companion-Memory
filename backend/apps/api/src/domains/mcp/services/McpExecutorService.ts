@@ -18,6 +18,7 @@ import {
 } from 'graphql';
 
 import { LoggerService } from '@ci/common/logging';
+import { formatError } from '@ci/domains/graphql/formatError';
 
 import type { McpToolDefinition } from '../types';
 
@@ -69,11 +70,21 @@ export class McpExecutorService {
 
       this.logger.warn(`GraphQL errors executing tool ${tool.name}: ${messages}`);
 
+      // Through the same `formatError` `/graphql` uses. This plane calls
+      // `execute` itself, so Apollo's masking never ran: a resolver's
+      // QueryFailedError reached the MCP client as the driver's text (relation
+      // and constraint names) while the same mutation over HTTP answered
+      // "Internal server error". The raw messages are logged above.
       return {
-        errors: result.errors.map((e) => ({
-          message: e.message,
-          path: e.path,
-        })),
+        errors: result.errors.map((e) => {
+          const formatted = formatError(e.toJSON(), e);
+
+          return {
+            message: formatted.message,
+            path: e.path,
+            ...(formatted.extensions ? { extensions: formatted.extensions } : {}),
+          };
+        }),
         data: result.data?.[tool.operationName] ?? null,
       };
     }

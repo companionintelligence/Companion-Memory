@@ -12,10 +12,7 @@ import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 import { EmbeddingEntity, IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
-import {
-  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
-  MEDIA_DIMENSIONS_STAGE_ID,
-} from '../mediaDimensionsCandidates';
+import { countMediaDimensionsCandidates } from '../mediaDimensionsCandidates';
 
 import {
   type CommunicationLinkBackfillOptions,
@@ -561,22 +558,19 @@ export class MaintenanceOrchestratorService {
   }
 
   /**
-   * Enqueue-and-return media-dimensions leg — mirrors POST /api/maintenance/
-   * backfill-media-dimensions: count ORIGINAL image/video files without a
-   * recorded width, enqueue one {@link MediaDimensionsBackfillRequestEvent}.
+   * Enqueue-and-return media-dimensions leg, and the whole of POST
+   * /api/maintenance/backfill-media-dimensions, which delegates here: count the
+   * ORIGINAL image/video files with no width that the `enrich.media_dimensions`
+   * stage still has work for ({@link countMediaDimensionsCandidates}), and
+   * enqueue one {@link MediaDimensionsBackfillRequestEvent} unless that is 0.
    */
-  private async runMediaDimensionsLeg(
+  async runMediaDimensionsLeg(
     userId: string,
     opts: { limit?: number },
   ): Promise<{ jobId: string | null; estimatedFileCount: number; status: 'enqueued' | 'noop' }> {
     const limit = opts.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
 
-    const rows = await this.dataSource.query<Array<{ count: string }>>(MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, [
-      userId,
-      MEDIA_DIMENSIONS_STAGE_ID,
-    ]);
-
-    const candidateCount = Number(rows[0]?.count ?? 0);
+    const candidateCount = await countMediaDimensionsCandidates(this.dataSource, userId);
     const estimatedFileCount = Math.min(candidateCount, limit);
 
     if (estimatedFileCount === 0) {

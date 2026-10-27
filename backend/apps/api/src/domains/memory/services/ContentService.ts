@@ -46,9 +46,9 @@ import {
   effectiveSourceSystemPredicate,
 } from './contentFacetsSql';
 import { type PurgedContentAggregates, purgeContentAggregates } from './contentPurge';
-import { CtiAggregate } from './CtiAggregate';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
 import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { clearHbpeLinks } from './purgeTeardown';
 import { nothingWrapped } from './wrappedFilePurge';
 
@@ -1374,14 +1374,14 @@ export class ContentService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before, after: reloaded, baseBefore }) => {
           const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
-          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {};
-          if (data.title !== undefined) {
-            changedFields.name = { new: data.title };
-          }
+          // Only what moved: the drawer sends the title with every save.
+          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {
+            ...changedFieldsBetween({ name: baseBefore?.name }, basePatch, Object.keys(basePatch)),
+          };
 
-          if (Object.keys(updateData).length > 0) {
+          if (detailChanged(before, reloaded, Object.keys(updateData))) {
             changedFields.detail_updated = { new: true };
           }
 

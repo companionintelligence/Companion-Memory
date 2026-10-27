@@ -111,6 +111,10 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * v2 — the probe moved from sharp's bundled libvips to the system `vips`
    * tools (VipsService). HEIC now reads: sharp's libheif had no HEVC decoder,
    * so every iPhone original probed as unreadable.
+   *
+   * Bump `MEDIA_DIMENSIONS_STAGE_VERSION` in
+   * `domains/maintenance/mediaDimensionsCandidates.ts` with it (a spec there
+   * fails until you do).
    */
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 2,
 

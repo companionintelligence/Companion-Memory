@@ -4,7 +4,7 @@ import type { Request } from 'express';
 
 import { isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
-import { IntentCatalogService } from '@ci/domains/tools';
+import { IntentCatalogService, toolErrorMessage } from '@ci/domains/tools';
 
 import { ToolExecutionError } from '../types';
 
@@ -176,5 +176,5 @@ function serializeToolError(error: Error): { code?: string; message: string; det
     };
   }
 
-  return { message: error.message };
+  return { message: toolErrorMessage(error) };
 }

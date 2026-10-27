@@ -32,6 +32,47 @@ import './playback.css';
 /** Scrubber resolution. 1,000 steps over a 13-year range is about 4.8 days a step. */
 const SCRUB_STEPS = 1_000;
 
+/**
+ * How far up from the map's bottom edge the bar reaches, in px, set on the map
+ * container while the bar is mounted. A caption on the same edge (the trace
+ * layer's status) sits on `var(--playback-bar-clearance, …)`, so it clears the
+ * bar in every state and drops back to its fallback when there is no bar.
+ */
+const CLEARANCE_VAR = '--playback-bar-clearance';
+
+/**
+ * Measured rather than assumed, because the bar's height moves: the provenance
+ * line, an error with its Retry button, date labels that wrap on a narrow
+ * window and the safe-area inset under it all change how much of the map it
+ * covers. Returns the cleanup that takes the property off again.
+ */
+function publishClearance(bar: HTMLElement): () => void {
+  const host = bar.parentElement;
+
+  if (host == null) {
+    return () => {};
+  }
+
+  const update = () => {
+    const bottom = Number.parseFloat(getComputedStyle(bar).bottom);
+
+    host.style.setProperty(CLEARANCE_VAR, `${bar.offsetHeight + (Number.isFinite(bottom) ? bottom : 0)}px`);
+  };
+
+  // The host as well as the bar: a rotation or a window resize can change the
+  // inset under the bar without changing the bar's own size.
+  const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+
+  observer?.observe(bar);
+  observer?.observe(host);
+  update();
+
+  return () => {
+    observer?.disconnect();
+    host.style.removeProperty(CLEARANCE_VAR);
+  };
+}
+
 export function PlaybackBar({ className }: { className?: string } = {}) {
   const { store, loading, error, retry, hasTrack, ready } = usePlayback();
   const { status, speed, range, skipGaps, stopCount } = usePlaybackControls();
@@ -40,7 +81,15 @@ export function PlaybackBar({ className }: { className?: string } = {}) {
 
   // Leaflet would otherwise treat a drag on the scrubber as a map pan and a
   // wheel over the bar as a zoom.
-  const setContainerRef = useMapIsolation();
+  const isolate = useMapIsolation();
+  const setContainerRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      isolate(el);
+
+      return el ? publishClearance(el) : undefined;
+    },
+    [isolate],
+  );
 
   // `stopCount` alone is a circular gate: `stops` only gains position-fix
   // times once the transport has already been used once (see `armed` in

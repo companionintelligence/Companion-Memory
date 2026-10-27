@@ -111,4 +111,16 @@ describe('ci-import memory', () => {
       memoryConfigureCommand(ctx, { backend: 'ollama', port: 'not-a-port' }),
     ).rejects.toMatchObject({ exitCode: 2, message: expect.stringContaining('--port') });
   });
+
+  it.each(['80abc', '11434.5', '1e3', ''])(
+    'rejects --port %j instead of saving the digits it starts with',
+    async (port) => {
+      const ctx = harness({});
+
+      await expect(memoryConfigureCommand(ctx, { backend: 'ollama', port })).rejects.toMatchObject({
+        exitCode: 2,
+        message: expect.stringContaining('--port'),
+      });
+    },
+  );
 });

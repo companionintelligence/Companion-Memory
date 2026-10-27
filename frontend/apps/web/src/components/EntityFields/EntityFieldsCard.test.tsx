@@ -93,6 +93,29 @@ describe('EntityFieldsCard', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it('does not write an untouched field back over a value that landed while editing', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onEditModeChange = vi.fn();
+
+    const { rerender } = render(
+      <EntityFieldsCard fields={FIELDS} editMode onSave={onSave} onEditModeChange={onEditModeChange} />,
+    );
+
+    // A rename saved in the memory drawer lands in the Apollo cache while this card is open.
+    const renamed = [{ ...FIELDS[0], value: 'Renamed elsewhere' }, FIELDS[1]];
+
+    rerender(
+      <EntityFieldsCard fields={renamed} editMode onSave={onSave} onEditModeChange={onEditModeChange} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(onEditModeChange).toHaveBeenCalledWith(false);
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('stays open with the typed text intact when the write is rejected', async () => {
     const onSave = vi.fn().mockRejectedValue(new Error('Update was rejected'));
     const onEditModeChange = vi.fn();

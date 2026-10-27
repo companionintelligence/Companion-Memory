@@ -260,6 +260,7 @@ export {
 export { IntentCatalogService } from './catalog/IntentCatalogService';
 export type { IntentManifest, ManifestIntent, IntentDomain, CiEntityDescriptor } from './catalog/types';
 export { BaseTool } from './core/BaseTool';
+export { DATABASE_ERROR_MESSAGE, UNAVAILABLE_ERROR_MESSAGE, toolErrorMessage } from './core/toolErrorMessage';
 export { ToolInvokedEvent, TOOL_INVOCATION_OUTCOMES, TOOL_INVOCATION_ERROR_MAX_LENGTH } from './events';
 export type { ToolInvokedPayload, ToolInvocationOutcome } from './events';
 export { ToolInvocationEntity } from './entities/ToolInvocationEntity';

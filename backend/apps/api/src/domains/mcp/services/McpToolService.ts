@@ -20,6 +20,7 @@ import {
   intentToolName,
   outcomeOf,
   type ToolInvocationOutcome,
+  toolErrorMessage,
 } from '@ci/domains/tools';
 
 import type { McpRegisteredTool, McpToolDefinition } from '../types';
@@ -705,7 +706,7 @@ export function describeFailure(error: unknown): { code: string; message: string
 
   return {
     code: error.constructor?.name ?? error.name ?? 'UNKNOWN_ERROR',
-    message: error.message,
+    message: toolErrorMessage(error),
     retryable: false,
   };
 }

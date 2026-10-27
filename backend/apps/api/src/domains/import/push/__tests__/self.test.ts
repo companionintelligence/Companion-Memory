@@ -2,6 +2,7 @@ import {
   decideSelfCollation,
   isExactOwnerIdentifier,
   isOwnerContact,
+  readSentLabelSenders,
   makeIsSelf,
   matchOwner,
   matchOwnerIdentifier,
@@ -219,6 +220,13 @@ describe('a second address on the self Person', () => {
     expect(makeIsSelf(work)).toBe(NOBODY_IS_SELF);
     expect(matchOwner(work, 'Info')).toBeNull();
   });
+
+  it('counts only a value with an @ as an address', () => {
+    const junk = identity({ names: [], email: null, emails: ['Info'] });
+
+    expect(matchOwner(junk, 'Info')).toBeNull();
+    expect(matchOwnerIdentifier(junk, 'email', 'info')).toBeNull();
+  });
 });
 
 describe('isOwnerContact', () => {
@@ -332,5 +340,47 @@ describe('decideSelfCollation', () => {
     expect(decideSelfCollation('hands_off', name)).toBe('review');
     expect(decideSelfCollation('balanced', email)).toBe('review');
     expect(decideSelfCollation('cautious', email)).toBe('review');
+  });
+});
+
+describe('readSentLabelSenders', () => {
+  it("reads the From addresses of the run's Sent mail as the owner's", async () => {
+    const query = jest.fn(async () => [
+      { sender: '"Liam Broza" <Liam@Alias.example>' },
+      { sender: 'liam@alias.example' },
+      { sender: 'old.account@example.org' },
+      { sender: 'Liam Broza' },
+      { sender: null },
+    ]);
+
+    await expect(readSentLabelSenders({ query } as never, 'run-1')).resolves.toEqual([
+      'liam@alias.example',
+      'old.account@example.org',
+    ]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("'sent_label'"), ['run-1']);
+  });
+
+  it('maps a contact holding one of those addresses to the owner', () => {
+    const identity = {
+      names: ['Liam Broza'],
+      email: 'liam@example.com',
+      emails: ['liam@alias.example'],
+      phones: [],
+    };
+
+    expect(
+      isOwnerContact(
+        identity,
+        { name: 'Liam Broza', emails: ['liam@alias.example'], phones: [] },
+        'balanced',
+      ),
+    ).toBe(true);
+    expect(
+      isOwnerContact(
+        identity,
+        { name: 'Liam Broza', emails: ['stranger@example.net'], phones: [] },
+        'balanced',
+      ),
+    ).toBe(false);
   });
 });

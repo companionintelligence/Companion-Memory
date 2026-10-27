@@ -79,6 +79,7 @@ describe('TimelineJsHost', () => {
     vi.unstubAllGlobals();
     delete (window as unknown as { TL?: unknown }).TL;
     document.querySelector('link[data-timelinejs-css]')?.remove();
+    document.querySelectorAll('script[data-timelinejs]').forEach((tag) => tag.remove());
   });
 
   it('does not add slides until TimelineJS reports itself loaded', async () => {
@@ -148,14 +149,10 @@ describe('TimelineJsHost', () => {
 
     // A new tag, not the dead one: a script element fetches only when it is
     // inserted, so the failed one could never load.
-    const retried = await waitFor(() => {
-      const tag = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+    const retried = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
 
-      expect(tag).not.toBe(failed);
-
-      return tag;
-    });
-
+    expect(retried).not.toBeNull();
+    expect(retried).not.toBe(failed);
     expect(failed?.isConnected).toBe(false);
     expect(document.querySelectorAll('script[data-timelinejs]')).toHaveLength(1);
 
@@ -166,6 +163,40 @@ describe('TimelineJsHost', () => {
     releaseStylesheet();
 
     await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
-    retried?.remove();
+  });
+
+  it('fetches the stylesheet again on Try again when it failed along with the script', async () => {
+    // Offline: both requests fail. A link fires load or error once, so reusing the dead one
+    // left Try again waiting on it with the script already back.
+    delete (window as unknown as { TL?: unknown }).TL;
+    render(<TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey="offline" />);
+
+    const failedSheet = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
+    const failedScript = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+    expect(failedSheet).not.toBeNull();
+    expect(failedScript).not.toBeNull();
+    act(() => {
+      failedSheet?.dispatchEvent(new Event('error'));
+      failedScript?.dispatchEvent(new Event('error'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load TimelineJS script');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    const sheet = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
+
+    expect(sheet).not.toBeNull();
+    expect(sheet).not.toBe(failedSheet);
+    expect(failedSheet?.isConnected).toBe(false);
+
+    (window as unknown as { TL: unknown }).TL = { Timeline: FakeTimeline };
+    act(() => {
+      document.querySelector('script[data-timelinejs]')?.dispatchEvent(new Event('load'));
+    });
+    releaseStylesheet();
+
+    await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
   });
 });

@@ -126,19 +126,22 @@ describe('PlaceService single create still emits', () => {
 });
 
 describe('PlaceService.create next to another place', () => {
-  function makeCreateService(occupant: string | null) {
+  function makeCreateService(occupant: string | null, constraint?: string) {
     const query = jest.fn(async () => (occupant ? [{ name: occupant }] : []));
     const repository = {
       create: jest.fn((partial: Partial<PlaceEntity>) => Object.assign(new PlaceEntity(), partial)),
       save: jest.fn(async () => {
-        throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+        throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+          driverError: { code: '23505', constraint },
+        });
       }),
       manager: { query },
     };
     const send = jest.fn(async () => []);
     const service = new PlaceService(repository as never, { send } as never, {} as never);
 
-    return { service, query, send };
+    return { service, query, send, repository };
   }
 
   const point = { type: 'Point' as const, coordinates: [-122.4602, 37.8102] };
@@ -162,11 +165,58 @@ describe('PlaceService.create next to another place', () => {
     );
   });
 
-  it('rethrows a unique violation on a place without a point unchanged', async () => {
+  it('answers a unique violation on a place without a point with the name conflict, without a spot lookup', async () => {
     const { service, query } = makeCreateService('Spot A');
 
-    await expect(service.create(CONTEXT, { name: 'Spot B' })).rejects.not.toBeInstanceOf(ConflictException);
+    await expect(service.create(CONTEXT, { name: 'Spot B' })).rejects.toThrow(
+      'A place with that name already exists.',
+    );
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rethrows an error that is not a unique violation unchanged', async () => {
+    const { service, repository } = makeCreateService('Spot A');
+    repository.save.mockRejectedValueOnce(Object.assign(new Error('connection reset'), { code: '08006' }));
+
+    await expect(service.create(CONTEXT, { name: 'Spot B', locationPoint: point })).rejects.toThrow(
+      'connection reset',
+    );
+  });
+
+  it('names the place when the driver reports the snap-cell index', async () => {
+    const { service } = makeCreateService('Spot A', 'entities_location_snap_dedup_uniq');
+
+    await expect(service.create(CONTEXT, { name: 'Spot B', locationPoint: point })).rejects.toThrow(
+      '"Spot A" is already saved at this spot.',
+    );
+  });
+
+  it('answers a violation of another index with the name conflict, even for a place with a point', async () => {
+    const { service, query } = makeCreateService('Spot A', 'entities_admin_place_uniq');
+
+    const attempt = service.create(CONTEXT, { name: 'Springfield', locationPoint: point });
+
+    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+    await expect(attempt).rejects.toThrow('A place with that name already exists.');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('points at the kept place when the spot is held by a place merged into it', async () => {
+    const { service, query } = makeCreateService(null, 'entities_location_snap_dedup_uniq');
+    query.mockResolvedValueOnce([{ name: 'Cafe', merged: true }] as never);
+
+    await expect(service.create(CONTEXT, { name: 'Bakery', locationPoint: point })).rejects.toThrow(
+      'This spot is held by a place you merged into "Cafe".',
+    );
+  });
+
+  it('still answers with the conflict when looking up the place in the spot fails', async () => {
+    const { service, query } = makeCreateService('Spot A');
+    query.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(service.create(CONTEXT, { name: 'Spot B', locationPoint: point })).rejects.toThrow(
+      'Another place is already saved at this spot.',
+    );
   });
 });
 
@@ -217,9 +267,11 @@ describe('PlaceService.update', () => {
     );
     const findOne = jest.fn(async () => existing);
     const send = jest.fn(async () => []);
+    const query = jest.fn(async (): Promise<Array<{ name: string | null }>> => []);
     const repository = {
       update,
       findOne,
+      manager: { query },
       metadata: { target: PlaceEntity, columns: { length: 8 } },
     };
     const service = new PlaceService(
@@ -233,7 +285,7 @@ describe('PlaceService.update', () => {
       } as never,
     );
 
-    return { service, update };
+    return { service, update, query };
   }
 
   it('stores punctuation and symbols in the name as typed', async () => {
@@ -275,6 +327,22 @@ describe('PlaceService.update', () => {
     await expect(
       service.update(CONTEXT, PLACE_ID, { name: 'Home', properties: existing.properties }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('names the place in the spot when a move lands in its cell, rather than asking for another name', async () => {
+    const { service, update, query } = makeUpdateService(place());
+    query.mockResolvedValueOnce([{ name: 'Spot A' }]);
+    update.mockRejectedValueOnce(
+      Object.assign(new Error('duplicate key'), {
+        code: '23505',
+        driverError: { code: '23505', constraint: 'entities_location_snap_dedup_uniq' },
+      }),
+    );
+
+    await expect(
+      service.update(CONTEXT, PLACE_ID, { properties: {}, latitude: 37.8102, longitude: -122.4602 }),
+    ).rejects.toThrow('"Spot A" is already saved at this spot.');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ST_SnapToGrid'), [USER, -122.4602, 37.8102]);
   });
 
   it('refuses an empty name', async () => {

@@ -41,7 +41,7 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
   const timeoutMs = parseTimeout(options.timeout);
 
   if (options.retryFailed) {
-    await retryFailedPush(ctx, options);
+    await retryFailedPush(ctx, options, timeoutMs);
 
     return;
   }
@@ -135,7 +135,7 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
  * re-queued runs to their close-out, which is where the run's status is
  * recomputed.
  */
-async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<void> {
+async function retryFailedPush(ctx: CliContext, options: PushOptions, timeoutMs: number): Promise<void> {
   const runIds = options.run ?? [];
 
   if (runIds.length === 0) {
@@ -243,7 +243,7 @@ async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<v
       ctx.client,
       ctx.term,
       requeued.map((entry) => entry.runId),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+      { timeoutMs, quiet: options.json },
     );
   }
 

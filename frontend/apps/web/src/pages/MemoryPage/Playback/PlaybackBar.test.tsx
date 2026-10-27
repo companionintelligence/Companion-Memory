@@ -253,4 +253,30 @@ describe('PlaybackBar', () => {
       'bottom-[calc(0.75rem+var(--safe-area-bottom))]',
     );
   });
+
+  it('tells the map how far up it reaches while it is mounted, and takes that back when it goes', async () => {
+    const source = fakeSource(fixture(5));
+    const { unmount } = renderWithProviders(
+      <div data-testid="map">
+        <PlaybackProvider args={[{ pins: [pin(0), pin(4)], source }]}>
+          <PlaybackBar />
+        </PlaybackProvider>
+      </div>,
+      { route: '/memory?view=map' },
+    );
+    const map = screen.getByTestId('map');
+
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('');
+
+    await transport();
+
+    // jsdom lays nothing out, so the measured value is 0px; what matters here
+    // is that the trace status's `var(--playback-bar-clearance, …)` has
+    // something to read while the bar is up and falls back once it is gone.
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('0px');
+
+    unmount();
+
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('');
+  });
 });

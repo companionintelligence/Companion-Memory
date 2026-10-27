@@ -1,7 +1,10 @@
+import { QueryFailedError } from 'typeorm';
+
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
 import { BaseTool } from '../BaseTool';
+import { DATABASE_ERROR_MESSAGE } from '../toolErrorMessage';
 import type { IntentDefinition } from '../types';
 
 /**
@@ -19,6 +22,34 @@ class ThrowingTool extends BaseTool<unknown, unknown> {
   protected async executeInternal(): Promise<unknown> {
     throw new Error('TMDB_API_KEY environment variable not set');
   }
+}
+
+/** Rethrows with `{ cause }`, the way `ForgetKnowledgeTool` wraps a failed delete. */
+class RethrowingTool extends ThrowingTool {
+  protected async executeInternal(): Promise<unknown> {
+    try {
+      runFailingQuery();
+    } catch (cause) {
+      throw new Error('The delete failed: deadlock detected', { cause });
+    }
+  }
+}
+
+/** A write the database refuses, as TypeORM reports it. */
+class RefusedWriteTool extends ThrowingTool {
+  protected async executeInternal(): Promise<unknown> {
+    throw new QueryFailedError(
+      'UPDATE ci.events SET end_time = $1',
+      [],
+      Object.assign(new Error('new row for relation "events" violates check constraint "valid_time_range"'), {
+        code: '23514',
+      }),
+    );
+  }
+}
+
+function runFailingQuery(): never {
+  throw new Error('deadlock detected');
 }
 
 function logger() {
@@ -59,6 +90,41 @@ describe('BaseTool error handling', () => {
     expect(log.error).toHaveBeenCalledWith(
       'Tool execution failed',
       expect.objectContaining({ stack: expect.stringContaining('ThrowingTool.executeInternal') }),
+    );
+  });
+
+  it('logs the stack of the error a tool wrapped, after its own', async () => {
+    const log = logger();
+
+    const result = await new RethrowingTool(log as unknown as LoggerService).execute(
+      { userId: 'user-1' } as RequestContext,
+      {},
+    );
+
+    expect(result.error?.details).toEqual({ name: 'Error' });
+    expect(log.error).toHaveBeenCalledWith(
+      'Tool execution failed',
+      expect.objectContaining({
+        stack: expect.stringMatching(
+          /RethrowingTool\.executeInternal[\s\S]*caused by: Error: deadlock detected\n\s+at runFailingQuery/,
+        ),
+      }),
+    );
+  });
+
+  it("keeps a database error's own text for the log and tells the caller only that the database refused", async () => {
+    const log = logger();
+
+    const result = await new RefusedWriteTool(log as unknown as LoggerService).execute(
+      { userId: 'user-1' } as RequestContext,
+      {},
+    );
+
+    expect(result.error?.message).toBe(DATABASE_ERROR_MESSAGE);
+    expect(JSON.stringify(result)).not.toMatch(/valid_time_range|relation/);
+    expect(log.error).toHaveBeenCalledWith(
+      'Tool execution failed',
+      expect.objectContaining({ originalError: expect.stringContaining('valid_time_range') }),
     );
   });
 });

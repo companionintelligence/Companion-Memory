@@ -27,10 +27,11 @@ import L from 'leaflet';
  *   dismissable layer does not watch dblclick or wheel.
  * - the context menu: left to bubble. React handles every event at the root,
  *   above the map, so stopping it here left the right-click menu on the side
- *   panel's cards dead. Letting it through costs nothing on the map: Leaflet
- *   only reacts to a contextmenu when the map or a layer under the pointer
- *   listens for one, and no map here listens on the map itself (a marker's
- *   listener is on its own icon, which these controls never contain).
+ *   panel's cards dead. Letting it through costs nothing on the map. Leaflet
+ *   only reacts to a contextmenu when the map listens for one, or a layer
+ *   whose element the event passes through on its way up. No map here listens
+ *   on the map itself, and a marker's listener is on its own icon, which these
+ *   controls never contain.
  * A pinch that starts on the control still zooms (touchZoom wants two
  * fingers on the container), as it did before.
  */
@@ -56,7 +57,15 @@ export function isolateFromMap(el: HTMLElement): void {
   L.DomEvent.on(el, 'dblclick', L.DomEvent.stopPropagation);
   L.DomEvent.disableScrollPropagation(el);
 
-  const press = () => {
+  const press = (event: MouseEvent | TouchEvent) => {
+    // A right press never starts a map drag (Leaflet's Draggable skips it), so
+    // there is nothing to hold. Holding anyway could leave dragging off: where
+    // the browser's own menu opens on mousedown, it takes the mouseup that
+    // would have given dragging back.
+    if (event.type === 'mousedown' && (event as MouseEvent).button === 2) {
+      return;
+    }
+
     // Looked up per press, not once: the map registers itself in an effect,
     // after the ref callback that set this listener up.
     const dragging = mapUnder(el)?.dragging;

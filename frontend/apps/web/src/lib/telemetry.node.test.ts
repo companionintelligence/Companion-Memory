@@ -3,6 +3,7 @@ import type { ErrorEvent } from '@sentry/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  isChunkLoadError,
   scrubBrowserEvent,
   scrubServerOrigin,
   scrubString,
@@ -34,10 +35,32 @@ describe('scrubUrl', () => {
   });
 });
 
+describe('isChunkLoadError', () => {
+  it.each([
+    'Failed to fetch dynamically imported module: /assets/x.js',
+    'Importing a module script failed.',
+    'error loading dynamically imported module: /assets/x.js',
+    'Unable to preload CSS for /assets/MapView-abc.css',
+  ])('recognises a failed chunk download: %s', (message) => {
+    expect(isChunkLoadError(new TypeError(message))).toBe(true);
+    expect(isChunkLoadError(message)).toBe(true);
+  });
+
+  it.each([
+    new Error('Cannot read properties of undefined'),
+    undefined,
+    null,
+    { message: 'Loading chunk 1 failed' },
+  ])('does not mistake anything else for one: %s', (error) => {
+    expect(isChunkLoadError(error)).toBe(false);
+  });
+});
+
 describe('shouldDropEvent', () => {
   it.each([
     'Loading chunk 42 failed',
     'Failed to fetch dynamically imported module: /assets/x.js',
+    'Unable to preload CSS for /assets/MapView-abc.css',
     'ResizeObserver loop completed with undelivered notifications',
   ])('drops known noise: %s', (message) => {
     expect(shouldDropEvent(event({ message }))).toBe(true);

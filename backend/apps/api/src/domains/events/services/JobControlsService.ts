@@ -287,12 +287,22 @@ export class JobControlsService {
       const { concurrency, perQueueConcurrency, nonInteractive } = input.global;
 
       if (concurrency !== undefined) {
-        writes.push(numberWrite('global', GLOBAL_CONCURRENCY, this.checkConcurrency(concurrency)));
+        writes.push(
+          numberWrite(
+            'global',
+            GLOBAL_CONCURRENCY,
+            this.checkConcurrency(concurrency, 'The appliance-wide limit'),
+          ),
+        );
       }
 
       if (perQueueConcurrency !== undefined) {
         writes.push(
-          numberWrite('global', GLOBAL_PER_QUEUE_CONCURRENCY, this.checkConcurrency(perQueueConcurrency)),
+          numberWrite(
+            'global',
+            GLOBAL_PER_QUEUE_CONCURRENCY,
+            this.checkConcurrency(perQueueConcurrency, 'The per-queue default'),
+          ),
         );
       }
 
@@ -336,7 +346,13 @@ export class JobControlsService {
       }
 
       if (queue.concurrency !== undefined) {
-        writes.push(numberWrite('queue', queue.name, this.checkConcurrency(queue.concurrency)));
+        writes.push(
+          numberWrite(
+            'queue',
+            queue.name,
+            this.checkConcurrency(queue.concurrency, `The "${queue.name}" queue`),
+          ),
+        );
       }
     }
 
@@ -369,15 +385,22 @@ export class JobControlsService {
     return writes;
   }
 
-  private checkConcurrency(value: number | null): number | null {
+  /**
+   * `field` names the control in the refusal. The route's zod pipe used to
+   * check this range and report the path of the offending field; this message
+   * is the only place a caller that sent more than one number can now learn
+   * which one was refused.
+   */
+  private checkConcurrency(value: number | null, field: string): number | null {
     if (value === null) {
       return null;
     }
 
     if (!Number.isInteger(value) || value < 1 || value > MAX_CONCURRENCY) {
       throw new BadRequestException(
-        `Concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}. There is deliberately no ` +
-          `spelling for "unlimited", and 0 is a disable expressed as a number — use the mode for that.`,
+        `Concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}. ${field} was given ` +
+          `${String(value)}. There is no setting for "unlimited", and 0 does not stop a queue: pause ` +
+          `or disable it instead.`,
       );
     }
 

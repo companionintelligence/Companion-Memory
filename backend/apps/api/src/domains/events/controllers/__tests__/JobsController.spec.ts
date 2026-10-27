@@ -5,7 +5,9 @@ import request from 'supertest';
 import { ContextService } from '@ci/common/context';
 import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MAX_CONCURRENCY } from '@ci/common/job-controls';
 
+import { EventListenerRegistry } from '../../event-registration';
 import { JobControlsService } from '../../services/JobControlsService';
 import { JobMonitorService } from '../../services/JobMonitorService';
 import { JobQueryService } from '../../services/JobQueryService';
@@ -95,10 +97,12 @@ async function buildApp(
 
   // Stands in for RequestContextMiddleware: `@Context()` reads the request
   // context out of AsyncLocalStorage, so a handler that takes one 500s with
-  // "Request context not found" without it. Only `POST /jobs/clear` reaches a
-  // handler body here — every other case in this file is answered by a guard or
-  // read straight off route metadata — which is why the omission surfaced as
-  // one failing test rather than a whole red file.
+  // "Request context not found" without it. When it was missing, only
+  // `POST /jobs/clear` reached a handler body (every other case was answered by
+  // a guard or read straight off route metadata), which is why the omission
+  // surfaced as one failing test rather than a whole red file. The
+  // `PUT /jobs/controls` range cases reach `updateControls` as well, which reads
+  // `context.userId` before the service refuses the body.
   app.use((_req: unknown, _res: unknown, next: () => void) => {
     ContextService.run({ traceId: 'test-trace', userId: 'user-1' }, () => next());
   });
@@ -302,15 +306,6 @@ describe('POST /jobs/clear', () => {
 });
 
 /**
- * The rest of the appliance-wide control plane.
- *
- * `clear` is not special — `crons/run` fires every schedule on the box
- * (including an account purge) and `PUT /controls` can pause the memory system
- * for everyone. All three carried a `@RequireCapability` that is a no-op for
- * sessions, so all three need the principal check, and asserting it on one of
- * them would leave the other two to be re-litigated later.
- */
-/**
  * `PUT /jobs/controls` with a concurrency out of range. The Jobs page shows the
  * 400's `message` and nothing else, so the reason has to be in it: the route's
  * zod pipe used to refuse 100 as a bare "Validation failed" before
@@ -321,6 +316,15 @@ describe('PUT /jobs/controls', () => {
   let repository: { query: jest.Mock };
 
   beforeEach(async () => {
+    // One real queue, so a queue's own cap is checked for range instead of
+    // being refused first as an unknown queue.
+    EventListenerRegistry.clear();
+    EventListenerRegistry.register(
+      'file.uploaded',
+      'ImageDescriptionListener',
+      'describe',
+      'image-description',
+    );
     repository = { query: jest.fn() };
     app = await buildApp(
       AlwaysAllowGuard,
@@ -333,16 +337,30 @@ describe('PUT /jobs/controls', () => {
 
   afterEach(async () => {
     await app?.close();
+    EventListenerRegistry.clear();
   });
 
   it.each([
     ['100 for the whole appliance', { global: { concurrency: 100 } }],
-    ['0 per queue', { global: { perQueueConcurrency: 0 } }],
+    ['0 for the per-queue default', { global: { perQueueConcurrency: 0 } }],
     ['2.5 for the whole appliance', { global: { concurrency: 2.5 } }],
-  ])('explains the 1 to 64 range when given %s, and writes nothing', async (_label, body) => {
+    ['100 for one queue', { queues: [{ name: 'image-description', concurrency: 100 }] }],
+  ])(`explains the 1 to ${MAX_CONCURRENCY} range when given %s and writes nothing`, async (_label, body) => {
     const response = await request(app.getHttpServer()).put('/jobs/controls').send(body).expect(400);
 
-    expect(response.body.message).toMatch(/^Concurrency must be a whole number between 1 and 64\./);
+    expect(response.body.message).toMatch(
+      new RegExp(`^Concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}\\.`),
+    );
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  it('names the field it refused, since the pipe no longer reports a path', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/jobs/controls')
+      .send({ global: { concurrency: 4, perQueueConcurrency: 100 } })
+      .expect(400);
+
+    expect(response.body.message).toContain('The per-queue default was given 100.');
     expect(repository.query).not.toHaveBeenCalled();
   });
 
@@ -357,6 +375,15 @@ describe('PUT /jobs/controls', () => {
   });
 });
 
+/**
+ * The rest of the appliance-wide control plane.
+ *
+ * `clear` is not special — `crons/run` fires every schedule on the box
+ * (including an account purge) and `PUT /controls` can pause the memory system
+ * for everyone. All three carried a `@RequireCapability` that is a no-op for
+ * sessions, so all three need the principal check, and asserting it on one of
+ * them would leave the other two to be re-litigated later.
+ */
 describe('the appliance-wide control plane declares BOTH axes', () => {
   const ROUTES: ReadonlyArray<[name: string, handler: unknown]> = [
     ['clearTerminal', JobsController.prototype.clearTerminal],

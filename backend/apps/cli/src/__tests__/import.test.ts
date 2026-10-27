@@ -143,6 +143,22 @@ describe('ci import', () => {
     expect(ctx.term.text()).not.toContain('run(s) started');
   });
 
+  it('counts a non-Error rejection as a failed path', async () => {
+    const archive = path.join(dir, 'odd.zip');
+
+    await writeFile(archive, 'x');
+
+    const ctx = harness({
+      upload: async () => {
+        throw 'socket closed';
+      },
+    });
+
+    await expect(importCommand(ctx, [archive])).rejects.toMatchObject({ exitCode: 1 });
+    expect(ctx.term.errorText()).toContain('socket closed');
+    expect(ctx.term.text()).not.toContain('run(s) started');
+  });
+
   it('follows the runs with --wait', async () => {
     const archive = path.join(dir, 'a.zip');
 
@@ -188,5 +204,15 @@ describe('parseTimeout', () => {
 
   it('refuses nonsense', () => {
     expect(() => parseTimeout('soon')).toThrow(CliError);
+  });
+
+  it('refuses a blank value rather than reading it as no limit', () => {
+    expect(() => parseTimeout('')).toThrow(CliError);
+    expect(() => parseTimeout('  ')).toThrow(CliError);
+  });
+
+  it('never rounds a positive timeout down to no limit', () => {
+    expect(parseTimeout('0.0001')).toBe(1);
+    expect(parseTimeout('0')).toBe(0);
   });
 });

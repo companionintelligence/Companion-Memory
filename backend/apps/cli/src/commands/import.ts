@@ -48,8 +48,9 @@ export async function importCommand(
   }
 
   const stages = parseStages(options.stages);
-  // Before anything is uploaded: a bad --timeout used to surface only once the
-  // runs had started, failing a command whose imports were already under way.
+  // Parsed before anything is uploaded. A bad --timeout used to surface only
+  // once the runs had started, so the command failed with its imports already
+  // under way.
   const timeoutMs = parseTimeout(options.timeout);
 
   if (stages != null && !stages.includes('media') && stages.includes('parse')) {
@@ -99,7 +100,9 @@ export async function importCommand(
 
       results.push({ path: resolved, sizeBytes: info.size, runId: run.id, label: run.label });
     } catch (err) {
-      results.push({ path: resolved, error: (err as Error).message });
+      // A non-Error rejection would otherwise record `error: undefined`, and
+      // the path would count as neither started nor failed.
+      results.push({ path: resolved, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -174,9 +177,12 @@ export function parseTimeout(value: string | undefined): number {
 
   const seconds = Number(value);
 
-  if (!Number.isFinite(seconds) || seconds < 0) {
+  // `Number('')` is 0, so a blank value (`--timeout "$UNSET"` in a script)
+  // would otherwise mean "no limit" without a word.
+  if (value.trim() === '' || !Number.isFinite(seconds) || seconds < 0) {
     throw new CliError(`--timeout takes a number of seconds, not "${value}"`);
   }
 
-  return Math.round(seconds * 1000);
+  // A positive value never rounds down to 0, which would also mean "no limit".
+  return seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
 }

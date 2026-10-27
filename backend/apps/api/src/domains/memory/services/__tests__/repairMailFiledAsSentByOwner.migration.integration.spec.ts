@@ -1,19 +1,25 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { DataSource, type QueryRunner } from 'typeorm';
 
+import { buildVectorUpsertStatement } from '@ci/domains/search-ingress';
+import { DEVICE_RECORD_VERSION } from '@ci/domains/search-next';
+
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 
 /**
- * 20261026105606_repair_mail_filed_as_sent_by_owner: mail somebody else sent
- * the owner, filed with the owner as its sender (K-303), comes off the owner's
- * person. Seeded on real Postgres and rolled back. Opt-in: set
- * `MEMORY_TEST_DATABASE_URL` to a migrated database of your own.
+ * 20261027144823_reissue_repair_mail_filed_as_sent_by_owner: mail somebody else
+ * sent the owner, filed with the owner as its sender (K-303), comes off the
+ * owner's person, and the phones' copy goes back to be rebuilt. The owner's own
+ * calls and the mail the owner sent to others stay theirs. Seeded on real
+ * Postgres and rolled back. Opt-in: set `MEMORY_TEST_DATABASE_URL` to a
+ * migrated database of your own.
  */
 
-const MIGRATION = '20261026105606_repair_mail_filed_as_sent_by_owner.sql';
+const MIGRATION = '20261027144823_reissue_repair_mail_filed_as_sent_by_owner.sql';
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../../../db/postgres/migrations');
 
 function migrationUpSql(): string {
@@ -52,7 +58,7 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
   async function mail(
     label: string,
     from: string,
-    options: { to?: string[]; direction?: string; toSelf?: boolean } = {},
+    options: { to?: string[]; direction?: string; toSelf?: boolean; type?: string } = {},
   ): Promise<string> {
     const [{ entity_id }] = await q<Array<{ entity_id: string }>>(
       `INSERT INTO ci.entities (entity_type, owner_user_id, name) VALUES ('Communication', $1, $2) RETURNING entity_id`,
@@ -61,7 +67,7 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
     await q(
       `INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content, from_entity_id,
                                       to_entity_ids, participants_metadata)
-       VALUES ($1, now(), $2, 'email', $3, 'hello', $4, $5::uuid[], $6::jsonb)`,
+       VALUES ($1, now(), $2, $7::ci.communication_type, $3, 'hello', $4, $5::uuid[], $6::jsonb)`,
       [
         entity_id,
         userId,
@@ -69,8 +75,17 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
         self,
         options.toSelf ? [self] : [],
         JSON.stringify({ from, to: options.to ?? [] }),
+        options.type ?? 'email',
       ],
     );
+    // Indexed as the row stood, which writes the phones' copy (entityDeviceRecord.ts).
+    const { sql, params } = buildVectorUpsertStatement([{ text: label, weight: 10 }], {
+      id: randomUUID(),
+      entityType: 'communication',
+      entityId: entity_id,
+      userId,
+    });
+    await q(sql, params);
     await q(
       `INSERT INTO ci.relationships (from_entity_id, to_entity_id, relationship_type, owner_user_id, properties)
        VALUES ($1, $2, 'SENT', $3, '{"rule": "communication.sent", "derived_from": "communications.from_entity_id"}')`,
@@ -79,6 +94,16 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
     mails[label] = entity_id;
 
     return entity_id;
+  }
+
+  async function deviceVersion(label: string): Promise<number> {
+    const [row] = await q<Array<{ detail_version: number }>>(
+      `SELECT detail_version FROM ci_search.mobile_search_documents
+        WHERE entity_type = 'communication' AND entity_id = $1`,
+      [mails[label]],
+    );
+
+    return Number(row.detail_version);
   }
 
   async function read(label: string): Promise<Mail> {
@@ -133,10 +158,47 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
       [self, userId],
     );
 
+    // A second self Person (a duplicate the owner never merged) and a connected
+    // account: both are the owner's addresses, as the import reads them.
+    await q(
+      `INSERT INTO ci.entities (entity_type, owner_user_id, name, is_self, properties)
+       VALUES ('Person', $1, 'Liam', TRUE, '{"emails": ["liam@old.example"]}')`,
+      [userId],
+    );
+    await q(
+      `INSERT INTO ci.connections (id, name, user_id, account_label)
+       VALUES (gen_random_uuid(), 'Gmail', $1, 'liam.broza@gmail.example')`,
+      [userId],
+    );
+
     await mail('lookalike to me', '"Liam Broza" <stranger@example.net>', { toSelf: true });
-    await mail('lookalike to someone else', '"Liam Broza" <stranger@example.net>', {
+    await mail('lookalike delivered to a list', '"Liam Broza" <stranger@example.net>', {
+      to: ['list@example.org'],
+      direction: 'inbound',
+    });
+    await mail('my alias to someone else', '"Liam Broza" <liam@alias.example>', {
       to: ['bo@example.org'],
     });
+    const sent = await mail('my alias, Sent label, cc me', '"Liam Broza" <liam@alias.example>', {
+      toSelf: true,
+    });
+    await q(`UPDATE ci.communications SET metadata = '{"DirectionBasis": "sent_label"}' WHERE id = $1`, [
+      sent,
+    ]);
+    await mail('my old address', '"Liam Broza" <liam@old.example>', { toSelf: true, direction: 'inbound' });
+    await mail('my connected account', '"Liam Broza" <Liam.Broza@gmail.example>', {
+      toSelf: true,
+      direction: 'inbound',
+    });
+    // SMS Backup & Restore files the number called as the call's `from`.
+    const call = await mail('my call to a number', '+12125550188', { type: 'call' });
+    // `enrich.person_link` claims that number as the call's sender, and nobody
+    // holds it yet.
+    await q(
+      `INSERT INTO ci.identifier_claims (owner_user_id, subject_type, subject_id, role, kind, value_normalized)
+       VALUES ($1, 'communication', $2, 'from', 'phone', '2125550188')`,
+      [userId, call],
+    );
     await mail('my second address', '"Liam Broza" <Liam@Work.example>', { to: ['bo@example.org'] });
     await mail('my account address', `"Liam" <${email}>`, { to: ['bo@example.org'] });
     await mail('no address at all', 'Liam Broza', { toSelf: true });
@@ -173,17 +235,56 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
     });
   });
 
-  it('takes the sender off a lookalike’s mail to somebody else, without turning it around', async () => {
-    expect(await read('lookalike to someone else')).toEqual({
-      direction: 'outbound',
+  it('takes the sender off a lookalike’s mail delivered to the owner through a list', async () => {
+    expect(await read('lookalike delivered to a list')).toEqual({
+      direction: 'inbound',
       from_entity_id: null,
       sent_from: [],
+    });
+  });
+
+  it('leaves mail Gmail filed as Sent alone, even with the owner on it', async () => {
+    expect(await read('my alias, Sent label, cc me')).toEqual({
+      direction: 'outbound',
+      from_entity_id: self,
+      sent_from: [self],
+    });
+  });
+
+  it('leaves the owner’s sent mail to others alone, whatever address it went out from', async () => {
+    // The owner is not a recipient, so it is the owner's sent copy: the reading
+    // PushStage's directionAfterSender gives the same mail at import.
+    expect(await read('my alias to someone else')).toEqual({
+      direction: 'outbound',
+      from_entity_id: self,
+      sent_from: [self],
     });
   });
 
   it('leaves mail from any of the owner’s own addresses alone', async () => {
     for (const label of ['my second address', 'my account address']) {
       expect(await read(label)).toEqual({ direction: 'outbound', from_entity_id: self, sent_from: [self] });
+    }
+
+    for (const label of ['my old address', 'my connected account']) {
+      expect(await read(label)).toEqual({ direction: 'inbound', from_entity_id: self, sent_from: [self] });
+    }
+  });
+
+  it('leaves the owner’s own call alone, though its `from` is the number called', async () => {
+    expect(await read('my call to a number')).toEqual({
+      direction: 'outbound',
+      from_entity_id: self,
+      sent_from: [self],
+    });
+  });
+
+  it('sends phones the repaired mail again, and leaves the rest of their copies alone', async () => {
+    expect(await deviceVersion('lookalike to me')).toBe(0);
+    expect(await deviceVersion('lookalike delivered to a list')).toBe(0);
+
+    for (const label of ['my alias to someone else', 'my second address', 'my call to a number']) {
+      expect(await deviceVersion(label)).toBe(Number(DEVICE_RECORD_VERSION));
     }
   });
 

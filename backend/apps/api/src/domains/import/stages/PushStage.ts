@@ -31,6 +31,7 @@ import {
   CalendarEventService,
   CommunicationService,
   ContentService,
+  type CreateCommunicationDto,
   type CreateContentDto,
   ItemService,
   ObjectObservationService,
@@ -84,6 +85,7 @@ import {
   makeIsSelf,
   NOBODY_IS_SELF,
   readSelfIdentity,
+  readSentLabelSenders,
   type SelfIdentity,
 } from '../push/self';
 import {
@@ -291,7 +293,6 @@ export const DESTINATION_ORDER: readonly Destination[] = [
  */
 const PRODUCT_IDENTIFIER_SOURCE = 'import';
 
-/** One staged row's journey through a batch: what it is, where it goes, what happened. */
 /**
  * A mail's direction once its sender is known.
  *
@@ -330,6 +331,7 @@ export function directionAfterSender<D extends string | undefined>(
   return senderIsSomeoneElse && ownerIsRecipient ? 'inbound' : direction;
 }
 
+/** One staged row's journey through a batch: what it is, where it goes, what happened. */
 interface RowPlan {
   row: StagedItem;
   record: CanonicalRecord;
@@ -1321,6 +1323,18 @@ export class PushStage implements ImportStageRunner {
         return { names: [], email: null, phones: [] };
       }),
     );
+    // The addresses the owner's own Sent mail in this run went out from. Fail-safe
+    // to none, as the identity above is: they only add owner addresses.
+    const sentFrom = await this.retrying(context, 'reading the owner’s sent addresses', () =>
+      readSentLabelSenders(this.dataSource, context.runId).catch((err: unknown): string[] => {
+        if (isTransientDatabaseError(err)) {
+          throw err;
+        }
+
+        return [];
+      }),
+    );
+    identity.emails = [...new Set([...(identity.emails ?? []), ...sentFrom])];
 
     // Several staged rows can share a natural key — the same artist reached by
     // two parsers in one archive — so the key maps to a LIST. Ingest is given
@@ -2685,6 +2699,31 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
+   * Put a communication's sender and recipients on it, and correct the
+   * direction of header-less mail once the sender is known
+   * ({@link directionAfterSender}). The one place `sendMany` and its per-row
+   * retry `send` decide this, so a retried row cannot come out different.
+   */
+  private applyCorrespondents(
+    input: CreateCommunicationDto,
+    record: CanonicalRecord,
+    participants: Map<string, string[]>,
+    selfEntityId: string | null,
+  ): void {
+    const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
+
+    input.direction = directionAfterSender(input.direction, record, participants, from, selfEntityId);
+
+    if (from) {
+      input.from_entity_id = from;
+    }
+
+    if (to.length) {
+      input.to_entity_ids = to;
+    }
+  }
+
+  /**
    * Catalogue the attachments a message LINKS to rather than carries.
    *
    * The other shape of the communication-attachment lane. Sources whose export
@@ -2834,23 +2873,7 @@ export class PushStage implements ImportStageRunner {
               ? toFacebookMessengerCommunicationInput(plan.record, isSelf)
               : toCommunicationInput(plan.record);
 
-          const { from, to } = this.resolveCorrespondents(plan.participants, input.direction, selfEntityId);
-
-          input.direction = directionAfterSender(
-            input.direction,
-            plan.record,
-            plan.participants,
-            from,
-            selfEntityId,
-          );
-
-          if (from) {
-            input.from_entity_id = from;
-          }
-
-          if (to.length) {
-            input.to_entity_ids = to;
-          }
+          this.applyCorrespondents(input, plan.record, plan.participants, selfEntityId);
 
           return input;
         });
@@ -3092,17 +3115,7 @@ export class PushStage implements ImportStageRunner {
         // group chat kept the owner's own entity in `to_entity_ids` because
         // `stripSelf` had nothing to strip. A retried batch produced quietly
         // different rows from a batch that happened to succeed.
-        const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
-
-        input.direction = directionAfterSender(input.direction, record, participants, from, selfEntityId);
-
-        if (from) {
-          input.from_entity_id = from;
-        }
-
-        if (to.length) {
-          input.to_entity_ids = to;
-        }
+        this.applyCorrespondents(input, record, participants, selfEntityId);
 
         return wroteAnything(await this.communications.createManyDetailed(ctx, [input]));
       }

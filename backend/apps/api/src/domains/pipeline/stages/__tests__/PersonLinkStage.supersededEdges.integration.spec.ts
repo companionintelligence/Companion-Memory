@@ -1,7 +1,7 @@
 import { DataSource, type QueryRunner } from 'typeorm';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
-import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { COMMUNICATION_SUBJECT, EVENT_SUBJECT } from '../enrich/PersonLinkStage';
 
 /**
@@ -75,18 +75,9 @@ describeWithDb(
     }
 
     beforeAll(async () => {
-      const connection = resolveConnection({ urlEnvVar: 'MEMORY_TEST_DATABASE_URL' })!;
       dataSource = new DataSource({
         type: 'postgres',
-        ...(connection.url != null
-          ? { url: connection.url }
-          : {
-              host: connection.host,
-              port: connection.port,
-              username: connection.username,
-              password: connection.password,
-              database: connection.database,
-            }),
+        ...dataSourceConnection({ urlEnvVar: 'MEMORY_TEST_DATABASE_URL' }),
         synchronize: false,
         logging: false,
         extra: { max: 1 },
@@ -144,6 +135,20 @@ describeWithDb(
 
       expect(await edgesTo(confirmed)).toEqual([{ from_entity_id: sender, rule: 'communication.sent' }]);
       expect(await edgesTo(silent)).toEqual([{ from_entity_id: sender, rule: 'communication.sent' }]);
+    });
+
+    it('takes back an edge an earlier move left behind, while keeping the current sender’s', async () => {
+      const before = await person('Sender before');
+      const now = await person('Sender now');
+      // Moved before the retraction existed: the column already names `now`,
+      // and `before` still holds the SENT edge it was first given.
+      const mail = await message(now);
+      await edge(before, mail, 'SENT', 'communication.sent');
+      await edge(now, mail, 'SENT', 'communication.sent');
+
+      await q(COMMUNICATION_SUBJECT.projectSql, [userId, [mail], [now], [null]]);
+
+      expect(await edgesTo(mail)).toEqual([{ from_entity_id: now, rule: 'communication.sent' }]);
     });
 
     it('does the same for an event organizer', async () => {

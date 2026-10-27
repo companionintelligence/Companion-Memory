@@ -173,11 +173,16 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unknown-key' };
     }
 
-    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH. Without this the
-    // `keyid` is decorative: a sender could name any key at all and still be
-    // verified against whichever one the link happens to hold, which quietly
-    // turns a key-identified request back into a link-identified one.
-    if (parsed.params.keyid !== thumbprint) {
+    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH (or its KERI AID).
+    // Without this the `keyid` is decorative: a sender could name any key at all
+    // and still be verified against whichever one the link happens to hold.
+    const jwkObj = request.peerPublicJwk as Record<string, unknown>;
+    const isKeriAid = parsed.params.keyid.startsWith('did:keri:');
+    const matchesKey =
+      parsed.params.keyid === thumbprint ||
+      (isKeriAid && (jwkObj.kid === parsed.params.keyid || jwkObj.aid === parsed.params.keyid));
+
+    if (!matchesKey) {
       return { ok: false, reason: 'unknown-key' };
     }
 

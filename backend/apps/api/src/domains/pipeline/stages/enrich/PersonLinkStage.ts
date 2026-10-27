@@ -680,7 +680,11 @@ export interface SubjectDescriptor {
   singularRole: ClaimRole;
   /** The role that projects onto the uuid[] column. */
   pluralRole: ClaimRole;
-  /** One bulk UPDATE: $1 user, $2 ids, $3 singular entity ids, $4 plural jsonb. */
+  /**
+   * One statement: the bulk UPDATE of the two link columns, behind a CTE that
+   * deletes the singular role's stale rule-written edge ({@link supersededEdgeSql}).
+   * $1 user, $2 ids, $3 singular entity ids, $4 plural jsonb.
+   */
   projectSql: string;
 }
 
@@ -746,30 +750,23 @@ export const EVENT_PERSON_LINK_SOURCE: StageSource = {
 };
 
 /**
- * `DELETE` of the edges a projection is about to orphan: for each `$2` id whose
- * `$3` singular id is a DIFFERENT entity than the row's stored one, the edge
- * the deterministic edge rule `rule` drew from the stored entity to that row.
- * Matched on the rule that wrote it, so an edge a person or another rule wrote
- * between the same two nodes stays. `$1` is the owner, as in the UPDATE it
- * runs beside.
+ * `DELETE` of the edges a projection leaves stale: for each `$2` id that gets a
+ * `$3` singular id, every edge the deterministic edge rule `rule` drew into that
+ * row from any OTHER entity. The rule draws its edge from the singular column
+ * alone, so once the column holds `$3` any other edge of that rule into the row
+ * is left over from a sender (or organizer) it no longer names: the one this
+ * statement replaces, or one an earlier pass replaced before this retraction
+ * existed. Matched on the rule that wrote it, so an edge a person or another
+ * rule wrote between the same two nodes stays. `$1` is the owner, as in the
+ * UPDATE it runs beside.
  */
-export function supersededEdgeSql(
-  table: string,
-  idColumn: string,
-  userColumn: string,
-  singularColumn: string,
-  rule: string,
-): string {
+export function supersededEdgeSql(rule: string): string {
   return `DELETE FROM ci.relationships r
-           USING ${table} s, unnest($2::uuid[], $3::uuid[]) AS t(id, singular_id)
-           WHERE s.${userColumn} = $1::uuid
-             AND s.${idColumn} = t.id
-             AND t.singular_id IS NOT NULL
-             AND s.${singularColumn} IS NOT NULL
-             AND s.${singularColumn} <> t.singular_id
+           USING unnest($2::uuid[], $3::uuid[]) AS t(id, singular_id)
+           WHERE t.singular_id IS NOT NULL
              AND r.owner_user_id = $1::uuid
-             AND r.from_entity_id = s.${singularColumn}
-             AND r.to_entity_id = s.${idColumn}
+             AND r.to_entity_id = t.id
+             AND r.from_entity_id <> t.singular_id
              AND r.properties ->> 'rule' = '${rule}'`;
 }
 
@@ -793,14 +790,14 @@ export const COMMUNICATION_SUBJECT: SubjectDescriptor = {
   // every one of them returns. The cc/bcc claims are still written, so promoting
   // them later is a projection-generation bump and not a re-parse.
   pluralRole: 'to',
-  // The CTE takes back the SENT edge `promote.edge_communication` projected from
-  // the sender this statement replaces: that projection only ever inserts, so
-  // the old sender kept "sent" a message it did not send (a display-name
-  // lookalike first filed as the owner's, K-303). Both run on the same snapshot,
-  // so it reads the sender as it was. The recipients only ever gain members, so
-  // no RECEIVED edge goes stale here.
+  // The CTE takes back any SENT edge `promote.edge_communication` projected from
+  // a sender this statement does not name: that projection only ever inserts,
+  // so a replaced sender kept "sent" a message it did not send (a display-name
+  // lookalike first filed as the owner's, K-303). The new sender's own edge is
+  // projected when this stage's `done` re-opens the edge leg (`STAGE_REOPENS`).
+  // The recipients only ever gain members, so no RECEIVED edge goes stale here.
   projectSql: `WITH superseded AS (
-                 ${supersededEdgeSql('ci.communications', 'id', 'user_id', 'from_entity_id', 'communication.sent')}
+                 ${supersededEdgeSql('communication.sent')}
                )
                UPDATE ci.communications c
                   SET from_entity_id = COALESCE(u.singular_id, c.from_entity_id),
@@ -842,9 +839,10 @@ export const EVENT_SUBJECT: SubjectDescriptor = {
   singularRole: 'organizer',
   pluralRole: 'participant',
   // Same as the communication subject's: a replaced organizer loses the
-  // `event.organized` edge it was given for this event.
+  // `event.organized` edge it was given for this event. If it is also a
+  // participant, the edge leg's re-open projects its `event.participated` edge.
   projectSql: `WITH superseded AS (
-                 ${supersededEdgeSql('ci.events', 'event_id', 'user_id', 'organizer_entity_id', 'event.organized')}
+                 ${supersededEdgeSql('event.organized')}
                )
                UPDATE ci.events e
                   SET organizer_entity_id    = COALESCE(u.singular_id, e.organizer_entity_id),
@@ -1266,9 +1264,13 @@ export class PersonLinkResolver {
    * `IS NULL`/`cardinality = 0` guard on either column, and there is no path
    * that shrinks a list or writes NULL — so a row this stage cannot resolve
    * keeps whatever a previous writer managed, and a row it can only PARTLY
-   * resolve keeps the rest. The projection can only ever add. (Generation 1
+   * resolve keeps the rest. The columns can only ever gain. (Generation 1
    * replaced the plural column outright, which is how an importer's four
    * recipients became the one the index knew at sweep time.)
+   *
+   * The one thing the statement removes is a graph edge: the singular role's
+   * rule-written edge from any entity other than the sender (or organizer) it
+   * now writes, through the `superseded` CTE in `projectSql`.
    */
   private async writeProjection(userId: string, patches: Array<[string, Projection]>): Promise<void> {
     await this.dataSource.query(this.subject.projectSql, [

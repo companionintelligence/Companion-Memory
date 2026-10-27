@@ -27,6 +27,7 @@ describe('ContentService CTI aggregate', () => {
     update: jest.Mock;
     delete: jest.Mock;
     metadata: { columns: unknown[] };
+    findOne: jest.Mock;
   };
   let deltas: {
     entityCreated: jest.Mock;
@@ -51,6 +52,10 @@ describe('ContentService CTI aggregate', () => {
       update: jest.fn(async () => ({ affected: 1 })),
       delete: jest.fn(async () => ({ affected: 1 })),
       metadata: { columns: Array.from({ length: 10 }) },
+      findOne: jest.fn(async ({ where: { id } }: { where: { id: string } }) => ({
+        id,
+        name: 'Example page',
+      })),
     };
     repo = {
       findOne: jest.fn(),
@@ -106,6 +111,26 @@ describe('ContentService CTI aggregate', () => {
         name: 'Example page',
         changeSource: 'ContentService.create',
       }),
+    );
+  });
+
+  it('records nothing for a save that hands back the stored title', async () => {
+    const row = Object.assign(new ContentEntity(), { id: 'c1', userId: 'user-1', type: 'web-page' });
+    repo.findOne.mockResolvedValue(row);
+
+    await service.update(ctx, 'c1', { title: 'Example page' });
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records a retitle with the title it replaced', async () => {
+    const row = Object.assign(new ContentEntity(), { id: 'c1', userId: 'user-1', type: 'web-page' });
+    repo.findOne.mockResolvedValue(row);
+
+    await service.update(ctx, 'c1', { title: 'Better title' });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ changedFields: { name: { old: 'Example page', new: 'Better title' } } }),
     );
   });
 

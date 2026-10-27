@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import { ForbiddenException } from '@nestjs/common';
 import {
   In,
@@ -86,7 +88,7 @@ interface CtiAggregateOptions<TDetail extends ObjectLiteral & { id: string }, TB
  * Entity-specific concerns (idempotency, label derivation, domain events) stay
  * in the composing service.
  */
-export interface CtiWriteHooks<TDetail> {
+export interface CtiWriteHooks<TDetail, TBase = ObjectLiteral> {
   /**
    * Runs inside the write transaction after detail/base patches (update) or
    * immediately before the base-row delete (remove), so the trail shares the tx.
@@ -95,12 +97,41 @@ export interface CtiWriteHooks<TDetail> {
    * row hands it back as it now stands, and `applyUpdate` answers with that row:
    * the reload it took for `after` predates the hook. Anything else a hook
    * returns is ignored, and so is a returned row on `remove` and `restore`.
+   *
+   * `baseBefore` is the base row as this transaction found it, read just before
+   * an update's base patch (null when the update patched no base column, and on
+   * `remove` and `restore`), so a hook can tell a rename from a title handed
+   * back unchanged.
    */
   withinTx?: (args: {
     manager: EntityManager;
     before: TDetail;
     after: TDetail | null;
+    baseBefore?: TBase | null;
   }) => Promise<TDetail | void>;
+}
+
+/**
+ * Whether any of `keys` holds a different value in `after` than in `before`,
+ * both rows as the write's transaction read them. A patch that names a column
+ * and hands back what was stored has not changed it.
+ */
+export function detailChanged<T extends ObjectLiteral>(
+  before: T,
+  after: T | null,
+  keys: Iterable<string>,
+): boolean {
+  if (after == null) {
+    return true;
+  }
+
+  for (const key of keys) {
+    if (!isDeepStrictEqual(before[key], after[key])) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
@@ -245,7 +276,7 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       detail?: QueryDeepPartialEntity<TDetail>;
       base?: QueryDeepPartialEntity<TBase> | ((after: TDetail) => QueryDeepPartialEntity<TBase> | null);
     },
-    hooks?: CtiWriteHooks<TDetail>,
+    hooks?: CtiWriteHooks<TDetail, TBase>,
   ): Promise<TDetail | null> {
     const where = this.liveWhere(context, id);
 
@@ -295,6 +326,15 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
         } as unknown as QueryDeepPartialEntity<TDetail>);
       }
 
+      // Read after the detail row's lock and before the base write, for a hook
+      // that records what the base patch changed.
+      const baseBefore =
+        baseTouched && hooks?.withinTx
+          ? await manager
+              .getRepository(this.options.baseEntity)
+              .findOne({ where: { id } as FindOptionsWhere<TBase> })
+          : null;
+
       if (baseTouched) {
         await manager
           .getRepository(this.options.baseEntity)
@@ -304,7 +344,7 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       const reloaded = await repository.findOne({ where });
 
       if (hooks?.withinTx) {
-        const rewritten = await hooks.withinTx({ manager, before, after: reloaded });
+        const rewritten = await hooks.withinTx({ manager, before, after: reloaded, baseBefore });
 
         return rewritten ?? reloaded;
       }

@@ -13,10 +13,9 @@ describe('LazyView', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, reload } });
   });
 
+  // The spies and `reload`'s calls are reset by vitest.config.ts (restoreMocks, clearMocks).
   afterEach(() => {
     Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
-    vi.restoreAllMocks();
-    reload.mockReset();
   });
 
   function failingOnce(error: Error): { load: ViewLoader; calls: () => number } {
@@ -48,7 +47,20 @@ describe('LazyView', () => {
     expect(calls()).toBe(1);
   });
 
-  it('re-runs the import in place while still offline, keeping the message instead of reloading', async () => {
+  it('reloads when the chunk that failed was the view stylesheet', async () => {
+    // Vite rejects with its own message when a chunk's CSS fails, before it
+    // starts the import(). The Map and Timeline views carry CSS.
+    const { load, calls } = failingOnce(new Error('Unable to preload CSS for /assets/MapView-abc.css'));
+
+    render(<LazyView viewKey="map" load={load} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(calls()).toBe(1);
+  });
+
+  it('re-runs the import in place instead of reloading while the device reports itself offline', async () => {
     // React.lazy memoizes the rejection, so a retry that reuses the original
     // lazy component can never recover. This asserts the loader is called a
     // second time and the view actually appears.
