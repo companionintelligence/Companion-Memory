@@ -197,9 +197,11 @@ describe('PositionTraceLayer', () => {
 
     // jsdom has no layout, so this pins the placement: the bar spans the map's
     // bottom edge at the same z-index, and a status at bottom-4 sat under it.
+    // The bar publishes how far up it reaches (PlaybackBar.test.tsx covers that
+    // half); the status has to sit on that, not on a fixed guess at it.
     const wrapper = screen.getByText('Loading your location history…').parentElement;
 
-    expect(wrapper).toHaveClass('device:bottom-20');
+    expect(wrapper).toHaveClass('device:bottom-[calc(var(--playback-bar-clearance,0.5rem)+0.5rem)]');
     expect(wrapper).not.toHaveClass('device:bottom-4');
   });
 });

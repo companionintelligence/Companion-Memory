@@ -315,12 +315,14 @@ export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; 
 
 /** Says what the trace is showing — and, when downsampled, what it is not. */
 function TraceStatus({ text }: { text: string }) {
-  // On desktop the playback bar runs along the map's bottom edge (about 4.3rem
-  // tall with its margin) at the same z-index and is drawn later, so a status in
-  // the bottom corner sat under it. Lifted to 5rem it clears the bar, and still
-  // reads as the map's own caption when there is no bar.
+  // On desktop the playback bar runs along the map's bottom edge at the same
+  // z-index and is drawn later, so a status in the bottom corner sat under it.
+  // The bar sets --playback-bar-clearance (see PlaybackBar) to how far up it
+  // reaches, which changes with its provenance line, a Retry button and the
+  // safe-area inset, so the status sits half a rem above whatever that is. With
+  // no bar the property is unset and the fallback keeps it 1rem off the corner.
   return (
-    <div className="pointer-events-none absolute left-3 right-14 top-24 z-400 device:bottom-20 device:left-auto device:right-4 device:top-auto">
+    <div className="pointer-events-none absolute left-3 right-14 top-24 z-400 device:bottom-[calc(var(--playback-bar-clearance,0.5rem)+0.5rem)] device:left-auto device:right-4 device:top-auto">
       <div className="rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-md">
         {text}
       </div>
