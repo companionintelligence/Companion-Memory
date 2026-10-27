@@ -34,8 +34,11 @@ const MAP = {
   // from inside frontend/apps/{ios,android} (they are not yarn workspaces; see their READMEs)
   '../ios/assets/icon-only.png': 'logos/app-icon-source.png', // logo.app-icon
   '../ios/assets/icon-foreground.png': 'logos/app-icon-source.png',
-  '../android/assets/icon-only.png': 'logos/app-icon-source.png',
-  '../android/assets/icon-foreground.png': 'logos/app-icon-source.png',
+  // NOT the Android ones: #3056 moved frontend/apps/android/assets/icon-{only,foreground}.png
+  // to the Play store listing's artwork (the desktop app's icon source, flattened onto
+  // #04141C) after Play rejected a build whose launcher icon did not match the listing.
+  // That artwork is not in @companionintelligence/assets, so mirroring logos/app-icon-source.png
+  // there would put the rejected icon back. Re-add them once the store icon is in the canon.
 };
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');

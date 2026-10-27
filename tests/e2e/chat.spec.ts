@@ -15,12 +15,16 @@ import { expect, test } from './fixtures/authenticated';
 test('@llm new chat: sending a message shows the user bubble', async ({ page }) => {
   await page.goto('/chat');
 
-  const input = page.getByPlaceholder(/Ask about Memory, Plan, Forecast, Brief/);
+  // `Ask about ${topics}…`, where the topics follow the enabled feature flags
+  // (e.g. "Memory or Plan"), so only the stable prefix is asserted.
+  const input = page.getByPlaceholder(/^Ask about /);
   await expect(input).toBeVisible();
 
   await input.fill('Hello there');
   await input.press('Enter');
 
   // The user's message should render immediately, before any model response.
-  await expect(page.getByText('Hello there')).toBeVisible();
+  // The bubble is a <p>; scope to it, since the composer can still hold the
+  // same text and a bare getByText is then a strict-mode violation.
+  await expect(page.getByRole('paragraph').filter({ hasText: 'Hello there' }).first()).toBeVisible();
 });

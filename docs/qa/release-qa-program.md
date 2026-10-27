@@ -35,7 +35,7 @@ A release is **go** when all of the following hold. Anything not met is either f
 
 Which workflows those are is **not** restated here — that line read "nine of twelve" for two weeks after it stopped being true, which is the exact failure this rule warns about. [`docs/CI.md`](../CI.md) carries the hand-maintained trigger table, per-workflow, with the two `grep` commands that re-derive it from the `on:` blocks. Check it against the tree at the start of every release pass; if it disagrees with the tree, fix the table there rather than adding a fourth copy.
 
-One consequence worth stating plainly, because it is easy to misread now that `pr-gate.yml` runs on every PR: **a green PR covers lint, typecheck, the frontend unit suite and a web-bundle build — and nothing else.** The *backend* and Python suites, E2E, migrations and every native build lane remain dispatch-only. So a green PR page contributes to G1 and to the frontend third of G2, and to nothing else; G3 through G6 are satisfied by a recorded run and never by a green PR page. Do not read the frontend half of G2 as covering the rest of it, and check [`docs/CI.md`](../CI.md)'s `pr-gate.yml` row rather than this sentence — that job list has grown twice in two days.
+One consequence worth stating plainly: **no workflow runs on a PR, so a green PR page proves nothing.** `pr-gate.yml`, which used to run lint, typecheck, the frontend unit suite and a web-bundle build on every PR, was deleted on 2026-09-17, and every remaining workflow is `workflow_dispatch`-only (see "`pr-gate.yml` is gone" in [`docs/CI.md`](../CI.md), and re-derive it with the two commands there). Every gate below is satisfied by a run someone started and recorded, never by the absence of a red check.
 
 ## 2. Feature inventory and risk ranking
 
@@ -70,7 +70,7 @@ yarn workspace @ci/be-api typecheck
 yarn workspace @ci/fe-web typecheck
 # The eight frontend/packages/* workspaces — the shared layer web, both
 # Capacitor shells and the Tauri desktop app all compile into their bundles.
-# Nothing typechecked them until pr-gate.yml grew a `packages` lane on
+# Nothing typechecked them until the since-deleted pr-gate.yml grew a `packages` lane on
 # 2026-09-07. It went in RED — three of the eight failed on
 # `Cannot find module '@/lib/utils'` from two @ci/shadcn sources using an alias
 # only @ci/shadcn's own tsconfig declares — and was green the same day once
@@ -84,8 +84,15 @@ yarn lint
 yarn workspace @ci/be-api lint
 yarn workspace @ci/fe-web lint
 yarn format:check
+# mypy resolves the workspace packages (ci.hbpe, …) from the venv, so sync
+# every workspace member first, as ci.yml does. Without it mypy exits 2 with
+# "Can't find package 'ci.hbpe'" (measured 2026-10-27; after the sync: no
+# issues in 106 source files).
+uv sync --all-packages --locked
 uv run ruff check . && uv run ruff format --check . && uv run mypy
-node scripts/lint-canon.mjs .
+# ci-lint-canon (the design canon) + the fe-web brand-mirror check. There is no
+# scripts/lint-canon.mjs; this is the command style-canon-lint.yml runs.
+yarn lint:canon
 ```
 
 > Two runners, two flag vocabularies: `@ci/be-api` is **jest** (`--runInBand`, path filters; passing `--run` makes it exit non-zero in a way that reads like a broken suite), `@ci/fe-web` is **vitest** (`vitest run`). A nav or consent-path change usually touches both.
@@ -97,6 +104,8 @@ yarn workspace @ci/be-api test          # jest
 yarn workspace @ci/fe-web test          # vitest
 uv run pytest                           # hbpe + summary + benchmark
 ```
+
+For `pytest`, leave `DATABASE_URL` unset or give it a `postgresql://` URL: SQLAlchemy rejects the `postgres://` form the jest setup uses, and collection aborts with errors before a test runs. **Run it on Linux for the gate.** On macOS three tests fail for platform reasons, identically at the previous tag: two in `test_entrypoint.py` (`entrypoint.sh` uses `wait -n`, which macOS's `/bin/bash` 3.2 lacks) and `test_parser_limits.py::test_parse_converts_a_real_docx_in_the_child` (`setrlimit(RLIMIT_AS)` is refused on Darwin). A macOS run that shows exactly those three is not a regression, but it is not a green G2 either.
 
 **Count the suites, do not quote a count.** These figures moved by ~200 files in under two weeks — this block said `~750` backend / `~337` frontend; on 2026-09-07 the tree held **918** and **381**, and the frontend figure moved by six *during the afternoon this correction was written*. A number in prose here is stale before the next release, so re-derive it and record *that* number in §7, alongside how many actually ran:
 
@@ -146,8 +155,16 @@ DATABASE_URL="postgres://companion:<pw>@localhost:<port>/companion_migtest?sslmo
   yarn workspace @ci/be-api migrate
 ```
 
-- **TimescaleDB hypertables make `pg_restore` exit non-zero on a healthy dump.** Expect `ONLY option not supported on hypertable operations` (6 of them, on `ci.position`) and `table "position" is not a hypertable`. The `ci.*` tables restore completely regardless — verify with a row count rather than the exit code, or use `timescaledb_pre_restore()` / `timescaledb_post_restore()` to avoid them.
+- **TimescaleDB hypertables make `pg_restore` exit non-zero on a healthy dump.** Expect `ONLY option not supported on hypertable operations`: 7 of them as of 2026-10-27 (6 on `ci.position`, 1 on `hbpe.prediction_log`; it was 6 before `hbpe.prediction_log` became a hypertable), and `table "position" is not a hypertable`. The `ci.*` tables restore completely regardless — verify with a row count rather than the exit code, or use `timescaledb_pre_restore()` / `timescaledb_post_restore()` to avoid them.
 - **Restoring as `postgres` silently defeats the whole test.** `public.schema_migrations` ends up owned by `postgres`, the `companion` role gets `permission denied` reading it, and dbmate concludes NOTHING is applied and begins re-running all 363 migrations against a populated database. It applied one before erroring. The `GRANT` above is not optional tidying; without it this gate measures nothing and looks like it passed a fresh-database run.
+
+- **A full restore of a real appliance dump is slow.** On 2026-10-27 a 3.47 GB dump took 4,827 s (about 80 minutes) on a loaded Mac, most of it building the HNSW index on `ci_search.embeddings` (742k rows). When the populated database is on the same server and **nothing else is connected to it** (stop its API, workers and any `psql` first), copy it instead; Postgres refuses the copy outright while another session is connected:
+
+  ```bash
+  docker exec <db> psql -U postgres -c "CREATE DATABASE companion_migtest TEMPLATE companion OWNER companion;"
+  ```
+
+  A template copy keeps ownership as it was, so the `GRANT` trap below does not arise, but run the row-count check either way. Use the dump and restore when the source has to stay up.
 
 > Dropping only the `ci` / `ci_search` schemas is **not** a reset — enum types such as `job_status` live outside them and the next `migrate` dies on `type "job_status" already exists`. Use `docker compose … down -v`.
 
@@ -162,6 +179,9 @@ cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts && cd -
 yarn playwright install chromium
 yarn e2e --grep-invert @llm
 ```
+
+- **Run Playwright through the `e2e*` scripts, not `yarn playwright test` directly.** Playwright 1.63's synchronous module hook passes `conditions` to `require()`, which Yarn PnP rejects (`Some options passed to require() aren't supported by PnP yet (conditions)`), so the config never loads. The root `e2e`, `e2e:desktop`, `e2e:ui` and `e2e:headed` scripts set `PLAYWRIGHT_FORCE_ASYNC_LOADER=1`, which switches Playwright to its async loader. Anything that calls `playwright test` some other way needs that variable too. See "Playwright under Yarn PnP" in [`docs/CI.md`](../CI.md).
+- **The seed does not need `hbpe-service`** (measured 2026-10-27: exit 0 and 239 rows in `ci.events` with the sidecar stopped), which settles the question in the `hbpe-service` bullet below in favour of `e2e.yml`. Starting it anyway is harmless.
 
 - **`object-store` (Minio, :9000)** — the API exits at boot without it (`ECONNREFUSED`), so Playwright's `webServer` never comes up. **Non-negotiable**, and no longer a difference from CI: `e2e.yml` was fixed on 2026-09-06 to start it and to fail the job outright if `http://localhost:9000/minio/health/live` never answers. This used to read "`e2e.yml` currently starts two [services], which is why it cannot pass"; it starts three.
 - **`hbpe-service` (:8002)** — **keep it in the command above, but know that CI does not.** The 2026-08-26 baseline §4 measured the seed exiting 1 with `TypeError: fetch failed` from `ensure_bootstrap` and leaving zero events without it; `e2e.yml` now deliberately omits it, with a comment arguing from the source that the seed writes `hbpe.*` rows over its own `DataSource` and never calls the sidecar. Both cannot be right. Until someone re-runs the seed without it and records the exit code and `SELECT count(*) FROM ci.events` — see [`ci-gate-proposal.md`](ci-gate-proposal.md) §3.3 for the procedure — start it locally, because a run that seeds nothing is the more expensive mistake. It has no host port mapping in the committed compose files; add one via an override.
@@ -285,7 +305,7 @@ Two standing caveats. Re-checked 2026-09-07 — one of the two iOS workarounds h
 | R3 | **Orphaned children get promoted.** Gating a group head off must not take its children with it. | M1 step 6 |
 | R4 | **One breakpoint.** Chrome switches only at 896px via `device:` — never `md:`/`lg:`. The 768–896 band once showed both chromes at once. | `grep -rn "md:\|lg:" ` over shell components; M1 step 7; `deviceBreakpoint.node.test.ts` |
 | R5 | **No orphan routes.** Every route in `App.tsx` is reachable from the shell, or is deliberately deep-link/redirect-only and says so. | Cross-check `grep -oE 'path="[^"]*"' App.tsx` against the rail, hub and submenus |
-| R6 | **Design canon.** No non-phthalo `--primary`, no undefined CI tokens, no hardcoded hex in components. | `node scripts/lint-canon.mjs .` |
+| R6 | **Design canon.** No non-phthalo `--primary`, no undefined CI tokens, no hardcoded hex in components. | `yarn lint:canon` |
 | R7 | **Failure is not emptiness.** Every list distinguishes "no data" from "the request failed", and offers a retry. | M4 step 7 |
 
 ## 7. Sign-off

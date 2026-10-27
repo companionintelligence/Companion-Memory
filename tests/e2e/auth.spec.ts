@@ -27,11 +27,11 @@ test('logs in with the seeded user and lands in the app', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Password' }).fill(process.env.AUTH_DEFAULT_USER_PASSWORD || '');
   await page.getByRole('button', { name: 'Log in' }).click();
 
-  // Onboarded user → the app home, which `appHomePath` defines as /plan when
-  // `planning.page` is on and /calendar when it is off. (/feed was the old home
-  // before the nav refactor; asserting it here made a working login look broken.)
+  // Onboarded user → the app home, which `appHomePath` (lib/appHome.ts) defines
+  // as /memory. (It was /plan or /calendar before #2955, and /feed before the
+  // nav refactor; asserting a stale home made a working login look broken.)
   // Un-onboarded would go to /onboarding instead.
-  await expect(page).toHaveURL(/\/(plan|calendar|onboarding)/);
+  await expect(page).toHaveURL(/\/(memory|onboarding)/);
 });
 
 test('the splash theme button takes a mouse click', async ({ page }) => {
