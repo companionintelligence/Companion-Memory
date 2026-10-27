@@ -4,8 +4,11 @@
 </p>
 
 
-# Companion Memory
-### Personal Database for Companion Intelligence
+<h1 align="center">Companion Memory</h1>
+
+<p align="center"><strong>Personal Database for Companion Intelligence</strong></p>
+
+<p align="center"><a href="https://ci.computer/memory">Website</a> · <a href="#docs">Documentation</a> · <a href="#install-from-store">Get started</a></p>
 
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
