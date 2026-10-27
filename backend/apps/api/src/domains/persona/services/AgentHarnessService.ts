@@ -194,7 +194,8 @@ function firstHubOrigin(): string | null {
 /**
  * Fleet Hub hostnames are `hub-<box>.…`. The app's public host is the same
  * suffix with the app name, e.g. `hub-core3-bc` → `ci-openclaw-core3-bc`.
- * Used when Portal's device-app list is down (401) but the app is connected.
+ * Used when Portal has no URL for the app, for example when its device-app list
+ * cannot be read.
  */
 function fallbackHubAppUrl(appName: string | undefined): string | null {
   if (!appName) {
