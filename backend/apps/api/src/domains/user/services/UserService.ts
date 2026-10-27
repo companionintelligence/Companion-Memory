@@ -530,17 +530,29 @@ export class UserService {
    * {@link LastAdminDeletionRefused} and writes nothing.
    *
    * `andThen` is the deletion itself. It runs after the handover, still inside its transaction
-   * and under its lock, and the handover commits only if it resolves: a delete that fails leaves
-   * the successor's role as it was, instead of leaving two administrators. It runs on its own
-   * connections, so it must not wait on what this transaction holds (the appliance-claim lock and
-   * the successor's row); the account purge touches neither.
+   * and under its lock, and the handover commits only if it resolves. Only what it writes through
+   * `manager` commits or rolls back with the promotion, so the account row has to be deleted
+   * through it: then the caller never leaves while the successor stays a member, and a delete
+   * that fails leaves the successor's role as it was. Anything `andThen` runs on other connections
+   * commits as it goes and must not wait on what this transaction holds (the appliance-claim lock,
+   * the successor's row and, once deleted, the caller's); every account creation waits on that
+   * lock meanwhile, so slow work that need not be atomic belongs after this returns.
    */
-  async handOverAdministration<T = void>(
+  handOverAdministration(context: ServiceContext, id: string, options?: DeletionOptions): Promise<void>;
+
+  handOverAdministration<T>(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions,
+    andThen: (manager: EntityManager) => Promise<T>,
+  ): Promise<T>;
+
+  async handOverAdministration<T>(
     context: ServiceContext,
     id: string,
     options: DeletionOptions = {},
-    andThen: () => Promise<T> = () => Promise.resolve(undefined as T),
-  ): Promise<T> {
+    andThen?: (manager: EntityManager) => Promise<T>,
+  ): Promise<T | void> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
@@ -548,7 +560,7 @@ export class UserService {
     const { handedOver, result } = await this.userRepository.manager.transaction(async (manager) => {
       const handedOver = await this.lockAndHandOver(manager, id, options);
 
-      return { handedOver, result: await andThen() };
+      return { handedOver, result: andThen ? await andThen(manager) : undefined };
     });
 
     if (handedOver?.successorId) {

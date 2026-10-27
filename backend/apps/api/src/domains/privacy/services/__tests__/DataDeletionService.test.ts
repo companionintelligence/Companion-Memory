@@ -3,7 +3,11 @@ import { NotFoundException } from '@nestjs/common';
 import { BaseOAuth2Client } from '@ci/domains/connections';
 
 import { USER_OWNED_TABLES } from '../../dataDeletionPlan';
-import { DataDeletionService, OBJECT_DELETE_DEADLINE_MS } from '../DataDeletionService';
+import {
+  DataDeletionService,
+  OBJECT_DELETE_DEADLINE_MS,
+  REVOCATION_DEADLINE_MS,
+} from '../DataDeletionService';
 
 /**
  * A tiny in-memory Postgres stand-in for the DataSource used by the service.
@@ -625,6 +629,44 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(store['ci.users']).toHaveLength(1);
   });
 
+  it('stops waiting on a provider that never answers a revocation and goes on with the purge', async () => {
+    jest.useFakeTimers();
+    try {
+      const hung = new FakeGoogleClient();
+      hung.revoke = jest.fn(() => new Promise<{ revoked: boolean }>(() => undefined));
+      const { service, store } = makeService({
+        connections: [
+          { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
+          { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
+        ],
+        client: hung,
+        store: {
+          'ci.users': [{ user: 'user-1' }],
+          'ci.connections': [
+            { user: 'user-1', connection: 'conn-1' },
+            { user: 'user-1', connection: 'conn-2' },
+          ],
+          'ci.notes': [{ user: 'user-1' }],
+        },
+      });
+
+      const deletion = service.deleteAccount({ userId: 'user-1' });
+      await jest.advanceTimersByTimeAsync(2 * REVOCATION_DEADLINE_MS);
+      const result = await deletion;
+
+      expect(hung.revoke).toHaveBeenCalledTimes(2);
+      expect(result.revocations).toEqual([
+        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
+        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: false },
+      ]);
+      expect(result.userDeleted).toBe(true);
+      expect(store['ci.notes']).toEqual([]);
+      expect(store['ci.connections']).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('gives up on an object store that never answers, before deleting any row', async () => {
     jest.useFakeTimers();
     try {
@@ -684,6 +726,37 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(result.totalDeleted).toBe(0);
     expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
     expect(savedAudits[0]).toMatchObject({ scope: 'account', totalDeleted: 0 });
+  });
+
+  it("inside a caller's transaction: the user row and the audit go through it, and the sweep is left to the caller", async () => {
+    const { service, store, query, savedAudits, cleanOrphans } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.notes': [{ user: 'user-1' }],
+      },
+    });
+    const transaction = {
+      query: jest.fn(async () => [[], 1]),
+      save: jest.fn(async (record: Record<string, unknown>) => record),
+    };
+
+    const result = await service.deleteAccount({ userId: 'user-1' }, { transaction: transaction as never });
+
+    expect(transaction.query).toHaveBeenCalledTimes(1);
+    expect(transaction.query).toHaveBeenCalledWith('DELETE FROM "ci"."users" WHERE "id" = $1', ['user-1']);
+    // The account row only through the transaction. (Clearing its entity
+    // pointer runs on the service's own connection, before the person goes.)
+    expect(query).not.toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "ci"."users"'),
+      expect.anything(),
+    );
+    // The data itself still went on the service's own connections.
+    expect(store['ci.notes']).toEqual([]);
+    expect(result.userDeleted).toBe(true);
+    expect(transaction.save).toHaveBeenCalledWith(expect.objectContaining({ scope: 'account' }));
+    expect(savedAudits).toEqual([]);
+    expect(cleanOrphans).not.toHaveBeenCalled();
   });
 
   it('deletes children before parents (content before events, graph before nulling)', () => {

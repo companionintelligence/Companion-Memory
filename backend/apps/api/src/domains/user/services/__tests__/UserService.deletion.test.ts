@@ -335,7 +335,8 @@ describe('UserService — account deletion', () => {
 
   /**
    * The same rule for the privacy route's immediate hard delete (`POST /users/me/delete`), which
-   * does not go through `requestDeletion`. It only hands the role over; the route deletes.
+   * does not go through `requestDeletion`. It hands the role over and runs the deletion the route
+   * gives it inside the same transaction; it deletes nothing itself.
    */
   describe('handOverAdministration', () => {
     const ADMIN = { id: 'user-1', role: 'admin' };
@@ -370,24 +371,26 @@ describe('UserService — account deletion', () => {
         'commit',
       ]);
       expect(queries.find((q) => q.sql.includes("SET role = 'admin'"))?.params).toEqual(['user-2']);
-      // The account itself is the route's to delete.
+      // Without a deletion to run, the account itself is left alone.
       expect(transactionManager.update).not.toHaveBeenCalled();
       expect(eventService.send).toHaveBeenCalledWith(UserUpdatedEvent, { userId: 'user-2' });
       expect(eventService.send).not.toHaveBeenCalledWith(UserRemovedEvent, expect.anything());
     });
 
     it('runs the deletion it is given inside the transaction, after the promotion, and returns its result', async () => {
-      const { service, journal } = makeService({
+      const { service, journal, transactionManager } = makeService({
         target: ADMIN,
         otherAccounts: true,
         successors: [{ id: 'user-2' }],
       });
+      let handedManager: unknown;
 
       const result = await service.handOverAdministration(
         OWN,
         'user-1',
         { successorEmail: 'member@example.com' },
-        async () => {
+        async (manager) => {
+          handedManager = manager;
           journal.push('delete-account');
 
           return 'deleted';
@@ -396,6 +399,8 @@ describe('UserService — account deletion', () => {
 
       expect(result).toBe('deleted');
       expect(journal.slice(-3)).toEqual(['promote-successor', 'delete-account', 'commit']);
+      // The transaction's own manager, so what the deletion writes through it commits with the promotion.
+      expect(handedManager).toBe(transactionManager);
     });
 
     it('does not commit the promotion when the deletion fails, and announces nothing', async () => {

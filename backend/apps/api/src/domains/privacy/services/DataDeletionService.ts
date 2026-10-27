@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Not, Repository } from 'typeorm';
+import { DataSource, type EntityManager, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -36,6 +36,16 @@ const OBJECT_PAGE_SIZE = 1000;
  * (`STORED_OBJECT_DELETE_DEADLINE_MS` in `memory/services/filePurge.ts`).
  */
 export const OBJECT_DELETE_DEADLINE_MS = 60_000;
+
+/**
+ * How long an account delete waits on one connection's revocation (the provider,
+ * and CI Portal for a brokered one). Revoking is best-effort, but the requests
+ * have no timeout of their own and the delete runs under the same account-creation
+ * lock as above, so a provider that never answers would hold every sign-up for
+ * minutes per token. Past this the grant counts as not revoked, as any other
+ * failed revocation does, and the purge goes on.
+ */
+export const REVOCATION_DEADLINE_MS = 10_000;
 
 /** Result of a single per-connection disconnect + purge. */
 export interface DisconnectResult {
@@ -232,8 +242,19 @@ export class DataDeletionService {
    * Delete the whole account: revoke every connection grant, purge every
    * user-owned table in FK-safe order, delete the user row, and clear the
    * search-index footprint. Idempotent.
+   *
+   * With `transaction`, the user row and the audit row are written through it,
+   * so they commit or roll back with whatever else the caller does there (the
+   * administrator handover). The revocations and the table purge still commit
+   * as they go. The search-index sweep is then the caller's to run, through
+   * {@link cleanupSearchIndex} once that transaction has committed: it reads
+   * the whole appliance's index and can take minutes, too long to hold the
+   * caller's locks for.
    */
-  async deleteAccount(context: UserServiceContext): Promise<AccountDeletionResult> {
+  async deleteAccount(
+    context: UserServiceContext,
+    { transaction }: { transaction?: EntityManager } = {},
+  ): Promise<AccountDeletionResult> {
     const userId = context.userId;
 
     // 1) Revoke every connection's OAuth grant first (best-effort), so access
@@ -245,7 +266,18 @@ export class DataDeletionService {
 
     const revocations: AccountDeletionResult['revocations'] = [];
     for (const connection of connections) {
-      const tokenRevoked = await this.revokeConnectionGrant(connection);
+      const tokenRevoked = await withDeadline(
+        this.revokeConnectionGrant(connection),
+        REVOCATION_DEADLINE_MS,
+        'The revocation',
+      ).catch((error: unknown) => {
+        this.logger.warn('Connection grant revocation timed out; continuing with purge', {
+          connectionId: connection.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+
+        return false;
+      });
       revocations.push({
         connectionId: connection.id,
         providerId: connection.providerId ?? null,
@@ -284,27 +316,32 @@ export class DataDeletionService {
     // 4) Delete the user row itself. With every RESTRICT child already gone and
     // the CASCADE children handled above, this now succeeds (previously it would
     // fail on the first RESTRICT FK — the bug this feature fixes).
-    const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId);
+    const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId, transaction);
     const userDeleted = userDeletedCount > 0;
     if (userDeletedCount > 0) {
       deletedCounts['ci.users'] = userDeletedCount;
     }
 
     // 5) Reap any search-index rows whose source rows we deleted.
-    await this.cleanupSearchIndex();
+    if (transaction == null) {
+      await this.cleanupSearchIndex();
+    }
 
     const totalDeleted = sumCounts(deletedCounts);
 
-    const auditId = await this.writeAudit({
-      subjectUserId: userId,
-      requestedByUserId: userId,
-      scope: 'account',
-      connectionId: null,
-      providerId: null,
-      tokenRevoked: revocations.some((r) => r.tokenRevoked),
-      deletedCounts,
-      totalDeleted,
-    });
+    const auditId = await this.writeAudit(
+      {
+        subjectUserId: userId,
+        requestedByUserId: userId,
+        scope: 'account',
+        connectionId: null,
+        providerId: null,
+        tokenRevoked: revocations.some((r) => r.tokenRevoked),
+        deletedCounts,
+        totalDeleted,
+      },
+      transaction,
+    );
 
     this.logger.log('Account deleted and all derived data purged', {
       userId,
@@ -597,13 +634,23 @@ export class DataDeletionService {
     return affectedRows(result);
   }
 
-  /** DELETE ... WHERE <column> = <value>, returning the affected row count. */
-  private async deleteWhere(schema: string, table: string, column: string, value: string): Promise<number> {
+  /**
+   * DELETE ... WHERE <column> = <value>, returning the affected row count. Runs
+   * through `within` when given, otherwise on a connection of its own.
+   */
+  private async deleteWhere(
+    schema: string,
+    table: string,
+    column: string,
+    value: string,
+    within?: EntityManager,
+  ): Promise<number> {
     // schema/table/column come exclusively from the trusted internal deletion
     // plan (never request input); the value is always a bound parameter.
-    const result = await this.dataSource.query(`DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`, [
-      value,
-    ]);
+    const result = await (within ?? this.dataSource).query(
+      `DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`,
+      [value],
+    );
 
     return affectedRows(result);
   }
@@ -745,7 +792,7 @@ export class DataDeletionService {
    * plan; this catches rows keyed only by (entity_type, entity_id) whose backing
    * ci.* row we removed. Best-effort — logged, never fatal to the deletion.
    */
-  private async cleanupSearchIndex(): Promise<void> {
+  async cleanupSearchIndex(): Promise<void> {
     try {
       await this.orphanCleanupService.cleanOrphans();
     } catch (error) {
@@ -755,16 +802,20 @@ export class DataDeletionService {
     }
   }
 
-  private async writeAudit(data: {
-    subjectUserId: string;
-    requestedByUserId: string;
-    scope: 'connection' | 'account';
-    connectionId: string | null;
-    providerId: string | null;
-    tokenRevoked: boolean | null;
-    deletedCounts: Record<string, number>;
-    totalDeleted: number;
-  }): Promise<string> {
+  /** Append the audit row, through `within` when given so it commits only with what it records. */
+  private async writeAudit(
+    data: {
+      subjectUserId: string;
+      requestedByUserId: string;
+      scope: 'connection' | 'account';
+      connectionId: string | null;
+      providerId: string | null;
+      tokenRevoked: boolean | null;
+      deletedCounts: Record<string, number>;
+      totalDeleted: number;
+    },
+    within?: EntityManager,
+  ): Promise<string> {
     const record = this.auditRepository.create({
       id: uuidv7(),
       subjectUserId: data.subjectUserId,
@@ -779,7 +830,7 @@ export class DataDeletionService {
       error: null,
     });
 
-    const saved = await this.auditRepository.save(record);
+    const saved = within ? await within.save(record) : await this.auditRepository.save(record);
 
     return saved.id;
   }
@@ -803,16 +854,13 @@ function affectedRows(result: unknown): number {
 }
 
 /** `work`, or a rejection once `ms` have passed without it settling. */
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+function withDeadline<T>(work: Promise<T>, ms: number, what = 'The object store'): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
 
   return Promise.race([
     work,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`The object store did not answer within ${ms / 1000} s`)),
-        ms,
-      );
+      timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms / 1000} s`)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
 }

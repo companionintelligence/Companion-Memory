@@ -106,8 +106,10 @@ export class PrivacyController {
     // Before anything is purged: the appliance's last administrator does not leave the other
     // people on it without one, whichever route deletes the account (`DELETE /account` applies
     // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
-    // The purge runs inside the handover's transaction, so if it fails the successor is not
-    // left an administrator beside the caller.
+    // The purge runs while the handover's transaction is open, and the account row and the audit
+    // go through that transaction: the caller's account goes exactly when the successor becomes
+    // administrator, or neither happens. The revocations and the table purge commit as they go,
+    // so a failure can leave those done and the account still there, to be asked again.
     let result: AccountDeletionResult;
 
     try {
@@ -115,11 +117,15 @@ export class PrivacyController {
         serviceContext,
         serviceContext.userId,
         { successorEmail: body.successorEmail },
-        () => this.dataDeletionService.deleteAccount(serviceContext),
+        (transaction) => this.dataDeletionService.deleteAccount(serviceContext, { transaction }),
       );
     } catch (error) {
       throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
+
+    // After the handover has committed and released the lock every account creation waits on: the
+    // sweep reads the whole appliance's search index.
+    await this.dataDeletionService.cleanupSearchIndex();
 
     return {
       status: 'deleted',

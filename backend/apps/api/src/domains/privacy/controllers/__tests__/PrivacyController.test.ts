@@ -8,14 +8,22 @@ import { LastAdminDeletionRefused, SUCCESSOR_NOT_FOUND, SUCCESSOR_REQUIRED } fro
 import type { AccountDeletionResult } from '../../services/DataDeletionService';
 import { PrivacyController } from '../PrivacyController';
 
+/** Stands in for the handover's transaction, so a test can see what was written through it. */
+const HANDOVER_TRANSACTION = { query: jest.fn(), save: jest.fn() };
+
 function makeController(result: AccountDeletionResult, email = 'owner@example.com') {
-  const deleteAccount = jest.fn(async () => result);
-  const dataDeletionService = { deleteAccount };
+  const deleteAccount = jest.fn(async (_context: unknown, _options?: unknown) => result);
+  const cleanupSearchIndex = jest.fn(async () => undefined);
+  const dataDeletionService = { deleteAccount, cleanupSearchIndex };
   // Runs the deletion it is handed inside the (here imaginary) handover transaction, as the real
   // one does.
   const handOverAdministration = jest.fn(
-    async (_context: unknown, _id: string, _options: unknown, andThen?: () => Promise<unknown>) =>
-      andThen ? andThen() : undefined,
+    async (
+      _context: unknown,
+      _id: string,
+      _options: unknown,
+      andThen?: (transaction: unknown) => Promise<unknown>,
+    ) => (andThen ? andThen(HANDOVER_TRANSACTION) : undefined),
   );
   const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })), handOverAdministration };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -26,7 +34,7 @@ function makeController(result: AccountDeletionResult, email = 'owner@example.co
     logger as never,
   );
 
-  return { controller, deleteAccount, handOverAdministration };
+  return { controller, deleteAccount, cleanupSearchIndex, handOverAdministration };
 }
 
 const RESULT: AccountDeletionResult = {
@@ -55,7 +63,7 @@ describe('PrivacyController.deleteMyAccount', () => {
     });
 
     // Delegated with the caller's own context — owner-scoped by construction.
-    expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' });
+    expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' }, expect.anything());
 
     expect(response).toEqual({
       status: 'deleted',
@@ -83,8 +91,20 @@ describe('PrivacyController.deleteMyAccount', () => {
       { successorEmail: 'member@example.com' },
       expect.any(Function),
     );
+    // The account row goes through the handover's transaction, so it commits with the promotion.
+    expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' }, { transaction: HANDOVER_TRANSACTION });
+  });
+
+  it('sweeps the search index only after the handover has returned', async () => {
+    const { controller, cleanupSearchIndex, handOverAdministration } = makeController(RESULT);
+
+    await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+      confirmEmail: 'owner@example.com',
+    });
+
+    expect(cleanupSearchIndex).toHaveBeenCalledTimes(1);
     expect(handOverAdministration.mock.invocationCallOrder[0]).toBeLessThan(
-      deleteAccount.mock.invocationCallOrder[0],
+      cleanupSearchIndex.mock.invocationCallOrder[0],
     );
   });
 
@@ -97,11 +117,13 @@ describe('PrivacyController.deleteMyAccount', () => {
       .deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, { confirmEmail: 'owner@example.com' })
       .catch(() => undefined);
 
+    // Reached the handover, so the empty purge below is its doing and not an earlier refusal.
+    expect(handOverAdministration).toHaveBeenCalledTimes(1);
     expect(deleteAccount).not.toHaveBeenCalled();
   });
 
-  it('passes a failed delete through untouched', async () => {
-    const { controller, deleteAccount } = makeController(RESULT);
+  it('passes a failed delete through untouched, and sweeps nothing', async () => {
+    const { controller, deleteAccount, cleanupSearchIndex } = makeController(RESULT);
     const purgeFailure = new Error('column "user_id" does not exist');
     deleteAccount.mockRejectedValue(purgeFailure);
 
@@ -111,6 +133,7 @@ describe('PrivacyController.deleteMyAccount', () => {
         successorEmail: 'member@example.com',
       }),
     ).rejects.toBe(purgeFailure);
+    expect(cleanupSearchIndex).not.toHaveBeenCalled();
   });
 
   it.each([
