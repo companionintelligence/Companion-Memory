@@ -30,8 +30,6 @@ import {
   FilePreviewSweepRequestEvent,
   VIDEO_PLAYBACK_SWEEP_QUEUE,
   VideoPlaybackSweepRequestEvent,
-  MediaDimensionsBackfillRequestEvent,
-  MEDIA_DIMENSIONS_QUEUE,
 } from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
@@ -45,10 +43,6 @@ import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-nex
 
 import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
-import {
-  MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL,
-  MEDIA_DIMENSIONS_STAGE_ID,
-} from '../mediaDimensionsCandidates';
 import {
   type CommunicationLinkBackfillProgress,
   type CommunicationLinkBackfillResult,
@@ -465,9 +459,6 @@ const GEOCODE_QUEUE = 'geocode';
 /** Default batch size for the location estimator when the body omits a limit. */
 const ESTIMATE_DEFAULT_LIMIT = 500;
 
-/** Default batch size for the media-dimensions backfill when the body omits a limit. */
-const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
-
 /**
  * Operator-facing maintenance endpoints. POST /api/maintenance/geocode-locations
  * enqueues a forward-geocode backfill (geodata-plan Phase 1): it counts the
@@ -794,12 +785,16 @@ export class MaintenanceController {
   /**
    * Media-dimensions backfill. Records `ci.files.width`/`height` for ORIGINAL
    * image/video files that still lack them — the existing corpus, ingested
-   * before the preview pass started capturing dimensions. Counts the candidates
-   * (locally-stored ORIGINAL image/video files with NULL width) and emits a
-   * {@link MediaDimensionsBackfillRequestEvent} for the files-domain listener to
-   * process out-of-band. Once recorded, EventType.mediaWidth/mediaHeight and the
-   * drawer "Dimensions" row light up with no frontend change. Idempotent +
-   * resumable: re-run until estimatedFileCount is 0.
+   * before the preview pass started capturing dimensions. Counts the files with
+   * no width that the `enrich.media_dimensions` stage still has work for (no
+   * ledger answer at its current version, or a failed probe whose retry is due)
+   * and emits a `MediaDimensionsBackfillRequestEvent` for the files-domain
+   * listener to process out-of-band. Once recorded, EventType.mediaWidth/
+   * mediaHeight and the drawer "Dimensions" row light up with no frontend
+   * change. Idempotent + resumable: re-run until estimatedFileCount is 0.
+   *
+   * The work is the orchestrator's `media_dimensions` leg, called as is, so the
+   * endpoint and the nightly leg cannot drift apart again.
    */
   @Post('backfill-media-dimensions')
   async backfillMediaDimensions(
@@ -813,33 +808,7 @@ export class MaintenanceController {
       return { jobId: null, estimatedFileCount: 0, status: 'noop' };
     }
 
-    const limit = body.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
-
-    // What the stage would still do, so the estimate matches the work and a
-    // file it could not decode does not keep this at `enqueued` forever.
-    const rows = await this.dataSource.query<Array<{ count: string }>>(MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, [
-      userId,
-      MEDIA_DIMENSIONS_STAGE_ID,
-    ]);
-
-    const candidateCount = Number(rows[0]?.count ?? 0);
-    const estimatedFileCount = Math.min(candidateCount, limit);
-
-    if (estimatedFileCount === 0) {
-      return { jobId: null, estimatedFileCount: 0, status: 'noop' };
-    }
-
-    const jobIds = await this.signallingEventService.send(
-      MediaDimensionsBackfillRequestEvent,
-      { userId, limit },
-      { queue: MEDIA_DIMENSIONS_QUEUE },
-    );
-
-    return {
-      jobId: jobIds[0] ?? null,
-      estimatedFileCount,
-      status: jobIds.length > 0 ? 'enqueued' : 'noop',
-    };
+    return this.maintenanceOrchestratorService.runMediaDimensionsLeg(userId, { limit: body.limit });
   }
 
   /**
