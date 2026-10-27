@@ -653,19 +653,22 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   }, [displayGraph.nodes]);
 
   // A selection only means something while its subject is on screen; mode/data changes that drop
-  // the subject drop the selection (and its dialog) with it. Not while a focus subgraph is still
-  // on its way, though: until it lands the canvas shows EMPTY_GRAPH, which is a wait, not an
-  // answer. A dot clicked in the overview selects it and focuses it in one go, and clearing the
-  // selection against that placeholder meant its card never opened.
+  // the subject drop the selection (and its dialog) with it. Focus mode waits until the focused
+  // entity's own subgraph is on screen first. Before that, useNodeGraphService hands back nothing
+  // on the first focus and the previously focused entity's subgraph after that. A dot clicked in
+  // the overview is selected and focused in one go, and checking it against either placeholder
+  // cleared the selection, so its card never opened.
+  const focusPending = focusEntityId !== null && !nodeById.has(focusEntityId);
+
   useEffect(() => {
-    if (mode === 'focus' && !focusGraph) {
+    if (focusPending) {
       return;
     }
 
     if (selectedNodeId && !nodeById.has(selectedNodeId)) {
       setSelectedNodeId(null);
     }
-  }, [focusGraph, mode, nodeById, selectedNodeId]);
+  }, [focusPending, nodeById, selectedNodeId]);
 
   useEffect(() => {
     if (selectedLinkId && !displayGraph.links.some((link) => link.id === selectedLinkId)) {
