@@ -221,38 +221,86 @@ const ASK_FRAME_WORDS: ReadonlySet<string> = new Set([
  *
  * "Do you have any photos of the volcano?" used to answer "at least one" for
  * anyone with photos and no volcano: 'photo' is on every photo event, so the
- * OR of terms was satisfied by the kind word alone. As a loose term it is not
+ * OR of terms was satisfied by the kind word alone. Videos are the same: every
+ * video event's title opens with 'Video'. As a loose term the kind word is not
  * evidence of anything the asker named. It is dropped from the terms and the
- * ask executor turns it into a photos type filter instead (see
- * {@link promptAsksForPhotos}).
+ * ask executor turns it into a type filter instead (see
+ * {@link promptMediaClass}). The value is the data class it stands for.
  *
  * Only ever dropped as a loose TERM: inside a run of capitalised words
  * ("Google Photos") or in a name ask it stays, because there it is part of
  * what has to match.
  */
-const PHOTO_KIND_WORDS: ReadonlySet<string> = new Set([
-  'photo',
-  'photos',
-  'picture',
-  'pictures',
-  'pic',
-  'pics',
-  'image',
-  'images',
+const MEDIA_KIND_WORDS: ReadonlyMap<string, 'photos' | 'media'> = new Map([
+  ['photo', 'photos'],
+  ['photos', 'photos'],
+  ['picture', 'photos'],
+  ['pictures', 'photos'],
+  ['pic', 'photos'],
+  ['pics', 'photos'],
+  ['image', 'photos'],
+  ['images', 'photos'],
+  ['video', 'media'],
+  ['videos', 'media'],
 ]);
+
+/**
+ * The data class a word names when it is a {@link MEDIA_KIND_WORDS} word.
+ *
+ * A trailing apostrophe, "'s" or hyphen is ignored: "photo's" and "photos'"
+ * are the same kind word, and Postgres reduces both to 'photo', so keeping
+ * them as terms would bring back the match on every photo event.
+ */
+function mediaKindOf(word: string): 'photos' | 'media' | undefined {
+  return MEDIA_KIND_WORDS.get(word.toLowerCase().replace(/(?:['’]s?|-)+$/u, ''));
+}
 
 /**
  * Characters that may sit INSIDE one word. Everything else separates words and
  * ends a capitalised run, so "Alice, Bob" is two names rather than the phrase
  * `'alice' <-> 'bob'` that would match neither of them.
  *
- * A `.` or `_` counts as inside a word only between two letters or digits, so
- * a file name ("PXL_20261021_115500_010.jpg") stays one word. Postgres reads it
- * as one lexeme too, which is how the file's own name is indexed; split into
- * `pxl`, `20261021`, … it could never match it. A sentence's closing `.` is
- * followed by nothing, so it still ends the word.
+ * A `.` or `_` between two letters or digits is matched here too, so a file
+ * name ("PXL_20261021_115500_010.jpg") comes out as one candidate. Only a
+ * candidate that {@link FILE_NAME_PATTERN} accepts stays whole; see
+ * {@link promptWords}. A sentence's closing `.` is followed by nothing, so it
+ * always ends the word.
  */
 const WORD_PATTERN = /[\p{L}\p{N}](?:[\p{L}\p{N}'’-]|[._](?=[\p{L}\p{N}]))*/gu;
+
+/** One word with no `.` or `_` inside it. */
+const PLAIN_WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+
+/**
+ * A word that ends in a file extension. Postgres indexes a file name as one
+ * lexeme ("pxl_20261021_115500_010.jpg"); split into `pxl`, `20261021`, … the
+ * prompt could never match it.
+ *
+ * Anything else with a `.` or `_` inside is split there, as before: Postgres
+ * reads "alice.wong" as one lexeme too, which no "Alice Wong" carries, and
+ * splits "photos_of_me" back into 'photo' on its own, which every photo event
+ * carries. The media extensions mirror `MEDIA_FILENAME_RE` in
+ * `search-ingress/searchTexts.ts`.
+ */
+const FILE_NAME_PATTERN =
+  /\.(?:jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv|mp3|m4a|wav|flac|pdf|docx?|xlsx?|pptx?|txt|csv|md|json|zip)$/iu;
+
+/** The prompt's words and where each starts, with only file names kept whole. */
+function* promptWords(prompt: string): Generator<{ word: string; start: number }> {
+  for (const match of prompt.matchAll(WORD_PATTERN)) {
+    const word = match[0];
+    const start = match.index ?? 0;
+
+    if (!/[._]/u.test(word) || FILE_NAME_PATTERN.test(word)) {
+      yield { word, start };
+      continue;
+    }
+
+    for (const part of word.matchAll(PLAIN_WORD_PATTERN)) {
+      yield { word: part[0], start: start + (part.index ?? 0) };
+    }
+  }
+}
 
 /** A word is "named" if it opens with an uppercase letter. */
 function isCapitalised(word: string): boolean {
@@ -300,10 +348,7 @@ function toAdjacentRuns(prompt: string): string[][] {
     }
   };
 
-  for (const match of prompt.matchAll(WORD_PATTERN)) {
-    const word = match[0];
-    const start = match.index ?? 0;
-
+  for (const { word, start } of promptWords(prompt)) {
     // Anything other than plain spaces between the previous word and this one
     // (a comma, a question mark, a newline) is a boundary.
     if (current.length > 0 && !/^[ \t]*$/.test(prompt.slice(cursor, start))) {
@@ -345,14 +390,19 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
 
   const groups: PromptQueryGroup[] = [];
 
+  // A loose term, unless it only names the kind of thing asked about.
+  const pushTerm = (word: string) => {
+    if (mediaKindOf(word) == null) {
+      groups.push({ kind: 'term', text: word });
+    }
+  };
+
   for (const run of runs) {
     let index = 0;
 
     while (index < run.length) {
       if (!isCapitalised(run[index])) {
-        if (!PHOTO_KIND_WORDS.has(run[index].toLowerCase())) {
-          groups.push({ kind: 'term', text: run[index] });
-        }
+        pushTerm(run[index]);
 
         index += 1;
         continue;
@@ -366,9 +416,7 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
       // A lone capitalised word carries no adjacency to enforce — it is just a
       // word, and requiring it would silently narrow every sentence-initial one.
       if (end - index === 1) {
-        if (!PHOTO_KIND_WORDS.has(run[index].toLowerCase())) {
-          groups.push({ kind: 'term', text: run[index] });
-        }
+        pushTerm(run[index]);
       } else {
         groups.push({ kind: 'phrase', text: run.slice(index, end).join(' ') });
       }
@@ -381,24 +429,28 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
 }
 
 /**
- * Does a topic ask say it is about photos ("photos of …", "any pictures …")?
+ * Which media class a topic ask says it is about: 'photos' for "photos of …"
+ * or "any pictures …", 'media' once it names videos, `null` for neither.
  *
- * True when a {@link PHOTO_KIND_WORDS} word stands on its own, which is
+ * A {@link MEDIA_KIND_WORDS} word counts when it stands on its own, which is
  * exactly when {@link buildPromptQuery} drops it from the terms. The ask
- * executor reads it as the photos class so the kind still narrows the search
- * once it stops counting as a match. A name ask, or the word inside a
- * capitalised name, says nothing about kind and answers false.
+ * executor reads the class as a type filter so the kind still narrows the
+ * search once it stops counting as a match. A name ask, or the word inside a
+ * capitalised name, says nothing about kind and answers `null`.
  */
-export function promptAsksForPhotos(prompt: string, options: BuildPromptQueryOptions = {}): boolean {
+export function promptMediaClass(
+  prompt: string,
+  options: BuildPromptQueryOptions = {},
+): 'photos' | 'media' | null {
   if (options.subjectIsName || hasNameSubjectFrame(prompt)) {
-    return false;
+    return null;
   }
 
-  return toAdjacentRuns(prompt).some((run) =>
-    run.some((word, index) => {
-      if (!PHOTO_KIND_WORDS.has(word.toLowerCase())) {
-        return false;
-      }
+  let found: 'photos' | 'media' | null = null;
+
+  for (const run of toAdjacentRuns(prompt)) {
+    for (const [index, word] of run.entries()) {
+      const kind = mediaKindOf(word);
 
       // Part of a capitalised run of two or more ("Google Photos"): a name.
       const inName =
@@ -406,7 +458,18 @@ export function promptAsksForPhotos(prompt: string, options: BuildPromptQueryOpt
         ((index > 0 && isCapitalised(run[index - 1])) ||
           (index < run.length - 1 && isCapitalised(run[index + 1])));
 
-      return !inName;
-    }),
-  );
+      if (kind == null || inName) {
+        continue;
+      }
+
+      // 'media' covers photos too, so it wins once any video word is named.
+      if (kind === 'media') {
+        return 'media';
+      }
+
+      found = kind;
+    }
+  }
+
+  return found;
 }

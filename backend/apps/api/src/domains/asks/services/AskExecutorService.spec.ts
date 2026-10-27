@@ -88,6 +88,20 @@ describe('AskExecutorService.execute', () => {
     );
   });
 
+  it('reads "videos of …" as the media class and a blank class as no class', async () => {
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'content', prompt: 'Any videos of the volcano?' } }));
+    // A zero-width class canonicalizes to nothing, which the grant evaluator
+    // also reads as "no class named".
+    await service.execute(
+      fakeAsk({ query: { queryType: 'content', dataClass: '​', prompt: 'photos of the volcano' } }),
+    );
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).toHaveProperty('includeTypes', ['file']);
+    expect(searchService.searchPrompt.mock.calls[1][1]).toHaveProperty('includeTypes', ['file']);
+  });
+
   it('does not read a kind into a name ask or a capitalised name', async () => {
     const { service, searchService } = makeService();
 

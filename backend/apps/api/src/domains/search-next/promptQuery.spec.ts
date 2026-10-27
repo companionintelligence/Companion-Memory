@@ -1,4 +1,4 @@
-import { buildPromptQuery, promptAsksForPhotos } from './promptQuery';
+import { buildPromptQuery, promptMediaClass } from './promptQuery';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -181,13 +181,43 @@ describe('photo asks', () => {
     ]);
   });
 
-  it('reports a standalone kind word, which the ask executor turns into the photos class', () => {
-    expect(promptAsksForPhotos('Do you have any photos of the volcano?')).toBe(true);
-    expect(promptAsksForPhotos('Pictures from Tahoe?')).toBe(true);
-    expect(promptAsksForPhotos('my Google Photos backup')).toBe(false);
-    expect(promptAsksForPhotos('the lake trip')).toBe(false);
+  it('does not let a video word count as a match either', () => {
+    expect(buildPromptQuery('Any videos of the volcano?')).toEqual([{ kind: 'term', text: 'volcano' }]);
+  });
+
+  it("drops the kind word in its apostrophe forms, which Postgres reduces to 'photo'", () => {
+    expect(buildPromptQuery("Do you have any photo's of the volcano?")).toEqual([
+      { kind: 'term', text: 'volcano' },
+    ]);
+    expect(buildPromptQuery('photos’ from the lake')).toEqual([{ kind: 'term', text: 'lake' }]);
+  });
+
+  it('splits a dotted or underscored word that is not a file name, as before', () => {
+    // Postgres reads "alice.wong" as one lexeme no "Alice Wong" carries.
+    expect(buildPromptQuery('alice.wong', { subjectIsName: true })).toEqual([
+      { kind: 'phrase', text: 'alice' },
+      { kind: 'phrase', text: 'wong' },
+    ]);
+    // Postgres splits "photos_of_me" back into 'photo' alone, which every
+    // photo event carries.
+    expect(buildPromptQuery('Do you have any photos_of_me?')).toEqual([]);
+    expect(buildPromptQuery('lake_house')).toEqual([
+      { kind: 'term', text: 'lake' },
+      { kind: 'term', text: 'house' },
+    ]);
+  });
+
+  it('reports the class a standalone kind word names, which the ask executor filters on', () => {
+    expect(promptMediaClass('Do you have any photos of the volcano?')).toBe('photos');
+    expect(promptMediaClass('Pictures from Tahoe?')).toBe('photos');
+    expect(promptMediaClass("any photo's from Tahoe")).toBe('photos');
+    expect(promptMediaClass('Do you have any photos_of_me?')).toBe('photos');
+    expect(promptMediaClass('Any videos of the volcano?')).toBe('media');
+    expect(promptMediaClass('photos or videos of the volcano')).toBe('media');
+    expect(promptMediaClass('my Google Photos backup')).toBeNull();
+    expect(promptMediaClass('the lake trip')).toBeNull();
     // A name ask is about a person; a kind word there is part of the name.
-    expect(promptAsksForPhotos('do you know pic jones')).toBe(false);
-    expect(promptAsksForPhotos('photos smith', { subjectIsName: true })).toBe(false);
+    expect(promptMediaClass('do you know pic jones')).toBeNull();
+    expect(promptMediaClass('photos smith', { subjectIsName: true })).toBeNull();
   });
 });

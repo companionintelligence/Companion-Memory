@@ -220,6 +220,25 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
 
       expect(result.items.map((item) => item.id)).toEqual([photo]);
     });
+
+    it("does not answer from the kind word in a form Postgres reduces to 'photo'", async () => {
+      await seed(owner, 'event', 'Photo Oct 22 2026 Google Pixel 9');
+
+      for (const prompt of ["Do you have any photo's of the volcano?", 'Do you have any photos_of_me?']) {
+        const result = await service.searchPrompt(context, { prompt });
+
+        expect(result.items).toEqual([]);
+      }
+    });
+
+    it('still finds a person asked about by a dotted handle', async () => {
+      // Kept whole, "alice.wong" is one lexeme that no "Alice Wong" carries.
+      const alice = await seed(owner, 'person', 'Alice Wong');
+
+      const result = await service.searchPrompt(context, { prompt: 'alice.wong', subjectIsName: true });
+
+      expect(result.items.map((item) => item.id)).toEqual([alice]);
+    });
   });
 
   describe('a real question still gets a real answer', () => {

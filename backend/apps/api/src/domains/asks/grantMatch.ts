@@ -237,10 +237,12 @@ function grantMatchesQuery(grant: AskGrant, query: AskQuery): boolean {
  * so an asker after a class the grant never named simply OMITTED the field and
  * was auto-answered anyway.
  *
- * Omitting it is not a narrowing. It is the BROADEST an ask can be: nothing
- * downstream re-derives the class, and `AskExecutorService` turns a null class
- * into `includeTypes: undefined` — an unfiltered search across every indexed
- * entity type in the owner's memory. A class-less auto grant plus a class-less
+ * Omitting it is not a narrowing. It is the BROADEST an ask can be:
+ * `AskExecutorService` turns a null class into `includeTypes: undefined`, an
+ * unfiltered search across every indexed entity type in the owner's memory.
+ * (The one class it reads off the prompt, a standalone "photos" or "videos",
+ * only narrows that search; it is never a class the gate saw, so it widens
+ * nothing here.) A class-less auto grant plus a class-less
  * ask is therefore a standing, unreviewed keyword oracle over the whole corpus,
  * answered from the asker's own prompt.
  *

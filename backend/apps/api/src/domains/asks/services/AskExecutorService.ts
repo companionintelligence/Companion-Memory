@@ -9,7 +9,7 @@ import {
   type PromptSearchResult,
   SearchService,
   hasNameSubjectFrame,
-  promptAsksForPhotos,
+  promptMediaClass,
 } from '@ci/domains/search-next';
 
 import { type Ask } from '../entities/AskEntity';
@@ -166,16 +166,13 @@ function toIncludeTypes(query: AskQuery, subjectIsName: boolean): IndexableEntit
   // Same canonical form the grant evaluator matched on — if these diverged, a
   // peer could satisfy one and evade the other.
   //
-  // With no class named, "photos of …" in the prompt stands in for the photos
-  // class. `buildPromptQuery` no longer lets the word 'photos' count as a match
-  // (it matched every photo event), so the kind is carried here, as a filter,
-  // instead. Only ever narrows: an ask with no class searched every type.
-  const canonical =
-    query.dataClass != null
-      ? canonicalDataClass(query.dataClass)
-      : promptAsksForPhotos(query.prompt, { subjectIsName })
-        ? 'photos'
-        : null;
+  // With no class named, "photos of …" (or "videos of …") in the prompt stands
+  // in for the class. `buildPromptQuery` no longer lets those words count as a
+  // match (they matched every photo or video event), so the kind is carried
+  // here, as a filter, instead. Only ever narrows: an ask with no class
+  // searched every type. A class that canonicalizes to nothing is "no class
+  // named" here exactly as it is to the grant evaluator.
+  const canonical = canonicalDataClass(query.dataClass) ?? promptMediaClass(query.prompt, { subjectIsName });
   if (canonical == null) {
     return undefined;
   }
