@@ -84,6 +84,7 @@ import {
   makeIsSelf,
   NOBODY_IS_SELF,
   readSelfIdentity,
+  readSentLabelSenders,
   type SelfIdentity,
 } from '../push/self';
 import {
@@ -1321,6 +1322,18 @@ export class PushStage implements ImportStageRunner {
         return { names: [], email: null, phones: [] };
       }),
     );
+    // The addresses the owner's own Sent mail in this run went out from. Fail-safe
+    // to none, as the identity above is: they only add owner addresses.
+    const sentFrom = await this.retrying(context, 'reading the owner’s sent addresses', () =>
+      readSentLabelSenders(this.dataSource, context.runId).catch((err: unknown): string[] => {
+        if (isTransientDatabaseError(err)) {
+          throw err;
+        }
+
+        return [];
+      }),
+    );
+    identity.emails = [...new Set([...(identity.emails ?? []), ...sentFrom])];
 
     // Several staged rows can share a natural key — the same artist reached by
     // two parsers in one archive — so the key maps to a LIST. Ingest is given

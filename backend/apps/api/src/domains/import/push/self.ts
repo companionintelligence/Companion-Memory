@@ -152,6 +152,39 @@ const SELF_IDENTITY_SQL = `
      AND e.merged_into_entity_id IS NULL
      AND (e.is_self IS TRUE OR e.properties ->> 'is_self' = 'true')`;
 
+/**
+ * The From addresses of this run's mail that Gmail filed as Sent
+ * (`DirectionBasis: 'sent_label'`, email_direction.ts), normalized.
+ *
+ * Mail in the owner's Sent folder is the owner's, whatever address it went out
+ * from: an alias, or the account of a Takeout that is not the one they signed
+ * in with. Neither is on the self Person, so without this {@link isOwnerContact}
+ * reads that sender as a stranger who shares the owner's name and files the
+ * owner's own mail under them. PushStage adds these to the owner's addresses
+ * for the run.
+ */
+export async function readSentLabelSenders(db: SelfIdentityReader, runId: string): Promise<string[]> {
+  const rows = await db.query<Array<{ sender: string | null }>>(
+    `SELECT DISTINCT metadata ->> 'From' AS sender
+       FROM ci_import.staged_items
+      WHERE run_id = $1::uuid
+        AND metadata ->> 'DirectionBasis' = 'sent_label'
+        AND jsonb_typeof(metadata -> 'From') = 'string'`,
+    [runId],
+  );
+  const out = new Set<string>();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const address = normalizeEmail(row.sender);
+
+    if (address && address.includes('@')) {
+      out.add(address);
+    }
+  }
+
+  return [...out];
+}
+
 /** Read the owner's names. Callers decide what a failure means — see PushStage. */
 export async function readSelfIdentity(db: SelfIdentityReader, userId: string): Promise<SelfIdentity> {
   const rows = await db.query<
