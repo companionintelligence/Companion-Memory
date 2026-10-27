@@ -119,7 +119,7 @@ describe('NotePage editor caret', () => {
         {
           request: {
             query: CREATE_NOTE,
-            variables: { input: { content, title: 'Grocery list' } },
+            variables: { input: { id: noteGlobalId, content, title: 'Grocery list' } },
           },
           result: {
             data: {

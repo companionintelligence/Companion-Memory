@@ -456,6 +456,86 @@ export class NoteService {
     return NoteEntity.toEgressType(updatedEntity);
   }
 
+  /**
+   * {@link update}, written only if the note still has the `updatedAt` the caller last
+   * saw. The web editor sends this when it tries a failed save again on its own: that
+   * save holds an edit typed before the outage, and if the note was changed somewhere
+   * else in the meantime, writing it would put the older edit over the newer one.
+   *
+   * The check and the write are one UPDATE, so nothing can land between them. The
+   * timestamps are compared to the millisecond, the precision `updatedAt` leaves the API
+   * at.
+   *
+   * @returns `written: false` and the note as stored when it had changed; null when the
+   *   caller has no such note.
+   */
+  async updateIfUnchanged(
+    context: ServiceContext,
+    id: string,
+    data: UpdateNoteDto,
+    expectedUpdatedAt: Date,
+  ): Promise<{ written: boolean; note: Note } | null> {
+    const owner = context.userId !== SYSTEM_USER ? { userId: context.userId } : {};
+    const changes = withoutUndefined(data);
+
+    if (Object.keys(changes).length > 0) {
+      const query = this.noteRepository
+        .createQueryBuilder()
+        .update(NoteEntity)
+        .set(changes)
+        .where('id = :id', { id })
+        .andWhere("date_trunc('milliseconds', updated_at) = :expectedUpdatedAt", { expectedUpdatedAt })
+        .returning('*');
+
+      if ('userId' in owner) {
+        query.andWhere('user_id = :userId', { userId: owner.userId });
+      }
+
+      const result = await query.execute();
+      const [row] = (Array.isArray(result.raw) ? result.raw : []) as Array<{
+        id: string;
+        title: string | null;
+        content: string | null;
+        user_id: string;
+        created_at: Date;
+        updated_at: Date;
+      }>;
+
+      if (row) {
+        await this.eventService.send(NoteUpdatedEvent, {
+          noteId: row.id,
+        });
+
+        return {
+          written: true,
+          note: NoteEntity.toEgressType(
+            this.noteRepository.create({
+              id: row.id,
+              title: row.title,
+              content: row.content,
+              userId: row.user_id,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            }),
+          ),
+        };
+      }
+    }
+
+    const stored = await this.noteRepository.findOne({ where: { id, ...owner } });
+
+    if (stored == null) {
+      return null;
+    }
+
+    // Nothing to write, or the note moved on: hand back what is stored so the caller can
+    // tell its own late save from someone else's.
+    const unchanged =
+      Object.keys(changes).length === 0 && stored.updatedAt.getTime() === expectedUpdatedAt.getTime();
+
+    return { written: unchanged, note: NoteEntity.toEgressType(stored) };
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.noteRepository.delete({
       id,

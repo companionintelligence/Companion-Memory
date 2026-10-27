@@ -5052,6 +5052,7 @@ export type UpdateKnownPlaceInput = {
 
 export type UpdateNoteInput = {
   content?: InputMaybe<Scalars['String']['input']>;
+  expectedUpdatedAt?: InputMaybe<Scalars['DateTime']['input']>;
   id: Scalars['String']['input'];
   title?: InputMaybe<Scalars['String']['input']>;
 };

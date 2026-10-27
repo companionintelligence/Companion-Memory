@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react';
 
+import { type MockedResponse } from '@apollo/client/testing';
 import { GlobalUID } from '@ci/common';
 import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +70,9 @@ const common = vi.hoisted(() => ({
   forgetQueuedNote: vi.fn(),
   isQueuedNote: vi.fn(() => false),
   newNoteId: vi.fn(() => 'minted-note-id'),
+  requestConnectionRefresh: vi.fn(),
+  // What the connection check says; null is no provider, as in most of these tests.
+  connection: null as { mode: string } | null,
 }));
 
 // Only the outbox/native-capture surface is faked; GlobalUID, buildNoteRecord,
@@ -80,6 +84,8 @@ vi.mock('@ci/common', async (orig) => ({
   forgetQueuedNote: common.forgetQueuedNote,
   isQueuedNote: common.isQueuedNote,
   newNoteId: common.newNoteId,
+  requestConnectionRefresh: common.requestConnectionRefresh,
+  useOptionalConnectionMode: () => common.connection,
   useOutboxQueue: () => ({ pending: 0 }),
   useDeviceLayout: () => device.layout,
 }));
@@ -145,6 +151,8 @@ beforeEach(() => {
   common.isQueuedNote.mockReturnValue(false);
   common.newNoteId.mockReset();
   common.newNoteId.mockReturnValue('minted-note-id');
+  common.requestConnectionRefresh.mockReset();
+  common.connection = null;
 });
 
 describe('NotePage — offline capture', () => {
@@ -167,7 +175,13 @@ describe('NotePage — offline capture', () => {
         {
           request: {
             query: CREATE_NOTE,
-            variables: { input: { content: '<p>Grocery list</p>', title: 'Grocery list' } },
+            variables: {
+              input: {
+                id: GlobalUID.encode('note', 'minted-note-id'),
+                content: '<p>Grocery list</p>',
+                title: 'Grocery list',
+              },
+            },
           },
           error: new Error('appliance unreachable'),
         },
@@ -581,5 +595,441 @@ describe('NotePage — toolbar on a phone', () => {
     const words = container.querySelector('time')?.parentElement;
 
     expect(words).toHaveClass('sr-only', 'device:not-sr-only');
+  });
+});
+
+describe('NotePage — a failed save is sent again on its own', () => {
+  const noteGlobalId = GlobalUID.encode('note', 'abc-uuid');
+  const loadedAt = '2026-08-01T00:00:00.000Z';
+  const savedAt = '2026-08-01T00:05:00.000Z';
+  const typed = '<p>Trip ideas in May</p>';
+  const input = { id: noteGlobalId, content: typed, title: 'Trip ideas in May' };
+
+  const loadedNote = {
+    request: { query: GET_NOTE, variables: { id: noteGlobalId } },
+    result: {
+      data: {
+        note: {
+          __typename: 'NoteType',
+          id: noteGlobalId,
+          title: 'Trip ideas',
+          content: '<p>Trip ideas</p>',
+          updatedAt: loadedAt,
+        },
+      },
+    },
+  };
+
+  // What the Hub's gateway answers while Memory is stopped.
+  const gatewayError = () => new Error('502 Bad Gateway');
+
+  const typedSaveFails = {
+    request: { query: UPDATE_NOTE, variables: { input } },
+    error: gatewayError(),
+  };
+
+  // A retry holds an edit typed before the failure, so it says which version it may replace.
+  function retried(expectedUpdatedAt: string, outcome: Pick<MockedResponse, 'error' | 'result' | 'delay'>) {
+    return {
+      request: { query: UPDATE_NOTE, variables: { input: { ...input, expectedUpdatedAt } } },
+      ...outcome,
+    };
+  }
+
+  function answer(success: boolean, content: string, updatedAt: string) {
+    return vi.fn(() => ({
+      data: {
+        updateNote: {
+          __typename: 'UpdateNotePayload',
+          success,
+          note: { __typename: 'NoteType', id: noteGlobalId, title: 'Trip ideas', content, updatedAt },
+        },
+      },
+    }));
+  }
+
+  // Last in the list: any UpdateNote nobody expected lands here.
+  function unexpected() {
+    const sent = vi.fn(() => true);
+
+    return {
+      sent,
+      mock: {
+        request: { query: UPDATE_NOTE },
+        variableMatcher: sent,
+        maxUsageCount: 99,
+        result: { data: { updateNote: { __typename: 'UpdateNotePayload', success: true, note: null } } },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    // A browser: no offline queue to fall back on.
+    common.captureNote.mockImplementation(async (record: unknown) => ({
+      status: 'unavailable',
+      record,
+      message: 'no offline queue here',
+    }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  async function typeAndFail(text = typed) {
+    await screen.findByTestId('chat-menu');
+    type(text);
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await waitFor(() => expect(common.captureNote).toHaveBeenCalled());
+  }
+
+  it('sends it again after 2 s, then 4 s, with nothing typed, and shows it saved once it lands', async () => {
+    const landed = answer(true, typed, savedAt);
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        loadedNote,
+        typedSaveFails,
+        retried(loadedAt, { error: gatewayError() }),
+        retried(loadedAt, { result: landed }),
+      ],
+    });
+
+    await typeAndFail();
+
+    // Not the old "Not saved — your Companion is unreachable": it is being taken care of.
+    expect(await screen.findByText('Not saved yet.')).toHaveTextContent(
+      "Not saved yet. Your Companion isn't answering.",
+    );
+    expect(common.requestConnectionRefresh).toHaveBeenCalled();
+
+    await advance(2000);
+    // The first retry failed too, so the next wait is twice as long.
+    await advance(2000);
+    expect(landed).not.toHaveBeenCalled();
+
+    await advance(2000);
+    await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
+    expect(document.querySelector('time')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['the browser is back online', () => window.dispatchEvent(new Event('online'))],
+    ['the window gets focus again', () => window.dispatchEvent(new Event('focus'))],
+    ['the tab is shown again', () => document.dispatchEvent(new Event('visibilitychange'))],
+  ])('sends it again at once when %s', async (_when, fire) => {
+    const landed = answer(true, typed, savedAt);
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, retried(loadedAt, { result: landed })],
+    });
+
+    await typeAndFail();
+    await screen.findByText('Not saved yet.');
+
+    act(fire);
+
+    await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
+  });
+
+  it('sends it again at once when the connection check finds Memory again', async () => {
+    const landed = answer(true, typed, savedAt);
+
+    common.connection = { mode: 'fresh' };
+
+    const view = renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, retried(loadedAt, { result: landed })],
+    });
+
+    await typeAndFail();
+    await screen.findByText('Not saved yet.');
+
+    common.connection = { mode: 'connected' };
+    view.rerender(<NotePage />);
+
+    await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
+  });
+
+  it('never has two saves out at once: a retry still waiting for an answer is not sent again', async () => {
+    const extra = unexpected();
+    // Matched by this, not by its variables, so the one retry that goes out is counted.
+    const hangs = vi.fn((variables: Record<string, unknown>) => {
+      return (variables.input as { expectedUpdatedAt?: string }).expectedUpdatedAt === loadedAt;
+    });
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        loadedNote,
+        typedSaveFails,
+        { request: { query: UPDATE_NOTE }, variableMatcher: hangs, delay: Infinity, result: {} },
+        extra.mock,
+      ],
+    });
+
+    await typeAndFail();
+    await advance(2000);
+    await waitFor(() => expect(hangs).toHaveReturnedWith(true));
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await advance(60_000);
+
+    expect(extra.sent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a save the offline queue took to the queue, so it is not sent twice', async () => {
+    const extra = unexpected();
+
+    common.captureNote.mockImplementation(async (record: { captured_at: string }) => ({
+      status: 'queued',
+      record,
+      id: 'row-9',
+    }));
+    common.connection = { mode: 'local' };
+
+    const view = renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, extra.mock],
+    });
+
+    await typeAndFail();
+    expect(await screen.findByText('Saved offline')).toBeInTheDocument();
+
+    common.connection = { mode: 'connected' };
+    view.rerender(<NotePage />);
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await advance(60_000);
+
+    expect(extra.sent).not.toHaveBeenCalled();
+  });
+
+  it('does not write over a version saved somewhere else meanwhile, and says so', async () => {
+    const extra = unexpected();
+    const refused = answer(false, '<p>Trip ideas, edited on the phone</p>', savedAt);
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, retried(loadedAt, { result: refused }), extra.mock],
+    });
+
+    await typeAndFail();
+    await advance(2000);
+
+    await waitFor(() => expect(refused).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Not saved.')).toHaveTextContent(
+      'Not saved. This note was changed somewhere else. Copy your text, then reload.',
+    );
+
+    // Nothing more goes out from this page, retried or typed.
+    await advance(60_000);
+    type('<p>Trip ideas in May and June</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+
+    expect(extra.sent).not.toHaveBeenCalled();
+  });
+
+  it("tells its own late save from someone else's and sends the newest text over it", async () => {
+    const newer = '<p>Trip ideas in May and June</p>';
+    // The first save's text, landed late after the gateway had given up on it.
+    const lateAt = '2026-08-01T00:01:00.000Z';
+    const ownLateSave = answer(false, typed, lateAt);
+    const landed = answer(true, newer, savedAt);
+    const newerInput = { id: noteGlobalId, content: newer, title: 'Trip ideas in May and June' };
+    const guardedTypedSave = vi.fn(() => ({ errors: [{ message: '502 Bad Gateway' }] }));
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [
+        loadedNote,
+        typedSaveFails,
+        // Typed while the first save waits to go again, so it holds that edit too and is guarded.
+        {
+          request: {
+            query: UPDATE_NOTE,
+            variables: { input: { ...newerInput, expectedUpdatedAt: loadedAt } },
+          },
+          result: guardedTypedSave,
+        },
+        {
+          request: {
+            query: UPDATE_NOTE,
+            variables: { input: { ...newerInput, expectedUpdatedAt: loadedAt } },
+          },
+          result: ownLateSave,
+        },
+        {
+          request: { query: UPDATE_NOTE, variables: { input: { ...newerInput, expectedUpdatedAt: lateAt } } },
+          result: landed,
+        },
+      ],
+    });
+
+    await typeAndFail();
+    type(newer);
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await waitFor(() => expect(common.captureNote).toHaveBeenCalledTimes(2));
+
+    await advance(4000);
+
+    await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
+    expect(guardedTypedSave).toHaveBeenCalledTimes(1);
+    expect(ownLateSave).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
+  });
+
+  it('stops sending it again once Memory says the note is gone, and says that instead', async () => {
+    const extra = unexpected();
+    const gone = vi.fn(() => ({
+      data: { updateNote: { __typename: 'UpdateNotePayload', success: false, note: null } },
+    }));
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, retried(loadedAt, { result: gone }), extra.mock],
+    });
+
+    await typeAndFail();
+    await advance(2000);
+
+    await waitFor(() => expect(gone).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Not saved. This note is no longer in your Memory.')).toBeInTheDocument();
+    expect(screen.queryByText('Not saved yet.')).not.toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    await advance(60_000);
+
+    expect(extra.sent).not.toHaveBeenCalled();
+  });
+
+  it('stops sending it again when Memory turns the save down, as an older Memory would the guard', async () => {
+    const extra = unexpected();
+    // What Apollo's HTTP link throws for a 400: GraphQL validation, here an unknown field.
+    const badRequest = Object.assign(new Error('Response not successful: Received status code 400'), {
+      statusCode: 400,
+    });
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [loadedNote, typedSaveFails, retried(loadedAt, { error: badRequest }), extra.mock],
+    });
+
+    await typeAndFail();
+    await advance(2000);
+
+    expect(await screen.findByText('Not saved. Memory turned this save down (400).')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await advance(60_000);
+
+    expect(extra.sent).not.toHaveBeenCalled();
+  });
+
+  it('does not create a new note that was emptied while its failed first save waited', async () => {
+    const draftInput = {
+      id: GlobalUID.encode('note', 'minted-note-id'),
+      content: '<p>Grocery list</p>',
+      title: 'Grocery list',
+    };
+    const createdAnyway = vi.fn(() => true);
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/new',
+      path: '/notes/:id',
+      mocks: [
+        { request: { query: CREATE_NOTE, variables: { input: draftInput } }, error: gatewayError() },
+        {
+          request: { query: CREATE_NOTE },
+          variableMatcher: createdAnyway,
+          maxUsageCount: 99,
+          result: { data: { createNote: { __typename: 'CreateNotePayload', success: false, note: null } } },
+        },
+      ],
+    });
+
+    await waitFor(() => expect(editorState.onUpdate).toBeDefined());
+    type('<p>Grocery list</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await screen.findByText('Not saved yet.');
+
+    type('<p></p>');
+    await advance(60_000);
+
+    expect(createdAnyway).not.toHaveBeenCalled();
+    expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
+  });
+
+  it('creates a new note whose first save failed under the same id when it tries again', async () => {
+    const draftInput = {
+      id: GlobalUID.encode('note', 'minted-note-id'),
+      content: '<p>Grocery list</p>',
+      title: 'Grocery list',
+    };
+    const created = vi.fn(() => ({
+      data: {
+        createNote: {
+          __typename: 'CreateNotePayload',
+          success: true,
+          note: {
+            __typename: 'NoteType',
+            id: draftInput.id,
+            title: 'Grocery list',
+            content: '<p>Grocery list</p>',
+            updatedAt: savedAt,
+          },
+        },
+      },
+    }));
+
+    renderWithProviders(<NotePage />, {
+      route: '/notes/new',
+      path: '/notes/:id',
+      mocks: [
+        { request: { query: CREATE_NOTE, variables: { input: draftInput } }, error: gatewayError() },
+        { request: { query: CREATE_NOTE, variables: { input: draftInput } }, result: created },
+      ],
+    });
+
+    await waitFor(() => expect(editorState.onUpdate).toBeDefined());
+    type('<p>Grocery list</p>');
+    await advance(AUTOSAVE_THROTTLE_MS + 50);
+    await waitFor(() => expect(common.captureNote).toHaveBeenCalledTimes(1));
+
+    await advance(2000);
+
+    await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
+    expect(common.newNoteId).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith('/notes/minted-note-id', { replace: true });
   });
 });

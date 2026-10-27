@@ -4020,6 +4020,7 @@ input UpdateKnownPlaceInput {
 
 input UpdateNoteInput {
   content: String
+  expectedUpdatedAt: DateTime
   id: String!
   title: String
 }

@@ -90,6 +90,23 @@ export class NoteResolver {
 
     const id = GlobalUID.parse('note', input.id);
 
+    if (input.expectedUpdatedAt) {
+      const outcome = await this.noteService.updateIfUnchanged(
+        serviceContext,
+        id,
+        { title: input.title, content: input.content },
+        input.expectedUpdatedAt,
+      );
+
+      if (outcome == null) {
+        return { success: false };
+      }
+
+      // Not written: the note changed since the client saw it. The note as stored goes
+      // back with `success: false`, so the client can tell whether the change was its own.
+      return { success: outcome.written, note: NoteType.toType(outcome.note) };
+    }
+
     const entity = await this.noteService.update(serviceContext, id, {
       title: input.title,
       content: input.content,
