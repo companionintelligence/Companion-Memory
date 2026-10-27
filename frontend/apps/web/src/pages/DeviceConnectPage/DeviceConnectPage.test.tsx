@@ -159,11 +159,10 @@ vi.mock('./oidc', async (importOriginal) => {
 });
 
 beforeEach(() => {
-  // The splash mark lazily imports a 1.9 MB Lottie animation unless reduced
-  // motion is on, and `lottie-web` throws when it evaluates under jsdom (no
-  // canvas context). That surfaced as an unhandled error landing on whichever
-  // test happened to be running; the static SVG is the deterministic path — the
-  // same stub DesktopSignInPage.test.tsx uses for the same reason.
+  // jsdom has no `matchMedia`, and `Reveal` reads it to decide whether to
+  // stagger the copy. Reduced motion is the deterministic path: no entrance
+  // animation classes, nothing timing-dependent — the same stub
+  // DesktopSignInPage.test.tsx uses for the same reason.
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion'),
     media: query,

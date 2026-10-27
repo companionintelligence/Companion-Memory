@@ -1,19 +1,23 @@
 import type { ReactNode } from 'react';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import brainMarkSvg from '@/assets/companion-memory-brain.svg';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ThemeToggle } from '@/components/ThemePicker';
 
-// lottie-web is ~300 KB of player that only splash surfaces use, so it travels
-// with the animation it plays rather than in the chunk every page pays for.
-const Lottie = lazy(() => import('lottie-react'));
-
 export const SPLASH_MARK_SIZE =
   'aspect-square w-[min(88vw,34rem)] md:w-[min(44vw,40rem)] lg:w-[min(48vw,48rem)]';
 /** Compact enough on a phone that Log in sits on-screen under the wordmark. */
 export const CONNECT_MARK_SIZE = 'aspect-square w-[min(72vw,20rem)]';
-const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(30,207,224,0.45)]';
+/** The mark's own teal (#00a9a7), as a soft halo — the logo's "glow". */
+const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(0,169,167,0.5)]';
+/**
+ * A single fade-and-scale entrance. `motion-safe:` makes it CSS-level, so
+ * `prefers-reduced-motion` gets the still mark with no animation class doing
+ * anything, and nothing has to wait on a player or a chunk to arrive.
+ */
+const MARK_ENTRANCE =
+  'motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:fill-mode-backwards motion-safe:duration-1000';
 
 function usePrefersReducedMotion() {
   return useMemo(
@@ -23,59 +27,22 @@ function usePrefersReducedMotion() {
 }
 
 /**
- * The Companion Memory mark: the app icon's own node graph, traced off the icon
- * artwork itself, so the animation and the static fallback are the same drawing.
- * `prefers-reduced-motion` gets the SVG, which matches the animation's settled state.
+ * The Companion Memory mark: a solid teal brain, white node network and dark
+ * "M" — the same drawing as the app icons and the store listing. It is a static
+ * vector with a CSS entrance; there is no animated version of this mark, so
+ * there is no player to load and nothing for the hero to flash on while one
+ * streams in.
+ *
+ * The halo is on a wrapper, not on the image. The entrance utility sets its own
+ * `filter` on whatever it animates, which would replace a `drop-shadow` on the
+ * image for the whole second of the entrance and then snap the glow back on.
+ * Filtering the wrapper instead lets the glow fade in with the mark.
  */
 export function BrainMark({ sizeClass = SPLASH_MARK_SIZE }: { sizeClass?: string }) {
-  const reducedMotion = usePrefersReducedMotion();
-  const [animationData, setAnimationData] = useState<object | null>(null);
-
-  // Loaded on demand rather than imported at the top of the file. Statically
-  // imported, the 1.9 MB animation lands in the app's main chunk: every user
-  // downloads it before the app can boot, and it pushed that chunk to 5.27 MB —
-  // past vite-plugin-pwa's 2 MiB precache ceiling, which fails the production
-  // build outright. As its own chunk it is fetched after first paint and only
-  // by the surface that shows it.
-  useEffect(() => {
-    if (reducedMotion) {
-      return;
-    }
-
-    let cancelled = false;
-
-    import('@/assets/companion-memory-brain.lottie.json')
-      .then((module) => {
-        if (!cancelled) {
-          setAnimationData(module.default);
-        }
-      })
-      // The mark is decoration; if its chunk fails to load the hero should
-      // still render its copy and its call to action.
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [reducedMotion]);
-
-  if (reducedMotion) {
-    return <img src={brainMarkSvg} alt="" className={`${sizeClass} ${MARK_GLOW}`} />;
-  }
-
-  // Nothing stands in for the animation while its chunk arrives. The loop opens
-  // and closes on black by design, so an empty box IS its first frame — a poster
-  // here would show the settled drawing and then cut back to black.
-  if (!animationData) {
-    return <div className={sizeClass} aria-hidden="true" />;
-  }
-
-  // One continuous loop that opens and closes on black, so it just repeats — no
-  // intro/idle segment handoff, because starting from nothing is the point.
   return (
-    <Suspense fallback={<div className={sizeClass} aria-hidden="true" />}>
-      <Lottie animationData={animationData} loop autoplay className={`${sizeClass} ${MARK_GLOW}`} />
-    </Suspense>
+    <div className={`${sizeClass} ${MARK_GLOW}`}>
+      <img src={brainMarkSvg} alt="" className={`size-full ${MARK_ENTRANCE}`} />
+    </div>
   );
 }
 

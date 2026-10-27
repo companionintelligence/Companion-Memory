@@ -43,9 +43,10 @@ function RailMark({
 }) {
   return (
     <>
-      {/* Full-size mark on a disc. The disc is near-black, not white: the mark's
-          glows fall off to transparent and are drawn to sit on the splash's
-          black, so a white disc washes the node graph out to nothing. */}
+      {/* Full-size mark on a disc. The disc is the mark's ground, and it is
+          near-black rather than the capsule's light glass: the logo is drawn to
+          sit on dark navy, where the teal brain and its white node network
+          carry their contrast. */}
       <span
         className={cn(
           'grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral-950',
@@ -104,9 +105,10 @@ export function PowerRailToggle() {
   const { t } = useTranslation();
   const { expanded, pinned, toggle } = usePowerRail();
   const label = expanded ? t('NAV_RAIL_COLLAPSE') : t('NAV_RAIL_EXPAND');
-  // The mark animates only while the user is on it. A 32px loop running behind
-  // every screen is motion the chrome never asked for; on hover it reads as the
-  // control answering. Focus counts too, so keyboard users get the same answer.
+  // The mark animates only while the user is on it. A 32px entrance replaying
+  // behind every screen is motion the chrome never asked for; on hover it reads
+  // as the control answering. Focus counts too, so keyboard users get the same
+  // answer.
   const [active, setActive] = useState(false);
 
   return (

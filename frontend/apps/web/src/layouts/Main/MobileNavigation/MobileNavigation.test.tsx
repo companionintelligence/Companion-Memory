@@ -211,9 +211,9 @@ describe('MobileNavigation', () => {
     expect(within(wordmark).getByText('Memory')).toHaveAttribute('aria-hidden', 'false');
     expect(within(wordmark).queryByText('Companion Memory')).toBeNull();
     // The Companion Memory mark, not the old raster logo.png: the drawer, the
-    // splash hero and the app icons are one drawing now. Under jsdom this is
-    // the static SVG — `CompanionMark` only reaches for the Lottie player when
-    // something asks it to animate, which the drawer never does.
+    // splash hero and the app icons are one drawing now — the static solid-teal
+    // SVG, which `CompanionMark` always renders (`animated` only adds a CSS
+    // entrance, which the drawer never asks for).
     expect(wordmark.querySelector('img[src*="companion-memory-brain"]')).not.toBeNull();
     // Same inset as Capture / Planning — without it the 32px disc sat on the
     // pane edge while every row below had px-2 + a 2px active border.

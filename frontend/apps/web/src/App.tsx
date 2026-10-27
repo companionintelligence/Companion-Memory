@@ -302,7 +302,7 @@ function AppRoutes() {
         />
 
         {/* Full-bleed splash on sign-in; the picker centers itself. Do not wrap
-            this in CenteredLayout — that card column is what hid the Lottie. */}
+            this in CenteredLayout — that card column is what hid the hero mark. */}
         <Route path="/device-connect" element={<DeviceConnectPage />} />
 
         <Route element={<CenteredLayout />}>
