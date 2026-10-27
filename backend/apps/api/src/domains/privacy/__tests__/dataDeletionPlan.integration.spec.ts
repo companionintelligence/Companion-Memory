@@ -143,4 +143,67 @@ describeWithDatabase(`data-deletion plans, against real Postgres (${availability
 
     expect(purged.filter((table) => !removed.has(table) && !notInPlan.has(table))).toEqual([]);
   });
+
+  it('leaves no column naming the account behind: each is removed, nulled, handled by the service, or exempt', async () => {
+    // Independently of the purge's discovery, which reads only `user_id` and
+    // `owner_user_id`: every uuid column whose name says it holds an account id.
+    // `ci.ask_audit.asker_user_id` is what that discovery missed.
+    const columns = await scratch.dataSource.query<
+      Array<{ table: string; column: string; action: string | null }>
+    >(
+      `SELECT ns.nspname || '.' || c.relname AS table, a.attname AS column,
+              (SELECT k.confdeltype::text FROM pg_constraint k
+                WHERE k.contype = 'f' AND k.conrelid = c.oid AND k.confrelid = 'ci.users'::regclass
+                  AND k.conkey = ARRAY[a.attnum]) AS action
+         FROM pg_attribute a
+         JOIN pg_class c      ON c.oid = a.attrelid AND c.relkind IN ('r', 'p')
+         JOIN pg_namespace ns ON ns.oid = c.relnamespace
+        WHERE a.atttypid = 'uuid'::regtype
+          AND NOT a.attisdropped
+          AND (a.attname ~ '(^|_)user_id$' OR a.attname ~ '_by$' OR a.attname = 'is_private_to')
+          AND ns.nspname NOT LIKE ALL (ARRAY['pg\\_%', 'information\\_schema', '\\_timescaledb%', 'timescaledb\\_%', 'pipeline\\_scratch'])`,
+    );
+    const edges = await readFkEdges(scratch.dataSource);
+
+    const removed = new Set(['ci.users', ...USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`)]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const edge of edges) {
+        const child = `${edge.childSchema}.${edge.childTable}`;
+        if (
+          edge.deleteAction === 'c' &&
+          !removed.has(child) &&
+          removed.has(`${edge.parentSchema}.${edge.parentTable}`)
+        ) {
+          removed.add(child);
+          grew = true;
+        }
+      }
+    }
+
+    // Columns DataDeletionService takes the account out of itself.
+    const handledByService = new Set([
+      // removeFromAskAudit: the other party's record, kept without this account.
+      'ci.ask_audit.asker_user_id',
+      'ci.ask_audit.responder_user_id',
+      // Nulled before the account row goes, or its NO ACTION key refuses it.
+      'ci.users.created_by',
+    ]);
+    // The record that the deletion happened, kept on purpose: ids and counts only.
+    const exempt = new Set([
+      'ci.data_deletion_audit.subject_user_id',
+      'ci.data_deletion_audit.requested_by_user_id',
+      'ci.account_purges.user_id',
+    ]);
+
+    const left = columns
+      .filter((c) => !removed.has(c.table))
+      // ON DELETE SET NULL / SET DEFAULT: Postgres detaches the row itself.
+      .filter((c) => c.action !== 'n' && c.action !== 'd')
+      .map((c) => `${c.table}.${c.column}`)
+      .filter((ref) => !handledByService.has(ref) && !exempt.has(ref));
+
+    expect(columns.length).toBeGreaterThan(80);
+    expect(left).toEqual([]);
+  });
 });

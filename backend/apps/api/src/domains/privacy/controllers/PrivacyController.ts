@@ -106,10 +106,11 @@ export class PrivacyController {
     // Before anything is purged: the appliance's last administrator does not leave the other
     // people on it without one, whichever route deletes the account (`DELETE /account` applies
     // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
-    // The purge runs while the handover's transaction is open, and the account row and the audit
-    // go through that transaction: the caller's account goes exactly when the successor becomes
-    // administrator, or neither happens. The revocations and the table purge commit as they go,
-    // so a failure can leave those done and the account still there, to be asked again.
+    // The purge runs while the handover's transaction is open, and every row it deletes, the
+    // account row and the audit go through that transaction: the caller's account and all of its
+    // data go exactly when the successor becomes administrator, or none of it does. Only the OAuth
+    // revocations happen outside it, first; a failure leaves the account whole and audited as
+    // failed, to be asked again.
     let result: AccountDeletionResult;
 
     try {
@@ -132,6 +133,7 @@ export class PrivacyController {
       userDeleted: result.userDeleted,
       totalDeleted: result.totalDeleted,
       deletedCounts: result.deletedCounts,
+      detachedCounts: result.detachedCounts,
       deletedObjects: result.deletedObjects,
       connectionsRevoked: result.revocations.filter((r) => r.tokenRevoked).length,
       connectionsProcessed: result.revocations.length,

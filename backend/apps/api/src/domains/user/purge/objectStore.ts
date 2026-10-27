@@ -62,18 +62,60 @@ export async function deleteSoleOwnedObjects(
   let deleted = 0;
 
   for (;;) {
-    const page = (await executor.query(SOLE_OWNED_OBJECTS_SQL, [userId, pageSize, offset])) as Array<{
-      bucket: string;
-      key: string;
-    }>;
+    const page = await readSoleOwnedPage(executor, userId, pageSize, offset);
 
     if (page.length === 0) {
       return deleted;
     }
 
+    deleted += await deleteStoredObjects(store, page);
+    offset += page.length;
+  }
+}
+
+/** A stored object: where the bytes behind a `ci.files` row live. */
+export interface StoredObject {
+  bucket: string;
+  key: string;
+}
+
+/**
+ * The objects {@link deleteSoleOwnedObjects} would delete, read without
+ * deleting any. For a caller that deletes the rows first, in a transaction, and
+ * the bytes only once nothing can roll those rows back: it has to read the keys
+ * while the rows that name them are still there.
+ */
+export async function listSoleOwnedObjects(
+  executor: SqlExecutor,
+  userId: string,
+  pageSize: number,
+): Promise<StoredObject[]> {
+  const objects: StoredObject[] = [];
+
+  for (;;) {
+    const page = await readSoleOwnedPage(executor, userId, pageSize, objects.length);
+
+    if (page.length === 0) {
+      return objects;
+    }
+
+    objects.push(...page);
+  }
+}
+
+/** Delete these objects, one `deleteObjects` call per bucket per page, and return how many went. */
+export async function deleteStoredObjects(
+  store: PurgeObjectStore,
+  objects: readonly StoredObject[],
+  pageSize = objects.length,
+): Promise<number> {
+  const size = Math.max(pageSize, 1);
+  let deleted = 0;
+
+  for (let start = 0; start < objects.length; start += size) {
     const byBucket = new Map<string, string[]>();
 
-    for (const object of page) {
+    for (const object of objects.slice(start, start + size)) {
       const keys = byBucket.get(object.bucket);
 
       if (keys) {
@@ -87,7 +129,16 @@ export async function deleteSoleOwnedObjects(
       await store.deleteObjects(bucket, keys);
       deleted += keys.length;
     }
-
-    offset += page.length;
   }
+
+  return deleted;
+}
+
+async function readSoleOwnedPage(
+  executor: SqlExecutor,
+  userId: string,
+  pageSize: number,
+  offset: number,
+): Promise<StoredObject[]> {
+  return (await executor.query(SOLE_OWNED_OBJECTS_SQL, [userId, pageSize, offset])) as StoredObject[];
 }

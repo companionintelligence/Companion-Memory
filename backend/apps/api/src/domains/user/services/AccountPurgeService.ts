@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
 import config from '@ci/configuration';
 
+import { type AskAuditRemoval, removeFromAskAudit } from '../purge/askAudit';
 import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
 import { expandToPhysicalTables, readFkEdges, readUserRefColumns } from '../purge/purgeCatalog';
 import { buildPurgePlan } from '../purge/purgePlan';
@@ -237,6 +238,19 @@ export class AccountPurgeService {
         // loses the pointer and strands the bytes forever.
         deletedObjects = await this.purgeObjects(runner, userId);
 
+        // Not in the plan: ci.ask_audit names the account in columns the catalog
+        // walk does not read, and is the other party's record as much as this
+        // one's, so the account is taken out of it rather than its rows purged.
+        const askAudit = await this.purgeAskAudit(runner, userId);
+
+        if (askAudit.deleted > 0) {
+          deletedRows['ci.ask_audit'] = askAudit.deleted;
+        }
+
+        if (askAudit.detached > 0) {
+          detachedRows['ci.ask_audit'] = askAudit.detached;
+        }
+
         for (const step of plan.steps) {
           const affected = await this.executeStep(runner, step, userId);
 
@@ -397,6 +411,15 @@ export class AccountPurgeService {
     const rows = (await runner.query(sql, parameters)) as Array<{ count: number | string }>;
 
     return Number(rows[0]?.count ?? 0);
+  }
+
+  /** {@link removeFromAskAudit}, on a deployment that has the table. */
+  private async purgeAskAudit(runner: QueryRunner, userId: string): Promise<AskAuditRemoval> {
+    const [{ present }] = (await runner.query(
+      `SELECT (to_regclass('ci.ask_audit') IS NOT NULL) AS present`,
+    )) as Array<{ present: boolean }>;
+
+    return present ? removeFromAskAudit(runner, userId) : { deleted: 0, detached: 0 };
   }
 
   /** Delete the account's objects from the object store ({@link deleteSoleOwnedObjects}). */

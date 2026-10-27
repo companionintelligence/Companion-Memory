@@ -31,16 +31,84 @@ interface Row {
   /** ci.files rows: where the bytes are stored. */
   bucket?: string;
   key?: string;
+  /** ci.users rows: the account that created this one. */
+  createdBy?: string;
+  /** ci.ask_audit rows: the two parties, and what the row holds of each. */
+  asker?: string | null;
+  responder?: string | null;
+  prompt?: string;
+  disclosed?: string[];
 }
 
-function makeDataSource(initial: Record<string, Row[]>) {
+function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: string[] } = {}) {
   const store: Record<string, Row[]> = {};
   for (const [key, rows] of Object.entries(initial)) {
     store[key] = rows.map((r) => ({ ...r }));
   }
 
-  const query = jest.fn(async (sql: string, params: unknown[] = []) => {
+  const run = async (sql: string, params: unknown[] = []): Promise<unknown> => {
     const value = params[0] as string;
+
+    // Which of the tables the account delete touches exist here.
+    if (sql.includes('to_regclass(name)')) {
+      return (params[0] as string[])
+        .filter((name) => !(opts.missingTables ?? []).includes(name))
+        .map((name) => ({ name }));
+    }
+
+    // removeFromAskAudit: rows no other account is a party to go; on the others
+    // the account's side is cleared.
+    if (sql.includes('ci.ask_audit')) {
+      const rows = store['ci.ask_audit'] ?? [];
+      const mine = (id: string | null | undefined) => id == null || id === value;
+      const kept = rows.filter((r) => !(mine(r.asker) && mine(r.responder)));
+      let detached = 0;
+      for (const r of kept) {
+        if (r.asker === value) {
+          r.asker = null;
+          r.prompt = '';
+          detached += 1;
+        } else if (r.responder === value) {
+          r.responder = null;
+          r.disclosed = [];
+          detached += 1;
+        }
+      }
+
+      store['ci.ask_audit'] = kept;
+
+      return [{ deleted: rows.length - kept.length, detached }];
+    }
+
+    // UPDATE ci.users SET created_by = NULL WHERE created_by = $1
+    if (sql.includes('SET "created_by" = NULL')) {
+      let count = 0;
+      for (const r of store['ci.users'] ?? []) {
+        if (r.createdBy === value) {
+          delete r.createdBy;
+          count += 1;
+        }
+      }
+
+      return [[], count];
+    }
+
+    // The user row cannot go while another account names it as its creator,
+    // as the NO ACTION foreign key refuses it.
+    if (
+      sql.includes('DELETE FROM "ci"."users"') &&
+      (store['ci.users'] ?? []).some((r) => r.createdBy === value)
+    ) {
+      throw Object.assign(new Error('violates foreign key constraint "users_created_by_fkey"'), {
+        code: '23503',
+      });
+    }
+
+    // A table set up to refuse its delete, as a trigger raising would.
+    const refused = /DELETE FROM "(\w+)"\."(\w+)"/.exec(sql);
+    if (refused && failingDeletes.has(`${refused[1]}.${refused[2]}`)) {
+      throw new Error(`delete refused on ${refused[1]}.${refused[2]}`);
+    }
 
     // The objects only this user's file rows point at, a page at a time:
     // ORDER BY bucket, key LIMIT $2 OFFSET $3.
@@ -172,15 +240,50 @@ function makeDataSource(initial: Record<string, Row[]>) {
     }
 
     return [[], 0];
-  });
+  };
+
+  const query = jest.fn(run);
 
   // A transaction runs its statements through the same query(), so their order
-  // stays visible in query.mock.calls.
-  const transaction = jest.fn(async (work: (manager: { query: typeof query }) => Promise<unknown>) =>
-    work({ query }),
-  );
+  // stays visible in query.mock.calls, and puts every row back when it throws.
+  // Audit rows, whichever way they were written.
+  const audits: Array<Record<string, unknown>> = [];
+  const manager = {
+    query,
+    save: async (record: Record<string, unknown>) => {
+      audits.push(record);
 
-  return { dataSource: { query, transaction } as never, store, query, transaction };
+      return record;
+    },
+  };
+  const transaction = jest.fn(async (work: (m: typeof manager) => Promise<unknown>) => {
+    const snapshot = structuredClone(store);
+    const auditCount = audits.length;
+    try {
+      return await work(manager);
+    } catch (error) {
+      for (const key of Object.keys(store)) {
+        delete store[key];
+      }
+
+      Object.assign(store, snapshot);
+      audits.length = auditCount;
+      throw error;
+    }
+  });
+
+  /** Tables whose DELETE throws. */
+  const failingDeletes = new Set<string>();
+
+  return {
+    dataSource: { query, transaction } as never,
+    store,
+    run,
+    query,
+    transaction,
+    audits,
+    failingDeletes,
+  };
 }
 
 /** A fake OAuth2 client whose revoke() we can assert on. */
@@ -235,8 +338,12 @@ function makeService(opts: {
   };
   /** The object store behind ci.files. Wired by default; null leaves it out. */
   objectStore?: { deleteObjects: jest.Mock } | null;
+  /** Tables this deployment does not have. */
+  missingTables?: string[];
 }) {
-  const { dataSource, store, query, transaction } = makeDataSource(opts.store);
+  const { dataSource, store, run, query, transaction, audits, failingDeletes } = makeDataSource(opts.store, {
+    missingTables: opts.missingTables,
+  });
 
   const connectionRepository = {
     findOne: jest.fn(async ({ where }: { where: { id: string; userId: string } }) => {
@@ -262,7 +369,7 @@ function makeService(opts: {
     ),
   };
 
-  const savedAudits: Array<Record<string, unknown>> = [];
+  const savedAudits = audits;
   const auditRepository = {
     create: jest.fn((data: Record<string, unknown>) => data),
     save: jest.fn(async (data: Record<string, unknown>) => {
@@ -322,8 +429,10 @@ function makeService(opts: {
     objectStore,
     logger,
     store,
+    run,
     query,
     transaction,
+    failingDeletes,
     savedAudits,
     connectionRepository,
     clientFactory,
@@ -569,7 +678,7 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(result.deletedCounts).toMatchObject({ 'ci.entities': 1 });
   });
 
-  it("deletes the stored bytes of the user's files before the rows, and keeps an object another account shares", async () => {
+  it("deletes the stored bytes of the user's files after the rows, and keeps an object another account shares", async () => {
     const { service, store, query, objectStore } = makeService({
       connections: [],
       store: {
@@ -600,19 +709,23 @@ describe('DataDeletionService.deleteAccount', () => {
       { user: 'user-2', bucket: 'companion', key: 'theirs' },
     ]);
 
-    // The keys are read while the rows that name them still exist.
+    // The keys are read while the rows that name them still exist, and the
+    // bytes go only once every row has: nothing after them can roll back.
     const statements = query.mock.calls.map(([sql]) => sql as string);
     const read = statements.findIndex((sql) => sql.includes('SELECT DISTINCT f.bucket'));
-    const rows = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."files"'));
+    const userRow = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."users"'));
     expect(read).toBeGreaterThanOrEqual(0);
-    expect(read).toBeLessThan(rows);
+    expect(read).toBeLessThan(statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."files"')));
+    expect(objectStore!.deleteObjects.mock.invocationCallOrder[0]).toBeGreaterThan(
+      query.mock.invocationCallOrder[userRow],
+    );
   });
 
-  it('stops before deleting any row when the object store refuses', async () => {
+  it('rolls every row back when the object store refuses, and records the failure', async () => {
     const deleteObjects = jest.fn(async () => {
       throw new Error('object store down');
     });
-    const { service, store } = makeService({
+    const { service, store, savedAudits } = makeService({
       connections: [],
       store: {
         'ci.users': [{ user: 'user-1' }],
@@ -624,9 +737,105 @@ describe('DataDeletionService.deleteAccount', () => {
 
     await expect(service.deleteAccount({ userId: 'user-1' })).rejects.toThrow('object store down');
 
+    expect(deleteObjects).toHaveBeenCalledTimes(1);
     expect(store['ci.files']).toHaveLength(1);
     expect(store['ci.notes']).toHaveLength(1);
     expect(store['ci.users']).toHaveLength(1);
+    expect(savedAudits).toEqual([
+      expect.objectContaining({
+        scope: 'account',
+        status: 'failed',
+        error: 'object store down',
+        totalDeleted: 0,
+      }),
+    ]);
+  });
+
+  it('rolls back every table already purged when a later table refuses its delete', async () => {
+    const { service, store, failingDeletes, savedAudits, objectStore, cleanOrphans } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2', createdBy: 'user-1' }],
+        'ci.entities': [{ user: 'user-1' }, { user: 'user-1' }, { user: 'user-1' }],
+        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
+        'ci.notes': [{ user: 'user-1' }],
+        'ci.saved_searches': [{ user: 'user-1' }, { user: 'user-1' }],
+        'ci.ask_audit': [{ asker: 'user-1', responder: 'user-2', prompt: 'where was I?' }],
+      },
+    });
+    const before = structuredClone(store);
+    // As a BEFORE DELETE trigger that raises would.
+    failingDeletes.add('ci.notes');
+
+    await expect(service.deleteAccount({ userId: 'user-1' })).rejects.toThrow('delete refused on ci.notes');
+
+    // ci.entities went before ci.notes; it is back, with everything else.
+    expect(store).toEqual(before);
+    expect(objectStore!.deleteObjects).not.toHaveBeenCalled();
+    expect(cleanOrphans).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([expect.objectContaining({ status: 'failed' })]);
+
+    // Asked again once the cause is gone, it completes.
+    failingDeletes.clear();
+    const result = await service.deleteAccount({ userId: 'user-1' });
+    expect(result.userDeleted).toBe(true);
+    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
+  });
+
+  it('nulls created_by on the accounts this one created, so its own row can go', async () => {
+    const { service, store } = makeService({
+      connections: [],
+      store: { 'ci.users': [{ user: 'user-1' }, { user: 'user-2', createdBy: 'user-1' }] },
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(result.userDeleted).toBe(true);
+    expect(result.detachedCounts).toMatchObject({ 'ci.users': 1 });
+    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
+  });
+
+  it('takes the account out of ci.ask_audit: its own rows go, the other party keeps theirs without it', async () => {
+    const { service, store } = makeService({
+      connections: [],
+      store: {
+        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.ask_audit': [
+          { id: 'asked-2', asker: 'user-1', responder: 'user-2', prompt: 'where was I?', disclosed: ['e2'] },
+          { id: 'answered-2', asker: 'user-2', responder: 'user-1', prompt: 'lunch?', disclosed: ['e1'] },
+          { id: 'to-peer', asker: 'user-1', responder: null, prompt: 'hi peer' },
+          { id: 'from-peer', asker: null, responder: 'user-1', prompt: 'hi', disclosed: ['e1'] },
+          { id: 'theirs', asker: 'user-2', responder: 'user-3', prompt: 'unrelated', disclosed: ['e3'] },
+        ],
+      },
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(store['ci.ask_audit']).toEqual([
+      { id: 'asked-2', asker: null, responder: 'user-2', prompt: '', disclosed: ['e2'] },
+      { id: 'answered-2', asker: 'user-2', responder: null, prompt: 'lunch?', disclosed: [] },
+      { id: 'theirs', asker: 'user-2', responder: 'user-3', prompt: 'unrelated', disclosed: ['e3'] },
+    ]);
+    expect(result.deletedCounts).toMatchObject({ 'ci.ask_audit': 2 });
+    expect(result.detachedCounts).toMatchObject({ 'ci.ask_audit': 2 });
+  });
+
+  it('skips a table this deployment does not have without issuing a statement that would abort the transaction', async () => {
+    const { service, query } = makeService({
+      connections: [],
+      store: { 'ci.users': [{ user: 'user-1' }] },
+      missingTables: ['hbpe.token_stream', 'ci.summaries', 'ci.ask_audit'],
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    const statements = query.mock.calls.map(([sql]) => sql as string);
+    expect(result.userDeleted).toBe(true);
+    expect(statements.filter((sql) => sql.includes('"hbpe"."token_stream"'))).toEqual([]);
+    // Goes through ci.summaries, which is missing too.
+    expect(statements.filter((sql) => sql.includes('"hbpe"."summary_l1_label"'))).toEqual([]);
+    expect(statements.filter((sql) => sql.includes('ci.ask_audit'))).toEqual([]);
   });
 
   it('stops waiting on a provider that never answers a revocation and goes on with the purge', async () => {
@@ -667,10 +876,10 @@ describe('DataDeletionService.deleteAccount', () => {
     }
   });
 
-  it('gives up on an object store that never answers, before deleting any row', async () => {
+  it('gives up on an object store that never answers, and rolls every row back', async () => {
     jest.useFakeTimers();
     try {
-      const { service, store } = makeService({
+      const { service, store, savedAudits } = makeService({
         connections: [],
         store: {
           'ci.users': [{ user: 'user-1' }],
@@ -688,6 +897,7 @@ describe('DataDeletionService.deleteAccount', () => {
       expect(store['ci.files']).toHaveLength(1);
       expect(store['ci.notes']).toHaveLength(1);
       expect(store['ci.users']).toHaveLength(1);
+      expect(savedAudits).toEqual([expect.objectContaining({ status: 'failed' })]);
     } finally {
       jest.useRealTimers();
     }
@@ -728,35 +938,69 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(savedAudits[0]).toMatchObject({ scope: 'account', totalDeleted: 0 });
   });
 
-  it("inside a caller's transaction: the user row and the audit go through it, and the sweep is left to the caller", async () => {
-    const { service, store, query, savedAudits, cleanOrphans } = makeService({
+  it("inside a caller's transaction: every statement and the audit go through it, and the sweep is left to the caller", async () => {
+    const {
+      service,
+      store,
+      run,
+      query,
+      transaction: ownTransaction,
+      savedAudits,
+      cleanOrphans,
+    } = makeService({
       connections: [],
       store: {
         'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+        'ci.entities': [{ user: 'user-1' }],
         'ci.notes': [{ user: 'user-1' }],
       },
     });
     const transaction = {
-      query: jest.fn(async () => [[], 1]),
+      query: jest.fn(run),
       save: jest.fn(async (record: Record<string, unknown>) => record),
     };
 
     const result = await service.deleteAccount({ userId: 'user-1' }, { transaction: transaction as never });
 
-    expect(transaction.query).toHaveBeenCalledTimes(1);
+    // Nothing on the service's own connections, and no transaction of its own:
+    // the rows commit or roll back with the caller's.
+    expect(query).not.toHaveBeenCalled();
+    expect(ownTransaction).not.toHaveBeenCalled();
     expect(transaction.query).toHaveBeenCalledWith('DELETE FROM "ci"."users" WHERE "id" = $1', ['user-1']);
-    // The account row only through the transaction. (Clearing its entity
-    // pointer runs on the service's own connection, before the person goes.)
-    expect(query).not.toHaveBeenCalledWith(
-      expect.stringContaining('DELETE FROM "ci"."users"'),
-      expect.anything(),
-    );
-    // The data itself still went on the service's own connections.
+    expect(transaction.query).toHaveBeenCalledWith('DELETE FROM "ci"."notes" WHERE "user_id" = $1', [
+      'user-1',
+    ]);
     expect(store['ci.notes']).toEqual([]);
+    expect(store['ci.entities']).toEqual([]);
     expect(result.userDeleted).toBe(true);
     expect(transaction.save).toHaveBeenCalledWith(expect.objectContaining({ scope: 'account' }));
     expect(savedAudits).toEqual([]);
     expect(cleanOrphans).not.toHaveBeenCalled();
+  });
+
+  it("inside a caller's transaction: a failure is audited on its own connection and rethrown for the caller to roll back", async () => {
+    const { service, run, failingDeletes, savedAudits } = makeService({
+      connections: [],
+      store: { 'ci.users': [{ user: 'user-1' }], 'ci.notes': [{ user: 'user-1' }] },
+    });
+    failingDeletes.add('ci.notes');
+    const transaction = {
+      query: jest.fn(run),
+      save: jest.fn(async (record: Record<string, unknown>) => record),
+    };
+
+    await expect(
+      service.deleteAccount({ userId: 'user-1' }, { transaction: transaction as never }),
+    ).rejects.toThrow('delete refused on ci.notes');
+
+    expect(transaction.save).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([
+      expect.objectContaining({
+        subjectUserId: 'user-1',
+        status: 'failed',
+        error: 'delete refused on ci.notes',
+      }),
+    ]);
   });
 
   it('deletes children before parents (content before events, graph before nulling)', () => {

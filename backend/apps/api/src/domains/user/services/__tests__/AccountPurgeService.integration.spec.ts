@@ -68,6 +68,9 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
   const victimFile = randomUUID();
   /** ci.files.key is a uuid, not a path. */
   const victimObjectKey = randomUUID();
+  /** ci.ask_audit rows the victim asked: of the bystander, and of a peer. */
+  const askedBystander = randomUUID();
+  const askedPeer = randomUUID();
 
   const query = async <T>(sql: string, parameters?: unknown[]): Promise<T[]> =>
     (await scratch.dataSource.query(sql, parameters)) as T[];
@@ -245,6 +248,20 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       [victim],
     );
 
+    // ── Ask disclosure records, which no foreign key and no user_id reach ──
+    // One the bystander answered for the victim (kept, without the victim's
+    // question), one only the victim and a peer were party to (deleted).
+    for (const [id, asker, responder, peer] of [
+      [askedBystander, victim, bystander, null],
+      [askedPeer, victim, null, randomUUID()],
+    ] as const) {
+      await query(
+        `INSERT INTO ci.ask_audit (id, asker_user_id, responder_user_id, peer_link_id, query, outcome, disclosed_entities)
+         VALUES ($1, $2, $3, $4, $5, 'answered', '["bystander-entity"]')`,
+        [id, asker, responder, peer, JSON.stringify({ queryType: 'retrieval', prompt: 'where was Alice?' })],
+      );
+    }
+
     // ── Deletion requested, grace period already over ──────────────────────
     await query(
       `UPDATE ci.users SET deleted_at = NOW() - INTERVAL '31 days', purge_after = NOW() - INTERVAL '1 day'
@@ -333,6 +350,26 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       ]);
 
       expect(remaining).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    });
+
+    it('takes the account out of the ask records the bystander keeps, and deletes its own', async () => {
+      const rows = await query<{
+        id: string;
+        asker_user_id: string | null;
+        query: unknown;
+        disclosed_entities: unknown;
+      }>(`SELECT id, asker_user_id, query, disclosed_entities FROM ci.ask_audit WHERE id = ANY($1::uuid[])`, [
+        [askedBystander, askedPeer],
+      ]);
+
+      expect(rows).toEqual([
+        {
+          id: askedBystander,
+          asker_user_id: null,
+          query: { queryType: 'retrieval', prompt: '' },
+          disclosed_entities: ['bystander-entity'],
+        },
+      ]);
     });
 
     it('empties a hypertable across all of its chunks', async () => {
@@ -430,6 +467,9 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       expect(record.detached_rows['ci.outbound_settings']).toBe(1);
       expect(record.detached_rows['ci.job_settings']).toBe(1);
       expect(record.deleted_rows['ci.outbound_settings']).toBeUndefined();
+      // The ask record the bystander keeps, and the one only the victim had.
+      expect(record.detached_rows['ci.ask_audit']).toBe(1);
+      expect(record.deleted_rows['ci.ask_audit']).toBe(1);
     });
   });
 

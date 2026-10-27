@@ -15,7 +15,14 @@ import {
   type Connection,
 } from '@ci/domains/connections';
 import { OrphanCleanupService } from '@ci/domains/search-ingress';
-import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '@ci/domains/user';
+import {
+  deleteStoredObjects,
+  listSoleOwnedObjects,
+  PURGE_OBJECT_STORE,
+  removeFromAskAudit,
+  type PurgeObjectStore,
+  type StoredObject,
+} from '@ci/domains/user';
 
 import {
   CONNECTION_SCOPED_TABLES,
@@ -73,6 +80,12 @@ export interface AccountDeletionResult {
   revocations: Array<{ connectionId: string; providerId: string | null; tokenRevoked: boolean }>;
   /** Per-table row counts purged across every user-owned table. */
   deletedCounts: Record<string, number>;
+  /**
+   * Rows of other accounts that named this one and were kept with that reference
+   * removed: `ci.ask_audit` rows another account is a party to, and
+   * `ci.users.created_by` of accounts this one created.
+   */
+  detachedCounts: Record<string, number>;
   totalDeleted: number;
   /** Stored file objects removed from the object store. */
   deletedObjects: number;
@@ -239,17 +252,25 @@ export class DataDeletionService {
   }
 
   /**
-   * Delete the whole account: revoke every connection grant, purge every
-   * user-owned table in FK-safe order, delete the user row, and clear the
-   * search-index footprint. Idempotent.
+   * Delete the whole account: revoke every connection grant, then, in ONE
+   * transaction, purge every user-owned table in FK-safe order, take the
+   * account out of the records it shares with other accounts, delete the user
+   * row and write the audit. The stored file objects go last, inside that
+   * transaction, so a failure anywhere before them rolls every row back and
+   * leaves the account whole, and nothing after them can bring the rows back
+   * without the bytes. Idempotent.
    *
-   * With `transaction`, the user row and the audit row are written through it,
-   * so they commit or roll back with whatever else the caller does there (the
-   * administrator handover). The revocations and the table purge still commit
-   * as they go. The search-index sweep is then the caller's to run, through
-   * {@link cleanupSearchIndex} once that transaction has committed: it reads
-   * the whole appliance's index and can take minutes, too long to hold the
-   * caller's locks for.
+   * A failure is recorded as a `failed` audit row (written outside the
+   * transaction that rolls back) and rethrown; deleting again is safe.
+   *
+   * With `transaction`, all of it goes through the caller's transaction, so it
+   * commits or rolls back with whatever else the caller does there (the
+   * administrator handover). Without one, the service opens its own. Only the
+   * revocations happen outside it, first, so access stops on the provider side
+   * even when the purge does not complete. The search-index sweep is then the
+   * caller's to run, through {@link cleanupSearchIndex} once that transaction
+   * has committed: it reads the whole appliance's index and can take minutes,
+   * too long to hold the caller's locks for.
    */
   async deleteAccount(
     context: UserServiceContext,
@@ -285,47 +306,128 @@ export class DataDeletionService {
       });
     }
 
-    // 2) The bytes of the account's files, before the rows that point at them,
-    // as the 30-day purge does: if the purge below stops part way, the rows are
-    // still there to find the keys again, while the other order would strand
-    // the bytes in the bucket for good.
-    const deletedObjects = await this.deleteFileObjects(userId);
+    // 2) Everything else, atomically.
+    let result: AccountDeletionResult;
 
-    // 3) Purge every user-owned table, children before parents.
+    try {
+      result = transaction
+        ? await this.purgeAccount(transaction, userId, revocations)
+        : await this.dataSource.transaction((manager) => this.purgeAccount(manager, userId, revocations));
+    } catch (error) {
+      await this.writeFailedAccountAudit(userId, revocations, error);
+
+      throw error;
+    }
+
+    // 3) Reap any search-index rows whose source rows we deleted.
+    if (transaction == null) {
+      await this.cleanupSearchIndex();
+    }
+
+    this.logger.log('Account deleted and all derived data purged', {
+      userId,
+      connectionsRevoked: revocations.length,
+      totalDeleted: result.totalDeleted,
+      detachedCounts: result.detachedCounts,
+      deletedObjects: result.deletedObjects,
+      userDeleted: result.userDeleted,
+    });
+
+    return result;
+  }
+
+  /** The database half of {@link deleteAccount}, every statement through `manager`. */
+  private async purgeAccount(
+    manager: EntityManager,
+    userId: string,
+    revocations: AccountDeletionResult['revocations'],
+  ): Promise<AccountDeletionResult> {
+    // One transaction now holds every delete, and TimescaleDB caps the tuples a
+    // TRANSACTION may decompress (100,000 by default), not a statement: a dense
+    // ci.position history in a compressed chunk would abort the whole delete.
+    // Lifted for this transaction only, as the 30-day purge and PlaceMergeService do.
+    await manager.query('SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
+
+    // A table in the plan may not exist in every deployment (the hbpe schema is
+    // only there when the prediction engine is installed). Asked up front: inside
+    // a transaction, a statement that fails on a missing table aborts the rest.
+    const present = await this.presentTables(manager);
+
+    // The keys of the account's stored objects, read while the rows that name
+    // them are still here. The bytes go only after every row has.
+    const objects = present.has('ci.files')
+      ? await listSoleOwnedObjects(manager, userId, OBJECT_PAGE_SIZE)
+      : [];
+
     const deletedCounts: Record<string, number> = {};
+    const detachedCounts: Record<string, number> = {};
 
     // Special-case: ci_search.entity_tag has no user_id; delete its rows that
     // reference this user's tags BEFORE we delete ci_search.tags.
-    const entityTagDeleted = await this.deleteEntityTagsForUser(userId);
-    if (entityTagDeleted > 0) {
-      deletedCounts['ci_search.entity_tag'] = entityTagDeleted;
+    if (present.has('ci_search.entity_tag') && present.has('ci_search.tags')) {
+      const entityTagDeleted = await this.deleteEntityTagsForUser(manager, userId);
+      if (entityTagDeleted > 0) {
+        deletedCounts['ci_search.entity_tag'] = entityTagDeleted;
+      }
     }
 
+    // 3) Purge every user-owned table, children before parents.
     for (const table of USER_OWNED_TABLES) {
+      if (!planTableNames(table).every((name) => present.has(name))) {
+        continue;
+      }
+
       // The user row points at the account's own "You" person, which this
       // deletes; see deleteEntitiesUnlinkingSelf.
       const count =
         table.schema === 'ci' && table.table === 'entities'
-          ? await this.deleteEntitiesUnlinkingSelf(userId)
-          : await this.deleteUserOwned(table, userId);
+          ? await this.deleteEntitiesUnlinkingSelf(manager, userId)
+          : await this.deleteUserOwned(manager, table, userId);
       if (count > 0) {
         deletedCounts[`${table.schema}.${table.table}`] = count;
       }
     }
 
-    // 4) Delete the user row itself. With every RESTRICT child already gone and
-    // the CASCADE children handled above, this now succeeds (previously it would
-    // fail on the first RESTRICT FK — the bug this feature fixes).
-    const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId, transaction);
+    // 4) The records this account shares with other accounts: it leaves them,
+    // and they stay theirs. ci.ask_audit (see removeFromAskAudit) has no foreign
+    // key, so nothing else would ever reach it.
+    if (present.has('ci.ask_audit')) {
+      const askAudit = await removeFromAskAudit(manager, userId);
+      if (askAudit.deleted > 0) {
+        deletedCounts['ci.ask_audit'] = askAudit.deleted;
+      }
+
+      if (askAudit.detached > 0) {
+        detachedCounts['ci.ask_audit'] = askAudit.detached;
+      }
+    }
+
+    // ci.users.created_by names the account that created another one, with no
+    // ON DELETE action: left set, the other account's row refuses this one's
+    // delete. Nulled, as the 30-day purge does; the other account stays.
+    const creditsCleared = affectedRows(
+      await manager.query(`UPDATE "ci"."users" SET "created_by" = NULL WHERE "created_by" = $1`, [userId]),
+    );
+    if (creditsCleared > 0) {
+      detachedCounts['ci.users'] = creditsCleared;
+    }
+
+    // 5) Delete the user row itself. With every RESTRICT child already gone and
+    // the CASCADE children handled above, this now succeeds.
+    const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId, manager);
     const userDeleted = userDeletedCount > 0;
     if (userDeletedCount > 0) {
       deletedCounts['ci.users'] = userDeletedCount;
     }
 
-    // 5) Reap any search-index rows whose source rows we deleted.
-    if (transaction == null) {
-      await this.cleanupSearchIndex();
-    }
+    // A deferred constraint would otherwise be checked at COMMIT, after the
+    // bytes below are gone; checked now, it rolls back with the bytes still there.
+    await manager.query('SET CONSTRAINTS ALL IMMEDIATE');
+
+    // 6) The bytes, last. A store that refuses or hangs fails the transaction
+    // and the account stays whole; what it already deleted is gone either way,
+    // which is why this waits until no statement can fail after it.
+    const deletedObjects = await this.deleteFileObjects(userId, objects, present);
 
     const totalDeleted = sumCounts(deletedCounts);
 
@@ -340,18 +442,76 @@ export class DataDeletionService {
         deletedCounts,
         totalDeleted,
       },
-      transaction,
+      manager,
     );
 
-    this.logger.log('Account deleted and all derived data purged', {
+    return {
       userId,
-      connectionsRevoked: revocations.length,
+      revocations,
+      deletedCounts,
+      detachedCounts,
       totalDeleted,
       deletedObjects,
       userDeleted,
-    });
+      auditId,
+    };
+  }
 
-    return { userId, revocations, deletedCounts, totalDeleted, deletedObjects, userDeleted, auditId };
+  /** Which of the tables the account delete touches exist in this deployment. */
+  private async presentTables(manager: EntityManager): Promise<Set<string>> {
+    const names = [
+      ...new Set([
+        ...USER_OWNED_TABLES.flatMap(planTableNames),
+        'ci_search.entity_tag',
+        'ci_search.tags',
+        'ci.files',
+        'ci.ask_audit',
+      ]),
+    ];
+    const rows = (await manager.query(
+      `SELECT name FROM unnest($1::text[]) AS name WHERE to_regclass(name) IS NOT NULL`,
+      [names],
+    )) as Array<{ name: string }>;
+
+    return new Set(rows.map((row) => row.name));
+  }
+
+  /**
+   * The audit row of a delete that did not complete. Written on a connection of
+   * its own: the transaction the delete ran in is rolling back. Best-effort, so
+   * it never hides the failure it records.
+   */
+  private async writeFailedAccountAudit(
+    userId: string,
+    revocations: AccountDeletionResult['revocations'],
+    error: unknown,
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+
+    this.logger.error('Account deletion failed and was rolled back', { userId, error: message });
+
+    try {
+      await this.auditRepository.save(
+        this.auditRepository.create({
+          id: uuidv7(),
+          subjectUserId: userId,
+          requestedByUserId: userId,
+          scope: 'account',
+          connectionId: null,
+          providerId: null,
+          tokenRevoked: revocations.some((r) => r.tokenRevoked),
+          deletedCounts: {},
+          totalDeleted: 0,
+          status: 'failed',
+          error: message,
+        }),
+      );
+    } catch (auditError) {
+      this.logger.error('Could not record the failed account deletion', {
+        userId,
+        error: auditError instanceof Error ? auditError.message : 'Unknown error',
+      });
+    }
   }
 
   /**
@@ -655,24 +815,16 @@ export class DataDeletionService {
     return affectedRows(result);
   }
 
-  private async deleteUserOwned(table: UserOwnedTable, userId: string): Promise<number> {
-    try {
-      if (table.through) {
-        return await this.deleteThroughParent(table, table.through, userId);
-      }
-
-      return await this.deleteWhere(table.schema, table.table, table.userColumn, userId);
-    } catch (error) {
-      // A table in the plan may not exist in every deployment (e.g. the hbpe
-      // schema is only present when the prediction engine is installed). Treat a
-      // missing relation as "nothing to delete" rather than failing the whole
-      // account deletion; re-throw anything else.
-      if (isUndefinedTableError(error)) {
-        return 0;
-      }
-
-      throw error;
+  private async deleteUserOwned(
+    manager: EntityManager,
+    table: UserOwnedTable,
+    userId: string,
+  ): Promise<number> {
+    if (table.through) {
+      return this.deleteThroughParent(manager, table, table.through, userId);
     }
+
+    return this.deleteWhere(table.schema, table.table, table.userColumn, userId, manager);
   }
 
   /**
@@ -698,13 +850,14 @@ export class DataDeletionService {
 
   /** Delete the rows of a table with no user column, through the parent rows the user owns. */
   private async deleteThroughParent(
+    manager: EntityManager,
     table: UserOwnedTable,
     through: NonNullable<UserOwnedTable['through']>,
     userId: string,
   ): Promise<number> {
     // Every identifier comes from the trusted internal deletion plan (never
     // request input); the user id is a bound parameter.
-    const result = await this.dataSource.query(
+    const result = await manager.query(
       `DELETE FROM "${table.schema}"."${table.table}" t
         USING "${through.parentSchema}"."${through.parentTable}" p
         WHERE t."${through.column}" = p."${through.parentKey}"
@@ -717,65 +870,54 @@ export class DataDeletionService {
 
   /**
    * Remove from the object store the bytes of every file only this account
-   * points at. File rows are deduplicated on content, so an object another
-   * account's row also names stays: deleting it would lose that account's file.
+   * points at ({@link listSoleOwnedObjects}, read before the rows went). File
+   * rows are deduplicated on content, so an object another account's row also
+   * names stays: deleting it would lose that account's file.
    */
-  private async deleteFileObjects(userId: string): Promise<number> {
-    try {
-      if (!this.objectStore) {
-        const [{ count }] = (await this.dataSource.query(
-          `SELECT count(*)::int AS count FROM "ci"."files" WHERE user_id = $1 AND key IS NOT NULL`,
-          [userId],
-        )) as Array<{ count: number }>;
-
-        if (count > 0) {
-          this.logger.warn('No object store wired into account deletion; stored file objects will remain', {
-            userId,
-            objects: count,
-          });
-        }
-
-        return 0;
-      }
-
-      // Nothing in the database is touched yet, so giving up here leaves the
-      // account whole apart from any objects already gone; deleting again is safe.
-      return await withDeadline(
-        deleteSoleOwnedObjects(this.dataSource, this.objectStore, userId, OBJECT_PAGE_SIZE),
-        OBJECT_DELETE_DEADLINE_MS,
-      );
-    } catch (error) {
-      // Same tolerance as the table purge: a deployment without ci.files has no objects.
-      if (isUndefinedTableError(error)) {
-        return 0;
-      }
-
-      throw error;
+  private async deleteFileObjects(
+    userId: string,
+    objects: readonly StoredObject[],
+    present: ReadonlySet<string>,
+  ): Promise<number> {
+    if (objects.length === 0 || !present.has('ci.files')) {
+      return 0;
     }
+
+    if (!this.objectStore) {
+      this.logger.warn('No object store wired into account deletion; stored file objects will remain', {
+        userId,
+        objects: objects.length,
+      });
+
+      return 0;
+    }
+
+    return withDeadline(
+      deleteStoredObjects(this.objectStore, objects, OBJECT_PAGE_SIZE),
+      OBJECT_DELETE_DEADLINE_MS,
+    );
   }
 
   /**
    * ci.entities, once the user row no longer points into it. `ci.users.entity_id`
    * names the account's own "You" person with no cascade, so the pointer has to
-   * be cleared first or the delete is refused. Both statements share one
-   * transaction: the UPDATE holds the user row's lock until the delete commits,
+   * be cleared first or the delete is refused. Both statements run in the account
+   * delete's transaction: the UPDATE holds the user row's lock until it commits,
    * so a graph ingest still running for this account (`ensureSelfEntity` sets the
    * pointer whenever it finds it NULL) waits instead of re-linking it in between
    * and failing the delete after most of the account is already gone.
    */
-  private async deleteEntitiesUnlinkingSelf(userId: string): Promise<number> {
-    return this.dataSource.transaction(async (manager) => {
-      await manager.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
+  private async deleteEntitiesUnlinkingSelf(manager: EntityManager, userId: string): Promise<number> {
+    await manager.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
 
-      const result = await manager.query(`DELETE FROM "ci"."entities" WHERE "owner_user_id" = $1`, [userId]);
+    const result = await manager.query(`DELETE FROM "ci"."entities" WHERE "owner_user_id" = $1`, [userId]);
 
-      return affectedRows(result);
-    });
+    return affectedRows(result);
   }
 
   /** Delete ci_search.entity_tag rows referencing this user's tags. */
-  private async deleteEntityTagsForUser(userId: string): Promise<number> {
-    const result = await this.dataSource.query(
+  private async deleteEntityTagsForUser(manager: EntityManager, userId: string): Promise<number> {
+    const result = await manager.query(
       `DELETE FROM "ci_search"."entity_tag" et
         USING "ci_search"."tags" t
         WHERE et.tag_id = t.id
@@ -836,6 +978,13 @@ export class DataDeletionService {
   }
 }
 
+/** Every table a plan entry's delete reads: its own, and the parent it goes through. */
+function planTableNames(table: UserOwnedTable): string[] {
+  const own = `${table.schema}.${table.table}`;
+
+  return table.through ? [own, `${table.through.parentSchema}.${table.through.parentTable}`] : [own];
+}
+
 /** Sum the values of a per-table count map. */
 function sumCounts(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, n) => sum + n, 0);
@@ -863,11 +1012,4 @@ function withDeadline<T>(work: Promise<T>, ms: number, what = 'The object store'
       timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms / 1000} s`)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
-}
-
-/** True for Postgres error 42P01 (undefined_table) / 3F000 (invalid_schema). */
-function isUndefinedTableError(error: unknown): boolean {
-  const code = (error as { code?: string } | null)?.code;
-
-  return code === '42P01' || code === '3F000';
 }

@@ -189,6 +189,14 @@ And the residue, which they must not paper over:
   user created another account, or changed a shared graph node, that row survives
   with a `NULL` where the reference was. It no longer identifies anyone; the row is
   not theirs to delete. Counted in `detached_rows`.
+- **Ask disclosure records another account is a party to are kept, without this
+  account in them.** `ci.ask_audit` has no foreign key on purpose: it is the other
+  party's record of what was asked of them and what they disclosed. Both the 30-day
+  purge and the immediate `POST /users/me/delete` take the account out of it
+  (`purge/askAudit.ts`): its id goes; where it asked, its prompt text, filters and
+  declared actor go (the question's category stays); where it answered, its disclosed
+  and read entity ids and its grant id go. Rows no other account is a party to (asks
+  to or from a peer, or to itself) are deleted.
 - **`ci.account_purges` retains the account's uuid** indefinitely, as proof of
   deletion. A pseudonymous identifier and counts — no name, address or content.
 - **Backups are out of scope.** Nothing here reaches a snapshot taken before the

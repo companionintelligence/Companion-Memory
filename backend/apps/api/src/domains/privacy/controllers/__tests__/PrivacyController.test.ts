@@ -44,6 +44,7 @@ const RESULT: AccountDeletionResult = {
     { connectionId: 'c2', providerId: 'google', tokenRevoked: false },
   ],
   deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
+  detachedCounts: { 'ci.ask_audit': 1 },
   totalDeleted: 4,
   deletedObjects: 2,
   userDeleted: true,
@@ -70,6 +71,7 @@ describe('PrivacyController.deleteMyAccount', () => {
       userDeleted: true,
       totalDeleted: 4,
       deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
+      detachedCounts: { 'ci.ask_audit': 1 },
       deletedObjects: 2,
       connectionsRevoked: 1, // only c1 was actually revoked
       connectionsProcessed: 2,

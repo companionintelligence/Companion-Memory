@@ -76,7 +76,15 @@ export { UserService, AccountPurgeService };
 export { CLIENT_TIMEZONE_HEADER, ClientTimezoneInterceptor };
 
 // Account purge
-export { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from './purge/objectStore';
+export { removeFromAskAudit, type AskAuditRemoval } from './purge/askAudit';
+export {
+  deleteSoleOwnedObjects,
+  deleteStoredObjects,
+  listSoleOwnedObjects,
+  PURGE_OBJECT_STORE,
+  type PurgeObjectStore,
+  type StoredObject,
+} from './purge/objectStore';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';
 
