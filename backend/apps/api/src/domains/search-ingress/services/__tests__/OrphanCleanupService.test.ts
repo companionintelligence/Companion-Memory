@@ -298,11 +298,13 @@ describe('OrphanCleanupService.truncateSearchIndex', () => {
 
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(outsideQuery).not.toHaveBeenCalled();
-    expect(flat(managerQuery.mock.calls[0][0])).toBe('TRUNCATE TABLE "ci_search"."embeddings"');
-    // documents before vectors: TRUNCATE refuses a table another one references.
-    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."mobile_search_documents"');
-    expect(flat(managerQuery.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
-    expect(flat(managerQuery.mock.calls[3][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
+    // One statement naming every table. mobile_search_documents references vectors, and Postgres
+    // refuses to truncate vectors in a statement of its own whatever ran before it; this mock
+    // cannot show that, the scratch-database spec beside IngestResetService does.
+    expect(flat(managerQuery.mock.calls[0][0])).toBe(
+      'TRUNCATE TABLE "ci_search"."embeddings", "ci_search"."mobile_search_documents", ' +
+        '"ci_search"."vectors", "ci_search"."index_skips"',
+    );
     expect(result.truncated).toEqual([
       'ci_search.embeddings',
       'ci_search.mobile_search_documents',
