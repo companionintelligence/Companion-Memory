@@ -5,6 +5,8 @@ import { GlobalUID } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { useSearchParams } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
+import { toResolvedSavedSearch, useLocalSavedSearch } from '@/api/powersync/localSavedSearches';
 import { excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import type { GetSavedSearchQuery } from '@/graphql/graphql';
@@ -49,6 +51,30 @@ export const GET_SAVED_SEARCH = gql(`
 `);
 
 type ResolvedSavedSearch = NonNullable<GetSavedSearchQuery['savedSearch']>;
+
+/**
+ * One saved search by raw uuid, from wherever this platform keeps them: the phone's
+ * synced `saved_searches` table when a replica is bound (online or off, as with notes),
+ * the appliance's GraphQL otherwise. `null` while loading or when there is no such search.
+ */
+export function useSavedSearchById(rawId: string | null): ResolvedSavedSearch | null {
+  const replica = useReplicaDatabase();
+  const { data } = useQuery(GET_SAVED_SEARCH, {
+    variables: { id: GlobalUID.encode('saved-search', rawId ?? '') },
+    skip: !rawId || replica != null,
+  });
+  const { search: local } = useLocalSavedSearch(replica ? rawId : null);
+
+  if (!rawId) {
+    return null;
+  }
+
+  if (replica) {
+    return local ? (toResolvedSavedSearch(local) as ResolvedSavedSearch) : null;
+  }
+
+  return data?.savedSearch ?? null;
+}
 
 /**
  * Rewrites `params` to the explorer filters `savedSearch` defines, clearing
@@ -220,16 +246,13 @@ export function useSavedSearchResolution() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchId, setSearchId] = useState<string | null>(null);
 
-  const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
-    variables: { id: GlobalUID.encode('saved-search', searchId!) },
-    skip: !searchId,
-  });
+  const savedSearch = useSavedSearchById(searchId);
 
   useEffect(() => {
-    if (savedSearchData?.savedSearch) {
-      setSearchParams(applySavedSearchToParams(searchParams, savedSearchData.savedSearch));
+    if (savedSearch) {
+      setSearchParams(applySavedSearchToParams(searchParams, savedSearch));
     }
-  }, [searchId, savedSearchData]);
+  }, [searchId, savedSearch]);
 
   useEffect(() => {
     const savedSearchId = searchParams.get('saved_search') || '';

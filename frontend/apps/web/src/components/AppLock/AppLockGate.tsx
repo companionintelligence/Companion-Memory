@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from '
 
 import { isNativePlatform, lockScreenQueueNote, useOutboxQueue } from '@ci/common';
 
+import { usePendingUploadsByTable } from '@/api/powersync/pendingUploads';
 import { useAppLock } from '@/hooks/useAppLock';
 
 import { LockScreen } from './LockScreen';
@@ -13,8 +14,10 @@ import { LockScreen } from './LockScreen';
  * decides to lock, it only mirrors — and it never blocks sync: this sits INSIDE the
  * PowerSync and outbox providers, which stay mounted whatever it renders.
  *
- * It also feeds the native overlay its one line of context, the capture queue depth.
- * That something is waiting is not sensitive; what is waiting is, and stays hidden.
+ * It also feeds the native overlay its one line of context: what is waiting to sync, by
+ * kind -- position fixes from the capture outbox, notes and saved searches from PowerSync's
+ * upload queue. That something is waiting is not sensitive; what is waiting is, and stays
+ * hidden.
  *
  * Off native there is no lock and the children render as they are.
  */
@@ -56,10 +59,19 @@ class GateBoundary extends Component<{ children: ReactNode; fallback: ReactNode 
 function LockMirror({ children }: { children: ReactNode }) {
   const native = isNativePlatform();
   const [status, { unlock, setLockScreenNote }] = useAppLock();
-  const { pending } = useOutboxQueue();
+  const { pending, pendingByKind } = useOutboxQueue();
+  const uploads = usePendingUploadsByTable();
   const [busy, setBusy] = useState(false);
 
-  const note = lockScreenQueueNote(pending);
+  const locations = pendingByKind.positions ?? 0;
+  const outboxNotes = pendingByKind.note ?? 0;
+  const note = lockScreenQueueNote({
+    locations,
+    notes: outboxNotes + (uploads.notes ?? 0),
+    savedSearches: uploads.saved_searches ?? 0,
+    // Whatever else the outbox holds under a kind this note does not name.
+    other: Math.max(0, pending - locations - outboxNotes),
+  });
   const locked = native && status?.locked === true;
 
   useEffect(() => {

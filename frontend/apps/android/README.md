@@ -348,6 +348,26 @@ npx @capacitor/assets generate \
   --splashBackgroundColor '#ffffff' --splashBackgroundColorDark '#0b1418'
 ```
 
+**Two single-colour rasters are NOT produced by that command and survive it only if
+re-added.** Android tints a notification's small icon and (from Android 13) a themed
+launcher icon as a stencil: it reads the alpha channel and fills the shape with the bar's
+or the launcher's colour, so the multi-colour launcher icon cannot serve — on Samsung it
+showed as a filled blob that never matched the bar. Both come from the brand repo's
+`icons/svg/memory-mark-mono.svg` (`icon.memory-mark-mono`: the mark with the hub dials
+and halos removed and the M weighted up so it reads at 24 px), rasterised white on
+transparent with a headless Chrome at device scale 1:
+
+- `android/app/src/main/res/drawable-*/ic_stat_memory.png` — 24 dp (24/36/48/72/96 px),
+  the mark filling the box. Every notification the app posts uses it: the location
+  foreground service and the resume nudge (`@ci/capacitor-local-hub`), the model download
+  and the generation service (`@ci/capacitor-local-llm`). The plugins look it up by name
+  in the host app's resources (`NotificationIcons.kt` in each) rather than shipping it,
+  since it is the app's brand, and fall back to what they used before if a host has none.
+- `android/app/src/main/res/mipmap-*/ic_launcher_monochrome.png` — the 108 dp adaptive
+  layer (54–288 px) with the mark at 66 %, the safe zone, referenced by the `<monochrome>`
+  element in `mipmap-anydpi-v26/ic_launcher*.xml`. `@capacitor/assets generate` rewrites
+  those XML files without it: put the element back after regenerating.
+
 The current icon is the CI globe mark (rendered from
 `frontend/apps/web/public/logo.svg` at 1024px). Re-run after changing the artwork,
 then rebuild. (`assets/` is shared in shape with the iOS package but generated

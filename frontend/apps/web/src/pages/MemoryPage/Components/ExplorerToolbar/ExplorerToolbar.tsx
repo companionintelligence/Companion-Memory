@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation } from '@apollo/client';
 import { GlobalUID, useDeviceLayout } from '@ci/common';
 import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {
@@ -26,7 +26,14 @@ import {
   Image as ImageIcon,
 } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
+import { v7 as uuid7 } from 'uuid';
 
+import { useAnswersFromDevice, useReplicaDatabase } from '@/api/powersync/deviceFallback';
+import {
+  createLocalSavedSearch,
+  toResolvedSavedSearch,
+  updateLocalSavedSearch,
+} from '@/api/powersync/localSavedSearches';
 import { useFeatures } from '@/common/feature';
 import { MenuShield } from '@/components/MenuShield';
 import { ActivityFilter } from '@/components/SearchBox/ActivityFilter';
@@ -55,7 +62,7 @@ import { ShareSavedSearchModal } from '../../../SavedSearchesPage/ShareSavedSear
 import { AREAS_PARAM, LEGACY_BBOX_PARAM, readAreasParam } from '../../bbox';
 import { fileKindLabel } from '../../fileKinds';
 import { buildSavedSearchFilters } from '../../savedSearchFilters';
-import { GET_SAVED_SEARCH } from '../../useSavedSearchResolution';
+import { useSavedSearchById } from '../../useSavedSearchResolution';
 
 import {
   WHEN_PRESET_GRID,
@@ -1570,18 +1577,21 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
   const { toast } = useToast();
 
   // The saved search these filters were loaded from, when there is one: Save
-  // then offers to update it in place as well as to save a new one. The
-  // resolver that loaded it put the same query in the cache, so this is a
-  // cache read, not a round trip.
+  // then offers to update it in place as well as to save a new one. Online the
+  // resolver that loaded it put the same query in the cache, so this is a cache
+  // read, not a round trip; on a phone with a replica it is the phone's row.
   const loadedId = searchParams.get(LOADED_SEARCH_PARAM);
-  const { data: loadedData } = useQuery(GET_SAVED_SEARCH, {
-    variables: { id: GlobalUID.encode('saved-search', loadedId ?? '') },
-    skip: !loadedId,
-  });
-  const loaded = loadedId ? (loadedData?.savedSearch ?? null) : null;
-  // Sharing (the "make public" control) is gated while the access model is hardened.
+  const loaded = useSavedSearchById(loadedId);
+  // A phone with a replica saves into its own `saved_searches` table, online or
+  // off, and PowerSync carries the row up (localSavedSearches.ts); everywhere
+  // else the mutations below run.
+  const replica = useReplicaDatabase();
+  const answersFromDevice = useAnswersFromDevice();
+  // Sharing (the "make public" control) is gated while the access model is hardened,
+  // and needs the server to mint the link, so it is not offered while the phone is
+  // answering for itself.
   const { isFeatureEnabled } = useFeatures();
-  const sharingEnabled = isFeatureEnabled('shared.search');
+  const sharingEnabled = isFeatureEnabled('shared.search') && !answersFromDevice;
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -1627,6 +1637,49 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
     }
 
     const { query, tags, entityTypes, filters } = currentDefinition();
+
+    if (replica) {
+      try {
+        const id = uuid7();
+
+        await createLocalSavedSearch(replica, { id, name: trimmed, query, entityTypes, tags, filters });
+        toast.success(`Saved search “${trimmed}”`);
+        setName('');
+        setOpen(false);
+        setSearchParams(
+          (params) => {
+            params.set(LOADED_SEARCH_PARAM, id);
+
+            return params;
+          },
+          { replace: true },
+        );
+
+        if (share) {
+          setSavedSearchToShare(
+            toResolvedSavedSearch({
+              id,
+              name: trimmed,
+              description: null,
+              query: query ?? null,
+              entityTypes: [...entityTypes],
+              tags: [...tags],
+              filters: filters ?? null,
+              isPublic: false,
+              shareToken: null,
+              isSeed: false,
+              createdAt: null,
+              updatedAt: null,
+            }) as unknown as FragmentType<typeof SavedSearchGridItemFragment>,
+          );
+        }
+      } catch (error) {
+        console.warn('[memory] Could not save the search on this phone', error);
+        toast.error('Failed to save search');
+      }
+
+      return;
+    }
 
     try {
       const result = await createSavedSearch({
@@ -1682,6 +1735,28 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
     }
 
     const { query, tags, entityTypes, filters } = currentDefinition();
+
+    if (replica) {
+      try {
+        await updateLocalSavedSearch(replica, {
+          id: GlobalUID.parse('saved-search', loaded.id),
+          name: loaded.name ?? '',
+          description: loaded.description,
+          query: query ?? null,
+          entityTypes,
+          tags,
+          filters: filters ?? null,
+        });
+        toast.success(`Updated “${loaded.name}”`);
+        setName('');
+        setOpen(false);
+      } catch (error) {
+        console.warn('[memory] Could not update the search on this phone', error);
+        toast.error(`Failed to update “${loaded.name}”`);
+      }
+
+      return;
+    }
 
     try {
       const result = await updateSavedSearch({

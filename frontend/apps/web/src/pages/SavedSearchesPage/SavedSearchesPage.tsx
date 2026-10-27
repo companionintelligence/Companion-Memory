@@ -6,6 +6,7 @@ import { Button, Collapsible, Input } from '@ci/shadcn';
 import { ChevronRight, Plus, Search } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { SavedSearchIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -17,6 +18,7 @@ import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
 import { DeleteSavedSearchModal } from './DeleteSavedSearchModal';
 import { EditSavedSearchModal } from './EditSavedSearchModal';
+import { LocalSavedSearchesPage } from './LocalSavedSearchesPage';
 import { SavedSearchGridItemFragment, SavedSearch } from './SavedSearch';
 import { ShareSavedSearchModal } from './ShareSavedSearchModal';
 
@@ -44,7 +46,16 @@ const GET_SAVED_SEARCHES = gql(`
 
 type SavedSearchNode = FragmentType<typeof SavedSearchGridItemFragment>;
 
+/**
+ * On a phone with a synced replica the list is the phone's `saved_searches` table
+ * ({@link LocalSavedSearchesPage}), online or off, the way notes work; everywhere else the
+ * appliance's, through GraphQL ({@link RemoteSavedSearchesPage}).
+ */
 export function SavedSearchesPage() {
+  return useReplicaDatabase() ? <LocalSavedSearchesPage /> : <RemoteSavedSearchesPage />;
+}
+
+function RemoteSavedSearchesPage() {
   usePageTitle('Saved Searches - Companion Memory');
 
   const [searchParams, setSearchParams] = useSearchParams();

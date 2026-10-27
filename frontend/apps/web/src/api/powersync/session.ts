@@ -5,11 +5,11 @@ import { POWER_SYNC_DEFAULT_LOOKBACK_DAYS, setLookbackDays } from './workingSet'
 let database: AbstractPowerSyncDatabase | null = null;
 
 /**
- * Whether the bound database is the phone's synced, encrypted replica. The
- * browser binds its placeholder too (plaintext, never connected, wiped on
- * load — see PowerSyncProvider), and nothing offline must read from that:
- * it holds nothing, and a "Saved on this phone" answer from it would be a
- * lie. Set by the provider when the native replica takes over.
+ * Whether the bound database is the phone's synced, encrypted replica. Since
+ * 2026-10-26 nothing else is ever bound (the browser opens no database, and the
+ * plaintext placeholder a phone used to open while its replica loaded is gone),
+ * so this is true whenever a database is bound at all; the flag stays so a
+ * reader's intent — "answer from this phone?" — is explicit at the call site.
  */
 let boundIsReplica = false;
 

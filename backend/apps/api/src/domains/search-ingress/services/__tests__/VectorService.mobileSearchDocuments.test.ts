@@ -106,6 +106,19 @@ describe('buildVectorUpsertStatement', () => {
     expect(params[3]).toBe('Lunch?');
   });
 
+  it('indexing an event moves its place’s document to that visit, only forward', () => {
+    const { sql } = buildVectorUpsertStatement([{ text: 'Dinner', weight: 10 }], {
+      ...row,
+      entityType: 'event',
+    });
+
+    expect(sql).toMatch(
+      /place_visit AS \(\s+UPDATE ci_search\.mobile_search_documents d\s+SET occurred_at = e\.start_time/,
+    );
+    expect(sql).toContain("WHERE v.entity_type = 'event'");
+    expect(sql).toContain('AND (d.occurred_at IS NULL OR d.occurred_at < e.start_time)');
+  });
+
   it('a type outside the device list still gets its tsvector; the document half simply matches no row', () => {
     const { params } = buildVectorUpsertStatement([{ text: '37.7749,-122.4194', weight: 10 }], {
       ...row,

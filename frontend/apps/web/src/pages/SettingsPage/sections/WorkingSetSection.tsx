@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import { formatBytes, isNativePlatform } from '@ci/common';
 import { Button, Card, Dialog, Switch } from '@ci/shadcn';
 import { usePowerSync } from '@powersync/react';
+import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import {
   deleteAllPreviews,
@@ -12,7 +13,12 @@ import {
   subscribePreviewSync,
   type PreviewStoreStatus,
 } from '@/api/powersync/previews';
-import { clearPowerSyncWorkingSet, measurePowerSyncSizeBytes } from '@/api/powersync/session';
+import {
+  clearPowerSyncWorkingSet,
+  getReplicaOpenState,
+  measurePowerSyncSizeBytes,
+  subscribeReplicaOpenState,
+} from '@/api/powersync/session';
 import {
   POWER_SYNC_CACHE_BUDGET_BYTES,
   formatCacheBudget,
@@ -20,9 +26,9 @@ import {
 } from '@/api/powersync/workingSet';
 
 export function WorkingSetSection() {
-  // A browser keeps no copy at all (PowerSyncProvider wipes its plaintext
-  // IndexedDB database and never connects it), so there is no working set to
-  // show or clear there — only the fact that nothing is stored.
+  // A browser keeps no copy at all (PowerSyncProvider opens no database there),
+  // so there is no working set to show or clear — only the fact that nothing is
+  // stored.
   if (!isNativePlatform()) {
     return (
       <Card>
@@ -40,8 +46,34 @@ export function WorkingSetSection() {
   return <NativeWorkingSetSection />;
 }
 
+/**
+ * The context holds the encrypted replica once it is open and nothing before:
+ * while the file is still opening, and on a phone whose native adapter failed,
+ * there is no working set to measure or clear yet.
+ */
 function NativeWorkingSetSection() {
-  const database = usePowerSync();
+  const database = usePowerSync() as AbstractPowerSyncDatabase | null;
+  const openState = useSyncExternalStore(subscribeReplicaOpenState, getReplicaOpenState, getReplicaOpenState);
+
+  if (!database) {
+    return (
+      <Card>
+        <Card.Content className="space-y-1 pt-6">
+          <h3 className="text-sm font-medium">On-device working set</h3>
+          <p className="text-sm text-muted-foreground">
+            {openState.phase === 'failed'
+              ? 'This phone’s copy could not be opened, so nothing is stored here; everything comes from your Memory Server.'
+              : 'Opening this phone’s copy…'}
+          </p>
+        </Card.Content>
+      </Card>
+    );
+  }
+
+  return <OpenWorkingSetSection database={database} />;
+}
+
+function OpenWorkingSetSection({ database }: { database: AbstractPowerSyncDatabase }) {
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
   const [clearing, setClearing] = useState(false);
   const lookbackDays = getLookbackDays();
@@ -107,7 +139,7 @@ function NativeWorkingSetSection() {
           {clearing ? 'Clearing…' : 'Clear cache'}
         </Button>
 
-        <PreviewStoreSettings />
+        <PreviewStoreSettings database={database} />
       </Card.Content>
     </Card>
   );
@@ -118,8 +150,7 @@ function NativeWorkingSetSection() {
  * with the previews already here: keep them (and fetch no more) or delete them
  * too — or cancel. Turning it on resumes fetching.
  */
-function PreviewStoreSettings() {
-  const database = usePowerSync();
+function PreviewStoreSettings({ database }: { database: AbstractPowerSyncDatabase }) {
   const [enabled, setEnabled] = useState(() => isPreviewSyncEnabled());
   const [status, setStatus] = useState<PreviewStoreStatus | null>(null);
   const [measureFailed, setMeasureFailed] = useState(false);

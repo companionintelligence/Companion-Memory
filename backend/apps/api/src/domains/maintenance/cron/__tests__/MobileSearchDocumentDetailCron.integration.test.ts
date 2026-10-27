@@ -58,8 +58,9 @@ describeWithDb(`device records (${availability.target})`, () => {
       related_id: string | null;
       detail: Record<string, unknown> | null;
       detail_version: number;
+      occurred_at: Date | null;
     }> = await dataSource.query(
-      'SELECT related_id, detail, detail_version FROM ci_search.mobile_search_documents WHERE entity_id = $1',
+      'SELECT related_id, detail, detail_version, occurred_at FROM ci_search.mobile_search_documents WHERE entity_id = $1',
       [entityId],
     );
 
@@ -233,6 +234,50 @@ describeWithDb(`device records (${availability.target})`, () => {
     expect((await documentFor(placeId)).detail).toMatchObject({ lat: 33.6, lng: -117.9 });
   });
 
+  it('a place’s time is its latest visit, kept current as events at it are indexed; no visit, no time', async () => {
+    const placeId = uuidv7();
+    const firstVisit = uuidv7();
+    const laterVisit = uuidv7();
+    const earlierVisit = uuidv7();
+
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Location', $2, 'Harbour Grill')`,
+      [placeId, userId],
+    );
+    await index('place', placeId);
+    // Promoted but never visited: the promotion time is not a time the person would recognise.
+    expect((await documentFor(placeId)).occurred_at).toBeNull();
+
+    for (const [eventId, startTime] of [
+      [firstVisit, '2026-03-01T19:00:00Z'],
+      [laterVisit, '2026-09-14T12:30:00Z'],
+      [earlierVisit, '2025-12-24T18:00:00Z'],
+    ] as const) {
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Event', $2, 'Meal')`,
+        [eventId, userId],
+      );
+      await dataSource.query(
+        `INSERT INTO ci.events (event_id, user_id, event_type, start_time, source_system, location_entity_id)
+         VALUES ($1, $2, 'meal', $3, 'google_calendar', $4)`,
+        [eventId, userId, startTime, placeId],
+      );
+    }
+
+    // Indexing an event advances the place to that visit...
+    await index('event', firstVisit);
+    expect((await documentFor(placeId)).occurred_at).toEqual(new Date('2026-03-01T19:00:00Z'));
+    await index('event', laterVisit);
+    expect((await documentFor(placeId)).occurred_at).toEqual(new Date('2026-09-14T12:30:00Z'));
+    // ...and never back: an older visit indexed later (an import) leaves the latest in place.
+    await index('event', earlierVisit);
+    expect((await documentFor(placeId)).occurred_at).toEqual(new Date('2026-09-14T12:30:00Z'));
+
+    // Re-indexing the place itself agrees with the rule.
+    await index('place', placeId);
+    expect((await documentFor(placeId)).occurred_at).toEqual(new Date('2026-09-14T12:30:00Z'));
+  });
+
   it('a type with no display fields writes NULL detail rather than an empty object', async () => {
     const id = uuidv7();
 
@@ -253,9 +298,13 @@ describeWithDb(`device records (${availability.target})`, () => {
     const id = await communication(userId, { source: 'discord', thread: 'Old conversation' });
 
     await index('communication', id);
-    // A row from before the columns existed: version 0, nothing derived.
+    const before = await documentFor(id);
+    // A row from before the columns existed: version 0, nothing derived, and a time written
+    // under an older rule.
     await dataSource.query(
-      'UPDATE ci_search.mobile_search_documents SET related_id = NULL, detail = NULL, detail_version = 0 WHERE entity_id = $1',
+      `UPDATE ci_search.mobile_search_documents
+          SET related_id = NULL, detail = NULL, detail_version = 0, occurred_at = '2001-01-01T00:00:00Z'
+        WHERE entity_id = $1`,
       [id],
     );
 
@@ -266,6 +315,7 @@ describeWithDb(`device records (${availability.target})`, () => {
     expect(await documentFor(id)).toMatchObject({
       detail: { direction: 'inbound' },
       detail_version: DEVICE_RECORD_VERSION,
+      occurred_at: before.occurred_at,
     });
     expect((await documentFor(id)).related_id).not.toBeNull();
 

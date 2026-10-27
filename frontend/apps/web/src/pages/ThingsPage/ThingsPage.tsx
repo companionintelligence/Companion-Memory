@@ -6,6 +6,7 @@ import { AlertDialog, Badge, Button, Card, Input, Select, Sheet, Tabs } from '@c
 import { Filter, Merge, X } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { EntityGrid, ItemGridItem } from '@/components/entities';
 import { ErrorState } from '@/components/ErrorState';
@@ -26,6 +27,7 @@ import type {
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 import { namedChatContext } from '@/lib/agentChat';
 import { humanizeEnum } from '@/lib/utils';
+import { LocalTypeList } from '@/pages/MemoryPage/LocalListView/LocalTypeList';
 
 import { ObservationReview } from './ObservationReview';
 
@@ -499,7 +501,22 @@ function DuplicateGroupCard({
   );
 }
 
+/**
+ * The things page. While the Memory server does not answer and this phone holds a synced
+ * replica, the list comes from the phone (LocalTypeList); otherwise from the appliance,
+ * with the duplicate queue. See api/powersync/deviceFallback.ts.
+ */
 export function ThingsPage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? (
+    <LocalTypeList entityType="item" heading="Things" pageTitle="Things - Companion Memory" order="title" />
+  ) : (
+    <RemoteThingsPage />
+  );
+}
+
+function RemoteThingsPage() {
   usePageTitle('Things - Companion Memory');
 
   const { isMobile } = useDeviceLayout();

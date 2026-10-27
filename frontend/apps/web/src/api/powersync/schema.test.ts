@@ -20,15 +20,15 @@ describe('AppSchema', () => {
   });
 
   // One device record per entity (2026-10-21): the managed tables are the
-  // writable notes, the tags and the tag join; everything else the phone
-  // shows comes from the raw documents table below. `events`, `entities`,
+  // writable notes and saved searches (2026-10-26), the tags and the tag join;
+  // everything else the phone shows comes from the raw documents table below. `events`, `entities`,
   // `files`, `threads` and `messages` were synced and never read, and left
   // the sync rules and this schema together — one of them reappearing here
   // means the replica grew back by accident.
   it('declares exactly the managed tables sync-rules.yaml still sends, plus the local-only preview ledger', () => {
     const names = AppSchema.tables.map((t) => t.name).sort();
 
-    expect(names).toEqual(['attachments', 'entity_tag', 'notes', 'tags']);
+    expect(names).toEqual(['attachments', 'entity_tag', 'notes', 'saved_searches', 'tags']);
     expect(AppSchema.tables.find((t) => t.name === 'attachments')?.localOnly).toBe(true);
   });
 
@@ -36,6 +36,23 @@ describe('AppSchema', () => {
   // exactly (minus `id`, which every Table gets implicitly).
   it('notes matches the user_data bucket select', () => {
     expect(columnNames('notes').sort()).toEqual(['content', 'created_at', 'title', 'updated_at', 'user_id']);
+  });
+
+  it('saved_searches matches the user_data bucket select', () => {
+    expect(columnNames('saved_searches').sort()).toEqual([
+      'created_at',
+      'description',
+      'entity_types',
+      'filters',
+      'is_public',
+      'is_seed',
+      'name',
+      'query',
+      'share_token',
+      'tags',
+      'updated_at',
+      'user_id',
+    ]);
   });
 
   it('mobile_search_documents is a raw table whose put binds every column the device keeps', () => {

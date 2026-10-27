@@ -6,4 +6,10 @@
     <foreground>
         <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />
     </foreground>
+    <!-- Android 13+ themed icons: a single-colour stencil the launcher tints. Rasterised
+         from the brand repo's icons/svg/memory-mark-mono.svg at 66% of the layer, which
+         is the adaptive icon's safe zone, so no inset here. `npx @capacitor/assets
+         generate` does not know about this layer: re-add it if the launcher icons are
+         regenerated (README, "App icon"). -->
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

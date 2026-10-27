@@ -40,7 +40,7 @@ class LocalLlmGenerationService : Service() {
             NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Companion is thinking")
                 .setContentText("Generating an on-device reply")
-                .setSmallIcon(android.R.drawable.ic_menu_info_details)
+                .setSmallIcon(NotificationIcons.small(this, android.R.drawable.ic_menu_info_details))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build()

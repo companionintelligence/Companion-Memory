@@ -977,6 +977,7 @@ input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
   filters: SavedSearchFiltersInput
+  id: String
   name: String
   query: String
   tags: [String!]

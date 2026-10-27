@@ -1,16 +1,11 @@
 import { setApiBaseUrl } from '@ci/common';
-import { act, render, waitFor } from '@testing-library/react';
+import { usePowerSync } from '@powersync/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PowerSyncProvider } from './PowerSyncProvider';
 
 const mocks = vi.hoisted(() => ({
-  database: {
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    disconnectAndClear: vi.fn(),
-    close: vi.fn(),
-  },
   nativeDatabase: {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -19,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   },
   /** What `isNativePlatform()` answers: a phone, or a browser. */
   native: false,
+  purgeLegacyIndexedDbReplica: vi.fn(),
   // One entry per connector the provider builds: the callback it passes for
   // "this server runs no PowerSync service".
   syncOffCallbacks: [] as Array<(origin: string) => void>,
@@ -33,8 +29,8 @@ vi.mock('@ci/common', async (importOriginal) => ({
   isNativePlatform: () => mocks.native,
 }));
 
-vi.mock('./webDatabase', () => ({
-  openWebPowerSyncDatabase: () => mocks.database,
+vi.mock('./legacyIndexedDb', () => ({
+  purgeLegacyIndexedDbReplica: mocks.purgeLegacyIndexedDbReplica,
 }));
 
 // The preview store needs a real database (`watch`) and the filesystem; the
@@ -87,16 +83,21 @@ function latestSyncOffCallback(): (origin: string) => void {
   return callback;
 }
 
+/** Renders what the context holds, so a test can see whether any database reached consumers. */
+function ContextProbe() {
+  const database = usePowerSync();
+
+  return <output data-testid="context">{database ? 'database' : 'none'}</output>;
+}
+
 beforeEach(() => {
   setApiBaseUrl('https://memory-a.example');
   mocks.native = false;
   mocks.syncOffCallbacks.length = 0;
+  mocks.purgeLegacyIndexedDbReplica.mockReset().mockResolvedValue([]);
 
-  for (const database of [mocks.database, mocks.nativeDatabase]) {
-    database.connect.mockReset().mockResolvedValue(undefined);
-    database.disconnect.mockReset().mockResolvedValue(undefined);
-    database.disconnectAndClear.mockReset().mockResolvedValue(undefined);
-    database.close.mockReset().mockResolvedValue(undefined);
+  for (const method of Object.values(mocks.nativeDatabase)) {
+    method.mockReset().mockResolvedValue(undefined);
   }
 });
 
@@ -106,7 +107,7 @@ afterEach(() => {
 
 // The connect logic only ever runs for the encrypted replica, so these run as
 // a phone would: the native adapter loads and its database is the one that
-// syncs. A browser's database is covered by the last describe.
+// syncs. A browser is covered by the last describe.
 describe('PowerSyncProvider', () => {
   beforeEach(() => {
     mocks.native = true;
@@ -178,28 +179,37 @@ describe('PowerSyncProvider', () => {
 });
 
 describe('PowerSyncProvider on a phone', () => {
-  it('never connects the IndexedDB placeholder; the encrypted SQLite replica is the one that syncs', async () => {
+  it('hands consumers nothing until the encrypted SQLite replica is open, then that replica', async () => {
     mocks.native = true;
 
-    render(<PowerSyncProvider>child</PowerSyncProvider>);
+    render(
+      <PowerSyncProvider>
+        <ContextProbe />
+      </PowerSyncProvider>,
+    );
 
+    // Before 2026-10-26 a plaintext IndexedDB placeholder filled this window; a
+    // consumer that read from it would have read nothing, or worse, synced into it.
+    expect(screen.getByTestId('context')).toHaveTextContent('none');
+
+    await waitFor(() => expect(screen.getByTestId('context')).toHaveTextContent('database'));
     await waitFor(() => expect(mocks.nativeDatabase.connect).toHaveBeenCalledTimes(1));
-
-    // Before the SQLite adapter resolved, the web database was the context's
-    // value and the session was authenticated — the old code connected it
-    // then, leaving a plaintext IndexedDB copy of whatever synced in that window.
-    expect(mocks.database.connect).not.toHaveBeenCalled();
-    expect(mocks.database.close).toHaveBeenCalled();
+    expect(mocks.purgeLegacyIndexedDbReplica).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('PowerSyncProvider in a desktop browser', () => {
-  it('never connects the plaintext IndexedDB database, and wipes what an earlier build left in it', async () => {
+  it('opens no database, connects nothing, and deletes what an earlier build left in IndexedDB', async () => {
     mocks.native = false;
+    mocks.purgeLegacyIndexedDbReplica.mockResolvedValue(['ci-powersync.db']);
 
-    render(<PowerSyncProvider>child</PowerSyncProvider>);
+    render(
+      <PowerSyncProvider>
+        <ContextProbe />
+      </PowerSyncProvider>,
+    );
 
-    await waitFor(() => expect(mocks.database.disconnectAndClear).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.purgeLegacyIndexedDbReplica).toHaveBeenCalledTimes(1));
 
     // Nothing asks the server for a sync token from a browser, even after the
     // working-set screens ask for a reconnect.
@@ -210,7 +220,8 @@ describe('PowerSyncProvider in a desktop browser', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(mocks.database.connect).not.toHaveBeenCalled();
+    expect(screen.getByTestId('context')).toHaveTextContent('none');
+    expect(mocks.nativeDatabase.connect).not.toHaveBeenCalled();
     expect(mocks.syncOffCallbacks).toHaveLength(0);
   });
 });

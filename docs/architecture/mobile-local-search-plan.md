@@ -175,7 +175,11 @@ the device, no dossiers): `birth_date`, every geography column,
 **Where it is computed: in SQL, in the one shared statement.**
 `buildVectorUpsertStatement` (`search-ingress/services/VectorService.ts:130`)
 already derives `occurred_at` from the source row with `entityTimeSql('v')`,
-a per-type `CASE` of primary-key subqueries (`search-next/entityTime.ts`). A
+a per-type `CASE` of primary-key subqueries (`search-next/entityTime.ts`;
+since 2026-10-26 a place's time is its latest visit -- the start of the newest
+event held there, kept current by the same statement when an event is indexed
+-- rather than the moment the pipeline promoted it, which put every promotion
+burst at the top of the phone's "most recent"). A
 sibling `entityDeviceRecordSql('v')` returns `related_id` and `detail` the
 same way. Merging both into one `LEFT JOIN LATERAL` makes it a single lookup
 per write instead of two.
@@ -910,6 +914,39 @@ appliance over the network.
    source and raw id, and the raw id is never synced. See
    [Conversation key](#conversation-key), including the SMS/WhatsApp import
    gaps the data check turned up.
+
+### Saved searches on the device (2026-10-26)
+
+Kyle asked for saved searches on the phone, syncing back when the connection returns.
+They follow the notes precedent exactly: `ci.saved_searches` joins the `user_data`
+bucket (name, description, query, `entity_types`, `tags`, `filters`, `is_public`,
+`share_token`, `is_seed`, timestamps; the sharing posture columns stay server-side),
+`POWERSYNC_TABLES` and the PowerSync README list it, and the device schema has a
+writable `saved_searches` table (`text[]` and jsonb arrive as JSON text, booleans as
+0/1). `connector.ts` replays PUT/PATCH/DELETE through `createSavedSearch` /
+`updateSavedSearch` / `deleteSavedSearch`, parsing the JSON-text columns back into the
+arrays and object the inputs take; `CreateSavedSearchInput.id` (new, like
+`CreateNoteInput.id`) carries the client-minted uuid so the row that syncs back is the
+same row. Sharing columns are never written on the device and a PATCH never forwards
+them.
+
+On a phone with a replica every saved-search surface reads and writes the local table,
+online or off: the Saved Searches page (`LocalSavedSearchesPage`: list, filter, open,
+rename, delete; filters are edited in the explorer; sharing is offered only while the
+appliance answers), the `?saved_search=` deep link and the loaded-search lookup
+(`useSavedSearchById` in `useSavedSearchResolution.ts`), the Load-search picker and
+the phone panel's count (`SavedSearchPicker.tsx`), and the explorer's Save / Update
+(`SaveSearchButton`, ids minted with uuid v7). The browser keeps GraphQL.
+
+Dev DB: `GRANT SELECT ON ci.saved_searches TO powersync` and `ALTER PUBLICATION
+powersync ADD TABLE ci.saved_searches` were run by hand on 2026-10-26 and the
+PowerSync container restarted; a fresh `make dev` does both through setup-database.
+Phones re-download on the sync-rules change.
+
+Found on the way: `make graphql` was failing on main because
+`api/offlineWriteLink.node.test.ts` defined gql-tagged documents codegen validated
+(duplicate operation names, an anonymous operation, a made-up `search` shape). They are
+`parse()`d now, which keeps them out of the scan.
 
 ### Follow-ups outside this plan
 

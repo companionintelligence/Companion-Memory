@@ -5,8 +5,9 @@ import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common
 import { Badge, Button, Card, Input } from '@ci/shadcn';
 import { ChevronDown, LocateFixed, MapPin, Plus } from '@ci/shadcn/icons';
 import { Tooltip, useMap as useLeafletMap } from 'react-leaflet';
-import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
+import { Navigate, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -17,12 +18,14 @@ import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/Memo
 import { AddPlaceModal } from '@/components/modals/AddItemModal';
 import { PLACE_KIND_LABELS } from '@/components/PlaceForm';
 import { PullToRefresh } from '@/components/PullToRefresh';
+import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
 import { GET_TAG_SUGGESTIONS, TagInput, useTagSuggestions } from '@/components/TagInput';
 import { gql } from '@/graphql';
 import type { GetKnownPlacesQuery, GetPlacesQuery } from '@/graphql/graphql';
 import { useModalControls } from '@/hooks';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 import { namedChatContext } from '@/lib/agentChat';
+import { LocalTypeList } from '@/pages/MemoryPage/LocalListView/LocalTypeList';
 
 import { PlaceDuplicatesCard } from './PlaceDuplicatesCard';
 import { PlaceSheet } from './PlaceSheet';
@@ -798,7 +801,30 @@ function KnownPlacesCard({
   );
 }
 
+/**
+ * The places page. While the Memory server does not answer and this phone holds a synced
+ * replica, the list comes from the phone (LocalTypeList) and a place in the URL opens its
+ * saved record; otherwise from the appliance, with the map and the duplicate queue. See
+ * api/powersync/deviceFallback.ts.
+ */
 export function PlacesPage() {
+  const offline = useAnswersFromDevice();
+  const { placeId } = useParams<{ placeId?: string }>();
+
+  if (!offline) {
+    return <RemotePlacesPage />;
+  }
+
+  if (placeId) {
+    return <Navigate to={savedRecordRoute('place', placeId)} replace />;
+  }
+
+  return (
+    <LocalTypeList entityType="place" heading="Places" pageTitle="Places - Companion Memory" order="title" />
+  );
+}
+
+function RemotePlacesPage() {
   usePageTitle('Places - Companion Memory');
 
   const { isMobile } = useDeviceLayout();

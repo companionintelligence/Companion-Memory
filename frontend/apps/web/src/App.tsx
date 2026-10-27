@@ -150,10 +150,11 @@ function RedirectProfileToSelfSettings() {
  * PowerSync only matters once someone is signed in.
  *
  * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
- * every visitor downloads before first paint and opened a WASQLite IndexedDB
- * database for people sitting on the splash screen who may never sign in. Signed
- * out, the tree renders without it; signed in, it loads and mounts exactly as
- * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ * every visitor downloads before first paint (and, until 2026-10-26, opened a
+ * WASQLite IndexedDB database for people sitting on the splash screen who may
+ * never sign in). Signed out, the tree renders without it; signed in, it loads
+ * and mounts exactly as before — every consumer of PowerSyncContext lives behind
+ * ProtectedRoute.
  */
 function PowerSyncBoundary({ children }: { children: ReactNode }) {
   const [{ authenticated, authToken }] = useAuth();

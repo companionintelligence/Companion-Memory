@@ -6,6 +6,7 @@ import { DropdownMenu, IconButton } from '@ci/shadcn';
 import { Ellipsis, Pencil, Trash } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
@@ -15,6 +16,7 @@ import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
 
 import { DeleteTagModal } from './DeleteTagModal';
+import { LocalTagsList } from './LocalTagsList';
 import { RenameTagModal } from './RenameTagModal';
 import { type TagListItem } from './tagList';
 
@@ -37,7 +39,18 @@ const GET_TAGS_WITH_USAGE = gql(`
 
 export { GET_TAGS_WITH_USAGE };
 
+/**
+ * The tags page. While the Memory server does not answer and this phone holds a synced
+ * replica, the list comes from the phone (LocalTagsList: the synced tags and their
+ * counts, no editing); otherwise from the appliance. See api/powersync/deviceFallback.ts.
+ */
 export function TagsPage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? <LocalTagsList /> : <RemoteTagsPage />;
+}
+
+function RemoteTagsPage() {
   usePageTitle('Tags - Companion Memory');
 
   // Search text is the header search box's `?search=` — it edits this page's

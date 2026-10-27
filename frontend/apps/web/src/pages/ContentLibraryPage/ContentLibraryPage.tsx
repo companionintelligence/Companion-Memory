@@ -4,8 +4,9 @@ import { useQuery } from '@apollo/client';
 import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button } from '@ci/shadcn';
 import { FileType, Filter, Shapes, X } from '@ci/shadcn/icons';
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
@@ -13,8 +14,10 @@ import { MemoryHubShell } from '@/components/MemoryHub';
 import { LoadingRegion, TilesSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
+import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
 import { gql } from '@/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
+import { LocalTypeList } from '@/pages/MemoryPage/LocalListView/LocalTypeList';
 
 import { ContentFacetFilter, readFacetParam } from './ContentFacetFilter';
 import { ContentSheet } from './ContentSheet';
@@ -78,7 +81,35 @@ export const GET_CONTENTS = gql(`
  * (external_id -> ci.files) arrive with previewUrl/mediaUrl already resolved by
  * the server, so a tile needs no second lookup to show its thumbnail.
  */
+/**
+ * The content library. While the Memory server does not answer and this phone holds a
+ * synced replica, the list comes from the phone (LocalTypeList), newest first, and a
+ * content id in the URL opens its saved record; otherwise from the appliance, with its
+ * facets and tiles. See api/powersync/deviceFallback.ts.
+ */
 export function ContentLibraryPage() {
+  const offline = useAnswersFromDevice();
+  const { contentId } = useParams<{ contentId?: string }>();
+
+  if (!offline) {
+    return <RemoteContentLibraryPage />;
+  }
+
+  if (contentId) {
+    return <Navigate to={savedRecordRoute('content', contentId)} replace />;
+  }
+
+  return (
+    <LocalTypeList
+      entityType="content"
+      heading="Content"
+      pageTitle="Content - Companion Memory"
+      order="newest"
+    />
+  );
+}
+
+function RemoteContentLibraryPage() {
   usePageTitle('Content - Companion Memory');
 
   const { isMobile } = useDeviceLayout();

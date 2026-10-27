@@ -4,7 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
-import { DEVICE_RECORD_VERSION, entityDeviceRecordSql } from '@ci/domains/search-next';
+import { DEVICE_RECORD_VERSION, entityDeviceRecordSql, entityTimeSql } from '@ci/domains/search-next';
 
 /**
  * Every 10 minutes, at second 58 of minutes 7, 17, 27...
@@ -39,13 +39,14 @@ export interface DetailRefreshSummary {
 /**
  * Brings every device record up to the current {@link DEVICE_RECORD_VERSION}.
  *
- * The shared index statement (`buildVectorUpsertStatement`) writes `related_id`
- * and `detail` for every row it touches, so new and re-indexed rows are always
- * current. This cron covers the rest: the corpus that existed when the columns
- * were added (migration 20261021203300, `detail_version` 0), and every row after
- * a later recipe change bumps the version. It rewrites only those two columns,
- * from the same SQL, without touching the tsvector — no re-embedding, no
- * pipeline ledger churn.
+ * The shared index statement (`buildVectorUpsertStatement`) writes `related_id`,
+ * `detail` and `occurred_at` for every row it touches, so new and re-indexed
+ * rows are always current. This cron covers the rest: the corpus that existed
+ * when the columns were added (migration 20261021203300, `detail_version` 0),
+ * and every row after a later change to the record recipe or to a type's time
+ * rule bumps the version. It rewrites only those three columns, from the same
+ * SQL, without touching the tsvector — no re-embedding, no pipeline ledger
+ * churn.
  *
  * Each batch touches `updated_at` too, because that is what makes PowerSync
  * replicate the row to phones. A version bump therefore re-sends every document,
@@ -127,7 +128,7 @@ export function refreshBatchSql(): string {
        FOR UPDATE SKIP LOCKED
     ),
     derived AS (
-      SELECT src.id, rec.related_id, rec.detail
+      SELECT src.id, rec.related_id, rec.detail, ${entityTimeSql('src')} AS occurred_at
         FROM batch
         JOIN ci_search.mobile_search_documents src ON src.id = batch.id
         LEFT JOIN LATERAL (${entityDeviceRecordSql('src')}) rec ON true
@@ -136,6 +137,7 @@ export function refreshBatchSql(): string {
       UPDATE ci_search.mobile_search_documents d
          SET related_id = derived.related_id,
              detail = derived.detail,
+             occurred_at = derived.occurred_at,
              detail_version = $1,
              updated_at = now()
         FROM derived

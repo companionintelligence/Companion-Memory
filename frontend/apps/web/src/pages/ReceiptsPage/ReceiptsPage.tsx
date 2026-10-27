@@ -5,6 +5,7 @@ import { EmptyState, GlobalUID, usePageTitle } from '@ci/common';
 import { Badge, Input, Select } from '@ci/shadcn';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
 import { ReceiptIcon } from '@/components/icons';
@@ -19,6 +20,7 @@ import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 import { namedChatContext } from '@/lib/agentChat';
 import { formatMinor } from '@/lib/money';
 import { humanizeEnum } from '@/lib/utils';
+import { LocalTypeList } from '@/pages/MemoryPage/LocalListView/LocalTypeList';
 
 export const PAGE_SIZE = 30;
 
@@ -126,7 +128,29 @@ function ReceiptRowButton({ receipt, onOpen }: { receipt: ReceiptNode; onOpen: (
   );
 }
 
+/**
+ * The receipts page. While the Memory server does not answer and this phone holds a synced
+ * replica, the list comes from the phone (LocalTypeList), newest first, ranked for the
+ * header box's `?search=` or this page's own `?q=`; otherwise from the appliance. See
+ * api/powersync/deviceFallback.ts.
+ */
 export function ReceiptsPage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? (
+    <LocalTypeList
+      entityType="receipt"
+      heading="Receipts"
+      pageTitle="Receipts - Companion Memory"
+      order="newest"
+      searchParams={['search', 'q']}
+    />
+  ) : (
+    <RemoteReceiptsPage />
+  );
+}
+
+function RemoteReceiptsPage() {
   usePageTitle('Receipts - Companion Memory');
 
   const navigate = useNavigate();

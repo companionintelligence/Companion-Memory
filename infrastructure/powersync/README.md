@@ -57,7 +57,8 @@ the search documents are a raw table the sync client writes directly.
 
 Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
 `POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
-both list `ci.notes`, `ci_search.tags`, `ci_search.entity_tag` and
+both list `ci.notes`, `ci.saved_searches` (both written on the device and replayed up by
+the connector), `ci_search.tags`, `ci_search.entity_tag` and
 `ci_search.mobile_search_documents` — the device record (one row per indexed entity of
 a device-shown type: title, snippet, own time, plus `related_id` and a small `detail`
 JSON of display fields), over which the device builds an FTS5 index and answers the

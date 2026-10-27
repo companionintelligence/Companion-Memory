@@ -17,10 +17,18 @@ vi.mock('@ci/common', async (importOriginal) => ({
   isNativePlatform: () => true,
 }));
 vi.mock('@powersync/react', () => ({ usePowerSync: () => ({}) }));
-vi.mock('@/api/powersync/session', () => ({
-  clearPowerSyncWorkingSet: async () => undefined,
-  measurePowerSyncSizeBytes: async () => 1000,
-}));
+vi.mock('@/api/powersync/session', () => {
+  // One object: `useSyncExternalStore` compares snapshots by identity, and a fresh
+  // literal per call would re-render without end.
+  const open = { phase: 'open' as const };
+
+  return {
+    clearPowerSyncWorkingSet: async () => undefined,
+    measurePowerSyncSizeBytes: async () => 1000,
+    getReplicaOpenState: () => open,
+    subscribeReplicaOpenState: () => () => undefined,
+  };
+});
 vi.mock('@/api/powersync/previews', () => ({
   isPreviewSyncEnabled: () => h.enabled,
   setPreviewSyncEnabled: (next: boolean) => h.setEnabled(next),

@@ -279,7 +279,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Downloading on-device model")
                 .setContentText("$progress%")
-                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setSmallIcon(NotificationIcons.small(applicationContext, android.R.drawable.stat_sys_download))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setProgress(100, progress, false)

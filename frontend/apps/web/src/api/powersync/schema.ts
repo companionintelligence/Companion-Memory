@@ -19,7 +19,7 @@
  * schema together. See docs/architecture/mobile-local-search-plan.md, "Revision
  * 2026-10-21", for the reasoning and the measurements.
  *
- * Write support (see `./connector.ts`) exists for `notes` only. `tags` and
+ * Write support (see `./connector.ts`) exists for `notes` and `saved_searches`. `tags` and
  * `entity_tag` are read replicas: a local write against them would be accepted
  * into the CRUD queue, but the connector has nothing to replay it through.
  */
@@ -34,6 +34,26 @@ import { DOCUMENTS_RAW_TABLE, DOCUMENTS_TABLE } from './searchIndex';
 const notes = new Table({
   title: column.text,
   content: column.text,
+  user_id: column.text,
+  created_at: column.text,
+  updated_at: column.text,
+});
+
+// Writable, like notes (see `./connector.ts`): the other thing a person authors in
+// this app and may edit offline. Postgres `text[]` columns (`entity_types`, `tags`)
+// and the `filters` jsonb arrive as JSON text; `is_public` / `is_seed` as 0/1. The
+// device writes name, description, query, entity_types, tags and filters; sharing
+// (`is_public`, `share_token`) is server-managed and only ever read here.
+const saved_searches = new Table({
+  name: column.text,
+  description: column.text,
+  query: column.text,
+  entity_types: column.text,
+  tags: column.text,
+  filters: column.text,
+  is_public: column.integer,
+  share_token: column.text,
+  is_seed: column.integer,
   user_id: column.text,
   created_at: column.text,
   updated_at: column.text,
@@ -76,6 +96,7 @@ const attachments = new AttachmentTable();
 
 export const AppSchema = new Schema({
   notes,
+  saved_searches,
   tags,
   entity_tag,
   attachments,

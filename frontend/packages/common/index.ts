@@ -48,6 +48,7 @@ export type {
   AppLockPluginBridge,
   AppLockSettings,
   AppLockStatus,
+  LockScreenQueueCounts,
 } from './src/utils/appLock';
 export {
   CONNECTION_REPROBE_INTERVAL_MS,
