@@ -114,13 +114,31 @@ export function boundsToBbox(bounds: LatLngBounds): Bbox {
  * keeps. A fixed one decimal read a street-sized area as `37.8°N–37.8°N`.
  */
 function spanDecimals(min: number, max: number): number {
-  const span = Math.abs(max - min);
+  // Rounded to the URL's six decimals first: 1.2 - 1.1 is 0.0999…9, which
+  // would otherwise get one decimal more than the same span at 0.1–0.2.
+  const span = Math.abs(Number((max - min).toFixed(6)));
 
   if (!(span > 0)) {
     return 6;
   }
 
   return Math.min(6, Math.max(1, Math.ceil(-Math.log10(span)) + 1));
+}
+
+/**
+ * Leaflet's `getBounds()` reports longitudes past ±180 once the map is panned
+ * into a world copy (a Pacific view runs 170 to 190), so bring those back into
+ * range before naming a hemisphere.
+ */
+function wrapLongitude(value: number): number {
+  return value > 180 || value < -180 ? ((((value + 180) % 360) + 360) % 360) - 180 : value;
+}
+
+/** One coordinate, its hemisphere read from the rounded figure so `-0.00003` is not `0.0000°S`. */
+function coordinate(value: number, digits: number, negative: string, positive: string): string {
+  const text = Math.abs(value).toFixed(digits);
+
+  return `${text}°${value < 0 && Number(text) !== 0 ? negative : positive}`;
 }
 
 /**
@@ -132,10 +150,14 @@ function spanDecimals(min: number, max: number): number {
 export function describeBbox([minLon, minLat, maxLon, maxLat]: Bbox): string {
   const latDigits = spanDecimals(minLat, maxLat);
   const lonDigits = spanDecimals(minLon, maxLon);
-  const lat = (value: number) => `${Math.abs(value).toFixed(latDigits)}°${value < 0 ? 'S' : 'N'}`;
-  const lon = (value: number) => `${Math.abs(value).toFixed(lonDigits)}°${value < 0 ? 'W' : 'E'}`;
+  const wholeWorld = Math.abs(maxLon - minLon) >= 360;
+  const west = wholeWorld ? -180 : wrapLongitude(minLon);
+  const east = wholeWorld ? 180 : wrapLongitude(maxLon);
 
-  return `${lat(minLat)}–${lat(maxLat)}, ${lon(minLon)}–${lon(maxLon)}`;
+  return [
+    `${coordinate(minLat, latDigits, 'S', 'N')}–${coordinate(maxLat, latDigits, 'S', 'N')}`,
+    `${coordinate(west, lonDigits, 'W', 'E')}–${coordinate(east, lonDigits, 'W', 'E')}`,
+  ].join(', ');
 }
 
 /** What the Where trigger says for the rectangles beside the place names: "Map Areas (2)". */
