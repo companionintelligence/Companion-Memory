@@ -7,8 +7,6 @@ PODS:
     - Capacitor
   - CapacitorCamera (7.0.5):
     - Capacitor
-  - CapacitorCommunityBackgroundGeolocation (1.2.26):
-    - Capacitor
   - CapacitorCommunitySqlite (7.0.3):
     - Capacitor
     - SQLCipher
@@ -103,7 +101,6 @@ DEPENDENCIES:
   - "CapacitorApp (from `../../node_modules/@capacitor/app`)"
   - "CapacitorBrowser (from `../../node_modules/@capacitor/browser`)"
   - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
-  - "CapacitorCommunityBackgroundGeolocation (from `../../node_modules/@capacitor-community/background-geolocation`)"
   - "CapacitorCommunitySqlite (from `../../node_modules/@capacitor-community/sqlite`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorLocalNotifications (from `../../node_modules/@capacitor/local-notifications`)"
@@ -145,8 +142,6 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/browser"
   CapacitorCamera:
     :path: "../../node_modules/@capacitor/camera"
-  CapacitorCommunityBackgroundGeolocation:
-    :path: "../../node_modules/@capacitor-community/background-geolocation"
   CapacitorCommunitySqlite:
     :path: "../../node_modules/@capacitor-community/sqlite"
   CapacitorCordova:
@@ -177,7 +172,6 @@ SPEC CHECKSUMS:
   CapacitorApp: f01a913211780e0718dae9750442c3e23f96e106
   CapacitorBrowser: 6d09f59655e89aede71654ef08b98de55cf032b6
   CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
-  CapacitorCommunityBackgroundGeolocation: 750523ec6dd1cc94cf4e2bf7787605106753f73c
   CapacitorCommunitySqlite: 4813d82ad33001e612a39d313cb5d28066cbafda
   CapacitorCordova: 2080fc0d6bfbc9dcc0e6d88e77fa624190d343ca
   CapacitorLocalNotifications: 2e3f5b717ec9cd2bd64d93c99a9470941e1c80be
@@ -207,6 +201,6 @@ SPEC CHECKSUMS:
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
   ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
 
-PODFILE CHECKSUM: 0da67a819fddfa689d9d0a1244ce497810188e85
+PODFILE CHECKSUM: cf58c5d20fedab47e5a18cd8c138c25f5a950ecf
 
 COCOAPODS: 1.17.0

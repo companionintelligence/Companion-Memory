@@ -18,10 +18,6 @@ const config: CapacitorConfig = {
   },
   android: {
     allowMixedContent: true,
-    // Required by @capacitor-community/background-geolocation: without it, location
-    // updates delivered through the legacy Capacitor bridge stop after ~5 minutes in
-    // the background. See https://github.com/capacitor-community/background-geolocation/issues/89.
-    useLegacyBridge: true,
     // Deliberately NOT `adjustMarginsForEdgeToEdge: 'auto'`. Android 15+ lays the window
     // out edge-to-edge and the WebView needs insetting from the system bars (three-button
     // navigation otherwise covers the bottom ~48 dp of every page), but Capacitor's version

@@ -65,22 +65,19 @@
       FINE offers the user a "coarse only" choice; without COARSE declared, that
       choice yields no permission at all rather than a degraded one.
 
-      The "Always" mode keeps sampling after the app leaves the screen, and
-      after it is swiped out of recents, through @ci/capacitor-local-hub's own
-      foreground service of type `location` (location/LocationService.kt), which
-      shows the "Recording location" notification. The person starts that service
-      from inside the app, so Android counts it as while-in-use access.
-      FOREGROUND_SERVICE_LOCATION lets it start on Android 14+, and Play needs a
-      foreground-service `location` declaration with its own video for it
-      (DEVICE_DATA_COMPLIANCE.md §3.4). A reboot or an update ends the service,
-      and while-in-use access means nothing but an app open may start it again:
-      the plugin's boot receiver posts a notification asking for that open.
-
-      ACCESS_BACKGROUND_LOCATION is deliberately NOT declared. Nothing requests it
-      at runtime, and declaring it alone makes Play review the app as accessing
-      location in the background: a declaration form, a demo video and a judgement
-      on whether the feature is core to the app. AndroidManifestContractTest fails
-      if it comes back.
+      The "Always" mode is @ci/capacitor-local-hub's motion-gated tracker
+      (location/LocationTracker.kt): GPS runs only while the phone is moving,
+      through a foreground service of type `location` that shows the "Recording
+      location" notification for those minutes only, and an exit geofence around
+      the resting spot is what starts it again. ACCESS_BACKGROUND_LOCATION is what
+      lets Play Services hold that geofence and deliver it to a process with no
+      activity alive, and what lets the service receive location when it was
+      started that way. FOREGROUND_SERVICE_LOCATION lets the service start on
+      Android 14+. Play therefore needs BOTH the background-location declaration
+      with its demo video AND the foreground-service `location` declaration with
+      its own (DEVICE_DATA_COMPLIANCE.md §3.4) before a build carrying this
+      manifest goes to any track. AndroidManifestContractTest fails if either
+      permission goes missing.
 
       What location commits us to (§8): an in-app prominent-disclosure screen
       shown immediately before each runtime prompt — not in the store listing, not
@@ -90,6 +87,7 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Location hardware is optional: the app is fully usable with tracking off. -->
