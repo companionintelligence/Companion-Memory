@@ -28,8 +28,8 @@ import type {
   UpdateItemDto,
 } from '../types';
 
-import { CtiAggregate } from './CtiAggregate';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { type PurgedItems, purgeItemAggregates } from './itemPurge';
 
 /** Page size {@link ItemService.findPage} uses when the caller names none. */
@@ -886,17 +886,31 @@ export class ItemService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before, after: reloaded, baseBefore }) => {
+          // Only what moved. The thing page's description save has to send the
+          // name too (UpdateItemInput requires it), and the drawer sends every
+          // field: recorded as given, each of those read as a rename.
+          const changedFields = {
+            ...changedFieldsBetween(
+              { name: baseBefore?.name, description: baseBefore?.description },
+              basePatch,
+              Object.keys(basePatch),
+            ),
+            ...(detailChanged(before, reloaded, Object.keys(updateData))
+              ? { detail_updated: { new: true } }
+              : {}),
+          };
+
+          if (Object.keys(changedFields).length === 0) {
+            return;
+          }
+
           const base = await manager.getRepository(ItemBaseEntity).findOne({ where: { id } });
           await this.graphDeltaWriter.entityUpdated({
             entityId: id,
             entityType: 'Item',
             name: base?.name ?? null,
-            changedFields: {
-              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
-              ...(basePatch.description !== undefined ? { description: { new: basePatch.description } } : {}),
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
+            changedFields,
             ownerUserId: typeof context.userId === 'string' ? context.userId : null,
             changeSource: 'ItemService.update',
             changedByUserId: typeof context.userId === 'string' ? context.userId : null,

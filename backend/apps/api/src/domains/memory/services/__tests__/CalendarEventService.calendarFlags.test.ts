@@ -249,6 +249,33 @@ describe('CalendarEventService — calendar flags survive create and update', ()
       expect(deltas.entityUpdated).not.toHaveBeenCalled();
     });
 
+    it('records no detail edit for times handed back as stored', async () => {
+      // The Plan page's edit sends the start (and end) with every save.
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        start_time: new Date('2026-01-01T09:00:00Z'),
+        end_time: null,
+      } as unknown as UpdateEventDto);
+
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('records a detail edit that moved a column', async () => {
+      const stored = Object.assign(new EventEntity(), {
+        id: 'e1',
+        userId: 'user-1',
+        startTime: new Date('2026-01-01T09:00:00Z'),
+        endTime: null,
+        status: 'confirmed',
+      });
+      repo.findOne.mockResolvedValueOnce(stored).mockResolvedValueOnce({ ...stored, category: 'social' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { category: 'social' });
+
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { detail_updated: { new: true } } }),
+      );
+    });
+
     it('leaves the description alone when the patch sends none', async () => {
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
         description: null,

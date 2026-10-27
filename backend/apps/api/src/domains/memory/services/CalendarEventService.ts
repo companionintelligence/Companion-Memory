@@ -51,7 +51,7 @@ import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queri
 import type { OccurrenceSpec } from '../recurrence/types';
 import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
 
-import { CtiAggregate } from './CtiAggregate';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
 import { resolveEventLocationReopener } from './eventLocationReopener';
 import { type PurgedEventAggregates, purgeEventAggregates } from './eventPurge';
 import { resolveEventStatusReopener } from './eventStatusReopener';
@@ -2576,6 +2576,15 @@ export class CalendarEventService {
       {
         withinTx: async ({ manager, before, after }) => {
           previousStart = before.startTime;
+          // Judged against the row as this transaction found it, as `moved` is
+          // below: the Plan page's edit sends both times with every save, and a
+          // field handed back as stored is not an edit. `lastMovedAt` is the
+          // stamp such a save leaves, not a change anyone made.
+          const detailEdited = detailChanged(
+            before,
+            after,
+            Object.keys(detail).filter((key) => key !== 'lastMovedAt'),
+          );
           const changedFields = {
             ...(basePatch.name !== undefined
               ? { name: { old: storedBase?.name ?? null, new: basePatch.name } }
@@ -2583,7 +2592,7 @@ export class CalendarEventService {
             ...(basePatch.description !== undefined
               ? { description: { old: storedBase?.description ?? null, new: basePatch.description } }
               : {}),
-            ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
+            ...(detailEdited ? { detail_updated: { new: true } } : {}),
           };
 
           // A patch that changed nothing leaves no Change History row.

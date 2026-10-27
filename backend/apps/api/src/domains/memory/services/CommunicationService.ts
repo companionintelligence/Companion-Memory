@@ -43,7 +43,7 @@ import { ledgerPlatform } from '../identity';
 import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
 
 import { type PurgedCommunications, purgeCommunicationAggregates } from './communicationPurge';
-import { CtiAggregate, type RepositoryProvider } from './CtiAggregate';
+import { CtiAggregate, detailChanged, type RepositoryProvider } from './CtiAggregate';
 import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 import { nothingWrapped, type WrappedFilesPurged } from './wrappedFilePurge';
@@ -686,8 +686,22 @@ export class CommunicationService {
           : undefined,
       },
       {
-        withinTx: async ({ manager, after }) => {
+        withinTx: async ({ manager, before, after }) => {
           if (!after) {
+            return;
+          }
+
+          // Only what moved. A connector re-sync and the message page's save
+          // hand back what is stored; recorded as given, each read as a rename.
+          const label = { old: this.labelFor(before), new: this.labelFor(after) };
+          const changedFields = {
+            ...(label.old !== label.new ? { name: label } : {}),
+            ...(detailChanged(before, after, Object.keys(updateData))
+              ? { detail_updated: { new: true } }
+              : {}),
+          };
+
+          if (Object.keys(changedFields).length === 0) {
             return;
           }
 
@@ -695,10 +709,7 @@ export class CommunicationService {
             entityId: id,
             entityType: 'Communication',
             name: this.labelFor(after),
-            changedFields: {
-              name: { new: this.labelFor(after) },
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
+            changedFields,
             ownerUserId: typeof context.userId === 'string' ? context.userId : null,
             changeSource: 'CommunicationService.update',
             changedByUserId: typeof context.userId === 'string' ? context.userId : null,

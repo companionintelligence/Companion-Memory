@@ -57,6 +57,12 @@ function makeService() {
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const dataSource = { transaction: jest.fn(), getRepository: jest.fn() };
 
+  const graphDeltaWriter = {
+    entityCreated: jest.fn(async () => undefined),
+    entityUpdated: jest.fn(async () => undefined),
+    entityDeleted: jest.fn(async () => undefined),
+    recordMany: jest.fn(async () => undefined),
+  };
   const service = new CommunicationService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     repository as any,
@@ -66,15 +72,10 @@ function makeService() {
     logger as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     dataSource as any,
-    {
-      entityCreated: jest.fn(async () => undefined),
-      entityUpdated: jest.fn(async () => undefined),
-      entityDeleted: jest.fn(async () => undefined),
-      recordMany: jest.fn(async () => undefined),
-    } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    graphDeltaWriter as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
-  return { service, send, repository, baseRepo, baseInsert };
+  return { service, send, repository, baseRepo, baseInsert, graphDeltaWriter };
 }
 
 const makeInput = (n: number) =>
@@ -278,5 +279,63 @@ describe('CommunicationService update: falsy-but-legitimate values', () => {
     expect(base?.({ subject: null, preview: null, content, summary: null })).toMatchObject({
       name: content,
     });
+  });
+});
+
+describe('CommunicationService update: Change History', () => {
+  function updateWith(
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ) {
+    const { service, graphDeltaWriter } = makeService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).aggregate = {
+      applyUpdate: jest.fn(
+        async (
+          _ctx: unknown,
+          _id: string,
+          _patch: unknown,
+          hooks: { withinTx: (args: Record<string, unknown>) => Promise<void> },
+        ) => {
+          await hooks.withinTx({ manager: {}, before, after, baseBefore: null });
+
+          return null;
+        },
+      ),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (service as any).update(CONTEXT, 'c-1', data).then(() => graphDeltaWriter.entityUpdated);
+  }
+
+  const stored = { subject: 'Lunch on Friday', preview: null, content: 'Are you free?', summary: null };
+
+  it('records nothing when a re-sync or a save hands back what is stored', async () => {
+    const entityUpdated = await updateWith(
+      stored,
+      { ...stored },
+      { subject: 'Lunch on Friday', content: 'Are you free?' },
+    );
+
+    expect(entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records a subject change with the label it replaced', async () => {
+    const entityUpdated = await updateWith(
+      stored,
+      { ...stored, subject: 'Lunch on Saturday' },
+      { subject: 'Lunch on Saturday' },
+    );
+
+    expect(entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedFields: {
+          name: { old: 'Lunch on Friday', new: 'Lunch on Saturday' },
+          detail_updated: { new: true },
+        },
+      }),
+    );
   });
 });
