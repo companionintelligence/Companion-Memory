@@ -31,20 +31,18 @@ export function DataPortabilitySection() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown inside the dialog, which stays open when an import fails. On the page it sat behind the
+  // dialog's overlay and closing the dialog to read it cleared it.
+  const [importError, setImportError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   // Every way out of the dialog clears what was chosen and typed, Cancel included (it used to only
   // hide the dialog, so reopening showed the same file and email with Replace my data already live).
-  // The hidden file input is emptied too, or choosing the same file again would not fire onChange.
   const closeImportDialog = () => {
     setImportOpen(false);
     setConfirmEmail('');
     setSelectedFile(null);
-    setError(null);
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    setImportError(null);
   };
 
   const email = user?.email ?? '';
@@ -77,6 +75,7 @@ export function DataPortabilitySection() {
 
     setImporting(true);
     setError(null);
+    setImportError(null);
     setSuccess(null);
 
     try {
@@ -89,7 +88,7 @@ export function DataPortabilitySection() {
       );
       closeImportDialog();
     } catch {
-      setError('Could not import that archive. Check the file and confirmation email, then try again.');
+      setImportError('Could not import that archive. Check the file and confirmation email, then try again.');
     } finally {
       setImporting(false);
     }
@@ -160,6 +159,8 @@ export function DataPortabilitySection() {
         className="hidden"
         onChange={(event) => {
           setSelectedFile(event.target.files?.[0] ?? null);
+          // Emptied once read, or choosing the same file again would not fire onChange.
+          event.target.value = '';
         }}
       />
 
@@ -168,7 +169,8 @@ export function DataPortabilitySection() {
         onOpenChange={(next) => {
           if (next) {
             setImportOpen(true);
-          } else {
+          } else if (!importing) {
+            // Escape, the close button and a click outside are refused mid-import, like Cancel.
             closeImportDialog();
           }
         }}
@@ -205,6 +207,8 @@ export function DataPortabilitySection() {
                 onChange={(event) => setConfirmEmail(event.target.value)}
               />
             </div>
+
+            {importError ? <p className="text-sm text-destructive">{importError}</p> : null}
           </div>
 
           <Dialog.Footer>

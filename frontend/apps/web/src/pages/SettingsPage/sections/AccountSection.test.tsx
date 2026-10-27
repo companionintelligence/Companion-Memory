@@ -175,6 +175,33 @@ describe('AccountSection — delete', () => {
     expect(confirmButton()).toBeDisabled();
   });
 
+  it('stays open while the request runs, so a 409 asking who takes over is not left for the next open', async () => {
+    let refuse: (error: unknown) => void = () => {};
+
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      return new Promise((_, reject) => {
+        refuse = reject;
+      });
+    });
+    render(<AccountSection />);
+    openDialog();
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+    await screen.findByRole('button', { name: 'Deleting…' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByText('Delete your account?')).toBeInTheDocument();
+
+    await act(async () => {
+      refuse(new FetchJsonError(409, 'Conflict', 'SUCCESSOR_REQUIRED'));
+    });
+    expect(await screen.findByLabelText(/person who takes over/i)).toBeInTheDocument();
+  });
+
   it('deletes the account and signs out when the confirmation matches', async () => {
     render(<AccountSection />);
     openDialog();

@@ -494,7 +494,9 @@ export function AccountSection() {
         onOpenChange={(next: boolean) => {
           if (next) {
             setOpen(true);
-          } else {
+          } else if (!loading) {
+            // Refused mid-request, like Cancel: the answer (a 409 asking who takes over) would land
+            // in a closed dialog and show up stale on the next open.
             closeDeleteDialog();
           }
         }}
