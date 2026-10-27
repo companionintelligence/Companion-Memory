@@ -67,6 +67,12 @@ vi.mock('@/pages/MemoryPage/useEntityService', () => ({
 
 vi.mock('@/pages/MemoryPage/Components', () => ({
   Empty: ({ title }: { title: string }) => <div>{title}</div>,
+  ErrorState: ({ description, onRetry }: { description?: string; onRetry?: () => void }) => (
+    <div role="alert">
+      <p>{description}</p>
+      {onRetry && <button onClick={onRetry}>Try again</button>}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/SearchBox/useDropdown', () => ({
@@ -526,6 +532,46 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ skip: false }));
       // No edges ship with the dots payload; they arrive via focus/section fetches.
       expect(screen.queryAllByTestId('force-link')).toHaveLength(0);
+    });
+
+    it('shows a plain message with Try again, not the raw error, and refetches on retry', async () => {
+      // One stable object per state, like the hook's memoised result: a fresh
+      // `counts` object on every render re-runs the explorer's effects forever.
+      const loaded = {
+        loading: false,
+        error: null,
+        nodes: DOT_NODES,
+        userEntityId: 'user-1',
+        counts: { PersonType: 2, Event: 1 },
+        truncated: false,
+      };
+      const failed = {
+        loading: false,
+        error: 'Fetch failed: 500 Internal Server Error',
+        nodes: [],
+        userEntityId: null,
+        counts: {},
+        truncated: false,
+      };
+
+      useGraphDotsMock.mockImplementation((options: { refreshKey?: number }) =>
+        options.refreshKey ? loaded : failed,
+      );
+
+      renderShell(['/']);
+
+      expect(
+        await screen.findByText("We couldn't load your graph. Check your connection and try again."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Fetch failed/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node')).toHaveLength(DOT_NODES.length);
+      });
+      expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ refreshKey: 1 }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('preloads edges among busy dots when switching to 3D overview', async () => {

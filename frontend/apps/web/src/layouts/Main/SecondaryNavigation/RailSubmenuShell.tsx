@@ -101,6 +101,9 @@ export function RailSubmenuShell({
         to={to}
         aria-label={ariaLabel}
         aria-expanded={clickOpen}
+        // The expanded head and every submenu row say which page is current;
+        // the icon-only rail has to as well, or the filled cell is sight-only.
+        aria-current={rootActive ? 'page' : undefined}
         onClick={onHeadClick}
         // Same height as the expanded head, so pinning the rail open never
         // moves an icon; the group you are in is a filled cell.

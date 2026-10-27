@@ -662,4 +662,27 @@ describe('MobileNavigation', () => {
 
     expect(banner).not.toHaveAttribute('inert');
   });
+
+  // The shut drawer is translated off-canvas but stays `visibility: visible`,
+  // so `aria-hidden` alone left its ten controls in the Tab order. `inert`
+  // takes them out while shut, and comes off the moment it opens so the
+  // focus trap above still lands on its first control.
+  it('keeps the shut drawer out of the tab order, and the open one in it', async () => {
+    renderMobileNav();
+
+    const nav = drawerNav();
+
+    expect(nav).toHaveAttribute('aria-hidden', 'true');
+    expect(nav).toHaveAttribute('inert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    await screen.findByRole('navigation');
+
+    expect(nav).not.toHaveAttribute('inert');
+    expect(nav).toContainElement(document.activeElement as HTMLElement);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(nav).toHaveAttribute('inert');
+  });
 });
