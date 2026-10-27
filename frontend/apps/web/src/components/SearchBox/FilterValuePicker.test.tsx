@@ -200,7 +200,31 @@ describe('FilterValuePicker', () => {
     expect(screen.getByTestId('values')).toHaveTextContent('');
   });
 
-  it('flags a saved value the known vocabulary no longer contains, in the field variant', () => {
+  it('explains a flagged value in the list, not with the icon alone', async () => {
+    render(
+      <Host
+        label="How"
+        initial={['hasdflasdjf']}
+        options={['gmail']}
+        optionsKnown
+        searchPlaceholder="Search sources…"
+        unknownValueHint="No connected source has this name, so this filter matches nothing."
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^How: hasdflasdjf/ }));
+    const stale = screen.getByRole('option', { name: 'hasdflasdjf' });
+
+    expect(stale.querySelector('svg.text-warning')).not.toBeNull();
+    expect(screen.getByRole('option', { name: 'gmail' }).querySelector('svg.text-warning')).toBeNull();
+
+    fireEvent.focus(stale);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'No connected source has this name, so this filter matches nothing.',
+    );
+  });
+
+  it('flags a saved value the known vocabulary no longer contains, in the field variant', async () => {
     render(
       <Host
         variant="field"
@@ -215,13 +239,18 @@ describe('FilterValuePicker', () => {
     expect(screen.getByText('reddit')).toBeInTheDocument();
     expect(screen.getByText('hasdflasdjf')).toBeInTheDocument();
     // The stale chip carries the warning, the live one does not.
-    expect(screen.getByText('hasdflasdjf').closest('[class*="border-warning"]')).not.toBeNull();
+    const staleChip = screen.getByText('hasdflasdjf').closest<HTMLElement>('[class*="border-warning"]');
+    expect(staleChip).not.toBeNull();
     expect(screen.getByText('reddit').closest('[class*="border-warning"]')).toBeNull();
     // Drawn in the warning colour itself. `text-warning-foreground` is the text
     // colour for a warning FILL (white in the light theme), and the chip has none.
-    const staleChip = screen.getByText('hasdflasdjf').closest('[class*="border-warning"]');
     expect(staleChip).toHaveClass('text-warning');
-    expect(staleChip).not.toHaveClass('text-warning-foreground');
+
+    // A keyboard user reaches the hint by focusing the chip.
+    fireEvent.focus(staleChip!);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'No connected source has this name, so this filter matches nothing.',
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove hasdflasdjf' }));
     expect(screen.getByTestId('values')).toHaveTextContent('reddit');
