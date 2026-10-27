@@ -8,7 +8,16 @@
 
 <p align="center"><strong>Personal Database for Companion Intelligence</strong></p>
 
+[![release](https://img.shields.io/github/v/release/companionintelligence/Companion-Memory?style=flat-square&color=0a6358&label=release)](https://github.com/companionintelligence/Companion-Memory/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Docker%20%C2%B7%20Web%20%C2%B7%20iOS%20%C2%B7%20Android-0a6358?style=flat-square)](https://github.com/companionintelligence/Companion-Memory)
+[![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-0a6358?style=flat-square)](LICENSE.md)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.com/invite/yQp9hwpzAa)
+
 <p align="center"><a href="https://ci.computer/memory">Website</a> · <a href="#docs">Documentation</a> · <a href="#install-from-store">Get started</a> · <a href="https://docs.ci.computer/docs/reference/open-source-systems">Systems map</a></p>
+
+<p align="center">
+  <a href="https://hub.ci.computer/store/ci-memory"><img src="https://img.shields.io/badge/Install%20in%20Hub-Install%20in%20Hub-0a6358?style=for-the-badge&logo=docker&logoColor=white" alt="Install in Hub" height="30"></a>
+</p>
 
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
@@ -63,6 +72,41 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
     ├── editor/                 # Rich-text editor package
     ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
     └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
+```
+
+
+## Features
+
+| Feature | What it provides |
+|---|---|
+| **Capture and import** | Accept authenticated events, files and personal archive imports. |
+| **Search and retrieval** | Expose the same memory domain through REST, GraphQL and Memory MCP. |
+| **Background intelligence** | Run parsing, summaries and predictions in workers and Python sidecars. |
+| **Clients** | Serve web, CLI and mobile clients from shared API contracts. |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td valign="top"><img src="video/assets/shots/feed-overview.png" alt="Companion Memory feed showing captured and summarized activity" width="420"><p align="center">Companion Memory feed showing captured and summarized activity</p></td>
+    <td valign="top"><img src="video/assets/shots/memory-search-results.png" alt="Companion Memory search results across personal records" width="420"><p align="center">Companion Memory search results across personal records</p></td>
+    <td valign="top"><img src="video/assets/shots/insights-list.png" alt="Companion Memory insight list" width="420"><p align="center">Companion Memory insight list</p></td>
+  </tr>
+</table>
+
+
+## How it fits together
+
+Clients send captures and queries to the authenticated API. Workers handle slower imports and parsing, while PostgreSQL remains the source of truth for structured records and vectors.
+
+```mermaid
+flowchart LR
+  Clients[Capture, web, CLI and agents] --> API[Authenticated API]
+  API --> Queue[Background jobs]
+  API --> DB[(PostgreSQL and extensions)]
+  Queue --> Workers[Import, parsing and summary workers]
+  Workers --> DB
+  API --> MCP[REST, GraphQL and Memory MCP]
 ```
 
 ## Architecture at a glance
