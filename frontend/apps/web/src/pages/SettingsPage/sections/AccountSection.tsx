@@ -45,6 +45,19 @@ function messageFrom(error: unknown, fallback: string, signInAgain: string): str
 }
 
 /**
+ * An `onChange` that stores the field's value and drops its form's error, which was about the
+ * values it was shown for. The browser's own checks (an address it won't accept, a too-short
+ * password) stop the next submit before the form's handler runs. Without this, "New passwords do
+ * not match." stayed beside a message about something else.
+ */
+function editAndClearError(set: (value: string) => void, setError: (error: null) => void) {
+  return (e: ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value);
+    setError(null);
+  };
+}
+
+/**
  * Account settings — currently just deletion, which exists because both stores
  * require it: an app offering in-app signup must offer in-app account deletion
  * (Apple Guideline 5.1.1(v), Google Play Data Deletion). Self-hosting is not an
@@ -166,16 +179,10 @@ export function AccountSection() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSavedNote, setPasswordSavedNote] = useState<string | null>(null);
 
-  // An error is about the values it was shown for. Editing a field clears it: the browser's own
-  // checks (a too-short password) stop the next submit before handleChangePassword runs, so
-  // "New passwords do not match." otherwise stayed beside a message about something else.
-  const editPasswordField = (set: (value: string) => void) => (e: ChangeEvent<HTMLInputElement>) => {
-    set(e.target.value);
-    setPasswordError(null);
-  };
-
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
+    // Before the mismatch check, so "Password updated." from the last change does not sit beside it.
+    setPasswordSavedNote(null);
 
     if (newPassword !== confirmNewPassword) {
       setPasswordError('New passwords do not match.');
@@ -185,7 +192,6 @@ export function AccountSection() {
 
     setPasswordSaving(true);
     setPasswordError(null);
-    setPasswordSavedNote(null);
 
     try {
       await fetchJson('/api/account/password', {
@@ -328,7 +334,7 @@ export function AccountSection() {
                         id="emailCurrentPassword"
                         autoComplete="current-password"
                         value={emailCurrentPassword}
-                        onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                        onChange={editAndClearError(setEmailCurrentPassword, setEmailError)}
                         disabled={emailSaving}
                         required
                       />
@@ -341,7 +347,7 @@ export function AccountSection() {
                       id="newEmail"
                       autoComplete="email"
                       value={newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
+                      onChange={editAndClearError(setNewEmail, setEmailError)}
                       disabled={emailSaving}
                       required
                     />
@@ -379,7 +385,7 @@ export function AccountSection() {
                       id="passwordCurrentPassword"
                       autoComplete="current-password"
                       value={passwordCurrentPassword}
-                      onChange={editPasswordField(setPasswordCurrentPassword)}
+                      onChange={editAndClearError(setPasswordCurrentPassword, setPasswordError)}
                       disabled={passwordSaving}
                       required
                     />
@@ -393,7 +399,7 @@ export function AccountSection() {
                     autoComplete="new-password"
                     minLength={MIN_PASSWORD_LENGTH}
                     value={newPassword}
-                    onChange={editPasswordField(setNewPassword)}
+                    onChange={editAndClearError(setNewPassword, setPasswordError)}
                     disabled={passwordSaving}
                     required
                   />
@@ -405,7 +411,7 @@ export function AccountSection() {
                     id="confirmNewPassword"
                     autoComplete="new-password"
                     value={confirmNewPassword}
-                    onChange={editPasswordField(setConfirmNewPassword)}
+                    onChange={editAndClearError(setConfirmNewPassword, setPasswordError)}
                     disabled={passwordSaving}
                     required
                   />

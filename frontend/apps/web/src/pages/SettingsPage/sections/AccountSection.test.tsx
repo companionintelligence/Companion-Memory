@@ -399,7 +399,7 @@ describe('AccountSection — change email', () => {
     expect(h.refetch).not.toHaveBeenCalled();
   });
 
-  it('surfaces the server error and does not refetch the user', async () => {
+  function refuseEmailAsTaken() {
     fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
       if (isAccountReadCall(url, init)) {
         return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
@@ -411,6 +411,10 @@ describe('AccountSection — change email', () => {
 
       return Promise.resolve(undefined);
     });
+  }
+
+  it('surfaces the server error and does not refetch the user', async () => {
+    refuseEmailAsTaken();
     render(<AccountSection />);
 
     fireEvent.change(
@@ -424,6 +428,27 @@ describe('AccountSection — change email', () => {
 
     expect(await screen.findByText('That email address is already in use')).toBeInTheDocument();
     expect(h.refetch).not.toHaveBeenCalled();
+  });
+
+  it('drops the server error as soon as a field is edited again', async () => {
+    refuseEmailAsTaken();
+    render(<AccountSection />);
+
+    fireEvent.change(
+      await screen.findByLabelText('Current password', { selector: '#emailCurrentPassword' }),
+      {
+        target: { value: 'my-password' },
+      },
+    );
+    fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'taken@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
+    expect(await screen.findByText('That email address is already in use')).toBeInTheDocument();
+
+    // The next address is one the browser refuses, so the form never submits and only the edit
+    // can take the old message away.
+    fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'not-an-address' } });
+
+    expect(screen.queryByText('That email address is already in use')).not.toBeInTheDocument();
   });
 });
 
@@ -593,6 +618,31 @@ describe('AccountSection — change password', () => {
     fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'short' } });
 
     expect(screen.queryByText('New passwords do not match.')).not.toBeInTheDocument();
+  });
+
+  it('drops the last "Password updated." note when the next try does not match', async () => {
+    render(<AccountSection />);
+
+    fireEvent.change(
+      await screen.findByLabelText('Current password', { selector: '#passwordCurrentPassword' }),
+      {
+        target: { value: 'my-password' },
+      },
+    );
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-1' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+    await screen.findByText(/phone and desktop apps you signed in on are signed out/i);
+
+    fireEvent.change(screen.getByLabelText('Current password', { selector: '#passwordCurrentPassword' }), {
+      target: { value: 'new-password-1' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-2' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'different' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+
+    expect(await screen.findByText('New passwords do not match.')).toBeInTheDocument();
+    expect(screen.queryByText(/Password updated/)).not.toBeInTheDocument();
   });
 
   it('labels the action "Set a password" and skips current-password for a federated account without one', async () => {
