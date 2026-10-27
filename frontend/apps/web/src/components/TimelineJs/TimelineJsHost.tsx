@@ -100,6 +100,7 @@ function timelineLocaleFor(timeFormat: TimeFormat): string {
 let timelineLoad: Promise<TimelineCtor> | null = null;
 
 function ensureTimelineCss(): Promise<void> {
+  // A failed link removes itself (below), so one still here without a sheet is in flight.
   const existing = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
   if (existing) {
     return existing.sheet
@@ -116,7 +117,13 @@ function ensureTimelineCss(): Promise<void> {
     link.href = timelineCssUrl;
     link.dataset.timelinejsCss = '1';
     link.onload = () => resolve();
-    link.onerror = () => resolve();
+    link.onerror = () => {
+      // Like a script, a link fires load or error once and never again. Left in place, the
+      // next mount would wait on it for good, so drop it and let that mount fetch afresh.
+      link.remove();
+      resolve();
+    };
+
     document.head.appendChild(link);
   });
 }
@@ -139,7 +146,13 @@ function loadTimelineCtor(): Promise<TimelineCtor> {
   }
 
   if (!timelineLoad) {
-    timelineLoad = Promise.all([ensureTimelineCss(), loadTimelineScript()]).then(([, Timeline]) => Timeline);
+    // Held only while a load is in flight: once `window.TL` exists the branch above serves every
+    // call, and a failure clears it so the next mount starts over.
+    timelineLoad = Promise.all([ensureTimelineCss(), loadTimelineScript()]).then(([, Timeline]) => {
+      timelineLoad = null;
+
+      return Timeline;
+    });
   }
 
   return timelineLoad;
@@ -147,37 +160,29 @@ function loadTimelineCtor(): Promise<TimelineCtor> {
 
 function loadTimelineScript(): Promise<TimelineCtor> {
   return new Promise<TimelineCtor>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
-    if (existing && window.TL?.Timeline) {
-      resolve(window.TL.Timeline);
-
-      return;
-    }
-
-    // A tag left without `window.TL` is one whose load already failed (while a
-    // load is in flight, `timelineLoad` keeps us from getting here). A script
-    // element fetches once, when it is inserted, and setting the same `src`
-    // again does nothing, so reusing it left Try again on "Loading timeline…"
-    // for good. Swap in a fresh tag, which fetches again.
-    existing?.remove();
-
     const script = document.createElement('script');
     script.dataset.timelinejs = '1';
     script.src = timelineJsUrl;
     script.async = true;
+
+    // A script element fetches once, when it is inserted, and setting the same `src` again does
+    // nothing, so reusing a failed tag left Try again on "Loading timeline…" for good. Drop it
+    // here; the next attempt inserts a fresh tag, which fetches again.
+    const fail = (message: string) => {
+      script.remove();
+      timelineLoad = null;
+      reject(new Error(message));
+    };
+
     script.onload = () => {
       if (window.TL?.Timeline) {
         resolve(window.TL.Timeline);
       } else {
-        timelineLoad = null;
-        reject(new Error('TimelineJS loaded without window.TL.Timeline'));
+        fail('TimelineJS loaded without window.TL.Timeline');
       }
     };
 
-    script.onerror = () => {
-      timelineLoad = null;
-      reject(new Error('Failed to load TimelineJS script'));
-    };
+    script.onerror = () => fail('Failed to load TimelineJS script');
 
     document.head.appendChild(script);
   });
