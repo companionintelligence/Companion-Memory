@@ -594,6 +594,8 @@ export class GraphUtilityService {
       entityType?: string;
       excludeEntityTypes?: string[];
       nameContains?: string;
+      /** The whole name, ignoring case and surrounding space. */
+      nameEquals?: string;
       propertyEquals?: Record<string, string | number | boolean>;
     } = {},
     options: { limit?: number; offset?: number } = {},
@@ -624,6 +626,12 @@ export class GraphUtilityService {
 
     if (filters.nameContains) {
       query = query.andWhere('entity.name ILIKE :name', { name: `%${filters.nameContains}%` });
+    }
+
+    if (filters.nameEquals) {
+      query = query.andWhere('lower(btrim(entity.name)) = lower(btrim(:nameEquals))', {
+        nameEquals: filters.nameEquals,
+      });
     }
 
     if (filters.propertyEquals) {

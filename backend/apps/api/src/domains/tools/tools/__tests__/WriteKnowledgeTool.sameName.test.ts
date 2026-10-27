@@ -11,10 +11,10 @@ import { WriteKnowledgeTool } from '../WriteKnowledgeTool';
 
 /**
  * "Remember that Jordan Lee likes jazz" made a second Person "Jordan Lee" beside
- * the one the user already had, plus a Concept "jazz", and the fact went with
+ * the one the user already had (plus a Concept "jazz") and the fact went with
  * the duplicate: an `entity.create` without an id never looked for an existing
  * entity of that name. It now lands on the one person, place or concept that
- * already carries the name, and leaves everything else as it was.
+ * already carries the name and leaves everything else as it was.
  *
  * Same harness as WriteKnowledgeTool.idReuse.test.ts: the real GraphEventService
  * and GraphUtilityService over in-memory tables, so the assertions are about the
@@ -90,14 +90,24 @@ function makePipeline(seed: GraphNodeEntity[], selfId: string | null = null) {
     getNode: jest.fn(
       async (_owner: string, id: string) => active().find((row) => row.entity_id === id) ?? null,
     ),
-    // GraphUtilityService.queryNodes: the owner's active rows of that type whose name contains the text.
-    getNodes: jest.fn(async (_owner: string, options: { entityType?: string; nameContains?: string }) =>
-      active().filter(
-        (row) =>
-          (!options.entityType || row.entity_type === options.entityType) &&
-          (!options.nameContains ||
-            (row.name ?? '').toLowerCase().includes(options.nameContains.toLowerCase())),
-      ),
+    // GraphUtilityService.queryNodes: the owner's active rows of that type whose name contains the
+    // text, or is the text ignoring case and surrounding space, newest first and capped at `limit`.
+    getNodes: jest.fn(
+      async (
+        _owner: string,
+        options: { entityType?: string; nameContains?: string; nameEquals?: string; limit?: number },
+      ) =>
+        active()
+          .filter(
+            (row) =>
+              (!options.entityType || row.entity_type === options.entityType) &&
+              (!options.nameContains ||
+                (row.name ?? '').toLowerCase().includes(options.nameContains.toLowerCase())) &&
+              (!options.nameEquals ||
+                (row.name ?? '').trim().toLowerCase() === options.nameEquals.trim().toLowerCase()),
+          )
+          .reverse()
+          .slice(0, options.limit ?? 25),
     ),
     getNodesByIds: jest.fn(async (_owner: string, ids: string[]) =>
       active().filter((row) => ids.includes(row.entity_id)),
@@ -144,8 +154,8 @@ const LIKES_JAZZ = {
   ],
 };
 
-describe('memory.remember — entity.create for a name the user already has', () => {
-  it('lands on the existing person: no second Jordan Lee, and the fact merged onto that one', async () => {
+describe('memory.remember with entity.create for a name the user already has', () => {
+  it('lands on the existing person: no second Jordan Lee and the fact merged onto that one', async () => {
     const graph = makePipeline([jordan()]);
 
     const result = await graph.run({ operations: LIKES_JAZZ.operations.slice(0, 2) });
@@ -184,7 +194,79 @@ describe('memory.remember — entity.create for a name the user already has', ()
     ]);
   });
 
-  it('matches whatever the case and surrounding space, and keeps the stored spelling', async () => {
+  it('finds the match behind more than a page of newer names that only contain it', async () => {
+    const ART = '0199a1b2-0000-7000-8000-000000000006';
+    const newer = Array.from({ length: 30 }, (_, i) =>
+      entityRow({
+        entity_id: `0199a1b2-0000-7000-8000-1000000000${String(i).padStart(2, '0')}`,
+        entity_type: 'Concept',
+        name: `Art ${i}`,
+      }),
+    );
+    const graph = makePipeline([
+      entityRow({ entity_id: ART, entity_type: 'Concept', name: 'Art' }),
+      ...newer,
+    ]);
+
+    const result = await graph.run({
+      operations: [{ kind: 'entity.create', entityType: 'Concept', name: 'art' }],
+    });
+
+    expect(result.data?.results[0]).toMatchObject({ status: 'updated', entityId: ART });
+    expect(graph.active()).toHaveLength(31);
+  });
+
+  it('links a concept created in the same call', async () => {
+    const graph = makePipeline([jordan()]);
+
+    const result = await graph.run({
+      operations: [
+        { kind: 'entity.create', entityType: 'Concept', name: 'bebop' },
+        {
+          kind: 'relationship.create',
+          relationshipType: 'LIKES',
+          from: { name: 'Jordan Lee' },
+          to: { name: 'bebop' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 1, createdRelationships: 1, failures: 0 });
+    const bebop = graph.active().find((row) => row.name === 'bebop');
+    expect(graph.edges.all()).toEqual([
+      expect.objectContaining({
+        from_entity_id: JORDAN,
+        to_entity_id: bebop?.entity_id,
+        relationship_type: 'LIKES',
+      }),
+    ]);
+  });
+
+  it('still refuses a link to an id the caller named that no row of theirs holds', async () => {
+    const graph = makePipeline([jordan()]);
+    const named = '0199a1b2-0000-7000-8000-000000000007';
+
+    const result = await graph.run({
+      operations: [
+        { kind: 'entity.create', entityId: named, entityType: 'Concept', name: 'bebop' },
+        // By name, so the end resolves to the named id from this call rather than failing to resolve.
+        {
+          kind: 'relationship.create',
+          relationshipType: 'LIKES',
+          from: { name: 'Jordan Lee' },
+          to: { name: 'bebop' },
+        },
+      ],
+    });
+
+    expect(result.data?.results[1]).toMatchObject({
+      status: 'failed',
+      message: 'Both source and target entities must exist and be owned by the user',
+    });
+    expect(graph.edges.all()).toEqual([]);
+  });
+
+  it('matches whatever the case and surrounding space and keeps the stored spelling', async () => {
     const graph = makePipeline([jordan()]);
 
     await graph.run({
@@ -224,7 +306,49 @@ describe('memory.remember — entity.create for a name the user already has', ()
     expect(graph.nodes.get(JORDAN)?.description).toBe('Likes jazz');
   });
 
-  it('says so on a dry run, and writes nothing', async () => {
+  it('replaces a description that is only the copy of the name an earlier create stored', async () => {
+    const JAZZ = '0199a1b2-0000-7000-8000-000000000005';
+    const graph = makePipeline([
+      entityRow({ entity_id: JAZZ, entity_type: 'Concept', name: 'jazz', description: 'jazz' }),
+    ]);
+
+    const result = await graph.run({
+      operations: [
+        { kind: 'entity.create', entityType: 'Concept', name: 'Jazz', description: 'A music genre' },
+      ],
+    });
+
+    expect(result.data?.results[0]).toMatchObject({ status: 'updated', entityId: JAZZ });
+    expect(result.data?.results[0].message).not.toContain('description was kept');
+    expect(graph.nodes.get(JAZZ)?.description).toBe('A music genre');
+  });
+
+  it('gives each new entity its own placeholder on a dry run, so a link between two reads as one', async () => {
+    const graph = makePipeline([]);
+
+    const result = await graph.run({
+      dryRun: true,
+      operations: [
+        { kind: 'entity.create', entityType: 'Person', name: 'Robin Park' },
+        { kind: 'entity.create', entityType: 'Concept', name: 'bebop' },
+        {
+          kind: 'relationship.create',
+          relationshipType: 'LIKES',
+          from: { name: 'Robin Park' },
+          to: { name: 'bebop' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 2, createdRelationships: 1, failures: 0 });
+    expect(result.data?.results[2]).toMatchObject({
+      status: 'created',
+      message: 'Dry run: would create relationship',
+    });
+    expect(graph.active()).toEqual([]);
+  });
+
+  it('says so on a dry run and writes nothing', async () => {
     const graph = makePipeline([jordan()]);
 
     const result = await graph.run({ ...LIKES_JAZZ, dryRun: true });
@@ -313,6 +437,27 @@ describe('memory.remember — entity.create for a name the user already has', ()
       });
 
       expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0 });
+    });
+
+    it('when the create carries an identity list, which an existing row would refuse', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { emails: ['jordan@example.com'] },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0, failures: 0 });
+      expect(graph.nodes.get(JORDAN)?.properties).toEqual({ city: 'Oakland' });
+      expect(
+        graph.active().find((row) => row.entity_id !== JORDAN && row.name === 'Jordan Lee')?.properties,
+      ).toEqual({ emails: ['jordan@example.com'] });
     });
   });
 });

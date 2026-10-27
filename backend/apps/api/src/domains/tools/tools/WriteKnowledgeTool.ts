@@ -208,6 +208,17 @@ function overwritesText(stored: string | null | undefined, next: string | undefi
   return next !== undefined && (stored ?? '').trim() !== '' && next.trim() !== (stored ?? '').trim();
 }
 
+/**
+ * An entity's own description, or `null` when all it holds is the copy of the name that
+ * `createOrUpdateNode` stores on an insert that sent none. Every entity `memory.remember` made
+ * without a description carries that copy. It describes nothing.
+ */
+function ownDescriptionOf(node: Pick<GraphNodeEntity, 'name' | 'description'>): string | null {
+  const description = node.description?.trim() ?? '';
+
+  return description === '' || description === (node.name ?? '').trim() ? null : node.description;
+}
+
 /** A Person row that claims to be the account holder, the way `UserContextService` falls back to one. */
 function claimsSelf(node: Pick<GraphNodeEntity, 'properties'>): boolean {
   const flag = (node.properties as Record<string, unknown> | null | undefined)?.is_self;
@@ -472,12 +483,15 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       : undefined;
   }
 
-  private async losesStoredData(
-    ownerId: string,
-    operations: WriteKnowledgeInput['operations'],
-  ): Promise<boolean> {
+  /**
+   * Whether a node is the account holder's own Person: it claims to be, or it is the entity
+   * `UserContextService` resolves. That lookup runs at most once per checker, only when a node
+   * does not claim it outright.
+   */
+  private selfChecker(ownerId: string): (node: GraphNodeEntity) => Promise<boolean> {
     let selfEntityId: string | null | undefined;
-    const isSelf = async (node: GraphNodeEntity): Promise<boolean> => {
+
+    return async (node) => {
       if (claimsSelf(node)) {
         return true;
       }
@@ -488,6 +502,13 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
 
       return node.entity_id === selfEntityId;
     };
+  }
+
+  private async losesStoredData(
+    ownerId: string,
+    operations: WriteKnowledgeInput['operations'],
+  ): Promise<boolean> {
+    const isSelf = this.selfChecker(ownerId);
 
     for (const operation of operations) {
       switch (operation.kind) {
@@ -583,6 +604,11 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     let updatedRelationships = 0;
     let failures = 0;
     const createdByName = new Map<string, string>();
+    // Ids this call minted for brand-new entities (on a dry run, a placeholder
+    // for each). Their writes are queued, so a read in this call cannot see them
+    // yet; they are the caller's by construction.
+    const mintedIds = new Set<string>();
+    const isSelf = this.selfChecker(ownerId);
 
     const rememberName = (entityType: string, name: string | undefined, entityId: string) => {
       if (!name || name.trim() === '') {
@@ -608,8 +634,11 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             // An entity.create without an id for a name the user already has a
             // person, place or concept by lands on that one. It used to mint a
             // second one: "Remember that Jordan Lee likes jazz" made another
-            // Jordan Lee beside the existing one, and the fact went with it.
-            const sameNamed = operation.entityId ? null : await this.findSameNamed(ownerId, operation);
+            // Jordan Lee beside the existing one and the fact went with it.
+            const sameNamed = operation.entityId
+              ? null
+              : await this.findSameNamed(ownerId, operation, isSelf);
+            const targetEntityId = operation.entityId ?? sameNamed?.entity_id;
             const ownerManagedCreate = ownerManagedKeysIn(operation, {
               newEntity: !operation.entityId && !sameNamed,
             });
@@ -628,12 +657,10 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               ? await this.graphQuery.getNode(ownerId, operation.entityId, { includeInactive: true })
               : sameNamed;
             // A name match keeps the stored description: overwriting one is
-            // what entity.update (with its approval) is for, and the model did
-            // not name this row.
+            // what entity.update (with its approval) is for. The model did not
+            // name this row.
             const keptDescription =
-              sameNamed != null &&
-              operation.description !== undefined &&
-              overwritesText(sameNamed.description, operation.description);
+              sameNamed != null && overwritesText(ownDescriptionOf(sameNamed), operation.description);
 
             // A soft-deleted (forgotten) row still owns its id, so an id-reuse
             // create must not fall through to createOrUpdateNode's update
@@ -703,7 +730,15 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             }
 
             if (dryRun) {
-              rememberName(entityType, knownName, operation.entityId ?? sameNamed?.entity_id ?? 'dry-run');
+              // Each new entity gets a placeholder of its own: one shared
+              // placeholder read a link between two new entities as a link
+              // from one entity to itself.
+              const plannedId = targetEntityId ?? `dry-run-${mintedIds.size + 1}`;
+              if (!targetEntityId) {
+                mintedIds.add(plannedId);
+              }
+
+              rememberName(entityType, knownName, plannedId);
               if (existing) {
                 updatedNodes += 1;
                 results.push({
@@ -725,11 +760,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             }
 
             const nestedRelationships = operation.relationships?.length
-              ? await this.prepareNestedRelationships(
-                  ownerId,
-                  operation.entityId ?? sameNamed?.entity_id,
-                  operation.relationships,
-                )
+              ? await this.prepareNestedRelationships(ownerId, targetEntityId, operation.relationships)
               : [];
 
             // Only what the caller supplied goes out: every other field, the
@@ -749,7 +780,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             // above did not. On a brand-new row the insert defaults an omitted
             // field exactly as it would a null one, so nothing changes there.
             const { entityId } = await this.graphEvents.upsertNode(ownerId, {
-              entityId: operation.entityId ?? sameNamed?.entity_id,
+              entityId: targetEntityId,
               entityType,
               // Same name, so nothing to write; the stored spelling stays.
               name: sameNamed ? undefined : operation.name,
@@ -782,6 +813,12 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
                 entityId,
               });
             } else {
+              // Only an id minted here, not one the caller named: a named id that
+              // reads as missing may be another owner's row.
+              if (!operation.entityId) {
+                mintedIds.add(entityId);
+              }
+
               createdNodes += 1;
               results.push({
                 kind: operation.kind,
@@ -1007,14 +1044,20 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             // that edge and say it was updated, rather than report an id no row
             // will ever carry. One that only appears after this read is still
             // merged into — just reported as created.
+            //
+            // An end minted in this call has no stored edge yet. A dry run's
+            // placeholder is no uuid to look one up by either: Postgres refused
+            // it and the link read as failed.
             const existingRel =
               byId ??
-              (await this.graphQuery.findActiveRelationship(ownerId, {
-                fromEntityId,
-                toEntityId,
-                relationshipType,
-                isBidirectional: operation.isBidirectional,
-              }));
+              (mintedIds.has(fromEntityId) || mintedIds.has(toEntityId)
+                ? null
+                : await this.graphQuery.findActiveRelationship(ownerId, {
+                    fromEntityId,
+                    toEntityId,
+                    relationshipType,
+                    isBidirectional: operation.isBidirectional,
+                  }));
 
             if (dryRun) {
               if (existingRel) {
@@ -1037,8 +1080,13 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
-            const endpoints = await this.graphQuery.getNodesByIds(ownerId, [fromEntityId, toEntityId]);
-            if (endpoints.length !== 2) {
+            // An end created earlier in this call is still queued, so reading it
+            // back failed every link to a new entity: "Jordan Lee likes bebop"
+            // with a new Concept "bebop" left the concept unlinked. The table has
+            // no foreign key to entities, so the edge can land before its node.
+            const unread = [fromEntityId, toEntityId].filter((id) => !mintedIds.has(id));
+            const endpoints = unread.length > 0 ? await this.graphQuery.getNodesByIds(ownerId, unread) : [];
+            if (endpoints.length !== unread.length) {
               results.push({
                 kind: operation.kind,
                 status: 'failed',
@@ -1313,25 +1361,30 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
   }
 
   /**
-   * Check the `relationships` an `entity.create` carries, and spell their types
-   * the stored way, BEFORE the entity is queued: a bad edge then fails the
-   * operation with nothing written. Checked after, the entity was already on its
-   * way while the result said the operation failed — and a model retrying a
-   * failed create without an `entityId` mints a second entity. `entityId` is the
-   * id the create reuses, if any; a minted one cannot be a target yet.
-   */
-  /**
    * The one active person, place or concept of this type that already carries
    * this name (ignoring case and surrounding space), for an `entity.create`
    * that names no entity. None when there are several (which one is meant is
    * not this tool's guess), when the create carries a linked key (an import's
-   * coordinate says which row it is), for other entity types (two events or
-   * notes may share a title), and for the account holder's own Person, whose
-   * row has writers and protections of its own.
+   * coordinate says which row it is), when it carries an owner-managed key,
+   * for other entity types (two events or notes may share a title) or for the
+   * account holder's own Person, whose row has writers and protections of its
+   * own.
+   *
+   * The owner-managed case is "remember Dana, dana@example.com": an identity
+   * list is refused on a row that already exists, so landing on the Dana the
+   * user has would fail the whole create. A new entity records the address
+   * (see `ownerManagedKeysIn`), as it did before names were matched.
    */
   private async findSameNamed(
     ownerId: string,
-    operation: { entityType: string; name?: string; linkedTable?: string; linkedId?: string },
+    operation: {
+      entityType: string;
+      name?: string;
+      properties?: Record<string, unknown>;
+      linkedTable?: string;
+      linkedId?: string;
+    },
+    isSelf: (node: GraphNodeEntity) => Promise<boolean>,
   ): Promise<GraphNodeEntity | null> {
     const name = operation.name?.trim();
     const entityType = storedEntityType(operation.entityType);
@@ -1340,24 +1393,35 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       return null;
     }
 
-    if (operation.linkedTable || operation.linkedId) {
+    if (operation.linkedTable || operation.linkedId || ownerManagedKeysIn(operation).length > 0) {
       return null;
     }
 
-    const candidates = await this.graphQuery.getNodes(ownerId, { entityType, nameContains: name, limit: 25 });
-    const matches = candidates.filter(
-      (node) => node.is_active && node.name?.trim().toLowerCase() === name.toLowerCase(),
-    );
+    // An exact-name read of active rows, two at most: enough to tell one match
+    // from several. A capped "name contains" page could miss the match (or a
+    // second one) behind newer rows that merely contain the name, such as "Art"
+    // behind 25 newer concepts with "art" in them.
+    const [match, another] = await this.graphQuery.getNodes(ownerId, {
+      entityType,
+      nameEquals: name,
+      limit: 2,
+    });
 
-    if (matches.length !== 1 || claimsSelf(matches[0])) {
+    if (!match || another || (await isSelf(match))) {
       return null;
     }
 
-    const selfEntityId = (await this.userContext.getSelfIdentity(ownerId))?.entityId ?? null;
-
-    return matches[0].entity_id === selfEntityId ? null : matches[0];
+    return match;
   }
 
+  /**
+   * Check the `relationships` an `entity.create` carries, and spell their types
+   * the stored way, BEFORE the entity is queued: a bad edge then fails the
+   * operation with nothing written. Checked after, the entity was already on its
+   * way while the result said the operation failed — and a model retrying a
+   * failed create without an `entityId` mints a second entity. `entityId` is the
+   * id the create reuses, if any; a minted one cannot be a target yet.
+   */
   private async prepareNestedRelationships(
     ownerId: string,
     entityId: string | undefined,

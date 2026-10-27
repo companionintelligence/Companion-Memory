@@ -12,6 +12,8 @@ export interface GraphNodeQueryOptions {
   entityType?: string;
   excludeEntityTypes?: string[];
   nameContains?: string;
+  /** The whole name, ignoring case and surrounding space. */
+  nameEquals?: string;
   propertyEquals?: Record<string, string | number | boolean>;
   limit?: number;
   offset?: number;
@@ -41,6 +43,7 @@ export class GraphQueryService {
         entityType: filters.entityType,
         excludeEntityTypes: filters.excludeEntityTypes,
         nameContains: filters.nameContains,
+        nameEquals: filters.nameEquals,
         propertyEquals: filters.propertyEquals,
       },
       { limit, offset },
