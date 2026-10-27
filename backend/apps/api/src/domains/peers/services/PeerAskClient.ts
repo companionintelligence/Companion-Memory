@@ -102,7 +102,9 @@ export class PeerAskClient {
     try {
       const authHeader = accessToken?.trim()
         ? `Bearer ${accessToken.trim()}`
-        : (signature ? 'Bearer keri' : undefined);
+        : signature
+          ? 'Bearer keri'
+          : undefined;
 
       const response = await peerEgressFetch(url, {
         method: init.method,

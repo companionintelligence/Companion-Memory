@@ -17,7 +17,12 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@/api/powersync/replicaQuery', () => ({
-  useReplicaQuery: () => ({ data: h.note ? [h.note] : [], isLoading: false, error: undefined, refresh: () => {} }),
+  useReplicaQuery: () => ({
+    data: h.note ? [h.note] : [],
+    isLoading: false,
+    error: undefined,
+    refresh: () => {},
+  }),
 }));
 
 vi.mock('@/api/powersync/session', () => {

@@ -1,7 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type Handler = { onResult: (result: { rows?: { _array: unknown[] } }) => void; onError?: (error: Error) => void };
+type Handler = {
+  onResult: (result: { rows?: { _array: unknown[] } }) => void;
+  onError?: (error: Error) => void;
+};
 
 const h = vi.hoisted(() => ({
   database: null as null | { watch: ReturnType<typeof vi.fn> },

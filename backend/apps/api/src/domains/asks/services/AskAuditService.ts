@@ -14,10 +14,10 @@ import { v7 as uuidv7 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
+import { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER } from '../auditSaid';
 import { type DisclosureSummary, summarizeDisclosures } from '../disclosureSummary';
 import { type AskAudit, AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskAuditOutcome, RecordAskAuditDto } from '../types';
-import { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER } from '../auditSaid';
 
 export { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER };
 
