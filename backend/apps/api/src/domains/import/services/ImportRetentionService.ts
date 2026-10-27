@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
@@ -70,6 +70,19 @@ interface DiscardCandidate extends RetentionCandidate {
    * stat to imply. See {@link ImportRetentionService.discardRun}.
    */
   readonly unstoredMedia: boolean;
+  /**
+   * The run has at least one `staged_sources` row and every one of them is an
+   * upload. Such a run's scratch tree holds a copy of an archive the user sent
+   * over HTTP, never the only copy of a file from their inbox folder, so a
+   * discard of a run that will never be pushed may reclaim it. See
+   * {@link ImportRetentionService.claimForDiscard}.
+   */
+  readonly uploadsOnly: boolean;
+}
+
+/** A claimed discard, and whether it takes the run's scratch tree with it. */
+interface ClaimedDiscard extends DiscardCandidate {
+  readonly reclaimScratch: boolean;
 }
 
 /** What a discard's media stage had already stored by the time it was called. */
@@ -101,6 +114,12 @@ export interface RunRetirement {
 export interface DiscardedRun extends RunRetirement, MediaAlreadyStored {
   readonly runId: string;
   readonly label: string | null;
+  /**
+   * The run's scratch tree was deleted with it: the copy of the uploaded
+   * archive that a failed unpack leaves behind. Only ever true for a run that
+   * had no parse to push and whose sources were all uploads.
+   */
+  readonly scratchTreeReclaimed: boolean;
 }
 
 /**
@@ -211,7 +230,10 @@ export interface RetentionSweepResult {
  *    inbox unit that tree is the user's only copy, acquired by rename. The
  *    tree's path is `<scratchDir>/<userId>/<runId>`, so the run row is the
  *    only index into it: delete the row and the archive is unattributable
- *    forever. Both passes skip such runs and log the directory.
+ *    forever. Both passes skip such runs and log the directory. The one way
+ *    such a tree goes is its owner's discard of a run with nothing to push
+ *    whose sources were all uploads (a failed unpack, typically): see
+ *    {@link ImportRetentionService.claimForDiscard}.
  *  - **No source row's bytes, ever.** A retirement takes the retired run's
  *    spent `staged_sources` rows — `ON DELETE SET NULL` would otherwise orphan
  *    one per completed run forever — but an upload whose archive is sitting in
@@ -493,6 +515,15 @@ export class ImportRetentionService {
       return null;
     }
 
+    // Before the row goes: the row is the only index into the tree. A crash or
+    // a failed delete here leaves a `cancelled` run that still holds its tree,
+    // and discarding it again finishes the job (the claim accepts it again).
+    if (candidate.reclaimScratch && !(await this.scratch.reclaim(candidate.userId, candidate.id))) {
+      throw new InternalServerErrorException(
+        `Import run ${runId}: its scratch files could not be removed, so the run was kept. Try the discard again.`,
+      );
+    }
+
     // Counted BEFORE the payload goes. `staged_items.metadata` is the only
     // thing left that names those files, so once `deletePayload` has run the
     // question has no answer anywhere.
@@ -509,9 +540,16 @@ export class ImportRetentionService {
       finishedAt: candidate.finishedAt,
       ...retired,
       ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
     });
 
-    return { runId: candidate.id, label: candidate.label, ...retired, ...kept };
+    return {
+      runId: candidate.id,
+      label: candidate.label,
+      ...retired,
+      ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
+    };
   }
 
   /**
@@ -552,7 +590,7 @@ export class ImportRetentionService {
    * costs microseconds, and doing it before the stamp is what keeps a refusal a
    * pure refusal — a run this declines is left exactly as it was found.
    */
-  private async claimForDiscard(userId: string, runId: string): Promise<DiscardCandidate | null> {
+  private async claimForDiscard(userId: string, runId: string): Promise<ClaimedDiscard | null> {
     return this.dataSource.transaction(async (manager) => {
       const [locked] = await manager.query<Array<{ id: string }>>(
         `SELECT r.id
@@ -570,7 +608,10 @@ export class ImportRetentionService {
         `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt",
                 ${pushableRunSql('r')} AS pushable,
                 NOT ${liveStageExistsSql('r', '$2')} AS quiet,
-                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia"
+                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia",
+                EXISTS (SELECT 1 FROM ci_import.staged_sources s WHERE s.run_id = r.id)
+                  AND NOT EXISTS (SELECT 1 FROM ci_import.staged_sources s
+                                   WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
         [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS]],
@@ -592,13 +633,24 @@ export class ImportRetentionService {
         throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
       }
 
-      if (await this.scratch.exists(candidate.userId, candidate.id)) {
+      const holdsTree = await this.scratch.exists(candidate.userId, candidate.id);
+
+      // The one tree a discard takes: a run with no parse to push (a failed
+      // unpack, typically), fed only by uploads. That tree holds the copy of
+      // the archive `UnpackStage` moved in, which nothing will read again, and
+      // the sweep never takes a run that still owns a tree, so without this
+      // nothing ever would. An inbox unit's tree is the user's only copy of
+      // that file, and a pushable run's tree is not what its discard is about,
+      // so both are still refused.
+      const reclaimScratch = holdsTree && !candidate.pushable && candidate.uploadsOnly;
+
+      if (holdsTree && !reclaimScratch) {
         throw new ConflictException(
           `${SCRATCH_TREE_REASON} (${this.scratch.dirFor(candidate.userId, candidate.id)})`,
         );
       }
 
-      if (!candidate.pushable) {
+      if (!candidate.pushable && !reclaimScratch) {
         throw new ConflictException(
           `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
             'to release. Retention collects this run on its own once it is past the history window.',
@@ -610,7 +662,7 @@ export class ImportRetentionService {
         [runId, DISCARD_CLAIM_ERROR],
       );
 
-      return candidate;
+      return { ...candidate, reclaimScratch };
     });
   }
 
