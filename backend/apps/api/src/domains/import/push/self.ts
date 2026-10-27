@@ -83,14 +83,21 @@ export interface SelfIdentity {
   phones: string[];
 }
 
-/** The owner's addresses, normalized: the account's and the self Person's. */
+/**
+ * The owner's addresses, normalized: the account's and the self Person's.
+ *
+ * Only values with an `@` count, the rule `classifyParticipant` uses for an
+ * email. `properties.emails` is free JSON, and `normalizeEmail` lower-cases
+ * anything, so a stray "info" there would otherwise let a display name "Info"
+ * match the owner as an exact address in every trust mode.
+ */
 function ownerEmails(identity: SelfIdentity): Set<string> {
   const out = new Set<string>();
 
   for (const raw of [identity.email, ...(identity.emails ?? [])]) {
     const normalized = raw ? normalizeEmail(raw) : null;
 
-    if (normalized) {
+    if (normalized?.includes('@')) {
       out.add(normalized);
     }
   }

@@ -220,6 +220,13 @@ describe('a second address on the self Person', () => {
     expect(makeIsSelf(work)).toBe(NOBODY_IS_SELF);
     expect(matchOwner(work, 'Info')).toBeNull();
   });
+
+  it('counts only a value with an @ as an address', () => {
+    const junk = identity({ names: [], email: null, emails: ['Info'] });
+
+    expect(matchOwner(junk, 'Info')).toBeNull();
+    expect(matchOwnerIdentifier(junk, 'email', 'info')).toBeNull();
+  });
 });
 
 describe('isOwnerContact', () => {
