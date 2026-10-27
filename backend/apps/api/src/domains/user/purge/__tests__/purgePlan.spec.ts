@@ -195,6 +195,58 @@ describe('buildPurgePlan', () => {
         indexOf(plan, 'delete:ci.entities:owner_user_id'),
       );
     });
+
+    it('never deletes another account row through such a reference', () => {
+      // The blocking walk used to follow ci.users.entity_id like any blocking
+      // child, adding a step that deleted every account whose `entity_id` named
+      // one of this account's entities.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.entities', 'owner_user_id', 'n')],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.users', 'entity_id', 'ci.entities', 'a'),
+        ],
+      });
+
+      expect(stepIds(plan).filter((id) => id.startsWith('delete:ci.users'))).toEqual(['delete:ci.users']);
+    });
+
+    it('deletes a SET NULL child before its parent, so its rows are not rewritten first', () => {
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [
+          userColumn('ci.entities', 'owner_user_id', 'n'),
+          userColumn('ci.position', 'user_id', 'c'),
+        ],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.position', 'user_id', 'ci.users', 'c'),
+          fk('ci.position', 'location_entity_id', 'ci.entities', 'n'),
+        ],
+      });
+
+      expect(indexOf(plan, 'delete:ci.position:user_id')).toBeLessThan(
+        indexOf(plan, 'delete:ci.entities:owner_user_id'),
+      );
+      expect(plan.warnings).toEqual([]);
+    });
+
+    it('drops a SET NULL ordering hint silently when it closes a cycle', () => {
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.a', 'user_id', 'a'), userColumn('ci.b', 'user_id', 'a')],
+        edges: [
+          fk('ci.a', 'user_id', 'ci.users', 'a'),
+          fk('ci.b', 'user_id', 'ci.users', 'a'),
+          fk('ci.a', 'b_id', 'ci.b', 'a'),
+          fk('ci.b', 'a_id', 'ci.a', 'n'),
+        ],
+      });
+
+      expect(indexOf(plan, 'delete:ci.a:user_id')).toBeLessThan(indexOf(plan, 'delete:ci.b:user_id'));
+      expect(plan.warnings).toEqual([]);
+    });
   });
 
   describe('tables that block the delete without being the account’s', () => {

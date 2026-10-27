@@ -1,11 +1,12 @@
 import { NotFoundException } from '@nestjs/common';
 
 import { BaseOAuth2Client } from '@ci/domains/connections';
+import { LastAdminDeletionRefused } from '@ci/domains/user';
 
-import { USER_OWNED_TABLES } from '../../dataDeletionPlan';
 import {
   DataDeletionService,
-  OBJECT_DELETE_DEADLINE_MS,
+  FAILED_AUDIT_DEADLINE_MS,
+  IMMEDIATE_PURGE_WAIT_MS,
   REVOCATION_DEADLINE_MS,
 } from '../DataDeletionService';
 
@@ -20,27 +21,14 @@ interface Row {
   user?: string;
   connection?: string;
   graphConnection?: string;
-  tagUser?: string; // for ci_search.entity_tag join-delete
   /** Primary key, for rows the ci.record_sources ledger references. */
   id?: string;
   /** Ledger rows only: which record this arrival evidences. */
   recordTable?: string;
   recordId?: string;
-  /** Rows of a table with no user column: the `id` of the parent row they belong to. */
-  parentId?: string;
-  /** ci.files rows: where the bytes are stored. */
-  bucket?: string;
-  key?: string;
-  /** ci.users rows: the account that created this one. */
-  createdBy?: string;
-  /** ci.ask_audit rows: the two parties, and what the row holds of each. */
-  asker?: string | null;
-  responder?: string | null;
-  prompt?: string;
-  disclosed?: string[];
 }
 
-function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: string[] } = {}) {
+function makeDataSource(initial: Record<string, Row[]>) {
   const store: Record<string, Row[]> = {};
   for (const [key, rows] of Object.entries(initial)) {
     store[key] = rows.map((r) => ({ ...r }));
@@ -48,91 +36,6 @@ function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: 
 
   const run = async (sql: string, params: unknown[] = []): Promise<unknown> => {
     const value = params[0] as string;
-
-    // Which of the tables the account delete touches exist here.
-    if (sql.includes('to_regclass(name)')) {
-      return (params[0] as string[])
-        .filter((name) => !(opts.missingTables ?? []).includes(name))
-        .map((name) => ({ name }));
-    }
-
-    // removeFromAskAudit: rows no other account is a party to go; on the others
-    // the account's side is cleared.
-    if (sql.includes('ci.ask_audit')) {
-      const rows = store['ci.ask_audit'] ?? [];
-      const mine = (id: string | null | undefined) => id == null || id === value;
-      const kept = rows.filter((r) => !(mine(r.asker) && mine(r.responder)));
-      let detached = 0;
-      for (const r of kept) {
-        if (r.asker === value) {
-          r.asker = null;
-          r.prompt = '';
-          detached += 1;
-        } else if (r.responder === value) {
-          r.responder = null;
-          r.disclosed = [];
-          detached += 1;
-        }
-      }
-
-      store['ci.ask_audit'] = kept;
-
-      return [{ deleted: rows.length - kept.length, detached }];
-    }
-
-    // UPDATE ci.users SET created_by = NULL WHERE created_by = $1
-    if (sql.includes('SET "created_by" = NULL')) {
-      let count = 0;
-      for (const r of store['ci.users'] ?? []) {
-        if (r.createdBy === value) {
-          delete r.createdBy;
-          count += 1;
-        }
-      }
-
-      return [[], count];
-    }
-
-    // The user row cannot go while another account names it as its creator,
-    // as the NO ACTION foreign key refuses it.
-    if (
-      sql.includes('DELETE FROM "ci"."users"') &&
-      (store['ci.users'] ?? []).some((r) => r.createdBy === value)
-    ) {
-      throw Object.assign(new Error('violates foreign key constraint "users_created_by_fkey"'), {
-        code: '23503',
-      });
-    }
-
-    // A table set up to refuse its delete, as a trigger raising would.
-    const refused = /DELETE FROM "(\w+)"\."(\w+)"/.exec(sql);
-    if (refused && failingDeletes.has(`${refused[1]}.${refused[2]}`)) {
-      throw new Error(`delete refused on ${refused[1]}.${refused[2]}`);
-    }
-
-    // The objects only this user's file rows point at, a page at a time:
-    // ORDER BY bucket, key LIMIT $2 OFFSET $3.
-    if (sql.includes('SELECT DISTINCT f.bucket')) {
-      const files = store['ci.files'] ?? [];
-      const objects = files.filter(
-        (f) =>
-          f.user === value &&
-          f.bucket != null &&
-          f.key != null &&
-          !files.some((o) => o.bucket === f.bucket && o.key === f.key && o.user !== value),
-      );
-      const distinct = [
-        ...new Map(objects.map((f) => [`${f.bucket}/${f.key}`, { bucket: f.bucket!, key: f.key! }])).values(),
-      ].sort((a, b) => a.bucket.localeCompare(b.bucket) || a.key.localeCompare(b.key));
-      const [limit, offset] = [params[1] as number, params[2] as number];
-
-      return distinct.slice(offset, offset + limit);
-    }
-
-    // SELECT count(*) ... FROM "ci"."files" WHERE user_id = $1 AND key IS NOT NULL
-    if (sql.includes('count(*)') && sql.includes('"ci"."files"')) {
-      return [{ count: (store['ci.files'] ?? []).filter((f) => f.user === value && f.key != null).length }];
-    }
 
     // Ledger arrival removal: DELETE FROM ci.record_sources WHERE user_id = $1 AND connection_id = $2
     if (sql.includes('ci.record_sources WHERE user_id')) {
@@ -180,15 +83,6 @@ function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: 
       return [[], count];
     }
 
-    // ci_search.entity_tag join-delete: remove rows whose tagUser matches.
-    if (sql.includes('"ci_search"."entity_tag"')) {
-      const key = 'ci_search.entity_tag';
-      const before = store[key]?.length ?? 0;
-      store[key] = (store[key] ?? []).filter((r) => r.tagUser !== value);
-
-      return [[], before - (store[key]?.length ?? 0)];
-    }
-
     // Graph connection-scoped delete (properties->>'connection_id').
     if (sql.includes("properties->>'connection_id'")) {
       const owner = params[0] as string;
@@ -197,20 +91,6 @@ function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: 
       const key = `ci.${match?.[1]}`;
       const before = store[key]?.length ?? 0;
       store[key] = (store[key] ?? []).filter((r) => !(r.user === owner && r.graphConnection === conn));
-
-      return [[], before - (store[key]?.length ?? 0)];
-    }
-
-    // Join-scoped delete for a table with no user column:
-    // DELETE FROM "s"."child" t USING "s"."parent" p WHERE t."x" = p."y" AND p."user_id" = $1
-    const through = /DELETE FROM "(\w+)"\."(\w+)" t\s+USING "(\w+)"\."(\w+)" p/.exec(sql);
-    if (through) {
-      const key = `${through[1]}.${through[2]}`;
-      const owned = new Set(
-        (store[`${through[3]}.${through[4]}`] ?? []).filter((r) => r.user === value).map((r) => r.id),
-      );
-      const before = store[key]?.length ?? 0;
-      store[key] = (store[key] ?? []).filter((r) => !owned.has(r.parentId));
 
       return [[], before - (store[key]?.length ?? 0)];
     }
@@ -244,45 +124,15 @@ function makeDataSource(initial: Record<string, Row[]>, opts: { missingTables?: 
 
   const query = jest.fn(run);
 
-  // A transaction runs its statements through the same query(), so their order
-  // stays visible in query.mock.calls, and puts every row back when it throws.
   // Audit rows, whichever way they were written.
   const audits: Array<Record<string, unknown>> = [];
-  const manager = {
-    query,
-    save: async (record: Record<string, unknown>) => {
-      audits.push(record);
-
-      return record;
-    },
-  };
-  const transaction = jest.fn(async (work: (m: typeof manager) => Promise<unknown>) => {
-    const snapshot = structuredClone(store);
-    const auditCount = audits.length;
-    try {
-      return await work(manager);
-    } catch (error) {
-      for (const key of Object.keys(store)) {
-        delete store[key];
-      }
-
-      Object.assign(store, snapshot);
-      audits.length = auditCount;
-      throw error;
-    }
-  });
-
-  /** Tables whose DELETE throws. */
-  const failingDeletes = new Set<string>();
 
   return {
-    dataSource: { query, transaction } as never,
+    dataSource: { query } as never,
     store,
     run,
     query,
-    transaction,
     audits,
-    failingDeletes,
   };
 }
 
@@ -336,14 +186,10 @@ function makeService(opts: {
     providerName?: string | null;
     revoke?: jest.Mock;
   };
-  /** The object store behind ci.files. Wired by default; null leaves it out. */
-  objectStore?: { deleteObjects: jest.Mock } | null;
-  /** Tables this deployment does not have. */
-  missingTables?: string[];
+  /** What `AccountPurgeService.purgeAccount` answers, call by call (the last one repeats). */
+  purgeOutcomes?: Array<Record<string, unknown> | Promise<Record<string, unknown>>>;
 }) {
-  const { dataSource, store, run, query, transaction, audits, failingDeletes } = makeDataSource(opts.store, {
-    missingTables: opts.missingTables,
-  });
+  const { dataSource, store, run, query, audits } = makeDataSource(opts.store);
 
   const connectionRepository = {
     findOne: jest.fn(async ({ where }: { where: { id: string; userId: string } }) => {
@@ -409,8 +255,69 @@ function makeService(opts: {
 
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
-  const objectStore =
-    opts.objectStore === undefined ? { deleteObjects: jest.fn(async () => undefined) } : opts.objectStore;
+  // The order things happened in, across the user service, the purge and the audit.
+  const journal: string[] = [];
+  const purgeAt = new Date('2026-10-27T12:00:00Z');
+  const txManager = {
+    query: jest.fn(async (sql: string, params: unknown[]) => {
+      journal.push(`tx:${sql.replace(/\s+/g, ' ').trim().slice(0, 40)}`);
+
+      return query(sql, params);
+    }),
+    save: jest.fn(async (record: Record<string, unknown>) => {
+      journal.push(`tx:audit:${String(record.status)}`);
+      savedAudits.push(record);
+
+      return record;
+    }),
+  };
+  const userService = {
+    assertMayEndAccount: jest.fn(async () => {
+      journal.push('assert-may-end');
+    }),
+    endAccountNow: jest.fn(
+      async (
+        _context: unknown,
+        _id: string,
+        _options: unknown,
+        alongside: (m: unknown) => Promise<unknown>,
+      ) => {
+        journal.push('end:begin');
+        const result = await alongside(txManager);
+        journal.push('end:commit');
+
+        return { requestedAt: purgeAt, purgeAfter: purgeAt, result };
+      },
+    ),
+  };
+  const outcomes = [...(opts.purgeOutcomes ?? [{}])];
+  const purgeAccount = jest.fn(async (userId: string) => {
+    journal.push('purge');
+    const next = outcomes.length > 1 ? outcomes.shift()! : outcomes[0];
+
+    return {
+      userId,
+      status: 'purged',
+      deletedRows: { 'ci.notes': 1, 'ci.users': 1 },
+      detachedRows: {},
+      deletedObjects: 0,
+      ...(await next),
+    };
+  });
+  const accountPurgeService = { purgeAccount };
+
+  // Journalled: what ran in which order is the point of several tests.
+  const originalSave = auditRepository.save.getMockImplementation()!;
+  auditRepository.save.mockImplementation(async (data: Record<string, unknown>) => {
+    journal.push(`audit:${String(data.status)}`);
+
+    return originalSave(data);
+  });
+  cleanOrphans.mockImplementation(async () => {
+    journal.push('sweep');
+
+    return { results: [], totalDeleted: 0, dryRun: false };
+  });
 
   const service = new DataDeletionService(
     dataSource,
@@ -421,18 +328,21 @@ function makeService(opts: {
     providerKeyService as never,
     cloudOAuthProxyService as never,
     logger as never,
-    objectStore ?? undefined,
+    userService as never,
+    accountPurgeService as never,
   );
 
   return {
     service,
-    objectStore,
+    journal,
+    txManager,
+    userService,
+    purgeAccount,
+    auditRepository,
     logger,
     store,
     run,
     query,
-    transaction,
-    failingDeletes,
     savedAudits,
     connectionRepository,
     clientFactory,
@@ -573,293 +483,251 @@ describe('DataDeletionService.disconnectConnection', () => {
 });
 
 describe('DataDeletionService.deleteAccount', () => {
-  it('revokes every connection, purges every user-owned table for that user ONLY, deletes the user, audits', async () => {
-    const { service, store, savedAudits, cleanOrphans, client } = makeService({
+  const OWN = { userId: 'user-1' };
+
+  it('revokes the grants, ends the account in one transaction, then purges it outside that transaction', async () => {
+    const { service, journal, client, txManager, userService, purgeAccount, savedAudits } = makeService({
       connections: [
         { id: 'conn-1', userId: 'user-1', providerId: 'google' },
         { id: 'conn-2', userId: 'user-1', providerId: 'google' },
       ],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.communications': [{ user: 'user-1' }, { user: 'user-1' }, { user: 'user-2' }],
-        'ci.events': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.entities': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.notes': [{ user: 'user-1' }],
-        'ci.sessions': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.api_keys': [{ user: 'user-1' }],
-        'ci_search.embeddings': [{ user: 'user-1' }, { user: 'user-2' }],
-      },
+      store: {},
     });
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
+    const result = await service.deleteAccount(OWN, { successorEmail: 'member@example.com' });
 
-    // Both connections had revocation attempted.
     expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(2);
+    expect(userService.assertMayEndAccount).toHaveBeenCalledWith(OWN, 'user-1', {
+      successorEmail: 'member@example.com',
+    });
+    expect(userService.endAccountNow).toHaveBeenCalledWith(
+      OWN,
+      'user-1',
+      { successorEmail: 'member@example.com' },
+      expect.any(Function),
+    );
 
-    // Every user-1 row gone; every user-2 row survives.
-    expect(store['ci.communications']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.events']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.entities']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.notes']).toEqual([]);
-    expect(store['ci.sessions']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.api_keys']).toEqual([]);
-    expect(store['ci_search.embeddings']).toEqual([{ user: 'user-2' }]);
-    // The user row itself deleted; the other user remains.
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
+    // Access ends inside the transaction that ends the account, with the `started` audit row.
+    const statements = txManager.query.mock.calls.map(([sql]) => sql.replace(/\s+/g, ' ').trim());
+    expect(statements).toEqual([
+      'DELETE FROM ci.sessions WHERE user_id = $1',
+      'DELETE FROM ci.api_keys WHERE user_id = $1',
+      'UPDATE ci.connections SET active = false, access_token = NULL, refresh_token = NULL WHERE user_id = $1',
+    ]);
+    expect(txManager.query.mock.calls.every(([, params]) => (params as unknown[])[0] === 'user-1')).toBe(
+      true,
+    );
+    expect(savedAudits).toEqual([
+      expect.objectContaining({
+        status: 'started',
+        scope: 'account',
+        subjectUserId: 'user-1',
+        tokenRevoked: true,
+      }),
+    ]);
 
-    expect(result.userDeleted).toBe(true);
-    expect(result.totalDeleted).toBeGreaterThan(0);
-    expect(cleanOrphans).toHaveBeenCalledTimes(1);
-    expect(savedAudits[0]).toMatchObject({ scope: 'account', subjectUserId: 'user-1' });
+    // The purge (and the sweep) only after that transaction has committed.
+    expect(journal.slice(journal.indexOf('end:commit'))).toEqual(['end:commit', 'purge', 'sweep']);
+    expect(purgeAccount).toHaveBeenCalledWith('user-1', expect.any(Date), expect.any(Date));
+
+    expect(result).toEqual({
+      userId: 'user-1',
+      status: 'deleted',
+      revocations: [
+        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: true },
+        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
+      ],
+      deletedCounts: { 'ci.notes': 1, 'ci.users': 1 },
+      detachedCounts: {},
+      totalDeleted: 2,
+      deletedObjects: 0,
+      userDeleted: true,
+      auditId: savedAudits[0].id,
+    });
   });
 
-  it('purges hbpe labels and cluster links, which have no user column, through the rows they belong to', async () => {
-    const { service, store, query } = makeService({
+  it('revokes nothing and records nothing when the last administrator names no successor', async () => {
+    const { service, client, userService, purgeAccount, savedAudits } = makeService({
+      connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
+      store: {},
+    });
+    userService.assertMayEndAccount.mockRejectedValue(new LastAdminDeletionRefused('successor_required'));
+
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+
+    expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
+    expect(userService.endAccountNow).not.toHaveBeenCalled();
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
+  });
+
+  it('records no failure when the locked rule refuses after the forecast let it through', async () => {
+    const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+    userService.endAccountNow.mockRejectedValue(new LastAdminDeletionRefused('successor_not_found'));
+
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
+  });
+
+  it('writes the failed audit only once the transaction that tried has rolled back, purges nothing, and rethrows', async () => {
+    const { service, journal, userService, purgeAccount, savedAudits } = makeService({
       connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.summaries': [
-          { id: 's1', user: 'user-1' },
-          { id: 's2', user: 'user-2' },
-        ],
-        'ci.events': [
-          { id: 'e1', user: 'user-1' },
-          { id: 'e2', user: 'user-2' },
-        ],
-        'ci.content': [
-          { id: 'c1', user: 'user-1' },
-          { id: 'c2', user: 'user-2' },
-        ],
-        'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
-        'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
-        'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
-      },
+      store: {},
+    });
+    const failure = new Error('could not obtain lock on row in relation "users"');
+    userService.endAccountNow.mockImplementation(async () => {
+      journal.push('end:rolled-back');
+      throw failure;
     });
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
+    await expect(service.deleteAccount(OWN)).rejects.toBe(failure);
 
-    expect(store['hbpe.summary_l1_label']).toEqual([{ parentId: 's2' }]);
-    expect(store['hbpe.l1_event_cluster']).toEqual([{ parentId: 'e2' }]);
-    expect(store['hbpe.l2_content_cluster']).toEqual([{ parentId: 'c2' }]);
-    expect(result.deletedCounts).toMatchObject({
-      'hbpe.summary_l1_label': 1,
-      'hbpe.l1_event_cluster': 1,
-      'hbpe.l2_content_cluster': 1,
-    });
-    expect(result.userDeleted).toBe(true);
+    expect(journal).toEqual(['assert-may-end', 'end:rolled-back', 'audit:failed']);
+    expect(savedAudits).toEqual([
+      expect.objectContaining({ status: 'failed', error: failure.message, totalDeleted: 0 }),
+    ]);
+    expect(purgeAccount).not.toHaveBeenCalled();
+  });
 
-    // None of the three is asked for a user_id column it does not have.
-    const statements = query.mock.calls.map(([sql]) => sql as string);
-    for (const table of ['summary_l1_label', 'l1_event_cluster', 'l2_content_cluster']) {
-      expect(statements.filter((sql) => sql.includes(`"hbpe"."${table}"`))).toEqual([
-        expect.stringContaining('USING'),
-      ]);
+  it('does not wait for good on a failed audit that cannot get a connection', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, userService, auditRepository, logger } = makeService({ connections: [], store: {} });
+      const failure = new Error('ending the account failed');
+      userService.endAccountNow.mockRejectedValue(failure);
+      // A pool that never hands out a connection.
+      auditRepository.save.mockImplementation(() => new Promise(() => undefined));
+
+      const deletion = service.deleteAccount(OWN).catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(FAILED_AUDIT_DEADLINE_MS + 1);
+
+      expect(await deletion).toBe(failure);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not record the failed account deletion',
+        expect.objectContaining({ error: expect.stringContaining('did not answer') }),
+      );
+    } finally {
+      jest.useRealTimers();
     }
   });
 
-  it('clears the user row pointer to its own person in the transaction that purges ci.entities', async () => {
-    const { service, query, transaction } = makeService({
-      connections: [],
-      store: { 'ci.users': [{ user: 'user-1' }], 'ci.entities': [{ user: 'user-1' }] },
-    });
+  it('answers 404 for an account already ended, recording nothing', async () => {
+    const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+    userService.endAccountNow.mockResolvedValue(null as never);
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    const statements = query.mock.calls.map(([sql]) => sql as string);
-    const cleared = statements.findIndex((sql) => /UPDATE "ci"\."users" SET "entity_id" = NULL/.test(sql));
-    const entities = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."entities"'));
-
-    // Straight before the delete, not at the start of the purge: a graph ingest
-    // still running for the account would otherwise re-link the pointer in between.
-    expect(cleared).toBeGreaterThanOrEqual(0);
-    expect(entities).toBe(cleared + 1);
-    expect(query.mock.calls[cleared][1]).toEqual(['user-1']);
-    expect(transaction).toHaveBeenCalledTimes(1);
-    expect(result.deletedCounts).toMatchObject({ 'ci.entities': 1 });
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(NotFoundException);
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
   });
 
-  it("deletes the stored bytes of the user's files after the rows, and keeps an object another account shares", async () => {
-    const { service, store, query, objectStore } = makeService({
+  it('answers deleting when the purge outlasts the wait, and lets it finish (and sweep) on its own', async () => {
+    jest.useFakeTimers();
+    try {
+      let finish: (outcome: Record<string, unknown>) => void = () => undefined;
+      const slow = new Promise<Record<string, unknown>>((resolve) => {
+        finish = resolve;
+      });
+      const { service, journal, cleanOrphans } = makeService({
+        connections: [],
+        store: {},
+        purgeOutcomes: [slow],
+      });
+
+      const deletion = service.deleteAccount(OWN);
+      await jest.advanceTimersByTimeAsync(IMMEDIATE_PURGE_WAIT_MS + 1);
+      const result = await deletion;
+
+      expect(result).toMatchObject({
+        status: 'deleting',
+        userDeleted: false,
+        deletedCounts: {},
+        totalDeleted: 0,
+      });
+      expect(cleanOrphans).not.toHaveBeenCalled();
+
+      finish({});
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(journal.slice(-2)).toEqual(['purge', 'sweep']);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('tries the purge a second time when the first fails, and counts both', async () => {
+    const { service, purgeAccount } = makeService({
       connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.files': [
-          { user: 'user-1', bucket: 'companion', key: 'own-a' },
-          { user: 'user-1', bucket: 'companion', key: 'own-b' },
-          { user: 'user-1', bucket: 'archive', key: 'own-c' },
-          // Deduplicated on content: both accounts point at one object.
-          { user: 'user-1', bucket: 'companion', key: 'shared' },
-          { user: 'user-2', bucket: 'companion', key: 'shared' },
-          { user: 'user-2', bucket: 'companion', key: 'theirs' },
-          // A cloud-drive pointer row holds no bytes.
-          { user: 'user-1' },
-        ],
-      },
+      store: {},
+      purgeOutcomes: [
+        {
+          status: 'failed',
+          deletedRows: { 'ci.notes': 5 },
+          deletedObjects: 2,
+          error: 'update or delete on table "users" violates foreign key constraint "notes_user_id_fkey"',
+        },
+        { deletedRows: { 'ci.notes': 1, 'ci.users': 1 } },
+      ],
     });
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
+    const result = await service.deleteAccount(OWN);
 
-    expect(objectStore?.deleteObjects.mock.calls).toEqual([
-      ['archive', ['own-c']],
-      ['companion', ['own-a', 'own-b']],
-    ]);
-    expect(result.deletedObjects).toBe(3);
-    expect(store['ci.files']).toEqual([
-      { user: 'user-2', bucket: 'companion', key: 'shared' },
-      { user: 'user-2', bucket: 'companion', key: 'theirs' },
-    ]);
+    expect(purgeAccount).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: 'deleted',
+      deletedCounts: { 'ci.notes': 6, 'ci.users': 1 },
+      totalDeleted: 7,
+      deletedObjects: 2,
+      userDeleted: true,
+    });
+  });
 
-    // The keys are read while the rows that name them still exist, and the
-    // bytes go only once every row has: nothing after them can roll back.
-    const statements = query.mock.calls.map(([sql]) => sql as string);
-    const read = statements.findIndex((sql) => sql.includes('SELECT DISTINCT f.bucket'));
-    const userRow = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."users"'));
-    expect(read).toBeGreaterThanOrEqual(0);
-    expect(read).toBeLessThan(statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."files"')));
-    expect(objectStore!.deleteObjects.mock.invocationCallOrder[0]).toBeGreaterThan(
-      query.mock.invocationCallOrder[userRow],
+  it('leaves an account whose purge fails twice to the hourly purge, and says deleting', async () => {
+    const { service, purgeAccount, cleanOrphans, logger } = makeService({
+      connections: [],
+      store: {},
+      purgeOutcomes: [{ status: 'failed', deletedRows: {}, error: 'boom' }],
+    });
+
+    const result = await service.deleteAccount(OWN);
+
+    expect(purgeAccount).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('deleting');
+    expect(cleanOrphans).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Purge of an ended account did not finish; the hourly purge will retry it',
+      expect.objectContaining({ userId: 'user-1', status: 'failed' }),
     );
   });
 
-  it('rolls every row back when the object store refuses, and records the failure', async () => {
-    const deleteObjects = jest.fn(async () => {
-      throw new Error('object store down');
-    });
-    const { service, store, savedAudits } = makeService({
+  it('says deleting while another worker holds the purge', async () => {
+    const { service, purgeAccount } = makeService({
       connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }],
-        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
-        'ci.notes': [{ user: 'user-1' }],
-      },
-      objectStore: { deleteObjects },
+      store: {},
+      purgeOutcomes: [{ status: 'locked', deletedRows: {} }],
     });
 
-    await expect(service.deleteAccount({ userId: 'user-1' })).rejects.toThrow('object store down');
+    const result = await service.deleteAccount(OWN);
 
-    expect(deleteObjects).toHaveBeenCalledTimes(1);
-    expect(store['ci.files']).toHaveLength(1);
-    expect(store['ci.notes']).toHaveLength(1);
-    expect(store['ci.users']).toHaveLength(1);
-    expect(savedAudits).toEqual([
-      expect.objectContaining({
-        scope: 'account',
-        status: 'failed',
-        error: 'object store down',
-        totalDeleted: 0,
-      }),
-    ]);
+    expect(purgeAccount).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('deleting');
   });
 
-  it('rolls back every table already purged when a later table refuses its delete', async () => {
-    const { service, store, failingDeletes, savedAudits, objectStore, cleanOrphans } = makeService({
-      connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2', createdBy: 'user-1' }],
-        'ci.entities': [{ user: 'user-1' }, { user: 'user-1' }, { user: 'user-1' }],
-        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
-        'ci.notes': [{ user: 'user-1' }],
-        'ci.saved_searches': [{ user: 'user-1' }, { user: 'user-1' }],
-        'ci.ask_audit': [{ asker: 'user-1', responder: 'user-2', prompt: 'where was I?' }],
-      },
-    });
-    const before = structuredClone(store);
-    // As a BEFORE DELETE trigger that raises would.
-    failingDeletes.add('ci.notes');
-
-    await expect(service.deleteAccount({ userId: 'user-1' })).rejects.toThrow('delete refused on ci.notes');
-
-    // ci.entities went before ci.notes; it is back, with everything else.
-    expect(store).toEqual(before);
-    expect(objectStore!.deleteObjects).not.toHaveBeenCalled();
-    expect(cleanOrphans).not.toHaveBeenCalled();
-    expect(savedAudits).toEqual([expect.objectContaining({ status: 'failed' })]);
-
-    // Asked again once the cause is gone, it completes.
-    failingDeletes.clear();
-    const result = await service.deleteAccount({ userId: 'user-1' });
-    expect(result.userDeleted).toBe(true);
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
-  });
-
-  it('nulls created_by on the accounts this one created, so its own row can go', async () => {
-    const { service, store } = makeService({
-      connections: [],
-      store: { 'ci.users': [{ user: 'user-1' }, { user: 'user-2', createdBy: 'user-1' }] },
-    });
-
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    expect(result.userDeleted).toBe(true);
-    expect(result.detachedCounts).toMatchObject({ 'ci.users': 1 });
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
-  });
-
-  it('takes the account out of ci.ask_audit: its own rows go, the other party keeps theirs without it', async () => {
-    const { service, store } = makeService({
-      connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.ask_audit': [
-          { id: 'asked-2', asker: 'user-1', responder: 'user-2', prompt: 'where was I?', disclosed: ['e2'] },
-          { id: 'answered-2', asker: 'user-2', responder: 'user-1', prompt: 'lunch?', disclosed: ['e1'] },
-          { id: 'to-peer', asker: 'user-1', responder: null, prompt: 'hi peer' },
-          { id: 'from-peer', asker: null, responder: 'user-1', prompt: 'hi', disclosed: ['e1'] },
-          { id: 'theirs', asker: 'user-2', responder: 'user-3', prompt: 'unrelated', disclosed: ['e3'] },
-        ],
-      },
-    });
-
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    expect(store['ci.ask_audit']).toEqual([
-      { id: 'asked-2', asker: null, responder: 'user-2', prompt: '', disclosed: ['e2'] },
-      { id: 'answered-2', asker: 'user-2', responder: null, prompt: 'lunch?', disclosed: [] },
-      { id: 'theirs', asker: 'user-2', responder: 'user-3', prompt: 'unrelated', disclosed: ['e3'] },
-    ]);
-    expect(result.deletedCounts).toMatchObject({ 'ci.ask_audit': 2 });
-    expect(result.detachedCounts).toMatchObject({ 'ci.ask_audit': 2 });
-  });
-
-  it('skips a table this deployment does not have without issuing a statement that would abort the transaction', async () => {
-    const { service, query } = makeService({
-      connections: [],
-      store: { 'ci.users': [{ user: 'user-1' }] },
-      missingTables: ['hbpe.token_stream', 'ci.summaries', 'ci.ask_audit'],
-    });
-
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    const statements = query.mock.calls.map(([sql]) => sql as string);
-    expect(result.userDeleted).toBe(true);
-    expect(statements.filter((sql) => sql.includes('"hbpe"."token_stream"'))).toEqual([]);
-    // Goes through ci.summaries, which is missing too.
-    expect(statements.filter((sql) => sql.includes('"hbpe"."summary_l1_label"'))).toEqual([]);
-    expect(statements.filter((sql) => sql.includes('ci.ask_audit'))).toEqual([]);
-  });
-
-  it('stops waiting on a provider that never answers a revocation and goes on with the purge', async () => {
+  it('stops waiting on a provider that never answers a revocation and goes on with the delete', async () => {
     jest.useFakeTimers();
     try {
       const hung = new FakeGoogleClient();
       hung.revoke = jest.fn(() => new Promise<{ revoked: boolean }>(() => undefined));
-      const { service, store } = makeService({
+      const { service, userService } = makeService({
         connections: [
           { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
           { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
         ],
         client: hung,
-        store: {
-          'ci.users': [{ user: 'user-1' }],
-          'ci.connections': [
-            { user: 'user-1', connection: 'conn-1' },
-            { user: 'user-1', connection: 'conn-2' },
-          ],
-          'ci.notes': [{ user: 'user-1' }],
-        },
+        store: {},
       });
 
-      const deletion = service.deleteAccount({ userId: 'user-1' });
+      const deletion = service.deleteAccount(OWN);
       await jest.advanceTimersByTimeAsync(2 * REVOCATION_DEADLINE_MS);
       const result = await deletion;
 
@@ -868,169 +736,11 @@ describe('DataDeletionService.deleteAccount', () => {
         { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
         { connectionId: 'conn-2', providerId: 'google', tokenRevoked: false },
       ]);
-      expect(result.userDeleted).toBe(true);
-      expect(store['ci.notes']).toEqual([]);
-      expect(store['ci.connections']).toEqual([]);
+      expect(userService.endAccountNow).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('deleted');
     } finally {
       jest.useRealTimers();
     }
-  });
-
-  it('gives up on an object store that never answers, and rolls every row back', async () => {
-    jest.useFakeTimers();
-    try {
-      const { service, store, savedAudits } = makeService({
-        connections: [],
-        store: {
-          'ci.users': [{ user: 'user-1' }],
-          'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
-          'ci.notes': [{ user: 'user-1' }],
-        },
-        objectStore: { deleteObjects: jest.fn(() => new Promise<void>(() => undefined)) },
-      });
-
-      const deletion = service.deleteAccount({ userId: 'user-1' });
-      const outcome = expect(deletion).rejects.toThrow('did not answer within 60 s');
-      await jest.advanceTimersByTimeAsync(OBJECT_DELETE_DEADLINE_MS);
-      await outcome;
-
-      expect(store['ci.files']).toHaveLength(1);
-      expect(store['ci.notes']).toHaveLength(1);
-      expect(store['ci.users']).toHaveLength(1);
-      expect(savedAudits).toEqual([expect.objectContaining({ status: 'failed' })]);
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-
-  it('warns and goes on when no object store is wired', async () => {
-    const { service, store, logger } = makeService({
-      connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }],
-        'ci.files': [{ user: 'user-1', bucket: 'companion', key: 'own-a' }],
-      },
-      objectStore: null,
-    });
-
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    expect(result.deletedObjects).toBe(0);
-    expect(result.userDeleted).toBe(true);
-    expect(store['ci.files']).toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('stored file objects will remain'),
-      expect.objectContaining({ userId: 'user-1', objects: 1 }),
-    );
-  });
-
-  it('is idempotent: re-deleting an already-deleted account purges nothing and audits zero', async () => {
-    const { service, store, savedAudits } = makeService({
-      connections: [],
-      store: { 'ci.users': [{ user: 'user-2' }] },
-    });
-
-    const result = await service.deleteAccount({ userId: 'user-1' });
-
-    expect(result.userDeleted).toBe(false);
-    expect(result.totalDeleted).toBe(0);
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
-    expect(savedAudits[0]).toMatchObject({ scope: 'account', totalDeleted: 0 });
-  });
-
-  it("inside a caller's transaction: every statement and the audit go through it, and the sweep is left to the caller", async () => {
-    const {
-      service,
-      store,
-      run,
-      query,
-      transaction: ownTransaction,
-      savedAudits,
-      cleanOrphans,
-    } = makeService({
-      connections: [],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.entities': [{ user: 'user-1' }],
-        'ci.notes': [{ user: 'user-1' }],
-      },
-    });
-    const transaction = {
-      query: jest.fn(run),
-      save: jest.fn(async (record: Record<string, unknown>) => record),
-    };
-
-    const result = await service.deleteAccount({ userId: 'user-1' }, { transaction: transaction as never });
-
-    // Nothing on the service's own connections, and no transaction of its own:
-    // the rows commit or roll back with the caller's.
-    expect(query).not.toHaveBeenCalled();
-    expect(ownTransaction).not.toHaveBeenCalled();
-    expect(transaction.query).toHaveBeenCalledWith('DELETE FROM "ci"."users" WHERE "id" = $1', ['user-1']);
-    expect(transaction.query).toHaveBeenCalledWith('DELETE FROM "ci"."notes" WHERE "user_id" = $1', [
-      'user-1',
-    ]);
-    expect(store['ci.notes']).toEqual([]);
-    expect(store['ci.entities']).toEqual([]);
-    expect(result.userDeleted).toBe(true);
-    expect(transaction.save).toHaveBeenCalledWith(expect.objectContaining({ scope: 'account' }));
-    expect(savedAudits).toEqual([]);
-    expect(cleanOrphans).not.toHaveBeenCalled();
-  });
-
-  it("inside a caller's transaction: a failure is audited on its own connection and rethrown for the caller to roll back", async () => {
-    const { service, run, failingDeletes, savedAudits } = makeService({
-      connections: [],
-      store: { 'ci.users': [{ user: 'user-1' }], 'ci.notes': [{ user: 'user-1' }] },
-    });
-    failingDeletes.add('ci.notes');
-    const transaction = {
-      query: jest.fn(run),
-      save: jest.fn(async (record: Record<string, unknown>) => record),
-    };
-
-    await expect(
-      service.deleteAccount({ userId: 'user-1' }, { transaction: transaction as never }),
-    ).rejects.toThrow('delete refused on ci.notes');
-
-    expect(transaction.save).not.toHaveBeenCalled();
-    expect(savedAudits).toEqual([
-      expect.objectContaining({
-        subjectUserId: 'user-1',
-        status: 'failed',
-        error: 'delete refused on ci.notes',
-      }),
-    ]);
-  });
-
-  it('deletes children before parents (content before events, graph before nulling)', () => {
-    // Guard the FK-safe ordering the account purge depends on.
-    const order = USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`);
-    expect(order.indexOf('ci.content')).toBeLessThan(order.indexOf('ci.events'));
-    expect(order.indexOf('hbpe.l1_event_cluster')).toBeLessThan(order.indexOf('ci.events'));
-    expect(order.indexOf('hbpe.l2_content_cluster')).toBeLessThan(order.indexOf('ci.content'));
-    expect(order.indexOf('ci.graph_deltas')).toBeLessThan(order.indexOf('ci.entities'));
-    expect(order.indexOf('ci.relationships')).toBeLessThan(order.indexOf('ci.entities'));
-    // Connections (holding OAuth tokens) are purged as part of the account sweep.
-    expect(order).toContain('ci.connections');
-    expect(order).toContain('ci.provider_keys');
-    // The digests memory.forget keeps so a forgotten person is not minted again are the user's data too.
-    expect(order).toContain('ci.forgotten_identifiers');
-  });
-
-  it('purges every table that has no user column before the parent its rows are found through', () => {
-    // No foreign key holds this order for summary_l1_label, so the catalog
-    // checks cannot: with its parent gone first, the join finds nothing.
-    const order = USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`);
-    const misplaced = USER_OWNED_TABLES.filter(
-      (t) =>
-        t.through &&
-        order.indexOf(`${t.through.parentSchema}.${t.through.parentTable}`) <=
-          order.indexOf(`${t.schema}.${t.table}`),
-    ).map((t) => `${t.schema}.${t.table}`);
-
-    expect(USER_OWNED_TABLES.some((t) => t.through)).toBe(true);
-    expect(misplaced).toEqual([]);
   });
 });
 

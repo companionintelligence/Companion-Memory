@@ -176,6 +176,11 @@ export function buildPurgePlan(input: {
         edge.parentTable === current.target.table &&
         // Self-references are flattened by a null step instead (step 3).
         tableKey({ schema: edge.childSchema, table: edge.childTable }) !== tableKey(current.target) &&
+        // ci.users is never deleted through: its references into purged rows are
+        // nulled for this account (step 3), and another account pointing there
+        // (`ci.users.entity_id` at this account's entities) must fail loudly on
+        // the foreign key rather than have its account row deleted.
+        tableKey({ schema: edge.childSchema, table: edge.childTable }) !== usersKey &&
         // A user-scoped child is deleted by its own root scope; ordering (step 4)
         // guarantees it happens first. Scoping it through the parent instead
         // could delete a different account's row.
@@ -318,7 +323,8 @@ export function buildPurgePlan(input: {
  * explicitly keeps it inside the batch loop, where letting the parent's delete
  * cascade would fire one unbounded delete instead. So both are used as
  * ordering constraints, and cascade edges are dropped first if they turn out to
- * create a cycle that the mandatory ones do not.
+ * create a cycle that the mandatory ones do not. `SET NULL`/`SET DEFAULT` edges
+ * are the cheapest hint of all, tried first and dropped first.
  */
 function orderDeletes(
   targets: Array<{ target: TableRef; scope: PurgeScope; reason: string }>,
@@ -338,8 +344,18 @@ function orderDeletes(
 
   const mandatory = new Set<FkDeleteActionSetMember>(['a', 'r']);
   const preferred = new Set<FkDeleteActionSetMember>(['a', 'r', 'c']);
+  const cheapest = new Set<FkDeleteActionSetMember>(['a', 'r', 'c', 'n', 'd']);
 
-  let sorted = kahn([...present].sort(), constraintEdges(preferred));
+  // `SET NULL` children first too, when that makes no cycle: a parent deleted
+  // first has Postgres rewrite every child row that points at it, only for the
+  // purge to delete those rows a step later. `ci.position` is the one that
+  // matters: each `ci.entities` delete used to null the account's own positions
+  // in compressed chunks (decompressing them) before they were deleted, which
+  // their `user_id` segment lets the purge do cheaply. Dropped silently on a
+  // cycle, as it changes only the cost, never what is deleted.
+  let sorted =
+    kahn([...present].sort(), constraintEdges(cheapest)) ??
+    kahn([...present].sort(), constraintEdges(preferred));
 
   if (!sorted) {
     // A cascade edge closed a loop. Drop the soft constraints and retry — the

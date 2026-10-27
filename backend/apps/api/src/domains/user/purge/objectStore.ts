@@ -23,53 +23,75 @@ interface SqlExecutor {
 }
 
 /**
+ * How long one `deleteObjects` call may take before the purge gives up on it. The
+ * S3 client sets no timeout of its own, and a purge waiting on a store that never
+ * answers holds its account's advisory lock and the hourly cron's slot for good.
+ * The call is not cancelled, only no longer waited for: the purge fails, keeps the
+ * rows (so the keys can be found again), and the next run deletes the same keys,
+ * which the store tolerates. The same bound a file purge uses
+ * (`STORED_OBJECT_DELETE_DEADLINE_MS` in `memory/services/filePurge.ts`).
+ */
+export const OBJECT_DELETE_DEADLINE_MS = 60_000;
+
+/**
  * Objects owned solely by this account. The `NOT EXISTS` clause matters: file
  * rows are deduplicated on content, so two accounts can point at one object.
  * Deleting the bytes out from under the other account would be a data-loss bug
  * caused by a privacy feature.
+ *
+ * Paged by key (`(bucket, key) > (last page's last)`, compared as text in the
+ * "C" collation so the order and the comparison agree; `key` is a uuid), not
+ * `OFFSET`, which read every earlier page again for each new one: quadratic in
+ * the account's files.
  */
 const SOLE_OWNED_OBJECTS_SQL = `
-  SELECT DISTINCT f.bucket AS bucket, f.key AS key
+  SELECT DISTINCT f.bucket::text COLLATE "C" AS bucket, f.key::text COLLATE "C" AS key
   FROM ci.files f
   WHERE f.user_id = $1
     AND f.bucket IS NOT NULL
     AND f.key IS NOT NULL
+    AND (f.bucket::text COLLATE "C", f.key::text COLLATE "C") > ($3::text, $4::text)
     AND NOT EXISTS (
       SELECT 1 FROM ci.files o
       WHERE o.bucket = f.bucket AND o.key = f.key AND o.user_id <> $1
     )
-  ORDER BY f.bucket, f.key
-  LIMIT $2 OFFSET $3
+  ORDER BY 1, 2
+  LIMIT $2
 `;
 
 /**
  * Delete from the object store every object only this account's `ci.files`
- * rows point at, and return how many went. Shared by the 30-day purge and the
- * immediate account delete, so the rule that protects another account's
- * deduplicated file lives in one place.
+ * rows point at, and return how many went.
  *
- * Call it while the rows are still there. Paged with `LIMIT`/`OFFSET` rather
- * than a keyset because the rows are not being deleted yet, so the result set
- * is stable for the length of the loop.
+ * Call it while the rows are still there: the rows are how the keys are found.
+ * A purge interrupted after this and before the rows go finds the same keys again
+ * and deletes them again, which the store tolerates; the other order would lose
+ * the keys and strand the bytes.
  */
 export async function deleteSoleOwnedObjects(
   executor: SqlExecutor,
   store: PurgeObjectStore,
   userId: string,
   pageSize: number,
+  deadlineMs: number = OBJECT_DELETE_DEADLINE_MS,
 ): Promise<number> {
-  let offset = 0;
+  let after: StoredObject = { bucket: '', key: '' };
   let deleted = 0;
 
   for (;;) {
-    const page = await readSoleOwnedPage(executor, userId, pageSize, offset);
+    const page = (await executor.query(SOLE_OWNED_OBJECTS_SQL, [
+      userId,
+      pageSize,
+      after.bucket,
+      after.key,
+    ])) as StoredObject[];
 
     if (page.length === 0) {
       return deleted;
     }
 
-    deleted += await deleteStoredObjects(store, page);
-    offset += page.length;
+    deleted += await deleteStoredObjects(store, page, deadlineMs);
+    after = page[page.length - 1];
   }
 }
 
@@ -79,66 +101,45 @@ export interface StoredObject {
   key: string;
 }
 
-/**
- * The objects {@link deleteSoleOwnedObjects} would delete, read without
- * deleting any. For a caller that deletes the rows first, in a transaction, and
- * the bytes only once nothing can roll those rows back: it has to read the keys
- * while the rows that name them are still there.
- */
-export async function listSoleOwnedObjects(
-  executor: SqlExecutor,
-  userId: string,
-  pageSize: number,
-): Promise<StoredObject[]> {
-  const objects: StoredObject[] = [];
-
-  for (;;) {
-    const page = await readSoleOwnedPage(executor, userId, pageSize, objects.length);
-
-    if (page.length === 0) {
-      return objects;
-    }
-
-    objects.push(...page);
-  }
-}
-
-/** Delete these objects, one `deleteObjects` call per bucket per page, and return how many went. */
-export async function deleteStoredObjects(
+/** Delete these objects, one `deleteObjects` call per bucket, and return how many went. */
+async function deleteStoredObjects(
   store: PurgeObjectStore,
   objects: readonly StoredObject[],
-  pageSize = objects.length,
+  deadlineMs: number,
 ): Promise<number> {
-  const size = Math.max(pageSize, 1);
+  const byBucket = new Map<string, string[]>();
+
+  for (const object of objects) {
+    const keys = byBucket.get(object.bucket);
+
+    if (keys) {
+      keys.push(object.key);
+    } else {
+      byBucket.set(object.bucket, [object.key]);
+    }
+  }
+
   let deleted = 0;
 
-  for (let start = 0; start < objects.length; start += size) {
-    const byBucket = new Map<string, string[]>();
-
-    for (const object of objects.slice(start, start + size)) {
-      const keys = byBucket.get(object.bucket);
-
-      if (keys) {
-        keys.push(object.key);
-      } else {
-        byBucket.set(object.bucket, [object.key]);
-      }
-    }
-
-    for (const [bucket, keys] of byBucket) {
-      await store.deleteObjects(bucket, keys);
-      deleted += keys.length;
-    }
+  for (const [bucket, keys] of byBucket) {
+    await withDeadline(store.deleteObjects(bucket, keys), deadlineMs);
+    deleted += keys.length;
   }
 
   return deleted;
 }
 
-async function readSoleOwnedPage(
-  executor: SqlExecutor,
-  userId: string,
-  pageSize: number,
-  offset: number,
-): Promise<StoredObject[]> {
-  return (await executor.query(SOLE_OWNED_OBJECTS_SQL, [userId, pageSize, offset])) as StoredObject[];
+/** `work`, or a rejection once `ms` have passed without it settling. */
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`The object store did not answer within ${ms / 1000} s`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
 }

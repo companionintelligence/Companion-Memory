@@ -7,6 +7,7 @@ import { countAffected } from '@ci/common/persistence';
 import config from '@ci/configuration';
 
 import { type AskAuditRemoval, removeFromAskAudit } from '../purge/askAudit';
+import { completeImmediateDeletionAudit } from '../purge/deletionAudit';
 import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
 import { expandToPhysicalTables, readFkEdges, readUserRefColumns } from '../purge/purgeCatalog';
 import { buildPurgePlan } from '../purge/purgePlan';
@@ -76,6 +77,11 @@ export interface AccountPurgeOutcome {
    */
   detachedRows: Record<string, number>;
   deletedObjects: number;
+  /**
+   * The `completed` row this run appended to `ci.data_deletion_audit`, when it
+   * finished an immediate delete (see `completeImmediateDeletionAudit`).
+   */
+  auditId?: string | null;
   error?: string;
 }
 
@@ -265,7 +271,13 @@ export class AccountPurgeService {
           }
         }
 
-        await this.markCompleted(runner, userId, deletedRows, detachedRows, deletedObjects);
+        const auditId = await this.recordCompletion(
+          runner,
+          userId,
+          deletedRows,
+          detachedRows,
+          deletedObjects,
+        );
 
         this.logger.log('Account data purged', {
           userId,
@@ -273,7 +285,7 @@ export class AccountPurgeService {
           totalRows: Object.values(deletedRows).reduce((sum, count) => sum + count, 0),
         });
 
-        return { userId, status: 'purged', deletedRows, detachedRows, deletedObjects };
+        return { userId, status: 'purged', deletedRows, detachedRows, deletedObjects, auditId };
       } finally {
         await runner.query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, [
           ADVISORY_LOCK_NAMESPACE,
@@ -468,6 +480,37 @@ export class AccountPurgeService {
              updated_at = NOW()`,
       [userId, requestedAt, purgeAfter],
     );
+  }
+
+  /**
+   * {@link markCompleted}, and the `completed` row of an immediate delete's
+   * audit when this run finished one, in one transaction: the two records of the
+   * same fact never disagree.
+   */
+  private async recordCompletion(
+    runner: QueryRunner,
+    userId: string,
+    deletedRows: Record<string, number>,
+    detachedRows: Record<string, number>,
+    deletedObjects: number,
+  ): Promise<string | null> {
+    await runner.startTransaction();
+
+    try {
+      await this.markCompleted(runner, userId, deletedRows, detachedRows, deletedObjects);
+
+      const auditId = await completeImmediateDeletionAudit(runner, userId, deletedRows);
+
+      await runner.commitTransaction();
+
+      return auditId;
+    } catch (err) {
+      if (runner.isTransactionActive) {
+        await runner.rollbackTransaction();
+      }
+
+      throw err;
+    }
   }
 
   private async markCompleted(

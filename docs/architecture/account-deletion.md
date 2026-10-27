@@ -46,6 +46,39 @@ account before the purge: that account is not the first row, so it is never prom
 
 The deleted account's unused invitations are deleted with it.
 
+## The immediate delete: `POST /users/me/delete`
+
+The privacy route (CASA ASVS V8) deletes at once instead of after the grace period, and
+revokes every OAuth grant first. It uses the same two halves, with the deadline set to now:
+
+1. **Revoke the grants**, best-effort, 10 s per connection, holding no lock. The
+   last-administrator rule is asked first without the lock
+   (`UserService.assertMayEndAccount`), so a refused request revokes nothing.
+2. **End the account** in one short transaction under the lock every sign-up takes
+   (`UserService.endAccountNow`): the rule asked again for real, the successor
+   promoted, `deleted_at` and `purge_after = now()` stamped, the unused invitations,
+   sessions and API keys deleted, the connections' provider tokens cleared, and a
+   `started` row written to `ci.data_deletion_audit`. All of it or none of it; a
+   failure writes a `failed` row after the rollback and changes nothing else.
+3. **Purge the rows** through `AccountPurgeService.purgeAccount`, inline: batched,
+   each batch its own commit, no lock but the purge's own advisory one. The route
+   waits up to 30 s and answers `status: "deleted"` with the counts, or
+   `status: "deleting"` while the purge carries on. A failed pass is retried once at
+   once (a row written for the account by a job that was already running when it
+   ended refuses the user row's delete the first time). Whichever run removes the
+   last row, inline or the hourly cron after an interruption, appends the
+   `completed` audit row with the counts.
+
+Until #3241 this was one transaction for everything, held under the sign-up lock. On
+a graph-heavy account that ran for more than 49 minutes with every sign-up waiting,
+and any interruption rolled all of it back. Once step 2 commits the account cannot
+come back, so a purge that stops part way leaves an ended account with rows still to
+delete, never a live account with some of its data gone. That is also why the bytes go
+before the rows here, as in the 30-day purge, and not after them.
+
+`accountDeletion.purge.enabled = false` stops the cron, so it also stops an
+interrupted immediate delete from being finished until it is switched back on.
+
 ## Why not `ON DELETE CASCADE`
 
 The obvious implementation is a migration rewriting every foreign key to
@@ -237,6 +270,15 @@ production.
   test that can say "the data is gone", and it is what caught the audit-record bug.
   Skips (loudly) without an administrative database connection; set
   `DATABASE_ADMIN_PASSWORD`.
+- `privacy/services/__tests__/DataDeletionService.integration.spec.ts` — the
+  immediate delete on the real schema: all-or-nothing account end (successor
+  included), an interrupted purge finished by the hourly run, a sign-up during a
+  purge, a row written for the account mid-purge, and the failure path on a pool of
+  two.
+- `privacy/__tests__/dataDeletionPlan.integration.spec.ts` — every column that can
+  name an account (by foreign key under any name, or by name in uuid, uuid[] or
+  text) must be one the purge deletes by, one it nulls, or listed with the reason it
+  stays. It adds such columns to the schema to prove it notices them.
 
 ## Still outstanding
 

@@ -73,9 +73,11 @@ export class PrivacyController {
    *
    * Kept as an immediate delete rather than routed through
    * `UserService.requestDeletion`: this is the user-data-deletion request that
-   * also revokes third-party OAuth grants on the spot, which the grace-period
-   * path does not do. No first-party client calls it; the web and mobile apps
-   * use `DELETE /account`.
+   * also revokes third-party OAuth grants on the spot and purges at once, which
+   * the grace-period path does not do. It shares that path's machinery, though:
+   * the account is ended the same way, and its rows go through the same batched
+   * purge with the deadline set to now. No first-party client calls it; the web
+   * and mobile apps use `DELETE /account`.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireCapability(FULL_CAPABILITY)
@@ -103,33 +105,25 @@ export class PrivacyController {
       throw new BadRequestException('Confirmation email does not match this account');
     }
 
-    // Before anything is purged: the appliance's last administrator does not leave the other
-    // people on it without one, whichever route deletes the account (`DELETE /account` applies
-    // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
-    // The purge runs while the handover's transaction is open, and every row it deletes, the
-    // account row and the audit go through that transaction: the caller's account and all of its
-    // data go exactly when the successor becomes administrator, or none of it does. Only the OAuth
-    // revocations happen outside it, first; a failure leaves the account whole and audited as
-    // failed, to be asked again.
+    // The appliance's last administrator does not leave the other people on it without one, whichever
+    // route deletes the account (`DELETE /account` applies the same rule): 409 `SUCCESSOR_REQUIRED` or
+    // `SUCCESSOR_NOT_FOUND`, and nothing revoked or deleted. Otherwise the grants are revoked, the
+    // account is ended in one short transaction (with the successor's promotion), and its rows are
+    // purged in batches outside it; see DataDeletionService.deleteAccount.
     let result: AccountDeletionResult;
 
     try {
-      result = await this.userService.handOverAdministration(
-        serviceContext,
-        serviceContext.userId,
-        { successorEmail: body.successorEmail },
-        (transaction) => this.dataDeletionService.deleteAccount(serviceContext, { transaction }),
-      );
+      result = await this.dataDeletionService.deleteAccount(serviceContext, {
+        successorEmail: body.successorEmail,
+      });
     } catch (error) {
       throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
 
-    // After the handover has committed and released the lock every account creation waits on: the
-    // sweep reads the whole appliance's search index.
-    await this.dataDeletionService.cleanupSearchIndex();
-
     return {
-      status: 'deleted',
+      // `deleting`: the account is ended and its purge is still running (or will be finished by the
+      // hourly purge). Nobody can sign in to it either way.
+      status: result.status,
       userDeleted: result.userDeleted,
       totalDeleted: result.totalDeleted,
       deletedCounts: result.deletedCounts,

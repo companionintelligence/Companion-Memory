@@ -1,15 +1,27 @@
-import { buildPurgePlan } from '@ci/domains/user';
+import { LoggerService } from '@ci/common/logging';
+import { AccountPurgeService, buildPurgePlan, type PurgePlan } from '@ci/domains/user';
 import { readFkEdges, readUserRefColumns } from '@ci/domains/user/purge/purgeCatalog';
 
 import { ScratchDatabase, scratchDatabaseAvailability } from '../../__tests__/support/scratchDatabase';
-import { CONNECTION_SCOPED_TABLES, USER_OWNED_TABLES } from '../dataDeletionPlan';
+import { CONNECTION_SCOPED_TABLES } from '../dataDeletionPlan';
 
 /**
- * The disconnect and account-deletion plans name tables and columns as
- * strings; a typo there is a delete that silently matches nothing, and a
- * column that does not exist fails the whole account deletion with a 500.
- * Checked against a migrated database, for what the migrations create
- * (including the hbpe schema).
+ * What an account delete leaves behind, checked against a migrated database.
+ *
+ * Both account deletes (`POST /users/me/delete` and the 30-day purge) remove an
+ * account's rows through the same purge, whose plan is read from the catalog:
+ * the columns with a foreign key to `ci.users`, and the `user_id` /
+ * `owner_user_id` columns that have none. This suite asks the question from the
+ * other side. It lists every column that can name an account, by foreign key
+ * (any name, any arity) or by name (uuid, uuid[] and text alike), and requires
+ * each to be one the purge deletes by, one it nulls, or one written down here
+ * with the reason it stays. A new column that names an account and that the
+ * purge would not reach fails here, the day it is added.
+ *
+ * "Deletes by" means the column IS the scope of one of the plan's deletes. A
+ * table the plan deletes from by another column, or through a parent, does not
+ * cover its other account columns: rows of other accounts that name this one
+ * there would survive.
  *
  * Skips (loudly) when there is no administrative connection; see
  * `domains/__tests__/support/scratchDatabase.ts`.
@@ -24,7 +36,124 @@ if (!availability.available) {
 
 jest.setTimeout(600_000);
 
-describeWithDatabase(`data-deletion plans, against real Postgres (${availability.target})`, () => {
+/** Anything that can run parameterised SQL. */
+interface SqlExecutor {
+  query(sql: string, parameters?: unknown[]): Promise<unknown>;
+}
+
+/**
+ * A column name that says it holds an account: `user`, `users`, `…_user_id`,
+ * `…_user_ids`, `…_by` or `is_private_to`, in a uuid, uuid[] or text column.
+ * Deliberately broad: a false positive costs a line in {@link KEPT}, a miss
+ * costs a deleted account's data.
+ */
+const ACCOUNT_COLUMN_NAME = '(^|_)users?(_ids?)?$|_by$|^is_private_to$';
+
+/**
+ * Party words, for uuid and uuid[] columns only (`owner_ref`, `grantee`,
+ * `member_ids`, …): in text columns they are mostly prose (an email's
+ * `subject`, a link preview's `author_name`).
+ */
+const PARTY_COLUMN_NAME =
+  '^(owner|grantee|member|asker|responder|recipient|subject|actor|issuer|invitee|inviter|assignee|author|participant|viewer|reviewer)s?(_|$)';
+
+/** Every column that can name an account: by foreign key to ci.users, or by name. */
+const ACCOUNT_COLUMNS_SQL = `
+  SELECT ns.nspname || '.' || c.relname || '.' || a.attname AS ref
+    FROM pg_attribute a
+    JOIN pg_class c      ON c.oid = a.attrelid AND c.relkind IN ('r', 'p')
+    JOIN pg_namespace ns ON ns.oid = c.relnamespace
+   WHERE a.attnum > 0
+     AND NOT a.attisdropped
+     AND ns.nspname NOT LIKE ALL (ARRAY['pg\\_%', 'information\\_schema', '\\_timescaledb%', 'timescaledb\\_%', 'pipeline\\_scratch'])
+     AND (
+       EXISTS (
+         SELECT 1 FROM pg_constraint k
+          WHERE k.contype = 'f' AND k.conrelid = c.oid
+            AND k.confrelid = 'ci.users'::regclass
+            AND a.attnum = ANY (k.conkey)
+       )
+       OR (
+         a.atttypid IN ('uuid'::regtype, 'uuid[]'::regtype, 'text'::regtype, 'text[]'::regtype, 'varchar'::regtype)
+         AND a.attname ~ $1
+       )
+       OR (a.atttypid IN ('uuid'::regtype, 'uuid[]'::regtype) AND a.attname ~ $2)
+     )
+   ORDER BY 1
+`;
+
+/**
+ * Columns that name an account and stay after its delete, each with the reason.
+ * An entry here is a claim about the purge's behaviour or about what the column
+ * holds; it needs the same scrutiny as the code.
+ */
+const KEPT: ReadonlyMap<string, string> = new Map([
+  // Taken out by `removeFromAskAudit`, which the purge runs before its plan
+  // (AccountPurgeService.integration.spec pins it): the other party's record.
+  ['ci.ask_audit.asker_user_id', 'removeFromAskAudit'],
+  ['ci.ask_audit.responder_user_id', 'removeFromAskAudit'],
+  // The record that a deletion happened: a pseudonymous id and counts.
+  ['ci.data_deletion_audit.subject_user_id', 'proof of deletion'],
+  ['ci.data_deletion_audit.requested_by_user_id', 'proof of deletion'],
+  ['ci.account_purges.user_id', 'proof of deletion'],
+  // Names that match and hold no account. The rows are their owner's, deleted
+  // with that owner by its own column.
+  ['ci.api_keys.managed_by', 'the installed app that manages the key'],
+  ['ci.entity_type_proposals.detected_by', 'the detector that proposed it'],
+  ['ci.graph_enrichment_proposals.detected_by', 'the detector that proposed it'],
+  ['ci.merge_candidates.detected_by', 'the detector that proposed it'],
+  ['ci.events.created_by', "free text from the event's source (an organiser, a system), not an account id"],
+  ['ci.ask_grants.grantee_peer_link_id', 'a peer link, not a local account'],
+  ['ci.events.participant_entity_ids', 'entity ids'],
+  ['ci.summaries.participants', 'entity ids'],
+  ['ci.identifier_claims.subject_id', 'the entity or object an identifier names'],
+  ['ci.object_identifiers.subject_id', 'the entity or object an identifier names'],
+]);
+
+/** The column refs the plan deletes by and nulls. */
+function coverage(plan: PurgePlan): { deletedBy: Set<string>; nulled: Set<string> } {
+  const deletedBy = new Set<string>();
+  const nulled = new Set<string>();
+
+  for (const step of plan.steps) {
+    const table = `${step.target.schema}.${step.target.table}`;
+
+    if (step.kind === 'delete' && step.scope.kind === 'owned') {
+      deletedBy.add(`${table}.${step.scope.column}`);
+    } else if (step.kind === 'null' && step.scope.kind === 'owned') {
+      nulled.add(`${table}.${step.column}`);
+    }
+  }
+
+  return { deletedBy, nulled };
+}
+
+async function planFor(executor: SqlExecutor): Promise<PurgePlan> {
+  const usersTable = { schema: 'ci', table: 'users' };
+  const [userColumns, edges] = await Promise.all([
+    readUserRefColumns(executor, usersTable),
+    readFkEdges(executor),
+  ]);
+
+  return buildPurgePlan({ userColumns, edges, usersTable });
+}
+
+/** Every account column the purge would leave naming a deleted account. */
+async function uncoveredAccountColumns(executor: SqlExecutor): Promise<{ all: string[]; left: string[] }> {
+  const rows = (await executor.query(ACCOUNT_COLUMNS_SQL, [
+    ACCOUNT_COLUMN_NAME,
+    PARTY_COLUMN_NAME,
+  ])) as Array<{ ref: string }>;
+  const { deletedBy, nulled } = coverage(await planFor(executor));
+  const all = rows.map((row) => row.ref);
+
+  return {
+    all,
+    left: all.filter((ref) => !deletedBy.has(ref) && !nulled.has(ref) && !KEPT.has(ref)),
+  };
+}
+
+describeWithDatabase(`account deletion coverage, against real Postgres (${availability.target})`, () => {
   let scratch: ScratchDatabase;
 
   beforeAll(async () => {
@@ -36,174 +165,71 @@ describeWithDatabase(`data-deletion plans, against real Postgres (${availability
     await scratch?.drop();
   });
 
-  it('every connection-scoped and ci_etl table the plans name exists', async () => {
+  it('every connection-scoped table the disconnect names exists', async () => {
     const columns = await scratch.dataSource.query<Array<{ ref: string }>>(
       `SELECT table_schema || '.' || table_name || '.' || column_name AS ref FROM information_schema.columns`,
     );
     const known = new Set(columns.map((c) => c.ref));
-    const missing = [
-      ...CONNECTION_SCOPED_TABLES.map((t) => `${t.schema}.${t.table}.${t.connectionColumn}`),
-      ...USER_OWNED_TABLES.filter((t) => t.schema === 'ci_etl').map(
-        (t) => `${t.schema}.${t.table}.${t.userColumn}`,
-      ),
-    ].filter((ref) => !known.has(ref));
+    const missing = CONNECTION_SCOPED_TABLES.map(
+      (t) => `${t.schema}.${t.table}.${t.connectionColumn}`,
+    ).filter((ref) => !known.has(ref));
 
     expect(missing).toEqual([]);
   });
 
-  it('every user-owned table the plan names exists, with the columns its delete uses', async () => {
-    const columns = await scratch.dataSource.query<Array<{ ref: string }>>(
-      `SELECT table_schema || '.' || table_name || '.' || column_name AS ref FROM information_schema.columns`,
-    );
-    const known = new Set(columns.map((c) => c.ref));
+  it('checks the plan the purge itself runs', async () => {
+    const service = new AccountPurgeService(scratch.dataSource, new LoggerService());
 
-    // The migrations create every table the plan names, hbpe included. At run
-    // time `deleteUserOwned` treats a missing relation as nothing to delete, so
-    // a renamed or dropped table (ci.inventory became ci.objects) would delete
-    // nothing without a word; here it fails. A missing COLUMN on a table that is
-    // there fails the whole deletion.
-    const missing = USER_OWNED_TABLES.flatMap((t) =>
-      t.through
-        ? [
-            `${t.schema}.${t.table}.${t.through.column}`,
-            `${t.through.parentSchema}.${t.through.parentTable}.${t.through.parentKey}`,
-            `${t.through.parentSchema}.${t.through.parentTable}.${t.userColumn}`,
-          ]
-        : [`${t.schema}.${t.table}.${t.userColumn}`],
-    );
-
-    expect(missing.filter((ref) => !known.has(ref))).toEqual([]);
+    expect(await service.describePlan()).toEqual(await planFor(scratch.dataSource));
   });
 
-  it('nothing outside the plan, and nothing later in it, holds a blocking reference into a table it purges', async () => {
-    // NO ACTION / RESTRICT references (deferred ones are checked at commit, after
-    // the whole plan has run). The user row is deleted after every planned table.
-    const references = await scratch.dataSource.query<Array<{ child: string; parent: string; name: string }>>(
-      `SELECT cn.nspname || '.' || c.relname AS child, pn.nspname || '.' || p.relname AS parent, k.conname AS name
-         FROM pg_constraint k
-         JOIN pg_class c ON c.oid = k.conrelid
-         JOIN pg_namespace cn ON cn.oid = c.relnamespace
-         JOIN pg_class p ON p.oid = k.confrelid
-         JOIN pg_namespace pn ON pn.oid = p.relnamespace
-        WHERE k.contype = 'f'
-          AND k.confdeltype IN ('a', 'r')
-          AND NOT k.condeferrable
-          AND k.conrelid <> k.confrelid`,
-    );
-    const order = USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`);
-    const position = (table: string) => (table === 'ci.users' ? order.length : order.indexOf(table));
+  it('leaves no column naming the account behind: each is deleted by, nulled, or kept for a stated reason', async () => {
+    const { all, left } = await uncoveredAccountColumns(scratch.dataSource);
 
-    // Handled by the service: it clears ci.users.entity_id in the same transaction
-    // as the ci.entities delete, and deletes ci_search.entity_tag through the
-    // user's tags before the plan runs.
-    const handled = new Set(['users_entity_id_fkey', 'entity_tag_tag_id_fkey']);
-
-    const blocking = references
-      .filter((r) => position(r.parent) >= 0 && !handled.has(r.name))
-      .filter((r) => position(r.child) < 0 || position(r.child) > position(r.parent))
-      .map((r) => `${r.name}: ${r.child} -> ${r.parent}`);
-
-    expect(blocking).toEqual([]);
-  });
-
-  it('removes every table the 30-day purge removes', async () => {
-    // The purge reads the catalog for the tables that hold an account's data;
-    // this plan is a list kept by hand. A table the purge finds must be in the
-    // plan, or go by cascade with the user row or with a table the plan deletes.
-    const [userColumns, edges] = await Promise.all([
-      readUserRefColumns(scratch.dataSource, { schema: 'ci', table: 'users' }),
-      readFkEdges(scratch.dataSource),
-    ]);
-    const purged = buildPurgePlan({ userColumns, edges }).purgedTables;
-
-    const removed = new Set(['ci.users', ...USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`)]);
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const edge of edges) {
-        const child = `${edge.childSchema}.${edge.childTable}`;
-        if (
-          edge.deleteAction === 'c' &&
-          !removed.has(child) &&
-          removed.has(`${edge.parentSchema}.${edge.parentTable}`)
-        ) {
-          removed.add(child);
-          grew = true;
-        }
-      }
-    }
-
-    const notInPlan = new Set([
-      // Deleted by the service itself, through the user's tags.
-      'ci_search.entity_tag',
-      // Appliance-wide settings. `updated_by` says who last changed one, not
-      // whose it is, so an account delete must not reset them.
-      'ci.job_settings',
-      'ci.outbound_settings',
-    ]);
-
-    expect(purged.filter((table) => !removed.has(table) && !notInPlan.has(table))).toEqual([]);
-  });
-
-  it('leaves no column naming the account behind: each is removed, nulled, handled by the service, or exempt', async () => {
-    // Independently of the purge's discovery, which reads only `user_id` and
-    // `owner_user_id`: every uuid column whose name says it holds an account id.
-    // `ci.ask_audit.asker_user_id` is what that discovery missed.
-    const columns = await scratch.dataSource.query<
-      Array<{ table: string; column: string; action: string | null }>
-    >(
-      `SELECT ns.nspname || '.' || c.relname AS table, a.attname AS column,
-              (SELECT k.confdeltype::text FROM pg_constraint k
-                WHERE k.contype = 'f' AND k.conrelid = c.oid AND k.confrelid = 'ci.users'::regclass
-                  AND k.conkey = ARRAY[a.attnum]) AS action
-         FROM pg_attribute a
-         JOIN pg_class c      ON c.oid = a.attrelid AND c.relkind IN ('r', 'p')
-         JOIN pg_namespace ns ON ns.oid = c.relnamespace
-        WHERE a.atttypid = 'uuid'::regtype
-          AND NOT a.attisdropped
-          AND (a.attname ~ '(^|_)user_id$' OR a.attname ~ '_by$' OR a.attname = 'is_private_to')
-          AND ns.nspname NOT LIKE ALL (ARRAY['pg\\_%', 'information\\_schema', '\\_timescaledb%', 'timescaledb\\_%', 'pipeline\\_scratch'])`,
-    );
-    const edges = await readFkEdges(scratch.dataSource);
-
-    const removed = new Set(['ci.users', ...USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`)]);
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const edge of edges) {
-        const child = `${edge.childSchema}.${edge.childTable}`;
-        if (
-          edge.deleteAction === 'c' &&
-          !removed.has(child) &&
-          removed.has(`${edge.parentSchema}.${edge.parentTable}`)
-        ) {
-          removed.add(child);
-          grew = true;
-        }
-      }
-    }
-
-    // Columns DataDeletionService takes the account out of itself.
-    const handledByService = new Set([
-      // removeFromAskAudit: the other party's record, kept without this account.
-      'ci.ask_audit.asker_user_id',
-      'ci.ask_audit.responder_user_id',
-      // Nulled before the account row goes, or its NO ACTION key refuses it.
-      'ci.users.created_by',
-    ]);
-    // The record that the deletion happened, kept on purpose: ids and counts only.
-    const exempt = new Set([
-      'ci.data_deletion_audit.subject_user_id',
-      'ci.data_deletion_audit.requested_by_user_id',
-      'ci.account_purges.user_id',
-    ]);
-
-    const left = columns
-      .filter((c) => !removed.has(c.table))
-      // ON DELETE SET NULL / SET DEFAULT: Postgres detaches the row itself.
-      .filter((c) => c.action !== 'n' && c.action !== 'd')
-      .map((c) => `${c.table}.${c.column}`)
-      .filter((ref) => !handledByService.has(ref) && !exempt.has(ref));
-
-    expect(columns.length).toBeGreaterThan(80);
+    // The inventory is not empty by accident: today's schema has well over a
+    // hundred such columns, the ones the purge's own discovery reads among them.
+    expect(all.length).toBeGreaterThan(100);
+    expect(all).toEqual(expect.arrayContaining(['ci.notes.user_id', 'ci.entities.owner_user_id']));
     expect(left).toEqual([]);
+  });
+
+  it('every entry kept on purpose still exists, so a stale one cannot hide a new column', async () => {
+    const { all } = await uncoveredAccountColumns(scratch.dataSource);
+
+    expect([...KEPT.keys()].filter((ref) => !all.includes(ref))).toEqual([]);
+  });
+
+  it('fails for a new account column the purge would not reach, whatever its shape', async () => {
+    const runner = scratch.dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+
+    try {
+      // A second account column on a table the plan already deletes from, an
+      // array of accounts, a name outside the `user_id` convention, and a new
+      // table with both. Plus one with a foreign key under an unusual name,
+      // which the purge does reach.
+      await runner.query(`
+        ALTER TABLE ci.notes
+          ADD COLUMN reviewer_user_id uuid,
+          ADD COLUMN member_ids uuid[],
+          ADD COLUMN grantee uuid REFERENCES ci.users (id)`);
+      await runner.query(
+        `CREATE TABLE ci.zz_guard_probe (id uuid PRIMARY KEY, owner_ref uuid, user_ids text[])`,
+      );
+
+      const { left } = await uncoveredAccountColumns(runner);
+
+      expect(left).toEqual([
+        'ci.notes.member_ids',
+        'ci.notes.reviewer_user_id',
+        'ci.zz_guard_probe.owner_ref',
+        'ci.zz_guard_probe.user_ids',
+      ]);
+      expect(coverage(await planFor(runner)).deletedBy).toContain('ci.notes.grantee');
+    } finally {
+      await runner.rollbackTransaction();
+      await runner.release();
+    }
   });
 });

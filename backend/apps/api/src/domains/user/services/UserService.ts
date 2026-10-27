@@ -491,6 +491,83 @@ export class UserService {
 
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
+    return (await this.endAccount(id, options, purgeAfter)) != null;
+  }
+
+  /**
+   * The last-administrator rule of {@link requestDeletion}, asked without the lock and without
+   * writing anything: throws {@link LastAdminDeletionRefused} when ending account `id` now would be
+   * refused. For a caller that does something irreversible before it ends the account (the immediate
+   * delete revokes the OAuth grants first, so the provider side stops even if what follows fails)
+   * and should not do it for a request that will be refused anyway.
+   *
+   * Only a forecast: {@link endAccountNow} asks again under the lock, and that answer is the one that
+   * counts. An account that disappears in between makes this answer nothing.
+   */
+  async assertMayEndAccount(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<void> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const manager = this.userRepository.manager;
+    const [target] = await manager.query<Array<{ role: string }>>(
+      `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      [id],
+    );
+
+    if (target?.role === 'admin') {
+      await this.successorFor(manager, id, options);
+    }
+  }
+
+  /**
+   * End account `id` now and leave its data to the purge, due at once: the first half of the privacy
+   * route's immediate delete (`POST /users/me/delete`). Everything {@link requestDeletion} does, in
+   * the same short transaction under the same lock (the last-administrator rule, the successor's
+   * promotion, the account hidden from every read, its unused invitations deleted), with
+   * `purge_after` set to now instead of after the grace period.
+   *
+   * The caller runs the purge right after (`AccountPurgeService.purgeAccount`): batched, resumable,
+   * and outside this lock. If the process dies before it finishes, the hourly purge finds the account
+   * due and finishes it. This used to delete every row inside this transaction instead, which held the
+   * lock every sign-up waits on for as long as the delete took (49 minutes and counting for a large
+   * graph, in review) and lost all of it to any interruption.
+   *
+   * @param alongside the caller's writes that must commit with the account's end and only with it
+   *   (the audit row, the sessions and keys revoked), run last in the transaction. If it throws, the
+   *   account is not ended.
+   * @returns null when there is no live account `id` (already ended), and nothing was written.
+   */
+  async endAccountNow<T>(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions,
+    alongside: (manager: EntityManager) => Promise<T>,
+  ): Promise<{ requestedAt: Date; purgeAfter: Date; result: T } | null> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const now = new Date();
+    const ended = await this.endAccount(id, options, now, alongside);
+
+    return ended && { requestedAt: now, purgeAfter: now, result: ended.result as T };
+  }
+
+  /**
+   * End account `id`: the shared half of {@link requestDeletion} and {@link endAccountNow}. Events go
+   * out after the commit.
+   */
+  private async endAccount(
+    id: string,
+    options: DeletionOptions,
+    purgeAfter: Date,
+    alongside?: (manager: EntityManager) => Promise<unknown>,
+  ): Promise<{ result: unknown } | null> {
     const outcome = await this.userRepository.manager.transaction(async (manager) => {
       const handedOver = await this.lockAndHandOver(manager, id, options);
 
@@ -504,11 +581,11 @@ export class UserService {
 
       await manager.query(`DELETE FROM ci.signup_code WHERE issued_by = $1 AND used = false`, [id]);
 
-      return handedOver;
+      return { successorId: handedOver.successorId, result: await alongside?.(manager) };
     });
 
     if (outcome == null) {
-      return false;
+      return null;
     }
 
     if (outcome.successorId) {
@@ -519,55 +596,7 @@ export class UserService {
       userId: id,
     });
 
-    return true;
-  }
-
-  /**
-   * The last-administrator rule of {@link requestDeletion}, for a deletion that does not go through
-   * it: the privacy route's immediate hard delete (`POST /users/me/delete`). When `id` is the last
-   * live administrator and other live accounts remain, `options.successorEmail` must name one of
-   * them, and that account becomes administrator now. Otherwise this throws
-   * {@link LastAdminDeletionRefused} and writes nothing.
-   *
-   * `andThen` is the deletion itself. It runs after the handover, still inside its transaction
-   * and under its lock, and the handover commits only if it resolves. Only what it writes through
-   * `manager` commits or rolls back with the promotion, so the account row has to be deleted
-   * through it: then the caller never leaves while the successor stays a member, and a delete
-   * that fails leaves the successor's role as it was. Anything `andThen` runs on other connections
-   * commits as it goes and must not wait on what this transaction holds (the appliance-claim lock,
-   * the successor's row and, once deleted, the caller's); every account creation waits on that
-   * lock meanwhile, so slow work that need not be atomic belongs after this returns.
-   */
-  handOverAdministration(context: ServiceContext, id: string, options?: DeletionOptions): Promise<void>;
-
-  handOverAdministration<T>(
-    context: ServiceContext,
-    id: string,
-    options: DeletionOptions,
-    andThen: (manager: EntityManager) => Promise<T>,
-  ): Promise<T>;
-
-  async handOverAdministration<T>(
-    context: ServiceContext,
-    id: string,
-    options: DeletionOptions = {},
-    andThen?: (manager: EntityManager) => Promise<T>,
-  ): Promise<T | void> {
-    if (context.userId !== SYSTEM_USER && context.userId !== id) {
-      throw new UnauthorizedException();
-    }
-
-    const { handedOver, result } = await this.userRepository.manager.transaction(async (manager) => {
-      const handedOver = await this.lockAndHandOver(manager, id, options);
-
-      return { handedOver, result: andThen ? await andThen(manager) : undefined };
-    });
-
-    if (handedOver?.successorId) {
-      await this.eventService.send(UserUpdatedEvent, { userId: handedOver.successorId });
-    }
-
-    return result;
+    return { result: outcome.result };
   }
 
   /**
@@ -582,8 +611,10 @@ export class UserService {
   ): Promise<{ successorId: string | null } | null> {
     await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
 
+    // FOR UPDATE: a row written for this account from here on (a foreign key takes KEY SHARE on
+    // this row) waits for this transaction, and then finds the account ended.
     const [target] = await manager.query<Array<{ id: string; role: string }>>(
-      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
       [id],
     );
 

@@ -49,8 +49,14 @@ function makeService(appliance: Partial<Appliance> = {}) {
         return Promise.resolve([]);
       }
 
-      if (/SELECT id, role FROM ci\.users WHERE id = \$1 AND deleted_at IS NULL/.test(sql)) {
+      if (/SELECT id, role FROM ci\.users WHERE id = \$1 AND deleted_at IS NULL FOR UPDATE/.test(sql)) {
         journal.push('read-target');
+
+        return Promise.resolve(target ? [target] : []);
+      }
+
+      if (sql.endsWith('SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL')) {
+        journal.push('peek-target');
 
         return Promise.resolve(target ? [target] : []);
       }
@@ -96,6 +102,8 @@ function makeService(appliance: Partial<Appliance> = {}) {
     create: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     manager: {
+      // Outside any transaction: the unlocked forecast (`assertMayEndAccount`).
+      query: transactionManager.query,
       transaction: jest.fn(async (run: (m: unknown) => Promise<unknown>) => {
         const result = await run(transactionManager);
 
@@ -334,93 +342,132 @@ describe('UserService — account deletion', () => {
   });
 
   /**
-   * The same rule for the privacy route's immediate hard delete (`POST /users/me/delete`), which
-   * does not go through `requestDeletion`. It hands the role over and runs the deletion the route
-   * gives it inside the same transaction; it deletes nothing itself.
+   * The privacy route's immediate delete (`POST /users/me/delete`): the same transaction as
+   * `requestDeletion`, with the purge due now and the caller's own writes inside it. It deletes no
+   * data itself; the purge does, outside the lock.
    */
-  describe('handOverAdministration', () => {
+  describe('endAccountNow', () => {
     const ADMIN = { id: 'user-1', role: 'admin' };
 
-    it('refuses the last administrator while others have accounts and nobody is named', async () => {
-      const { service, journal, eventService } = makeService({ target: ADMIN, otherAccounts: true });
-
-      const failure = await service.handOverAdministration(OWN, 'user-1').catch((error: unknown) => error);
-
-      expect((failure as LastAdminDeletionRefused).reason).toBe('successor_required');
-      expect(journal).toEqual(['lock', 'read-target', 'count-others']);
-      expect(eventService.send).not.toHaveBeenCalled();
-    });
-
-    it('promotes the named successor under the lock, and touches nothing else', async () => {
-      const { service, journal, queries, transactionManager, eventService } = makeService({
+    it("ends the account with its purge due now, runs the caller's writes last inside the transaction, and returns their result", async () => {
+      const { service, journal, transactionManager, eventService } = makeService({
         target: ADMIN,
         otherAccounts: true,
         successors: [{ id: 'user-2' }],
       });
+      let handedManager: unknown;
+      const before = Date.now();
 
-      await expect(
-        service.handOverAdministration(OWN, 'user-1', { successorEmail: 'Member@Example.com' }),
-      ).resolves.toBeUndefined();
+      const ended = await service.endAccountNow(
+        OWN,
+        'user-1',
+        { successorEmail: 'member@example.com' },
+        async (manager) => {
+          handedManager = manager;
+          journal.push('caller-writes');
 
+          return 'audit-1';
+        },
+      );
+
+      expect(ended?.result).toBe('audit-1');
       expect(journal).toEqual([
         'lock',
         'read-target',
         'count-others',
         'find-successor',
         'promote-successor',
+        'soft-delete',
+        'drop-invitations',
+        'caller-writes',
         'commit',
       ]);
-      expect(queries.find((q) => q.sql.includes("SET role = 'admin'"))?.params).toEqual(['user-2']);
-      // Without a deletion to run, the account itself is left alone.
-      expect(transactionManager.update).not.toHaveBeenCalled();
-      expect(eventService.send).toHaveBeenCalledWith(UserUpdatedEvent, { userId: 'user-2' });
-      expect(eventService.send).not.toHaveBeenCalledWith(UserRemovedEvent, expect.anything());
-    });
-
-    it('runs the deletion it is given inside the transaction, after the promotion, and returns its result', async () => {
-      const { service, journal, transactionManager } = makeService({
-        target: ADMIN,
-        otherAccounts: true,
-        successors: [{ id: 'user-2' }],
-      });
-      let handedManager: unknown;
-
-      const result = await service.handOverAdministration(
-        OWN,
-        'user-1',
-        { successorEmail: 'member@example.com' },
-        async (manager) => {
-          handedManager = manager;
-          journal.push('delete-account');
-
-          return 'deleted';
-        },
-      );
-
-      expect(result).toBe('deleted');
-      expect(journal.slice(-3)).toEqual(['promote-successor', 'delete-account', 'commit']);
-      // The transaction's own manager, so what the deletion writes through it commits with the promotion.
+      // The transaction's own manager, so what the caller writes commits with the account's end.
       expect(handedManager).toBe(transactionManager);
+      const patch = transactionManager.update.mock.calls[0][2] as { deletedAt: Date; purgeAfter: Date };
+      expect(patch.purgeAfter.getTime()).toBeGreaterThanOrEqual(before);
+      expect(patch.purgeAfter.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(ended?.purgeAfter).toEqual(patch.purgeAfter);
+      expect(eventService.send).toHaveBeenCalledWith(UserUpdatedEvent, { userId: 'user-2' });
+      expect(eventService.send).toHaveBeenCalledWith(UserRemovedEvent, { userId: 'user-1' });
     });
 
-    it('does not commit the promotion when the deletion fails, and announces nothing', async () => {
+    it('refuses the last administrator while others have accounts and nobody is named, writing nothing', async () => {
+      const { service, journal, eventService } = makeService({ target: ADMIN, otherAccounts: true });
+      const writes = jest.fn();
+
+      const failure = await service.endAccountNow(OWN, 'user-1', {}, writes).catch((error: unknown) => error);
+
+      expect((failure as LastAdminDeletionRefused).reason).toBe('successor_required');
+      expect(journal).toEqual(['lock', 'read-target', 'count-others']);
+      expect(writes).not.toHaveBeenCalled();
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it("does not commit the account's end or the promotion when the caller's writes fail, and announces nothing", async () => {
       const { service, journal, eventService } = makeService({
         target: ADMIN,
         otherAccounts: true,
         successors: [{ id: 'user-2' }],
       });
-      const purgeFailure = new Error('column "user_id" does not exist');
+      const failure = new Error('audit insert refused');
 
       await expect(
-        service.handOverAdministration(OWN, 'user-1', { successorEmail: 'member@example.com' }, () =>
-          Promise.reject(purgeFailure),
+        service.endAccountNow(OWN, 'user-1', { successorEmail: 'member@example.com' }, () =>
+          Promise.reject(failure),
         ),
-      ).rejects.toBe(purgeFailure);
+      ).rejects.toBe(failure);
 
-      // The promotion was written inside the transaction, which then rolled back with the failure.
       expect(journal).toContain('promote-successor');
       expect(journal).not.toContain('commit');
       expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('answers null for an account already ended, writing nothing', async () => {
+      const { service, journal, eventService } = makeService({ target: null });
+      const writes = jest.fn();
+
+      await expect(service.endAccountNow(OWN, 'user-1', {}, writes)).resolves.toBeNull();
+      expect(writes).not.toHaveBeenCalled();
+      expect(journal).toEqual(['lock', 'read-target', 'commit']);
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses to act for someone else', async () => {
+      const { service, userRepository } = makeService({ target: ADMIN });
+
+      await expect(service.endAccountNow(OWN, 'user-2', {}, jest.fn())).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(userRepository.manager.transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  /** The unlocked forecast of the last-administrator rule, asked before anything irreversible. */
+  describe('assertMayEndAccount', () => {
+    const ADMIN = { id: 'user-1', role: 'admin' };
+
+    it('refuses as the locked rule would, without a lock or a transaction', async () => {
+      const { service, journal, userRepository } = makeService({ target: ADMIN, otherAccounts: true });
+
+      const failure = await service.assertMayEndAccount(OWN, 'user-1').catch((error: unknown) => error);
+
+      expect((failure as LastAdminDeletionRefused).reason).toBe('successor_required');
+      expect(journal).toEqual(['peek-target', 'count-others']);
+      expect(userRepository.manager.transaction).not.toHaveBeenCalled();
+    });
+
+    it('accepts a named successor, and writes nothing', async () => {
+      const { service, journal } = makeService({
+        target: ADMIN,
+        otherAccounts: true,
+        successors: [{ id: 'user-2' }],
+      });
+
+      await expect(
+        service.assertMayEndAccount(OWN, 'user-1', { successorEmail: 'member@example.com' }),
+      ).resolves.toBeUndefined();
+      expect(journal).toEqual(['peek-target', 'count-others', 'find-successor']);
     });
 
     it('lets a member through without asking', async () => {
@@ -429,17 +476,14 @@ describe('UserService — account deletion', () => {
         otherAccounts: true,
       });
 
-      await expect(service.handOverAdministration(OWN, 'user-1')).resolves.toBeUndefined();
-      expect(journal).not.toContain('count-others');
+      await expect(service.assertMayEndAccount(OWN, 'user-1')).resolves.toBeUndefined();
+      expect(journal).toEqual(['peek-target']);
     });
 
     it('refuses to act for someone else', async () => {
-      const { service, userRepository } = makeService({ target: ADMIN });
+      const { service } = makeService({ target: ADMIN });
 
-      await expect(service.handOverAdministration(OWN, 'user-2')).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
-      expect(userRepository.manager.transaction).not.toHaveBeenCalled();
+      await expect(service.assertMayEndAccount(OWN, 'user-2')).rejects.toBeInstanceOf(UnauthorizedException);
     });
   });
 
