@@ -179,6 +179,12 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
     await mail('my alias to someone else', '"Liam Broza" <liam@alias.example>', {
       to: ['bo@example.org'],
     });
+    const sent = await mail('my alias, Sent label, cc me', '"Liam Broza" <liam@alias.example>', {
+      toSelf: true,
+    });
+    await q(`UPDATE ci.communications SET metadata = '{"DirectionBasis": "sent_label"}' WHERE id = $1`, [
+      sent,
+    ]);
     await mail('my old address', '"Liam Broza" <liam@old.example>', { toSelf: true, direction: 'inbound' });
     await mail('my connected account', '"Liam Broza" <Liam.Broza@gmail.example>', {
       toSelf: true,
@@ -234,6 +240,14 @@ describeWithDb(`repair_mail_filed_as_sent_by_owner (${availability.target})`, ()
       direction: 'inbound',
       from_entity_id: null,
       sent_from: [],
+    });
+  });
+
+  it('leaves mail Gmail filed as Sent alone, even with the owner on it', async () => {
+    expect(await read('my alias, Sent label, cc me')).toEqual({
+      direction: 'outbound',
+      from_entity_id: self,
+      sent_from: [self],
     });
   });
 

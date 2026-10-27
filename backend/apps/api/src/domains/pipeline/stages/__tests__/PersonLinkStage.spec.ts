@@ -1024,10 +1024,11 @@ describe('run() answers for every id, and never anonymously', () => {
     expect(results.get(subjectId(1))?.reason).toBe('no_projectable_role_resolved');
   });
 
-  it('NEVER merges two people, and touches no graph table', async () => {
+  it('NEVER merges two people, and its only graph write retracts a stale edge', async () => {
     // The decision this stage is built around: two entities claiming one
     // identifier is a merge CANDIDATE and never a merge. The only writes are
-    // the claim upsert and the link projection.
+    // the claim upsert and the link projection, whose CTE deletes a replaced
+    // sender's rule-written SENT edge and writes no other graph row.
     const harness = makeDecisionHarness({
       rows: [commLoaded(1, { from: 'dana@example.com', to: ['dana@example.com'] })],
       index: { 'email:dana@example.com': { entity_id: personId(1) } },
@@ -1040,7 +1041,14 @@ describe('run() answers for every id, and never anonymously', () => {
     expect(writes).toHaveLength(2);
     for (const write of writes) {
       expect(write.sql).not.toMatch(/ci\.entities|ci\.entity_merges|ci\.entity_identifiers/i);
+      expect(write.sql).not.toMatch(/INSERT INTO ci\.relationships|UPDATE ci\.relationships/i);
     }
+
+    expect(writes.filter((write) => /DELETE FROM ci\.relationships/i.test(write.sql))).toEqual([
+      expect.objectContaining({
+        sql: expect.stringMatching(/^WITH superseded AS \( DELETE FROM ci\.relationships/),
+      }),
+    ]);
   });
 
   it('fails every id in the slice with a reason when the claim write does not commit', async () => {

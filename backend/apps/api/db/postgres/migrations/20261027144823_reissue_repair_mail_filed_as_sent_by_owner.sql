@@ -41,6 +41,8 @@
 -- number that is NOT one of the owner's, and that reached the owner from
 -- somebody else: it is `inbound`, or the owner is among its recipients (in
 -- `to_entity_ids`, or by address in the To/Cc of `participants_metadata`).
+-- Mail Gmail filed as Sent (`metadata.DirectionBasis = 'sent_label'`, imports
+-- since #3136) is the owner's and is never taken.
 --
 -- The sender is the `from` claim `enrich.person_link` wrote
 -- (`ci.identifier_claims`, kind email or phone) when there is one and nobody
@@ -130,8 +132,11 @@ sent_as_owner AS (
     FROM ci.communications c
     JOIN owner o ON o.user_id = c.user_id
    WHERE c.from_entity_id = o.self_id
-     -- Mail only: a call's or a text's `from` can be the other party.
+     -- Mail only: a call's or a text's `from` can be the other party, and a
+     -- post's or a DM's an `@handle`.
      AND c.communication_type = 'email'
+     -- Gmail filed it as Sent: the owner's own mail, whatever its From says.
+     AND c.metadata ->> 'DirectionBasis' IS DISTINCT FROM 'sent_label'
 ),
 sender AS (
   -- The claim when there is one: it is what `enrich.person_link` keyed.
@@ -229,7 +234,8 @@ UPDATE ci.identifier_claims cl
 
 DELETE FROM ci.pipeline_state ps
  USING _owner_sent m
- WHERE ps.entity_id = m.id
+ WHERE ps.entity_type = 'communication'
+   AND ps.entity_id = m.id
    AND ps.stage IN ('enrich.person_link', 'promote.edge_communication');
 
 -- The phones' copy. A record that already matches its row is left alone, so a
