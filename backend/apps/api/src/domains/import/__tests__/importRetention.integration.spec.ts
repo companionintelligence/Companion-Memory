@@ -463,6 +463,24 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await counts(runId)).toEqual(GONE);
     });
 
+    it('keeps that run once its unpack is retried, because the retry reopens it', async () => {
+      const runId = await failedUnpackRun(200);
+      const [unpack] = await dataSource.query<Array<{ id: string }>>(
+        `SELECT id FROM ci_import.import_stages WHERE run_id = $1::uuid AND kind = 'unpack'`,
+        [runId],
+      );
+
+      expect(await harness.service.retryStage({ userId }, runId, unpack.id)).toBe(true);
+      // The requeue and the reopen land together. The run is open again, so the
+      // sweep counts its queued stages as live.
+      expect(await runStatus(runId)).toBe('queued');
+      expect(await stageStatuses(runId)).toEqual(['queued', 'queued', 'queued']);
+
+      await retention.sweep();
+
+      expect(await counts(runId)).toEqual({ ...GONE, runs: 1, stages: 3 });
+    });
+
     it('takes the retired run’s spent source rows with it', async () => {
       const runId = await retiredRun(200);
       const dropId = await uploadDropFor(runId);
@@ -866,6 +884,23 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await runStatus(runId)).toBe('failed');
     });
 
+    it('tells a failed run that still holds its scratch tree about the tree, not that retention will collect it', async () => {
+      // What a worker leaves behind: the failure path never reclaims the tree,
+      // and `UnpackStage` has already moved the upload into it. The sweep skips
+      // such a run, so "retention collects this run" would be untrue.
+      const runId = await failedUnpackRun(0);
+
+      await mkdir(scratch.dirFor(userId, runId), { recursive: true });
+
+      const refusal = retention.discardRun({ userId }, runId);
+
+      await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+      await expect(refusal).rejects.toThrow(/still owns a scratch tree/);
+      expect(await runStatus(runId)).toBe('failed');
+
+      await rm(scratch.dirFor(userId, runId), { recursive: true, force: true });
+    });
+
     it('refuses a run whose stages are still live, whatever the status column says', async () => {
       const runId = await parsedNeverPushedRun(200);
 
@@ -1097,6 +1132,31 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect((await retention.sweep()).payloadPurgedRuns).toBe(1);
       expect((await retention.sweep()).payloadPurgedRuns).toBe(1);
       expect((await retention.sweep()).payloadPurgedRuns).toBe(0);
+    });
+
+    it('does not let runs held by a scratch tree use up that budget', async () => {
+      // Failed runs keep their trees and are the oldest, so they head every
+      // candidate page. Counting them against the budget would stop the sweep
+      // ever reaching the runs behind them.
+      const held = [await failedUnpackRun(300), await failedUnpackRun(250)];
+      const runId = await retiredRun(200);
+
+      for (const heldId of held) {
+        await mkdir(scratch.dirFor(userId, heldId), { recursive: true });
+      }
+
+      setRetention({ maxRunsPerSweep: 1 });
+
+      const result = await retention.sweep();
+
+      expect(result.runsDeleted).toBe(1);
+      expect(result.skipped.scratch_tree_present).toBeGreaterThanOrEqual(2);
+      expect(await counts(runId)).toEqual(GONE);
+
+      for (const heldId of held) {
+        expect(await runStatus(heldId)).toBe('failed');
+        await rm(scratch.dirFor(userId, heldId), { recursive: true, force: true });
+      }
     });
   });
 });

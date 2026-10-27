@@ -21,7 +21,7 @@ import { SearchResolver } from './SearchResolver';
 const USER = '00000000-0000-0000-0000-0000000000bb';
 const CONTEXT = { userId: USER } as RequestContext;
 
-type RowType = 'event' | 'communication' | 'note';
+type RowType = 'event' | 'communication' | 'note' | 'answer' | 'receipt';
 
 interface Row {
   id: string;
@@ -31,7 +31,13 @@ interface Row {
   fields: Record<string, string | null>;
 }
 
-const TIME_FIELD: Record<RowType, string> = { event: 'startTime', communication: 'time', note: 'updatedAt' };
+const TIME_FIELD: Record<RowType, string> = {
+  event: 'startTime',
+  communication: 'time',
+  note: 'updatedAt',
+  answer: 'answeredAt',
+  receipt: 'purchasedAt',
+};
 const HOUR_MS = 3_600_000;
 const FIRST_MS = Date.parse('2026-01-01T00:00:00.000Z');
 const uuid = (n: number) => `018f0000-0000-7000-8000-${n.toString(16).padStart(12, '0')}`;
@@ -39,7 +45,9 @@ const uuid = (n: number) => `018f0000-0000-7000-8000-${n.toString(16).padStart(1
 /**
  * 150 events (more than one page's per-type window of 30 * 4), named so that
  * name order runs against time order; 12 messages, half with a subject and
- * half chat-style with only a preview; 6 notes; and 3 events with no title.
+ * half chat-style with only a preview, one of those also carrying an LLM
+ * summary the row never shows; 6 notes; 3 answers, shown by their question;
+ * 3 receipts, shown by their merchant; and 3 events with no title.
  */
 function buildRows(): Row[] {
   const rows: Row[] = [];
@@ -65,7 +73,25 @@ function buildRows(): Row[] {
       fields:
         j % 2 === 0
           ? { subject: `Re: plan ${j}`, preview: 'see below' }
-          : { subject: null, preview: `chat line ${j}` },
+          : { subject: null, preview: `chat line ${j}`, ...(j === 3 ? { summary: 'Aardvark summary' } : {}) },
+    });
+  }
+
+  for (let j = 0; j < 3; j++) {
+    rows.push({
+      id: uuid(next++),
+      type: 'answer',
+      time: new Date(FIRST_MS + (j * 31 + 11) * HOUR_MS),
+      fields: { question: `What did you do ${j}?` },
+    });
+  }
+
+  for (const merchant of ['Zebra Books', 'Amazon', 'Bakery Corner']) {
+    rows.push({
+      id: uuid(next++),
+      type: 'receipt',
+      time: new Date(FIRST_MS + (next * 17 + 2) * HOUR_MS),
+      fields: { merchantName: merchant },
     });
   }
 
@@ -92,13 +118,22 @@ function buildRows(): Row[] {
 
 const ROWS = buildRows();
 
+/** What each row shows as its title: the event or note title, a message's subject or preview, an answer's question. */
 const nameOf = (row: Row) =>
-  [row.fields.title, row.fields.subject, row.fields.preview].find((value) => value != null && value !== '') ??
-  '';
+  [
+    row.fields.title,
+    row.fields.subject,
+    row.fields.preview,
+    row.fields.merchantName,
+    row.fields.question,
+  ].find((value) => value != null && value !== '') ?? '';
+
+/** What a browse with no type filter reads: receipts are opt-in, listed only when asked for. */
+const DEFAULT_BROWSE = ROWS.filter((row) => row.type !== 'receipt');
 
 /** The order the list must come out in: by name, unnamed rows last, ties by id. */
 function expectedOrder(direction: 1 | -1): Row[] {
-  return [...ROWS].sort((a, b) => {
+  return [...DEFAULT_BROWSE].sort((a, b) => {
     const [aName, bName] = [nameOf(a), nameOf(b)];
 
     if ((aName === '') !== (bName === '')) {
@@ -109,7 +144,14 @@ function expectedOrder(direction: 1 | -1): Row[] {
   });
 }
 
-type TimedOptions = { limit?: number; order?: unknown; afterTime?: Date; afterId?: string };
+type TimedOptions = {
+  limit?: number;
+  order?: unknown;
+  startTime?: Date;
+  endTime?: Date;
+  afterTime?: Date;
+  afterId?: string;
+};
 
 function directionOf(order: unknown): 'ASC' | 'DESC' {
   const raw = typeof order === 'string' ? order : Object.values((order ?? {}) as object)[0];
@@ -121,13 +163,18 @@ function serve(type: RowType, options: TimedOptions): EntityIdentifier<Indexable
   const sign = directionOf(options.order) === 'ASC' ? 1 : -1;
   const { afterTime, afterId } = options;
 
-  return ROWS.filter((row) => row.type === type)
+  return ROWS.filter(
+    (row) =>
+      row.type === type &&
+      (options.startTime == null || row.time >= options.startTime) &&
+      (options.endTime == null || row.time <= options.endTime),
+  )
     .filter(
       (row) =>
         !afterTime ||
         !afterId ||
         sign * (row.time.getTime() - afterTime.getTime()) > 0 ||
-        (row.time.getTime() === afterTime.getTime() && sign * (row.id < afterId ? -1 : 1) > 0),
+        (row.time.getTime() === afterTime.getTime() && sign * row.id.localeCompare(afterId) > 0),
     )
     .sort((a, b) => sign * (a.time.getTime() - b.time.getTime() || (a.id < b.id ? -1 : 1)))
     .slice(0, options.limit ?? Number.MAX_SAFE_INTEGER)
@@ -152,11 +199,18 @@ function makeResolver() {
 
       for (const identifier of identifiers) {
         const row = ROWS.find((candidate) => candidate.id === identifier.id)!;
+        const { question, ...fields } = row.fields;
 
         resolved.set(`${identifier.type}:${identifier.id}`, {
           type: identifier.type,
           id: identifier.id,
-          entity: { id: row.id, [TIME_FIELD[row.type]]: row.time, ...row.fields, tags: [] },
+          entity: {
+            id: row.id,
+            [TIME_FIELD[row.type]]: row.time,
+            ...fields,
+            ...(question != null ? { question: { text: question } } : {}),
+            tags: [],
+          },
         });
       }
 
@@ -178,8 +232,8 @@ function makeResolver() {
     empty('getEntitiesForPeople') as never,
     empty('getEntitiesForPlaces') as never,
     empty('getEntitiesForProducts') as never,
-    empty('getEntitiesForReceipts') as never,
-    empty('getEntitiesForAnswers') as never,
+    timed('receipt', 'getEntitiesForReceipts') as never,
+    timed('answer', 'getEntitiesForAnswers') as never,
     {} as never,
     {
       authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
@@ -228,7 +282,7 @@ describe('SearchResolver timed browse, sorted by name', () => {
       const { rows, totalCount } = await walk(makeResolver(), { first: 30, sortBy: 'name', sortOrder });
 
       expect(rows.map((row) => row.id)).toEqual(expectedOrder(sign).map((row) => row.id));
-      expect(totalCount).toBe(ROWS.length);
+      expect(totalCount).toBe(DEFAULT_BROWSE.length);
     },
   );
 
@@ -239,6 +293,54 @@ describe('SearchResolver timed browse, sorted by name', () => {
     // "chat line 1" sorts among the C's, not ahead of "Event 000".
     expect(names.indexOf('chat line 1')).toBeLessThan(names.indexOf('Event 000'));
     expect(names.indexOf('Re: plan 0')).toBeGreaterThan(names.indexOf('Note 5'));
+    // "chat line 3" also has a summary the row never shows; it does not move the message to the top.
+    expect(names[0]).toBe('chat line 1');
     expect(names.slice(-3)).toEqual(['', '', '']);
+  });
+
+  it('names an answer by its question, as AnswerRow shows it', async () => {
+    const { rows } = await walk(makeResolver(), { first: 30, sortBy: 'name', sortOrder: 'desc' });
+
+    // Z to A starts at the W's; an answer read as unnamed would sit in the tail instead.
+    expect(nameOf(rows[0]!)).toBe('What did you do 2?');
+  });
+
+  it('names a receipt by its merchant, as ReceiptRow shows it', async () => {
+    const { rows } = await walk(makeResolver(), {
+      first: 30,
+      sortBy: 'name',
+      sortOrder: 'asc',
+      includeTypes: ['receipt'],
+    } as Partial<SearchInput>);
+
+    expect(rows.map(nameOf)).toEqual(['Amazon', 'Bakery Corner', 'Zebra Books']);
+  });
+
+  it('keeps its place when the cursor row is edited between pages', async () => {
+    const resolver = makeResolver();
+    const input = {
+      first: 2,
+      sortBy: 'name',
+      sortOrder: 'asc',
+      includeTypes: ['note'],
+    } as unknown as SearchInput;
+
+    const firstPage = await resolver.search(CONTEXT, input);
+    const cursorRow = rowOf(firstPage.edges[1]!.node);
+    const originalTime = cursorRow.time;
+
+    try {
+      // A note's updated_at moves when it is edited, and with it the time half of its cursor.
+      cursorRow.time = new Date(originalTime.getTime() + 60_000);
+
+      const secondPage = await resolver.search(CONTEXT, {
+        ...input,
+        after: firstPage.pageInfo.endCursor,
+      } as SearchInput);
+
+      expect(secondPage.edges.map((edge) => rowOf(edge.node).fields.title)).toEqual(['Note 2', 'Note 3']);
+    } finally {
+      cursorRow.time = originalTime;
+    }
   });
 });

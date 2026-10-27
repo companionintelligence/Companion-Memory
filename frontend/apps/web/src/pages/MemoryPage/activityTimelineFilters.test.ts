@@ -43,6 +43,10 @@ describe('activityTimelineFiltersFromSearchParams', () => {
         'concept',
         'thread',
         'file-chunk',
+        'task',
+        'action',
+        'message',
+        'position',
       ],
     });
     expect(

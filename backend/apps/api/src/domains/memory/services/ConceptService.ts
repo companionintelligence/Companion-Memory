@@ -210,6 +210,26 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
   }
 
   /**
+   * List concepts, leaving out the ones the user asked Memory to forget
+   * (`memory.forget` in archive mode) and merge tombstones, both `is_active`
+   * false. Overrides {@link EntityService.findAll}, which does not know the flag.
+   */
+  async findAll(context: ServiceContext): Promise<Concept[]> {
+    let qb = this.repository
+      .createQueryBuilder('concept')
+      // The STI child repository scopes the query to `entity_type = 'Concept'`.
+      .where('concept.is_active IS DISTINCT FROM FALSE');
+
+    if (context.userId !== SYSTEM_USER) {
+      qb = qb.andWhere('concept.owner_user_id = :userId', { userId: context.userId });
+    }
+
+    const rows = await qb.getMany();
+
+    return rows.map((row) => ConceptEntity.toEgressType(row));
+  }
+
+  /**
    * Lightweight identifiers for the most-recent concepts, for the unified
    * search/explorer feed. Full entities are batch-resolved downstream.
    */
@@ -228,7 +248,10 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
       .createQueryBuilder('concept')
       .select('concept.id', 'id')
       // The STI child repository scopes the query to `entity_type = 'Concept'`.
-      .where('concept.owner_user_id = :userId', { userId: context.userId });
+      .where('concept.owner_user_id = :userId', { userId: context.userId })
+      // A concept the user asked Memory to forget (or a merge tombstone) is not
+      // one of theirs any more.
+      .andWhere('concept.is_active IS DISTINCT FROM FALSE');
 
     if (options.startTime) {
       query = query.andWhere('concept.updated_at >= :startTime', { startTime: options.startTime });
@@ -271,7 +294,8 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
   ): Promise<number> {
     let query = this.repository
       .createQueryBuilder('concept')
-      .where('concept.owner_user_id = :userId', { userId: context.userId });
+      .where('concept.owner_user_id = :userId', { userId: context.userId })
+      .andWhere('concept.is_active IS DISTINCT FROM FALSE');
 
     if (options.startTime) {
       query = query.andWhere('concept.updated_at >= :startTime', { startTime: options.startTime });

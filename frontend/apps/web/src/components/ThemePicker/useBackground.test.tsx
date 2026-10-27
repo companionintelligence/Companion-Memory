@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
+import { act, render, renderHook, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { act, renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-import { BackgroundProvider, GLOW_STORAGE_KEY, readTexturePalette, useBackground } from './useBackground';
+import { TexturePicker } from './TexturePicker';
+import { BackgroundProvider, GLOW_STORAGE_KEY, useBackground } from './useBackground';
 import { ThemeProvider, useTheme } from './useTheme';
 
 function wrapper({ children }: { children: React.ReactNode }) {
@@ -78,35 +77,44 @@ describe('texture colours follow a theme change', () => {
     root.removeAttribute('style');
   });
 
-  it('reads the new theme in an effect, not the one just left', () => {
-    const { result } = renderHook(
-      () => {
-        const theme = useTheme();
-        const [background, setBackground] = useState<string | null>(null);
-        // What TexturePicker does: read the palette in an effect keyed on the theme.
-        useEffect(() => {
-          setBackground(readTexturePalette()?.background ?? null);
-        }, [theme.themeState.mode]);
+  it('draws the texture tiles in the new theme, not the one just left', () => {
+    // jsdom has no canvas; without this the Conway preview logs a
+    // "Not implemented" error for every tile build.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 
-        return { theme, background };
-      },
+    let theme: ReturnType<typeof useTheme> | undefined;
+    function ThemeHandle() {
+      theme = useTheme();
+
+      return null;
+    }
+
+    render(
+      <>
+        <ThemeHandle />
+        <TexturePicker />
+      </>,
       { wrapper: themed },
     );
 
-    const light = result.current.background;
-    act(() => result.current.theme.setTheme('dark'));
+    const swatch = screen.getByText('None').previousElementSibling as HTMLElement;
+    const background = () => root.style.getPropertyValue('--background').trim();
+    expect(swatch.style.backgroundColor).toBe(background());
 
-    expect(result.current.background).not.toBe(light);
-    expect(result.current.background).toBe(root.style.getPropertyValue('--background').trim());
+    const light = swatch.style.backgroundColor;
+    act(() => theme?.setTheme('dark'));
+
+    expect(swatch.style.backgroundColor).not.toBe(light);
+    expect(swatch.style.backgroundColor).toBe(background());
   });
 
   it('redraws the page texture in the new theme’s colours', () => {
     const { result } = renderHook(() => useTheme(), { wrapper: themed });
     const lightTexture = root.style.getPropertyValue('--texture-image');
+    expect(lightTexture).not.toBe('');
 
     act(() => result.current.setTheme('dark'));
 
-    expect(lightTexture).not.toBe('');
     expect(root.style.getPropertyValue('--texture-image')).not.toBe(lightTexture);
   });
 });

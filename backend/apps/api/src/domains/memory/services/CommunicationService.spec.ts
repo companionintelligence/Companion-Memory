@@ -246,8 +246,37 @@ describe('CommunicationService update: falsy-but-legitimate values', () => {
     await expect(patchFor({ subject: '' })).resolves.toMatchObject({ subject: null });
   });
 
+  it('treats a subject of only whitespace as cleared', async () => {
+    await expect(patchFor({ subject: '   ' })).resolves.toMatchObject({ subject: null });
+  });
+
   it('leaves the subject alone when a re-sync sends none', async () => {
     await expect(patchFor({ subject: null })).resolves.not.toHaveProperty('subject');
     await expect(patchFor({ content: 'body' })).resolves.not.toHaveProperty('subject');
+  });
+
+  it('names a message whose subject was cleared from its preview, then its content', async () => {
+    const { service } = makeService();
+
+    let base: ((after: Partial<CommunicationEntity>) => Record<string, unknown>) | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).aggregate = {
+      applyUpdate: jest.fn(async (_ctx: unknown, _id: string, patch: { base?: typeof base }) => {
+        base = patch.base;
+
+        return null;
+      }),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (service as any).update(CONTEXT, 'c-1', { subject: '' });
+
+    const content = 'Are you free for lunch on Friday? The new noodle place opened.';
+    expect(base?.({ subject: null, preview: 'Lunch?', content, summary: null })).toMatchObject({
+      name: 'Lunch?',
+    });
+    expect(base?.({ subject: null, preview: null, content, summary: null })).toMatchObject({
+      name: content,
+    });
   });
 });

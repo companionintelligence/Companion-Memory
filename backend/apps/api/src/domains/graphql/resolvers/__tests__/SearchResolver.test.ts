@@ -209,25 +209,6 @@ describe('SearchResolver.search — combinable filters', () => {
     expect(result.totalCount).toBe(1);
   });
 
-  it('leaves out a person the user asked Memory to forget, even while an index row still finds them', async () => {
-    const { resolver, searchService, entityResolutionService } = makeResolver();
-    searchService.search.mockResolvedValue([
-      { type: 'person', id: 'forgotten' },
-      { type: 'person', id: 'kept' },
-    ]);
-    entityResolutionService.resolve.mockResolvedValue(
-      resolveMap([
-        { type: 'person', id: 'forgotten', entity: { name: 'Jane Smith', isActive: false } },
-        { type: 'person', id: 'kept', entity: { name: 'Jane Doe', isActive: true } },
-      ]),
-    );
-
-    const result = await resolver.search(ctx, { query: 'Jane' } as SearchInput);
-
-    expect(nodeIds(result)).toEqual(['person:kept']);
-    expect(result.totalCount).toBe(1);
-  });
-
   it('sorts by time ascending and descending', async () => {
     const entries: Entry[] = [
       { type: 'event', id: 'old', entity: { startTime: new Date('2026-01-01') } },

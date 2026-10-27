@@ -529,6 +529,32 @@ describe('RelationshipService Change History', () => {
     );
   });
 
+  it('records the dates as the re-read row stored them, not as the edit sent them', async () => {
+    const { service, repo, record } = withDeltas();
+    const stored = {
+      id: 'r1',
+      fromNodeId: 'p1',
+      toNodeId: 'p2',
+      type: 'KNOWS',
+      strength: 1,
+      isBidirectional: true,
+      startDate: null,
+      endDate: null,
+      userId: 'owner-1',
+      properties: {},
+    };
+    // A server west of UTC writes the UTC-midnight Date as the day before.
+    repo.findOne.mockResolvedValueOnce(stored).mockResolvedValueOnce({ ...stored, startDate: '2019-05-31' });
+
+    await service.update(ownerCtx, 'r1', { startDate: new Date('2019-06-01T00:00:00Z') });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedFields: { start_date: { old: null, new: '2019-05-31' } },
+      }),
+    );
+  });
+
   it('records nothing for an edit that changes nothing', async () => {
     const { service, repo, record } = withDeltas();
     repo.findOne.mockResolvedValue({

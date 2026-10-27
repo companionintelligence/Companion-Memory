@@ -34,6 +34,12 @@ type Value = [
      * `selectedModel` alone would race the save and read the old model's value.
      */
     chatModelRevision: number;
+    /**
+     * True while a chat-model switch is on its way to the server. Until it
+     * lands, a per-model setting on screen still belongs to the old model, and
+     * changing it would be saved for whichever model the server has by then.
+     */
+    chatModelSaving: boolean;
     thinkingSupported: boolean;
     thinkingEnabled: boolean;
     toolsSupported: boolean;
@@ -63,6 +69,7 @@ function useModel(): Value {
   const [toolsPreferred, setToolsPreferred] = useState<boolean>(true);
   const [thinkingPreferred, setThinkingPreferred] = useState<boolean>(true);
   const [chatModelRevision, setChatModelRevision] = useState<number>(0);
+  const [chatModelSaves, setChatModelSaves] = useState<number>(0);
 
   const initialRequestRef = useRef<boolean>(false);
 
@@ -88,6 +95,7 @@ function useModel(): Value {
       // model the server never actually recorded. And say so: the revert alone
       // looked like the tap had done nothing (six taps, six silent reverts, on
       // an iOS QA run whose account the server could not write for).
+      setChatModelSaves((saves) => saves + 1);
       void fetchJson('/api/personalization/chat-model', {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
@@ -97,7 +105,8 @@ function useModel(): Value {
         .catch(() => {
           setSelectedModel(previous);
           toast.error("Couldn't switch models — your choice wasn't saved. Try again.");
-        });
+        })
+        .finally(() => setChatModelSaves((saves) => saves - 1));
     },
     [activeModels, headers, selectedModel, toast],
   );
@@ -210,12 +219,17 @@ function useModel(): Value {
       // agree; the appliance default then applies. Only when the list is
       // non-empty — an empty list is the backend being unreachable, not the
       // model being gone, and must not erase a valid preference.
+      // Clearing it is a chat-model switch on the server like any other, so it
+      // bumps the revision: after an endpoint change the model-owned settings
+      // on screen were loaded for a model the new backend does not serve.
       if (persistedModel != null && !persistedIsServed && data.length > 0) {
         void fetchJson('/api/personalization/chat-model', {
           method: 'POST',
           headers: requestHeaders,
           body: JSON.stringify({ chatModel: null }),
-        }).catch(() => undefined);
+        })
+          .then(() => setChatModelRevision((revision) => revision + 1))
+          .catch(() => undefined);
       }
 
       const visionModels = data.filter((m) => m.vision === true);
@@ -270,6 +284,7 @@ function useModel(): Value {
       selectedModel,
       selectedVisionModel,
       chatModelRevision,
+      chatModelSaving: chatModelSaves > 0,
       thinkingSupported,
       thinkingEnabled,
       toolsSupported,

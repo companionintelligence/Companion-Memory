@@ -322,7 +322,9 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
           <h3 className="mb-2 text-sm font-medium">Family</h3>
           <ul className="space-y-1 text-sm text-muted-foreground">
             {view.family.map((member) => (
-              <li key={member.entityId}>
+              // One person can sit on two edges (a SIBLING_OF stored both ways, an old
+              // CHILD_OF beside its PARENT_OF), so the id alone is not unique here.
+              <li key={`${member.entityId}:${member.relationship}:${member.direction ?? ''}`}>
                 {member.name} ({familyRoleLabel(member)}
                 {member.age != null ? `, ${member.age}` : ''})
               </li>

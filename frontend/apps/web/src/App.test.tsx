@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   },
   signOutPrompt: { open: false, unsentCaptures: 0 },
   signedIn: true,
+  // The session check went unanswered: no token yet, but nobody said "signed out".
+  unreachable: false,
 }));
 
 vi.mock('@/common/feature', () => ({
@@ -39,11 +41,12 @@ vi.mock('@/hooks/useAuth', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => [
     {
-      expired: false,
+      expired: !h.signedIn,
       authToken: h.signedIn ? 'test-token' : null,
       authenticated: h.signedIn,
       loading: false,
       initializing: false,
+      unreachable: h.unreachable,
       error: null,
       signOutPrompt: h.signOutPrompt,
     },
@@ -136,6 +139,7 @@ beforeEach(() => {
   h.features = { loading: true, enabled: false };
   h.signOutPrompt = { open: false, unsentCaptures: 0 };
   h.signedIn = true;
+  h.unreachable = false;
 });
 
 describe('signing out with captures that have not uploaded', () => {
@@ -237,6 +241,24 @@ describe('App routing', () => {
     },
   );
 
+  // A reload while Memory cannot answer leaves no token and no per-user flags, so the
+  // gated route is missing. Nobody signed out. Say Memory cannot be reached, as every
+  // other signed-in page does, and keep the address.
+  it.each(['/self', '/memory/chat', '/jobs'])(
+    'says Memory cannot be reached at %s during an outage instead of sending the person to Log In',
+    async (path) => {
+      h.signedIn = false;
+      h.unreachable = true;
+      h.features = { loading: false, enabled: false };
+
+      renderAt(path);
+
+      expect(await screen.findByText("Can't reach Memory")).toBeInTheDocument();
+      expect(window.location.pathname).toBe(path);
+      expect(notFound()).not.toBeInTheDocument();
+    },
+  );
+
   it('renders 404 for an unknown path once the flags have loaded', async () => {
     h.features = { loading: false, enabled: true };
 
@@ -292,10 +314,14 @@ describe('App routing', () => {
       ['/profile/appearance', '/self/settings/appearance'],
     ])('redirects %s to %s', async (from, to) => {
       h.features = { loading: false, enabled: true };
+      // On desktop /self/settings is only a stop on the way. ProfilePage sends it on to
+      // the settings dialog, sometimes before the first check below runs. So record each
+      // address the redirects write instead of sampling the last one.
+      const replaced = vi.spyOn(window.history, 'replaceState');
 
       renderAt(from);
 
-      await waitFor(() => expect(window.location.pathname).toBe(to));
+      await waitFor(() => expect(replaced.mock.calls.map(([, , url]) => url)).toContain(to));
       expect(notFound()).not.toBeInTheDocument();
     });
 

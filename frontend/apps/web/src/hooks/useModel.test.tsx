@@ -269,6 +269,35 @@ describe('useModel', () => {
     expect(result.current[0].chatModelRevision).toBe(1);
   });
 
+  it('reports a chat-model switch as saving until the server answers', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].chatModelSaving).toBe(false);
+
+    let answer: () => void = () => undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = () => resolve({ ok: true, status: 200, text: async () => '{}' } as Response);
+        }),
+    );
+    act(() => result.current[1].selectModel('qwen-vl'));
+    expect(result.current[0].chatModelSaving).toBe(true);
+
+    act(() => answer());
+    await waitFor(() => expect(result.current[0].chatModelSaving).toBe(false));
+    expect(result.current[0].chatModelRevision).toBe(1);
+  });
+
+  it('bumps chatModelRevision when it clears a chat model the backend no longer serves', async () => {
+    const { state } = setFetch({ state: { ...defaultServerState(), chatModel: 'gone:latest' } });
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].chatModelRevision).toBe(1));
+    expect(state.chatModel).toBeNull();
+  });
+
   it('reverts the selection if the server rejects the write', async () => {
     const { fetchMock } = setFetch();
     const { result } = renderHook(() => useModel(), { wrapper });

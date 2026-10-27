@@ -6,6 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { USER_EDITED_KEYS, userEditedKeys } from '@ci/domains/graph/utils/ingestedProperties';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
@@ -150,10 +151,6 @@ export class PersonMergeService {
       // already has; emails/phones/names accumulate. This preserves the
       // identifiers a stub carried even though its identifier ROWS were
       // re-pointed above (properties stay the readable record).
-      const mergedProperties = foldProperties(
-        target.properties ?? {},
-        sources.map((id) => byId.get(id)?.properties ?? {}),
-      );
 
       // Target's name always wins when present — a merge SOURCE (e.g. a
       // communications-participant stub) must never overwrite the target's
@@ -166,6 +163,14 @@ export class PersonMergeService {
         target.description,
         ...sources.map((id) => byId.get(id)?.description),
       ]);
+      const mergedProperties = withHandSetColumns(
+        foldProperties(
+          target.properties ?? {},
+          sources.map((id) => byId.get(id)?.properties ?? {}),
+        ),
+        target,
+        sources.map((id) => byId.get(id)),
+      );
 
       await em.query(
         `UPDATE ci.entities
@@ -553,6 +558,37 @@ export class PersonMergeService {
   }
 }
 
+/**
+ * `folded` with `name` / `description` added to its hand-set list when the
+ * merge took that column from a source whose person had set it by hand (the
+ * target had none of its own), so a later import keeps it as it would have on
+ * the source.
+ */
+function withHandSetColumns(
+  folded: Record<string, unknown>,
+  target: { name: string | null; description: string | null },
+  sources: Array<
+    | { name: string | null; description: string | null; properties: Record<string, unknown> | null }
+    | undefined
+  >,
+): Record<string, unknown> {
+  const handSet = new Set(userEditedKeys(folded));
+
+  for (const column of ['name', 'description'] as const) {
+    if (firstNonEmpty([target[column]]) != null) {
+      continue;
+    }
+
+    const giver = sources.find((source) => source != null && firstNonEmpty([source[column]]) != null);
+
+    if (giver && userEditedKeys(giver.properties).includes(column)) {
+      handSet.add(column);
+    }
+  }
+
+  return handSet.size > 0 ? { ...folded, [USER_EDITED_KEYS]: [...handSet] } : folded;
+}
+
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
   for (const value of values) {
     if (value != null && value.trim() !== '') {
@@ -563,23 +599,43 @@ function firstNonEmpty(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
-/** Target wins scalars; emails/phones/names arrays are unioned across all rows. */
+/**
+ * Target wins scalars; emails/phones/names arrays are unioned across all rows.
+ *
+ * The hand-set list ({@link USER_EDITED_KEYS}) is not a scalar to fill: a key
+ * the target's person cleared or set by hand keeps the target's value, and the
+ * list the target ends with is its own plus each key a source had set by hand
+ * whose value the fold took from that source. Copied whole, a source's list
+ * would freeze the target's own imported values against later imports.
+ */
 function foldProperties(
   target: Record<string, unknown>,
   sources: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...target };
+  const targetHandSet = new Set(userEditedKeys(target));
+  const handSet = new Set(targetHandSet);
 
   for (const source of sources) {
+    const sourceHandSet = new Set(userEditedKeys(source));
+
     for (const [key, value] of Object.entries(source)) {
-      if (value == null) {
+      if (value == null || key === USER_EDITED_KEYS || targetHandSet.has(key)) {
         continue;
       }
 
       if (out[key] == null || out[key] === '') {
         out[key] = value;
+
+        if (sourceHandSet.has(key)) {
+          handSet.add(key);
+        }
       }
     }
+  }
+
+  if (handSet.size > 0) {
+    out[USER_EDITED_KEYS] = [...handSet];
   }
 
   for (const key of ['emails', 'phones', 'names']) {

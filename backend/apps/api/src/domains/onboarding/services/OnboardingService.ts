@@ -94,8 +94,12 @@ const RELATIONSHIP_MAP: Record<
   }
 > = {
   partner: { type: RelationshipType.SPOUSE, bidirectional: true },
-  parent: { type: RelationshipType.PARENT_OF },
-  child: { type: RelationshipType.CHILD_OF },
+  // The edge starts at the user (`captureConnections`), and "Parent" in the
+  // step means "this person is my parent". PARENT_OF points from parent to
+  // child, so the user's parent is `user CHILD_OF them` (stored swapped, as
+  // `them PARENT_OF user`) and the user's child is `user PARENT_OF them`.
+  parent: { type: RelationshipType.CHILD_OF },
+  child: { type: RelationshipType.PARENT_OF },
   roommate: { type: RelationshipType.LIVES_WITH, bidirectional: true },
   friend: { type: RelationshipType.FRIENDS_WITH, bidirectional: true },
   coworker: { type: RelationshipType.WORKS_WITH, bidirectional: true },

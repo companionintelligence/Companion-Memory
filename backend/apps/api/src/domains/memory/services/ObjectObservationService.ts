@@ -450,11 +450,13 @@ export class ObjectObservationService {
       return null;
     }
 
-    if (existing.confirmedByUser) {
+    if (existing.confirmedByUser || existing.resolutionMethod === 'user') {
       // Same rule as the write path: a human's answer is not a machine's to
-      // revise. Returned unchanged rather than thrown, because a resolver
-      // sweeping a batch should skip these, not abort.
-      this.logger.log('Observation is user-confirmed, leaving resolution untouched', {
+      // revise. Method `user` without the flag is a "no" (`rejectObservation`)
+      // or a retraction, and that is an answer too. Returned unchanged rather
+      // than thrown, because a resolver sweeping a batch should skip these,
+      // not abort.
+      this.logger.log('Observation was answered by a person, leaving resolution untouched', {
         observationId: id,
       });
 
@@ -568,12 +570,14 @@ export class ObjectObservationService {
    * The review queue: sightings nobody has confirmed and nothing has resolved,
    * newest first.
    *
-   * Matches `object_observations_review_idx` exactly — the partial index the
-   * migration added for this one query. It also leaves out sightings a person
-   * already answered "not a thing" (`rejectObservation`: unconfirmed, unlinked,
-   * method `user`). They match the index predicate too, so they stayed at the
-   * top of the queue however often they were rejected, and the resolution sweep
-   * that reads this queue could link them again.
+   * Served by `object_observations_review_idx`, the partial index the migration
+   * added for this query. It also leaves out sightings a person already
+   * answered "not a thing" (`rejectObservation`: unconfirmed, unlinked, method
+   * `user`). They match the index predicate too, so they stayed at the top of
+   * the queue however often they were rejected, and the resolution sweep that
+   * reads this queue could link them again. The index does not carry that
+   * extra predicate, so rejected rows are still in it and get filtered out on
+   * read.
    */
   async findForReview(context: ServiceContext, limit = 100, offset = 0): Promise<ObjectObservation[]> {
     return this.find(context, {

@@ -1,8 +1,8 @@
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 import { Button, Checkbox, Input, Label, Textarea } from '@ci/shadcn';
 
-import type { PlaceLookup } from '@/api/usePlaceLookup';
+import type { PlaceLookup, PlaceLookupResult } from '@/api/usePlaceLookup';
 
 import type { EventDraft, EventDraftProblem } from './eventDraft';
 
@@ -197,15 +197,70 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
     | { kind: 'unconfigured' }
     | { kind: 'error' };
   const [lookup, setLookup] = useState<LookupState>({ kind: 'idle' });
+
+  // An answer is about the name it was asked for, so a new name makes it stale:
+  // typed here, or put there by the caller (TaskSlate swaps in a fresh draft,
+  // Place and all, when the slot moves). Otherwise "use this area" would stay
+  // on offer and pin the old place's coordinates on the new draft.
+  const [answeredName, setAnsweredName] = useState(value.locationName);
+  if (answeredName !== value.locationName) {
+    setAnsweredName(value.locationName);
+    setLookup({ kind: 'idle' });
+  }
+
   const canLookUp = Boolean(lookupPlace) && value.locationName.trim().length > 0 && lookup.kind !== 'busy';
+
+  // The draft as of the last render. An answer lands after an await, and the
+  // geocode throttle is shared with the import pipeline, so that can be seconds
+  // later; whatever was typed meanwhile has to survive it.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  // Bumped by every lookup and on unmount, so only the latest one on a form
+  // that is still there gets to answer.
+  const lookupTicket = useRef(0);
+  useEffect(
+    () => () => {
+      lookupTicket.current += 1;
+    },
+    [],
+  );
+
+  const fillCoordinates = (
+    draft: EventDraft,
+    latitude: number,
+    longitude: number,
+    address: string | null,
+  ) => {
+    // Both at once: two `set` calls would each spread the same stale value.
+    onChange({ ...draft, latitude: String(latitude), longitude: String(longitude) });
+    setLookup({ kind: 'found', address });
+  };
 
   const lookUpPlace = async () => {
     if (!lookupPlace || !canLookUp) {
       return;
     }
 
+    const name = value.locationName.trim();
+    const ticket = ++lookupTicket.current;
     setLookup({ kind: 'busy' });
-    const result = await lookupPlace(value.locationName.trim());
+
+    let result: PlaceLookupResult;
+
+    try {
+      result = await lookupPlace(name);
+    } catch {
+      // `usePlaceLookup` never throws, but any other lookup handed in might,
+      // and a throw would leave the button on "Looking up…" for good.
+      result = { status: 'error' };
+    }
+
+    // Asked again since, or the name in the box is not this one any more. The
+    // reset above has already cleared what was on screen for it.
+    if (ticket !== lookupTicket.current || valueRef.current.locationName.trim() !== name) {
+      return;
+    }
 
     if (result.status === 'ok' && result.approximate) {
       // Only the area around the name (a café looked up as "…, San Francisco"
@@ -218,9 +273,7 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
         longitude: result.longitude,
       });
     } else if (result.status === 'ok') {
-      // Both at once: two `set` calls would each spread the same stale value.
-      onChange({ ...value, latitude: String(result.latitude), longitude: String(result.longitude) });
-      setLookup({ kind: 'found', address: result.address });
+      fillCoordinates(valueRef.current, result.latitude, result.longitude, result.address);
     } else {
       setLookup({ kind: result.status });
     }
@@ -321,11 +374,7 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
               label="Place"
               value={value.locationName}
               placeholder="Where it happened"
-              onChange={(next) => {
-                set('locationName', next);
-                // A new name makes the last answer stale.
-                setLookup({ kind: 'idle' });
-              }}
+              onChange={(next) => set('locationName', next)}
             />
           </div>
           {lookupPlace && (
@@ -349,7 +398,7 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
         )}
         {lookup.kind === 'approximate' && (
           <p role="status" className="text-xs text-muted-foreground">
-            Only found {lookup.address ?? 'the area around it'}, not that exact place, so the coordinates were
+            Only found {lookup.address || 'the area around it'}, not that exact place, so the coordinates were
             not filled in. Add a street address and look it up again, or{' '}
             <Button
               type="button"
@@ -357,14 +406,7 @@ export function EventForm({ value, onChange, problem, disabled, lookupPlace }: P
               size="sm"
               className="h-auto p-0 text-xs"
               disabled={disabled}
-              onClick={() => {
-                onChange({
-                  ...value,
-                  latitude: String(lookup.latitude),
-                  longitude: String(lookup.longitude),
-                });
-                setLookup({ kind: 'found', address: lookup.address });
-              }}
+              onClick={() => fillCoordinates(value, lookup.latitude, lookup.longitude, lookup.address)}
             >
               use this area
             </Button>

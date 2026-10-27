@@ -35,9 +35,11 @@ export interface EntitySource {
    * (`merged_into_entity_id`), `item` (`ci.objects.merged_into_object_id`) and
    * `product` (`ci.product_models.merged_into_product_id`): a merge deletes the
    * tombstone's embedding+vector, and without this filter the sweep would
-   * re-find and re-index it via PersonCreatedEvent. `file` uses it for the
-   * non-tombstone equivalent — the variant/soft-delete population its pipeline
-   * stage already restricts itself to.
+   * re-find and re-index it via PersonCreatedEvent. `person`, `place` and
+   * `concept` also keep out the rows the user asked Memory to forget
+   * (`is_active` false). `file` uses it
+   * for the non-tombstone equivalent: the variant/soft-delete population its
+   * pipeline stage already restricts itself to.
    *
    * NOT applied by the ORPHAN sweep: a row excluded here still exists, so it is
    * not an orphan. Narrowing this can only make the backfill enqueue less; it
@@ -82,7 +84,8 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     table: 'entities',
     idColumn: 'entity_id',
     discriminator: { column: 'entity_type', value: 'Concept' },
-    backfillPredicate: 's.merged_into_entity_id IS NULL',
+    // Archived (forgotten) concepts are kept out on purpose, like merge tombstones.
+    backfillPredicate: 's.merged_into_entity_id IS NULL AND s.is_active IS NOT FALSE',
   },
   content: { schema: 'ci', table: 'content', idColumn: 'id' },
   // Mirrors INDEX_EMBED_EVENT_SOURCE.predicate (pipeline domain; not importable
@@ -153,7 +156,8 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     table: 'entities',
     idColumn: 'entity_id',
     discriminator: { column: 'entity_type', value: 'Location' },
-    backfillPredicate: 's.merged_into_entity_id IS NULL',
+    // Archived (forgotten) places are kept out on purpose, like merge tombstones.
+    backfillPredicate: 's.merged_into_entity_id IS NULL AND s.is_active IS NOT FALSE',
   },
   position: {
     schema: 'ci',

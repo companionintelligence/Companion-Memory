@@ -739,6 +739,15 @@ export class ImportStageListener implements OnApplicationBootstrap {
    * come from `completeStage`, so a throttled-away tick loses nothing that
    * survives the stage.
    *
+   * A tick that changes the phase is never throttled away. `completeStage`
+   * leaves the column alone. A failed or cancelled stage keeps it as the place
+   * it stopped. Dropping one left an unpack reading "acquiring" through
+   * the whole of an extraction that reports no ticks of its own, because the
+   * `extracting` write came less than a second after the `acquiring` one.
+   * Phase changes are rare (a handful per stage, plus runner-paced ticks that
+   * already hold themselves to about one a second), so letting them through
+   * adds only a few writes.
+   *
    * It is also where a superseded runner is STOPPED. Every write is fenced by
    * the claim token, and once the claim is gone — seen here, or by the
    * heartbeat — the callback throws {@link StageClaimLostError}, which a runner
@@ -752,6 +761,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
     claim: { isLost: () => boolean; lose: () => void },
   ): StageRunContext {
     let lastWrite = 0;
+    let lastPhase: string | undefined;
 
     return {
       userId: payload.userId,
@@ -764,12 +774,17 @@ export class ImportStageListener implements OnApplicationBootstrap {
         }
 
         const now = Date.now();
+        const phaseChanged = update.phase != null && update.phase !== lastPhase;
 
-        if (now - lastWrite < PROGRESS_THROTTLE_MS) {
+        if (!phaseChanged && now - lastWrite < PROGRESS_THROTTLE_MS) {
           return;
         }
 
         lastWrite = now;
+
+        if (update.phase != null) {
+          lastPhase = update.phase;
+        }
 
         if (!(await this.runs.recordProgress(stageId, update, claimToken))) {
           claim.lose();

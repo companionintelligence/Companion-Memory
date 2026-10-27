@@ -165,14 +165,15 @@ describe('PersonSearchIndexListener merge tombstones', () => {
 
 describe('PersonSearchIndexListener archived (forgotten) people', () => {
   it('removes an archived person from the search index when a later write re-emits it', async () => {
-    const { listener, embeddingGenerationService, embeddingService, vectorService } = makeListener({
-      id: 'p7',
-      userId: 'u1',
-      name: 'Jane Smith',
-      description: null,
-      properties: undefined,
-      isActive: false,
-    });
+    const { listener, embeddingGenerationService, embeddingService, indexSkipService, vectorService } =
+      makeListener({
+        id: 'p7',
+        userId: 'u1',
+        name: 'Jane Smith',
+        description: null,
+        properties: undefined,
+        isActive: false,
+      });
 
     await listener.updatePerson({ personId: 'p7' });
 
@@ -187,6 +188,9 @@ describe('PersonSearchIndexListener archived (forgotten) people', () => {
       { userId: SYSTEM_USER },
       { entityType: 'person', entityId: 'p7' },
     );
+    // Like a tombstone, absent by the user's choice, not for want of content.
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
   });
 });
 

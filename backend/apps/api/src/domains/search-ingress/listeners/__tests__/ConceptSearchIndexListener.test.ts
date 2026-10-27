@@ -88,6 +88,34 @@ describe('ConceptSearchIndexListener.indexConcept / updateConcept', () => {
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
+  it('removes a concept the user asked Memory to forget instead of indexing it again on a later write', async () => {
+    const { listener, embeddingGenerationService, embeddingService, vectorService, indexSkipService } =
+      makeListener({
+        id: 'concept-9',
+        userId: 'user-1',
+        name: 'Quillfeather Project',
+        description: 'A side project',
+        isActive: false,
+      });
+
+    await listener.updateConcept({ conceptId: 'concept-9' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'concept', entityId: 'concept-9' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'concept', entityId: 'concept-9' },
+    );
+    // Absent by the user's choice, not for want of text: no skip marker either way.
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
+  });
+
   it('embeds and vectorizes a concept scoped to its user, passing the generated embedding through', async () => {
     const { listener, embeddingGenerationService, embeddingService, vectorService, indexSkipService } =
       makeListener({

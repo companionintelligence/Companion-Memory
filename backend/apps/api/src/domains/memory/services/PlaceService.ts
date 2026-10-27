@@ -1376,8 +1376,8 @@ export class PlaceService {
       .select('place.id', 'id')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
       .andWhere('place.owner_user_id = :userId', { userId: context.userId })
-      // Merged-away and archived places are left out, as in findAll.
-      .andWhere('place.merged_into_entity_id IS NULL')
+      // A place the user asked Memory to forget, or merged into another, is not
+      // one of their places any more (findAll leaves both out the same way).
       .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
     // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, entity_id), in
@@ -1460,7 +1460,6 @@ export class PlaceService {
       .createQueryBuilder('place')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
       .andWhere('place.owner_user_id = :userId', { userId: context.userId })
-      .andWhere('place.merged_into_entity_id IS NULL')
       .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
     if (options.startTime) {
@@ -1595,12 +1594,15 @@ export class PlaceService {
       }
 
       // Only what moved: the place form sends every field back on each save.
+      // `!== undefined`, not `??`: an explicit null description is a clear the
+      // UPDATE above wrote.
+      const name = rest.name !== undefined ? rest.name : place.name;
+      const description = rest.description !== undefined ? rest.description : place.description;
       const changedFields = {
-        ...changedFieldsBetween(
-          { name: place.name, description: place.description },
-          { name: rest.name ?? place.name, description: rest.description ?? place.description },
-          ['name', 'description'],
-        ),
+        ...changedFieldsBetween({ name: place.name, description: place.description }, { name, description }, [
+          'name',
+          'description',
+        ]),
         ...changedFieldsBetween(
           {
             coordinates: place.locationPoint?.coordinates ?? null,
@@ -1622,8 +1624,8 @@ export class PlaceService {
       if (Object.keys(changedFields).length > 0) {
         await this.graphDeltaWriter.entityUpdated({
           entityId: id,
-          entityType: 'Location',
-          name: rest.name ?? place.name,
+          entityType: place.entityType,
+          name,
           changedFields,
           ownerUserId: typeof context.userId === 'string' ? context.userId : null,
           changeSource: 'PlaceService.update',

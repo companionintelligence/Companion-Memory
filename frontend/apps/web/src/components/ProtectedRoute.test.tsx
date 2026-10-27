@@ -116,6 +116,35 @@ describe('ProtectedRoute', () => {
     expect(screen.queryByText('login page')).not.toBeInTheDocument();
   });
 
+  it('says Memory cannot be reached, not Log In, when the kept token runs out during the outage', async () => {
+    const refresh = vi.fn().mockResolvedValue(undefined);
+
+    h.auth = { authToken: 'stale', expired: true, loading: false, error: null, unreachable: true };
+    h.actions = { refresh };
+    h.user = { user: { id: 'u1' }, loading: false, unreachable: false };
+
+    renderProtected();
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("Can't reach Memory")).toBeInTheDocument());
+    expect(screen.queryByText('login page')).not.toBeInTheDocument();
+  });
+
+  it('keeps a shown page mounted when a later profile refetch goes unanswered', () => {
+    h.auth = { authToken: 'tok', expired: false, loading: false, error: null, unreachable: false };
+    h.user = { user: { id: 'u1' }, loading: false, unreachable: false };
+
+    const view = renderProtected();
+
+    expect(screen.getByText('secret content')).toBeInTheDocument();
+
+    h.user = { user: null, loading: false, unreachable: true, refetch: vi.fn() };
+    view.rerender(routeTree());
+
+    expect(screen.getByText('secret content')).toBeInTheDocument();
+    expect(screen.queryByText("Can't reach Memory")).not.toBeInTheDocument();
+  });
+
   it('redirects to /login when expired or unauthenticated on web', () => {
     h.auth = { authToken: null, expired: true, loading: false, error: null };
     h.user = { user: null, loading: false };

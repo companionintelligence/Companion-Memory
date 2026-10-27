@@ -502,6 +502,28 @@ describe('ObjectObservationService.resolve — a machine decision is not a human
     expect(result).toEqual({ id: 'obs-1', confirmedByUser: true });
   });
 
+  it('leaves a sighting a person answered "not a thing" untouched', async () => {
+    const { service, findOne, update } = makeService();
+
+    // What rejectObservation leaves: unconfirmed, unlinked, method `user`.
+    const rejected = {
+      id: 'obs-1',
+      confirmedByUser: false,
+      resolvedObjectId: null,
+      resolutionMethod: 'user',
+    };
+
+    findOne.mockResolvedValue(rejected);
+
+    const result = await service.resolve(ctx(), 'obs-1', {
+      resolvedObjectId: 'item-2',
+      resolutionMethod: 'label',
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(result).toEqual(rejected);
+  });
+
   it('clamps a resolution confidence and never invents one', async () => {
     const { service, findOne, update } = makeService();
 

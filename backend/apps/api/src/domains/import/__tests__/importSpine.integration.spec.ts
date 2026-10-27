@@ -305,8 +305,9 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
 
       await service.beginStage(stages[0].id);
       await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
-      // The runner moved on to `extracting`, but that write fell inside the
-      // progress throttle. The failure's context is what knows where it was.
+      // The runner moved on to `extracting` but the row never heard (the
+      // listener's throttle used to drop that write). The failure's context
+      // is what knows where it was.
       await service.failStage(
         stages[0].id,
         'unpack [phase=extracting file=export.zip] cannot unpack export.zip',
@@ -321,12 +322,25 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       expect((await service.getStage(stages[0].id))?.phase).toBe('extracting');
     });
 
-    it('keeps the recorded phase when the failure names none', async () => {
+    it('keeps the recorded phase when there is no failure context', async () => {
       const { stages } = await startRun(await stageDrop());
 
       await service.beginStage(stages[0].id);
       await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
       await service.failStage(stages[0].id, 'unreadable');
+
+      expect((await service.getStage(stages[0].id))?.phase).toBe('acquiring');
+    });
+
+    it.each([
+      ['names no phase', { stage: 'unpack', message: 'unreadable', name: 'Error' }],
+      ['names an empty phase', { stage: 'unpack', phase: '', message: 'unreadable', name: 'Error' }],
+    ])('keeps the recorded phase when the failure %s', async (_case, failure) => {
+      const { stages } = await startRun(await stageDrop());
+
+      await service.beginStage(stages[0].id);
+      await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
+      await service.failStage(stages[0].id, 'unpack unreadable', failure);
 
       expect((await service.getStage(stages[0].id))?.phase).toBe('acquiring');
     });

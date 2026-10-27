@@ -2358,10 +2358,11 @@ export class CalendarEventService {
       basePatch.name = data.title;
     }
 
-    // An empty string is how the event page clears the description, so it is
-    // stored as no description. A missing or null field still leaves it alone.
+    // An empty string is how the event page clears the description, so it (or
+    // one that is only whitespace) is stored as no description. A missing or
+    // null field still leaves it alone.
     if (data.description != null) {
-      basePatch.description = data.description || null;
+      basePatch.description = data.description.trim() ? data.description : null;
     }
 
     if (data.event_type) {
@@ -2543,7 +2544,13 @@ export class CalendarEventService {
       delete basePatch.name;
     }
 
-    if (storedBase && basePatch.description === storedBase.description) {
+    // Compared as the patch stores it: a row imported with '' and a save that
+    // sends '' back (now null) are both "no description".
+    if (
+      storedBase &&
+      basePatch.description !== undefined &&
+      basePatch.description === (storedBase.description || null)
+    ) {
       delete basePatch.description;
     }
 

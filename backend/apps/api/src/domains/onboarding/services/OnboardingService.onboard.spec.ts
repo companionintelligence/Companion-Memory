@@ -20,6 +20,7 @@ describe('OnboardingService onboard', () => {
   let actionService: jest.Mocked<Pick<ActionService, 'create' | 'findAll'>>;
   let featureService: jest.Mocked<Pick<FeatureService, 'isFeatureEnabled'>>;
   let logger: { setContext: jest.Mock; warn: jest.Mock };
+  let relationshipService: { create: jest.Mock };
 
   beforeEach(() => {
     userService = {
@@ -54,6 +55,7 @@ describe('OnboardingService onboard', () => {
     };
 
     logger = { setContext: jest.fn(), warn: jest.fn() };
+    relationshipService = { create: jest.fn() };
 
     service = new OnboardingService(
       userService as unknown as UserService,
@@ -67,10 +69,74 @@ describe('OnboardingService onboard', () => {
       { create: jest.fn().mockResolvedValue({ id: 'a-1' }) } as unknown as AnswerService,
       { create: jest.fn() } as unknown as ConceptService,
       personService as unknown as PersonService,
-      { create: jest.fn() } as unknown as RelationshipService,
+      relationshipService as unknown as RelationshipService,
       entityIdentifierService as never,
       featureService as unknown as FeatureService,
       logger as unknown as LoggerService,
+    );
+  });
+
+  it('writes a parent and a child the right way round: PARENT_OF points from parent to child', async () => {
+    userService.findById.mockResolvedValue({
+      id: 'user-1',
+      name: 'user@example.com',
+      email: 'user@example.com',
+      onboarded: false,
+      role: 'user',
+      timezone: 'UTC',
+      timeFormat: 'auto',
+      onboardingProgress: null,
+      entityId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    userService.update.mockResolvedValue(null);
+    userService.onboard.mockResolvedValue(undefined);
+    userService.setEntityIdIfUnchanged.mockImplementation(async (_context, _id, entityId) => entityId);
+    // The people from the step are created with no id of their own; give each one.
+    personService.create.mockImplementation(
+      async (_context, data) =>
+        ({ id: data.id ?? `person:${data.name}`, name: data.name, properties: data.properties }) as never,
+    );
+
+    await service.onboard(context, {
+      name: 'Ada Lovelace',
+      timezone: 'UTC',
+      schedule: null,
+      trust_mode: 'balanced',
+      focus_areas: [],
+      people: [
+        { first: 'Morgan', last: 'Lee', relationship: 'parent' },
+        { first: 'Riley', last: 'Lee', relationship: 'child' },
+      ],
+      food_preference: null,
+      movie_preference: null,
+      activity_preference: null,
+    } as never);
+
+    const self = (await personService.create.mock.results[0].value) as { id: string };
+    const byName = new Map(
+      await Promise.all(
+        personService.create.mock.results.map(async (result) => {
+          const person = (await result.value) as { id: string; name: string };
+
+          return [person.id, person.name] as const;
+        }),
+      ),
+    );
+    const edges = relationshipService.create.mock.calls.map(([, edge]) => [
+      edge.fromNodeId === self.id ? 'me' : byName.get(edge.fromNodeId),
+      edge.type,
+      byName.get(edge.toNodeId),
+    ]);
+
+    // "Parent" in the step means "this person is my parent". RelationshipService
+    // stores `me CHILD_OF Morgan` swapped, as `Morgan PARENT_OF me`.
+    expect(edges).toEqual(
+      expect.arrayContaining([
+        ['me', 'CHILD_OF', 'Morgan Lee'],
+        ['me', 'PARENT_OF', 'Riley Lee'],
+      ]),
     );
   });
 

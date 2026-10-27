@@ -105,12 +105,23 @@ export const UNDATED_ENTITY_TYPES: readonly string[] = AVAILABLE_ENTITY_TYPES.fi
 /**
  * Kinds the search returns that no What picker offers and that carry only a
  * row-write time: a chat thread is dated by its last write, a document excerpt
- * by its file's. The timed browse never lists them under a date range, but the
- * text search's date check falls back to that write time, so a When filter
- * plus search text brought a chat started today back into "Last week". A When
+ * by its file's, a planner task and a feed action by their own row. The timed
+ * browse never lists them under a date range, but the text and tag searches'
+ * date check falls back to that write time, so a When filter plus search text
+ * brought a chat started today back into "Last week". The device list dates
+ * its task, thread and excerpt records the same way, browse or not. A When
  * filter sets them aside with {@link UNDATED_ENTITY_TYPES}.
  */
-export const UNDATED_UNLISTED_TYPES: readonly string[] = ['Thread', 'FileChunk'];
+export const UNDATED_UNLISTED_TYPES: readonly string[] = ['Thread', 'FileChunk', 'Task', 'Action'];
+
+/**
+ * Kinds the server's text search leaves out on its own, but only while the
+ * request names no types: raw chat messages (the recall channel) and GPS
+ * fixes. Neither resolves to a result row, so any exclude list has to name
+ * them itself, or they take places in the candidate pool that real matches
+ * should have had.
+ */
+export const SERVER_DEFAULT_EXCLUDED_TYPES: readonly string[] = ['Message', 'Position'];
 
 export interface ExplorerTypeResolution {
   includeTypes?: string[];
@@ -201,7 +212,12 @@ export function resolveExplorerTypes(params: URLSearchParams, pathname?: string)
 
   if (!narrowed) {
     return {
-      excludeTypes: [...UNDATED_ENTITY_TYPES, ...HIDDEN_ENTITY_TYPES, ...UNDATED_UNLISTED_TYPES],
+      excludeTypes: [
+        ...UNDATED_ENTITY_TYPES,
+        ...HIDDEN_ENTITY_TYPES,
+        ...UNDATED_UNLISTED_TYPES,
+        ...SERVER_DEFAULT_EXCLUDED_TYPES,
+      ],
       droppedByWhen: [],
       nothingLeft: false,
     };

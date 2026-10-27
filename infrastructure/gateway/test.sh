@@ -3,8 +3,8 @@
 # TRUSTED_PROXY_CIDRS. Runs on any POSIX sh, no Docker; the final `exec` is
 # pointed at `true`. Wired into `make test` by scripts/xtask/commands/test.ts.
 #
-# Also reads nginx.conf for its request-body limits (the last section below):
-# a static check, since no nginx runs here.
+# Also reads nginx.conf for its request-body limits and its upstream connect
+# timeout (the last two sections below): static checks, since no nginx runs here.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -45,9 +45,11 @@ grep -q "ignoring invalid" "$work/stderr" || fail "junk was not reported"
 nginx_conf="$here/nginx.conf"
 
 # Each `location` block, flattened to one line: "<location line> | <body>".
+# Comment-only lines are left out, so prose naming a directive satisfies nothing.
 blocks=$(awk '
   /^    location / { name = $0; body = ""; inside = 1; next }
   inside && /^    }$/ { print name " |" body; inside = 0; next }
+  inside && /^[[:space:]]*#/ { next }
   inside { body = body " " $0 }
 ' "$nginx_conf")
 
@@ -87,9 +89,12 @@ printf '%s\n' "$blocks" | grep -F 'location ~ ^/api/graphql/?$ {' | grep -q 'cli
 printf '%s\n' "$blocks" | grep -F 'location /v1/ {' | grep -q 'client_max_body_size 10m;' \
   || fail "/v1/ lost its 10m limit"
 
-# ── nginx.conf: a stopped api answers fast. The api is on the same network, so a
-# connect that takes seconds means it is gone; 60s left a sign-in spinning a minute.
-slow=$(printf '%s\n' "$blocks" | grep -F 'proxy_pass http://api;' | grep -v 'proxy_connect_timeout 5s;' || true)
-[ -z "$slow" ] || fail "an api location waits longer than 5s to connect: ${slow%% |*}"
+# ── nginx.conf: a stopped upstream answers fast. Every upstream is on the same
+# network, so a connect that takes seconds means it is gone; at nginx's 60s
+# default a sign-in sat on a dead api address for about 40s. The server block
+# sets it once and no location may set its own, so a new one cannot miss it.
+grep -q '^    proxy_connect_timeout 5s;$' "$nginx_conf" || fail "server block lost its 5s connect timeout"
+own=$(printf '%s\n' "$blocks" | grep -F 'proxy_connect_timeout' || true)
+[ -z "$own" ] || fail "a location sets its own connect timeout instead of the server's 5s: ${own%% |*}"
 
 echo "gateway: ok"

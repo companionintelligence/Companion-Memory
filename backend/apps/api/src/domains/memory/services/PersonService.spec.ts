@@ -339,6 +339,16 @@ describe('PersonService Change History', () => {
     );
   });
 
+  it('records a description the edit cleared with an explicit null', async () => {
+    const { service, deltas } = makeDeltaService(Object.assign(robin(), { description: 'Neighbour' }));
+
+    await service.patch(CONTEXT, 'p1', { name: 'Robin Hale', description: null as unknown as string });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ changedFields: { description: { old: 'Neighbour', new: null } } }),
+    );
+  });
+
   /** A repository whose UPDATE really changes what the next read returns, for `update` (applyUpdate). */
   function makeUpdateService(stored: PersonEntity) {
     const deltas = { entityUpdated: jest.fn(async () => undefined) };
@@ -394,5 +404,53 @@ describe('PersonService Change History', () => {
     await service.update(CONTEXT, 'p1', { properties: { nickname: 'Rob', job_title: null, website: '' } });
 
     expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a re-sync that only moves its sync stamps', async () => {
+    const synced = Object.assign(robin(), {
+      properties: {
+        nickname: 'Rob',
+        last_synced_at: '2026-10-01T00:00:00.000Z',
+        facebook_data: { name: 'Robin Hale', last_synced: '2026-10-01T00:00:00.000Z' },
+      },
+    });
+    const { service, deltas } = makeUpdateService(synced);
+
+    await service.update(
+      CONTEXT,
+      'p1',
+      {
+        properties: {
+          nickname: 'Rob',
+          last_synced_at: '2026-10-27T00:00:00.000Z',
+          facebook_data: { name: 'Robin Hale', last_synced: '2026-10-27T00:00:00.000Z' },
+        },
+      },
+      { source: 'TransformGoogleContacts.processContact' },
+    );
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records what a re-sync changed besides its sync stamps', async () => {
+    const synced = Object.assign(robin(), {
+      properties: { facebook_data: { name: 'Robin Hale', last_synced: '2026-10-01T00:00:00.000Z' } },
+    });
+    const { service, deltas } = makeUpdateService(synced);
+
+    await service.update(
+      CONTEXT,
+      'p1',
+      { properties: { facebook_data: { name: 'Robin J. Hale', last_synced: '2026-10-27T00:00:00.000Z' } } },
+      { source: 'TransformFacebookFriends.transform' },
+    );
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedFields: {
+          facebook_data: { old: { name: 'Robin Hale' }, new: { name: 'Robin J. Hale' } },
+        },
+      }),
+    );
   });
 });

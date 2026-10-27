@@ -64,7 +64,7 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
   it('binds $4 to the linked_table rejection and $5 to the derived branch', async () => {
     const sql = await sqlOf();
 
-    expect(sql).toContain('WHEN linked_table = ANY($4::text[]) THEN NULL');
+    expect(sql).toContain('WHEN e.linked_table = ANY($4::text[]) THEN NULL');
     expect(sql).toContain("WHEN linked_src = ANY($5::text[]) THEN 'derived'");
   });
 
@@ -84,7 +84,7 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
 
     // is_self short-circuits, so the owner's own node — which carries no
     // provenance at all — never falls through to the Unknown bucket.
-    expect(sql).toContain("WHEN properties ->> 'is_self' = 'true' THEN $2");
+    expect(sql).toContain("WHEN e.properties ->> 'is_self' = 'true' THEN $2");
   });
 
   it('ranks data_source above Source: contract before convention', async () => {
@@ -98,7 +98,7 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
   });
 
   it('consults the provenance ledger after the properties and before the bare linked_table', async () => {
-    // Imported events, content, items and messages carry no data_source or
+    // Imported events, content and messages carry no data_source or
     // Source property, only a bare linked_table ('events', 'content'), which
     // classifies as derived. The ledger is what says they were imported.
     const sql = await sqlOf();
@@ -106,7 +106,9 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
     expect(sql).toContain('FROM ci.record_sources rs');
     expect(sql).toContain('rs.record_table = e.linked_table AND rs.record_id = e.entity_id');
     expect(sql).toContain('COALESCE(self_src, prop_src, ledger_src, linked_src, shape_src, $3)');
-    expect(sql).toContain("WHEN ledger_src IS NOT NULL THEN 'imported'");
+    expect(sql).toContain(
+      "WHEN ledger_src IS NOT NULL THEN CASE WHEN ledger_src = ANY($5::text[]) THEN 'derived' ELSE 'imported' END",
+    );
     // A File entity reaches the ledger through the content row naming the file.
     expect(sql).toContain("c.external_id_kind = 'file'");
     expect(sql).toContain("e.linked_table = 'files' AND fs.file_id = e.linked_id::text");
@@ -124,7 +126,9 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
     expect(sql).toContain("a ->> 'type' = 'file'");
     expect(sql).toContain("rs.record_table = 'communications' AND rs.record_id = m.id");
     // Both lanes feed one earliest-arrival pick per file.
-    expect(sql).toContain('FROM file_arrivals ORDER BY file_id, first_seen ASC');
+    expect(sql).toContain(
+      "FROM file_arrivals ORDER BY file_id, NULLIF(platform, '') IS NULL, first_seen ASC, platform, source_system",
+    );
   });
 
   it('does not let a non-array attachments value fail the whole stats query', async () => {
@@ -143,6 +147,32 @@ describe('GraphUtilityService.getEntityCountsBySource', () => {
     const sql = await sqlOf();
 
     expect(sql).toContain("'import:' || COALESCE(ledger.src, fs.src) AS ledger_src");
+  });
+
+  it('skips the ledger rows of planned blocks, which the owner made on this device', async () => {
+    // A planned block is a calendar event with the source triple 'planning', so
+    // CalendarEventService ledgers it. It did not come from elsewhere.
+    const params = await paramsOf();
+    const sql = await sqlOf();
+
+    expect(params[5]).toEqual(['planning']);
+    // Every ledger read: the entity's own, and both arms naming a file.
+    expect(sql.split('rs.source_type <> ALL($6::text[])')).toHaveLength(4);
+  });
+
+  it('prefers an arrival that names a platform, then the earliest, with a deterministic tie-break', async () => {
+    // A photo uploaded first (platform NULL, source_system 'file') and then
+    // synced from Google Photos is a Google Photos photo, as the How filter
+    // (contentFacetsSql) says. first_seen is DEFAULT now(), one value per
+    // transaction, so it needs a tie-break to give the same answer twice.
+    const sql = await sqlOf();
+
+    expect(sql).toContain(
+      "ORDER BY NULLIF(rs.platform, '') IS NULL, rs.first_seen ASC, rs.platform, rs.source_system",
+    );
+    expect(sql).toContain(
+      "ORDER BY file_id, NULLIF(platform, '') IS NULL, first_seen ASC, platform, source_system",
+    );
   });
 
   it('returns the driver rows unchanged', async () => {

@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+
+import type { PlaceLookupResult } from '@/api/usePlaceLookup';
 
 import { emptyEventDraft, type EventDraft } from './eventDraft';
 import { EventForm } from './EventForm';
@@ -72,6 +74,7 @@ describe('EventForm — looking a place up', () => {
       latitude: 37.7955,
       longitude: -122.3937,
       address: '1 Ferry Building, San Francisco',
+      approximate: false,
     });
     const { rerender } = render(
       <EventForm value={emptyEventDraft()} onChange={onChange} lookupPlace={lookupPlace} />,
@@ -115,6 +118,95 @@ describe('EventForm — looking a place up', () => {
 
     expect(onChange).toHaveBeenCalledWith({ ...draft, latitude: '37.7749295', longitude: '-122.4194155' });
     expect(screen.getByRole('status')).toHaveTextContent(/Matched San Francisco, CA, USA/);
+  });
+
+  // The geocode throttle is shared with the import pipeline, so an answer can
+  // arrive seconds after the click. The form stays editable meanwhile.
+  it('keeps what was typed elsewhere while the lookup was out', async () => {
+    let answer!: (result: PlaceLookupResult) => void;
+    const lookupPlace = vi.fn(
+      () =>
+        new Promise<PlaceLookupResult>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const onChange = vi.fn();
+    const draft = { ...emptyEventDraft(), locationName: 'Ferry Building' };
+    const { rerender } = render(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    const typed = { ...draft, title: 'Lunch with Ana' };
+    rerender(<EventForm value={typed} onChange={onChange} lookupPlace={lookupPlace} />);
+    await act(async () =>
+      answer({
+        status: 'ok',
+        latitude: 37.7955,
+        longitude: -122.3937,
+        address: '1 Ferry Building, San Francisco',
+        approximate: false,
+      }),
+    );
+
+    expect(onChange).toHaveBeenCalledWith({ ...typed, latitude: '37.7955', longitude: '-122.3937' });
+  });
+
+  it('drops an answer for a name that is no longer in the box', async () => {
+    let answer!: (result: PlaceLookupResult) => void;
+    const lookupPlace = vi.fn(
+      () =>
+        new Promise<PlaceLookupResult>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const onChange = vi.fn();
+    const draft = { ...emptyEventDraft(), locationName: 'Blue Bottle Coffee, San Francisco' };
+    const { rerender } = render(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    rerender(
+      <EventForm
+        value={{ ...draft, locationName: 'Ferry Building' }}
+        onChange={onChange}
+        lookupPlace={lookupPlace}
+      />,
+    );
+    await act(async () =>
+      answer({
+        status: 'ok',
+        latitude: 37.7749295,
+        longitude: -122.4194155,
+        address: 'San Francisco, CA, USA',
+        approximate: true,
+      }),
+    );
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Look up' })).toBeEnabled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('takes the "use this area" offer away when the caller swaps in a new draft', async () => {
+    const lookupPlace = vi.fn().mockResolvedValue({
+      status: 'ok',
+      latitude: 37.7749295,
+      longitude: -122.4194155,
+      address: '',
+      approximate: true,
+    });
+    const onChange = vi.fn();
+    const draft = { ...emptyEventDraft(), locationName: 'Blue Bottle Coffee, San Francisco' };
+    const { rerender } = render(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/Only found the area around it,/),
+    );
+
+    // What TaskSlate does when the slot moves: a fresh draft, Place blank.
+    rerender(<EventForm value={emptyEventDraft()} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    expect(screen.queryByRole('button', { name: 'use this area' })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('says when nothing matched, when lookups are not set up, and when the lookup itself failed', async () => {

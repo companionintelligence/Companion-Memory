@@ -291,9 +291,12 @@ function searchCursorOf({ result, sortTime }: OrderedResult): string {
  * primary key. Ids are uuidv7 (time-ordered) so a single raw-uuid tiebreak is a
  * consistent total order across the merged entity types. `id` is null when the
  * cursor predates this format or its GlobalUID can't be decoded — callers then
- * fall back to the legacy time-only window.
+ * fall back to the legacy time-only window. `globalId` is the id portion as it
+ * was minted (null when absent or undecodable), for matching a result's own id.
  */
-function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | null } | null {
+function decodeSearchCursor(
+  cursor?: string | null,
+): { time: Date; id: string | null; globalId: string | null } | null {
   if (!cursor) {
     return null;
   }
@@ -318,7 +321,7 @@ function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | 
       }
     }
 
-    return { time, id };
+    return { time, id, globalId: id != null ? globalId : null };
   } catch {
     return null;
   }
@@ -668,6 +671,9 @@ export class SearchResolver {
     // see the branch's comment and `countTimedEntities` for why this can't just be
     // `identifiers.length` (or the Paginator's derived totalCount from it).
     let timedTotalCount: number | undefined;
+    // Whether SQL already paged strictly past the cursor row (the timed keyset). Every other
+    // source hands the whole candidate list over and the Paginator finds the cursor in it.
+    let seeksPastCursor = false;
 
     const first = Math.min(Math.max(input.first ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const afterCursor = decodeSearchCursor(input.after);
@@ -703,6 +709,7 @@ export class SearchResolver {
       // ended early. It reads one fixed pool every page and lets the Paginator find the cursor.
       const byName = input.sortBy === 'name';
       const keyset = !byName && afterCursor?.time != null && afterCursor.id != null;
+      seeksPastCursor = keyset;
       // With no filters at all, bound to "now" so we return recent items, not the entire
       // history. This is the *filter's* upper bound — stable across pages — as opposed to
       // the legacy `afterCursor?.time` window fallback below, which is a pagination artifact
@@ -894,7 +901,9 @@ export class SearchResolver {
     } = Paginator.paginate(ordered, {
       getId: searchCursorOf,
       first,
-      after: input.after ?? undefined,
+      after: seeksPastCursor
+        ? (input.after ?? undefined)
+        : SearchResolver.reanchorCursor(ordered, input.after ?? undefined, afterCursor?.globalId ?? null),
     });
 
     const edges = slice.map((item) => ({
@@ -1350,15 +1359,6 @@ export class SearchResolver {
           return null;
         }
 
-        // A person the user asked Memory to forget is archived (is_active false)
-        // and un-indexed, but an index row written before or after that (see
-        // PersonSearchIndexListener) must not bring them back: every search
-        // surface, the header box, the Add relationship picker and the note `[[`
-        // menu, reads its rows from here.
-        if (entry.type === 'person' && (entry.entity as { isActive?: boolean }).isActive === false) {
-          return null;
-        }
-
         // People/places date-filter by first real activity in the window. The
         // identifier carries that instant as sortTime; copy it onto the loaded
         // entity as appearedAt so getEntityTimestamp, the cursor, and the
@@ -1510,25 +1510,24 @@ export class SearchResolver {
     if (effective === 'name') {
       // Rows with no name go last either way, rather than heading an A-Z list. Equal names
       // fall back to the raw id so the order, and with it the cursor's place, is the same on
-      // every request.
+      // every request. Each name is read once, not on every comparison.
+      const names = new Map(entries.map((entry) => [entry, SearchResolver.getEntityName(entry)]));
+
       return [...entries].sort((a, b) => {
-        const aName = SearchResolver.getEntityName(a);
-        const bName = SearchResolver.getEntityName(b);
+        const aName = names.get(a)!;
+        const bName = names.get(b)!;
 
         if ((aName === '') !== (bName === '')) {
           return aName === '' ? 1 : -1;
         }
 
-        const byName = aName.localeCompare(bName);
+        const nameOrder = aName.localeCompare(bName);
 
-        if (byName !== 0) {
-          return direction * byName;
+        if (nameOrder !== 0) {
+          return direction * nameOrder;
         }
 
-        const aId = String((a.entity as { id?: unknown }).id ?? '');
-        const bId = String((b.entity as { id?: unknown }).id ?? '');
-
-        return direction * aId.localeCompare(bId);
+        return direction * SearchResolver.compareRawIds(a, b);
       });
     }
 
@@ -1543,11 +1542,39 @@ export class SearchResolver {
       // Deterministic same-timestamp tiebreak on the raw id (uuidv7 → time-ordered),
       // mirroring the SQL keyset's `id DESC` so cursor pagination through a cluster
       // of identical timestamps is stable across pages.
-      const aId = String((a.entity as { id?: unknown }).id ?? '');
-      const bId = String((b.entity as { id?: unknown }).id ?? '');
-
-      return direction * aId.localeCompare(bId);
+      return direction * SearchResolver.compareRawIds(a, b);
     });
+  }
+
+  /** Tiebreak on the raw entity id, shared by the time and name sorts. */
+  private static compareRawIds(a: ResolvedEntity, b: ResolvedEntity): number {
+    const aId = String((a.entity as { id?: unknown }).id ?? '');
+    const bId = String((b.entity as { id?: unknown }).id ?? '');
+
+    return aId.localeCompare(bId);
+  }
+
+  /**
+   * The `after` to hand the Paginator for a list paged in memory.
+   *
+   * The Paginator finds its place by the cursor's exact string, `<time>::<id>`, and the time half
+   * moves when the cursor row is written to between pages (a note edited, a file's updated_at bumped
+   * by parsing). The exact match then failed and the next page started the list over from the top.
+   * This finds the row by its id and hands over the cursor it has now, which is the same string when
+   * nothing changed. A row that left the list altogether still restarts it.
+   */
+  private static reanchorCursor(
+    items: OrderedResult[],
+    after: string | undefined,
+    globalId: string | null,
+  ): string | undefined {
+    if (after == null || globalId == null) {
+      return after;
+    }
+
+    const row = items.find((item) => item.result.id === globalId);
+
+    return row ? searchCursorOf(row) : after;
   }
 
   /**
@@ -1641,13 +1668,33 @@ export class SearchResolver {
   /**
    * What a name sort orders by: the first non-blank of the fields the rows show
    * as their title. A message's is its subject, or for chat-style sources with
-   * none, its preview, as CommunicationRow shows it; reading only name/title/
-   * summary gave every message an empty name and stacked them at the top.
+   * none, its preview, as CommunicationRow shows it (its LLM summary only when
+   * it has neither); reading only name/title/summary gave every message an
+   * empty name and stacked them at the top. An answer is shown by its question,
+   * a receipt by its merchant and a document excerpt by its section title or
+   * file name (AnswerRow, ReceiptRow, getFileChunkTitle).
    */
   private static getEntityName(entry: ResolvedEntity): string {
-    const entity = entry.entity as Record<string, unknown>;
+    if (entry.type === 'file-chunk') {
+      return SearchResolver.firstNonBlank([entry.entity.chunk.sectionTitle, entry.entity.file?.filename]);
+    }
 
-    for (const value of [entity.name, entity.title, entity.subject, entity.summary, entity.preview]) {
+    const entity = entry.entity as Record<string, unknown>;
+    const question = entity.question as { text?: unknown } | null | undefined;
+
+    return SearchResolver.firstNonBlank([
+      entity.name,
+      entity.title,
+      entity.subject,
+      entity.preview,
+      entity.summary,
+      entity.merchantName,
+      question?.text,
+    ]);
+  }
+
+  private static firstNonBlank(values: unknown[]): string {
+    for (const value of values) {
       if (typeof value === 'string' && value.trim() !== '') {
         return value.trim();
       }

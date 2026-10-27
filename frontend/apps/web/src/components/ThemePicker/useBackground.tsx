@@ -411,6 +411,17 @@ class ConwayLifeAnimator implements DynamicTextureController {
       return;
     }
 
+    // Already running on this root: a theme or opacity change only recolours
+    // the board. Reseeding would restart the pattern from noise every time the
+    // theme flips or the opacity slider moves.
+    if (this.root === root) {
+      this.palette = palette;
+      this.opacity = opacity;
+      this.drawAndApply();
+
+      return;
+    }
+
     this.stop();
     this.root = root;
     this.palette = palette;
@@ -659,12 +670,12 @@ export function BackgroundProvider({
   // The texture is drawn in the theme's colours, read off the root when it is
   // applied, so it is redrawn when the theme changes too. ThemeProvider swaps
   // the root variables in a layout effect, which has run by the time this
-  // passive effect does.
+  // passive effect does. Keyed on the same themeState that effect is keyed on.
   const { themeState } = useTheme();
   useEffect(() => {
     const root = window.document.documentElement;
     applyTextureToRoot(root, backgroundState.textureId, backgroundState.textureOpacity);
-  }, [backgroundState, themeState.mode, themeState.colorTheme, themeState.colorOverrides]);
+  }, [backgroundState, themeState]);
 
   const setTexture = (textureId: string) => {
     const resolved = resolveTexturePattern(textureId).id;

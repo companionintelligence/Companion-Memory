@@ -5,6 +5,7 @@ import { Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/sh
 import { Navigate } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { AppToaster } from '@/components/AppToaster';
 import { CompanionMark } from '@/components/CompanionMark';
 import { ThemeToggle } from '@/components/ThemePicker';
 import { WizardNavProvider } from '@/components/WizardNav';
@@ -310,6 +311,11 @@ export function OnboardingPage() {
 
   return (
     <Form {...form}>
+      {/* This page is routed outside MainLayout (App.tsx), which holds the
+          app's only other toaster. The Connect step's ProviderConnectDialog
+          toasts a failed or finished connect, and without this it painted
+          nowhere: Connect looked like it did nothing. */}
+      <AppToaster />
       {/* The provider wraps the form, not just the step area: the footer lives
           inside it too, and the footer is the thing a nested flow is driving. */}
       <WizardNavProvider>

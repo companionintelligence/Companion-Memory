@@ -413,4 +413,41 @@ describe('PlaceService Change History', () => {
       }),
     );
   });
+
+  it("records a description cleared with an explicit null, under the row's own type", async () => {
+    const existing = Object.assign(new PlaceEntity(), {
+      id: 'pl1',
+      entityType: 'Place',
+      name: 'Cafe',
+      description: 'By the station',
+      placeKind: null,
+      parentPlaceId: null,
+      locationPoint: null,
+      properties: {},
+    });
+    const entityUpdated = jest.fn(async () => undefined);
+    const repository = {
+      update: jest.fn(async () => ({ affected: 1 })),
+      findOne: jest.fn(async () => existing),
+      metadata: { target: PlaceEntity, columns: { length: 8 } },
+    };
+    const service = new PlaceService(
+      repository as never,
+      { send: jest.fn(async () => []) } as never,
+      { entityUpdated } as never,
+    );
+
+    await service.update(CONTEXT, 'pl1', {
+      name: 'Cafe',
+      description: null as unknown as string,
+      properties: {},
+    });
+
+    expect(entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: 'Place',
+        changedFields: { description: { old: 'By the station', new: null } },
+      }),
+    );
+  });
 });

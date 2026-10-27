@@ -5,6 +5,7 @@ import { gql, useFragment } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
+import { readCoordinates, readGeoJsonPoint } from '../../MapView/mapCoordinates';
 import type { MemoryEntityOf } from '../../useEntityService';
 import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
 import { eventDisplayTitle, formatBytes } from '../utils';
@@ -25,16 +26,14 @@ const UPDATE_EVENT = gql(`
 
 type LocationProperties = {
   address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
   [key: string]: unknown;
 };
 
 type EventLocationFields = {
   eventType?: string | null;
   locationName?: string | null;
+  /** Every query that opens this drawer aliases `locationCoordinates` to this key. */
   mapCoordinates?: unknown;
-  locationCoordinates?: unknown;
 };
 
 type DetailItem = {
@@ -109,33 +108,6 @@ function formatDuration(start?: string | null, end?: string | null): string | nu
   return parts.join(' ');
 }
 
-function readGeoJsonPoint(value: unknown): { lat: number; lng: number } | null {
-  if (value == null || typeof value !== 'object') {
-    return null;
-  }
-
-  const coords = (value as { coordinates?: unknown }).coordinates;
-
-  if (!Array.isArray(coords) || coords.length < 2) {
-    return null;
-  }
-
-  const [lng, lat] = coords;
-
-  return typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)
-    ? { lat, lng }
-    : null;
-}
-
-function readPropertyCoordinates(properties: LocationProperties): { lat: number; lng: number } | null {
-  return typeof properties.latitude === 'number' &&
-    typeof properties.longitude === 'number' &&
-    !isNaN(properties.latitude) &&
-    !isNaN(properties.longitude)
-    ? { lat: properties.latitude, lng: properties.longitude }
-    : null;
-}
-
 function formatCoordinates(coords: { lat: number; lng: number } | null): string | null {
   return coords ? `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}` : null;
 }
@@ -176,15 +148,24 @@ export function EventDetails({ entity }: Props) {
 
   const props = (data.location?.properties ?? {}) as LocationProperties;
   const eventFields = entity as EventLocationFields;
-  const mapCoordinates = readGeoJsonPoint(eventFields.mapCoordinates ?? eventFields.locationCoordinates);
-  const coordinates = readPropertyCoordinates(props) ?? mapCoordinates;
+  // The event's own point first (a photo's GPS fix), then the linked place's,
+  // which is the order the map pin uses. An event can be linked to a place
+  // without a point of its own. The place's typed latitude/longitude come from
+  // its location_point at full precision. The `lat`/`lng` in its properties
+  // are snapped to 3 decimals for geocoded places and missing for hand-made
+  // ones, so they are only the last resort (as in PlaceDetails).
+  const coordinates =
+    readGeoJsonPoint(eventFields.mapCoordinates) ??
+    readCoordinates({ latitude: data.location?.latitude, longitude: data.location?.longitude }) ??
+    readCoordinates(props);
   const locationItems: DetailItem[] = [
     { label: 'Place', value: data.location?.name ?? data.locationName ?? eventFields.locationName ?? '' },
-    { label: 'Address', value: props.address ?? '' },
+    // The bag is free-form JSON. An object here would crash the render.
+    { label: 'Address', value: typeof props.address === 'string' ? props.address : '' },
     { label: 'Coordinates', value: formatCoordinates(coordinates) ?? '' },
-    // Nothing else from the place's properties: the rest of that bag is the
-    // pipeline's bookkeeping (`promote`, `source`, `place_id`, the rounded
-    // `lat`/`lng`), and listing it printed raw JSON in the drawer.
+    // Nothing else from the place's properties. The rest of that bag is the
+    // pipeline's bookkeeping (`promote`, `source`, `place_id`, `type`) and
+    // listing it printed raw JSON in the drawer.
   ].filter((item) => item.value);
 
   // Photo/video events: the ORIGINAL is what renders (a 300px PREVIEW upscaled

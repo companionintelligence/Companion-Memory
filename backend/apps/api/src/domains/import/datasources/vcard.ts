@@ -871,7 +871,8 @@ export function namePartsFromN(value: string): { given: string; additional: stri
  * with a time after it; vCard 4.0 allows a date with no year (`--0315`), and
  * Apple writes a yearless birthday as year 1604 with `X-APPLE-OMIT-YEAR=1604`.
  * Neither of the last two is a birth date, so they are left out rather than
- * stored as one.
+ * stored as one. Nor is year 0000, which some exports write for "no year" and
+ * which Postgres' `date` (the person's `birth_date` column) refuses.
  */
 export function birthDateFromBday(value: string, omitYear?: string): string {
   const match = /^(\d{4})-?(\d{2})-?(\d{2})(?:[T\s].*)?$/.exec(value.trim());
@@ -881,14 +882,18 @@ export function birthDateFromBday(value: string, omitYear?: string): string {
   }
 
   const [, year, month, day] = match;
+  const [y, m, d] = [Number(year), Number(month), Number(day)];
 
-  if (omitYear && omitYear.trim() === year) {
+  if (y < 1 || (omitYear && omitYear.trim() === year)) {
     return '';
   }
 
-  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  // setUTCFullYear, not Date.UTC: Date.UTC reads years 0-99 as 1900-1999, which
+  // would check a leap day against the wrong year.
+  const date = new Date(0);
+  date.setUTCFullYear(y, m - 1, d);
 
-  return date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day)
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
     ? `${year}-${month}-${day}`
     : '';
 }

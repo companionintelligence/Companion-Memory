@@ -1177,13 +1177,15 @@ export class MemoryCompactionService {
     }
 
     try {
-      await this.personService.update(
+      const updated = await this.personService.update(
         context,
         node.id,
         { name: incomingName },
         { source: 'MemoryCompactionService.promotePersonName' },
       );
-      node.name = incomingName;
+      // What was stored, not what was asked for: a name the person set by hand
+      // is kept (PersonService.update), and the cached candidate must say so.
+      node.name = updated?.name ?? node.name;
     } catch {
       // Promotion is cosmetic; the merge (shared id) is the real win.
     }

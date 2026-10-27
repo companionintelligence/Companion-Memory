@@ -100,6 +100,31 @@ describe('AboutYouSection', () => {
     expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
   });
 
+  it('renders markup and script links in a dossier as inert text', async () => {
+    // The dossier is model-written from the owner's own data, which a stranger's
+    // email can steer. Raw HTML must stay text and a javascript: link must not
+    // survive as one.
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      dossier: {
+        summary:
+          'Likes <img src=x onerror="window.__pwned=1"> photos. <script>window.__pwned=2</script> ' +
+          '[Open](javascript:window.__pwned=3)',
+      },
+    });
+    await renderSection();
+
+    await screen.findByText(/Likes/);
+    expect(document.body.querySelector('img')).toBeNull();
+    expect(document.body.querySelector('script')).toBeNull();
+    expect(document.body.querySelector('[onerror]')).toBeNull();
+    // It is still there, as text the owner can read.
+    expect(screen.getByText(/<img src=x onerror/)).toBeInTheDocument();
+    const link = screen.getByText('Open').closest('a');
+    expect(link?.getAttribute('href') ?? '').not.toMatch(/^javascript:/i);
+    expect((window as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
   it('names family by what they are to you, not by the graph type', async () => {
     h.fetchAboutYou.mockResolvedValue({
       ...view,

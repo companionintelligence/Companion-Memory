@@ -9,10 +9,7 @@ import { MapAreaList } from '@/components/SearchBox/MapAreaList';
 import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
 import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
 import { mapAreasLabel } from '@/pages/MemoryPage/bbox';
-import {
-  datePresetLabel,
-  isRollingDatePreset,
-} from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
+import { datePresetLabel } from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
 
 import {
   addListValue,
@@ -205,11 +202,19 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
     }
 
     const time = field === 'endTime' ? 'T23:59:59.999' : 'T00:00:00';
+    const date = new Date(`${dateStr}${time}`);
 
-    onChange({ ...value, [field]: new Date(`${dateStr}${time}`).toISOString(), datePreset: undefined });
+    // A date input accepts years up to 275760, but a five- or six-digit year
+    // is not an ISO date `Date` can read, and toISOString() would throw.
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+
+    onChange({ ...value, [field]: date.toISOString(), datePreset: undefined });
   };
 
-  const rollingWhen = isRollingDatePreset(value.datePreset) ? datePresetLabel(value.datePreset) : null;
+  // Null for anything but a rolling preset (no value, 'custom', unknown).
+  const rollingWhen = datePresetLabel(value.datePreset);
 
   return (
     <div className="space-y-4">
@@ -297,6 +302,7 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
             <button
               type="button"
               className="font-medium text-primary hover:underline"
+              aria-label={`Remove ${rollingWhen}`}
               onClick={() => onChange({ ...value, datePreset: undefined })}
             >
               Remove

@@ -217,9 +217,36 @@ describe('CalendarEventService — calendar flags survive create and update', ()
     });
 
     it('clears the description when the event page saves it empty', async () => {
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: 'Agenda' });
+
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { description: '' });
 
       expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: null });
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { description: { old: 'Agenda', new: null } } }),
+      );
+    });
+
+    it('treats a description of only whitespace as cleared', async () => {
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: 'Agenda' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { description: '   ' });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: null });
+    });
+
+    it('does not rewrite or record an empty description that is already empty', async () => {
+      // The drawer sends its whole form, so a title-only save of an event
+      // imported with '' hands back '' for the description too.
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: '' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        title: 'Standup',
+        description: '',
+      });
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
     });
 
     it('leaves the description alone when the patch sends none', async () => {

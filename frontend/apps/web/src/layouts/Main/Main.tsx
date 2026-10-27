@@ -1,14 +1,14 @@
 import { Suspense } from 'react';
 
 import { LoadingPage, Portal, useDeviceLayout } from '@ci/common';
-import { Toaster } from '@ci/shadcn';
 import { Outlet } from 'react-router-dom';
 
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { AppToaster } from '@/components/AppToaster';
 import { GettingStartedBanner } from '@/components/GettingStarted/GettingStartedBanner';
 import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
-import { useBackground, useTheme } from '@/components/ThemePicker';
+import { useBackground } from '@/components/ThemePicker';
 import { UnsyncedImportsBanner } from '@/components/UnsyncedImports/UnsyncedImportsBanner';
 import { useCurrentUser } from '@/hooks';
 import { isGettingStartedActive } from '@/lib/gettingStarted';
@@ -22,7 +22,6 @@ import { SecondaryNavigation } from './SecondaryNavigation';
 
 export function Main() {
   const { isMobile } = useDeviceLayout();
-  const { themeState } = useTheme();
   const { glowEnabled } = useBackground();
   const { user } = useCurrentUser();
   const gettingStartedActive = isGettingStartedActive(user?.id);
@@ -30,21 +29,16 @@ export function Main() {
   if (isMobile) {
     return (
       <PowerRailProvider variant="overlay">
-        {/* Viewport-fixed; default 16px top sits under the status bar /
-            Dynamic Island. Offset past safe-area + the phone header so the
-            toast is in the content well, not the notch.
+        {/* Viewport-fixed, and offset past the safe area and the phone
+            header (see AppToaster) so the toast is in the content well, not
+            the notch.
 
             A sibling of the column below, not a child of it, on purpose. While
             the drawer is open `MobileNavigation` makes every other child of
             that column `inert`, and an inert toast is still painted over the
             drawer (z-index 999999999) but cannot be hit — so a tap on it fell
             through to the drawer row beneath. Out here it stays tappable. */}
-        <Toaster
-          position="top-center"
-          offset={{ top: 'calc(var(--safe-area-top) + 3.5rem)' }}
-          mobileOffset={{ top: 'calc(var(--safe-area-top) + 3.5rem)' }}
-          theme={themeState.mode}
-        />
+        <AppToaster />
         {/* Top padding is the status-bar tap target (see useStatusBarScrollToTop). */}
         <div className="flex h-[var(--vv-height,100dvh)] max-h-[var(--vv-height,100dvh)] flex-col pt-[var(--safe-area-top)]">
           <MobileTopBar />
@@ -99,7 +93,7 @@ export function Main() {
           under the panel, invisible: the desktop looked like a refused
           placement did nothing. Same shape as the phone layout above, whose
           toaster is a sibling of its column for a related reason (inert). */}
-      <Toaster theme={themeState.mode} />
+      <AppToaster />
       <div className="relative z-10 grid h-lvh min-h-0 grid-cols-[auto_1fr] grid-rows-[auto_1fr]">
         {/* Left-aligned so the mark stays put when the rail widens. Centering
             it here walks the logo to the middle of the expanded column. */}

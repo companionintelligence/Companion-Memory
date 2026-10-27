@@ -72,26 +72,32 @@ export function ProtectedRoute({
     return <LoadingPage />;
   }
 
-  // Memory did not answer for the session or the profile. That is an outage, not a
-  // sign-out: say so, and let the retries in useAuth and useCurrentUser bring the page
-  // back, instead of sending a signed-in person to Log In.
-  if (!user && (sessionUnreachable || profileUnreachable)) {
-    return (
-      <MemoryUnreachable
-        onRetry={() => {
-          if (profileUnreachable) {
-            void refetch?.();
-          } else if (canRecover) {
-            void refresh();
-          }
-        }}
-      />
-    );
-  }
-
   // A phone session stays valid when `me` blips to empty (no JWT to expire).
   // Sending that through the signed-out redirect reloads onboarding.
   if ((expired || !user) && !(shown.current && !expired)) {
+    // Memory did not answer for the session or the profile. That is an outage, not a
+    // sign-out: say so, and let the retries in useAuth and useCurrentUser bring the page
+    // back, instead of sending a signed-in person to Log In. Checked here, after the
+    // `shown` guard, so a page already on screen stays mounted through a `me` blip. It
+    // includes a token that ran out while the session check went unanswered: Log In
+    // would send a known user straight back here, and round again.
+    if (sessionUnreachable || (profileUnreachable && !user)) {
+      return (
+        <MemoryUnreachable
+          onRetry={() => {
+            // The session first: a profile asked for with an expired token fails again.
+            if (sessionUnreachable) {
+              if (canRecover) {
+                void refresh();
+              }
+            } else {
+              void refetch?.();
+            }
+          }}
+        />
+      );
+    }
+
     return (
       <Navigate
         to={isNativePlatform() ? '/device-connect' : '/login'}

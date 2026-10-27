@@ -472,6 +472,26 @@ describeWithDb(`re-importing an entity merges into what is stored (${availabilit
       expect(now.properties).toMatchObject({ nickname: 'Olly', job_title: 'Navigator' });
       expect(now.properties.user_edited_keys).toEqual(['name', 'nickname', 'website']);
     });
+
+    it('claims nothing a save sends back blank, so the card can still fill it', async () => {
+      // The form sends a missing description as '' and no addresses as [];
+      // neither is a change, and the next import's NOTE still lands.
+      const quiet = vcard('2125550199', 'Bo Lind', { Phones: ['(212) 555-0199'] });
+      const bo = (await ingest(quiet)).get(quiet.key)!;
+
+      await people.patch(
+        ctx,
+        bo,
+        { name: 'Bo Lind', description: '', propertiesPatch: { nickname: null, addresses: [] } },
+        { handEdit: true },
+      );
+
+      expect((await row(bo)).properties).not.toHaveProperty('user_edited_keys');
+
+      await ingest({ ...quiet, description: 'Met at the climbing gym' });
+
+      expect((await row(bo)).description).toBe('Met at the climbing gym');
+    });
   });
 
   describe('a null name says nothing', () => {

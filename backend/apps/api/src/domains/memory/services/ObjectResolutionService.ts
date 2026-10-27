@@ -194,16 +194,24 @@ export class ObjectResolutionService {
       return null;
     }
 
-    if (observation.confirmedByUser) {
+    if (observation.confirmedByUser || observation.resolutionMethod === 'user') {
       // A human's answer is not a machine's to revise. Reported, not thrown, so
-      // a sweep skips it instead of aborting.
+      // a sweep skips it instead of aborting. Method `user` without the flag is
+      // a "no" (`rejectObservation`, which also clears the link) or a
+      // retraction that kept its link (`confirm(id, false)`). Both are answers.
+      const unlinked = observation.resolvedObjectId == null && observation.resolvedProductId == null;
+
       return {
         observationId,
         method: observation.resolutionMethod,
         confidence: observation.resolutionConfidence,
         objectId: observation.resolvedObjectId,
         productId: observation.resolvedProductId,
-        reason: 'user-confirmed; left untouched',
+        reason: observation.confirmedByUser
+          ? 'user-confirmed; left untouched'
+          : unlinked
+            ? 'user-rejected; left untouched'
+            : 'user-retracted; left untouched',
         applied: false,
         observation,
       };

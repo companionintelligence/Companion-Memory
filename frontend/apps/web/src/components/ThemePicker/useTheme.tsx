@@ -504,7 +504,7 @@ export function ThemeProvider({
   };
 
   // A layout effect, not a passive one: everything below rewrites the root's
-  // colour variables, and anything that reads them back with getComputedStyle
+  // colour variables. Anything that reads them back with getComputedStyle
   // (the Surface Texture previews, the page texture) does so in its own effect.
   // Passive effects run child first, so with a plain useEffect those readers
   // ran before this and kept the palette of the theme just left. Layout

@@ -1,3 +1,4 @@
+import { sonnerToast } from '@ci/shadcn';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -57,6 +58,14 @@ vi.mock('@/components/ThemePicker', () => ({
   ThemeToggle: () => <button type="button">Toggle theme</button>,
 }));
 
+// The page's own toaster, without the theme and device-layout providers the
+// real one reads.
+vi.mock('@/components/AppToaster', async () => {
+  const { Toaster } = await import('@ci/shadcn');
+
+  return { AppToaster: () => <Toaster /> };
+});
+
 function trustOption(name: string) {
   return screen.getByRole('button', { name: new RegExp(`^${name}`) });
 }
@@ -90,5 +99,22 @@ describe('OnboardingPage trust dial', () => {
     await waitFor(() => expect(h.saveProgress).toHaveBeenCalled());
     const [, draft] = h.saveProgress.mock.calls.at(-1) as unknown as [string, Record<string, unknown>];
     expect(draft.trust_mode).toBe('hands_off');
+  });
+});
+
+/**
+ * The page is routed outside MainLayout, which holds the app's only other
+ * toaster, so the Connect step's "Could not connect to Signal" never painted.
+ */
+describe('OnboardingPage toasts', () => {
+  it('shows a toast raised while onboarding', async () => {
+    render(<OnboardingPage />);
+
+    await waitFor(() => expect(screen.getByText('How much trust?')).toBeInTheDocument());
+
+    sonnerToast.error('Could not connect to Signal. Internal server error');
+
+    expect(await screen.findByText('Could not connect to Signal. Internal server error')).toBeInTheDocument();
+    sonnerToast.dismiss();
   });
 });

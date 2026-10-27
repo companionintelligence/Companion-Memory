@@ -123,11 +123,11 @@ export function SplashShell({ children }: { children: ReactNode }) {
       />
 
       {/* Above the page's content layer, which is `relative z-10` and fills the screen:
-          at the same z-index the later content won and swallowed every click here. */}
-      <div className="absolute top-0 left-0 h-[max(0.5rem,env(safe-area-inset-top))] w-full">
-        <div className="absolute top-full right-2 z-20">
-          <ThemeToggle />
-        </div>
+          at the same z-index the later content won and swallowed every click here.
+          The offset reads `--safe-area-top` rather than `env()` because WKWebView can
+          report that inset as 0, which put the button under the status bar on iOS. */}
+      <div className="ci-mobile-chrome-top absolute right-2 z-20">
+        <ThemeToggle />
       </div>
 
       {children}

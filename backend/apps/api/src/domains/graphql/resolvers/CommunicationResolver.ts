@@ -145,11 +145,11 @@ export class CommunicationResolver {
   }
 
   @Mutation(() => CommunicationType, { nullable: true })
-  // CommunicationService.update only patches fields that are truthy/defined on
-  // this row (subject/content here); `content: input.content ?? ''` cannot
-  // blank an existing value because the service guards with `if (data.content)`,
-  // which treats '' as "not provided". The row and the people on it are
-  // otherwise untouched.
+  // CommunicationService.update patches only the fields it is handed. An empty
+  // subject clears it (the label then falls back to the preview or content);
+  // `content: input.content ?? ''` cannot blank an existing body because the
+  // service guards with `if (data.content)`, which treats '' as "not provided".
+  // The row and the people on it are otherwise untouched.
   @GraphqlPrivacy({ destructive: false })
   async updateCommunication(
     @Context() context: RequestContext,

@@ -188,8 +188,10 @@ export interface RetentionSweepResult {
  * holds at any TTL, including 0:
  *
  *  - **Nothing in flight.** Terminal status, `finished_at` set and older than
- *    the cutoff, `updated_at` older than the cutoff, and NO stage in `queued`
- *    or `running`. The status column is a cache; the stage rows are the truth.
+ *    the cutoff, `updated_at` older than the cutoff, and NO stage `running`.
+ *    A `queued` stage left behind in a finished run is a leftover that no
+ *    worker will reach ({@link liveStageExistsSql}). The status column is a
+ *    cache; the stage rows are the truth.
  *  - **Nothing resumable.** A run with any `pending` staged row is what the
  *    Sync card offers and `startPush` acts on; a run with any `failed` staged
  *    row is what `ImportRunService.retryFailedPush` exists for. Either
@@ -310,13 +312,13 @@ export class ImportRetentionService {
       });
     }
 
-    for (const candidate of await this.drainedRuns(cutoff(now, stagingDays), maxRunsPerSweep)) {
-      const blocked = await this.blockedByBytes(candidate, skip);
+    const stagingCutoff = cutoff(now, stagingDays);
 
-      if (blocked) {
-        continue;
-      }
-
+    for await (const candidate of this.unblocked(
+      (seen) => this.drainedRuns(stagingCutoff, maxRunsPerSweep, seen),
+      maxRunsPerSweep,
+      skip,
+    )) {
       const deleted = await this.deletePayload(candidate.id);
 
       stagedRowsDeleted += deleted;
@@ -348,13 +350,11 @@ export class ImportRetentionService {
       });
     }
 
-    for (const candidate of await this.expiredRuns(historyCutoff, maxRunsPerSweep)) {
-      const blocked = await this.blockedByBytes(candidate, skip);
-
-      if (blocked) {
-        continue;
-      }
-
+    for await (const candidate of this.unblocked(
+      (seen) => this.expiredRuns(historyCutoff, maxRunsPerSweep, seen),
+      maxRunsPerSweep,
+      skip,
+    )) {
       // Whatever the payload sweep declined to take (a run that kept `failed`
       // rows for a retry nobody ran) goes now, in the same bounded batches, so
       // the run delete itself cascades over an empty tail.
@@ -428,11 +428,13 @@ export class ImportRetentionService {
    *  - **Pushable**, by {@link pushableRunSql} — the same expression the Sync
    *    card offers and the history sweep negates, evaluated here for a third
    *    time rather than restated. A run that is not pushable is refused with
-   *    the reason: retention already collects it.
+   *    the reason: retention already collects it. That refusal comes after the
+   *    byte guards below, because the sweep does NOT collect a run they hold.
    *  - **Quiet**, by the stage rows rather than the status cache. A run with a
-   *    `queued` or `running` stage is refused and told to cancel first;
-   *    deleting a run a worker still holds would leave that worker writing to
-   *    rows that no longer exist.
+   *    `running` stage is refused and told to cancel first; deleting a run a
+   *    worker still holds would leave that worker writing to rows that no
+   *    longer exist. A `queued` stage left behind in a finished run does not
+   *    count, because no worker will reach it ({@link liveStageExistsSql}).
    *  - **Not holding bytes on disk**, by {@link SCRATCH_TREE_REASON} and by
    *    {@link UNSTORED_MEDIA_REASON}. In practice a pushable run has neither —
    *    `ImportStageListener` keeps a tree only for a run that staged NO records,
@@ -580,13 +582,12 @@ export class ImportRetentionService {
         );
       }
 
-      if (!candidate.pushable) {
-        throw new ConflictException(
-          `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
-            'to release. Retention collects this run on its own once it is past the history window.',
-        );
-      }
-
+      // The byte guards come before the "not pushable" answer, because that
+      // answer promises the sweep will collect the run, and the sweep refuses
+      // a run for exactly these two reasons. A run that failed in a worker
+      // still owns its scratch tree (the failure path never reclaims it, and
+      // `UnpackStage` moves the upload into it), so it is told about the tree
+      // rather than promised a collection that never comes.
       if (candidate.unstoredMedia) {
         throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
       }
@@ -594,6 +595,13 @@ export class ImportRetentionService {
       if (await this.scratch.exists(candidate.userId, candidate.id)) {
         throw new ConflictException(
           `${SCRATCH_TREE_REASON} (${this.scratch.dirFor(candidate.userId, candidate.id)})`,
+        );
+      }
+
+      if (!candidate.pushable) {
+        throw new ConflictException(
+          `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
+            'to release. Retention collects this run on its own once it is past the history window.',
         );
       }
 
@@ -756,14 +764,60 @@ export class ImportRetentionService {
   }
 
   /**
+   * Candidates from `select`, oldest first, until `budget` of them have been
+   * handed out, skipping (and reporting) every one {@link blockedByBytes}
+   * refuses.
+   *
+   * `select` is given every id this sweep has already seen and must leave them
+   * out, so a refused run is never fetched twice and a page that gains nothing
+   * still moves forward. Without that, a full page of refused runs at the
+   * front of the queue would stop every run behind it from ever being reached,
+   * night after night. Each run is stat-ed as it is reached, right before the
+   * caller acts on it, so the gap between the check and the delete stays one
+   * run wide.
+   */
+  private async *unblocked(
+    select: (seen: readonly string[]) => Promise<RetentionCandidate[]>,
+    budget: number,
+    skip: (reason: string, candidate: RetentionCandidate, detail?: object) => void,
+  ): AsyncGenerator<RetentionCandidate> {
+    const seen: string[] = [];
+    let handedOut = 0;
+
+    while (handedOut < budget) {
+      const page = await select(seen);
+
+      if (page.length === 0) {
+        return;
+      }
+
+      for (const candidate of page) {
+        seen.push(candidate.id);
+
+        if (await this.blockedByBytes(candidate, skip)) {
+          continue;
+        }
+
+        yield candidate;
+        handedOut += 1;
+
+        if (handedOut >= budget) {
+          return;
+        }
+      }
+    }
+  }
+
+  /**
    * The one guard SQL cannot express: does this run still own a scratch tree?
    *
    * `stat`, not a query, which is why it is here and not in the candidate
-   * predicate — and why it is the one skip that can consume a sweep's budget.
-   * Acceptable because it is rare and loud: `ImportStageListener` keeps a tree
-   * only for a run that staged no records, and every such run logs a warning
-   * naming the directory. The unstored-media case, which is neither rare nor
-   * self-clearing, is filtered in SQL instead.
+   * predicate. It does not use up a sweep's budget: {@link unblocked} pages
+   * past a refused run. That matters because it is not rare. Besides a run
+   * that staged no records, every run that failed in a worker keeps its tree
+   * (the failure path never reclaims it), and those runs are old, so they sort
+   * to the front of every candidate page. Each one logs a warning naming the
+   * directory. The unstored-media case is filtered in SQL instead.
    *
    * Returns true when the run must be left alone.
    */
@@ -799,7 +853,11 @@ export class ImportRetentionService {
    * {@link ImportRetentionService.mediaBlockedRuns} reports them separately so
    * excluding them here does not also make them invisible.
    */
-  private async drainedRuns(cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async drainedRuns(
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     return this.selectRuns(
       `${TERMINAL_AND_QUIET}
        AND (EXISTS (SELECT 1 FROM ci_import.staged_items i WHERE i.run_id = r.id)
@@ -813,6 +871,7 @@ export class ImportRetentionService {
        AND NOT ${unstoredMediaExistsSql('r.id', '$5')}`,
       cutoffAt,
       limit,
+      seen,
     );
   }
 
@@ -828,13 +887,18 @@ export class ImportRetentionService {
    * this sweep cannot delete rows the card is still promising to push — see the
    * "never collected at all" note on the class.
    */
-  private async expiredRuns(cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async expiredRuns(
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     return this.selectRuns(
       `${TERMINAL_AND_QUIET}
        AND NOT ${pushableRunSql('r')}
        AND NOT ${unstoredMediaExistsSql('r.id', '$5')}`,
       cutoffAt,
       limit,
+      seen,
     );
   }
 
@@ -873,18 +937,32 @@ export class ImportRetentionService {
    * rejects a bind list longer than the statement's highest `$n`, so `$5` (the
    * file classifications) is not optional here. That is a constraint worth
    * having: it is what stops a new sweep being added that forgets the
-   * unstored-media guard.
+   * unstored-media guard. `$6` is this statement's own: the ids `seen`
+   * already ({@link unblocked}).
    */
-  private async selectRuns(where: string, cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async selectRuns(
+    where: string,
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     const rows = await this.dataSource.query<
       Array<{ id: string; userId: string; label: string | null; status: string; finishedAt: Date | null }>
     >(
       `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt"
          FROM ci_import.import_runs r
-        WHERE ${where}
+        WHERE (${where})
+          AND NOT (r.id = ANY($6::uuid[]))
         ORDER BY r.finished_at ASC
         LIMIT $4`,
-      [cutoffAt, [...TERMINAL_RUN_STATUSES], [...LIVE_STAGE_STATUSES], limit, [...FILE_CLASSIFICATIONS]],
+      [
+        cutoffAt,
+        [...TERMINAL_RUN_STATUSES],
+        [...LIVE_STAGE_STATUSES],
+        limit,
+        [...FILE_CLASSIFICATIONS],
+        [...seen],
+      ],
     );
 
     return rows;
@@ -961,8 +1039,9 @@ const TERMINAL_AND_QUIET = `
  *
  * A `queued` stage in a FINISHED run is a leftover, not work. `failStage`
  * closes the run when a stage fails and leaves the stages after it `queued`,
- * which is what lets `retryStage` carry the import on from there (it reopens
- * the run along with the stage it requeues). Counting those leftovers as live
+ * which is what lets `retryStage` carry the import on from there (it requeues
+ * the stage and reopens the run in one statement, so no reader ever sees the
+ * retried stage `queued` under a closed run). Counting those leftovers as live
  * made a run whose unpack failed refuse a discard as "still working" while
  * cancel answered "not in flight", and kept it out of both sweeps for good.
  * `ImportRunService.retryFailedPush` already reads them the same way.

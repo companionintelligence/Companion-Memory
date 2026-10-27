@@ -44,6 +44,14 @@ export class ImageDescriptionPreferenceService {
     { enabled: boolean; chatModel: string | null; expiresAt: number }
   >();
 
+  /**
+   * Bumped by {@link invalidate}. A read that started before a write and
+   * finishes after it carries the old answer; without this it put that answer
+   * back in the cache right after `setEnabled` cleared it, and background jobs
+   * used it for the next 60 s.
+   */
+  private readonly generations = new Map<string, number>();
+
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
@@ -57,18 +65,21 @@ export class ImageDescriptionPreferenceService {
     @Optional() private readonly moduleRef?: ModuleRef,
     /**
      * Read to tell when the cached value belongs to a different chat model.
-     * It keeps its own cache, cleared in this process when the choice is set,
-     * so the check costs no extra round trip. Optional so hand-built services
-     * (the unit tests) still construct; without it the cache only expires.
+     * It keeps its own 60 s cache, cleared in this process when the choice is
+     * set, so most checks are a map lookup; when that cache has expired the
+     * check reads the self entity once. Optional so hand-built services (the
+     * unit tests) still construct; without it the cache only expires.
      */
     @Optional() private readonly chatModelPreference?: ChatModelPreferenceService,
   ) {}
 
   invalidate(userId: string): void {
     this.cache.delete(userId);
+    this.generations.set(userId, (this.generations.get(userId) ?? 0) + 1);
   }
 
   async isEnabled(userId: string): Promise<boolean> {
+    const generation = this.generations.get(userId) ?? 0;
     const chatModel = (await this.chatModelPreference?.getChatModel(userId)) ?? null;
     const cached = this.cache.get(userId);
     if (cached && cached.chatModel === chatModel && cached.expiresAt > Date.now()) {
@@ -76,7 +87,10 @@ export class ImageDescriptionPreferenceService {
     }
 
     const enabled = await this.readEnabled(userId);
-    this.cache.set(userId, { enabled, chatModel, expiresAt: Date.now() + 60_000 });
+
+    if ((this.generations.get(userId) ?? 0) === generation) {
+      this.cache.set(userId, { enabled, chatModel, expiresAt: Date.now() + 60_000 });
+    }
 
     return enabled;
   }

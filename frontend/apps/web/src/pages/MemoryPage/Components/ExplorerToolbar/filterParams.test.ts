@@ -68,7 +68,17 @@ describe('resolveExplorerTypes with a When filter', () => {
 
   it('excludes the undated kinds from an unnarrowed browse, leaving opt-in types opt-in', () => {
     expect(resolveExplorerTypes(new URLSearchParams(WHEN))).toEqual({
-      excludeTypes: [...UNDATED_ENTITY_TYPES, 'Answer', 'Concept', 'Thread', 'FileChunk'],
+      excludeTypes: [
+        ...UNDATED_ENTITY_TYPES,
+        'Answer',
+        'Concept',
+        'Thread',
+        'FileChunk',
+        'Task',
+        'Action',
+        'Message',
+        'Position',
+      ],
       droppedByWhen: [],
       nothingLeft: false,
     });

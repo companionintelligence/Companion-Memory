@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Card, Input, Label, Select, Switch } from '@ci/shadcn';
@@ -75,6 +75,7 @@ export function ModelSection() {
     {
       selectedModel,
       chatModelRevision,
+      chatModelSaving,
       thinkingSupported,
       thinkingEnabled,
       toolsSupported,
@@ -117,6 +118,11 @@ export function ModelSection() {
   const [governanceLoading, setGovernanceLoading] = useState(true);
   const [governanceSaving, setGovernanceSaving] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
+  const chatModelRevisionRef = useRef(chatModelRevision);
+
+  useEffect(() => {
+    chatModelRevisionRef.current = chatModelRevision;
+  }, [chatModelRevision]);
 
   useEffect(() => {
     if (!config) {
@@ -141,6 +147,9 @@ export function ModelSection() {
 
     let cancelled = false;
     setImageDescriptionLoading(true);
+    // A message left by an earlier load or save no longer describes what this
+    // reload is about to show.
+    setImageDescriptionError(null);
     void fetchJson<{ enabled: boolean }>('/api/personalization/image-description', {
       headers,
     })
@@ -271,6 +280,9 @@ export function ModelSection() {
     }
 
     const previous = imageDescriptionEnabled;
+    // A model switch that lands while this save is in flight reloads the switch
+    // for the new model; this answer is for the old one and must not overwrite it.
+    const revision = chatModelRevisionRef.current;
     setImageDescriptionEnabled(enabled);
     setImageDescriptionSaving(true);
     setImageDescriptionError(null);
@@ -284,9 +296,15 @@ export function ModelSection() {
         },
         body: JSON.stringify({ enabled }),
       });
-      setImageDescriptionEnabled(payload?.enabled === true);
+
+      if (chatModelRevisionRef.current === revision) {
+        setImageDescriptionEnabled(payload?.enabled === true);
+      }
     } catch {
-      setImageDescriptionEnabled(previous);
+      if (chatModelRevisionRef.current === revision) {
+        setImageDescriptionEnabled(previous);
+      }
+
       setImageDescriptionError('Could not save image-description setting.');
     } finally {
       setImageDescriptionSaving(false);
@@ -646,7 +664,7 @@ export function ModelSection() {
                 id="model-image-description"
                 checked={imageDescriptionEnabled}
                 onCheckedChange={(checked) => void handleImageDescriptionToggle(checked)}
-                disabled={imageDescriptionLoading || imageDescriptionSaving || !ready}
+                disabled={imageDescriptionLoading || imageDescriptionSaving || chatModelSaving || !ready}
               />
             </div>
 

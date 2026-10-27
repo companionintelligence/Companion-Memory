@@ -423,6 +423,8 @@ describe('PersonEmbedStage', () => {
     expect(h.loads[0].sql).toContain('ci.entities');
     expect(h.loads[0].sql).toContain("entity_type = 'Person'");
     expect(h.loads[0].sql).toContain('merged_into_entity_id IS NULL');
+    // A slice queued before a forget, or replayed after it, re-checks the archive here.
+    expect(h.loads[0].sql).toContain('is_active IS NOT FALSE');
     expect(h.loads[0].params).toEqual([['person-1'], USER]);
 
     const doc = h.generateEmbeddings.mock.calls[0][0][0] as string;
@@ -470,7 +472,7 @@ describe('PersonEmbedStage', () => {
     expect(h.generateEmbeddings.mock.calls[0][0][0]).toBe('Al');
   });
 
-  it('never re-indexes a merge tombstone', () => {
+  it('never re-indexes a merge tombstone or a forgotten person', () => {
     // The tombstone predicate itself is exercised against real Postgres in
     // entityRows.integration.spec.ts; this pins the source declaration the
     // stage actually ships, which is what a slice replayed from a dead letter

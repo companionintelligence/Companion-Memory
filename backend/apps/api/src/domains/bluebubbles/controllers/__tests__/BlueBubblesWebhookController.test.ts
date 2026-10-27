@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import { BlueBubblesWebhookController } from '../BlueBubblesWebhookController';
 
@@ -63,5 +63,21 @@ describe('BlueBubblesWebhookController', () => {
       NotFoundException,
     );
     expect(none.configService.recordWebhookReceived).not.toHaveBeenCalled();
+  });
+
+  it('answers a malformed body with the same 404 as a wrong secret until the secret matches', async () => {
+    // Validation runs after the secret and the switch, so a stranger cannot
+    // tell a live route from a dead one by sending a bad body.
+    const on = setup({ enabled: true });
+
+    await expect(on.controller.handle('not-the-secret', {})).rejects.toBeInstanceOf(NotFoundException);
+    await expect(setup({ enabled: false }).controller.handle(SECRET, {})).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    // The real server still hears about a body it got wrong, and nothing is recorded for it.
+    await expect(on.controller.handle(SECRET, {})).rejects.toBeInstanceOf(BadRequestException);
+    expect(on.configService.recordWebhookReceived).not.toHaveBeenCalled();
+    expect(on.syncService.ingestWebhookMessage).not.toHaveBeenCalled();
   });
 });

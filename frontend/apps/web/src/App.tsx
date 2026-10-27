@@ -147,35 +147,6 @@ function RedirectProfileToSelfSettings() {
 }
 
 /**
- * What "*" shows. The feature-gated routes (/self, /memory/chat, /jobs, …) are only in
- * the table once their flag is on, and signed out only the global flags are known, so
- * for a signed-out visitor those paths fell through to here and showed the 404 card
- * instead of Log In. Everything past the public pages needs an account, so a
- * signed-out visitor is sent to sign in, with the path kept for afterwards, the same
- * redirect ProtectedRoute makes. Signed in, an unmatched path is a real 404.
- */
-function UnmatchedRoute({ featuresLoading }: { featuresLoading: boolean }) {
-  const [{ authenticated, initializing }] = useAuth();
-  const location = useLocation();
-
-  if (featuresLoading || initializing) {
-    return <LoadingPage />;
-  }
-
-  if (!authenticated) {
-    return (
-      <Navigate
-        to={isNativePlatform() ? '/device-connect' : '/login'}
-        state={{ from: location.pathname + location.search }}
-        replace
-      />
-    );
-  }
-
-  return <NotFoundPage />;
-}
-
-/**
  * PowerSync only matters once someone is signed in.
  *
  * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
@@ -929,10 +900,26 @@ function AppRoutes() {
           backgroundLocation is one of them) this is what "*" matches. Rendering
           404 there flashed a not-found page over a route that was about to
           exist; wait for the flags instead, exactly as ProtectedRoute waits for
-          the session. A genuinely unknown URL still lands on 404, one tick later,
-          or on Log In when nobody is signed in (UnmatchedRoute).
+          the session. A genuinely unknown URL still lands on 404, one tick later.
+
+          The 404 sits behind ProtectedRoute because signed out only the global
+          flags are known. The gated routes (/self, /memory/chat, /jobs) are then
+          never in the table, so they reach here. A signed-out visitor goes to
+          sign in with the path kept. A reload during an outage says Memory
+          cannot be reached, the same as every other signed-in page.
         */}
-        <Route path="*" element={<UnmatchedRoute featuresLoading={featuresLoading} />} />
+        <Route
+          path="*"
+          element={
+            featuresLoading ? (
+              <LoadingPage />
+            ) : (
+              <ProtectedRoute>
+                <NotFoundPage />
+              </ProtectedRoute>
+            )
+          }
+        />
       </Routes>
 
       {backgroundLocation && (

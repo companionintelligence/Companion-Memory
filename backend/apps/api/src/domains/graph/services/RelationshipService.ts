@@ -390,7 +390,11 @@ export class RelationshipService {
     // #2703, where the same class of bug shipped without this safety net).
     const entity = await this.findById(context, updatedEntity.id);
 
-    await this.recordUpdate(before, updatedEntity);
+    // Against the re-read row, not `updatedEntity`: that still holds the DTO's
+    // values (a `Date` for a date column), the re-read holds what was stored.
+    if (entity) {
+      await this.recordUpdate(before, entity);
+    }
 
     return RelationshipEntity.toEgressType(entity!);
   }
@@ -400,8 +404,8 @@ export class RelationshipService {
    * what moved among its type, strength, dates and properties, with both ends so
    * both people's histories show it. Nothing when nothing moved.
    */
-  private async recordUpdate(before: RelationshipEntity, after: RelationshipEntity): Promise<void> {
-    const fields = (row: RelationshipEntity) => ({
+  private async recordUpdate(before: Relationship, after: Relationship): Promise<void> {
+    const fields = (row: Relationship) => ({
       relationship_type: row.type,
       strength: row.strength,
       is_bidirectional: row.isBidirectional,

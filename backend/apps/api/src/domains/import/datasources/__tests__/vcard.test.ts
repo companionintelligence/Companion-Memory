@@ -318,7 +318,7 @@ describe('birthDateFromBday', () => {
     expect(birthDateFromBday(bday)).toBe(expected);
   });
 
-  it.each(['--0315', '1985-02-30', 'March 15', ''])('refuses %s', (bday) => {
+  it.each(['--0315', '1985-02-30', '0000-03-15', 'March 15', ''])('refuses %s', (bday) => {
     expect(birthDateFromBday(bday)).toBe('');
   });
 

@@ -58,11 +58,19 @@ describe('splitLooseFiles', () => {
     return blob;
   }
 
+  // By name, not toEqual on the Files: toEqual finds any two File objects
+  // equal, so it would pass with the pack and the singles swapped.
+  function split(files: File[]): { pack: string[]; single: string[] } {
+    const { pack, single } = splitLooseFiles(files);
+
+    return { pack: pack.map((entry) => entry.name), single: single.map((entry) => entry.name) };
+  }
+
   it('packs two or more loose files that are not archives', () => {
     const photo = file('PXL_001.jpg');
     const video = file('VID_002.mp4');
 
-    expect(splitLooseFiles([photo, video])).toEqual({ pack: [photo, video], single: [] });
+    expect(split([photo, video])).toEqual({ pack: ['PXL_001.jpg', 'VID_002.mp4'], single: [] });
   });
 
   it('keeps every archive on its own, beside the packed rest', () => {
@@ -71,22 +79,44 @@ describe('splitLooseFiles', () => {
     const partTwo = file('takeout-002.tgz');
     const video = file('VID_002.mp4');
 
-    expect(splitLooseFiles([partOne, photo, partTwo, video])).toEqual({
-      pack: [photo, video],
-      single: [partOne, partTwo],
+    expect(split([partOne, photo, partTwo, video])).toEqual({
+      pack: ['PXL_001.jpg', 'VID_002.mp4'],
+      single: ['takeout-001.zip', 'takeout-002.tgz'],
+    });
+  });
+
+  it('packs only the first of two files with the same name, so unpacking cannot overwrite one', () => {
+    const first = file('IMG_0001.JPG');
+    const other = file('VID_002.mp4');
+    const sameName = file('img_0001.jpg');
+
+    expect(split([first, other, sameName])).toEqual({
+      pack: ['IMG_0001.JPG', 'VID_002.mp4'],
+      single: ['img_0001.jpg'],
     });
   });
 
   it('leaves a single loose file as it is', () => {
     const contacts = file('contacts.vcf');
 
-    expect(splitLooseFiles([contacts])).toEqual({ pack: [], single: [contacts] });
+    expect(split([contacts])).toEqual({ pack: [], single: ['contacts.vcf'] });
   });
 
-  it('uploads loose files one by one when together they are too big to pack', () => {
+  it('uploads loose files one by one when no two of them fit the budget together', () => {
     const big = sized('VID_big.mp4', PACK_LOOSE_FILES_MAX_BYTES);
     const small = sized('PXL_001.jpg', 1);
 
-    expect(splitLooseFiles([big, small])).toEqual({ pack: [], single: [big, small] });
+    expect(split([big, small])).toEqual({ pack: [], single: ['VID_big.mp4', 'PXL_001.jpg'] });
+  });
+
+  it('packs the photos and sends only the video that does not fit on its own', () => {
+    const photoOne = sized('PXL_001.jpg', 5 * 1024 ** 2);
+    const video = sized('VID_long.mp4', PACK_LOOSE_FILES_MAX_BYTES - 1024 ** 2);
+    const photoTwo = sized('PXL_002.jpg', 5 * 1024 ** 2);
+
+    expect(split([photoOne, video, photoTwo])).toEqual({
+      pack: ['PXL_001.jpg', 'PXL_002.jpg'],
+      single: ['VID_long.mp4'],
+    });
   });
 });

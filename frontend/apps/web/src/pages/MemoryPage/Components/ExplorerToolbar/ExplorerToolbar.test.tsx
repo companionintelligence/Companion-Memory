@@ -206,6 +206,9 @@ describe('ExplorerToolbar', () => {
         return `/?when=custom&from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(endOfDay.toISOString())}`;
       };
 
+      const labelFor = (start: Date, end: Date) =>
+        `${start.toLocaleDateString()} – ${end.toLocaleDateString()}`;
+
       it('shows the range in the Start / End date fields and applies a typed date as a whole local day', () => {
         renderToolbar(<MemoryExplorerFilterControls />, { route });
         fireEvent.click(screen.getByRole('button', { name: label }));
@@ -270,16 +273,29 @@ describe('ExplorerToolbar', () => {
         renderToolbar(<MemoryExplorerFilterControls />, {
           route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)),
         });
-        fireEvent.click(screen.getByRole('button', { name: /3\/1\/2025|1\/3\/2025/ }));
+        fireEvent.click(
+          screen.getByRole('button', { name: labelFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) }),
+        );
 
         const end = screen.getByLabelText('End date');
         const fromBefore = param('from');
+        const toBefore = param('to');
 
-        // What the field reports while 02152025 is typed over 03/08/2025 from its month part:
-        // every one is a complete date, and all of them fall before the start.
-        for (const value of ['2025-02-08', '2025-02-01', '2025-02-15', '2025-02-15']) {
+        // What the field reports while 02152025 is typed over 03/08/2025 from its month part.
+        // The day digits give complete dates, all before the start; the year digits pass
+        // through years under 1000 on the way back to 2025.
+        for (const value of [
+          '2025-02-08',
+          '2025-02-01',
+          '2025-02-15',
+          '0002-02-15',
+          '0020-02-15',
+          '0202-02-15',
+          '2025-02-15',
+        ]) {
           fireEvent.change(end, { target: { value } });
           expect(param('from')).toBe(fromBefore);
+          expect(param('to')).toBe(toBefore);
         }
 
         fireEvent.blur(end);
@@ -287,6 +303,53 @@ describe('ExplorerToolbar', () => {
         // Committed before the start, the end begins a new one-day range on the day typed.
         expect(param('from')).toBe(new Date(2025, 1, 15, 0, 0, 0, 0).toISOString());
         expect(param('to')).toBe(new Date(2025, 1, 15, 23, 59, 59, 999).toISOString());
+      });
+
+      it('applies a held end on Enter', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, {
+          route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)),
+        });
+        fireEvent.click(
+          screen.getByRole('button', { name: labelFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) }),
+        );
+
+        const end = screen.getByLabelText('End date');
+
+        fireEvent.change(end, { target: { value: '2025-02-15' } });
+        fireEvent.keyDown(end, { key: 'Enter' });
+
+        expect(param('from')).toBe(new Date(2025, 1, 15, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(new Date(2025, 1, 15, 23, 59, 59, 999).toISOString());
+      });
+
+      it('turns the calendar to a held date, and drops it when the popover is closed without committing', async () => {
+        const range = [new Date(2025, 2, 1), new Date(2025, 2, 8)] as const;
+
+        renderToolbar(<MemoryExplorerFilterControls />, { route: routeFor(...range) });
+        fireEvent.click(screen.getByRole('button', { name: labelFor(...range) }));
+        await screen.findByRole('combobox', { name: /year/i });
+
+        const end = screen.getByLabelText('End date');
+
+        fireEvent.change(end, { target: { value: '2024-11-20' } });
+        expect(screen.getByRole('combobox', { name: /year/i })).toHaveValue('2024');
+        expect(screen.getByRole('combobox', { name: /month/i })).toHaveValue('10');
+
+        // Escape closes the popover without a blur, so the held end is never applied.
+        fireEvent.keyDown(end, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByLabelText('End date')).not.toBeInTheDocument());
+
+        const trigger = screen.getByRole('button', { name: labelFor(...range) });
+
+        fireEvent.click(trigger);
+
+        // Reopened, the fields show the range in force, not the date that was dropped,
+        // and leaving the field does not bring that date back.
+        const reopenedEnd = screen.getByLabelText('End date');
+
+        expect(reopenedEnd).toHaveValue('2025-03-08');
+        fireEvent.blur(reopenedEnd);
+        expect(param('to')).toBe(new Date(2025, 2, 8, 23, 59, 59, 999).toISOString());
       });
 
       it('offers month and year dropdowns on the calendar and turns it to a typed date', async () => {

@@ -597,7 +597,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       .filter((d) => d != null)
       .forEach((d) => resultMap.set(makeCompositeKey('communication', d.id), d));
 
-    concepts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('concept', d.id), d));
+    // A forgotten (archived) person, place or concept can still have an index row
+    // written before the forget or by an update that raced it; it must not answer
+    // here either (EntityResolutionService drops them the same way).
+    concepts
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('concept', d.id), d));
     content.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('content', d.id), d));
     events.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('event', d.id), d));
     fileChunks
@@ -606,8 +611,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     files.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('file', d.id), d));
     items.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('item', d.id), d));
     notes.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('note', d.id), d));
-    people.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('person', d.id), d));
-    places.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
+    people
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('person', d.id), d));
+    places
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
     products.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('product', d.id), d));
     receipts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('receipt', d.id), d));
     tasks.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('task', d.id), d));

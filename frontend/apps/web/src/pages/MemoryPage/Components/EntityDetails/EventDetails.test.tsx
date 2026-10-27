@@ -39,6 +39,10 @@ function photoAtPlace() {
       __typename: 'PlaceType' as const,
       id: btoa('place:01a1777c-bcc9-7efb-acc7-179bc5264939'),
       name: 'The Embarcadero & Ferry Building',
+      // The typed pair is the place's location_point at full precision; the
+      // bag's `lat`/`lng` are the geocoder's 3-decimal snap cell.
+      latitude: 37.795412 as number | null,
+      longitude: -122.393781 as number | null,
       properties: {
         lat: 37.795,
         lng: -122.394,
@@ -51,23 +55,27 @@ function photoAtPlace() {
           version: 1,
           boundary_metres: 55.66,
         },
-      },
+      } as Record<string, unknown>,
     },
   };
 }
 
+function renderLocationCard(entity: ReturnType<typeof photoAtPlace>) {
+  renderWithProviders(
+    <EntityDrawerHostProvider value={host}>
+      <Sheet open>
+        <EventDetails entity={entity as never} />
+      </Sheet>
+    </EntityDrawerHostProvider>,
+  );
+
+  // Scoped to the Location card: the drawer's Raw data panel shows the whole record on purpose.
+  return within(screen.getByRole('heading', { name: 'Location' }).closest('section')!);
+}
+
 describe('EventDetails location', () => {
   it('names the place and its coordinates without the place record’s internal fields', () => {
-    renderWithProviders(
-      <EntityDrawerHostProvider value={host}>
-        <Sheet open>
-          <EventDetails entity={photoAtPlace() as never} />
-        </Sheet>
-      </EntityDrawerHostProvider>,
-    );
-
-    // Scoped to the Location card: the drawer's Raw data panel shows the whole record on purpose.
-    const location = within(screen.getByRole('heading', { name: 'Location' }).closest('section')!);
+    const location = renderLocationCard(photoAtPlace());
 
     expect(location.getByText('The Embarcadero & Ferry Building')).toBeInTheDocument();
     expect(location.getByText('37.795353, -122.393617')).toBeInTheDocument();
@@ -79,5 +87,48 @@ describe('EventDetails location', () => {
     expect(location.queryByText(/promote\.place/)).not.toBeInTheDocument();
     expect(location.queryByText('reverse_geocode')).not.toBeInTheDocument();
     expect(location.queryByText('ChIJibSPmmaAhYARm8omtXU9Go8')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the place’s full-precision point when the event has no point of its own', () => {
+    const location = renderLocationCard({ ...photoAtPlace(), mapCoordinates: null as never });
+
+    expect(location.getByText('The Embarcadero & Ferry Building')).toBeInTheDocument();
+    expect(location.getByText('37.795412, -122.393781')).toBeInTheDocument();
+    expect(location.queryByText('37.795000, -122.394000')).not.toBeInTheDocument();
+    expect(location.queryByText('Lat', { exact: true })).not.toBeInTheDocument();
+  });
+
+  it('shows a hand-made place’s coordinate, which lives only in its location_point', () => {
+    const event = photoAtPlace();
+    const location = renderLocationCard({
+      ...event,
+      mapCoordinates: null as never,
+      location: { ...event.location, properties: { address: '1 Ferry Building, San Francisco' } },
+    });
+
+    expect(location.getByText('1 Ferry Building, San Francisco')).toBeInTheDocument();
+    expect(location.getByText('37.795412, -122.393781')).toBeInTheDocument();
+  });
+
+  it('uses the bag’s `lat`/`lng` only when the place has no typed point', () => {
+    const event = photoAtPlace();
+    const location = renderLocationCard({
+      ...event,
+      mapCoordinates: null as never,
+      location: { ...event.location, latitude: null, longitude: null },
+    });
+
+    expect(location.getByText('37.795000, -122.394000')).toBeInTheDocument();
+  });
+
+  it('skips an address that is not a string instead of crashing the drawer', () => {
+    const event = photoAtPlace();
+    const location = renderLocationCard({
+      ...event,
+      location: { ...event.location, properties: { address: { street: '1 Ferry Building' } } },
+    });
+
+    expect(location.queryByText('Address', { exact: true })).not.toBeInTheDocument();
+    expect(location.getByText('37.795353, -122.393617')).toBeInTheDocument();
   });
 });

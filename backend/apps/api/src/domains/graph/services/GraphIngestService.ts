@@ -16,6 +16,7 @@ import {
   mergeIngestedProperties,
   stableJson,
   unionKeysFor,
+  USER_EDITED_KEYS,
   userEditedKeys,
   userEditedSql,
 } from '../utils/ingestedProperties';
@@ -722,12 +723,15 @@ export class GraphIngestService {
         continue;
       }
 
+      // The hand-set list is never taken from a source: the conflict merge
+      // skips it, and a brand-new row must not start with one either.
+      const { [USER_EDITED_KEYS]: _sourceList, ...sourced } = input.properties ?? {};
       const row = this.nodeRepository.create({
         entityId: uuidv7(),
         entityType: input.entityType,
         name: input.name ?? null,
         description: input.description ?? null,
-        properties: input.properties ?? {},
+        properties: sourced,
         linkedTable,
         linkedId,
         userId: ownerId,

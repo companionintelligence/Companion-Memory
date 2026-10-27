@@ -20,6 +20,10 @@ const PROVENANCE_LABELS: Readonly<Record<string, string>> = {
   'import:communications:participant': 'Message participants',
   // The catch-all importer: photos and documents added as plain files.
   'import:generic': 'Files you added',
+  // A file the ledger knows only by its bytes (source_system 'file', no
+  // platform): an upload from the app or a capture client. Without this it
+  // reads as the bare "File".
+  'import:file': 'Uploaded files',
 };
 
 /** Section order on the page: where things came from, then what we made of it. */

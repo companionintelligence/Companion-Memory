@@ -1385,6 +1385,13 @@ export class ImportRunService {
    *
    * The run is reopened alongside it — a finished run with a queued stage would
    * be a row that contradicts itself, and the rollup would never move again.
+   *
+   * In the SAME statement, so the two commit together. `ImportRetentionService`
+   * reads a `queued` stage in a finished run as a leftover nothing will reach,
+   * which is only true if no instant exists where this stage is already
+   * `queued` and the run is still closed. Two statements opened exactly that
+   * instant, and a discard or a sweep landing in it would take the run this
+   * retry is about to hand a worker.
    */
   async retryStage(ctx: UserServiceContext, runId: string, stageId: string): Promise<boolean> {
     const rows = await this.dataSource.query<Array<{ id: string; seq: number }>>(
@@ -1399,7 +1406,13 @@ export class ImportRunService {
               SELECT 1 FROM ci_import.import_runs r
                WHERE r.id = s.run_id AND r.user_id = $3::uuid
             )
-      RETURNING s.id, s.seq)
+      RETURNING s.id, s.seq, s.run_id),
+       reopened AS (
+         UPDATE ci_import.import_runs r
+            SET status = 'queued', error = NULL, finished_at = NULL
+           FROM requeued q
+          WHERE r.id = q.run_id
+      RETURNING r.id)
        SELECT id, seq FROM requeued`,
       [stageId, runId, ctx.userId],
     );
@@ -1407,13 +1420,6 @@ export class ImportRunService {
     if (rows.length === 0) {
       return false;
     }
-
-    await this.dataSource.query(
-      `UPDATE ci_import.import_runs
-          SET status = 'queued', error = NULL, finished_at = NULL
-        WHERE id = $1::uuid`,
-      [runId],
-    );
 
     await this.enqueueStage(ctx.userId, runId, { id: rows[0].id } as ImportStage);
 
@@ -2053,11 +2059,12 @@ export class ImportRunService {
    * which is every stage that failed before producing anything.
    *
    * The failure's `phase` also becomes the stage's own, so the row says where
-   * the stage stopped. Progress writes are throttled, so a phase change right
-   * after another one is dropped: an unpack that failed while extracting still
-   * read "acquiring", the phase written a moment before, next to an error that
-   * says `phase=extracting`. Without a failure, or one with no phase, the
-   * column is left as it was.
+   * the stage stopped and agrees with the `phase=` the error line carries. An
+   * unpack that failed while extracting used to read "acquiring" next to an
+   * error saying `phase=extracting`, because the listener's progress throttle
+   * had dropped the `extracting` write (it no longer drops phase changes). No
+   * failure, or one whose phase is missing or empty, leaves the column as it
+   * was.
    *
    * Fenced by `claimToken` when one is given (see {@link claimStage}). False
    * means the claim was taken back first: the failure belongs to an attempt
@@ -2077,7 +2084,7 @@ export class ImportRunService {
          UPDATE ci_import.import_stages
             SET status = 'failed', error = $2, finished_at = now(), updated_at = now(),
                 claim_token = NULL,
-                phase = COALESCE($3::jsonb->>'phase', phase),
+                phase = COALESCE(NULLIF($3::jsonb->>'phase', ''), phase),
                 detail = CASE
                   WHEN $3::jsonb IS NULL THEN detail
                   ELSE jsonb_set(

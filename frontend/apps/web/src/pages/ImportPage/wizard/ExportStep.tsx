@@ -36,9 +36,9 @@ interface UploadItem {
   readonly error?: string;
   /**
    * The File this row will upload — kept so a failed row can be retried
-   * without re-dropping. For a folder row this is the packed zip, so it is
-   * absent until packing succeeds (and a row whose PACKING failed cannot be
-   * retried from here; re-drop the folder).
+   * without re-dropping. For a packed row (a folder, or loose files packed
+   * together) this is the zip, so it is absent until packing succeeds (and a
+   * row whose PACKING failed cannot be retried from here; re-drop the files).
    */
   readonly file?: File;
   /** Free-text progress for non-byte phases, e.g. "packing 132 of 400 files". */
@@ -63,10 +63,11 @@ export interface ExportStepProps {
  *
  * The card is the authored export instructions with the upload INSIDE them —
  * the steps end at "upload it here", and here is where that is. An upload
- * starts an unpack+parse run immediately (one run per file: a drop is one
- * archive), so extraction happens while the person works through their other
- * services; the final Sync step only pushes. The live pipeline renders on the
- * card, and its parse counts are the "your drop landed" feedback.
+ * starts an unpack+parse run immediately (one run per archive uploaded; a
+ * folder, or a set of loose files, is packed into one first), so extraction
+ * happens while the person works through their other services; the final Sync
+ * step only pushes. The live pipeline renders on the card, and its parse counts
+ * are the "your drop landed" feedback.
  */
 export function ExportStep({
   entries,
@@ -192,12 +193,16 @@ export function ExportStep({
       }
 
       const { pack, single } = splitLooseFiles(batch.files);
+      // A slash in the card title ("Twitter / X") would reach the server as a
+      // path: the upload parser keeps only what follows the last one. The
+      // run's label read " X (3 files).zip".
+      const packTitle = shortTitle(guide.title).replace(/\s*[/\\]+\s*/g, ' - ');
 
       return [
         ...(pack.length > 0
           ? [
               {
-                name: `${shortTitle(guide.title)} (${pack.length} files).zip`,
+                name: `${packTitle} (${pack.length} files).zip`,
                 sizeBytes: pack.reduce((sum, file) => sum + file.size, 0),
                 pack,
                 file: undefined,

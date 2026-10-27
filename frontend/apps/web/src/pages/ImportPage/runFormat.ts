@@ -9,6 +9,8 @@
  * deliberately.
  */
 
+import { ARCHIVE_NAME } from './groupImportFiles';
+
 /**
  * Human label per stage kind, for the stage bar.
  *
@@ -195,7 +197,7 @@ export function humanizeUnit(unit: string | null | undefined): string | null {
     return null;
   }
 
-  const trimmed = unit.trim().replace(/\.(zip|tar|tgz|gz|7z|rar)$/i, '');
+  const trimmed = unit.trim().replace(ARCHIVE_NAME, '');
 
   if (trimmed.length === 0) {
     return null;

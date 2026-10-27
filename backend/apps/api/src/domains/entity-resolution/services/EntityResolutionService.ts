@@ -55,6 +55,19 @@ export type ResolvedEntity =
   | { type: 'task'; id: string; entity: Task }
   | { type: 'thread'; id: string; entity: Thread };
 
+/**
+ * Drops the people, places and concepts the user asked Memory to forget.
+ * `memory.forget` in archive mode sets their `ci.entities.is_active` false and
+ * un-indexes them, and a merge tombstone is inactive too, but an index row
+ * written before that, or by an update that raced it, must not bring them back.
+ * Every search consumer hydrates here: the `search` query (the header box, the
+ * explorer, saved searches, the Add relationship picker and the note `[[`
+ * menu), chat recall, forage and the activity timeline's counts.
+ */
+function withoutArchived<T extends { isActive?: boolean | null }>(rows: (T | null)[]): (T | null)[] {
+  return rows.map((row) => (row?.isActive === false ? null : row));
+}
+
 @Injectable()
 export class EntityResolutionService {
   constructor(
@@ -137,14 +150,14 @@ export class EntityResolutionService {
     this.addToMap(map, 'answer', answers);
     this.addToMap(map, 'browser-activity', browserActivities);
     this.addToMap(map, 'communication', communications);
-    this.addToMap(map, 'concept', concepts);
+    this.addToMap(map, 'concept', withoutArchived(concepts));
     this.addToMap(map, 'content', contents);
     this.addToMap(map, 'event', events);
     this.addToMap(map, 'file', files);
     this.addToMap(map, 'item', items);
     this.addToMap(map, 'note', notes);
-    this.addToMap(map, 'person', people);
-    this.addToMap(map, 'place', places);
+    this.addToMap(map, 'person', withoutArchived(people));
+    this.addToMap(map, 'place', withoutArchived(places));
     this.addToMap(map, 'product', products);
     this.addToMap(map, 'receipt', receipts);
     this.addToMap(map, 'task', tasks);

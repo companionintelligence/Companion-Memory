@@ -149,19 +149,25 @@ describeWithDb(`PlaceService place appearance against Postgres (${availability.t
     //  - Only a cancelled meeting inside it. The user did go, but outside it.
     //  - A deleted import early in it, then a visit. Dated from the visit.
     //  - Only a visit, the control.
+    //  - A visit, but the user asked Memory to forget the place (memory.forget in
+    //    archive mode sets is_active false).
     const calledOff = await seedPlace('History: called off in the window');
     const deletedFirst = await seedPlace('History: deleted, then visited');
     const visited = await seedPlace('History: visited');
+    const forgotten = await seedPlace('History: visited, then forgotten');
 
     await seedLinkedEvent(calledOff, 'Went, before', day(50));
     await seedLinkedEvent(calledOff, 'Called off', day(120), { ...HAPPENED, status: 'cancelled' });
     await seedLinkedEvent(deletedFirst, 'Deleted import', day(110), { ...HAPPENED, isDeleted: true });
     await seedLinkedEvent(deletedFirst, 'Went', day(130));
     await seedLinkedEvent(visited, 'Went', day(150));
+    await seedLinkedEvent(forgotten, 'Went', day(160));
+    await query('UPDATE ci.entities SET is_active = FALSE WHERE entity_id = $1', [forgotten]);
 
     history.set('calledOff', calledOff);
     history.set('deletedFirst', deletedFirst);
     history.set('visited', visited);
+    history.set('forgotten', forgotten);
   });
 
   afterAll(async () => {
@@ -221,6 +227,10 @@ describeWithDb(`PlaceService place appearance against Postgres (${availability.t
 
     it('still appears, dated from its first visit, when it was visited', async () => {
       expect((await browse(HISTORY_WINDOW)).get(history.get('visited')!)).toBe(day(150));
+    });
+
+    it('does not appear once the user asked Memory to forget it, though it was visited in the window', async () => {
+      expect((await browse(HISTORY_WINDOW)).has(history.get('forgotten')!)).toBe(false);
     });
 
     it('counts exactly the places that appear', async () => {

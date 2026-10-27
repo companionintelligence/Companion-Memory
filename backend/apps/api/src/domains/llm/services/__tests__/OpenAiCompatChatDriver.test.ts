@@ -235,6 +235,17 @@ place
 
 const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 
+const apiError = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+function driverWith(create: jest.Mock) {
+  const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+  (
+    driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
+  ).client.chat.completions.create = create;
+
+  return driver;
+}
+
 describe('toResponseFormat', () => {
   it("maps Ollama's format onto the OpenAI response_format", () => {
     expect(toResponseFormat(undefined)).toBeUndefined();
@@ -251,8 +262,6 @@ describe('toResponseFormat', () => {
 });
 
 describe('isResponseFormatRejection', () => {
-  const apiError = (status: number, message: string) => Object.assign(new Error(message), { status });
-
   it('recognises a 4xx that blames the response format', () => {
     expect(isResponseFormatRejection(apiError(400, '400 response_format json_schema is not supported'))).toBe(
       true,
@@ -270,15 +279,6 @@ describe('isResponseFormatRejection', () => {
 });
 
 describe('OpenAiCompatChatDriver.chat with a JSON Schema format', () => {
-  function driverWith(create: jest.Mock) {
-    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
-    (
-      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
-    ).client.chat.completions.create = create;
-
-    return driver;
-  }
-
   const reply = { choices: [{ message: { role: 'assistant', content: '{"ok":true}' } }] };
   const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }], format: SCHEMA };
 
@@ -410,15 +410,6 @@ describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
 });
 
 describe('OpenAiCompatChatDriver.chat usage and deadline', () => {
-  function driverWith(create: jest.Mock) {
-    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
-    (
-      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
-    ).client.chat.completions.create = create;
-
-    return driver;
-  }
-
   const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
 
   it('reports the token counts the backend returned', async () => {
@@ -599,25 +590,14 @@ describe('tool markup salvage is limited to markup that opens or closes the repl
  */
 describe('turning thinking off on every OpenAI-compatible backend', () => {
   const vllmRefusal = () =>
-    Object.assign(
-      new Error(
-        "400 1 validation error for ChatCompletionRequest\nreasoning_effort\n  Input should be 'low', 'medium' or 'high'",
-      ),
-      { status: 400 },
+    apiError(
+      400,
+      "400 1 validation error for ChatCompletionRequest\nreasoning_effort\n  Input should be 'low', 'medium' or 'high'",
     );
-
-  function driverWith(create: jest.Mock) {
-    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
-    (
-      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
-    ).client.chat.completions.create = create;
-
-    return driver;
-  }
 
   const reply = { choices: [{ message: { role: 'assistant', content: '{"ok":true}' } }] };
   const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
-  const emptyStream = () => ({
+  const okStream = () => ({
     async *[Symbol.asyncIterator]() {
       yield { choices: [{ delta: { content: 'ok' } }] };
     },
@@ -636,19 +616,11 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     expect(thinkingBody(false, true)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   });
 
-  it('recognises a backend refusing the field, and nothing else', () => {
+  it('recognises a backend refusing the field and nothing else', () => {
     expect(isReasoningEffortRejection(vllmRefusal())).toBe(true);
-    expect(
-      isReasoningEffortRejection(
-        Object.assign(new Error("400 invalid reasoning value: 'none'"), { status: 400 }),
-      ),
-    ).toBe(true);
-    expect(
-      isReasoningEffortRejection(Object.assign(new Error('400 json_schema not supported'), { status: 400 })),
-    ).toBe(false);
-    expect(
-      isReasoningEffortRejection(Object.assign(new Error('500 reasoning_effort crashed'), { status: 500 })),
-    ).toBe(false);
+    expect(isReasoningEffortRejection(apiError(400, "400 invalid reasoning value: 'none'"))).toBe(true);
+    expect(isReasoningEffortRejection(apiError(400, '400 json_schema not supported'))).toBe(false);
+    expect(isReasoningEffortRejection(apiError(500, '500 reasoning_effort crashed'))).toBe(false);
     expect(isReasoningEffortRejection(new Error('fetch failed'))).toBe(false);
   });
 
@@ -678,14 +650,13 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
   });
 
   it('chat() still falls back from json_schema on a backend that refuses both', async () => {
-    const SCHEMA_ONLY = { type: 'object', properties: { ok: { type: 'boolean' } } };
     const create = jest
       .fn()
       .mockRejectedValueOnce(vllmRefusal())
-      .mockRejectedValueOnce(Object.assign(new Error('400 json_schema not supported'), { status: 400 }))
+      .mockRejectedValueOnce(apiError(400, '400 json_schema not supported'))
       .mockResolvedValue(reply);
 
-    await driverWith(create).chat({ ...request, format: SCHEMA_ONLY });
+    await driverWith(create).chat({ ...request, format: SCHEMA });
 
     expect(
       create.mock.calls.map(([body]) => [body.response_format.type, 'reasoning_effort' in body]),
@@ -705,11 +676,11 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('chatStream() sends it, and retries once without it on a refusal', async () => {
+  it('chatStream() sends it and retries once without it on a refusal', async () => {
     const create = jest
       .fn()
       .mockRejectedValueOnce(vllmRefusal())
-      .mockImplementation(async () => emptyStream());
+      .mockImplementation(async () => okStream());
     const driver = driverWith(create);
 
     const drain = async () => {
@@ -726,5 +697,72 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     await drain();
 
     expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, false]);
+  });
+
+  it('retries every call that was in flight when the backend first refused it', async () => {
+    // Both requests leave before either refusal comes back, as two background jobs do on a
+    // two-slot queue right after the driver is created.
+    const create = jest.fn(async (body: Record<string, unknown>) => {
+      await new Promise((resolve) => setImmediate(resolve));
+
+      if ('reasoning_effort' in body) {
+        throw vllmRefusal();
+      }
+
+      return body.stream === true ? okStream() : reply;
+    });
+    const driver = driverWith(create);
+    const drain = async () => {
+      const chunks: unknown[] = [];
+
+      for await (const chunk of driver.chatStream(request)) {
+        chunks.push(chunk);
+      }
+
+      return chunks;
+    };
+
+    await expect(Promise.all([driver.chat(request), driver.chat(request), drain()])).resolves.toHaveLength(3);
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('sends the field again once a refusal is five minutes old', async () => {
+    jest.useFakeTimers();
+
+    try {
+      let refuse = true;
+      const create = jest.fn(async (body: Record<string, unknown>) => {
+        if (refuse && 'reasoning_effort' in body) {
+          throw apiError(400, "Invalid value for 'reasoning_effort'");
+        }
+
+        return { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] };
+      });
+      const driver = driverWith(create);
+
+      await driver.chat(request);
+      jest.advanceTimersByTime(4 * 60_000);
+      await driver.chat(request);
+      // The engine behind the URL changed, or the pool sent this one to another peer.
+      refuse = false;
+      jest.advanceTimersByTime(60_000 + 1);
+      await driver.chat(request);
+
+      expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
+        true,
+        false,
+        false,
+        true,
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

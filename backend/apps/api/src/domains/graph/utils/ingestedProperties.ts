@@ -77,14 +77,22 @@ export function userEditedKeys(properties: Record<string, unknown> | null | unde
 }
 
 /**
+ * The bag `properties`' {@link USER_EDITED_KEYS} list as a SQL jsonb array. A
+ * missing or non-array list reads as `[]`.
+ */
+export function userEditedListSql(properties: string): string {
+  return (
+    `(CASE WHEN jsonb_typeof(${properties} -> '${USER_EDITED_KEYS}') = 'array' ` +
+    `THEN ${properties} -> '${USER_EDITED_KEYS}' ELSE '[]'::jsonb END)`
+  );
+}
+
+/**
  * {@link USER_EDITED_KEYS} as SQL: true when the bag `properties` lists `key`.
  * A missing or non-array list holds nothing.
  */
 export function userEditedSql(properties: string, key: string): string {
-  return (
-    `((CASE WHEN jsonb_typeof(${properties} -> '${USER_EDITED_KEYS}') = 'array' ` +
-    `THEN ${properties} -> '${USER_EDITED_KEYS}' ELSE '[]'::jsonb END) @> jsonb_build_array(${key}))`
-  );
+  return `(${userEditedListSql(properties)} @> jsonb_build_array(${key}))`;
 }
 
 /**

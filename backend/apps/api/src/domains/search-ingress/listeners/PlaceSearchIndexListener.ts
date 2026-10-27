@@ -85,6 +85,20 @@ export class PlaceSearchIndexListener {
       return;
     }
 
+    // A place the user asked Memory to forget (memory.forget in archive mode sets
+    // is_active false and un-indexes it) must stay out of the index, and so must a
+    // merge tombstone, which is inactive too. Any later write to the row sends
+    // PlaceUpdatedEvent, and indexing it then put the forgotten place back in
+    // search.
+    if (place.isActive === false) {
+      this.logger.log('Place is archived, removing from search index', { placeId: place.id });
+
+      await this.embeddingService.remove(context, { entityType: 'place', entityId: place.id });
+      await this.vectorService.remove(context, { entityType: 'place', entityId: place.id });
+
+      return;
+    }
+
     if (place.user?.id == null) {
       this.logger.warn('Place has no associated user, cannot index');
 

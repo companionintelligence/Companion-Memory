@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { resolveListTypes } from '@/api/powersync/localList';
+
 import { localListOptionsFromParams } from './localListParams';
 
 const params = (query: string) => new URLSearchParams(query);
@@ -50,6 +52,21 @@ describe('localListOptionsFromParams', () => {
     );
 
     expect(none.nothingLeft).toBe(true);
+  });
+
+  it('a When filter with no What selection leaves the device kinds dated only by their row out', () => {
+    const range = 'from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z';
+    const { query } = localListOptionsFromParams(params(`view=list&${range}`), '/memory');
+
+    // In the device's own names: an excerpt is `file-chunk`, not `filechunk`,
+    // and a name the device does not know would be ignored without a sound.
+    expect(query.excludeTypes).toEqual(expect.arrayContaining(['thread', 'file-chunk', 'task']));
+    expect(resolveListTypes(query.includeTypes, query.excludeTypes)).toEqual([
+      'browser-activity',
+      'communication',
+      'event',
+      'receipt',
+    ]);
   });
 
   it('relevance when there is no time sort, newest for Newest', () => {

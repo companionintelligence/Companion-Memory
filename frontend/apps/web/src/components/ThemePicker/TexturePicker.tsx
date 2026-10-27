@@ -17,6 +17,11 @@ const TEXTURE_OPACITY_MIN = 0;
 const TEXTURE_OPACITY_MAX = 0.8;
 const TEXTURE_OPACITY_STEP = 0.05;
 
+type Palette = typeof DEFAULT_TEXTURE_PALETTE;
+
+const samePalette = (a: Palette, b: Palette) =>
+  a.background === b.background && a.accent === b.accent && a.contrast === b.contrast && a.muted === b.muted;
+
 export function TexturePicker() {
   const { t } = useTranslation();
   const { themeState } = useTheme();
@@ -25,10 +30,13 @@ export function TexturePicker() {
   // Read in an effect, after ThemeProvider's layout effect has swapped the
   // root variables. Reading during render (it used to be a useMemo) picked up
   // the theme being left, so the tiles showed light swatches on a dark page.
+  // The mount run usually reads what the initial render already read; keeping
+  // the old object then saves rebuilding every preview (and reseeding Conway's).
   const [texturePalette, setTexturePalette] = useState(() => readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE);
   useEffect(() => {
-    setTexturePalette(readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE);
-  }, [themeState.mode, themeState.colorTheme, themeState.colorOverrides]);
+    const next = readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE;
+    setTexturePalette((prev) => (samePalette(prev, next) ? prev : next));
+  }, [themeState]);
   const textureOpacity = backgroundState.textureOpacity;
 
   const texturePreviews = useMemo<Record<string, CSSProperties>>(() => {

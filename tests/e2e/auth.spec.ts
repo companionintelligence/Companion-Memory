@@ -34,6 +34,18 @@ test('logs in with the seeded user and lands in the app', async ({ page }) => {
   await expect(page).toHaveURL(/\/(plan|calendar|onboarding)/);
 });
 
+test('the splash theme button takes a mouse click', async ({ page }) => {
+  await page.goto('/');
+
+  // jsdom has no layout, so only a real browser sees what is under the pointer.
+  // Playwright's click waits until the button itself is the hit target: while the
+  // splash content layer covered it (#3133), this timed out with that layer
+  // reported as intercepting pointer events. A fresh context starts on `system`.
+  await page.getByRole('button', { name: 'Switch to light mode' }).click();
+
+  await expect(page.getByRole('button', { name: 'Switch to dark mode' })).toBeVisible();
+});
+
 test('redirects to /login when visiting a protected route logged-out', async ({ page }) => {
   await page.goto('/memory/events');
 

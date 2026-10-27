@@ -93,7 +93,8 @@ const START_OF_DAY_TIME = '00:00';
 const END_OF_DAY_TIME = '23:59';
 
 function localDateInputValue(date: Date): string {
-  const year = date.getFullYear();
+  // Four digits, as a date field writes it, so these compare as strings.
+  const year = String(date.getFullYear()).padStart(4, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
 
@@ -959,6 +960,13 @@ export function DateControl({
     applyTime(part, nextValue);
   };
 
+  // A start typed past the applied end, or an end typed before the applied start.
+  const crossesOtherEnd = (part: 'from' | 'to', value: string) => {
+    const other = part === 'from' ? toDateValue : fromDateValue;
+
+    return Boolean(value && other) && (part === 'from' ? value > other : value < other);
+  };
+
   // One end of the range, typed. `value` is a complete yyyy-mm-dd, or '' to
   // leave that end open.
   const applyDate = (part: 'from' | 'to', value: string) => {
@@ -968,11 +976,11 @@ export function DateControl({
     // A start typed past the end (or an end before the start) is a new range
     // beginning there, not an empty one: the other end comes along to the same
     // day and can then be typed in turn.
-    if (nextFromDate && nextToDate && nextFromDate > nextToDate) {
+    if (crossesOtherEnd(part, value)) {
       if (part === 'from') {
-        nextToDate = nextFromDate;
+        nextToDate = value;
       } else {
-        nextFromDate = nextToDate;
+        nextFromDate = value;
       }
     }
 
@@ -1003,10 +1011,11 @@ export function DateControl({
     // 02/15 over an end of 03/08 passes through 02/08 and 02/01 on the way.
     // Applied as they come, the ones before the start dragged the start along
     // (see applyDate) and left it on a day nobody typed. A date that crosses
-    // the other end waits for the field to be committed (blur or Enter).
-    const other = part === 'from' ? toDateValue : fromDateValue;
+    // the other end waits for the field to be committed (blur or Enter). The
+    // grid still turns to it, as it does for any typed date.
+    if (crossesOtherEnd(part, value)) {
+      setCalendarMonth(localDateFromInputValue(value));
 
-    if (other && (part === 'from' ? value > other : value < other)) {
       return;
     }
 
@@ -1083,6 +1092,10 @@ export function DateControl({
             whenPreset === 'custom' || (!isRollingDatePreset(whenPreset) && Boolean(dateFrom || dateTo)),
           );
           setCalendarMonth(calendarMonthFor(dateFrom, dateTo));
+          // A date held back from the last visit (one that crossed the other
+          // end, then Escape) was never applied; show the range in force.
+          setDraftFromDate(fromDateValue);
+          setDraftToDate(toDateValue);
         }
       }}
     >
