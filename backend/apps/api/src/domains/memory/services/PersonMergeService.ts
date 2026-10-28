@@ -5,8 +5,8 @@ import { EntityManager, Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
+import { USER_EDITED_KEYS, userEditedKeys } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
-import { USER_EDITED_KEYS, userEditedKeys } from '@ci/domains/graph/utils/ingestedProperties';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';

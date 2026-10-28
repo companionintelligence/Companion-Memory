@@ -17,8 +17,8 @@ import {
   isUnionType,
 } from 'graphql';
 
+import { formatError } from '@ci/common/graphql/formatError';
 import { LoggerService } from '@ci/common/logging';
-import { formatError } from '@ci/domains/graphql/formatError';
 
 import type { McpToolDefinition } from '../types';
 

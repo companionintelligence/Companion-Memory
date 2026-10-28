@@ -5,7 +5,7 @@
  * ends the account and hands its rows to the account purge (`domains/user/purge`),
  * which reads the tables that hold an account's data from the catalog on every run.
  * The list that used to be here duplicated that discovery and had to be kept in step
- * with it by a test. `__tests__/dataDeletionPlan.integration.spec.ts` now checks the
+ * with it by a test. `integration-tests/dataDeletionPlan.integration.spec.ts` now checks the
  * purge itself against every column that names an account.
  */
 

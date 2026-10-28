@@ -148,6 +148,7 @@ jobs:
       # `DATABASE_URL` left them on `describe.skip` with jest still exiting 0 —
       # the green-but-tested-nothing outcome this job exists to end. AUTH_ was
       # missing from this list altogether until it was added with that change.
+      AGENT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       AUTH_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -156,8 +157,10 @@ jobs:
       EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       GEOCODE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      MAINTENANCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      ONBOARDING_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PEERS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PERSISTENCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PERSONALIZATION_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -344,7 +347,10 @@ jobs:
 
       - name: Run backend API tests
         timeout-minutes: 60
-        run: yarn workspace @ci/be-api test --coverage
+        # DB-backed integration specs share this disposable database. Keep
+        # suites serial so TimescaleDB chunk creation cannot deadlock with a
+        # parallel suite deleting its test user.
+        run: yarn workspace @ci/be-api test --coverage --maxWorkers=1
 
       # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.
       # PR #2632 moved the CLI out of `domains/import/cli` into its own

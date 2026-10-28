@@ -5,19 +5,16 @@ import { DataSource } from 'typeorm';
 import { SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { SavedSearchEntity } from '@ci/domains/files/entities/SavedSearchEntity';
-import { SavedSearchService } from '@ci/domains/files/services/SavedSearchService';
-import { PeerLinkEntity } from '@ci/domains/peers/entities/PeerLinkEntity';
-import { PeerLinkService } from '@ci/domains/peers/services/PeerLinkService';
+import { SavedSearchEntity, SavedSearchService } from '@ci/domains/files';
+import { PeerLinkEntity, PeerLinkService } from '@ci/domains/peers';
+import { DataDeletionAuditEntity, DataDeletionService } from '@ci/domains/privacy';
 import { AccountPurgeService, LastAdminDeletionRefused, UserEntity, UserService } from '@ci/domains/user';
 
 import {
   resolveAdminConnection,
   ScratchDatabase,
   scratchDatabaseAvailability,
-} from '../../../__tests__/support/scratchDatabase';
-import { DataDeletionAuditEntity } from '../../entities/DataDeletionAuditEntity';
-import { DataDeletionService } from '../DataDeletionService';
+} from '../domains/__tests__/support/scratchDatabase';
 
 /**
  * `POST /users/me/delete`, against the real schema: every migration, in a

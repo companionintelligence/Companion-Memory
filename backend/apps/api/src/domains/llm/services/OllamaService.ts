@@ -17,8 +17,8 @@ import {
   guardToolResultRound,
   unguardToolResult,
 } from '@ci/common/prompt/untrustedBlock';
+import { stableJson } from '@ci/common/stableJson';
 import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
-import { stableJson } from '@ci/domains/graph/utils/ingestedProperties';
 import { ModelTierRouter, TIER_PROFILES, type RoutingDecision } from '@ci/domains/model-routing';
 import {
   ToolRegistry,
