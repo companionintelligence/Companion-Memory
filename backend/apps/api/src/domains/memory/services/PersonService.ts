@@ -6,12 +6,8 @@ import { v7 as uuid7 } from 'uuid';
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { chunkedConflictInsert, keysetSeek } from '@ci/common/persistence';
+import { USER_EDITED_KEYS, userEditedKeys, userEditedListSql } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
-import {
-  USER_EDITED_KEYS,
-  userEditedKeys,
-  userEditedListSql,
-} from '@ci/domains/graph/utils/ingestedProperties';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 

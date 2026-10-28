@@ -304,12 +304,12 @@ production.
   test that can say "the data is gone", and it is what caught the audit-record bug.
   Skips (loudly) without an administrative database connection; set
   `DATABASE_ADMIN_PASSWORD`.
-- `privacy/services/__tests__/DataDeletionService.integration.spec.ts` — the
+- `integration-tests/DataDeletionService.integration.spec.ts` — the
   immediate delete on the real schema: all-or-nothing account end (successor
   included), an interrupted purge finished by the hourly run, a sign-up during a
   purge, a row written for the account mid-purge, and the failure path on a pool of
   two.
-- `privacy/__tests__/dataDeletionPlan.integration.spec.ts` — every column that can
+- `integration-tests/dataDeletionPlan.integration.spec.ts` — every column that can
   name an account (by foreign key under any name, or by name in uuid, uuid[] or
   text) must be one the purge deletes by, one it nulls, or listed with the reason it
   stays. It adds such columns to the schema to prove it notices them. Every table,

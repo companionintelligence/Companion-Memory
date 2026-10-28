@@ -1,9 +1,9 @@
 import { LoggerService } from '@ci/common/logging';
+import { CONNECTION_SCOPED_TABLES } from '@ci/domains/privacy/dataDeletionPlan';
 import { AccountPurgeService, buildPurgePlan, type PurgePlan } from '@ci/domains/user';
 import { readFkEdges, readUserRefColumns } from '@ci/domains/user/purge/purgeCatalog';
 
-import { ScratchDatabase, scratchDatabaseAvailability } from '../../__tests__/support/scratchDatabase';
-import { CONNECTION_SCOPED_TABLES } from '../dataDeletionPlan';
+import { ScratchDatabase, scratchDatabaseAvailability } from '../domains/__tests__/support/scratchDatabase';
 
 /**
  * What an account delete leaves behind, checked against a migrated database.

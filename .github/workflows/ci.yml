@@ -88,15 +88,16 @@ jobs:
     # Raised from 15 when the Postgres service below landed: the job now also
     # pays for a client install, the role/extension bootstrap and ~300
     # migrations, and the suite itself grew by the 57 DB-backed files that used
-    # to skip. That prefix is measured, not guessed — 1m53s on run
+    # to skip. The suite now runs the 22 scratch-database suites too. That
+    # prefix is measured, not guessed — 1m53s on run
     # 34409425373 (container init 53s, checkout 6s, corepack 1s, cache restore
     # 21s, install 16s, bootstrap + migrations the rest).
     #
-    # Raised again to 80 with the test step's own ceiling: the four step
-    # ceilings below now sum to 73, and this number has to stay above their sum
-    # PLUS that prefix or the invariant the paragraph above describes is a
-    # fiction. 73 + 2 = 75, so 80 keeps five minutes of slack.
-    timeout-minutes: 80
+    # The API test step now has a 120-minute ceiling to accommodate those
+    # scratch suites replaying migrations into their own databases. The four
+    # step ceilings below sum to 133; plus the measured 2-minute prefix is 135,
+    # so 140 keeps five minutes of slack.
+    timeout-minutes: 140
     container:
       image: node:22
     services:
@@ -132,6 +133,9 @@ jobs:
       # `DATABASE_URL` is what `bin/dbmate.js` reads, so the migrations and the
       # suites cannot disagree about which database this is.
       DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      DATABASE_ADMIN_USERNAME: postgres
+      DATABASE_ADMIN_PASSWORD: ci_test_admin_pw
+      CI_REQUIRE_DB: '1'
       PGPASSWORD: ci_test_admin_pw
       # Every per-suite `<DOMAIN>_TEST_DATABASE_URL` a suite reads is enumerated
       # below. Every DB-backed suite resolves its connection through
@@ -148,6 +152,7 @@ jobs:
       # `DATABASE_URL` left them on `describe.skip` with jest still exiting 0 —
       # the green-but-tested-nothing outcome this job exists to end. AUTH_ was
       # missing from this list altogether until it was added with that change.
+      AGENT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       AUTH_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -156,8 +161,10 @@ jobs:
       EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       GEOCODE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      MAINTENANCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      ONBOARDING_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PEERS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PERSISTENCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PERSONALIZATION_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -168,18 +175,10 @@ jobs:
       SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       USER_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
-      # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
-      # oversight to "fix" by adding it. Further suites gate on
-      # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
-      # — `git grep -l 'scratchDatabaseAvailability()' -- '*.spec.ts'` lists
-      # them; the count and list once kept here went stale — and each
-      # one CREATEs a database of its own and replays every migration into it —
-      # roughly another two minutes apiece on top of the run below, against a
-      # 20-minute step ceiling. THEY STILL SKIP IN THIS JOB. That is visible,
-      # not disguised: each prints `SKIPPED — no administrative database
-      # connection configured …` naming this variable. Turning them on is a
-      # separate cost decision (and needs the step timeout revisited), not a
-      # side effect of this one.
+      # The admin credential above is only for this throwaway Postgres service.
+      # It lets every `scratchDatabaseAvailability()` suite create its own
+      # uniquely named database and replay migrations there. CI_REQUIRE_DB
+      # makes a missing or unreachable database fail instead of quietly skip.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -343,8 +342,12 @@ jobs:
         run: yarn workspace @ci/tool-core test
 
       - name: Run backend API tests
-        timeout-minutes: 60
-        run: yarn workspace @ci/be-api test --coverage
+        timeout-minutes: 120
+        # DB-backed integration specs share this disposable database. Keep
+        # suites serial so TimescaleDB chunk creation cannot deadlock with a
+        # parallel suite deleting its test user. Scratch suites create separate
+        # disposable databases on the same service and are covered here too.
+        run: yarn workspace @ci/be-api test --coverage --maxWorkers=1
 
       # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.
       # PR #2632 moved the CLI out of `domains/import/cli` into its own
