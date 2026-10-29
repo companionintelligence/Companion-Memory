@@ -60,6 +60,7 @@ export {
   useOptionalConnectionMode,
   getLatestConnectionMode,
   isConnectionModeResolved,
+  memoryAnswers,
   requestConnectionRefresh,
   registerCachedDataProbe,
 } from './src/utils/connectionMode';

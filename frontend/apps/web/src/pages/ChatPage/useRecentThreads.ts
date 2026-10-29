@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { fetchJson, GlobalUID } from '@ci/common';
 
 import { useSessionAuth } from '@/hooks/useSessionAuth';
 import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
@@ -29,20 +29,55 @@ export function threadInstant(iso: string | undefined): Date | null {
 }
 
 /**
+ * When a UUIDv7 was minted, or null for any other id. Its first 48 bits are the Unix time in
+ * milliseconds.
+ *
+ * Every thread id is one: the server mints them (`ThreadService.create`) and so does Chat, which
+ * names a new thread before it sends the first message. That is what lets a list that has no
+ * `createdAt` for a thread (the explorer's search results, the device's records) still name it for
+ * when it started.
+ */
+export function uuidV7Time(id: string): Date | null {
+  const hex = id.replace(/-/g, '');
+
+  if (!/^[0-9a-f]{32}$/i.test(hex) || hex[12] !== '7') {
+    return null;
+  }
+
+  return new Date(Number.parseInt(hex.slice(0, 12), 16));
+}
+
+/**
+ * The raw thread uuid behind a GraphQL global id (`base64("thread:<uuid>")`), or the id as it
+ * came when it is not one.
+ */
+export function threadIdOf(globalId: string): string {
+  try {
+    const { type, id } = GlobalUID.decode(globalId);
+
+    return type === 'thread' ? id : globalId;
+  } catch {
+    return globalId;
+  }
+}
+
+/**
  * What to call a thread.
  *
- * Shared so the drawer submenu, the desktop sidebar and the phone's chat list
- * cannot drift into different names for the same conversation.
+ * Shared so the drawer submenu, the desktop sidebar, the phone's chat list and the explorer cannot
+ * drift into different names for the same conversation. The explorer used to call an untitled one
+ * "Untitled chat" in its list and "Thread" in its drawer while Chat called it "Chat · Oct 27, 3:43
+ * PM".
  *
  * A thread's title is written by a background job after the first reply and can
  * arrive late, so an untitled thread is the normal state for a while. Its id
  * says nothing — chats started within about a minute of each other share the
  * same first eight characters, because a UUIDv7 opens with a timestamp — so it
- * is named for when it started, which at least tells two of them apart. The id
- * remains the last resort.
+ * is named for when it started, which at least tells two of them apart. Without
+ * a `createdAt` that time is read from the id. The id remains the last resort.
  */
 export function threadLabel(
-  thread: Pick<Thread, 'id' | 'name' | 'createdAt'>,
+  thread: { id: string; name?: string | null; createdAt?: string | null },
   fmt: DateTimeFormatter = DEVICE_DATE_TIME_FORMATTER,
 ): string {
   const name = thread.name?.trim();
@@ -51,7 +86,7 @@ export function threadLabel(
     return name;
   }
 
-  const started = threadInstant(thread.createdAt);
+  const started = threadInstant(thread.createdAt ?? undefined) ?? uuidV7Time(thread.id);
 
   if (started) {
     return `Chat · ${fmt.dateTime(started, THREAD_TIME)}`;

@@ -614,13 +614,17 @@ describeWithDb(
       expect(storage.deleteObjects).not.toHaveBeenCalled();
     });
 
-    it('does not touch the file in archive mode, which only deactivates the message’s node', async () => {
+    it('does not touch the file when it refuses to archive the message', async () => {
       const photo = await seedPhoto('Trip photo');
       const text = await seedMessage(attachmentsOf(photo.fileId));
 
       const result = await forget([text], 'archive');
 
-      expect(result.success).toBe(true);
+      expect(result.error?.code).toBe('ARCHIVE_REFUSED');
+      // Not even its graph node was touched.
+      expect(
+        await dataSource.query('SELECT is_active FROM ci.entities WHERE entity_id = $1', [text]),
+      ).toEqual([{ is_active: true }]);
       expect(await remains(photo)).toEqual(WHOLE);
       expect(storage.deleteObjects).not.toHaveBeenCalled();
       expect(publishedOf(FileRemovedEvent)).toEqual([]);

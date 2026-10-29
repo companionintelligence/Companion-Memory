@@ -216,7 +216,7 @@ export function LocalRecordPage() {
   const document = loaded.state === 'ready' ? loaded.document : null;
   // Before the early returns below: a hook.
   const previewUrl = usePreviewUrl(document);
-  const lines = document ? localDocumentLines(document) : null;
+  const lines = document ? localDocumentLines(document, fmt) : null;
 
   usePageTitle(lines ? `${lines.title} - Companion Memory` : 'Saved record - Companion Memory');
 

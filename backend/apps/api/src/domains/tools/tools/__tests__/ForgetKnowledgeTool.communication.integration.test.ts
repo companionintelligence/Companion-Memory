@@ -375,6 +375,15 @@ describeWithDb(`memory.forget on a Communication node, against Postgres (${avail
     };
   }
 
+  /**
+   * What `memory.forget` in archive mode did to a node of this kind before archive refused them: the
+   * `ci.entities` half goes inactive and nothing else changes. Appliances still hold nodes archived
+   * that way, and deleting one has to work.
+   */
+  async function archivedBeforeTheRefusal(id: string): Promise<void> {
+    await dataSource.query('UPDATE ci.entities SET is_active = false WHERE entity_id = $1', [id]);
+  }
+
   async function nodeExists(id: string): Promise<boolean> {
     return (await dataSource.query('SELECT 1 FROM ci.entities WHERE entity_id = $1', [id])).length === 1;
   }
@@ -436,14 +445,19 @@ describeWithDb(`memory.forget on a Communication node, against Postgres (${avail
     expect(publishedOf(ConceptRemovedEvent)).toEqual([{ conceptId: concept }]);
   });
 
-  it('does not purge a communication in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive a communication, which archive cannot hide, and leaves it as it was', async () => {
     const id = await seedCommunication('A mail from Dana');
 
     await seedTrail(id, 'A mail from Dana');
 
     const result = await forget([id], 'archive');
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatchObject({ code: 'ARCHIVE_REFUSED', retryable: false });
+    // Not even its graph node was touched.
+    expect(await dataSource.query('SELECT is_active FROM ci.entities WHERE entity_id = $1', [id])).toEqual([
+      { is_active: true },
+    ]);
     // The detail row, the claims and the rest are as they were, and nobody is told anything was deleted.
     expect(await remains(id)).toMatchObject({ entities: 1, communications: 1, identifierClaims: 2 });
     expect(publishedOf(CommunicationRemovedEvent)).toEqual([]);
@@ -454,7 +468,7 @@ describeWithDb(`memory.forget on a Communication node, against Postgres (${avail
     const id = await seedCommunication('A mail from Dana');
 
     await seedTrail(id, 'A mail from Dana');
-    expect((await forget([id], 'archive')).success).toBe(true);
+    await archivedBeforeTheRefusal(id);
 
     const result = await forget([id]);
 

@@ -47,5 +47,17 @@ export interface ToolHandle<TOutput = unknown> {
    */
   checkInput?(input: unknown): string | undefined;
 
+  /**
+   * Why this caller's call could never run, for a reason only a lookup can tell, or `undefined`
+   * when nothing stands in its way.
+   *
+   * Asked before a call is parked for confirmation, after {@link checkInput}, for the same reason:
+   * a well-formed call can still be one `execute` refuses whatever the owner says (archiving a
+   * message, which archive cannot hide), and that refusal belongs to the caller now, not to an
+   * Approvals card that can only fail. A lookup that fails is not a refusal: the call is queued as
+   * before and `execute` decides. Optional.
+   */
+  checkCall?(context: ToolRequestContext, input: unknown): Promise<string | undefined>;
+
   execute(context: ToolRequestContext, input: unknown): Promise<ToolResult<TOutput>>;
 }

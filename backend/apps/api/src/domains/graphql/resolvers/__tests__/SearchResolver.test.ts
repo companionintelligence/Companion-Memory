@@ -209,6 +209,73 @@ describe('SearchResolver.search — combinable filters', () => {
     expect(result.totalCount).toBe(1);
   });
 
+  it('leaves threads, tasks and feed actions out of a dated query, whatever their last write says', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const inRange = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([
+      { type: 'thread', id: 't1' },
+      { type: 'task', id: 'k1' },
+      { type: 'action', id: 'a1' },
+      { type: 'note', id: 'n1' },
+      { type: 'event', id: 'e1' },
+    ]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([
+        { type: 'thread', id: 't1', entity: { id: 't1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'action', id: 'a1', entity: { id: 'a1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'note', id: 'n1', entity: { id: 'n1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'event', id: 'e1', entity: { startTime: new Date('2026-03-20') } },
+      ]),
+    );
+
+    const result = await resolver.search(ctx, {
+      query: 'hi',
+      startTime: '2026-02-01',
+      endTime: '2026-04-01',
+    } as SearchInput);
+
+    // A note keeps riding its write time: only the kinds with no time of their own drop out.
+    expect(nodeIds(result).sort()).toEqual(['event:e1', 'note:n1']);
+  });
+
+  it('keeps tasks in a dated query that names them, as the caller asked for that kind', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const inRange = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([{ type: 'task', id: 'k1' }]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([{ type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: inRange, createdAt: inRange } }]),
+    );
+
+    const result = await resolver.search(ctx, {
+      query: 'hi',
+      includeTypes: ['task'],
+      startTime: '2026-02-01',
+      endTime: '2026-04-01',
+    } as SearchInput);
+
+    expect(result.edges).toHaveLength(1);
+  });
+
+  it('still returns threads and tasks for the same query without a date range', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const written = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([
+      { type: 'thread', id: 't1' },
+      { type: 'task', id: 'k1' },
+    ]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([
+        { type: 'thread', id: 't1', entity: { id: 't1', updatedAt: written, createdAt: written } },
+        { type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: written, createdAt: written } },
+      ]),
+    );
+
+    const result = await resolver.search(ctx, { query: 'hi' } as SearchInput);
+
+    expect(result.edges).toHaveLength(2);
+  });
+
   it('sorts by time ascending and descending', async () => {
     const entries: Entry[] = [
       { type: 'event', id: 'old', entity: { startTime: new Date('2026-01-01') } },

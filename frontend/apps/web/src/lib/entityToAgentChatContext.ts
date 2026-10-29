@@ -1,6 +1,7 @@
 import type { AgentChatContext } from '@/lib/agentChat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { formatMinor } from '@/lib/money';
+import { threadIdOf, threadLabel } from '@/pages/ChatPage/useRecentThreads';
 import { eventDisplayTitle } from '@/pages/MemoryPage/Components/utils';
 import { getFileChunkTitle } from '@/pages/MemoryPage/fileChunks';
 import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
@@ -184,9 +185,14 @@ export function entityToAgentChatContext(entity: MemoryEntity, fmt: DateTimeForm
     case 'PersonType':
     case 'PlaceType':
     case 'ConceptType':
-    case 'ThreadType':
     case 'ItemType':
       title = readString(record, 'name') ?? fallbackTitle(entity.__typename);
+      prose = readString(record, 'description');
+      break;
+
+    // An untitled chat has the name Chat gives it, as in the explorer and the drawer.
+    case 'ThreadType':
+      title = threadLabel({ id: threadIdOf(sourceId ?? ''), name: readString(record, 'name') }, fmt);
       prose = readString(record, 'description');
       break;
 
