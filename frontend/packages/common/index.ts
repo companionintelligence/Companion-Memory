@@ -11,8 +11,9 @@ export {
   useDeviceLayout,
   useOverflowsRight,
   usePageTitle,
+  useScrollOverflow,
 } from './src/hooks';
-export type { DeviceSizeClass } from './src/hooks';
+export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
