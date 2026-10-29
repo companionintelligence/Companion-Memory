@@ -49,7 +49,7 @@ DEST="$IOS_ROOT/ios/App/SafariWebExtension/Resources"
 # has to delete it again from BOTH places, and a drifted literal there would
 # silently stop the cleanup working.
 MARKER_NAME="SAFARI_EXTENSION_MISSING.txt"
-PINNED_VERSION="${CI_BROWSER_EXTENSION_VERSION:-1.6.0}"
+PINNED_VERSION="${CI_BROWSER_EXTENSION_VERSION:-1.6.1}"
 GH_REPO="${CI_BROWSER_EXTENSION_REPO:-companionintelligence/CI-Browser-Extension}"
 
 if [[ -n "${CI_BROWSER_EXTENSION_DIR:-}" ]]; then
