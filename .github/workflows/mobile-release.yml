@@ -223,7 +223,9 @@ jobs:
     name: iOS → TestFlight
     needs: version
     if: needs.version.outputs.run_ios == 'true'
-    runs-on: macos-15
+    # App Store Connect requires the iOS 26 SDK. macos-15 selected Xcode 16.4
+    # and produced an iOS 18.5 build that ASC rejected during validation.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
