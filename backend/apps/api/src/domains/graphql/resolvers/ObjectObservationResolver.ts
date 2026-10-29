@@ -173,10 +173,18 @@ export class ObjectObservationResolver {
   async unlinkObservation(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
+    @Args('itemId', {
+      type: () => ID,
+      nullable: true,
+      description:
+        'The thing the person said it is not. When given, a sighting no longer linked to that thing is left as it is.',
+    })
+    itemId?: string,
   ): Promise<ObjectObservationType | null> {
     const row = await this.observationService.sendBackToReview(
       toServiceContext(context),
       GlobalUID.parse('observation', gid),
+      itemId != null ? GlobalUID.parse('item', itemId) : undefined,
     );
 
     if (row == null) {

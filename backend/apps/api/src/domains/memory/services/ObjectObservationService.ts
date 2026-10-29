@@ -559,12 +559,23 @@ export class ObjectObservationService {
    * {@link SENT_BACK_TO_REVIEW} mark is what puts it in front of the person.
    *
    * A sighting linked to nothing is returned unchanged: "not this thing" says
-   * nothing about one that was already answered "not a thing".
+   * nothing about one that was already answered "not a thing". So is one that
+   * is no longer linked to `fromObjectId`, the thing the person was looking at:
+   * a page opened before a merge or another answer must not unlink a sighting
+   * from the thing it is linked to now.
    */
-  async sendBackToReview(context: ServiceContext, id: string): Promise<ObjectObservation | null> {
+  async sendBackToReview(
+    context: ServiceContext,
+    id: string,
+    fromObjectId?: string,
+  ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
     if (existing == null || (existing.resolvedObjectId == null && existing.resolvedProductId == null)) {
+      return existing;
+    }
+
+    if (fromObjectId !== undefined && existing.resolvedObjectId !== fromObjectId) {
       return existing;
     }
 

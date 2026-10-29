@@ -87,6 +87,11 @@ describe('a date input with nothing to store', () => {
   it.each(['not a date', '2026-02-30', '2026-13-01'])('refuses %j', (value) => {
     expect(() => fromThingDateInput(value)).toThrow(RangeError);
   });
+
+  // Date.UTC reads years 0 to 99 as 1900 to 1999; a date input can still send one.
+  it('stores a day in the first century as that day', () => {
+    expect(fromThingDateInput('0099-05-04')).toBe('0099-05-04T00:00:00.000Z');
+  });
 });
 
 describe('thing dates with nothing to show', () => {

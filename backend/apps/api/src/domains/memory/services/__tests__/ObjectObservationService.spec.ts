@@ -647,6 +647,16 @@ describe('ObjectObservationService.sendBackToReview — "not this thing"', () =>
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('leaves a sighting alone when it is no longer linked to the thing the person was looking at', async () => {
+    const { service, findOne, update } = makeService();
+    const moved = { id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-2', resolvedProductId: null };
+
+    findOne.mockResolvedValue(moved as never);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-1', 'item-1')).toBe(moved);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('is undone by any later answer', async () => {
     const { service, findOne, update } = makeService();
 
