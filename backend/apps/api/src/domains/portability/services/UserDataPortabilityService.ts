@@ -217,6 +217,8 @@ interface ImportState {
   setAside: SetAsideLinks[];
   links: ImportLinks;
   tables: readonly UserScopedTable[];
+  /** Every single-column foreign key in the account's schemas, read once at the start. */
+  references: readonly DiscoveredLinkReference[];
 }
 
 @Injectable()
@@ -511,13 +513,15 @@ export class UserDataPortabilityService {
     // touched anything, and the archive has no say in it. See FileKeyMap.
     const keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, userId));
     const selfEntityIds = [profileEntityId(profile), await this.detachSelfEntity(queryRunner, userId)];
-    const setAside = await this.setAsideLinkedRows(queryRunner, userId, tables);
+    const references = ((await queryRunner.query(DISCOVER_LINK_REFERENCES_SQL, [USER_DATA_SCHEMAS])) ??
+      []) as DiscoveredLinkReference[];
+    const setAside = await this.setAsideLinkedRows(queryRunner, userId, tables, references);
 
     for (const table of [...tables].reverse()) {
       await this.deleteUserRows(queryRunner, userId, table);
     }
 
-    return { keyMap, selfEntityIds, setAside, links: new ImportLinks(), tables };
+    return { keyMap, selfEntityIds, setAside, links: new ImportLinks(), tables, references };
   }
 
   /**
@@ -530,7 +534,7 @@ export class UserDataPortabilityService {
     await this.restoreLinks(queryRunner, userId, state.links);
     await this.restoreLinkedRows(queryRunner, userId, state.setAside);
     await this.reattachSelfEntity(queryRunner, userId, state.selfEntityIds);
-    await this.refuseLinksOutOfAccount(queryRunner, userId, state.tables);
+    await this.refuseLinksOutOfAccount(queryRunner, userId, state.tables, state.references);
 
     return inserted;
   }
@@ -554,9 +558,8 @@ export class UserDataPortabilityService {
     queryRunner: QueryRunner,
     userId: string,
     tables: readonly UserScopedTable[],
+    references: readonly DiscoveredLinkReference[],
   ): Promise<void> {
-    const references = ((await queryRunner.query(DISCOVER_LINK_REFERENCES_SQL, [USER_DATA_SCHEMAS])) ??
-      []) as DiscoveredLinkReference[];
     const entityLinks = ((await queryRunner.query(DISCOVER_UNDECLARED_ENTITY_LINKS_SQL, [
       USER_DATA_SCHEMAS,
     ])) ?? []) as DiscoveredEntityLink[];
@@ -564,7 +567,13 @@ export class UserDataPortabilityService {
 
     for (const link of findAccountLinks(references, entityLinks, tables)) {
       const name = qualifiedName(link.child);
-      byChild.set(name, [...(byChild.get(name) ?? []), link]);
+      const links = byChild.get(name);
+
+      if (links) {
+        links.push(link);
+      } else {
+        byChild.set(name, [link]);
+      }
     }
 
     for (const links of byChild.values()) {
@@ -1124,9 +1133,8 @@ export class UserDataPortabilityService {
     queryRunner: QueryRunner,
     userId: string,
     userTables: readonly UserScopedTable[],
+    references: readonly DiscoveredLinkReference[],
   ): Promise<SetAsideLinks[]> {
-    const references = ((await queryRunner.query(DISCOVER_LINK_REFERENCES_SQL, [USER_DATA_SCHEMAS])) ??
-      []) as DiscoveredLinkReference[];
     const setAside: SetAsideLinks[] = [];
 
     for (const [index, table] of findLinkTables(references, userTables).entries()) {

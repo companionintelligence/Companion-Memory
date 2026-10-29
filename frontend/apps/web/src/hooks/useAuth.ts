@@ -652,6 +652,10 @@ function useAuth(): ReturnValue {
           setAccessToken(jwt);
         }
 
+        // Memory answered the sign-in, so the session check it left unanswered no longer
+        // holds. Left set, `/` would show "Can't reach Memory" until the profile loads.
+        setUnreachable(false);
+
         const returnTo = (location.state as { from?: string })?.from ?? '/';
         navigate(returnTo, { replace: true });
       } catch (err: unknown) {
@@ -900,6 +904,8 @@ function useAuth(): ReturnValue {
           setAccessToken(jwt);
         }
 
+        // As in login: Memory answered, so the outage the session check saw is over.
+        setUnreachable(false);
         navigate('/');
       } catch (err: unknown) {
         setLoginError(err);

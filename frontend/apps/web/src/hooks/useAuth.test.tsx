@@ -179,6 +179,33 @@ describe('useAuth', () => {
       expect(result.current[0].unreachable).toBe(true);
     });
 
+    it('ends the outage once Memory answers a sign-in, though the session check still fails', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          return emptyResponse(false, 502);
+        }
+
+        if (url.endsWith('/api/authenticate')) {
+          return jsonResponse({ accessToken: 'signed-in' });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].unreachable).toBe(true);
+
+      await act(async () => {
+        await result.current[1].login('jo@example.com', 'secret');
+      });
+
+      expect(result.current[0].authToken).toBe('signed-in');
+      expect(result.current[0].unreachable).toBe(false);
+    });
+
     it('keeps the token when a later refresh goes unanswered', async () => {
       document.cookie = 'csrfToken=csrf-abc';
       let refreshCalls = 0;

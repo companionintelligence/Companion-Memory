@@ -121,6 +121,7 @@ describeWithDatabase(
       await dataSource.query('DELETE FROM ci.threads WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.agent_jobs WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.content WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1::uuid[])', [users]);
@@ -827,6 +828,38 @@ describeWithDatabase(
           ),
         ).rejects.toThrow(
           `The archive links ci.agent_jobs.thread_id to ${theirThread}, a row of ci.threads that belongs to another account, so it was refused.`,
+        );
+      });
+
+      it("refuses a product model whose picture is another account's content, though that column has no key", async () => {
+        const theirPhoto = randomUUID();
+
+        // A content row stands on its entity (content_id_entities_fk).
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Content', $2::uuid, 'Their photo')`,
+          [theirPhoto, otherUserId],
+        );
+        await dataSource.query('INSERT INTO ci.content (id, user_id) VALUES ($1::uuid, $2::uuid)', [
+          theirPhoto,
+          otherUserId,
+        ]);
+
+        await expect(
+          service.importArchive(
+            { userId: testUserId } as never,
+            archiveWith({
+              'ci.product_models': [
+                {
+                  product_id: randomUUID(),
+                  owner_user_id: testUserId,
+                  title: 'Kettle',
+                  image_content_id: theirPhoto,
+                },
+              ],
+            }),
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.product_models.image_content_id to ${theirPhoto}, a row of ci.content that belongs to another account, so it was refused.`,
         );
       });
 
