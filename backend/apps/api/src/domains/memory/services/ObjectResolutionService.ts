@@ -251,7 +251,10 @@ export class ObjectResolutionService {
     context: UserServiceContext,
     options: ResolveOptions & { limit?: number } = {},
   ): Promise<ObjectResolutionOutcome[]> {
-    const pending = await this.observationService.findForReview(context, options.limit ?? 100);
+    // Not the sightings a person sent back: those are answered, so the ladder could only skip them.
+    const pending = await this.observationService.findForReview(context, options.limit ?? 100, 0, {
+      sentBack: false,
+    });
     const outcomes: ObjectResolutionOutcome[] = [];
 
     for (const observation of pending) {

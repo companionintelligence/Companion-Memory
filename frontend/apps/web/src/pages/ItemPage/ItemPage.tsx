@@ -2,7 +2,7 @@ import { type ReactNode, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
-import { Badge, Button, Card } from '@ci/shadcn';
+import { Badge, Button, Card, useToast } from '@ci/shadcn';
 import { useParams } from 'react-router-dom';
 
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
@@ -56,9 +56,11 @@ const CONFIRM_OBSERVATION = gql(`
   }
 `);
 
-const REJECT_OBSERVATION = gql(`
-  mutation RejectItemObservation($id: ID!) {
-    rejectObservation(id: $id) {
+// "No" here means "not this thing", not "not a thing": the sighting goes back to
+// Things > Review sightings, where the right thing can be picked for it.
+const UNLINK_OBSERVATION = gql(`
+  mutation UnlinkItemObservation($id: ID!) {
+    unlinkObservation(id: $id) {
       id
       confirmedByUser
       resolvedObjectId
@@ -79,7 +81,24 @@ export function ItemPage() {
 
   const [updateItemFields] = useMutation(UPDATE_ITEM_FIELDS);
   const [confirmObservation, { loading: confirming }] = useMutation(CONFIRM_OBSERVATION);
-  const [rejectObservation, { loading: rejecting }] = useMutation(REJECT_OBSERVATION);
+  const [unlinkObservation, { loading: unlinking }] = useMutation(UNLINK_OBSERVATION, {
+    // The sighting is now in Review sightings, which may be cached from an earlier visit.
+    update: (cache) => {
+      cache.evict({ id: 'ROOT_QUERY', fieldName: 'unresolvedObservations' });
+      cache.gc();
+    },
+  });
+  const { toast } = useToast();
+
+  /** Yes or No on a sighting, then the thing re-read. A refused answer is said, not swallowed. */
+  const answerSighting = async (answer: () => Promise<unknown>) => {
+    try {
+      await answer();
+      await refetch();
+    } catch (cause) {
+      toast.error(cause instanceof Error && cause.message ? cause.message : 'Could not record that.');
+    }
+  };
 
   const item = data?.item;
 
@@ -208,7 +227,8 @@ export function ItemPage() {
               <Card.Header>
                 <Card.Title className="text-base">Sightings</Card.Title>
                 <Card.Description>
-                  Frames a detector matched to this thing. Confirming one is what sets its last-seen date.
+                  Frames a detector matched to this thing. No sends a frame back to Review sightings, so you
+                  can say which thing it is.
                 </Card.Description>
               </Card.Header>
               <Card.Content>
@@ -221,11 +241,12 @@ export function ItemPage() {
                         size="sm"
                         variant="secondary"
                         className="flex-1"
-                        disabled={confirming || rejecting}
-                        onClick={async () => {
-                          await confirmObservation({ variables: { id: target.id, itemId: item.id } });
-                          await refetch();
-                        }}
+                        disabled={confirming || unlinking}
+                        onClick={() =>
+                          void answerSighting(() =>
+                            confirmObservation({ variables: { id: target.id, itemId: item.id } }),
+                          )
+                        }
                       >
                         Yes
                       </Button>
@@ -233,11 +254,10 @@ export function ItemPage() {
                         size="sm"
                         variant="ghost"
                         className="flex-1"
-                        disabled={confirming || rejecting}
-                        onClick={async () => {
-                          await rejectObservation({ variables: { id: target.id } });
-                          await refetch();
-                        }}
+                        disabled={confirming || unlinking}
+                        onClick={() =>
+                          void answerSighting(() => unlinkObservation({ variables: { id: target.id } }))
+                        }
                       >
                         No
                       </Button>

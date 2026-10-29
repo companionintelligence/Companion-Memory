@@ -293,6 +293,32 @@ describe('CalendarEventService — calendar flags survive create and update', ()
       expect(deltas.entityUpdated).not.toHaveBeenCalled();
     });
 
+    it.each(['', '   '])('refuses an emptied title (%j) instead of saving around it', async (title) => {
+      await expect(service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title })).rejects.toThrow(
+        'An event needs a title.',
+      );
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('still saves a description next to the empty title of an event that never had one', async () => {
+      // The memory drawer sends every field, and an untitled event's title field is ''.
+      baseRepo.findOne.mockImplementation(async ({ where: { id } }: { where: { id: string } }) => ({
+        id,
+        name: null,
+        description: null,
+      }));
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        title: '',
+        description: 'Morning walk',
+      });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: 'Morning walk' });
+    });
+
     it('records a real rename with the title it replaced', async () => {
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Team standup' });
 

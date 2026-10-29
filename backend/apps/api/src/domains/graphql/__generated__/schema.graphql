@@ -2221,6 +2221,11 @@ type Mutation {
   """Manually trigger the HBPE pipeline for the current user"""
   triggerHbpe: String!
 
+  """
+  A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing at all", which takes it out of that queue.
+  """
+  unlinkObservation(id: ID!): ObjectObservationType
+
   """Remove the planned block for this task and clear scheduledFor."""
   unscheduleTask(id: ID!): TaskType
 
