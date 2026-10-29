@@ -870,10 +870,12 @@ export class SearchResolver {
     // Entities without a domain timestamp, and the kinds dated only by their last write
     // (ROW_DATED_TYPES), are dropped while a date filter is active.
     if (hasDate && candidateSource !== 'timed') {
+      // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
+      // knowing what it is dated by, as the timed browse gives a named kind its rows too.
+      const namedTypes = new Set<string>(input.includeTypes ?? []);
+
       entries = entries.filter((entry) => {
-        // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
-        // knowing what it is dated by, as the timed browse gives a named kind its rows too.
-        if (ROW_DATED_TYPES.has(entry.type) && !input.includeTypes?.some((type) => type === entry.type)) {
+        if (ROW_DATED_TYPES.has(entry.type) && !namedTypes.has(entry.type)) {
           return false;
         }
 

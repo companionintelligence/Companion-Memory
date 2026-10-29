@@ -197,7 +197,7 @@ function archiveRefusal(
 
   const named = Array.from(refused, ([kind, ids]) => `${kind} ${listIds(ids)}`).join('; ');
 
-  return `Archive cannot hide messages, files, content or things: archiving one only marks its graph node, and it would still show in search, the explorer and chat. Nothing was changed. Refused: ${named}. Deleting them is the only way to remove them: ask the owner first, because mode "archive_and_delete" deletes them for good and cannot be undone.`;
+  return `Archive cannot hide messages, files, content or things: archiving one only marks its graph node and it would still show in search, the explorer and chat. Nothing was changed. Refused: ${named}. Deleting them is the only way to remove them: ask the owner first, because mode "archive_and_delete" deletes them for good and cannot be undone.`;
 }
 
 /** An archive {@link archiveRefusal} turned down. Nothing was written, and the same call is refused again. */

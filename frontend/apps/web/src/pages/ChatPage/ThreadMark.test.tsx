@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { paletteFor } from '@/components/PersonAvatar';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { ThreadMark, threadActivity, threadMarkText } from './ThreadMark';
 
@@ -13,6 +14,16 @@ describe('threadMarkText', () => {
   // Every untitled label starts "Chat · ", so initials would make them all "C".
   it('shows the day an untitled thread started', () => {
     expect(threadMarkText({ name: null, createdAt: '2026-10-23T14:09:00' })).toBe('23');
+  });
+
+  // Older appliances send no createdAt. The label reads the start time from the UUIDv7 id then,
+  // and the tile has to show the same day.
+  it('reads the day from a UUIDv7 id when there is no createdAt, as the label does', () => {
+    const utc = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+
+    expect(
+      threadMarkText({ id: '01a17e07-73a0-7abc-8def-0123456789ab', name: null, createdAt: undefined }, utc),
+    ).toBe('27');
   });
 
   it('falls back to "?" with neither a title nor a start time', () => {
