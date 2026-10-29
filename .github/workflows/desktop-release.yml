@@ -531,6 +531,7 @@ jobs:
         working-directory: frontend/apps/desktop
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          REQUIRE_SIGNED_APPLE_BRIDGE: 'true'
         run: |
           yarn tauri build \
             --target universal-apple-darwin \
