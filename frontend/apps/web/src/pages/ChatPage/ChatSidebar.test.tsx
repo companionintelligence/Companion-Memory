@@ -91,6 +91,86 @@ describe('ChatSidebar', () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  describe('collapsed rail', () => {
+    function collapse() {
+      fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+    }
+
+    it('shows each thread as its own tile, with no dot on an idle one', () => {
+      setup({ threads: [thread('t1', 'Coffee with Jordan Lee'), thread('t2', 'Trip planning')] });
+      collapse();
+
+      expect(screen.getAllByTestId('thread-mark').map((tile) => tile.textContent)).toEqual(['CW', 'TP']);
+      expect(screen.queryByTestId('thread-mark-busy')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('thread-mark-failed')).not.toBeInTheDocument();
+    });
+
+    it('marks the open thread as current and opens another on click', () => {
+      const { onSelectThread } = setup({ selectedThreadId: 't1' });
+      collapse();
+
+      expect(screen.getByLabelText('First chat')).toHaveAttribute('aria-current', 'true');
+      expect(screen.getByLabelText('Second chat')).not.toHaveAttribute('aria-current');
+
+      fireEvent.click(screen.getByLabelText('Second chat'));
+      expect(onSelectThread).toHaveBeenCalledWith('t2');
+    });
+
+    it('says in its name that a reply is being written', () => {
+      setup({ threads: [{ ...thread('t1', 'First chat'), generationStatus: 'running' } as Thread] });
+      collapse();
+
+      expect(screen.getByLabelText('First chat, Replying…')).toBeInTheDocument();
+      expect(screen.getByTestId('thread-mark-busy')).toBeInTheDocument();
+    });
+
+    it('starts a new thread from the rail', () => {
+      const { onNewThread } = setup();
+      collapse();
+
+      fireEvent.click(screen.getByLabelText('New thread'));
+      expect(onNewThread).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('scrolls the list to the open thread when it is below the fold, and leaves a visible one alone', () => {
+    const scrollTo = vi.fn();
+    const hadScrollTo = Object.prototype.hasOwnProperty.call(HTMLElement.prototype, 'scrollTo');
+    const original = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = scrollTo as typeof HTMLElement.prototype.scrollTo;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const below = this.dataset.threadId === 't2';
+
+      return {
+        top: below ? 900 : 0,
+        bottom: below ? 940 : 500,
+        left: 0,
+        right: 80,
+        width: 80,
+        height: below ? 40 : 500,
+      } as DOMRect;
+    });
+
+    try {
+      setup({ selectedThreadId: 't2' });
+      // Centred: 900 down, less half of the 500px view minus the 40px row.
+      expect(scrollTo).toHaveBeenCalledWith({ top: 670 });
+
+      scrollTo.mockClear();
+      setup({ selectedThreadId: 't1' });
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      rect.mockRestore();
+      if (hadScrollTo) {
+        HTMLElement.prototype.scrollTo = original;
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollTo;
+      }
+    }
+  });
+
   describe('auto-collapse on resize', () => {
     function setInnerWidth(width: number) {
       Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width });
