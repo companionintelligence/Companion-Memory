@@ -57,10 +57,11 @@
 #   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID,
 #   AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE
 #
-# None of the above are currently provisioned in this repo. Each platform's
-# job is SKIPPED (not failed) when its secrets are absent, so macOS/Windows
-# signing can be wired up independently without blocking a release. The
-# Linux lane always runs unsigned — no signing convention exists for
+# The six Azure values are configured on the `production` Environment. The
+# four macOS-specific values still need repository secrets; APPLE_TEAM_ID is
+# shared with the iOS lane. A lane skips when none of its platform-specific
+# signing values are configured and fails early on a partial configuration.
+# The Linux lane always runs unsigned — no signing convention exists for
 # .deb/.rpm in this codebase.
 name: Desktop Release
 
@@ -361,15 +362,38 @@ jobs:
       - name: Check for macOS signing secrets
         id: secrets
         env:
-          CERT: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$CERT" ] && [ -n "$APPLE_ID_SECRET" ] && [ -n "$TEAM_ID" ]; then
+          set -uo pipefail
+          REQUIRED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+          MISSING=""
+          FOUND=0
+          PLATFORM_FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+              if [ "$VAR" != "APPLE_TEAM_ID" ]; then
+                PLATFORM_FOUND=$((PLATFORM_FOUND + 1))
+              fi
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$PLATFORM_FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::macOS signing secrets not configured — skipping the signed macOS build."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::macOS lane is partially configured. Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Rust toolchain
@@ -570,12 +594,28 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
         run: |
-          if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ] \
-            && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_CERTIFICATE_PROFILE" ]; then
+          set -uo pipefail
+          REQUIRED="AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_SUBSCRIPTION_ID AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE"
+          MISSING=""
+          FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Windows signing secrets not configured — skipping the signed Windows build."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Windows lane is partially configured. Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Rust toolchain
