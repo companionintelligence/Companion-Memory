@@ -5,6 +5,7 @@ import static com.companionintelligence.app.SourceManifest.elements;
 import static com.companionintelligence.app.SourceManifest.names;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
@@ -247,6 +248,30 @@ public class AndroidManifestContractTest {
                 + "has while-in-use access. Declaring it puts the app through Play's background-location "
                 + "review. Declared: " + permissions,
             permissions.contains("android.permission.ACCESS_BACKGROUND_LOCATION")
+        );
+    }
+
+    @Test
+    public void gps_hardware_is_optional_and_overrides_dependency_requirement() {
+        Element gps = null;
+        for (Element feature : elements(manifest, "uses-feature")) {
+            if ("android.hardware.location.gps".equals(attr(feature, "name"))) {
+                gps = feature;
+                break;
+            }
+        }
+
+        assertNotNull("GPS must be explicitly declared because the app requests precise location.", gps);
+        assertEquals(
+            "Location tracking is optional; devices without built-in GPS must remain installable.",
+            "false",
+            attr(gps, "required")
+        );
+        assertEquals(
+            "The manifest merger ORs uses-feature required flags, so the app must replace the "
+                + "dependency's android:required value rather than merge it.",
+            "android:required",
+            gps.getAttributeNS("http://schemas.android.com/tools", "replace")
         );
     }
 
