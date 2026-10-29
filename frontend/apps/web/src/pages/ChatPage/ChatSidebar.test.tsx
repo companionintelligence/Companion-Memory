@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { ChatSidebar } from './ChatSidebar';
 import type { Thread } from './types';
@@ -18,9 +18,13 @@ function setup(overrides: Partial<Parameters<typeof ChatSidebar>[0]> = {}) {
     onRefresh: vi.fn(),
     ...overrides,
   };
-  render(<ChatSidebar {...props} />);
+  const view = render(<ChatSidebar {...props} />);
 
-  return props;
+  return {
+    ...props,
+    rerender: (next: Partial<Parameters<typeof ChatSidebar>[0]>) =>
+      view.rerender(<ChatSidebar {...props} {...next} />),
+  };
 }
 
 describe('ChatSidebar', () => {
@@ -133,42 +137,74 @@ describe('ChatSidebar', () => {
     });
   });
 
-  it('scrolls the list to the open thread when it is below the fold, and leaves a visible one alone', () => {
-    const scrollTo = vi.fn();
-    const hadScrollTo = Object.prototype.hasOwnProperty.call(HTMLElement.prototype, 'scrollTo');
-    const original = HTMLElement.prototype.scrollTo;
-    HTMLElement.prototype.scrollTo = scrollTo as typeof HTMLElement.prototype.scrollTo;
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
-      this: HTMLElement,
-    ) {
-      const below = this.dataset.threadId === 't2';
-
-      return {
-        top: below ? 900 : 0,
-        bottom: below ? 940 : 500,
-        left: 0,
-        right: 80,
-        width: 80,
-        height: below ? 40 : 500,
-      } as DOMRect;
+  it("says a thread's state in the open list too, and marks the open row", () => {
+    setup({
+      threads: [
+        { ...thread('t1', 'First chat'), generationStatus: 'failed' } as Thread,
+        thread('t2', 'Second chat'),
+      ],
+      selectedThreadId: 't2',
     });
 
-    try {
+    expect(screen.getByText('Last reply failed')).toHaveClass('sr-only');
+    expect(screen.getByText('Second chat').closest('button')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('First chat').closest('button')).not.toHaveAttribute('aria-current');
+  });
+
+  describe('keeping the open thread in view', () => {
+    // The list is a 500px view from 0; a row is wherever `rows` puts it, else inside the view.
+    let rows: Record<string, [top: number, bottom: number]>;
+    let scrollTo: MockInstance;
+
+    beforeEach(() => {
+      rows = {};
+      scrollTo = vi.spyOn(Element.prototype, 'scrollTo').mockImplementation(() => {});
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const [top, bottom] = rows[this.getAttribute('data-thread-id') ?? ''] ?? [0, 500];
+
+        return { top, bottom, left: 0, right: 80, width: 80, height: bottom - top } as DOMRect;
+      });
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('centres an open thread that is out of sight', () => {
+      rows.t2 = [900, 940];
       setup({ selectedThreadId: 't2' });
-      // Centred: 900 down, less half of the 500px view minus the 40px row.
+
+      // 900 down, less half of the 500px view minus the 40px row.
+      expect(scrollTo).toHaveBeenCalledWith({ top: 670 });
+    });
+
+    it('leaves a visible one alone', () => {
+      setup({ selectedThreadId: 't1' });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('nudges a row cut off at the bottom just far enough, rather than centring it under the pointer', () => {
+      rows.t2 = [480, 520];
+      setup({ selectedThreadId: 't2' });
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 20 });
+    });
+
+    it('waits for the open thread to load, then leaves the list alone when another is deleted', () => {
+      rows.t2 = [900, 940];
+      const { rerender } = setup({ threads: [], selectedThreadId: 't2' });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      rerender({
+        threads: [thread('t1', 'First chat'), thread('t2', 'Second chat'), thread('t3', 'Third chat')],
+      });
       expect(scrollTo).toHaveBeenCalledWith({ top: 670 });
 
+      // Scrolled away to delete an old thread: the list must not jump back.
       scrollTo.mockClear();
-      setup({ selectedThreadId: 't1' });
+      rerender({ threads: [thread('t1', 'First chat'), thread('t2', 'Second chat')] });
       expect(scrollTo).not.toHaveBeenCalled();
-    } finally {
-      rect.mockRestore();
-      if (hadScrollTo) {
-        HTMLElement.prototype.scrollTo = original;
-      } else {
-        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollTo;
-      }
-    }
+    });
   });
 
   describe('auto-collapse on resize', () => {
@@ -209,6 +245,17 @@ describe('ChatSidebar', () => {
       expect(screen.getByText('New Thread')).toBeInTheDocument();
 
       setInnerWidth(400);
+      fireEvent(window, new Event('resize'));
+
+      expect(screen.queryByText('New Thread')).not.toBeInTheDocument();
+    });
+
+    it('keeps a sidebar you collapsed when a resize stays above the breakpoint', () => {
+      setInnerWidth(1024);
+      setup();
+
+      fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+      setInnerWidth(1200);
       fireEvent(window, new Event('resize'));
 
       expect(screen.queryByText('New Thread')).not.toBeInTheDocument();

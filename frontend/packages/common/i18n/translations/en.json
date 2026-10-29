@@ -24,6 +24,7 @@
   "CHAT_SIDEBAR_COLLAPSE": "Collapse sidebar",
   "CHAT_THREADS_REFRESH": "Refresh threads",
   "CHAT_THREAD_DELETE": "Delete thread",
+  "CHAT_THREAD_NAME_WITH_STATUS": "{{name}}, {{status}}",
   "CHAT_THREAD_NEW": "New thread",
   "CHAT_THREAD_STATUS_BUSY": "Replying…",
   "CHAT_THREAD_STATUS_FAILED": "Last reply failed",

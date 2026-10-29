@@ -13,6 +13,21 @@ export const RECENT_THREAD_LIMIT = 10;
 /** Skip a refetch if the list we already have is younger than this. */
 const STALE_MS = 30_000;
 
+/** How a thread's times read wherever threads are listed: "Oct 23, 2:09 PM". */
+export const THREAD_TIME: Readonly<Intl.DateTimeFormatOptions> = Object.freeze({
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+/** One of a thread's ISO timestamps as a Date, or null when it is missing or unreadable. */
+export function threadInstant(iso: string | undefined): Date | null {
+  const date = iso ? new Date(iso) : null;
+
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
 /**
  * What to call a thread.
  *
@@ -36,10 +51,10 @@ export function threadLabel(
     return name;
   }
 
-  const started = thread.createdAt ? new Date(thread.createdAt) : null;
+  const started = threadInstant(thread.createdAt);
 
-  if (started && !Number.isNaN(started.getTime())) {
-    return `Chat · ${fmt.dateTime(started, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  if (started) {
+    return `Chat · ${fmt.dateTime(started, THREAD_TIME)}`;
   }
 
   return `Thread ${thread.id.slice(0, 8)}`;

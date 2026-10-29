@@ -6,6 +6,7 @@ import { initialsFor, paletteFor } from '@/components/PersonAvatar';
 import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
+import { threadInstant } from './useRecentThreads';
 
 /**
  * What a thread's tile says.
@@ -25,9 +26,9 @@ export function threadMarkText(
     return initialsFor(name);
   }
 
-  const started = thread.createdAt ? new Date(thread.createdAt) : null;
+  const started = threadInstant(thread.createdAt);
 
-  if (started && !Number.isNaN(started.getTime())) {
+  if (started) {
     return fmt.dateTime(started, { day: 'numeric' });
   }
 

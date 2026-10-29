@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, memo } from 'react';
 
 import { Sidebar, Tooltip, cn } from '@ci/shadcn';
 import { Plus, RefreshCw, Trash2, MessageSquare, PanelLeftClose, PanelLeftOpen } from '@ci/shadcn/icons';
@@ -10,20 +10,30 @@ import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { ThreadMark, threadActivity } from './ThreadMark';
 import type { Thread } from './types';
-import { threadLabel } from './useRecentThreads';
+import { THREAD_TIME, threadInstant, threadLabel } from './useRecentThreads';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+/** Below this window width the sidebar starts collapsed (Tailwind's `md`). */
+const COLLAPSE_BELOW_PX = 768;
+
+/** "Replying…" or "Last reply failed", or null for an idle thread: what the dot on its tile means. */
+function threadStatus(thread: Thread, t: Translate): string | null {
+  const activity = threadActivity(thread);
+
+  if (!activity) {
+    return null;
+  }
+
+  return t(activity === 'busy' ? 'CHAT_THREAD_STATUS_BUSY' : 'CHAT_THREAD_STATUS_FAILED');
+}
 
 /** A busy or failed thread says so in its name, since the dot on its tile is only a picture. */
 function threadAccessibleName(thread: Thread, fmt: DateTimeFormatter, t: Translate): string {
   const label = threadLabel(thread, fmt);
-  const activity = threadActivity(thread);
+  const status = threadStatus(thread, t);
 
-  if (activity === 'busy') {
-    return `${label}, ${t('CHAT_THREAD_STATUS_BUSY')}`;
-  }
-
-  return activity === 'failed' ? `${label}, ${t('CHAT_THREAD_STATUS_FAILED')}` : label;
+  return status ? t('CHAT_THREAD_NAME_WITH_STATUS', { name: label, status }) : label;
 }
 
 /**
@@ -31,23 +41,17 @@ function threadAccessibleName(thread: Thread, fmt: DateTimeFormatter, t: Transla
  * description, and when it last changed. A tile only has two letters to go on.
  */
 function ThreadTooltipBody({ thread, fmt, t }: { thread: Thread; fmt: DateTimeFormatter; t: Translate }) {
-  const activity = threadActivity(thread);
-  const updated = thread.updatedAt ? new Date(thread.updatedAt) : null;
-  const when =
-    updated && !Number.isNaN(updated.getTime())
-      ? fmt.dateTime(updated, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-      : null;
+  const status = threadStatus(thread, t);
+  const updated = threadInstant(thread.updatedAt);
 
   return (
     <div className="max-w-64 space-y-0.5 text-left">
       <p className="font-semibold">{threadLabel(thread, fmt)}</p>
       {thread.description ? <p className="line-clamp-2 opacity-85">{thread.description}</p> : null}
-      {activity ? (
-        <p className="opacity-85">
-          {t(activity === 'busy' ? 'CHAT_THREAD_STATUS_BUSY' : 'CHAT_THREAD_STATUS_FAILED')}
-        </p>
-      ) : when ? (
-        <p className="opacity-70">{t('CHAT_THREAD_UPDATED', { time: when })}</p>
+      {status ? (
+        <p className="opacity-85">{status}</p>
+      ) : updated ? (
+        <p className="opacity-70">{t('CHAT_THREAD_UPDATED', { time: fmt.dateTime(updated, THREAD_TIME) })}</p>
       ) : null}
     </div>
   );
@@ -85,39 +89,68 @@ export const ChatSidebar = memo(function ChatSidebar({
   const fmt = useDateTimeFormat();
   const [isExpanded, setIsExpanded] = useState(true);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // The open thread and layout the list was last brought to, so it is done once
+  // per selection rather than again on every change to the thread list.
+  const revealedFor = useRef<string | null>(null);
 
   // Keep the open thread on screen. A thread opened from a link or the rail's
   // submenu can sit far down a long list, and then nothing visible says which
-  // one is open. Only scrolls when it is out of view, so clicking a visible row
-  // doesn't move the list under the pointer.
-  useEffect(() => {
+  // one is open. A row out of sight is centred; a row cut off at an edge is
+  // nudged just far enough, so clicking it doesn't move the list under the
+  // pointer. Until the row exists (the list still loading) every new list
+  // retries; after that a refresh or a delete leaves your scroll alone.
+  // A layout effect, so a thread opened from a link is never painted at the
+  // top of the list first.
+  useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     const row = selectedThreadId
       ? scroller?.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(selectedThreadId)}"]`)
       : null;
+    const target = `${selectedThreadId}:${isExpanded}`;
 
-    if (!scroller || !row || typeof scroller.scrollTo !== 'function') {
+    if (!scroller || !row || revealedFor.current === target) {
       return;
     }
 
     const view = scroller.getBoundingClientRect();
+
+    // Not laid out (hidden, or a test without layout): nothing to measure yet.
+    if (view.height === 0) {
+      return;
+    }
+
+    revealedFor.current = target;
+
     const box = row.getBoundingClientRect();
+    let delta = 0;
+
+    if (box.bottom <= view.top || box.top >= view.bottom) {
+      delta = box.top - view.top - (view.height - box.height) / 2;
+    } else if (box.top < view.top) {
+      delta = box.top - view.top;
+    } else if (box.bottom > view.bottom) {
+      delta = box.bottom - view.bottom;
+    }
 
     // The list's own scroll, not `scrollIntoView`, which also scrolls every
     // ancestor and pushed the pinned header off the top.
-    if (box.top < view.top || box.bottom > view.bottom) {
-      scroller.scrollTo({ top: scroller.scrollTop + (box.top - view.top) - (view.height - box.height) / 2 });
+    if (delta !== 0) {
+      scroller.scrollTo({ top: scroller.scrollTop + delta });
     }
-  }, [selectedThreadId, isExpanded, threads.length]);
+  }, [selectedThreadId, isExpanded, threads]);
 
-  // Auto-collapse on mobile screens
+  // Start collapsed on a narrow window, and follow the window across the
+  // breakpoint. Only a crossing changes it: a resize that stays on one side
+  // (DevTools opening, a soft keyboard) keeps whatever you picked.
   useEffect(() => {
+    let narrow: boolean | null = null;
+
     const handleResize = () => {
-      if (window.innerWidth < 768) {
-        // md breakpoint
-        setIsExpanded(false);
-      } else {
-        setIsExpanded(true);
+      const next = window.innerWidth < COLLAPSE_BELOW_PX;
+
+      if (next !== narrow) {
+        narrow = next;
+        setIsExpanded(!next);
       }
     };
 
@@ -155,7 +188,7 @@ export const ChatSidebar = memo(function ChatSidebar({
           </div>
         ) : (
           <Tooltip delayDuration={600}>
-            <Tooltip.Content>{t('CHAT_SIDEBAR_EXPAND')}</Tooltip.Content>
+            <Tooltip.Content side="right">{t('CHAT_SIDEBAR_EXPAND')}</Tooltip.Content>
             <Tooltip.Trigger asChild>
               <button
                 onClick={() => setIsExpanded(true)}
@@ -272,56 +305,59 @@ export const ChatSidebar = memo(function ChatSidebar({
 
                 {/* Existing Threads */}
                 <div className="space-y-2">
-                  {threads.map((thread) => (
-                    <div key={thread.id} className="group" data-thread-id={thread.id}>
-                      <button
-                        onClick={() => onSelectThread(thread.id)}
-                        className={cn(
-                          'w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-muted/60 transition-all duration-200 relative',
-                          selectedThreadId === thread.id && 'bg-primary/10',
-                        )}
-                      >
-                        <ThreadMark
-                          thread={thread}
-                          selected={selectedThreadId === thread.id}
-                          size="sm"
-                          fmt={fmt}
-                        />
-                        <div className="flex-1 min-w-0 text-left">
-                          <div className="truncate font-medium text-sm">{threadLabel(thread, fmt)}</div>
-                          {thread.description && (
-                            <div className="text-xs text-muted-foreground truncate mt-0.5">
-                              {thread.description}
-                            </div>
+                  {threads.map((thread) => {
+                    const selected = selectedThreadId === thread.id;
+                    const status = threadStatus(thread, t);
+
+                    return (
+                      <div key={thread.id} className="group" data-thread-id={thread.id}>
+                        <button
+                          onClick={() => onSelectThread(thread.id)}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-muted/60 transition-all duration-200 relative',
+                            selected && 'bg-primary/10',
                           )}
-                        </div>
-                        <Tooltip delayDuration={600}>
-                          <Tooltip.Content>{t('CHAT_THREAD_DELETE')}</Tooltip.Content>
-                          <Tooltip.Trigger asChild>
-                            <div
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteThread(thread.id);
-                              }}
-                              className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 cursor-pointer"
-                              aria-label={t('CHAT_THREAD_DELETE')}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
+                          aria-current={selected ? 'true' : undefined}
+                        >
+                          <ThreadMark thread={thread} selected={selected} size="sm" fmt={fmt} />
+                          <div className="flex-1 min-w-0 text-left">
+                            <div className="truncate font-medium text-sm">{threadLabel(thread, fmt)}</div>
+                            {thread.description && (
+                              <div className="text-xs text-muted-foreground truncate mt-0.5">
+                                {thread.description}
+                              </div>
+                            )}
+                            {/* The dot on the tile is only a picture; this is what it says. */}
+                            {status ? <div className="sr-only">{status}</div> : null}
+                          </div>
+                          <Tooltip delayDuration={600}>
+                            <Tooltip.Content>{t('CHAT_THREAD_DELETE')}</Tooltip.Content>
+                            <Tooltip.Trigger asChild>
+                              <div
+                                onClick={(e) => {
                                   e.stopPropagation();
                                   onDeleteThread(thread.id);
-                                }
-                              }}
-                            >
-                              <Trash2 size={14} />
-                            </div>
-                          </Tooltip.Trigger>
-                        </Tooltip>
-                      </button>
-                    </div>
-                  ))}
+                                }}
+                                className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 cursor-pointer"
+                                aria-label={t('CHAT_THREAD_DELETE')}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onDeleteThread(thread.id);
+                                  }
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </div>
+                            </Tooltip.Trigger>
+                          </Tooltip>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -340,9 +376,11 @@ export const ChatSidebar = memo(function ChatSidebar({
                   className="relative flex w-full justify-center"
                   data-thread-id={thread.id}
                 >
+                  {/* At the rail's edge, out in the list's padding: at `left-0` a
+                      40px tile in the 64px rail covers it once a scrollbar shows. */}
                   {selected && (
                     <span
-                      className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary"
+                      className="absolute -left-2 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary"
                       aria-hidden="true"
                     />
                   )}
