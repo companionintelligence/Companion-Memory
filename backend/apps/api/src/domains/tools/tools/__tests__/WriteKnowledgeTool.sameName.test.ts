@@ -587,6 +587,49 @@ describe('memory.remember with entity.create for a name the user already has', (
       expect(result.data?.results[0].message).not.toContain('Did not save');
     });
 
+    // An import stores `phones` as ten-digit keys; the model writes the number as a person would.
+    it('does not report a phone number the person already has as lost, however it is written', async () => {
+      const graph = makePipeline([
+        entityRow({ ...jordan(), properties: { city: 'Oakland', phones: ['5550100100'] } }),
+      ]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { phones: ['+1 (555) 010-0100'] },
+          },
+        ],
+      });
+
+      expect(result.data?.results[0]).toMatchObject({ status: 'skipped', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain('already has the phone number');
+      expect(result.data?.results[0].message).not.toContain('Did not save');
+    });
+
+    it('says a different description was kept when it writes nothing else', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            description: 'Climbs on Tuesdays',
+            properties: { emails: ['jordan@example.com'] },
+          },
+        ],
+      });
+
+      expect(result.data?.results[0]).toMatchObject({ status: 'skipped', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain('Did not save the email address');
+      expect(result.data?.results[0].message).toContain('Its description was kept');
+      expect(graph.nodes.get(JORDAN)?.description).toBe('A friend from the climbing gym');
+    });
+
     it('writes nothing when the only other fact is the description it already has', async () => {
       const graph = makePipeline([jordan()]);
 

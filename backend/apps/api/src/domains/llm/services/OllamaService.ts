@@ -2117,13 +2117,6 @@ function parameterBillionsFrom(raw: string | undefined): number | null {
 }
 
 /**
- * Exported for direct unit testing — see `__tests__/OllamaService.savedKnowledgeWrapUp.test.ts`.
- * A tool-only turn (the model called `memory.remember` or similar and produced
- * no prose of its own) leaves the user looking at silence unless something
- * says what happened; a turn that already has prose needs no synthetic
- * addition.
- */
-/**
  * A streamed chunk with its tool calls sorted: collected into `kept` when the
  * round offered tools. Otherwise they go into `discarded` and are left out of
  * the chunk that is yielded, so the viewer is not shown a call that never runs.
@@ -2153,6 +2146,13 @@ function keepOfferedToolCalls(
   return { ...chunk, message };
 }
 
+/**
+ * Exported for direct unit testing — see `__tests__/OllamaService.savedKnowledgeWrapUp.test.ts`.
+ * A tool-only turn (the model called `memory.remember` or similar and produced
+ * no prose of its own) leaves the user looking at silence unless something
+ * says what happened; a turn that already has prose needs no synthetic
+ * addition.
+ */
 export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
   const assistants = messages.filter((message) => message.role === 'assistant');
   const hasProse = assistants.some(
