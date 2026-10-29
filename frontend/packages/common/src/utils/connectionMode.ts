@@ -135,6 +135,16 @@ function probeRemote(): Promise<HealthProbe<unknown>> {
 }
 
 /**
+ * Whether the configured Memory answers its health endpoint now: one fresh request under the
+ * remote probe's budget, not the mode a probe settled on up to {@link CONNECTION_REPROBE_INTERVAL_MS}
+ * ago, and not `navigator.onLine`, which only says a network is there. For a choice that turns on
+ * the answer at this moment, like reloading the page onto a view whose code failed to download.
+ */
+export async function memoryAnswers(): Promise<boolean> {
+  return (await probeRemote()).ok;
+}
+
+/**
  * Probes the on-device LocalHub sidecar (native only). `localHubSession()`
  * calls the plugin's idempotent `start()` — if the sidecar is already running
  * it returns the existing baseUrl/token without restarting or regenerating the

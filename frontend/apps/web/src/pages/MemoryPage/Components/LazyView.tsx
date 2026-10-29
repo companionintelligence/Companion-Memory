@@ -1,5 +1,6 @@
-import { type ComponentType, Suspense, lazy, useState } from 'react';
+import { type ComponentType, Suspense, lazy, useEffect, useRef, useState } from 'react';
 
+import { memoryAnswers } from '@ci/common';
 import { Button } from '@ci/shadcn';
 
 import { isChunkLoadError } from '@/lib/telemetry';
@@ -40,34 +41,71 @@ export function LazyView({ viewKey, load }: Props) {
   // render, so "Try again" against the original component can never succeed.
   // Retry mints a fresh payload, which re-runs import().
   const [View, setView] = useState<ComponentType>(() => lazy(load));
+  // Set while Try again waits to hear whether Memory answers, so the message says what is going on
+  // and a second press does not start a second check.
+  const [checking, setChecking] = useState(false);
+  // Leaving the view (another tab) while the check runs must not reload the page the person moved on to.
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   return (
     <ViewCrashBoundary
       resetKey={viewKey}
       fallback={(retry, error) => (
         <ErrorState
-          description="This view could not be loaded. Check your connection and try again."
-          onRetry={() => {
+          description={
+            checking
+              ? 'Checking whether Memory answers…'
+              : 'This view could not be loaded. Check your connection and try again.'
+          }
+          onRetry={async () => {
+            if (checking) {
+              return;
+            }
+
             // A chunk that failed to download stays failed for the life of the
             // document. Chromium keeps the failed fetch in its module map, so a
             // fresh import() of the same URL rejects at once without a request.
             // The dependencies Vite had already tried to preload stay failed too.
             // Once the connection is back only a reload fetches them again. The
             // view is in the URL, so the reload lands on the same view.
-            // Still offline, the in-place retry below fails again and keeps
-            // this message, which is better than the browser's offline page.
-            if (isChunkLoadError(error) && navigator.onLine) {
-              window.location.reload();
+            //
+            // Whether the reload can fetch them is Memory's to say, so it is asked
+            // now. `navigator.onLine` only says a network is there (a phone on
+            // Wi-Fi with Memory down is "online"), and the app's connection
+            // probe can be up to 30 s old. Memory not answering, the in-place
+            // retry below fails again and keeps this message, which is better
+            // than the browser's offline page.
+            if (isChunkLoadError(error)) {
+              setChecking(true);
+              const answers = await memoryAnswers();
 
-              return;
+              if (!mounted.current) {
+                return;
+              }
+
+              setChecking(false);
+
+              if (answers) {
+                window.location.reload();
+
+                return;
+              }
             }
 
             // A fresh payload, for a browser that does not keep failed fetches
-            // (Firefox, Safari) when the device reports itself offline; `retry`
-            // to clear the boundary so the new one actually gets rendered. Both
-            // land in one batch. For a plain render crash the module is already
-            // loaded, so this is just a remount. That is the right recovery for
-            // a component that threw mid-render anyway.
+            // (Firefox, Safari) when Memory does not answer; `retry` to clear the
+            // boundary so the new one actually gets rendered. Both land in one
+            // batch. For a plain render crash the module is already loaded, so
+            // this is just a remount. That is the right recovery for a component
+            // that threw mid-render anyway.
             setView(() => lazy(load));
             retry();
           }}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LocalDocument } from '@/api/powersync/localSearch';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { localDocumentLines } from './LocalDocumentRow';
 
@@ -42,5 +43,22 @@ describe('localDocumentLines', () => {
   it('names the kind when there is no text at all', () => {
     expect(localDocumentLines({ ...base, entityType: 'note' }).title).toBe('Untitled note');
     expect(localDocumentLines({ ...base, entityType: 'person' }).title).toBe('Unnamed person');
+  });
+
+  it('names an untitled chat as Chat does, for when it started', () => {
+    const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+    const chat = { ...base, entityType: 'thread', entityId: '01a17e07-73a0-7abc-8def-0123456789ab' };
+
+    expect(localDocumentLines(chat, fmt).title).toBe('Chat · Oct 27, 15:43');
+  });
+
+  it('keeps that name for an untitled chat with a body, the body going under it as online', () => {
+    const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+    const chat = { ...base, entityType: 'thread', entityId: '01a17e07-73a0-7abc-8def-0123456789ab' };
+
+    expect(localDocumentLines({ ...chat, title: '  ', body: 'Plans for next spring' }, fmt)).toEqual({
+      title: 'Chat · Oct 27, 15:43',
+      subtitle: 'Plans for next spring',
+    });
   });
 });

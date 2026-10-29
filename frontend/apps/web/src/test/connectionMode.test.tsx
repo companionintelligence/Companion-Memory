@@ -5,6 +5,7 @@ import { setApiBaseUrl } from '@ci/common/src/utils/apiBase';
 import {
   ConnectionModeProvider,
   LOCAL_PROBE_TIMEOUT_MS,
+  memoryAnswers,
   REMOTE_PROBE_TIMEOUT_MS,
   resolveConnectionMode,
   useConnectionMode,
@@ -36,6 +37,43 @@ afterEach(() => {
   vi.useRealTimers();
   setApiBaseUrl('');
   setApiKey(null);
+});
+
+// What LazyView's Try again asks: whether Memory answers now, one fresh request each time.
+describe('memoryAnswers', () => {
+  it('is true when /api/health answers, and asks again on every call', async () => {
+    setWindow({});
+    const fetchMock = vi.fn(async () => okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(memoryAnswers()).resolves.toBe(true);
+    await expect(memoryAnswers()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(urlOf(fetchMock.mock.calls[0][0] as RequestInfo)).toContain('/api/health');
+  });
+
+  it('is false when the request fails', async () => {
+    setWindow({});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    await expect(memoryAnswers()).resolves.toBe(false);
+  });
+
+  it('gives up after the remote probe budget instead of waiting on a stalled server', async () => {
+    vi.useFakeTimers();
+    setWindow({});
+    vi.stubGlobal('fetch', slowServer(REMOTE_PROBE_TIMEOUT_MS * 10));
+
+    const answered = memoryAnswers();
+    await vi.advanceTimersByTimeAsync(REMOTE_PROBE_TIMEOUT_MS + 1);
+
+    await expect(answered).resolves.toBe(false);
+  });
 });
 
 describe('resolveConnectionMode — "connected"', () => {

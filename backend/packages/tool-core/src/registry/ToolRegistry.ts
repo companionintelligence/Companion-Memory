@@ -542,6 +542,34 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
   }
 
   /**
+   * The tool's own reason this call could never run ({@link ToolHandle.checkCall}), or `undefined`.
+   *
+   * A lookup that throws is not a refusal: the call is queued as it was before the tool could
+   * answer, and `execute` makes the same decision after it is approved.
+   */
+  private async callRefusal(
+    tool: TTool,
+    context: ToolInvocationContext,
+    input: unknown,
+  ): Promise<string | undefined> {
+    if (!tool.checkCall) {
+      return undefined;
+    }
+
+    try {
+      return await tool.checkCall(context, input);
+    } catch (error) {
+      this.logger.warn(`Could not check this call to ${tool.schema.name} before queueing it`, {
+        intent: tool.schema.name,
+        userId: context.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return undefined;
+    }
+  }
+
+  /**
    * {@link privacyOf} for a resolved tool and an already-coerced input.
    *
    * A per-call answer that throws (a lookup the tool needed failed) is read as destructive rather
@@ -629,7 +657,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       };
     }
 
-    const invalid = tool.checkInput?.(coerced);
+    const invalid = tool.checkInput?.(coerced) ?? (await this.callRefusal(tool, context, coerced));
 
     if (invalid !== undefined) {
       // A card the owner can only approve into a failure is not a question worth asking them. The

@@ -91,6 +91,25 @@ const QUERY_CANDIDATE_LIMIT = 300;
 // list is complete; above it, only the newest rows of that type are in it.
 const NAME_SORT_CANDIDATE_LIMIT = 500;
 /**
+ * Kinds the text and tag searches return that carry no time of their own, only their last write:
+ * a chat thread (its last message or title), a planner task, a feed action and a document excerpt.
+ * {@link SearchResolver.getEntityTimestamp} has to give them that write time, because it is also
+ * their cursor, so a date window kept them as if they had happened then: a chat started today
+ * came back under "Last week". A date window leaves them out instead, as the timed browse never
+ * fetches them and the explorer's When filter already sets them aside (`UNDATED_UNLISTED_TYPES`
+ * in the web app's `filterParams.ts`). The API and shared links get the same answer.
+ *
+ * Notes, files, content, people and places also ride a row stamp here, and stay: an agent's or a
+ * saved search's date range has always included them, and the explorer leaves them out itself.
+ */
+const ROW_DATED_TYPES: ReadonlySet<ResolvedEntity['type']> = new Set([
+  'thread',
+  'task',
+  'action',
+  'file-chunk',
+]);
+
+/**
  * Pin caps for the map read (`mapPins`).
  *
  * The map is capped by row count rather than paged: it draws a whole located
@@ -848,9 +867,16 @@ export class SearchResolver {
     }
 
     // Date filter (when date wasn't the candidate source — the timed path filters in SQL).
-    // Entities without a domain timestamp are dropped while a date filter is active.
+    // Entities without a domain timestamp, and the kinds dated only by their last write
+    // (ROW_DATED_TYPES), are dropped while a date filter is active.
     if (hasDate && candidateSource !== 'timed') {
       entries = entries.filter((entry) => {
+        // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
+        // knowing what it is dated by, as the timed browse gives a named kind its rows too.
+        if (ROW_DATED_TYPES.has(entry.type) && !input.includeTypes?.includes(entry.type)) {
+          return false;
+        }
+
         const timestamp = SearchResolver.getEntityTimestamp(entry);
 
         if (timestamp == null) {

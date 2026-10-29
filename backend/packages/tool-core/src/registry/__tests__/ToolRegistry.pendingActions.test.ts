@@ -202,6 +202,67 @@ describe('ToolRegistry.executeTool — a call that could never run is not queued
   });
 });
 
+describe('ToolRegistry.executeTool — a call the tool refuses after a lookup is not queued', () => {
+  async function harnessWithCallCheck(checkCall: jest.Mock) {
+    const built = await harness(FORGET, QUEUE_RULING);
+    (built.tool as any).checkCall = checkCall;
+
+    return built;
+  }
+
+  it("answers TOOL_INVALID_INPUT with the tool's reason and writes nothing to the queue", async () => {
+    const checkCall = jest.fn(async () => 'Archive cannot hide messages');
+    const { registry, tool, propose } = await harnessWithCallCheck(checkCall);
+    const ctx = context();
+
+    const result = await registry.executeTool('memory_forget', ctx, { entityIds: ['e-1'] });
+
+    expect(result.error).toStrictEqual({
+      code: 'TOOL_INVALID_INPUT',
+      message: 'Nothing was queued for confirmation: Archive cannot hide messages',
+      retryable: false,
+    });
+    expect(checkCall).toHaveBeenCalledWith(expect.objectContaining({ userId: ctx.userId }), {
+      entityIds: ['e-1'],
+    });
+    expect(propose).not.toHaveBeenCalled();
+    expect((tool as any).execute).not.toHaveBeenCalled();
+  });
+
+  it('queues as before when the tool has no reason to refuse', async () => {
+    const checkCall = jest.fn(async () => undefined);
+    const { registry, propose } = await harnessWithCallCheck(checkCall);
+
+    const result = await registry.executeTool('memory_forget', context(), { entityIds: ['e-1'] });
+
+    expect(result.error?.code).toBe('TOOL_QUEUED');
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues as before when the lookup fails, leaving the decision to execute', async () => {
+    const checkCall = jest.fn(async () => {
+      throw new Error('database unavailable');
+    });
+    const { registry, propose } = await harnessWithCallCheck(checkCall);
+
+    const result = await registry.executeTool('memory_forget', context(), { entityIds: ['e-1'] });
+
+    expect(result.error?.code).toBe('TOOL_QUEUED');
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not asked when checkInput already refused the call', async () => {
+    const checkCall = jest.fn(async () => 'never asked');
+    const { registry, tool } = await harnessWithCallCheck(checkCall);
+    (tool as any).checkInput = jest.fn(() => 'entityIds.0: Invalid uuid');
+
+    const result = await registry.executeTool('memory_forget', context(), { entityIds: ['a name'] });
+
+    expect(result.error?.message).toBe('Nothing was queued for confirmation: entityIds.0: Invalid uuid');
+    expect(checkCall).not.toHaveBeenCalled();
+  });
+});
+
 describe('ToolRegistry.executeTool — an execute ruling is the unchanged path', () => {
   it('runs the tool and still emits the behavioural signal', async () => {
     const { registry, tool, propose, record } = await harness(FORGET, EXECUTE_RULING);
