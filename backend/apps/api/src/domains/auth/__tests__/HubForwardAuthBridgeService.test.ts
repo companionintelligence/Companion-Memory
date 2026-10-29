@@ -662,6 +662,60 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: null,
+        refused: null,
+      });
+    });
+
+    describe('for a Hub that sends no stable id, says what alignSession would refuse', () => {
+      it('several case-insensitive matches', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_ambiguous' });
+      });
+
+      it('an account whose address nobody proved, with the same answer alignSession gives', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(
+          unprovenAccount('user-planted', 'hello@lifescope.io'),
+        );
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_unproven' });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+        ).resolves.toMatchObject({ refused: 'account_unproven' });
+      });
+
+      it('not for a browser already signed in to that address, which alignSession keeps', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(own);
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'))),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: null,
+        });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('hello@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      });
+
+      it('not for a proven account', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
       });
     });
 
@@ -675,6 +729,7 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'new@lifescope.io',
         accountId: 'user-a',
+        refused: null,
       });
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
@@ -688,18 +743,124 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: 'user-a',
+        refused: null,
       });
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
 
-    it('reports no account for someone not created yet, or refused', async () => {
-      const { service } = makeService();
+    it('reports no account and no refusal for someone not created yet, creating nothing', async () => {
+      const { service, userService } = makeService();
 
       await expect(
         service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: null,
+        refused: null,
+      });
+      expect(userService.create).not.toHaveBeenCalled();
+    });
+
+    describe('says why it withholds the account of a person alignSession would refuse', () => {
+      it('several case-insensitive matches', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_ambiguous' });
+      });
+
+      it('an account another person of this Hub holds', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'x@lifescope.io'));
+        federatedIdentityService.findForUserFromIssuer.mockResolvedValue({
+          userId: 'user-a',
+          issuer: DIRECTORY,
+          subject: OTHER_HUB_ID,
+        });
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('x@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'x@lifescope.io',
+          accountId: null,
+          refused: 'account_linked_elsewhere',
+        });
+      });
+
+      it('an account whose address nobody proved', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(
+          unprovenAccount('user-planted', 'hello@lifescope.io'),
+        );
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_unproven' });
+        expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      });
+
+      it('a linked account that was deleted', async () => {
+        const { service, federatedIdentityService } = makeService();
+        federatedIdentityService.findUserId.mockResolvedValue('user-gone');
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: 'account_unavailable',
+        });
+      });
+
+      it('but not an unproven account this browser is signed in to, as alignSession adopts it', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(own);
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'))),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: 'user-a',
+          refused: null,
+        });
+        await expect(
+          service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      });
+
+      it('the same reason alignSession answers with, for a signed-out session on an unproven account', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        authService.resolveLiveSession.mockResolvedValue(null);
+        userService.findById.mockResolvedValue(own);
+        const headers = stableHeaders('hello@lifescope.io');
+
+        const described = await service.describeIdentity(requestWith(headers));
+        const aligned = await service.alignSession(requestWith(headers), response());
+
+        expect(described.refused).toBe('account_unproven');
+        expect(aligned.refused).toBe(described.refused);
+      });
+
+      it('an address an account awaiting its purge still holds', async () => {
+        const { service, userService } = makeService();
+        userService.checkEmailAvailability.mockResolvedValue(true);
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: 'account_unavailable',
+        });
+        expect(userService.create).not.toHaveBeenCalled();
       });
     });
 
@@ -709,6 +870,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(service.describeIdentity(requestWith({}, null))).resolves.toEqual({
         username: null,
         accountId: null,
+        refused: null,
       });
     });
   });
@@ -989,6 +1151,7 @@ describe('HubForwardAuthBridgeService', () => {
         await expect(service.describeIdentity(requestWith(headers, null))).resolves.toEqual({
           username: 'hello@lifescope.io',
           accountId: 'user-a',
+          refused: null,
         });
       });
 

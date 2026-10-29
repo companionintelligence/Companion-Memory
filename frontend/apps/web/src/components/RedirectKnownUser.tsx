@@ -28,6 +28,8 @@ export interface HubIdentity {
   username: string | null;
   /** The Memory account the Hub person signs in as, when the Hub sends a stable id. */
   accountId: string | null;
+  /** Why Memory would not sign the Hub person in at all, when it would not. */
+  refused?: string | null;
 }
 
 /**
@@ -35,11 +37,17 @@ export interface HubIdentity {
  *
  * By account when the server could say which one the Hub person signs in as. Their address
  * may have changed on the Hub or here since they were linked, and proves nothing either way.
- * By address otherwise, which is all a Hub without stable ids gives to go on.
+ * By address otherwise, which is all a Hub without stable ids gives to go on. A person Memory
+ * refuses has no account here, so any session this browser holds is someone else's, even one
+ * at their address.
  */
 export function hubNamesSomeoneElse(user: { id: string; email: string }, hub: HubIdentity): boolean {
   if (!hub.username) {
     return false;
+  }
+
+  if (hub.refused) {
+    return true;
   }
 
   if (hub.accountId) {
@@ -49,7 +57,7 @@ export function hubNamesSomeoneElse(user: { id: string; email: string }, hub: Hu
   return !emailsEqual(user.email, hub.username);
 }
 
-const NO_HUB_IDENTITY: HubIdentity = { username: null, accountId: null };
+const NO_HUB_IDENTITY: HubIdentity = { username: null, accountId: null, refused: null };
 
 export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // `initializing`, not `loading`: the latter is also true while a login or
@@ -75,7 +83,11 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
     })
       .then((body) => {
         if (!cancelled) {
-          setHubIdentity({ username: body?.username ?? null, accountId: body?.accountId ?? null });
+          setHubIdentity({
+            username: body?.username ?? null,
+            accountId: body?.accountId ?? null,
+            refused: body?.refused ?? null,
+          });
         }
       })
       .catch(() => {
