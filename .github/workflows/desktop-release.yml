@@ -545,9 +545,28 @@ jobs:
         run: |
           set -euo pipefail
           DMG=$(find frontend/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' | head -1)
+          SUBMIT_LOG="$RUNNER_TEMP/notarytool-submit.txt"
+          set +e
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID_SECRET" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 600
+            --wait --timeout 600 2>&1 | tee "$SUBMIT_LOG"
+          SUBMIT_EXIT=${PIPESTATUS[0]}
+          set -e
+          SUBMISSION_ID=$(sed -nE 's/^[[:space:]]*id: ([[:xdigit:]-]+)$/\1/p' "$SUBMIT_LOG" | head -1)
+          NOTARY_STATUS=$(sed -nE 's/^[[:space:]]*status: ([[:alpha:][:space:]]+)$/\1/p' "$SUBMIT_LOG" | tail -1 | xargs)
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::error::notarytool returned no submission ID (exit $SUBMIT_EXIT)."
+            exit 1
+          fi
+          NOTARY_LOG="$RUNNER_TEMP/notarytool-log.json"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID_SECRET" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            "$NOTARY_LOG"
+          cat "$NOTARY_LOG"
+          if [ "$NOTARY_STATUS" != "Accepted" ] || [ "$SUBMIT_EXIT" -ne 0 ]; then
+            echo "::error::Notarization status was '$NOTARY_STATUS' (submission $SUBMISSION_ID)."
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
           spctl -a -vvv -t open --context context:primary-signature "$DMG" 2>&1 | grep -q 'source=Notarized Developer ID'
           xcrun stapler validate "$DMG"
