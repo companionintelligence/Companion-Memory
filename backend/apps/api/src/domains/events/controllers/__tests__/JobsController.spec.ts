@@ -5,13 +5,17 @@ import request from 'supertest';
 import { ContextService } from '@ci/common/context';
 import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { MAX_CONCURRENCY } from '@ci/common/job-controls';
+import config from '@ci/configuration';
 
 import { EventListenerRegistry } from '../../event-registration';
+import { queueWorkerProcesses } from '../../jobConcurrency';
 import { JobControlsService } from '../../services/JobControlsService';
 import { JobMonitorService } from '../../services/JobMonitorService';
 import { JobQueryService } from '../../services/JobQueryService';
 import { JobsController } from '../JobsController';
+
+/** What the appliance-wide box takes at most: the shipped figure across every worker process. */
+const applianceMost = () => config.queues.concurrency * queueWorkerProcesses();
 
 /**
  * `POST /jobs/crons/run`, the one route on this controller that ACTS rather than
@@ -341,16 +345,49 @@ describe('PUT /jobs/controls', () => {
   });
 
   it.each([
-    ['100 for the whole appliance', { global: { concurrency: 100 } }],
-    ['0 for the per-queue default', { global: { perQueueConcurrency: 0 } }],
-    ['2.5 for the whole appliance', { global: { concurrency: 2.5 } }],
-    ['100 for one queue', { queues: [{ name: 'image-description', concurrency: 100 }] }],
-  ])(`explains the 1 to ${MAX_CONCURRENCY} range when given %s and writes nothing`, async (_label, body) => {
+    [
+      '0 for the per-queue default',
+      { global: { perQueueConcurrency: 0 } },
+      () => config.queues.perQueueConcurrency,
+    ],
+    ['2.5 for the whole appliance', { global: { concurrency: 2.5 } }, () => applianceMost()],
+  ])('explains the range when given %s and writes nothing', async (_label, body, most) => {
     const response = await request(app.getHttpServer()).put('/jobs/controls').send(body).expect(400);
 
     expect(response.body.message).toMatch(
-      new RegExp(`^Concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}\\.`),
+      new RegExp(`^Concurrency must be a whole number between 1 and ${most()}\\.`),
     );
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  // The shipped figures are the `max` the card shows. A value above one used to
+  // be stored and then clamped, so 20 typed into the appliance box saved, read
+  // back as 20 and ran at 10.
+  it.each([
+    [
+      'one more than the appliance runs',
+      () => ({ global: { concurrency: applianceMost() + 1 } }),
+      () => `The appliance-wide limit can be at most ${applianceMost()} (the figure this build ships with)`,
+    ],
+    [
+      '100 for the whole appliance',
+      () => ({ global: { concurrency: 100 } }),
+      () => `The appliance-wide limit can be at most ${applianceMost()}`,
+    ],
+    [
+      'one more than the per-queue default ships with',
+      () => ({ global: { perQueueConcurrency: config.queues.perQueueConcurrency + 1 } }),
+      () => `The per-queue default can be at most ${config.queues.perQueueConcurrency}`,
+    ],
+    [
+      '100 for one queue',
+      () => ({ queues: [{ name: 'image-description', concurrency: 100 }] }),
+      () => `The "image-description" queue can be at most ${config.queues.perQueueConcurrency}`,
+    ],
+  ])('refuses %s with the cap named and writes nothing', async (_label, body, message) => {
+    const response = await request(app.getHttpServer()).put('/jobs/controls').send(body()).expect(400);
+
+    expect(response.body.message).toContain(message());
     expect(repository.query).not.toHaveBeenCalled();
   });
 
@@ -360,7 +397,8 @@ describe('PUT /jobs/controls', () => {
       .send({ global: { concurrency: 4, perQueueConcurrency: 100 } })
       .expect(400);
 
-    expect(response.body.message).toContain('The per-queue default was given 100.');
+    expect(response.body.message).toContain('The per-queue default can be at most');
+    expect(response.body.message).toContain('It was given 100.');
     expect(repository.query).not.toHaveBeenCalled();
   });
 

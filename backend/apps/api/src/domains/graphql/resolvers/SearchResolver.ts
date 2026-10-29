@@ -873,7 +873,7 @@ export class SearchResolver {
       entries = entries.filter((entry) => {
         // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
         // knowing what it is dated by, as the timed browse gives a named kind its rows too.
-        if (ROW_DATED_TYPES.has(entry.type) && !input.includeTypes?.includes(entry.type)) {
+        if (ROW_DATED_TYPES.has(entry.type) && !input.includeTypes?.some((type) => type === entry.type)) {
           return false;
         }
 

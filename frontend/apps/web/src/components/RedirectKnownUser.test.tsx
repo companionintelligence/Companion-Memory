@@ -33,6 +33,19 @@ describe('hubNamesSomeoneElse', () => {
     ).toBe(true);
   });
 
+  it('names someone else whenever Memory refuses the Hub person, even at the same address', () => {
+    // The bridge has signed this browser out already; a session that outlived that (a failed
+    // bridge call) belongs to whoever holds the address here, not to the Hub person.
+    for (const refused of [
+      'account_linked_elsewhere',
+      'account_unproven',
+      'account_ambiguous',
+      'account_unavailable',
+    ]) {
+      expect(hubNamesSomeoneElse(user, { username: 'old@example.com', accountId: null, refused })).toBe(true);
+    }
+  });
+
   it('compares addresses, ignoring case, when the Hub sends no stable id', () => {
     expect(hubNamesSomeoneElse(user, { username: 'Old@Example.com', accountId: null })).toBe(false);
     expect(hubNamesSomeoneElse(user, { username: 'other@example.com', accountId: null })).toBe(true);

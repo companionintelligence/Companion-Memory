@@ -203,6 +203,69 @@ function ownerManagedKeysMessage(keys: string[]): string {
   );
 }
 
+/**
+ * The identity lists (`emails`, `phones` and the rest of the owner-managed keys that are not
+ * settings) in a create's `properties`. An `entity.create` that lands on a same-named Person
+ * leaves them out and saves the rest: that row's lists are refused to this tool (see
+ * `ownerManagedKeysIn`). A second Person of the same name to hold them is the duplicate that
+ * matching by name is there to stop. Edit Person is where the user adds an address instead.
+ */
+function identityListKeysIn(properties: Record<string, unknown> | undefined): string[] {
+  return Object.keys(properties ?? {}).filter(
+    (key) => isOwnerManagedPropertyKey(key) && !isOwnerSettingPropertyKey(key),
+  );
+}
+
+/** `properties` without `keys`, or `undefined` when nothing is left. */
+function withoutKeys(
+  properties: Record<string, unknown> | undefined,
+  keys: string[],
+): Record<string, unknown> | undefined {
+  const kept = Object.entries(properties ?? {}).filter(([key]) => !keys.includes(key));
+
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+}
+
+const IDENTITY_LIST_WORDS: Record<string, string> = {
+  emails: 'email address',
+  phones: 'phone number',
+  Phones: 'phone number',
+  Faxes: 'fax number',
+  names: 'other names',
+};
+
+/** "the email address", or "the email address and the phone number", for these identity keys. */
+function identityListWords(keys: string[]): string {
+  const words = [...new Set(keys.map((key) => IDENTITY_LIST_WORDS[key] ?? `"${key}"`))];
+
+  return words.length === 1
+    ? `the ${words[0]}`
+    : `the ${words.slice(0, -1).join(', the ')} and the ${words.at(-1)}`;
+}
+
+/** What the model is told about identity lists a same-named create left out. */
+function identityListsLeftOutMessage(keys: string[], person: GraphNodeEntity): string {
+  return (
+    `Did not save ${identityListWords(keys)} on the existing Person "${person.name}" (${person.entity_id}): ` +
+    'imports and merges keep contact details, so memory.remember cannot add them to someone the user already has. ' +
+    `Tell the user to add it with Edit Person on ${person.name}'s page.`
+  );
+}
+
+/** Lower-cased, trimmed strings of an identity list value, which is a list or a single value. */
+function identityValues(value: unknown): string[] {
+  return (Array.isArray(value) ? value : [value])
+    .filter((item) => item != null && item !== '')
+    .map((item) => String(item).trim().toLowerCase());
+}
+
+/** Whether the stored row already holds every value the create names under `key`. */
+function holdsIdentityValues(entity: GraphNodeEntity, key: string, value: unknown): boolean {
+  const stored = new Set(identityValues((entity.properties as Record<string, unknown> | null)?.[key]));
+
+  return identityValues(value).every((item) => stored.has(item));
+}
+
 /** Whether `next` would overwrite a non-empty stored value with a different one. */
 function overwritesText(stored: string | null | undefined, next: string | undefined): boolean {
   return next !== undefined && (stored ?? '').trim() !== '' && next.trim() !== (stored ?? '').trim();
@@ -639,9 +702,22 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               ? null
               : await this.findSameNamed(ownerId, operation, isSelf);
             const targetEntityId = operation.entityId ?? sameNamed?.entity_id;
-            const ownerManagedCreate = ownerManagedKeysIn(operation, {
-              newEntity: !operation.entityId && !sameNamed,
-            });
+            // Only a same-named Person matches a create that carries identity lists (see
+            // findSameNamed). Values the row already holds are saved already; the rest are left out.
+            const identityKeys = sameNamed ? identityListKeysIn(operation.properties) : [];
+            const leftOutKeys = sameNamed
+              ? identityKeys.filter(
+                  (key) => !holdsIdentityValues(sameNamed, key, operation.properties?.[key]),
+                )
+              : [];
+            const properties =
+              identityKeys.length > 0
+                ? withoutKeys(operation.properties, identityKeys)
+                : operation.properties;
+            const ownerManagedCreate = ownerManagedKeysIn(
+              { properties },
+              { newEntity: !operation.entityId && !sameNamed },
+            );
             if (ownerManagedCreate.length > 0) {
               results.push({
                 kind: operation.kind,
@@ -661,6 +737,36 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             // name this row.
             const keptDescription =
               sameNamed != null && overwritesText(ownDescriptionOf(sameNamed), operation.description);
+            const leftOut =
+              sameNamed && leftOutKeys.length > 0
+                ? identityListsLeftOutMessage(leftOutKeys, sameNamed)
+                : null;
+
+            // "Remember that Jordan Lee's email is …" and nothing else: with the address left out
+            // there is nothing to write. Reporting "updated" would tell the model it was saved. A
+            // description equal to the stored one is nothing new either.
+            if (
+              sameNamed &&
+              identityKeys.length > 0 &&
+              properties === undefined &&
+              (operation.description === undefined ||
+                keptDescription ||
+                operation.description.trim() === (ownDescriptionOf(sameNamed) ?? '').trim()) &&
+              operation.searchContent === undefined &&
+              !operation.relationships?.length
+            ) {
+              rememberName(sameNamed.entity_type, operation.name, sameNamed.entity_id);
+              results.push({
+                kind: operation.kind,
+                status: 'skipped',
+                message:
+                  leftOut ??
+                  `The existing Person "${sameNamed.name}" (${sameNamed.entity_id}) already has ` +
+                    `${identityListWords(identityKeys)}, so there was nothing new to save.`,
+                entityId: sameNamed.entity_id,
+              });
+              break;
+            }
 
             // A soft-deleted (forgotten) row still owns its id, so an id-reuse
             // create must not fall through to createOrUpdateNode's update
@@ -744,7 +850,9 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
                 results.push({
                   kind: operation.kind,
                   status: 'updated',
-                  message: `Dry run: would update existing entity ${existing.entity_id}${sameNamed ? ' (matched by name)' : ''}`,
+                  message:
+                    `Dry run: would update existing entity ${existing.entity_id}${sameNamed ? ' (matched by name)' : ''}` +
+                    (leftOut ? `. ${leftOut}` : ''),
                   entityId: existing.entity_id,
                 });
               } else {
@@ -785,7 +893,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               // Same name, so nothing to write; the stored spelling stays.
               name: sameNamed ? undefined : operation.name,
               description: keptDescription ? undefined : operation.description,
-              properties: operation.properties,
+              properties,
               searchContent: operation.searchContent,
               linkedTable: operation.linkedTable,
               linkedId: operation.linkedId,
@@ -808,7 +916,8 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
                   ? `Updated the existing ${sameNamed.entity_type} "${sameNamed.name}" (${entityId}), matched by name` +
                     (keptDescription
                       ? '; its description was kept, so use entity.update with this entityId to change it'
-                      : '')
+                      : '') +
+                    (leftOut ? `. ${leftOut}` : '')
                   : `Updated existing entity ${entityId}`,
                 entityId,
               });
@@ -1365,15 +1474,16 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
    * this name (ignoring case and surrounding space), for an `entity.create`
    * that names no entity. None when there are several (which one is meant is
    * not this tool's guess), when the create carries a linked key (an import's
-   * coordinate says which row it is), when it carries an owner-managed key,
-   * for other entity types (two events or notes may share a title) or for the
-   * account holder's own Person, whose row has writers and protections of its
-   * own.
+   * coordinate says which row it is), for other entity types (two events or
+   * notes may share a title) or for the account holder's own Person, whose row
+   * has writers and protections of its own.
    *
-   * The owner-managed case is "remember Dana, dana@example.com": an identity
-   * list is refused on a row that already exists, so landing on the Dana the
-   * user has would fail the whole create. A new entity records the address
-   * (see `ownerManagedKeysIn`), as it did before names were matched.
+   * A create that carries an identity list still matches a Person: "remember
+   * Dana, dana@example.com" for the Dana the user has saves its other facts on
+   * her and leaves the address out (see `identityListKeysIn`). It used to skip
+   * the match and mint a second Dana to hold the address. A place or concept
+   * has no Edit Person to add the address on, so for those the create still
+   * skips the match and the new entity records it.
    */
   private async findSameNamed(
     ownerId: string,
@@ -1393,7 +1503,11 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       return null;
     }
 
-    if (operation.linkedTable || operation.linkedId || ownerManagedKeysIn(operation).length > 0) {
+    if (operation.linkedTable || operation.linkedId) {
+      return null;
+    }
+
+    if (entityType !== 'Person' && ownerManagedKeysIn(operation).length > 0) {
       return null;
     }
 

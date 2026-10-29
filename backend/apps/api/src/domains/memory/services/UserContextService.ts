@@ -269,7 +269,7 @@ export class UserContextService {
     if (context.familyMembers.length > 0) {
       lines.push('', '## Family Members');
       context.familyMembers.forEach((member) => {
-        const label = `${fenceUntrusted(member.name)} (${fenceUntrusted(member.relationship)})`;
+        const label = `${fenceUntrusted(member.name)} (${fenceUntrusted(familyRoleLabel(member))})`;
 
         lines.push(`- ${label}${member.age ? `, age ${member.age}` : ''}`);
         lines.push(`  - Entity ID: ${fenceUntrusted(member.entityId)}`);
@@ -722,6 +722,43 @@ export class UserContextService {
       lines.push(`  - ${fenceUntrusted(value)}`);
     });
   }
+}
+
+/**
+ * What a family member is to the user, in a word: "sibling", "parent", "child".
+ *
+ * The graph type alone can't say: PARENT_OF names the user's parent when it
+ * points at them and their child when it points away, so `direction` decides.
+ * The same words as Self > About you (`familyRoleLabel` in AboutYouSection), so
+ * the model and the page agree on who is whose parent. A type this does not
+ * know, or a PARENT_OF / CHILD_OF without its direction, is lower-cased with
+ * spaces rather than sent as the raw enum.
+ */
+export function familyRoleLabel(member: {
+  relationship: string;
+  direction?: 'outgoing' | 'incoming';
+}): string {
+  switch (member.relationship) {
+    case 'SPOUSE':
+      return 'spouse';
+    case 'SIBLING_OF':
+      return 'sibling';
+    case 'PARENT_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'parent' : 'child';
+      }
+
+      break;
+    case 'CHILD_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'child' : 'parent';
+      }
+
+      break;
+  }
+
+  // "parent of" with no direction says only what the edge says, like the page.
+  return member.relationship.replace(/_/g, ' ').toLowerCase();
 }
 
 /**

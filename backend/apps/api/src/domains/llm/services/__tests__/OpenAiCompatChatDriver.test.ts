@@ -638,14 +638,14 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     expect(create.mock.calls[1][0]).not.toHaveProperty('reasoning_effort');
   });
 
-  it('chat() retries once without it when the backend refuses it, then stops sending it', async () => {
+  it('chat() retries once without it on a refusal and sends it again on the next call', async () => {
     const create = jest.fn().mockRejectedValueOnce(vllmRefusal()).mockResolvedValue(reply);
     const driver = driverWith(create);
 
     await expect(driver.chat(request)).resolves.toMatchObject({ message: { content: '{"ok":true}' } });
     await driver.chat(request);
 
-    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, false]);
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, true]);
     expect(create.mock.calls[1][0]).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
   });
 
@@ -696,7 +696,7 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     await expect(drain()).resolves.not.toHaveLength(0);
     await drain();
 
-    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, false]);
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, true]);
   });
 
   it('retries every call that was in flight when the backend first refused it', async () => {
@@ -733,36 +733,34 @@ describe('turning thinking off on every OpenAI-compatible backend', () => {
     ]);
   });
 
-  it('sends the field again once a refusal is five minutes old', async () => {
-    jest.useFakeTimers();
+  it('sends the field on every call, so a pool peer on Ollama gets it right after a vLLM peer refused it', async () => {
+    // One URL, two engines: the pool sends the first and third calls to vLLM, which refuses "none",
+    // and the second to Ollama, which needs it to stop thinking.
+    const peers = ['vllm', 'ollama', 'vllm'];
+    let call = 0;
+    const create = jest.fn(async (body: Record<string, unknown>) => {
+      const peer = peers[call];
 
-    try {
-      let refuse = true;
-      const create = jest.fn(async (body: Record<string, unknown>) => {
-        if (refuse && 'reasoning_effort' in body) {
-          throw apiError(400, "Invalid value for 'reasoning_effort'");
-        }
+      if (peer === 'vllm' && 'reasoning_effort' in body) {
+        throw vllmRefusal();
+      }
 
-        return { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] };
-      });
-      const driver = driverWith(create);
+      call += 1;
 
-      await driver.chat(request);
-      jest.advanceTimersByTime(4 * 60_000);
-      await driver.chat(request);
-      // The engine behind the URL changed, or the pool sent this one to another peer.
-      refuse = false;
-      jest.advanceTimersByTime(60_000 + 1);
-      await driver.chat(request);
+      return { choices: [{ message: { content: peer }, finish_reason: 'stop' }] };
+    });
+    const driver = driverWith(create);
 
-      expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
-        true,
-        false,
-        false,
-        true,
-      ]);
-    } finally {
-      jest.useRealTimers();
-    }
+    await driver.chat(request);
+    await driver.chat(request);
+    await driver.chat(request);
+
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
+      true,
+      false,
+      true,
+      true,
+      false,
+    ]);
   });
 });

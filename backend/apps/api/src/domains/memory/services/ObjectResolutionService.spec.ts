@@ -368,3 +368,13 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     expect(harness.statements.some(({ sql }) => sql.includes('INSERT INTO ci.objects'))).toBe(false);
   });
 });
+
+describe('ObjectResolutionService.resolveUnresolved', () => {
+  it('sweeps only the sightings nobody has answered, not the ones a person sent back to review', async () => {
+    const harness = makeHarness();
+
+    await harness.service.resolveUnresolved(CONTEXT, { limit: 25 });
+
+    expect(harness.findForReview).toHaveBeenCalledWith(CONTEXT, 25, 0, { sentBack: false });
+  });
+});

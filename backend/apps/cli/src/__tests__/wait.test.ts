@@ -6,6 +6,7 @@ import {
   WaitUnreachableError,
   TERMINAL_RUN_STATUSES,
   MAX_CONSECUTIVE_POLL_FAILURES,
+  unsuccessfulRunsMessage,
 } from '../wait';
 
 import { harness } from './support/harness';
@@ -196,5 +197,42 @@ describe('waitForRuns', () => {
 
     expect(ctx.term.text()).toContain('[aaaaaaaa]');
     expect(ctx.term.text()).toContain('[bbbbbbbb]');
+  });
+});
+
+describe('unsuccessfulRunsMessage', () => {
+  const run = (id: string, status: string, error: string | null = null): RunDetail => ({
+    ...detail(status, 100),
+    id,
+    error,
+  });
+
+  it('is null when every run completed, partial included', () => {
+    expect(unsuccessfulRunsMessage(['a', 'b'], [run('a', 'completed'), run('b', 'partial')])).toBeNull();
+    expect(unsuccessfulRunsMessage([], [])).toBeNull();
+  });
+
+  it('names each failed or cancelled run, with the failure', () => {
+    expect(
+      unsuccessfulRunsMessage(
+        ['a', 'b', 'c'],
+        [
+          run('a', 'completed'),
+          run('b', 'failed', 'cannot unpack truncated.zip: the file is truncated'),
+          run('c', 'cancelled'),
+        ],
+      ),
+    ).toBe(
+      '2 of 3 run(s) did not finish: b failed (cannot unpack truncated.zip: the file is truncated); ' +
+        'c was cancelled. Follow one with `ci runs <id>`.',
+    );
+  });
+
+  it('counts a run that vanished mid-wait as not finished, since nothing was imported', () => {
+    // `waitForRuns` drops a run that answers 404 (discarded or retired from
+    // another session), so it is absent from the runs and present in the ids.
+    expect(unsuccessfulRunsMessage(['a', 'b'], [run('a', 'completed')])).toBe(
+      '1 of 2 run(s) did not finish: b is gone. Follow one with `ci runs <id>`.',
+    );
   });
 });

@@ -154,6 +154,39 @@ export class ObjectObservationResolver {
   }
 
   /**
+   * A human says this sighting is not the thing it was linked to ("No" on a
+   * thing's page).
+   *
+   * The link goes and the sighting returns to the review queue
+   * (`unresolvedObservations`), where they can pick the thing it is or answer
+   * "Not a thing" (`rejectObservation`). A machine will not link it again.
+   */
+  @Mutation(() => ObjectObservationType, {
+    nullable: true,
+    description:
+      'A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes ' +
+      'back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing ' +
+      'at all", which takes it out of that queue.',
+  })
+  // Clears the LINK and leaves the sighting, like rejectObservation.
+  @GraphqlPrivacy({ destructive: false })
+  async unlinkObservation(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) gid: string,
+  ): Promise<ObjectObservationType | null> {
+    const row = await this.observationService.sendBackToReview(
+      toServiceContext(context),
+      GlobalUID.parse('observation', gid),
+    );
+
+    if (row == null) {
+      throw new BadRequestException('No such observation.');
+    }
+
+    return ObjectObservationType.toType(row);
+  }
+
+  /**
    * A human says this sighting is NOT that thing.
    *
    * Clears the link and leaves the sighting: "that is not my mug" is evidence

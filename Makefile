@@ -977,16 +977,14 @@ smoke-stack: ## Boot the built production images and prove the gateway serves th
 		}; \
 	done
 
-# nginx resolves `upstream api { server api:3030; }` and the object-store
-# proxy_pass at CONFIG LOAD time, so a bare `nginx -t` outside the compose
-# network dies with "host not found in upstream" and tells you nothing about
-# the config itself. The two --add-host entries give those names something to
-# resolve to; what is under test is nginx.conf's syntax and directives, not
-# connectivity. Seconds of work, and it fails here instead of as a
-# crash-looping gateway on someone's appliance.
+# Every upstream server in nginx.conf is `resolve`, looked up while nginx
+# runs rather than at config load, so a bare `nginx -t` outside the compose
+# network passes with no --add-host. It used to die there with "host not
+# found in upstream"; it failing that way again means a name went back to
+# being resolved once at start. Seconds of work. It fails here instead of as
+# a crash-looping gateway on someone's appliance.
 	@printf "➤ Validating the gateway's nginx.conf...\n\n"
-	@docker run --rm --add-host api:127.0.0.1 --add-host object-store:127.0.0.1 \
-		--entrypoint nginx $(GATEWAY_REPO):latest -t
+	@docker run --rm --entrypoint nginx $(GATEWAY_REPO):latest -t
 
 # docker-compose.production.yml publishes the gateway on a FIXED host port, so
 # anything already holding 8642 (a running `make production`, the desktop app)

@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { Person } from '@ci/domains/memory';
 import type { PeerLink } from '@ci/domains/peers';
@@ -61,6 +61,9 @@ function build(
     findById: jest.fn().mockResolvedValue(makeLink()),
     upsert: jest.fn().mockImplementation((_ctx, dto) => Promise.resolve(makeLink({ ...dto }))),
     revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+    // The handle's current link is the one `findById` read, unless a test says
+    // a newer link has replaced it.
+    findByHandle: jest.fn((ctx: unknown): Promise<PeerLink | null> => service.findById(ctx)),
     ...overrides,
   };
 
@@ -126,6 +129,23 @@ describe('PeerLinkResolver', () => {
 
       expect(service.revoke).not.toHaveBeenCalled();
     });
+
+    it('leaves the live link alone when asked to revoke an ended one under the same handle', async () => {
+      // `revoke` ends the handle's CURRENT link, which for a peer added back
+      // since is the new one. The ended link is already what was asked for.
+      const ended = makeLink({
+        id: 'link-old',
+        status: 'revoked',
+        revokedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const { resolver, service, context } = build({ findById: jest.fn().mockResolvedValue(ended) });
+
+      const payload = await resolver.revokePeerLink(context, GlobalUID.encode('peer-link', 'link-old'));
+
+      expect(service.revoke).not.toHaveBeenCalled();
+      expect(payload.success).toBe(true);
+      expect(payload.peerLink?.status).toBe('revoked');
+    });
   });
 
   describe('trust tier', () => {
@@ -154,9 +174,10 @@ describe('PeerLinkResolver', () => {
       expect(service.upsert.mock.calls[0][1]).toMatchObject({ trustTier: 'family' });
     });
 
-    it('re-activates the link it adds, so re-adding a revoked handle brings the link back', async () => {
+    it('asks for a live link, so re-adding a revoked handle makes a link that works', async () => {
       // `upsert` keeps a stored `revoked` status unless told otherwise, so
       // re-adding a revoked peer used to answer success with the link still dead.
+      // `active` on an ended link is a new link beside it (PeerLinkService.spec).
       const { resolver, service, context } = build();
 
       await resolver.createPeerLink(context, {
@@ -178,6 +199,27 @@ describe('PeerLinkResolver', () => {
       });
 
       expect(service.upsert.mock.calls[0][1].status).toBeUndefined();
+    });
+
+    it('SECURITY: refuses to edit an ended link whose peer was added again since, without writing', async () => {
+      // `upsert` writes the handle's current row, which is the NEW link. This
+      // edit would copy the ended link's tier and identity onto it.
+      const { resolver, service, context } = build({
+        findById: jest
+          .fn()
+          .mockResolvedValue(
+            makeLink({ id: 'link-old', status: 'revoked', revokedAt: new Date(), trustTier: 'family' }),
+          ),
+        findByHandle: jest.fn().mockResolvedValue(makeLink({ id: 'link-new', trustTier: 'stranger' })),
+      });
+
+      await expect(
+        resolver.updatePeerLink(context, {
+          id: GlobalUID.encode('peer-link', 'link-old'),
+          displayName: 'Ada',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(service.upsert).not.toHaveBeenCalled();
     });
 
     it('preserves the existing tier when an update does not mention it', async () => {

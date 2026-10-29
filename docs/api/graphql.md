@@ -261,7 +261,7 @@ Many newer writes return a `*Payload` wrapper; note also that several entities n
 `createEvent`/`updateEvent`/`removeEvent`/`deleteEvent`/`restoreEvent`, `rescheduleEvent`, `returnEventToSlate`, `createContent`/`updateContent`/`removeContent`/`deleteContent`, `createItem`/`updateItem`/`deleteItem` (payload-wrapped), `updateBrowserActivity`/`deleteBrowserActivity`, `updateCommunication`/`deleteCommunication`, `createNote`/`updateNote`/`deleteNote`, `createPlace`/`updatePlace`/`removePlace`/`deletePlace`, `createPerson`/`updatePerson`/`deletePerson`, `updateFile`, `updateKnownPlace`.
 
 ### 4.1b Identity, merge & object writes
-`mergePeople`, `rejectPersonDuplicates`, `addPersonIdentifier`/`removePersonIdentifier`; `mergeItems`, `addItemIdentifier`/`removeItemIdentifier`, `linkItemToProduct`; `mergeProductModels`; `confirmObservation`/`rejectObservation`; `rebuildPlaces`.
+`mergePeople`, `rejectPersonDuplicates`, `addPersonIdentifier`/`removePersonIdentifier`; `mergeItems`, `addItemIdentifier`/`removeItemIdentifier`, `linkItemToProduct`; `mergeProductModels`; `confirmObservation`/`rejectObservation`/`unlinkObservation`; `rebuildPlaces`.
 
 `ci.entity_merges` rows are written under `entity_type` `'ObjectInstance'` for `mergeItems` and `'ProductModel'` for `mergeProductModels`, preserving the instance-vs-model distinction.
 

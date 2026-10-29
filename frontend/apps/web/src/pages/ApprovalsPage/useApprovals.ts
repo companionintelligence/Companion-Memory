@@ -16,6 +16,7 @@ export type ApprovalReason =
   | 'destructive-requires-confirmation'
   | 'external-leaves-appliance'
   | 'confirmation-required'
+  | 'write-after-lookup'
   | 'not-local-capable'
   | 'capability-insufficient'
   | 'allowed';

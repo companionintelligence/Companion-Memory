@@ -97,4 +97,31 @@ grep -q '^    proxy_connect_timeout 5s;$' "$nginx_conf" || fail "server block lo
 own=$(printf '%s\n' "$blocks" | grep -F 'proxy_connect_timeout' || true)
 [ -z "$own" ] || fail "a location sets its own connect timeout instead of the server's 5s: ${own%% |*}"
 
+# ── nginx.conf: upstream names are looked up again, not once at start. A
+# container recreated on a new address (an update, a crash and `up -d`) was
+# unreachable until the gateway restarted. Every upstream server carries
+# `resolve` (which needs a `zone`), the resolver overrides Docker's 600s TTL,
+# and every proxy_pass names one of those upstreams, never a host of its own,
+# which nginx would resolve once.
+grep -Eq '^  resolver 127\.0\.0\.11 valid=[0-9]+s ' "$nginx_conf" || fail "resolver lost its valid= override of Docker's TTL"
+upstreams=$(awk '
+  /^  upstream / { name = $2; body = ""; inside = 1; next }
+  inside && /^  }$/ { print name " |" body; inside = 0; next }
+  inside && /^[[:space:]]*#/ { next }
+  inside { body = body " " $0 }
+' "$nginx_conf")
+[ -n "$upstreams" ] || fail "no upstream blocks found"
+printf '%s\n' "$upstreams" | while IFS= read -r block; do
+  case "$block" in *" zone "*) ;; *) fail "upstream ${block%% |*} has no zone, which resolve needs" ;; esac
+  servers=$(printf '%s\n' "$block" | grep -o 'server [^;]*;' || true)
+  [ -n "$servers" ] || fail "upstream ${block%% |*} has no server"
+  printf '%s\n' "$servers" | grep -v ' resolve' | grep -q . && fail "upstream ${block%% |*} has a server without resolve"
+  true
+done
+names=$(printf '%s\n' "$upstreams" | sed 's/ |.*//')
+grep -E '^[[:space:]]*proxy_pass ' "$nginx_conf" | sed -E 's#.*proxy_pass https?://([^/:;]+).*#\1#' | while IFS= read -r host; do
+  printf '%s\n' "$names" | grep -qx "$host" \
+    || fail "proxy_pass names $host, not one of the upstreams above (a name of its own is resolved once, at start)"
+done
+
 echo "gateway: ok"

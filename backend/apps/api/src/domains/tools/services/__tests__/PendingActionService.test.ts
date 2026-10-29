@@ -48,6 +48,7 @@ const MCP_TOOL = schema('mcp.notes.search', {
   external: true,
 });
 const COMPLETE_TASK = schema('planning.completeTask', { access: 'write', destructive: true });
+const CREATE_TASK = schema('planning.createTask', { access: 'write' });
 
 /**
  * A real profile for the mode, served the way `PersonalizationService.getProfile`
@@ -219,6 +220,38 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
     );
 
     expect((await service.evaluate(COMPLETE_TASK, context())).decision).toBe('queue');
+  });
+
+  // A chat turn that looked something up may act on what came back, a mail or a note someone else
+  // wrote. Its writes ask in every mode that asks before a delete; the first round's writes, which
+  // the person asked for, do not.
+  it.each([
+    ['hands_off', 'execute'],
+    ['balanced', 'queue'],
+    ['cautious', 'queue'],
+  ] as const)('trust mode %s → %s for a write that follows a lookup', async (trustMode, expected) => {
+    const service = new PendingActionService(
+      makeRepository(),
+      personalizationFor(trustMode),
+      features(true),
+      makeLogger(),
+    );
+
+    const ruling = await service.evaluate(CREATE_TASK, context({ followsLookup: true }));
+
+    expect(ruling.decision).toBe(expected);
+    if (expected === 'queue') {
+      expect(ruling.reason).toBe('write-after-lookup');
+    }
+  });
+
+  it('never consults the dial for a write the turn did not make after a lookup', async () => {
+    const personalization = personalizationFor('cautious');
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
+
+    expect((await service.evaluate(CREATE_TASK, context())).decision).toBe('execute');
+    expect((await service.evaluate(RECALL, context({ followsLookup: true }))).decision).toBe('execute');
+    expect(personalization.getProfile).not.toHaveBeenCalled();
   });
 
   it('never consults the dial for an ordinary read, in any mode', async () => {

@@ -59,6 +59,14 @@ export interface HubBridgeResult {
   refused?: HubBridgeRefusal;
 }
 
+/** `GET /authenticate/hub-identity`; see {@link HubForwardAuthBridgeService.describeIdentity}. */
+export interface HubIdentityDescription {
+  username: string | null;
+  accountId: string | null;
+  /** Why the Hub person would not be signed in, or null when they would be (or nothing was checked). */
+  refused: HubBridgeRefusal | null;
+}
+
 /** Where a Hub person with a stable id belongs in Memory; see {@link HubForwardAuthBridgeService.locate}. */
 type Placement =
   | { kind: 'linked'; user: User }
@@ -233,15 +241,23 @@ export class HubForwardAuthBridgeService {
    * another address now" — the email comparison it used to make cannot. It is null for a Hub that
    * sends no stable id (compare by email, as before), for someone this Memory has no account for
    * yet, and for a person {@link alignSession} would refuse.
+   *
+   * `refused` tells the last of those apart from the others: it is the reason `alignSession` would
+   * give (the same `refused` it answers with) and null otherwise, for a Hub that sends no stable id
+   * too.
    */
-  async describeIdentity(req: Request): Promise<{ username: string | null; accountId: string | null }> {
+  async describeIdentity(req: Request): Promise<HubIdentityDescription> {
     const identity = this.verifyIdentity(req);
     if (!identity) {
-      return { username: null, accountId: null };
+      return { username: null, accountId: null, refused: null };
     }
 
     if (!identity.stableId) {
-      return { username: identity.username, accountId: null };
+      return {
+        username: identity.username,
+        accountId: null,
+        refused: await this.refusalByEmail(req, identity.username),
+      };
     }
 
     const placement = await this.locate(
@@ -253,7 +269,34 @@ export class HubForwardAuthBridgeService {
     return {
       username: identity.username,
       accountId: placement.kind === 'linked' || placement.kind === 'adopt' ? placement.user.id : null,
+      refused: placement.kind === 'refused' ? placement.reason : null,
     };
+  }
+
+  /**
+   * What {@link alignByEmail} would refuse this person for, read-only. It keeps a live session already
+   * signed in to the address before it looks for the account, so that browser is never refused.
+   */
+  private async refusalByEmail(req: Request, username: string): Promise<HubBridgeRefusal | null> {
+    const existing = await this.userService.findAccountByEmail(username);
+    if (existing === 'ambiguous') {
+      return 'account_ambiguous';
+    }
+
+    if (!existing || this.userService.isEmailProven(existing)) {
+      return null;
+    }
+
+    const session = await this.readSession(req);
+    if (
+      session &&
+      emailsEqual(session.email, username) &&
+      (await this.liveSessionUserId(session)) === session.userId
+    ) {
+      return null;
+    }
+
+    return 'account_unproven';
   }
 
   /**

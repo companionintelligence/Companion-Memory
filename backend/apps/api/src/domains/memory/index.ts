@@ -539,6 +539,7 @@ export type {
   ReceiptLineItem,
 };
 export {
+  AGENT_TURN_MESSAGE_CATEGORY,
   CommunicationDirection,
   CommunicationType,
   CreateCommunicationDto,

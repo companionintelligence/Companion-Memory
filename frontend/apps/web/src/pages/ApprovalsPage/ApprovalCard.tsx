@@ -22,6 +22,8 @@ const REASON_COPY: Record<ApprovalReason, string> = {
   'destructive-requires-confirmation': 'This removes data. It cannot be undone from here.',
   'external-leaves-appliance': 'This sends data to a third party, off your appliance.',
   'confirmation-required': 'This is irreversible, and an installed app asked for it.',
+  'write-after-lookup':
+    'Chat wants to make this change right after looking something up, so it waits for your OK.',
   'not-local-capable': 'This needs the appliance, and cannot be answered on-device.',
   'capability-insufficient': 'This caller is not permitted to run it.',
   allowed: 'This is waiting for you.',

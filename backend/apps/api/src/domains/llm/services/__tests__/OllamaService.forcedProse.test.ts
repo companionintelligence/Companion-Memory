@@ -213,6 +213,100 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(last.tool_calls).toBeUndefined();
   });
 
+  it('runs no call from a round that offered no tools, which the native engine parses anyway', async () => {
+    const searchFor = (query: string) => ({
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query } } }],
+      },
+    });
+    // Two tool rounds use up the offer, so the third is offered none. The model calls a tool
+    // there anyway: that call used to run before the round after it was forced to prose.
+    const { service, tool, driver } = await setup([
+      [searchFor('first')],
+      [searchFor('second')],
+      [searchFor('third')],
+      [proseChunk('Here is what I found.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(driver.calls[2].tools).toBeUndefined();
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(tool.execute.mock.calls.map((call: any[]) => call[1])).toEqual([
+      { query: 'first' },
+      { query: 'second' },
+    ]);
+    // The stored rows claim no call that never ran. The turn still ends in prose.
+    expect(
+      messages.filter((m: any) => m.tool_calls?.some((c: any) => c.function.arguments.query === 'third')),
+    ).toEqual([]);
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Here is what I found.',
+    });
+  });
+
+  it('asks once more in prose when a round offered no tools thinks or writes a preamble before its call', async () => {
+    const preambleThenCall = {
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: 'Let me check one more place.',
+        thinking: 'I should search once more',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'third' } } }],
+      },
+    };
+    const { service, tool, driver } = await setup([
+      [toolCallChunk()],
+      [
+        {
+          ...toolCallChunk(),
+          message: {
+            ...toolCallChunk().message,
+            tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'second' } } }],
+          },
+        },
+      ],
+      [preambleThenCall],
+      [proseChunk('Nothing else matches.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const streamed: any[] = [];
+    let iteration = await stream.next();
+
+    while (!iteration.done) {
+      streamed.push(iteration.value);
+      iteration = await stream.next();
+    }
+
+    expect(driver.chatStream).toHaveBeenCalledTimes(4);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(driver.calls[3].messages[driver.calls[3].messages.length - 1].content).toContain(
+      'do not call any more tools',
+    );
+    // The call it was not offered never reaches the viewer as a tool block.
+    expect(
+      streamed.some((chunk) =>
+        chunk.message?.tool_calls?.some((c: any) => c.function.arguments.query === 'third'),
+      ),
+    ).toBe(false);
+    expect(stream.messages[stream.messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Nothing else matches.',
+    });
+  });
+
   it('asks once more, with tools off, when the follow-up after tools is empty', async () => {
     const { service, tool, driver } = await setup([
       [proseChunk('Let me look.'), toolCallChunk()],

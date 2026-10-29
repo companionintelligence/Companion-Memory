@@ -43,13 +43,13 @@ afterEach(() => {
 describe('memoryAnswers', () => {
   it('is true when /api/health answers, and asks again on every call', async () => {
     setWindow({});
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_input: RequestInfo) => okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(memoryAnswers()).resolves.toBe(true);
     await expect(memoryAnswers()).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(urlOf(fetchMock.mock.calls[0][0] as RequestInfo)).toContain('/api/health');
+    expect(urlOf(fetchMock.mock.calls[0][0])).toContain('/api/health');
   });
 
   it('is false when the request fails', async () => {

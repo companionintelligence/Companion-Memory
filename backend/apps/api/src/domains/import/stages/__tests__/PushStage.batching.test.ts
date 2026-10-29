@@ -433,3 +433,32 @@ describe('the per-row retry resolves correspondents the same way the batch does'
     }
   });
 });
+
+/*
+ * `ci doctor`'s `comms-missing-participants` remedy cites 16,325 outbound
+ * iMessages with nobody on them: chat.db rows with no chat join and no handle,
+ * so the importer stages no participant edge at all. That count is the
+ * reference corpus, imported before the push named the owner as an outbound
+ * message's sender. Today the same row reaches `ci.communications` FROM the
+ * owner, so it has a participant and the check does not count it.
+ */
+describe('an outbound message whose counterpart chat.db never recorded', () => {
+  const SELF = '99999999-9999-4999-8999-999999999999';
+
+  it('is from the owner, so it is not a message from nobody', async () => {
+    const rows = [
+      messageRow('orphan', {
+        dataSource: 'imessage',
+        metadata: { Source: 'iMessage', 'From Me': true, Text: 'on my way' },
+      } as Partial<StagedItem>),
+    ];
+    const { stage, sent } = makeStage(rows, { selfEntityId: SELF, relationships: [] });
+
+    await stage.run(context);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].direction).toBe('outbound');
+    expect(sent[0].from_entity_id).toBe(SELF);
+    expect(sent[0].to_entity_ids ?? []).toEqual([]);
+  });
+});

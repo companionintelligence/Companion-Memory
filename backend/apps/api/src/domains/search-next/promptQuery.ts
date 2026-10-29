@@ -245,6 +245,71 @@ const MEDIA_KIND_WORDS: ReadonlyMap<string, 'photos' | 'media'> = new Map([
 ]);
 
 /**
+ * Nouns a kind word can MODIFY instead of naming: "a picture frame" is a frame,
+ * "a photo album" a book, "a video game" a game. Followed by one of these the
+ * kind word is part of the thing's name, so it neither narrows the ask to files
+ * nor drops out of it: the two words bind as one phrase.
+ *
+ * A closed list rather than "any word that follows", because the words that
+ * follow a kind word are mostly not nouns: "photos taken in Lisbon", "pictures
+ * last October". Leaving a compound out keeps today's reading; adding a word
+ * that is not one would stop a real photo ask from narrowing to photos.
+ */
+const MEDIA_COMPOUND_HEADS: ReadonlySet<string> = new Set([
+  'album',
+  'albums',
+  'book',
+  'books',
+  'booth',
+  'booths',
+  'call',
+  'calls',
+  'camera',
+  'cameras',
+  'card',
+  'cards',
+  'frame',
+  'frames',
+  'game',
+  'games',
+  'hanger',
+  'hangers',
+  'hook',
+  'hooks',
+  'id',
+  'ledge',
+  'paper',
+  'player',
+  'players',
+  'printer',
+  'printers',
+  'projector',
+  'rail',
+  'recorder',
+  'shoot',
+  'stand',
+  'stands',
+  'tape',
+  'tapes',
+]);
+
+/**
+ * Does the word at `index` of `run` modify the next one ("picture frame") rather
+ * than name a kind? Not when both are capitalised: "Video Game Awards" is a name
+ * that binds whole as a capitalised run, and splitting "Video Game" off it
+ * would let any mention of a video game and an award answer for it.
+ */
+function modifiesNext(run: readonly string[], index: number): boolean {
+  const next = run[index + 1];
+
+  return (
+    next != null &&
+    MEDIA_COMPOUND_HEADS.has(next.toLowerCase()) &&
+    !(isCapitalised(run[index]) && isCapitalised(next))
+  );
+}
+
+/**
  * The data class a word names when it is a {@link MEDIA_KIND_WORDS} word.
  *
  * A trailing apostrophe, "'s" or hyphen is ignored: "photo's" and "photos'"
@@ -401,6 +466,14 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
     let index = 0;
 
     while (index < run.length) {
+      // "picture frame": a kind word in a thing's name, which has to match whole.
+      if (mediaKindOf(run[index]) != null && modifiesNext(run, index)) {
+        groups.push({ kind: 'phrase', text: `${run[index]} ${run[index + 1]}` });
+
+        index += 2;
+        continue;
+      }
+
       if (!isCapitalised(run[index])) {
         pushTerm(run[index]);
 
@@ -433,7 +506,8 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
  * or "any pictures …", 'media' once it names videos, `null` for neither.
  *
  * A {@link MEDIA_KIND_WORDS} word counts when it stands on its own, which is
- * exactly when {@link buildPromptQuery} drops it from the terms. The ask
+ * exactly when {@link buildPromptQuery} drops it from the terms. One that
+ * modifies the next word ("picture frame") is part of a name, not a kind. The ask
  * executor reads the class as a type filter so the kind still narrows the
  * search once it stops counting as a match. A name ask, or the word inside a
  * capitalised name, says nothing about kind and answers `null`.
@@ -458,7 +532,7 @@ export function promptMediaClass(
         ((index > 0 && isCapitalised(run[index - 1])) ||
           (index < run.length - 1 && isCapitalised(run[index + 1])));
 
-      if (kind == null || inName) {
+      if (kind == null || inName || modifiesNext(run, index)) {
         continue;
       }
 

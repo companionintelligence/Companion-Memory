@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { formatThingDate, thingDate, toThingDateInput } from './thingDate';
+import { formatThingDate, fromThingDateInput, thingDate, toThingDateInput } from './thingDate';
 
 /**
- * A stored Thing date is a day kept as an instant. Rows from before the app wrote
- * "the start of the picked day where the person is" (and an importer's date-only
- * values) are UTC midnight, which is the day before in every zone west of UTC. So
- * every case runs in a named zone: CI is UTC, where a local day is a UTC day and
- * the bug cannot show.
+ * A stored Thing date is a day kept as an instant. A picked day (and an
+ * importer's date-only value) is UTC midnight, which is the day before in every
+ * zone west of UTC when read as a moment. So every case runs in a named zone: CI
+ * is UTC, where a local day is a UTC day and the bug cannot show.
  */
 const ZONES = [
   'UTC',
@@ -36,7 +35,20 @@ describe.each(ZONES)('thing dates in %s', (zone) => {
     expect(formatThingDate('2024-03-02T00:00:00.000Z')).toBe(new Date(2024, 2, 2).toLocaleDateString());
   });
 
-  it('reads the start of a local day, as the form now writes it, as that day', () => {
+  it('stores a picked day as UTC midnight and reads it back as that day', () => {
+    process.env.TZ = zone;
+
+    for (const picked of ['2026-10-01', '2026-01-01', '2026-12-31', '2026-03-08', '2024-02-29']) {
+      const stored = fromThingDateInput(picked);
+      const [year, month, day] = picked.split('-').map(Number);
+
+      expect(stored).toBe(`${picked}T00:00:00.000Z`);
+      expect(toThingDateInput(stored)).toBe(picked);
+      expect(formatThingDate(stored)).toBe(new Date(year, month - 1, day).toLocaleDateString());
+    }
+  });
+
+  it('reads the start of a local day, as the form wrote it for a while, as that day', () => {
     process.env.TZ = zone;
 
     for (const [year, month, day] of [
@@ -63,6 +75,17 @@ describe.each(ZONES)('thing dates in %s', (zone) => {
 
     expect(toThingDateInput(stored)).toBe(expected);
     expect(formatThingDate(stored)).toBe(local.toLocaleDateString());
+  });
+});
+
+describe('a date input with nothing to store', () => {
+  it.each(['', '   '])('stores nothing for %j', (value) => {
+    expect(fromThingDateInput(value)).toBeNull();
+  });
+
+  // Thrown, not null: null would clear the date already stored.
+  it.each(['not a date', '2026-02-30', '2026-13-01'])('refuses %j', (value) => {
+    expect(() => fromThingDateInput(value)).toThrow(RangeError);
   });
 });
 
