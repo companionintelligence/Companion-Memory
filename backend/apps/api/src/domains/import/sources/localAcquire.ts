@@ -1,10 +1,10 @@
-import { lstatSync } from 'node:fs';
-import { cp, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { constants as fsConstants, lstatSync } from 'node:fs';
+import { chmod, copyFile, cp, link, lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { freeBytesAt } from '../archive/unpack';
 
-import { resolveWithinStaging } from './importRoots';
+import { resolveWithinRoots, resolveWithinStaging } from './importRoots';
 
 /**
  * How the unit ended up in scratch. `rename` is the designed case (inbox and
@@ -140,6 +140,190 @@ export async function acquireLocalUnit(
   await doRename(tmpPath, destPath);
 
   return { destPath, method: 'copy' };
+}
+
+/**
+ * Where an inbox unit is in its run's scratch, if it is still whole there.
+ *
+ * `acquireLocalUnit` leaves it at `<scratchDir>/<name>`, or at the temp name
+ * when a crash split its two renames. The temp name counts only when the
+ * original is gone: with the original still in the inbox, a temp is a copy
+ * fallback that died mid-write and the original is the whole unit.
+ */
+export async function inboxUnitInScratch(sourcePath: string, scratchDir: string): Promise<string | null> {
+  const name = path.basename(sourcePath);
+  const destPath = path.join(scratchDir, name);
+
+  if (await exists(destPath)) {
+    return destPath;
+  }
+
+  const tmpPath = path.join(scratchDir, `.acquiring-${name}`);
+
+  return (await exists(tmpPath)) && !(await exists(sourcePath)) ? tmpPath : null;
+}
+
+export interface ReturnInboxUnitInput {
+  /** The unit in the run's scratch, from {@link inboxUnitInScratch}. A file. */
+  unitPath: string;
+  /** The claim's `source_path`: where the unit was when the run took it. */
+  sourcePath: string;
+  /** The owner's inbox. The unit goes back under it and nowhere else. */
+  inboxDir: string;
+  log: (message: string) => void;
+  /** Test seam: overrides the filesystem link to simulate EXDEV. */
+  linkImpl?: typeof link;
+}
+
+/**
+ * Put an inbox FILE back where its run took it from: the reverse of
+ * {@link acquireLocalUnit}, for a run that is being discarded.
+ *
+ * The unit was the user's only copy, acquired by rename, so a discard must not
+ * delete it with the scratch tree. It goes back to its own path in the inbox,
+ * or beside it as `name (2).ext` when something has taken that name since.
+ * Nothing in the inbox is ever overwritten: the file is placed with `link`,
+ * which fails rather than replaces. Only then is it unlinked from scratch. A
+ * plain `rename` would silently replace a file written into the inbox between
+ * the name check and the move.
+ *
+ * Files only. A directory unit is changed in place by the unpack (nested
+ * archives expanded and deleted, rejects quarantined), so it is not the folder
+ * the user dropped any more. The caller refuses it.
+ *
+ * The target is re-resolved against the owner's inbox before anything moves,
+ * as the acquire re-resolves its source: a `source_path` that no longer lies
+ * under this inbox (an edited row, a folder moved since) comes back at the
+ * inbox's top level under its own name instead. Folders it has to recreate get
+ * the inbox's own `1777`, so the host user can still manage them.
+ *
+ * Returns the path the unit now has.
+ */
+export async function returnInboxUnit(input: ReturnInboxUnitInput): Promise<string> {
+  const doLink = input.linkImpl ?? link;
+
+  if (!(await lstat(input.unitPath)).isFile()) {
+    throw new Error(`${input.unitPath} is not a file. Only a file unit goes back to the inbox`);
+  }
+
+  const relative = path.relative(input.inboxDir, input.sourcePath);
+  const underInbox = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  const wanted = path.join(input.inboxDir, underInbox ? relative : path.basename(input.sourcePath));
+
+  await ensureInboxFolder(input.inboxDir);
+
+  // The deepest folder that exists is checked BEFORE anything is created, so a
+  // symlink out of the inbox cannot have folders made through it. The
+  // parent is checked again after, on where it leads.
+  const missing: string[] = [];
+  let existing = path.dirname(wanted);
+
+  while (!(await exists(existing)) && existing !== input.inboxDir) {
+    missing.unshift(existing);
+    existing = path.dirname(existing);
+  }
+
+  await resolveWithinRoots(existing, [input.inboxDir]);
+
+  for (const dir of missing) {
+    await ensureInboxFolder(dir);
+  }
+
+  const parent = await resolveWithinRoots(path.dirname(wanted), [input.inboxDir]);
+  const name = path.basename(wanted);
+
+  try {
+    const target = await linkUnderFreeName(doLink, input.unitPath, parent, name);
+
+    await rm(input.unitPath, { force: true });
+    input.log(`return: ${path.basename(input.unitPath)} moved back to the inbox as ${target}`);
+
+    return target;
+  } catch (err: unknown) {
+    if ((err as { code?: string }).code !== 'EXDEV') {
+      throw err;
+    }
+  }
+
+  // The split-mount case the acquire copies across. The copy goes to a temp
+  // name beside the target and is linked into place only once it is whole, so
+  // a disk filling up mid-copy leaves a temp file, never a truncated file under
+  // the user's own name. The scratch copy goes last.
+  input.log(`return: inbox and scratch are on different filesystems; copying ${name}`);
+
+  const tmpPath = path.join(parent, `.returning-${name}`);
+
+  await rm(tmpPath, { force: true });
+  await copyFile(input.unitPath, tmpPath, fsConstants.COPYFILE_EXCL);
+
+  const target = await linkUnderFreeName(link, tmpPath, parent, name);
+
+  await rm(tmpPath, { force: true });
+  await rm(input.unitPath, { force: true });
+
+  return target;
+}
+
+/** `mkdir` plus the inbox's `1777`, as `ImportInboxService` makes its folders. */
+async function ensureInboxFolder(dir: string): Promise<void> {
+  if (await exists(dir)) {
+    return;
+  }
+
+  await mkdir(dir, { recursive: true });
+  await chmod(dir, 0o1777).catch(() => undefined);
+}
+
+/** Archive suffixes that are one extension, so a renamed copy reads `x (2).tar.gz`. */
+const COMPOUND_EXTENSIONS = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'];
+
+/**
+ * Link `from` into `dir` as `name`, or as the first `name (n)` nothing uses
+ * yet. `link` refuses an existing name with EEXIST instead of replacing it,
+ * so a file that appears in the inbox while this runs moves the unit to the
+ * next name rather than being lost.
+ */
+async function linkUnderFreeName(
+  doLink: typeof link,
+  from: string,
+  dir: string,
+  name: string,
+): Promise<string> {
+  const lower = name.toLowerCase();
+  const compound = COMPOUND_EXTENSIONS.find((ext) => lower.endsWith(ext));
+  const ext = compound != null ? name.slice(-compound.length) : path.extname(name);
+  const stem = ext === '' ? name : name.slice(0, -ext.length);
+
+  for (let n = 1; n < 1000; n++) {
+    const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
+
+    if (await occupied(candidate)) {
+      continue;
+    }
+
+    try {
+      await doLink(from, candidate);
+
+      return candidate;
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code !== 'EEXIST') {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error(`No free name for ${name} in ${dir}: ${stem} (2)${ext} to (999) are all taken`);
+}
+
+/** Taken by anything, a dangling symlink included, which `stat` would miss. */
+async function occupied(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function exists(target: string): Promise<boolean> {

@@ -1350,7 +1350,9 @@ yarn workspace @ci/cli dev <command>          # or `ci <command>` once installed
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, an unknown `--check` id), **1** a failure the appliance owns.
 `doctor` also exits **1** when its gate trips — see [§6](#6-what-to-measure--ci-doctor);
-distinguish the two by whether stdout carried a report.
+distinguish the two by whether stdout carried a report. With `--wait`, `import`,
+`inbox --start` and `push` exit **1** when a run they followed ended `failed` or
+`cancelled`; a `partial` run exits 0.
 
 `--stages` warns when it omits `media`, because that stage uploads the archive's
 bytes and stamps `metadata.FileId`; a run that parses photos without it leaves

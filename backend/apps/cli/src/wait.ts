@@ -162,6 +162,45 @@ export async function waitForRuns(
   return finished;
 }
 
+/**
+ * What a `--wait` owes its caller when a run it followed ended `failed` or
+ * `cancelled`, or null when none did.
+ *
+ * The wait used to return normally either way, so `ci import --wait` exited 0
+ * on an import that never happened and a script went on as if it had. The
+ * commands raise this with exit code 1, the code for a failure on the
+ * appliance's side. `partial` is not in it: that run imported what it could and
+ * says so on its own.
+ */
+export function unsuccessfulRunsMessage(
+  runIds: readonly string[],
+  runs: readonly RunDetail[],
+): string | null {
+  const unsuccessful = runs.filter((run) => run.status === 'failed' || run.status === 'cancelled');
+  // A run that answered 404 mid-wait was discarded or retired from elsewhere.
+  // `waitForRuns` stops following it, which must not read as success either.
+  const finished = new Set(runs.map((run) => run.id));
+  const vanished = runIds.filter((id) => !finished.has(id));
+
+  if (unsuccessful.length === 0 && vanished.length === 0) {
+    return null;
+  }
+
+  const each = [
+    ...unsuccessful.map((run) =>
+      run.status === 'cancelled'
+        ? `${run.id} was cancelled`
+        : `${run.id} failed${run.error ? ` (${run.error})` : ''}`,
+    ),
+    ...vanished.map((id) => `${id} is gone`),
+  ];
+
+  return (
+    `${each.length} of ${runIds.length} run(s) did not finish: ${each.join('; ')}. ` +
+    'Follow one with `ci runs <id>`.'
+  );
+}
+
 /** One run's current position, as a single line. */
 function describe(run: RunDetail, prefixId: boolean): string {
   const active =

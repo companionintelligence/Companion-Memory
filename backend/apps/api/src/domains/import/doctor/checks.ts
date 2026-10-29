@@ -198,7 +198,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'ever fill it. On the reference corpus that is 16,325 outbound iMessages whose chat.db row has ' +
       'neither recipients nor a partner handle (see migration 20260819000941) — the counterpart is ' +
       'genuinely unrecorded, and a name invented from a filename is the defect migration ' +
-      '20260818220731 exists to undo. Note also what a re-import does NOT do here: from_entity_id and ' +
+      '20260818220731 exists to undo. Those rows were written before the push named the owner as the ' +
+      'sender of every outbound message: one imported now is from the owner and is not counted, so an ' +
+      'outbound row here comes from an older build, or from a run that could not read the owner. ' +
+      'Note also what a re-import does NOT do here: from_entity_id and ' +
       'to_entity_ids are absent from INGEST_REFRESH_COLUMNS.communication (deliberately — they are ' +
       'resolved server-side), so re-ingesting an existing triple leaves them as they are. The parser ' +
       'fixes that stage participant edges (imessage.ts outbound fan-out, googlevoice.ts ' +
