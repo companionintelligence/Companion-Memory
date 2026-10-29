@@ -362,14 +362,18 @@ jobs:
         id: secrets
         env:
           CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$CERT" ] && [ -n "$APPLE_ID_SECRET" ] && [ -n "$TEAM_ID" ]; then
+          if [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] && \
+            [ -n "$APPLE_ID_SECRET" ] && [ -n "$APPLE_PASSWORD_SECRET" ] && \
+            [ -n "$TEAM_ID" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::macOS signing secrets not configured — skipping the signed macOS build."
+            echo "::warning::One or more macOS signing secrets are not configured (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) — skipping the signed macOS build."
           fi
 
       - name: Rust toolchain
