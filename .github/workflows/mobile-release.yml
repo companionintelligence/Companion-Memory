@@ -377,6 +377,30 @@ jobs:
           echo "EXTENSION_PROVISIONING_PROFILE_NAME=$EXT_NAME" >> "$GITHUB_ENV"
           echo "Installed extension profile '$EXT_NAME' ($EXT_UUID)"
 
+      - name: Verify signing certificate matches provisioning profiles
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          SIGNING_KEYCHAIN: ${{ runner.temp }}/signing.keychain-db
+        run: |
+          set -euo pipefail
+          IDENTITY_SHA1="$(security find-identity -v -p codesigning "$SIGNING_KEYCHAIN" \
+            | awk '/Apple Distribution/ { print toupper($2); exit }')"
+          if [ -z "$IDENTITY_SHA1" ]; then
+            echo "::error::IOS_DIST_CERT_P12_BASE64 contains no usable Apple Distribution identity."
+            exit 1
+          fi
+          for PROFILE in \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/companion-extension.mobileprovision"; do
+            PROFILE_SHA1="$(security cms -D -i "$PROFILE" | python3 -c \
+              'import hashlib, plistlib, sys; d = plistlib.loads(sys.stdin.buffer.read()); print(hashlib.sha1(d["DeveloperCertificates"][0]).hexdigest().upper())')"
+            if [ "$IDENTITY_SHA1" != "$PROFILE_SHA1" ]; then
+              echo "::error::IOS_DIST_CERT_P12_BASE64 does not match certificate in $(basename "$PROFILE")."
+              exit 1
+            fi
+          done
+          echo "Apple Distribution identity matches both App Store provisioning profiles."
+
       # The project is checked in with CODE_SIGN_STYLE = Automatic and no DEVELOPMENT_TEAM,
       # which cannot work on a runner that has no Apple ID session. Override to manual
       # signing on the command line rather than editing the pbxproj, so opening the project
