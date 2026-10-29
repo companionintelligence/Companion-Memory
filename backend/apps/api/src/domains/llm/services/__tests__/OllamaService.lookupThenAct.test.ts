@@ -142,6 +142,9 @@ async function setup(rounds: any[][], options: { searchFails?: boolean } = {}) {
 
 const context: ChatRequestContext = { userId: 'user-1' };
 
+/** The context a tool's first call ran with. */
+const invocationContext = (tool: jest.Mock) => (tool.mock.calls[0] as unknown[])[0];
+
 async function turn(service: OllamaService) {
   const stream = await service.chatStream(
     context,
@@ -184,12 +187,34 @@ describe('OllamaService.chatStream lookup, then act', () => {
     });
   });
 
+  // What the lookup returned may be a mail or a note someone else wrote, so a call made after it
+  // tells the gate, which then asks before any write under a dial that asks before a delete.
+  it('marks the calls made after a lookup but not the first round’s', async () => {
+    const REMEMBER = call('memory_remember', { operations: [{ kind: 'entity.create', name: 'Lisbon' }] });
+    const { service, search, remember } = await setup([calls(SEARCH), calls(REMEMBER), prose('Saved.')]);
+
+    await turn(service);
+
+    expect(invocationContext(search)).not.toHaveProperty('followsLookup');
+    expect(invocationContext(remember)).toMatchObject({ userId: 'user-1', followsLookup: true });
+  });
+
+  it('does not mark a write the person asked for in the first round', async () => {
+    const REMEMBER = call('memory_remember', { operations: [{ kind: 'entity.create', name: 'Lisbon' }] });
+    const { service, remember } = await setup([calls(REMEMBER), prose('Saved.')]);
+
+    await turn(service);
+
+    expect(remember).toHaveBeenCalledTimes(1);
+    expect(invocationContext(remember)).not.toHaveProperty('followsLookup');
+  });
+
   it('answers in prose after the second tool round, whatever the model asks for', async () => {
     const { service, driver, search, forget } = await setup([
       calls(SEARCH),
       calls(FORGET),
       // A third round of calls: not offered tools, but the native engine can
-      // still parse them. They run, and the forced prose round follows.
+      // still parse them. They are dropped and the forced prose round follows.
       calls(call('knowledge_search', { query: 'something else' })),
       prose('All done.'),
     ]);
@@ -198,7 +223,7 @@ describe('OllamaService.chatStream lookup, then act', () => {
 
     expect(driver.chatStream).toHaveBeenCalledTimes(4);
     expect(driver.requests.map((request) => request.tools !== undefined)).toEqual([true, true, false, false]);
-    expect(search).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenCalledTimes(1);
     expect(forget).toHaveBeenCalledTimes(1);
     expect(driver.requests[3].messages[driver.requests[3].messages.length - 1].content).toContain(
       'do not call any more tools',

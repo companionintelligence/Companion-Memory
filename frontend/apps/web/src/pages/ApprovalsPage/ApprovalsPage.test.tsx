@@ -63,6 +63,21 @@ describe('ApprovalsPage', () => {
     expect(screen.getByText(/sends data to a third party/i)).toBeInTheDocument();
   });
 
+  it('says a write waits because chat made it right after a lookup', () => {
+    state.actions = [
+      card({
+        intent: 'planning.createTask',
+        tool: 'planning_createTask',
+        input: { title: 'Call the plumber' },
+        reason: 'write-after-lookup',
+      }),
+    ];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText(/right after looking something up/i)).toBeInTheDocument();
+    expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
+  });
+
   it('falls back to a conservative sentence for a reason it does not know', () => {
     // A gate reason added later must read as "something serious" before anyone
     // writes its copy — not as a raw slug.
