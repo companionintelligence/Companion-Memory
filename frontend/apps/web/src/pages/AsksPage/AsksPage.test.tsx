@@ -1,5 +1,6 @@
 import type { MockedResponse } from '@apollo/client/testing';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { print } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -8,9 +9,11 @@ import {
   APPROVE_ASK,
   ASK_ANSWER,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
   MY_HOUSEHOLD_TIERS,
   ASK_INBOX,
+  ASK_INBOX_HIDDEN_CHARACTERS,
   ASK_OUTBOX,
   CREATE_ASK,
   CREATE_ASK_GRANT,
@@ -45,7 +48,6 @@ function askRow(overrides: Record<string, unknown> = {}) {
       queryType: 'photos',
       dataClass: 'photos',
       prompt: 'Lake trip photos?',
-      promptHiddenCharactersRemoved: false,
     },
     ...overrides,
   };
@@ -108,7 +110,6 @@ function auditRow(overrides: Record<string, unknown> = {}) {
       queryType: 'photos',
       dataClass: 'photos',
       prompt: 'Lake trip photos?',
-      promptHiddenCharactersRemoved: false,
     },
     ...overrides,
   };
@@ -142,6 +143,41 @@ const historyOk = (rows: unknown[], counterpartyKey = SUMMARY_KEY) => ({
 });
 
 const SUMMARY_KEY = 'peer:link-1';
+
+/** The note's own read: which of these ids had characters that render as nothing removed. */
+const hiddenRows = (typename: string, flags: Record<string, boolean>) =>
+  Object.entries(flags).map(([id, removed]) => ({
+    __typename: typename,
+    id,
+    query: { __typename: 'AskQueryType', promptHiddenCharactersRemoved: removed },
+  }));
+const inboxHiddenOk = (flags: Record<string, boolean>) => ({
+  request: { query: ASK_INBOX_HIDDEN_CHARACTERS },
+  result: { data: { askInbox: hiddenRows('AskType', flags) } },
+});
+const historyHiddenOk = (flags: Record<string, boolean>, counterpartyKey = SUMMARY_KEY) => ({
+  request: { query: ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS, variables: { input: { counterpartyKey } } },
+  result: {
+    data: {
+      askDisclosureHistory: {
+        __typename: 'AskDisclosureHistoryPayload',
+        rows: hiddenRows('AskAuditType', flags),
+      },
+    },
+  },
+});
+/** What a Memory from before `promptHiddenCharactersRemoved` answers when asked for it. */
+const inboxHiddenUnknownField = {
+  request: { query: ASK_INBOX_HIDDEN_CHARACTERS },
+  result: {
+    errors: [
+      {
+        message: 'Cannot query field "promptHiddenCharactersRemoved" on type "AskQueryType".',
+        extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+      },
+    ],
+  },
+};
 
 /** The owner's own verdicts about other LOCAL accounts. Absent = the default. */
 const householdTiersOk = (rows: unknown[] = []) => ({
@@ -1629,11 +1665,11 @@ describe('AsksPage', () => {
               queryType: 'relationship',
               dataClass: null,
               prompt: 'Do you have the lake photos?',
-              promptHiddenCharactersRemoved: true,
             },
           }),
         ]),
       ),
+      ...repeated(inboxHiddenOk({ 'ask-1': true })),
       ...repeated(outboxOk),
       ...repeated(grantsOk([])),
       ...repeated(peersOk([])),
@@ -1641,7 +1677,46 @@ describe('AsksPage', () => {
     ]);
 
     expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
-    expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('still shows the inbox from a Memory too old to know the hidden-characters field', async () => {
+    // The phone apps ship this web build to whichever Memory the person runs.
+    // When the field sat inside ASK_INBOX, that server refused the whole query
+    // and the owner saw "We couldn't load your inbox" instead of the ask.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated(inboxHiddenUnknownField),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument();
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t load your inbox/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the inbox query free of the hidden-characters field, so an older Memory can answer it', () => {
+    const source = print(ASK_INBOX);
+    const historySource = print(ASK_DISCLOSURE_HISTORY);
+
+    expect(source).toContain('prompt');
+    expect(source).not.toContain('promptHiddenCharactersRemoved');
+    expect(historySource).not.toContain('promptHiddenCharactersRemoved');
   });
 
   it('says hidden characters were removed in the disclosure history too', async () => {
@@ -1659,18 +1734,18 @@ describe('AsksPage', () => {
               queryType: 'relationship',
               dataClass: null,
               prompt: 'Do you have the lake photos?',
-              promptHiddenCharactersRemoved: true,
             },
           }),
         ]),
       ),
+      ...repeated(historyHiddenOk({ 'audit-1': true })),
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
     await openRelationship();
 
     expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
-    expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/render as nothing were removed/i)).toBeInTheDocument();
   });
 
   it('shows no hidden-characters note for a prompt nobody altered', async () => {
@@ -1683,11 +1758,11 @@ describe('AsksPage', () => {
               queryType: 'relationship',
               dataClass: null,
               prompt: 'Do you have the lake photos?',
-              promptHiddenCharactersRemoved: false,
             },
           }),
         ]),
       ),
+      ...repeated(inboxHiddenOk({ 'ask-1': false })),
       ...repeated(outboxOk),
       ...repeated(grantsOk([])),
       ...repeated(peersOk([])),

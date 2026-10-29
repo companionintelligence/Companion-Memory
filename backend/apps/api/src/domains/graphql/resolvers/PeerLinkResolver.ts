@@ -1,4 +1,4 @@
-import { NotFoundException, Optional, UseGuards } from '@nestjs/common';
+import { ConflictException, NotFoundException, Optional, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -140,15 +140,13 @@ export class PeerLinkResolver {
       // The identity inbound asks are matched on. `undefined` is passed through
       // as `undefined`, NOT coerced to null: `upsert` distinguishes the two, and
       // only `undefined` means "leave whatever is there alone" — which is what
-      // keeps re-adding an already-federated peer from silently unbinding it.
+      // keeps re-adding a peer whose link is LIVE from silently unbinding it. A
+      // peer whose link was ended starts unbound, like any new link.
       peerIssuer: input.peerIssuer,
       peerSubject: input.peerSubject,
-      // Adding a peer means "this link is live". Re-adding a handle the owner
-      // revoked used to answer success while `upsert` kept the stored
-      // `revoked` status, so the link stayed dead. Saying `active` here is the
-      // explicit re-activation `upsert` honours (it also clears `revokedAt`);
-      // the tier above starts from the narrow default again, as for any new
-      // link. `updatePeerLink` still never re-activates.
+      // Adding a peer means "this link is live". For a handle whose link the
+      // owner ended, `upsert` reads `active` as a new link beside the ended one,
+      // which stays as it was. `updatePeerLink` never sends it.
       status: 'active',
     });
 
@@ -182,6 +180,16 @@ export class PeerLinkResolver {
 
     if (existing == null) {
       throw new NotFoundException(`Peer link ${input.id} not found`);
+    }
+
+    // `upsert` writes the handle's CURRENT row. An ended link whose peer was
+    // added back since is not that row, and writing its stored tier and
+    // identity onto the new link would hand the peer back what ending it took
+    // away.
+    if ((await this.peerLinkService.findByHandle(serviceContext, existing.peerHandle))?.id !== existing.id) {
+      throw new ConflictException(
+        `This link to ${existing.peerHandle} was ended and they were added again since. Change the current link instead.`,
+      );
     }
 
     const link = await this.peerLinkService.upsert(serviceContext, {
@@ -229,6 +237,12 @@ export class PeerLinkResolver {
 
     if (existing == null) {
       throw new NotFoundException(`Peer link ${gid} not found`);
+    }
+
+    // Already ended. `revoke` ends the handle's current link, which for a peer
+    // added back since is the NEW one, not the link this id names.
+    if (existing.revokedAt != null) {
+      return { success: true, peerLink: PeerLinkType.toType(existing) };
     }
 
     const link = await this.peerLinkService.revoke(serviceContext, existing.peerHandle);

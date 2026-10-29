@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
-import { CommunicationEntity } from '@ci/domains/memory';
+import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -411,6 +411,9 @@ export class InboxScanService {
       .where('comm.user_id = :userId', { userId })
       .andWhere('comm.direction = :direction', { direction: 'inbound' })
       .andWhere('comm.communication_type IN (:...types)', { types: INBOX_TYPES })
+      // An agent's reply is stored inbound, but it is not mail someone sent the
+      // owner, and a task proposed from it would be the agent's own words.
+      .andWhere('comm.category IS DISTINCT FROM :agentTurn', { agentTurn: AGENT_TURN_MESSAGE_CATEGORY })
       .andWhere('comm.is_archived = false');
 
     if (cursor) {
@@ -435,6 +438,7 @@ export class InboxScanService {
       .where('comm.user_id = :userId', { userId })
       .andWhere('comm.direction = :direction', { direction: 'inbound' })
       .andWhere('comm.communication_type IN (:...types)', { types: INBOX_TYPES })
+      .andWhere('comm.category IS DISTINCT FROM :agentTurn', { agentTurn: AGENT_TURN_MESSAGE_CATEGORY })
       .andWhere('comm.is_archived = false')
       .andWhere('comm.time <= :now', { now: new Date() })
       .getRawOne<{ newest: Date | string | null }>();
