@@ -70,6 +70,16 @@ const FORCED_PROSE_NUDGE: OllamaMessage = {
 };
 
 /**
+ * The same instruction for a turn that has no tool results to point at: chat with tools off, or no
+ * tool registered, where the native engine still parsed a call and the round has to be asked again.
+ * Telling the model to ground its answer in results that are not there invites it to make some up.
+ */
+const FORCED_PROSE_NUDGE_NO_RESULTS: OllamaMessage = {
+  role: 'system',
+  content: 'Do not call any tools. Answer the user now in plain prose.',
+};
+
+/**
  * What a `TOOL_QUEUED` result means, put next to the result itself.
  *
  * The chat is the dispatcher that most often meets the confirmation gate and
@@ -1040,7 +1050,11 @@ export class OllamaService implements OnModuleInit {
         // accumulatedMessages — persistTurn writes those as thread rows and a
         // stored system row would replay into every later turn.
         const requestMessages = forcedProseRound
-          ? inputMessages.concat(accumulatedMessages, [FORCED_PROSE_NUDGE])
+          ? inputMessages.concat(accumulatedMessages, [
+              accumulatedMessages.some((message) => message.role === 'tool')
+                ? FORCED_PROSE_NUDGE
+                : FORCED_PROSE_NUDGE_NO_RESULTS,
+            ])
           : inputMessages.concat(accumulatedMessages);
 
         try {
@@ -1067,7 +1081,10 @@ export class OllamaService implements OnModuleInit {
               maxTokens: maxOutputTokens,
             });
 
-            for await (const chunk of iterator) {
+            for await (const { discardedToolCalls, ...chunk } of iterator) {
+              // The driver drops a discarding round's calls itself and names them here, so they
+              // count as discarded below just as the native engine's do.
+              discardedCalls.push(...(discardedToolCalls ?? []));
               lastChunk = chunk;
 
               if (chunk.message.content) {
