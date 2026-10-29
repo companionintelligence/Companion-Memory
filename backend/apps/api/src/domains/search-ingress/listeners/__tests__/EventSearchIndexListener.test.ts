@@ -1,6 +1,7 @@
 import { SYSTEM_USER } from '@ci/common/context';
 import { type Event } from '@ci/domains/memory';
 
+import { eventWeightedTexts } from '../../searchTexts';
 import { EventSearchIndexListener, eventDisplayTitle } from '../EventSearchIndexListener';
 
 // getSearchDocument is private and depends on nothing but its argument, so we
@@ -231,6 +232,42 @@ describe('eventDisplayTitle', () => {
     });
 
     expect(result).toBe('Photo · Jun 17, 2026');
+  });
+});
+
+describe('eventWeightedTexts', () => {
+  const words = (event: Parameters<typeof eventWeightedTexts>[0]) =>
+    eventWeightedTexts(event)
+      .map((part) => part.text)
+      .join(' ');
+
+  it('gives a photo its capture month, year and season, which the short title date cannot match', () => {
+    // "Oct" stems to 'oct' and "October" to 'octob', so an ask for "photos
+    // from October" never matched a photo whose only date was its title.
+    expect(
+      words({
+        title: 'PXL_20251003_101500_001.jpg',
+        startTime: new Date('2025-10-03T10:15:00.000Z'),
+        locationName: 'Lisbon, Portugal',
+      }),
+    ).toContain('October 2025 autumn fall 2025');
+    expect(
+      words({
+        title: '50231557_2415233981880',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        metadata: { 'Media Type': 'video/mp4' },
+      }),
+    ).toContain('June 2026 summer 2026');
+  });
+
+  it('leaves the date words off every other event', () => {
+    expect(
+      words({
+        title: 'Lunch with Dana',
+        startTime: new Date('2026-06-17T15:30:00.000Z'),
+        locationName: 'Topanga',
+      }),
+    ).not.toMatch(/June|summer/);
   });
 });
 

@@ -320,7 +320,44 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   maxResults?: number;
   includeTypes?: IndexableEntity[];
   excludeTypes?: IndexableEntity[];
+  /**
+   * Also admit the owner's photo events ('photos'), or photo and video events
+   * ('media'), beside `includeTypes`. A photo's place and capture date are on
+   * its event, not its file, so "photos from Lisbon" filtered to files alone
+   * could only ever answer "none". Never other events: a calendar entry in
+   * Lisbon is not a photo of it.
+   */
+  mediaEvents?: 'photos' | 'media';
 };
+
+/** Image file extensions, as `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts lists them. */
+const IMAGE_FILENAME_SQL = String.raw`\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef)$`;
+/** The video ones, from the same list. */
+const VIDEO_FILENAME_SQL = String.raw`\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$`;
+
+/**
+ * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
+ * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
+ * `Media Type`, or a title that is such a file name. Constant SQL, no asker text.
+ */
+function mediaEventSql(kind: 'photos' | 'media'): string {
+  const mediaTypes =
+    kind === 'media'
+      ? `(e.metadata ->> 'Media Type' LIKE 'image/%' OR e.metadata ->> 'Media Type' LIKE 'video/%')`
+      : `e.metadata ->> 'Media Type' LIKE 'image/%'`;
+  const fileNames =
+    kind === 'media'
+      ? `(n.name ~* '${IMAGE_FILENAME_SQL}' OR n.name ~* '${VIDEO_FILENAME_SQL}')`
+      : `n.name ~* '${IMAGE_FILENAME_SQL}'`;
+
+  return `EXISTS (
+          SELECT 1
+            FROM ci.events e
+            LEFT JOIN ci.entities n ON n.entity_id = e.event_id
+           WHERE e.event_id = v.entity_id
+             AND (${mediaTypes} OR ${fileNames})
+        )`;
+}
 
 /** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
 export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
@@ -711,6 +748,11 @@ export class SearchService {
     } as SearchOptions);
 
     const typeFilter = this.buildTypeFilter(resolvedOptions, 4, 'v');
+    // The same `$4` list, widened by the media events of `mediaEvents`.
+    const typeClause =
+      options.mediaEvents && resolvedOptions.includeTypes?.length
+        ? `AND (v.entity_type = ANY($4) OR (v.entity_type = 'event' AND ${mediaEventSql(options.mediaEvents)}))`
+        : typeFilter.clause;
     const { weights } = await this.rankingLiterals();
 
     // Each group's text crosses as a PARAMETER and is turned into a tsquery by
@@ -761,7 +803,7 @@ export class SearchService {
       WHERE v.user_id = $1
         AND q.tq IS NOT NULL
         AND v.vector @@ q.tq
-        ${typeFilter.clause}
+        ${typeClause}
       ORDER BY score DESC
       LIMIT ${limit}
     `;

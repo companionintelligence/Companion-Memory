@@ -258,8 +258,8 @@ describeWithDatabase(`peer revocation is immediate — against real Postgres (${
     expect(await service.findActiveByIssuerSubject(owner, ISSUER, subject)).toBeNull();
   });
 
-  it('SECURITY: re-adding a revoked peer does not bring its old grants back', async () => {
-    const { id, handle } = await freshLink();
+  it("SECURITY: adding back a revoked peer makes a new link, with none of the ended one's grants, identity or tier", async () => {
+    const { id, handle, subject } = await freshLink();
     const ctx = { userId: owner } as never;
     const before = await grantService.create(ctx, {
       granteePeerLinkId: id,
@@ -277,12 +277,33 @@ describeWithDatabase(`peer revocation is immediate — against real Postgres (${
     expect(whileRevoked).toBeNull();
 
     // What `createPeerLink` sends when the owner adds them back.
-    await service.upsert(ctx, {
+    const relinked = await service.upsert(ctx, {
       peerHandle: handle,
       memoryEndpoint: 'https://devon.test',
       trustTier: 'stranger',
       status: 'active',
     });
+
+    expect(relinked.id).not.toBe(id);
+
+    const rows: Array<{
+      id: string;
+      status: string;
+      revoked_at: Date | null;
+      trust_tier: string;
+      peer_subject: string | null;
+    }> = await dataSource.query(
+      `SELECT id, status, revoked_at, trust_tier, peer_subject
+         FROM ci.peer_links WHERE owner_user_id = $1 AND peer_handle = $2 ORDER BY created_at`,
+      [owner, handle],
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({ id, status: 'revoked', trust_tier: 'family', peer_subject: subject }),
+      { id: relinked.id, status: 'active', revoked_at: null, trust_tier: 'stranger', peer_subject: null },
+    ]);
+    expect(rows[0].revoked_at).toBeInstanceOf(Date);
+    // The identity the ended link was bound to resolves to nothing.
+    expect(await service.findActiveByIssuerSubject(owner, ISSUER, subject)).toBeNull();
 
     const [row] = await dataSource.query(
       'SELECT revoked_at, revocation_reason FROM ci.ask_grants WHERE id = $1',
@@ -291,19 +312,41 @@ describeWithDatabase(`peer revocation is immediate — against real Postgres (${
     expect(row.revoked_at).toBeInstanceOf(Date);
     expect(row.revocation_reason).toBe('revoked');
 
-    // A grant the owner gives after the re-add is theirs to keep, and an edit
-    // of the live link leaves it alone.
+    // A grant the owner gives the new link is theirs to keep, and an edit of
+    // the live link leaves it alone.
     const after = await grantService.create(ctx, {
-      granteePeerLinkId: id,
+      granteePeerLinkId: relinked.id,
       queryType: 'content',
       mode: 'review',
     });
-    await service.upsert(ctx, {
+    const edited = await service.upsert(ctx, {
       peerHandle: handle,
       memoryEndpoint: 'https://devon.test',
       displayName: 'Devon M',
     });
+    expect(edited.id).toBe(relinked.id);
     const [kept] = await dataSource.query('SELECT revoked_at FROM ci.ask_grants WHERE id = $1', [after.id]);
     expect(kept.revoked_at).toBeNull();
+  });
+
+  it('still allows only one LIVE link per handle', async () => {
+    const { handle } = await freshLink();
+
+    await expect(
+      dataSource.query(
+        `INSERT INTO ci.peer_links (id, owner_user_id, peer_handle, memory_endpoint, trust_tier, status)
+         VALUES ($1, $2, $3, 'https://devon.test', 'stranger', 'active')`,
+        [uuidv7(), owner, handle],
+      ),
+    ).rejects.toMatchObject({ constraint: 'peer_links_owner_handle_uniq' });
+
+    // An ended row under the same handle is history, and the index allows it.
+    await expect(
+      dataSource.query(
+        `INSERT INTO ci.peer_links (id, owner_user_id, peer_handle, memory_endpoint, trust_tier, status, revoked_at)
+         VALUES ($1, $2, $3, 'https://devon.test', 'stranger', 'revoked', now())`,
+        [uuidv7(), owner, handle],
+      ),
+    ).resolves.toBeDefined();
   });
 });

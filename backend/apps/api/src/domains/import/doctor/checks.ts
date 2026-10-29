@@ -213,7 +213,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
           FROM ci.communications
          WHERE from_entity_id IS NULL
            AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
-           -- An agent chat turn (MemoryController.turn, TURN_MESSAGE_CATEGORY)
+           -- An agent chat turn (MemoryController.turn, AGENT_TURN_MESSAGE_CATEGORY)
            -- is the owner talking to an agent: no Person is on the other end,
            -- so an empty participant set is the honest value.
            AND category IS DISTINCT FROM 'agent-turn'

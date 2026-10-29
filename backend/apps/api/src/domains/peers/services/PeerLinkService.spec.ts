@@ -5,13 +5,14 @@ import { type PeerLinkEntity } from '../entities/PeerLinkEntity';
 
 import { PeerLinkService } from './PeerLinkService';
 
-/** The one GrantService call `upsert` makes, on a re-activation only. */
+/** The one GrantService call `upsert` makes, when an ended link is added back. */
 function makeGrantService(revoked = 0) {
   return { revokeForPeerLink: jest.fn().mockResolvedValue(revoked) };
 }
 
 function makeService() {
   const repository = {
+    find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockImplementation((row: unknown) => row),
     save: jest.fn().mockImplementation((row: unknown) => Promise.resolve({ ...(row as object) })),
@@ -161,13 +162,15 @@ describe('PeerLinkService.upsert — the peer identity binding', () => {
     // subject of an already-bound link is a legitimate write.
     const { service, repository } = makeService();
 
-    repository.findOne.mockResolvedValue({
-      id: 'link-1',
-      ownerUserId: 'owner-1',
-      peerHandle: 'devon',
-      peerIssuer: 'https://portal.example',
-      peerSubject: 'old-sub',
-    });
+    repository.find.mockResolvedValue([
+      {
+        id: 'link-1',
+        ownerUserId: 'owner-1',
+        peerHandle: 'devon',
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'old-sub',
+      },
+    ]);
 
     await service.upsert(CTX as never, { ...DTO, peerSubject: 'devon-sub' });
 
@@ -182,13 +185,15 @@ describe('PeerLinkService.upsert — the peer identity binding', () => {
     // identity, not to every write that passes near one.
     const { service, repository } = makeService();
 
-    repository.findOne.mockResolvedValue({
-      id: 'link-1',
-      ownerUserId: 'owner-1',
-      peerHandle: 'devon',
-      peerIssuer: 'https://portal.example',
-      peerSubject: null,
-    });
+    repository.find.mockResolvedValue([
+      {
+        id: 'link-1',
+        ownerUserId: 'owner-1',
+        peerHandle: 'devon',
+        peerIssuer: 'https://portal.example',
+        peerSubject: null,
+      },
+    ]);
 
     await service.upsert(CTX as never, { ...DTO, trustTier: 'family' });
 
@@ -490,118 +495,120 @@ describe('PeerLinkService — a revoked peer does not authenticate', () => {
     expect(updated.revokedAt).toEqual(revokedTimestamp);
   });
 
-  it('re-adding a revoked link with status=active makes it live again at the tier given', async () => {
-    // What `createPeerLink` sends. The peer resolves again on the next ask,
-    // which is what the owner asked for by adding them back.
+  it('adding back a peer whose link was ended makes a NEW link, and leaves the ended one as it was', async () => {
+    // What `createPeerLink` sends. The ended row keeps its signing key, its
+    // identity and the asks exchanged over it; none of that is the new link's.
+    const endedAt = new Date('2026-02-01T00:00:00Z');
     const rows = [
-      link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z'), trustTier: 'peer' }),
+      link({
+        status: 'revoked',
+        revokedAt: endedAt,
+        trustTier: 'family',
+        peerKeyThumbprint: 'old-key',
+        personEntityId: 'person-devon',
+      } as Partial<FakeRow>),
     ];
     const { service, repository, grantService } = makeServiceOverRows(rows);
-    // `upsert` saves a merged copy rather than the row it read, so store it
-    // back the way Postgres would before asking again.
     repository.save.mockImplementation((row: FakeRow) => {
-      rows[0] = row;
+      rows.push(row);
 
       return Promise.resolve(row);
     });
 
     const relinked = await service.upsert(CTX as never, { ...DTO, trustTier: 'stranger', status: 'active' });
 
-    expect(relinked).toMatchObject({ status: 'active', revokedAt: null, trustTier: 'stranger' });
-    // SECURITY: the grants given before the link was ended do not come back
-    // with it. A new link has none, and a re-added one starts over.
-    expect(grantService.revokeForPeerLink).toHaveBeenCalledWith(CTX, rows[0].id);
-    await expect(service.findActiveByPeerIdentity(IDENTITY.issuer, IDENTITY.subject)).resolves.toHaveLength(
-      1,
-    );
+    expect(relinked.id).not.toBe('link-1');
+    expect(relinked).toMatchObject({
+      status: 'active',
+      revokedAt: null,
+      trustTier: 'stranger',
+      peerIssuer: null,
+      peerSubject: null,
+      // The owner's own labels for who this is carry over.
+      displayName: 'Devon',
+      personEntityId: 'person-devon',
+    });
+    expect((relinked as unknown as Record<string, unknown>).peerKeyThumbprint).toBeUndefined();
+    expect(rows[0]).toMatchObject({
+      id: 'link-1',
+      status: 'revoked',
+      revokedAt: endedAt,
+      trustTier: 'family',
+    });
+    // The ended link's grants are revoked, by ITS id; the new link has none.
+    expect(grantService.revokeForPeerLink).toHaveBeenCalledWith(CTX, 'link-1');
+    // The identity the ended link was bound to does not resolve to either row.
+    await expect(service.findActiveByPeerIdentity(IDENTITY.issuer, IDENTITY.subject)).resolves.toEqual([]);
+    // Writes by handle now reach the new link.
+    await expect(service.findByHandle(CTX as never, 'devon')).resolves.toMatchObject({ id: relinked.id });
   });
 
-  it('reports a re-activation that clashes on the live identity index as a 409, not a bare 500', async () => {
-    // The revoked link still carries its (iss, sub). If another live link took
-    // that identity meanwhile, bringing this one back trips the partial index
-    // even though the write names no identity.
+  it('binds the new link to the identity given with the re-add, not the ended one', async () => {
     const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
-    const { service, repository } = makeServiceOverRows(rows);
+    const { service } = makeServiceOverRows(rows);
 
-    repository.save.mockRejectedValue(
-      Object.assign(new Error('duplicate key value violates unique constraint'), {
-        code: '23505',
-        constraint: 'peer_links_owner_identity_live_uniq',
-      }),
-    );
+    const relinked = await service.upsert(CTX as never, {
+      ...DTO,
+      status: 'active',
+      peerIssuer: 'https://portal.example.com',
+      peerSubject: 'devon-new-sub',
+    });
 
-    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    expect(relinked).toMatchObject({ peerSubject: 'devon-new-sub', revokedAt: null });
+    expect(relinked.id).not.toBe('link-1');
   });
 
-  it('tells a re-add that clashes on the identity what to do, without naming a pair it never sent', async () => {
-    const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
-    const { service, repository } = makeServiceOverRows(rows);
-
-    repository.save.mockRejectedValue(
-      Object.assign(new Error('duplicate key'), {
-        code: '23505',
-        constraint: 'peer_links_owner_identity_live_uniq',
-      }),
-    );
-
-    const refusal = service.upsert(CTX as never, { ...DTO, status: 'active' });
-
-    await expect(refusal).rejects.toThrow(/re-add this one with a different peerIssuer and peerSubject/);
-    await expect(refusal).rejects.not.toThrow(new RegExp(IDENTITY.subject));
-  });
-
-  it('reports a re-activation that clashes on the live KEY index as a 409', async () => {
-    // The revoked row keeps its signing key too, and that index is partial on
-    // `revoked_at IS NULL` in the same way.
+  it('answers a second re-add of the same ended link with a 409, not a bare 500', async () => {
+    // Two re-adds (a double click) both read the ended row and both insert.
     const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
     const { service, repository } = makeServiceOverRows(rows);
 
     repository.save.mockRejectedValue(
       Object.assign(new Error('duplicate key'), {
         code: '23505',
-        constraint: 'peer_links_owner_key_live_uniq',
+        constraint: 'peer_links_owner_handle_uniq',
       }),
     );
 
-    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toThrow(/signing key/);
+    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toThrow(
+      /devon was added again a moment ago/,
+    );
   });
 
-  it('does not read a nameless 23505 as an identity clash when the re-activated link has no identity', async () => {
+  it('revokes the live link of a handle, never the ended one beside it', async () => {
     const rows = [
-      link({
-        status: 'revoked',
-        revokedAt: new Date('2026-02-01T00:00:00Z'),
-        peerIssuer: null,
-        peerSubject: null,
-      }),
+      link({ id: 'link-old', status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') }),
+      link({ id: 'link-new', peerIssuer: null, peerSubject: null }),
     ];
-    const { service, repository } = makeServiceOverRows(rows);
-    const err = Object.assign(new Error('duplicate key'), { driverError: { code: '23505' } });
+    const { service } = makeServiceOverRows(rows);
 
-    repository.save.mockRejectedValue(err);
+    const revoked = await service.revoke(CTX as never, 'devon');
 
-    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toBe(err);
+    expect(revoked.id).toBe('link-new');
+    expect(rows[1]?.revokedAt).toBeInstanceOf(Date);
+    expect(rows[0]?.revokedAt).toEqual(new Date('2026-02-01T00:00:00Z'));
   });
 
-  it('logs a re-activation, as revoke() logs a revocation', async () => {
+  it('logs a re-add, as revoke() logs a revocation', async () => {
     const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
-    const repository = {
-      findOne: jest.fn().mockResolvedValue(rows[0]),
-      create: jest.fn().mockImplementation((row: unknown) => row),
-      save: jest.fn().mockImplementation((row: unknown) => Promise.resolve(row)),
-    };
+    const { repository } = makeServiceOverRows(rows);
     const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn() };
     const grantService = makeGrantService(2);
-    const service = new PeerLinkService(repository as never, logger as never, grantService as never);
+    const logged = new PeerLinkService(repository as never, logger as never, grantService as never);
+    repository.save.mockImplementation((row: FakeRow) => {
+      rows.push(row);
 
-    await service.upsert(CTX as never, { ...DTO, status: 'active' });
-    await service.upsert(CTX as never, { ...DTO, displayName: 'Devon' });
+      return Promise.resolve(row);
+    });
+
+    await logged.upsert(CTX as never, { ...DTO, status: 'active' });
+    await logged.upsert(CTX as never, { ...DTO, displayName: 'Devon' });
 
     expect(logger.log).toHaveBeenCalledTimes(1);
-    expect(logger.log).toHaveBeenCalledWith('peer link re-activated: devon; 2 old grant(s) revoked');
-    // Only the re-activation touches grants. An edit of a live link leaves them.
+    expect(logger.log).toHaveBeenCalledWith(
+      'peer link re-added as a new link: devon; 2 grant(s) of the ended link revoked',
+    );
+    // Only the re-add touches grants. An edit of the live link leaves them.
     expect(grantService.revokeForPeerLink).toHaveBeenCalledTimes(1);
   });
 });

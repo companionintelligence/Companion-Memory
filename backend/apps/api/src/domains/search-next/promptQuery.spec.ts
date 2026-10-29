@@ -207,6 +207,42 @@ describe('photo asks', () => {
     ]);
   });
 
+  it('reads a kind word that modifies the next one as part of a name, not a kind', () => {
+    // "picture frame" asks for a frame. It used to narrow the ask to files and
+    // drop 'picture', so a frame bought on Amazon was never found.
+    expect(buildPromptQuery('Do you have a picture frame?')).toEqual([
+      { kind: 'phrase', text: 'picture frame' },
+    ]);
+    expect(promptMediaClass('Do you have a picture frame?')).toBeNull();
+    expect(buildPromptQuery('the photo album from Lisbon')).toEqual([
+      { kind: 'phrase', text: 'photo album' },
+      { kind: 'term', text: 'Lisbon' },
+    ]);
+    expect(promptMediaClass('any video games?')).toBeNull();
+    expect(buildPromptQuery('Video game nights?')).toEqual([
+      { kind: 'phrase', text: 'Video game' },
+      { kind: 'term', text: 'nights' },
+    ]);
+  });
+
+  it('leaves a capitalised name that opens with a compound whole', () => {
+    expect(buildPromptQuery('Have you been to the Video Game Awards?')).toEqual([
+      { kind: 'phrase', text: 'Video Game Awards' },
+    ]);
+    expect(promptMediaClass('Have you been to the Video Game Awards?')).toBeNull();
+  });
+
+  it('still reads a kind word followed by anything else as the kind', () => {
+    expect(promptMediaClass('photos taken in Lisbon')).toBe('photos');
+    expect(buildPromptQuery('photos taken in Lisbon')).toEqual([
+      { kind: 'term', text: 'taken' },
+      { kind: 'term', text: 'Lisbon' },
+    ]);
+    expect(promptMediaClass('any pictures last October')).toBe('photos');
+    // A frame word ends the run, so the kind word is last in its run.
+    expect(promptMediaClass('photos from the frame shop')).toBe('photos');
+  });
+
   it('reports the class a standalone kind word names, which the ask executor filters on', () => {
     expect(promptMediaClass('Do you have any photos of the volcano?')).toBe('photos');
     expect(promptMediaClass('Pictures from Tahoe?')).toBe('photos');

@@ -14,7 +14,12 @@ import { ApiKeyGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { untrustedBlock } from '@ci/common/prompt/untrustedBlock';
-import { CommunicationService, CommunicationType, UserContextService } from '@ci/domains/memory';
+import {
+  AGENT_TURN_MESSAGE_CATEGORY,
+  CommunicationService,
+  CommunicationType,
+  UserContextService,
+} from '@ci/domains/memory';
 
 import { AgentMemoryService } from '../services/AgentMemoryService';
 import { ForecastContextService } from '../services/ForecastContextService';
@@ -30,8 +35,6 @@ import {
   type RecallDto,
   type TurnDto,
 } from '../types';
-
-const TURN_MESSAGE_CATEGORY = 'agent-turn';
 
 function createAgentTurnMessageId(input: {
   userId: string;
@@ -250,7 +253,7 @@ export class MemoryController {
           subject: `${platform} conversation`,
           content,
           preview: content.slice(0, 240),
-          category: TURN_MESSAGE_CATEGORY,
+          category: AGENT_TURN_MESSAGE_CATEGORY,
         });
         created += 1;
       } catch (err) {

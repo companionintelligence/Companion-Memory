@@ -63,8 +63,25 @@ describe('AskExecutorService.execute', () => {
 
     expect(searchService.searchPrompt).toHaveBeenCalledWith(
       { userId: 'responder-1' },
-      { prompt: 'lake', subjectIsName: false, maxResults: 50, includeTypes: ['file'] },
+      { prompt: 'lake', subjectIsName: false, maxResults: 50, includeTypes: ['file'], mediaEvents: 'photos' },
     );
+  });
+
+  it('searches photo events beside files for a photo ask, and no events for other file classes', async () => {
+    // A photo's place and capture date are on its event, so "photos from
+    // Lisbon" filtered to files alone could only ever answer "none".
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'media', prompt: 'Lisbon' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'files', prompt: 'Lisbon' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'events', prompt: 'Lisbon' } }));
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).toMatchObject({
+      includeTypes: ['file'],
+      mediaEvents: 'media',
+    });
+    expect(searchService.searchPrompt.mock.calls[1][1]).not.toHaveProperty('mediaEvents');
+    expect(searchService.searchPrompt.mock.calls[2][1]).not.toHaveProperty('mediaEvents');
   });
 
   it('reads "photos of …" in a class-less ask as the photos class', async () => {
@@ -84,6 +101,7 @@ describe('AskExecutorService.execute', () => {
         subjectIsName: false,
         maxResults: 50,
         includeTypes: ['file'],
+        mediaEvents: 'photos',
       },
     );
   });
