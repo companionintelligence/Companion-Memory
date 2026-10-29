@@ -17,33 +17,10 @@
 #     resources, and a silent no-op there is how an empty .appex reaches an
 #     archive in the first place.
 #
-# BOTH CI SOURCING PATHS ARE STILL BROKEN, AND NOT FIXABLE FROM THIS REPO ALONE
-# (investigated 2026-08-29, see docs/qa/baseline-2026-08-26.md §6.2(a)):
-#   - No sibling CI_BROWSER_EXTENSION_DIR checkout exists in GitHub Actions,
-#     so every CI run falls to the pinned-release path.
-#   - companionintelligence/CI-Browser-Extension is a PRIVATE repo, and
-#     CI-Server's Actions secrets carry no cross-repo credential for it (only
-#     app-signing/store secrets) — so `mobile-build.yml` cannot even `git
-#     clone` it directly as a workaround without someone provisioning a new
-#     PAT/deploy-key secret in this repo's settings first.
-#   - Its releases (currently only v1.4.0; PINNED_VERSION defaults to the
-#     unreleased 1.5.0) have never shipped a `*safari-mobile.zip` asset, and
-#     its in-tree source has no committed build output either — `.output/`
-#     is gitignored, so even a successful clone would still need to run
-#     `yarn install && yarn build:safari-mobile` (a second JS toolchain) in
-#     that checkout before this script's sync_from_dir() would find anything.
-#   Unblocking the SOURCING needs an action in the OTHER repo: publish a v1.5.0
-#   (or whatever PINNED_VERSION says) release there with a safari-mobile.zip
-#   asset, built via its own already-existing `npm run zip:safari-mobile`.
-#   Until that lands, the CI simulator lane (.github/workflows/mobile-build.yml
-#   → "iOS (Simulator .app)", Debug / -sdk iphonesimulator) is EXPECTED to take
-#   the warn path: no resources, a SAFARI_EXTENSION_MISSING.txt marker left in
-#   Resources/ (and copied into the built .appex so the gap is visible in the
-#   artifact), and exit 0 so the App target compiles at all — which is what any
-#   future XCTest target or simulator smoke test depends on. Those artifacts
-#   must never be shipped; a Release/archive build still fails closed here.
-#   The CI_BROWSER_EXTENSION_DIR local-dev override below is unaffected and
-#   still works for anyone who sets it.
+# GitHub Actions does not check out the extension repo as a sibling, so CI
+# downloads a pinned public release and syncs its safari-mobile asset. Keep
+# PINNED_VERSION aligned with the extension release. Local builds can set
+# CI_BROWSER_EXTENSION_DIR to a checkout and build the bundle directly.
 set -euo pipefail
 
 # Xcode GUI Run scripts do not load a login shell, so asdf/nvm/Homebrew yarn
@@ -72,7 +49,7 @@ DEST="$IOS_ROOT/ios/App/SafariWebExtension/Resources"
 # has to delete it again from BOTH places, and a drifted literal there would
 # silently stop the cleanup working.
 MARKER_NAME="SAFARI_EXTENSION_MISSING.txt"
-PINNED_VERSION="${CI_BROWSER_EXTENSION_VERSION:-1.5.0}"
+PINNED_VERSION="${CI_BROWSER_EXTENSION_VERSION:-1.6.0}"
 GH_REPO="${CI_BROWSER_EXTENSION_REPO:-companionintelligence/CI-Browser-Extension}"
 
 if [[ -n "${CI_BROWSER_EXTENSION_DIR:-}" ]]; then
