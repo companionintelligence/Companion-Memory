@@ -24,7 +24,7 @@ import {
   volumeFromMl,
   volumeToMl,
 } from '@/lib/measurements';
-import { toThingDateInput } from '@/lib/thingDate';
+import { fromThingDateInput, toThingDateInput } from '@/lib/thingDate';
 
 export interface ThingModalItem {
   id: string;
@@ -316,21 +316,6 @@ function toNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/**
- * The start of the picked day where the person is. `new Date('2026-10-01')`
- * parses a bare date as UTC midnight, which west of UTC is still September 30,
- * so the thing's page showed the day before the one picked.
- */
-function toDate(value: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-
-  if (!match) {
-    return value.trim() === '' ? null : new Date(value).toISOString();
-  }
-
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toISOString();
-}
-
 /** Comma-separated text → the term array the API takes; empty means "none recorded". */
 function toTerms(value: string): string[] | null {
   const terms = value
@@ -422,6 +407,21 @@ export function ThingModal({ open, onClose, item, create = false, detailPagePath
     volumeMl: volumeToMl(toNumber(formData.volume), formData.unitSystem),
   });
 
+  /**
+   * What to send for a date field: the stored value when the input still shows
+   * the day it was read as, else the picked day. Every save sends all three, so
+   * a brand fix would otherwise cut an importer's order time to a midnight.
+   */
+  const dateInput = (field: 'acquiredAt' | 'manufacturedAt' | 'expiresAt') => {
+    const stored = create ? null : item?.[field];
+
+    if (stored != null && formData[field] === toThingDateInput(stored)) {
+      return stored;
+    }
+
+    return fromThingDateInput(formData[field]);
+  };
+
   const commonInput = () => ({
     name: formData.name.trim(),
     category: formData.category.trim() || null,
@@ -431,11 +431,11 @@ export function ThingModal({ open, onClose, item, create = false, detailPagePath
     currentValue: toNumber(formData.currentValue),
     purchasePrice: toNumber(formData.purchasePrice),
     condition: formData.condition || null,
-    acquiredAt: toDate(formData.acquiredAt),
+    acquiredAt: dateInput('acquiredAt'),
     acquisitionMethod: formData.acquisitionMethod || null,
     acquiredFrom: formData.acquiredFrom.trim() || null,
-    manufacturedAt: toDate(formData.manufacturedAt),
-    expiresAt: toDate(formData.expiresAt),
+    manufacturedAt: dateInput('manufacturedAt'),
+    expiresAt: dateInput('expiresAt'),
     colors: toTerms(formData.colors),
     colorHex: formData.colorHex.trim() || null,
     materials: toTerms(formData.materials),

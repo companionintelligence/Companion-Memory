@@ -1,4 +1,4 @@
-import { Not, type DataSource, type Repository } from 'typeorm';
+import { IsNull, Not, type DataSource, type Repository } from 'typeorm';
 
 import type { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
 import { platformIdentity } from '../../identity';
@@ -604,6 +604,60 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
   });
 });
 
+describe('ObjectObservationService.sendBackToReview — "not this thing"', () => {
+  it("clears the link as a person's answer and marks the sighting for the review queue", async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-1' });
+
+    await service.sendBackToReview(ctx(), 'obs-1');
+
+    const [criteria, patch] = update.mock.calls[0];
+
+    expect(criteria).toEqual({ id: 'obs-1', userId: USER });
+    expect(patch).toEqual(
+      expect.objectContaining({
+        confirmedByUser: false,
+        // `user`, so the resolution ladder and the vision listener leave it alone.
+        resolutionMethod: 'user',
+        resolutionConfidence: null,
+        resolvedObjectId: null,
+        resolvedProductId: null,
+      }),
+    );
+    expect(patch.metadata()).toBe(`metadata || '{"sentBackToReview": true}'::jsonb`);
+  });
+
+  it('returns null for an id that is not this user’s', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue(null);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-x')).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('leaves a sighting linked to nothing as it is, so "not a thing" stays out of the queue', async () => {
+    const { service, findOne, update } = makeService();
+    const rejected = { id: 'obs-1', confirmedByUser: false, resolvedObjectId: null, resolvedProductId: null };
+
+    findOne.mockResolvedValue(rejected as never);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-1')).toBe(rejected);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('is undone by any later answer', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
+
+    await service.confirm(ctx(), 'obs-1', false, { resolvedObjectId: null, resolvedProductId: null });
+
+    expect(update.mock.calls[0][1].metadata()).toBe("metadata - 'sentBackToReview'");
+  });
+});
+
 /* ===================================================================== *
  * Scoped reads
  * ===================================================================== */
@@ -623,12 +677,29 @@ describe('ObjectObservationService — reads are user-scoped', () => {
     await service.findForReview(ctx());
 
     // object_observations_review_idx is WHERE NOT confirmed_by_user AND
-    // resolved_object_id IS NULL — this query must match it to use it.
+    // resolved_object_id IS NULL — every branch of this query must match it to use it.
     const { where, order } = find.mock.calls[0][0];
 
-    expect(where.confirmedByUser).toBe(false);
-    expect(where.resolvedObjectId).toBeDefined();
+    expect(where).toHaveLength(2);
+
+    for (const branch of where) {
+      expect(branch.userId).toBe(USER);
+      expect(branch.confirmedByUser).toBe(false);
+      expect(branch.resolvedObjectId).toEqual(IsNull());
+    }
+
     expect(order).toEqual({ observedAt: 'DESC' });
+  });
+
+  it('leaves the sent-back sightings out for a machine sweep', async () => {
+    const { service, find } = makeService();
+
+    await service.findForReview(ctx(), 100, 0, { sentBack: false });
+
+    const { where } = find.mock.calls[0][0];
+
+    expect(where).toHaveLength(1);
+    expect(where[0].resolutionMethod).toEqual(Not('user'));
   });
 
   it('leaves a sighting a person answered "not a thing" out of the review queue', async () => {
@@ -638,6 +709,12 @@ describe('ObjectObservationService — reads are user-scoped', () => {
 
     // rejectObservation leaves the row unconfirmed and unlinked, so only the
     // method says a person has already looked at it.
-    expect(find.mock.calls[0][0].where.resolutionMethod).toEqual(Not('user'));
+    const [unanswered, sentBack] = find.mock.calls[0][0].where;
+
+    expect(unanswered.resolutionMethod).toEqual(Not('user'));
+    expect(unanswered).not.toHaveProperty('metadata');
+    // The one answered row the queue shows: "not this thing" on a thing's page.
+    expect(sentBack.resolutionMethod).toBe('user');
+    expect(sentBack.metadata).toBeDefined();
   });
 });

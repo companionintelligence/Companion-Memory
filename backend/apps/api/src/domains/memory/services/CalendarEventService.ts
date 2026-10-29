@@ -2341,6 +2341,21 @@ export class CalendarEventService {
    * event it returns is the row as it stands after that.
    */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
+    // Below, a title is only written when it has text in it, so an emptied one
+    // was skipped while the save still answered with the event: the page said
+    // it saved and the old title stayed. An event that never had a title is
+    // still saved: the drawer sends its empty title next to a description edit.
+    if (typeof data.title === 'string' && data.title.trim() === '') {
+      const stored = await this.eventBaseRepository.findOne({
+        where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+        select: { id: true, name: true },
+      });
+
+      if (stored?.name?.trim()) {
+        throw new BadRequestException('An event needs a title.');
+      }
+    }
+
     // An edit is one person's request, not a batch, so a rule that would hang
     // the calendar is refused outright rather than dropped as on create.
     const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
