@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 
 import { fetchJson, GlobalUID, isNativePlatform, LoadingPage } from '@ci/common';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { isPastOutage, MemoryUnreachable } from '@/components/MemoryUnreachable';
 import { useAuth, useCurrentUser } from '@/hooks';
 import { appHomePath } from '@/lib/appHome';
 
@@ -56,9 +57,10 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // signup POST is in flight, and swapping in LoadingPage then unmounts the
   // very form awaiting the response — wiping the user's input and the local
   // state needed to attach the server's field errors.
-  const [{ expired, authToken, authenticated, initializing }] = useAuth();
-  const { user, loading: userLoading } = useCurrentUser();
+  const [{ expired, authToken, authenticated, initializing, unreachable: sessionUnreachable }] = useAuth();
+  const { user, loading: userLoading, unreachable: profileUnreachable, refetch } = useCurrentUser();
   const { loading: featuresLoading } = useFeatures();
+  const location = useLocation();
   const [hubIdentity, setHubIdentity] = useState<HubIdentity | undefined>(undefined);
 
   useEffect(() => {
@@ -88,6 +90,31 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  // Memory did not answer the session check or the profile and there is no profile to go on.
+  // The splash, Log In and Sign up cannot work then, so say so, as the pages inside the app do
+  // (ProtectedRoute). The card's link comes back here with `pastOutage` and gets the form
+  // anyway. A known user still goes on to their memory below. A phone goes on to its device
+  // picker, where it can choose an appliance that answers.
+  if ((sessionUnreachable || profileUnreachable) && !user && !isNativePlatform()) {
+    if (isPastOutage(location.state)) {
+      return children;
+    }
+
+    return (
+      <MemoryUnreachable
+        signedIn={Boolean(authToken || authenticated)}
+        onRetry={() => {
+          if (sessionUnreachable) {
+            // Not refresh(): with no session it answers 401, which Log In shows as an error.
+            window.location.reload();
+          } else {
+            void refetch?.();
+          }
+        }}
+      />
+    );
+  }
 
   if (initializing || userLoading || hubIdentity === undefined || (user?.onboarded && featuresLoading)) {
     return <LoadingPage />;

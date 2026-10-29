@@ -26,16 +26,21 @@ import type {
   UserScopedTable,
 } from '../types';
 import {
+  type AccountLink,
   DISCOVER_INSERTABLE_COLUMNS_SQL,
   DISCOVER_LINK_REFERENCES_SQL,
+  DISCOVER_UNDECLARED_ENTITY_LINKS_SQL,
   DISCOVER_USER_TABLES_SQL,
+  type DiscoveredEntityLink,
   type DiscoveredLinkReference,
   type DiscoveredUserColumn,
   EXCLUDED_TABLES,
   type LinkTable,
   USER_DATA_SCHEMAS,
+  findAccountLinks,
   findLinkTables,
   groupUserTables,
+  linkOutOfAccountMessage,
   qualifiedName,
   quoteIdentifier,
   quotedTableName,
@@ -211,6 +216,7 @@ interface ImportState {
   selfEntityIds: Array<string | null>;
   setAside: SetAsideLinks[];
   links: ImportLinks;
+  tables: readonly UserScopedTable[];
 }
 
 @Injectable()
@@ -511,7 +517,7 @@ export class UserDataPortabilityService {
       await this.deleteUserRows(queryRunner, userId, table);
     }
 
-    return { keyMap, selfEntityIds, setAside, links: new ImportLinks() };
+    return { keyMap, selfEntityIds, setAside, links: new ImportLinks(), tables };
   }
 
   /**
@@ -524,8 +530,70 @@ export class UserDataPortabilityService {
     await this.restoreLinks(queryRunner, userId, state.links);
     await this.restoreLinkedRows(queryRunner, userId, state.setAside);
     await this.reattachSelfEntity(queryRunner, userId, state.selfEntityIds);
+    await this.refuseLinksOutOfAccount(queryRunner, userId, state.tables);
 
     return inserted;
+  }
+
+  /**
+   * Refuse the archive, naming the link, when a row it put in links to a row
+   * another account owns. Every row of this account is the archive's by now
+   * (the import deleted the rest first), so this reads what the archive set.
+   *
+   * A foreign key only asks that the parent exists, so an archive that named
+   * someone's thread, person or place by id got the link and with it their
+   * row in this account's chat, graph and known places. An export never
+   * carries one, as its links are between the account's own rows. A row with
+   * no owner, or an id that names no row at all (a column with no key can hold
+   * one), is not another account's and imports as before.
+   *
+   * One pass over each table that has links, looking each one up by the key it
+   * names, rather than one join per link.
+   */
+  private async refuseLinksOutOfAccount(
+    queryRunner: QueryRunner,
+    userId: string,
+    tables: readonly UserScopedTable[],
+  ): Promise<void> {
+    const references = ((await queryRunner.query(DISCOVER_LINK_REFERENCES_SQL, [USER_DATA_SCHEMAS])) ??
+      []) as DiscoveredLinkReference[];
+    const entityLinks = ((await queryRunner.query(DISCOVER_UNDECLARED_ENTITY_LINKS_SQL, [
+      USER_DATA_SCHEMAS,
+    ])) ?? []) as DiscoveredEntityLink[];
+    const byChild = new Map<string, AccountLink[]>();
+
+    for (const link of findAccountLinks(references, entityLinks, tables)) {
+      const name = qualifiedName(link.child);
+      byChild.set(name, [...(byChild.get(name) ?? []), link]);
+    }
+
+    for (const links of byChild.values()) {
+      const child = links[0].child;
+      // The first id each link names that is a row of another account, or NULL.
+      const foreign = links.map(
+        ({ column, parent, array }) =>
+          `(SELECT p.${quoteIdentifier(parent.column)}::text FROM ${quotedTableName(parent)} p
+             WHERE p.${quoteIdentifier(parent.column)} ${array ? '= ANY' : '='} (c.${quoteIdentifier(column)})
+               AND p.${quoteIdentifier(parent.userColumn)} <> $1
+             LIMIT 1)`,
+      );
+      const [found] = ((await queryRunner.query(
+        `SELECT * FROM (
+           SELECT ${foreign.map((sql, index) => `${sql} AS l${index}`).join(',\n                  ')}
+             FROM ${quotedTableName(child)} c
+            WHERE c.${quoteIdentifier(child.userColumn)} = $1
+         ) found
+         WHERE ${foreign.map((_, index) => `l${index} IS NOT NULL`).join(' OR ')}
+         LIMIT 1`,
+        [userId],
+      )) ?? []) as Array<Record<string, string | null>>;
+
+      if (found) {
+        const index = links.findIndex((_, at) => found[`l${at}`] != null);
+
+        throw new BadRequestException(linkOutOfAccountMessage(links[index], found[`l${index}`]!));
+      }
+    }
   }
 
   private async assertConfirmEmail(context: UserServiceContext, confirmEmail: string): Promise<void> {
@@ -1001,8 +1069,9 @@ export class UserDataPortabilityService {
    *
    * Only between this account's own rows: the row being linked and the row it
    * points at both have to carry the importer in their table's user column. A
-   * link the archive aims at another account's row stays empty instead of
-   * planting a reference into that account's data.
+   * link the archive aims at another account's row refuses the whole archive
+   * (see {@link refuseLinksOutOfAccount}); one whose row the archive lacks
+   * stays empty.
    */
   private async restoreLinks(queryRunner: QueryRunner, userId: string, links: ImportLinks): Promise<void> {
     const dropped = new Map<string, number>();
@@ -1019,6 +1088,19 @@ export class UserDataPortabilityService {
       )) as [unknown, number] | undefined;
 
       if ((result?.[1] ?? 0) === 0) {
+        const [foreign] = ((await queryRunner.query(
+          `SELECT 1 FROM ${quotedTableName(parent)} p
+            WHERE p.${quoteIdentifier(parent.key)} = $1 AND p.${quoteIdentifier(parent.userColumn)} <> $2
+            LIMIT 1`,
+          [value, userId],
+        )) ?? []) as unknown[];
+
+        if (foreign) {
+          throw new BadRequestException(
+            linkOutOfAccountMessage({ child: table, column, parent }, String(value)),
+          );
+        }
+
         const link = `${qualifiedName(table)}.${column}`;
         dropped.set(link, (dropped.get(link) ?? 0) + 1);
       }

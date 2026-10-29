@@ -119,6 +119,9 @@ describeWithDatabase(
       await dataSource.query('DELETE FROM ci.mcp_server_configs WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.messages WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.threads WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.agent_jobs WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1::uuid[])', [users]);
     };
@@ -664,7 +667,7 @@ describeWithDatabase(
         expect(row.merged_into_product_id).toBe(survivor);
       });
 
-      it("does not link a row to another account's row", async () => {
+      it("refuses an archive that links a row to another account's row of the same table", async () => {
         const theirThread = randomUUID();
         const theirMessage = randomUUID();
 
@@ -677,35 +680,205 @@ describeWithDatabase(
           [theirMessage, otherUserId, theirThread],
         );
 
-        await service.importArchive(
-          { userId: testUserId } as never,
-          {
-            version: 1,
-            exportedAt: new Date().toISOString(),
-            userId: testUserId,
-            profile: null,
-            tables: {
-              'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
-              'ci.messages': [
-                {
-                  message_id: replyId,
-                  thread_id: threadId,
-                  role: 'user',
-                  content: 'mine',
-                  parent_message_id: theirMessage,
-                },
-              ],
-            },
-            fileBlobs: [],
-          } as UserDataArchive,
+        await expect(
+          service.importArchive(
+            { userId: testUserId } as never,
+            {
+              version: 1,
+              exportedAt: new Date().toISOString(),
+              userId: testUserId,
+              profile: null,
+              tables: {
+                'ci.threads': [{ thread_id: threadId, title: 'Trip' }],
+                'ci.messages': [
+                  {
+                    message_id: replyId,
+                    thread_id: threadId,
+                    role: 'user',
+                    content: 'mine',
+                    parent_message_id: theirMessage,
+                  },
+                ],
+              },
+              fileBlobs: [],
+            } as UserDataArchive,
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.messages.parent_message_id to ${theirMessage}, a row of ci.messages that belongs to another account, so it was refused.`,
         );
 
-        expect(await parentOf(replyId)).toBeNull();
+        expect(
+          await dataSource.query('SELECT 1 FROM ci.messages WHERE message_id = $1::uuid', [replyId]),
+        ).toHaveLength(0);
         const [theirs] = await dataSource.query(
           'SELECT user_id, content FROM ci.messages WHERE message_id = $1::uuid',
           [theirMessage],
         );
         expect(theirs).toEqual({ user_id: otherUserId, content: 'theirs' });
+      });
+    });
+
+    describe("links to another account's rows", () => {
+      // The archive is the importer's to write. A foreign key only asks that the
+      // row it names exists, so naming someone else's thread or place by id used
+      // to link it into this account.
+      const mine = randomUUID();
+      const theirs = randomUUID();
+      const relationshipId = randomUUID();
+
+      const seedTheirPlace = () =>
+        dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Location', $2::uuid, 'Their home')`,
+          [theirs, otherUserId],
+        );
+
+      const archiveWith = (tables: UserDataArchive['tables']): UserDataArchive => ({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables,
+        fileBlobs: [],
+      });
+
+      const me = { entity_id: mine, entity_type: 'Person', name: 'Me' };
+      const knows = (toEntityId: string) => ({
+        relationship_id: relationshipId,
+        from_entity_id: mine,
+        to_entity_id: toEntityId,
+        from_entity_type: 'Person',
+        to_entity_type: 'Location',
+        relationship_type: 'LIVES_AT',
+      });
+
+      beforeEach(() => {
+        noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+      });
+
+      it("refuses a message in another account's thread and keeps what the account had", async () => {
+        const theirThread = randomUUID();
+        const kept = randomUUID();
+
+        await dataSource.query(
+          'INSERT INTO ci.threads (thread_id, user_id, title) VALUES ($1::uuid, $2::uuid, $3)',
+          [theirThread, otherUserId, 'theirs'],
+        );
+        await dataSource.query('INSERT INTO ci.notes (id, user_id, title) VALUES ($1::uuid, $2::uuid, $3)', [
+          kept,
+          testUserId,
+          'before the import',
+        ]);
+
+        await expect(
+          service.importNdjsonStream(
+            { userId: testUserId } as never,
+            streamOf([
+              manifest(),
+              {
+                type: 'row',
+                table: 'ci.messages',
+                row: { message_id: randomUUID(), thread_id: theirThread, role: 'user', content: 'planted' },
+              },
+            ]),
+            'jane@example.com',
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.messages.thread_id to ${theirThread}, a row of ci.threads that belongs to another account, so it was refused.`,
+        );
+
+        expect(await notesFor()).toEqual([{ id: kept, title: 'before the import' }]);
+        const planted = await dataSource.query('SELECT 1 FROM ci.messages WHERE thread_id = $1::uuid', [
+          theirThread,
+        ]);
+        expect(planted).toHaveLength(0);
+      });
+
+      it("refuses a relationship to another account's place, though the graph has no foreign key", async () => {
+        await seedTheirPlace();
+
+        await expect(
+          service.importArchive(
+            { userId: testUserId } as never,
+            archiveWith({ 'ci.entities': [me], 'ci.relationships': [knows(theirs)] }),
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.relationships.to_entity_id to ${theirs}, a row of ci.entities that belongs to another account, so it was refused.`,
+        );
+
+        const linked = await dataSource.query(
+          'SELECT 1 FROM ci.relationships WHERE to_entity_id = $1::uuid',
+          [theirs],
+        );
+        expect(linked).toHaveLength(0);
+      });
+
+      it("refuses an agent job on another account's thread, though that column has no key", async () => {
+        const theirThread = randomUUID();
+
+        await dataSource.query(
+          'INSERT INTO ci.threads (thread_id, user_id, title) VALUES ($1::uuid, $2::uuid, $3)',
+          [theirThread, otherUserId, 'theirs'],
+        );
+
+        await expect(
+          service.importArchive(
+            { userId: testUserId } as never,
+            archiveWith({ 'ci.agent_jobs': [{ id: randomUUID(), thread_id: theirThread }] }),
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.agent_jobs.thread_id to ${theirThread}, a row of ci.threads that belongs to another account, so it was refused.`,
+        );
+      });
+
+      it("refuses an event whose participants include another account's person", async () => {
+        await seedTheirPlace();
+
+        await expect(
+          service.importArchive(
+            { userId: testUserId } as never,
+            archiveWith({
+              'ci.entities': [me],
+              'ci.events': [
+                {
+                  event_id: randomUUID(),
+                  start_time: new Date().toISOString(),
+                  participant_entity_ids: `{${mine},${theirs}}`,
+                },
+              ],
+            }),
+          ),
+        ).rejects.toThrow(
+          `The archive links ci.events.participant_entity_ids to ${theirs}, a row of ci.entities that belongs to another account, so it was refused.`,
+        );
+      });
+
+      it("imports the account's own links and one to an id that names no row", async () => {
+        const place = { entity_id: theirs, entity_type: 'Location', name: 'My home' };
+
+        await service.importArchive(
+          { userId: testUserId } as never,
+          archiveWith({ 'ci.entities': [me, place], 'ci.relationships': [knows(theirs)] }),
+        );
+        expect(
+          await dataSource.query(
+            'SELECT to_entity_id FROM ci.relationships WHERE relationship_id = $1::uuid',
+            [relationshipId],
+          ),
+        ).toEqual([{ to_entity_id: theirs }]);
+
+        // A column with no key can hold an id whose row is gone; that is no one else's row.
+        const gone = randomUUID();
+
+        await service.importArchive(
+          { userId: testUserId } as never,
+          archiveWith({ 'ci.entities': [me], 'ci.relationships': [knows(gone)] }),
+        );
+        expect(
+          await dataSource.query(
+            'SELECT to_entity_id FROM ci.relationships WHERE relationship_id = $1::uuid',
+            [relationshipId],
+          ),
+        ).toEqual([{ to_entity_id: gone }]);
       });
     });
 

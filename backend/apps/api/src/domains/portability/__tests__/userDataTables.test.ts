@@ -1,5 +1,11 @@
 import type { UserScopedTable } from '../types';
-import { findLinkTables, groupUserTables, orderParentsFirst } from '../userDataTables';
+import {
+  findAccountLinks,
+  findLinkTables,
+  groupUserTables,
+  linkOutOfAccountMessage,
+  orderParentsFirst,
+} from '../userDataTables';
 
 function table(name: string): UserScopedTable {
   const [schema, tableName] = name.split('.');
@@ -227,5 +233,107 @@ describe('findLinkTables', () => {
         userTables,
       ).map(({ table }) => table),
     ).toEqual(['tag_categories']);
+  });
+});
+
+describe('findAccountLinks', () => {
+  const reference = (child: string, column: string, parent: string, parentColumn: string) => {
+    const [schema, tableName] = child.split('.');
+    const [parentSchema, parentTable] = parent.split('.');
+
+    return {
+      schema,
+      table: tableName,
+      column,
+      parent_schema: parentSchema,
+      parent_table: parentTable,
+      parent_column: parentColumn,
+      delete_action: 'a',
+    };
+  };
+
+  const withColumns = (
+    name: string,
+    columns: string[],
+    userColumn: 'user_id' | 'owner_user_id' = 'user_id',
+  ) => ({
+    ...table(name),
+    userColumn,
+    columns,
+  });
+  const entities = withColumns('ci.entities', ['entity_id', 'owner_user_id'], 'owner_user_id');
+  const describeLinks = (links: ReturnType<typeof findAccountLinks>) =>
+    links.map(({ child, column, parent, array }) => [
+      `${child.schema}.${child.table}.${column}`,
+      `${parent.schema}.${parent.table}.${parent.column}`,
+      parent.userColumn,
+      array,
+    ]);
+
+  it("checks each key between the account's tables, each entity column without one and the listed unkeyed links", () => {
+    const links = findAccountLinks(
+      [
+        reference('ci.messages', 'thread_id', 'ci.threads', 'thread_id'),
+        reference('ci.messages', 'parent_message_id', 'ci.messages', 'message_id'),
+        // Into ci.users or from a table with no user column: neither is an account's row.
+        reference('ci.graph_deltas', 'changed_by_user_id', 'ci.users', 'id'),
+        reference('ci_search.entity_tag', 'tag_id', 'ci_search.tags', 'tag_id'),
+      ],
+      [
+        { schema: 'ci', table: 'relationships', column: 'to_entity_id', array: false },
+        { schema: 'ci', table: 'communications', column: 'to_entity_ids', array: true },
+        // Excluded tables are not imported, so nothing is checked on them.
+        { schema: 'ci', table: 'peer_links', column: 'person_entity_id', array: false },
+      ],
+      [
+        withColumns('ci.messages', ['message_id', 'thread_id', 'parent_message_id', 'user_id']),
+        withColumns('ci.threads', ['thread_id', 'user_id']),
+        withColumns('ci.graph_deltas', ['changed_by_user_id', 'user_id']),
+        withColumns('ci.relationships', ['to_entity_id', 'owner_user_id'], 'owner_user_id'),
+        withColumns('ci.communications', ['id', 'to_entity_ids', 'user_id']),
+        withColumns('ci.agent_jobs', ['id', 'thread_id', 'user_id']),
+        entities,
+      ],
+    );
+
+    expect(describeLinks(links)).toEqual([
+      ['ci.messages.thread_id', 'ci.threads.thread_id', 'user_id', false],
+      ['ci.messages.parent_message_id', 'ci.messages.message_id', 'user_id', false],
+      ['ci.relationships.to_entity_id', 'ci.entities.entity_id', 'owner_user_id', false],
+      ['ci.communications.to_entity_ids', 'ci.entities.entity_id', 'owner_user_id', true],
+      ['ci.agent_jobs.thread_id', 'ci.threads.thread_id', 'user_id', false],
+    ]);
+  });
+
+  it('skips a listed link whose column or key the schema does not have', () => {
+    const links = findAccountLinks(
+      [],
+      [],
+      [withColumns('ci.agent_jobs', ['id', 'user_id']), withColumns('ci.threads', ['thread_id', 'user_id'])],
+    );
+
+    expect(links).toEqual([]);
+  });
+
+  it('checks no entity column when the account has no entities table to check it against', () => {
+    expect(
+      findAccountLinks(
+        [],
+        [{ schema: 'ci', table: 'relationships', column: 'to_entity_id' }],
+        [withColumns('ci.relationships', ['to_entity_id', 'owner_user_id'], 'owner_user_id')],
+      ),
+    ).toEqual([]);
+  });
+
+  it('names the link and the id it points at', () => {
+    expect(
+      linkOutOfAccountMessage(
+        { child: table('ci.relationships'), column: 'to_entity_id', parent: entities },
+        '01a1769a-0000-7000-8000-000000000000',
+      ),
+    ).toBe(
+      'The archive links ci.relationships.to_entity_id to 01a1769a-0000-7000-8000-000000000000, a row of ' +
+        'ci.entities that belongs to another account, so it was refused.',
+    );
   });
 });

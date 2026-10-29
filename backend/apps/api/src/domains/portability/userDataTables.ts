@@ -429,3 +429,153 @@ export function findLinkTables(
     .filter((entry) => entry.hangsOff)
     .map(({ hangsOff: _hangsOff, ...table }) => table);
 }
+
+/**
+ * Columns of the account's tables that name an entity by id with no foreign key
+ * behind them: the graph's own `ci.relationships.from_entity_id` and
+ * `to_entity_id`, a message's `from_entity_id` and `to_entity_ids`, an event's
+ * organizer and participants, search rows and more. Input to
+ * {@link findAccountLinks}, which checks them against `ci.entities`. Matched by
+ * name and type (`uuid` or `uuid[]`), so a new one is covered the day it is
+ * added.
+ */
+export const DISCOVER_UNDECLARED_ENTITY_LINKS_SQL = `
+  SELECT c.table_schema AS schema,
+         c.table_name AS table,
+         c.column_name AS column,
+         c.udt_name = '_uuid' AS array
+    FROM information_schema.columns c
+    JOIN information_schema.tables t
+      ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+   WHERE c.table_schema = ANY($1)
+     AND t.table_type = 'BASE TABLE'
+     AND (
+       (c.udt_name = 'uuid' AND c.column_name LIKE '%entity!_id' ESCAPE '!')
+       OR (c.udt_name = '_uuid' AND (c.column_name LIKE '%entity!_ids' ESCAPE '!'
+                                     OR c.column_name LIKE '%entities!_ids' ESCAPE '!'))
+     )
+     AND NOT (c.table_schema = 'ci' AND c.table_name = 'entities' AND c.column_name = 'entity_id')
+     AND NOT EXISTS (
+       SELECT 1
+         FROM pg_constraint k
+         JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
+        WHERE k.contype = 'f'
+          AND k.conrelid = format('%I.%I', c.table_schema, c.table_name)::regclass
+          AND a.attname = c.column_name
+     )
+   ORDER BY 1, 2, 3
+`;
+
+/** One row of {@link DISCOVER_UNDECLARED_ENTITY_LINKS_SQL}. */
+export interface DiscoveredEntityLink {
+  schema: string;
+  table: string;
+  column: string;
+  /** A `uuid[]` column: every id in it is checked. */
+  array?: boolean;
+}
+
+/**
+ * Links with no foreign key that name a row other than an entity, so the
+ * entity columns' name match cannot find them. A checkpoint on an imported
+ * agent job writes into its `thread_id`, so that one alone would plant a
+ * message in someone else's thread.
+ */
+export const UNDECLARED_LINKS: ReadonlyArray<{
+  child: string;
+  column: string;
+  parent: string;
+  key: string;
+  array?: boolean;
+}> = [
+  { child: 'ci.agent_jobs', column: 'thread_id', parent: 'ci.threads', key: 'thread_id' },
+  { child: 'ci.threads', column: 'fork_point_message_id', parent: 'ci.messages', key: 'message_id' },
+  { child: 'ci.events', column: 'parent_event_id', parent: 'ci.events', key: 'event_id' },
+  { child: 'ci.object_observations', column: 'file_id', parent: 'ci.files', key: 'id' },
+  { child: 'ci.object_observations', column: 'content_id', parent: 'ci.content', key: 'id' },
+  { child: 'ci.receipts', column: 'source_file_id', parent: 'ci.files', key: 'id' },
+  { child: 'ci.objects', column: 'related_object_ids', parent: 'ci.objects', key: 'object_id', array: true },
+  { child: 'ci.product_models', column: 'manual_content_ids', parent: 'ci.content', key: 'id', array: true },
+  { child: 'ci.summaries', column: 'related_events_ids', parent: 'ci.events', key: 'event_id', array: true },
+  { child: 'ci.summaries', column: 'related_files_ids', parent: 'ci.files', key: 'id', array: true },
+];
+
+/** A column of one of the account's tables that names a row of another of them (or of itself). */
+export interface AccountLink {
+  child: UserScopedTable;
+  column: string;
+  parent: { schema: string; table: string; column: string; userColumn: UserColumn };
+  /** A `uuid[]` column, which names a row with each of its ids. */
+  array: boolean;
+}
+
+/**
+ * Every link an import could plant between this account's rows and someone
+ * else's: each single-column foreign key from one of `userTables` into one of
+ * them (`ci.messages.thread_id`, `ci.events.location_entity_id`, a reply's
+ * `parent_message_id`), each entity column with no key at all (pointed at
+ * `ci.entities`) and the other unkeyed links in {@link UNDECLARED_LINKS}.
+ *
+ * A key holds a row to a parent that exists, not to one of the importer's: an
+ * archive naming another account's thread or person got the link. Composite
+ * keys are left out. The only ones, `(entity_type, id)` into `ci.entities`, tie
+ * a row to its own entity and share the row's primary key. A listed link
+ * whose column or key the schema does not have is skipped rather than failing
+ * every import.
+ */
+export function findAccountLinks(
+  references: readonly DiscoveredLinkReference[],
+  entityLinks: readonly DiscoveredEntityLink[],
+  userTables: readonly UserScopedTable[],
+): AccountLink[] {
+  const byName = new Map(userTables.map((table) => [qualifiedName(table), table]));
+  const links: AccountLink[] = [];
+  const add = (childName: string, column: string, parentName: string, key: string, array: boolean): void => {
+    const child = byName.get(childName);
+    const parent = byName.get(parentName);
+
+    if (child && parent && child.columns.includes(column) && parent.columns.includes(key)) {
+      links.push({
+        child,
+        column,
+        parent: { schema: parent.schema, table: parent.table, column: key, userColumn: parent.userColumn },
+        array,
+      });
+    }
+  };
+
+  for (const reference of references) {
+    add(
+      qualifiedName(reference),
+      reference.column,
+      `${reference.parent_schema}.${reference.parent_table}`,
+      reference.parent_column,
+      false,
+    );
+  }
+
+  for (const link of entityLinks) {
+    add(qualifiedName(link), link.column, 'ci.entities', 'entity_id', link.array === true);
+  }
+
+  for (const link of UNDECLARED_LINKS) {
+    add(link.child, link.column, link.parent, link.key, link.array === true);
+  }
+
+  return links;
+}
+
+/** What an import that would link to another account's row answers, naming the link. */
+export function linkOutOfAccountMessage(
+  link: {
+    child: Pick<UserScopedTable, 'schema' | 'table'>;
+    column: string;
+    parent: Pick<UserScopedTable, 'schema' | 'table'>;
+  },
+  value: string,
+): string {
+  return (
+    `The archive links ${qualifiedName(link.child)}.${link.column} to ${value}, a row of ` +
+    `${qualifiedName(link.parent)} that belongs to another account, so it was refused.`
+  );
+}
