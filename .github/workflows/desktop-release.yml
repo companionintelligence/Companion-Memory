@@ -350,7 +350,9 @@ jobs:
     # later edit that drops or reorders `version` cannot silently release an
     # untested commit from this lane. Same on the windows and linux jobs.
     needs: [verify-desktop-build-passed, version]
-    runs-on: macos-15
+    # The Apple on-device bridge uses Swift tools 6.2 and the macOS 26 SDK;
+    # macos-15 currently ships Swift 6.1 and fails before the signed build.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -434,8 +436,8 @@ jobs:
       # every signed artifact died at its first `docker compose` pull.
       #
       # It then passed nothing at all and let the script resolve a tag per
-      # job. THAT WAS WRONG ON THIS RUNNER SPECIFICALLY: macos-15 (like every
-      # GitHub-hosted macOS image) ships no docker CLI, so
+      # job. That was wrong because GitHub-hosted macOS images ship no Docker
+      # CLI, so
       # sync-compose-resources.cjs took its `!hasDocker()` branch and returned
       # the nearest ancestor release tag with the GHCR completeness check
       # SKIPPED — i.e. the .dmg, the primary artifact, was the ONE build baking
@@ -468,7 +470,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CI_SERVER_IMAGE_TAG}" ]; then
-            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself — and macos-15 has no docker to verify it with. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
+            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself — and the macOS runner has no Docker CLI to verify it with. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
             exit 1
           fi
           node scripts/sync-compose-resources.cjs
@@ -486,7 +488,7 @@ jobs:
             conf.version = '${{ needs.version.outputs.name }}';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
-          # BSD sed (macos-15 runner) — `-i` REQUIRES the backup-suffix
+          # BSD sed (macOS runner) — `-i` REQUIRES the backup-suffix
           # argument, hence the empty ''. The identical steps in the windows
           # and linux jobs run GNU sed, where `-i ''` would be read as the
           # script and clobber the edit, so they use a bare `-i`.
