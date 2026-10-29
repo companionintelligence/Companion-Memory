@@ -1,10 +1,10 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { IMPORT_STAGE_KINDS } from '../wire';
+import { IMPORT_STAGE_KINDS, type RunDetail } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { bytes, csv, json, table } from '../output';
-import { waitForRuns } from '../wait';
+import { unsuccessfulRunsMessage, waitForRuns } from '../wait';
 
 export interface ImportOptions {
   label?: string;
@@ -133,20 +133,27 @@ export async function importCommand(
     }
   }
 
-  if (options.wait && started.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      started.map((result) => result.runId as string),
-      { timeoutMs, quiet: options.json },
-    );
+  const followed = options.wait ? started.map((result) => result.runId as string) : [];
+  let waited: RunDetail[] = [];
+
+  if (followed.length > 0) {
+    waited = await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json });
   }
+
+  const unfinished = unsuccessfulRunsMessage(followed, waited);
 
   if (failed.length > 0) {
     throw new CliError(
-      `${failed.length} of ${results.length} path(s) could not be imported.`,
-      started.length > 0 ? 2 : 1,
+      `${failed.length} of ${results.length} path(s) could not be imported.` +
+        (unfinished == null ? '' : ` ${unfinished}`),
+      // A followed run that failed is the appliance's failure, whatever else
+      // went wrong, so it decides the code as it does on its own.
+      unfinished == null && started.length > 0 ? 2 : 1,
     );
+  }
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 

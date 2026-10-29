@@ -21,7 +21,8 @@ import { WaitTimeoutError, WaitUnreachableError } from './wait';
  * missing key, an unreachable server, a stage name that does not exist), 1 for
  * one we cannot — an unexpected exception, which also gets its stack. The split
  * matters in a script: 2 means "you asked for something impossible", 1 means
- * "look at the appliance".
+ * "look at the appliance". A `--wait` that saw a run end failed or cancelled is
+ * the second kind, so it exits 1 too.
  */
 async function main(): Promise<number> {
   const term = processTerm();

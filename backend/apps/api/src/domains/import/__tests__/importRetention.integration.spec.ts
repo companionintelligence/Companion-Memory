@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,7 @@ import config from '@ci/configuration';
 import type { ImportStageKindName } from '../constants';
 import { ImportRetentionService } from '../services/ImportRetentionService';
 import { ImportScratchService } from '../services/ImportScratchService';
+import { userInboxDir } from '../sources/importRoots';
 import { StagedWriter } from '../staging/StagedWriter';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -61,6 +62,8 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
   let scratchRoot: string;
   let originalRetention: Retention;
   let originalScratchDir: string;
+  let inboxRoot: string;
+  let originalInboxDir: string;
   /**
    * The sweep's own logger, kept rather than discarded: the skip REASONS are
    * reported per run only in these calls (the result carries bare counts), and
@@ -89,6 +92,13 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
     // about bytes the spec created rather than about the appliance's own tree.
     (config.import as { scratchDir: string }).scratchDir = scratchRoot;
 
+    // The same for the inbox, which a discard now writes into: a failed inbox
+    // import's file goes back there rather than with the scratch tree.
+    inboxRoot = await mkdtemp(path.join(os.tmpdir(), 'ci-import-retention-inbox-'));
+    originalInboxDir = config.import.inboxDir;
+    (config.import as { inboxDir: string }).inboxDir = inboxRoot;
+    await mkdir(userInboxDir(userId), { recursive: true });
+
     scratch = new ImportScratchService(stubLogger() as never);
     sweepLog = stubLogger();
     retention = new ImportRetentionService(dataSource, scratch, sweepLog as never);
@@ -97,8 +107,10 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
   afterAll(async () => {
     (config.import as { retention: Retention }).retention = originalRetention;
     (config.import as { scratchDir: string }).scratchDir = originalScratchDir;
+    (config.import as { inboxDir: string }).inboxDir = originalInboxDir;
 
     await rm(scratchRoot, { recursive: true, force: true });
+    await rm(inboxRoot, { recursive: true, force: true });
 
     // This spec seeds source rows the harness does not track (an inbox unit,
     // an upload it re-points at a run) and its sweeps deliberately leave some
@@ -270,6 +282,33 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
     );
 
     return { runId: run.id, dropId };
+  }
+
+  /**
+   * {@link failedAfterMoveRun} fed by an inbox unit instead of an upload: the
+   * run's one source row names `<inbox>/<name>` with `status`. Its scratch
+   * tree exists, empty, for the test to fill with whatever the failure left.
+   */
+  async function failedInboxRun(
+    name: string,
+    status: 'moved' | 'claimed' | 'released' = 'moved',
+    kind: 'file' | 'directory' = 'file',
+  ): Promise<{ runId: string; sourcePath: string; dir: string }> {
+    const { runId, dropId } = await failedAfterMoveRun(200);
+    const sourcePath = path.join(userInboxDir(userId), name);
+
+    await dataSource.query(
+      `UPDATE ci_import.staged_sources
+          SET origin = 'inbox', drop_id = NULL, expires_at = NULL, source_path = $2, status = $3, kind = $4
+        WHERE drop_id = $1`,
+      [dropId, sourcePath, status, kind],
+    );
+
+    const dir = scratch.dirFor(userId, runId);
+
+    await mkdir(dir, { recursive: true });
+
+    return { runId, sourcePath, dir };
   }
 
   /** The run's stage statuses, in pipeline order. */
@@ -848,6 +887,7 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
         mediaFilesKept: 0,
         attachmentContentsKept: 0,
         scratchTreeReclaimed: false,
+        returnedToInbox: null,
       });
       expect(await counts(runId)).toEqual(GONE);
       // Its consumed upload registry row went with it — the same retirement the
@@ -937,7 +977,7 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await sourceRow(dropId)).toBeNull();
     });
 
-    it('still refuses a failed run whose tree holds an inbox unit — that is the user’s only copy', async () => {
+    it('still refuses a failed run whose tree holds an inbox unit beside an upload', async () => {
       const { runId } = await failedAfterMoveRun(0);
       const inboxPath = `/nonexistent/inbox/${runId}/unit`;
 
@@ -956,6 +996,108 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await scratch.exists(userId, runId)).toBe(true);
 
       await rm(scratch.dirFor(userId, runId), { recursive: true, force: true });
+    });
+
+    it('puts a failed inbox import’s file back in the inbox, then takes the run and its tree', async () => {
+      // The inbox unit was acquired by rename, so the copy in the tree is the
+      // user's only one. The discard must return it rather than delete it.
+      const { runId, sourcePath, dir } = await failedInboxRun('returned.zip');
+
+      await writeFile(path.join(dir, 'returned.zip'), 'the only copy');
+      // What a truncated zip's extraction got out before it failed: derived
+      // from the archive, so it goes with the tree.
+      await writeFile(path.join(dir, 'half-extracted.txt'), 'derived');
+
+      // The premise: the sweep keeps a run that still owns its tree, so the
+      // file is never lost to retention either.
+      const swept = await retention.sweep();
+      expect(swept.skipped.scratch_tree_present).toBeGreaterThanOrEqual(1);
+      expect(await runStatus(runId)).toBe('failed');
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        runId,
+        scratchTreeReclaimed: true,
+        returnedToInbox: 'returned.zip',
+      });
+      expect(await readFile(sourcePath, 'utf8')).toBe('the only copy');
+      expect(await scratch.exists(userId, runId)).toBe(false);
+      expect(await runStatus(runId)).toBeNull();
+      expect(await counts(runId)).toEqual(GONE);
+      // Released by the claim and deleted with the run like any released claim.
+      expect(await sourceRow(sourcePath)).toBeNull();
+    });
+
+    it('never overwrites a newer file of the same name in the inbox', async () => {
+      const { runId, sourcePath, dir } = await failedInboxRun('clash.zip');
+
+      await writeFile(sourcePath, 'dropped in since');
+      await writeFile(path.join(dir, 'clash.zip'), 'the only copy');
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        returnedToInbox: 'clash (2).zip',
+      });
+      expect(await readFile(sourcePath, 'utf8')).toBe('dropped in since');
+      expect(await readFile(path.join(userInboxDir(userId), 'clash (2).zip'), 'utf8')).toBe('the only copy');
+    });
+
+    it('refuses once the archive was unpacked, since the unpacked files are the only copy now', async () => {
+      const { runId, sourcePath, dir } = await failedInboxRun('unpacked.zip');
+
+      // `deleteArchiveAfterExtract`: the archive is gone and its contents are
+      // all that is left of it.
+      await writeFile(path.join(dir, 'all.mbox'), 'mail');
+
+      const refusal = retention.discardRun({ userId }, runId);
+
+      await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+      await expect(refusal).rejects.toThrow(/no longer whole in the run's working files/);
+      expect(await runStatus(runId)).toBe('failed');
+      expect(await readdir(dir)).toEqual(['all.mbox']);
+      expect(await sourceRow(sourcePath)).toMatchObject({ status: 'moved' });
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('does not trust a released claim whose file is in neither the inbox nor the tree', async () => {
+      // A cancel that raced the acquire: release() marked the row while the
+      // rename landed and the unpack went on to expand and delete the archive.
+      // The row says the unit is back in the inbox. It is not.
+      const { runId, dir } = await failedInboxRun('raced.zip', 'released');
+
+      await writeFile(path.join(dir, 'all.mbox'), 'mail');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/no longer whole/);
+      expect(await readdir(dir)).toEqual(['all.mbox']);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('leaves a directory unit to the general refusal, since the unpack changes it in place', async () => {
+      const { runId, dir } = await failedInboxRun('Takeout', 'moved', 'directory');
+
+      await mkdir(path.join(dir, 'Takeout', 'Mail'), { recursive: true });
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/still owns a scratch tree/);
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('takes the tree of an inbox claim that never moved, leaving the inbox file alone', async () => {
+      // A copy fallback that died mid-write: the original never left the inbox,
+      // and the temp copy in the tree is garbage.
+      const { runId, sourcePath, dir } = await failedInboxRun('stayed.zip', 'claimed');
+
+      await writeFile(sourcePath, 'still in the inbox');
+      await writeFile(path.join(dir, '.acquiring-stayed.zip'), 'still in');
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        scratchTreeReclaimed: true,
+        returnedToInbox: null,
+      });
+      expect(await readFile(sourcePath, 'utf8')).toBe('still in the inbox');
+      expect(await scratch.exists(userId, runId)).toBe(false);
+      expect(await runStatus(runId)).toBeNull();
     });
 
     it('refuses a run whose stages are still live, whatever the status column says', async () => {

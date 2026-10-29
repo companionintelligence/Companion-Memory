@@ -63,6 +63,37 @@ describe('ci inbox', () => {
     expect(ctx.term.text()).toContain('2 of 2 unit(s) started');
   });
 
+  it('exits 1 when --wait sees the run of a unit fail', async () => {
+    const ctx = harness({
+      scanInbox: async () => scan([unit(), unit({ path: 'mail.zip' })]),
+      startInboxRuns: async (units: string[]) => ({
+        results: units.map((u, index) => ({ unit: u, runId: `run-${index}` })),
+      }),
+      getRun: async (runId: string) => ({
+        id: runId,
+        label: null,
+        source: 'inbox',
+        dataSources: [],
+        declaredSources: null,
+        status: runId === 'run-1' ? 'failed' : 'completed',
+        percent: 100,
+        requestedStages: [],
+        error: runId === 'run-1' ? 'cannot unpack mail.zip: the file is truncated' : null,
+        createdAt: '1970-01-01T00:00:00.000Z',
+        startedAt: null,
+        finishedAt: null,
+        stages: [],
+      }),
+    });
+
+    const outcome = inboxCommand(ctx, { start: true, wait: true });
+
+    await expect(outcome).rejects.toMatchObject({ exitCode: 1 });
+    await expect(outcome).rejects.toThrow(
+      '1 of 2 run(s) did not finish: run-1 failed (cannot unpack mail.zip: the file is truncated).',
+    );
+  });
+
   it('refuses a bad --timeout before starting any unit', async () => {
     const requested: unknown[] = [];
     const ctx = harness({
