@@ -13,12 +13,12 @@ export const TRUST_OPTIONS = [
   {
     value: 'cautious' as const,
     label: 'Cautious',
-    hint: 'Ask before adding to-dos or placing them on your calendar, and before chat deletes, sends, or reads from an outside service',
+    hint: 'Ask before adding to-dos or placing them on your calendar, and before chat deletes, sends, reads from an outside service, or changes anything right after looking something up',
   },
   {
     value: 'balanced' as const,
     label: 'Balanced',
-    hint: 'High-confidence to-dos join the backlog; scheduling, deleting, sending, completing tasks and connected MCP tools still ask first',
+    hint: 'High-confidence to-dos join the backlog; scheduling, deleting, sending, completing tasks, connected MCP tools and changes chat makes right after a lookup still ask first',
   },
   {
     value: 'hands_off' as const,

@@ -339,6 +339,14 @@ export interface ToolInvocationContext extends ToolRequestContext {
   principalName?: string | null;
 
   /**
+   * This call comes from a chat round after the turn already ran a lookup. The
+   * gate then asks before any write under a dial that asks before a delete; see
+   * `ToolGateOptions.followsLookup`. Absent means false, so no other caller
+   * changes behaviour.
+   */
+  followsLookup?: boolean;
+
+  /**
    * The `ci.pending_actions` row this call is the confirmed replay of.
    *
    * NOT a bearer token: the gate re-reads the row and honours it only if it

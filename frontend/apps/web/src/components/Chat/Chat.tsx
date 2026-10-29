@@ -17,6 +17,8 @@ import * as smd from 'streaming-markdown';
 import { type Parser as StreamingParser } from 'streaming-markdown';
 import { v7 as uuid7 } from 'uuid';
 
+import { isPrimaryPointerTouch } from '@/hooks/useDeviceBreakpoint';
+
 import { AssistantMessage } from './blocks/AssistantMessage';
 import { ThinkBlock } from './blocks/ThinkBlock';
 import { ToolBlock } from './blocks/ToolBlock';
@@ -422,10 +424,12 @@ export function Chat({
     maybeAutoScroll();
   }, [accumulatedMessages]);
 
+  // Not on a touch screen, where focus opens the keyboard over the conversation. Opening a thread sets `messages`, and
+  // a dispatch thread sets them again on every update, so this would bring the keyboard back while the person reads.
   useEffect(() => {
     const input = autoFocusRef.current;
 
-    if (input && autoFocus) {
+    if (input && autoFocus && !isPrimaryPointerTouch()) {
       requestAnimationFrame(() => {
         input.focus();
       });

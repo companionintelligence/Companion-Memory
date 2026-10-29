@@ -20,15 +20,6 @@ import {
 const SERVER_PROPS_TTL_MS = 5 * 60_000;
 
 /**
- * How long a refused `reasoning_effort: "none"` keeps the field off. Not the
- * driver's life: the engine behind one URL can change (a Hub swapping vLLM
- * for Ollama, or a vLLM upgrade that accepts "none"), and a Hub pool can put
- * peers on different engines behind it, where one refusal used to stop the
- * field for an Ollama peer that needs it.
- */
-const REASONING_EFFORT_REFUSAL_TTL_MS = 5 * 60_000;
-
-/**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
  * OpenAI-compatible server). It speaks `/v1/chat/completions` (+ `/v1/models`)
@@ -73,9 +64,13 @@ export function vllmThinkingExtraBody(enableThinking?: boolean): {
  * anyway: background jobs that ask for thinking off and cap the reply spent
  * the whole cap on reasoning and got empty content back (answer inference on
  * qwen3.5:9b, 800 of 800 tokens; image descriptions on gemma4:e2b, 256 of
- * 256). Ollama maps `reasoning_effort: "none"` to `think: false`. Not sent
- * for a while after this backend refused it (vLLM accepts only low, medium or high);
- * see {@link isReasoningEffortRejection}.
+ * 256). Ollama maps `reasoning_effort: "none"` to `think: false`. Sent on
+ * every call with thinking off. It is left out only on the retry of a call the
+ * backend refused it on (vLLM accepts only low, medium or high); see
+ * {@link isReasoningEffortRejection}. A refusal is not remembered: a Hub pool
+ * can put peers on different engines behind one URL, so the next call may
+ * reach an Ollama peer that needs the field. Remembering a vLLM refusal left
+ * that peer thinking for minutes.
  */
 export function thinkingBody(
   enableThinking: boolean | undefined,
@@ -156,17 +151,6 @@ export class OpenAiCompatChatDriver {
 
   /** Set once this endpoint has refused a `json_schema` response format; see {@link toResponseFormat}. */
   private jsonSchemaRejected = false;
-
-  /** When this endpoint last refused `reasoning_effort: "none"`; see {@link thinkingBody}. */
-  private reasoningEffortRejectedAt: number | null = null;
-
-  /** Whether the field stays off: a refusal within {@link REASONING_EFFORT_REFUSAL_TTL_MS}. */
-  private get reasoningEffortRejected(): boolean {
-    return (
-      this.reasoningEffortRejectedAt != null &&
-      Date.now() - this.reasoningEffortRejectedAt < REASONING_EFFORT_REFUSAL_TTL_MS
-    );
-  }
 
   /** The last `/props` answer (a `null` answer is remembered too) and when it was taken. */
   private serverPropsCache: { at: number; value: ServerProps | null } | null = null;
@@ -283,14 +267,14 @@ export class OpenAiCompatChatDriver {
       );
 
     let format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    // Dropped for this call's retry only; see thinkingBody.
+    let reasoningEffortRejected = false;
     let response: Awaited<ReturnType<typeof create>>;
 
     // At most one retry per kind of refusal: each retry drops the field that was refused, so the
     // loop cannot run more than three times.
     for (;;) {
-      // Built per attempt. A refusal is retried when this attempt sent the field, which a call
-      // already in flight when another call set the flag did too.
-      const thinking = thinkingBody(request.enableThinking, this.reasoningEffortRejected);
+      const thinking = thinkingBody(request.enableThinking, reasoningEffortRejected);
 
       try {
         response = await create(format, thinking);
@@ -302,8 +286,7 @@ export class OpenAiCompatChatDriver {
           this.jsonSchemaRejected = true;
           format = { type: 'json_object' };
         } else if (thinking.reasoning_effort !== undefined && isReasoningEffortRejection(err)) {
-          // The same for a backend that validates `reasoning_effort` and refuses "none".
-          this.reasoningEffortRejectedAt = Date.now();
+          reasoningEffortRejected = true;
         } else {
           throw err;
         }
@@ -385,20 +368,17 @@ export class OpenAiCompatChatDriver {
         },
         { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
       );
-    const firstThinking = thinkingBody(request.enableThinking, this.reasoningEffortRejected);
+    const firstThinking = thinkingBody(request.enableThinking);
     let stream: Awaited<ReturnType<typeof open>>;
 
     try {
       stream = await open(firstThinking);
     } catch (err) {
-      // Keyed on what this request sent, as in chat(), so a stream opened before the flag was set
-      // still retries.
       if (firstThinking.reasoning_effort === undefined || !isReasoningEffortRejection(err)) {
         throw err;
       }
 
-      // See chat(): a backend that refuses `reasoning_effort: "none"` is asked without it from now on.
-      this.reasoningEffortRejectedAt = Date.now();
+      // See chat(): this call is asked again without `reasoning_effort`, the next one sends it again.
       stream = await open(thinkingBody(request.enableThinking, true));
     }
 

@@ -45,14 +45,29 @@ export function classifyDeviceBreakpoint(width: number, isTouch = false): Device
   };
 }
 
+/** A phone or tablet: the primary pointer is a finger and nothing hovers. */
+export const TOUCH_PRIMARY_QUERY = '(hover: none) and (pointer: coarse)';
+
+/**
+ * Whether the primary pointer is a finger, read now. Narrower than `isTouch`, which also counts a
+ * touch-screen laptop (`maxTouchPoints`). That laptop has a keyboard, so focusing a text box there
+ * opens nothing over the page.
+ */
+export function isPrimaryPointerTouch(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(TOUCH_PRIMARY_QUERY).matches
+  );
+}
+
 function readViewportState(): DeviceBreakpointState {
   if (typeof window === 'undefined') {
     return classifyDeviceBreakpoint(1280, false);
   }
 
   const width = window.innerWidth || 1280;
-  const coarseQuery =
-    typeof window.matchMedia === 'function' ? window.matchMedia('(hover: none) and (pointer: coarse)') : null;
+  const coarseQuery = typeof window.matchMedia === 'function' ? window.matchMedia(TOUCH_PRIMARY_QUERY) : null;
   const isTouch = Boolean(
     coarseQuery?.matches || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0),
   );
@@ -76,7 +91,7 @@ export function useDeviceBreakpoint(): DeviceBreakpointState {
     const tabletQuery = window.matchMedia(
       `(min-width: ${TABLET_MIN_BREAKPOINT}px) and (max-width: ${TABLET_MAX_BREAKPOINT}px)`,
     );
-    const coarseQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const coarseQuery = window.matchMedia(TOUCH_PRIMARY_QUERY);
 
     update();
 

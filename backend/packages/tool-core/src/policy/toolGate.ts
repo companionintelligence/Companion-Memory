@@ -22,10 +22,13 @@ export type TrustDecision = 'auto' | 'review' | 'skip';
 
 /**
  * Why the gate answered as it did. The three {@link DispatchReason} queue
- * reasons come straight from {@link resolveDispatch}; the fourth is the
- * appliance-tier one this module adds.
+ * reasons come straight from {@link resolveDispatch}; the other two are the
+ * appliance-tier ones this module adds. `confirmation-required` is for work
+ * that removes data or leaves the appliance. `write-after-lookup` is for any
+ * other write a chat turn makes once it has looked something up (see
+ * {@link ToolGateOptions.followsLookup}).
  */
-export type ToolGateReason = DispatchReason | 'confirmation-required';
+export type ToolGateReason = DispatchReason | 'confirmation-required' | 'write-after-lookup';
 
 export interface ToolGateRuling extends Omit<DispatchRuling, 'reason'> {
   reason: ToolGateReason;
@@ -46,6 +49,15 @@ export interface ToolGateOptions {
    * must be byte-identical to today's behaviour.
    */
   trust: TrustDecision | null;
+  /**
+   * The call comes from a chat round after the turn already ran a lookup, so
+   * what it does may have been steered by text the lookup returned: a mail, a
+   * note or a page someone else wrote. Under a dial that asks before a delete,
+   * such a call asks before any write, not only a destructive or external one.
+   * A write the person asked for directly comes from the turn's first round and
+   * is judged as before. Absent means false.
+   */
+  followsLookup?: boolean;
 }
 
 /**
@@ -57,9 +69,19 @@ export interface ToolGateOptions {
  * ("a dispatcher must confirm before this one fires") and `ToolRegistry`'s
  * `privacy.external` warn ("It gates nothing today") are the two in-repo
  * admissions that nothing did.
+ *
+ * With `followsLookup`, any write too: see {@link ToolGateOptions.followsLookup}.
  */
-export function needsConfirmation(intent: DispatchableIntent): boolean {
-  return removesData(intent.privacy) || intent.privacy.external;
+export function needsConfirmation(
+  intent: DispatchableIntent,
+  { followsLookup = false }: Pick<ToolGateOptions, 'followsLookup'> = {},
+): boolean {
+  return removesData(intent.privacy) || intent.privacy.external || writesAfterLookup(intent, followsLookup);
+}
+
+/** A write that is not already destructive or external, from a chat round after a lookup. */
+function writesAfterLookup(intent: DispatchableIntent, followsLookup: boolean): boolean {
+  return followsLookup && intent.privacy.access !== 'read';
 }
 
 /**
@@ -90,13 +112,18 @@ export function needsConfirmation(intent: DispatchableIntent): boolean {
  * | `balanced`  | auto for an external read, else review | an external read executes; the rest queues |
  * | `cautious`  | review                                 | queues for confirmation                    |
  *
+ * A write that is flagged only because it follows a lookup is queued the same
+ * way under the same dial, with the reason `write-after-lookup`. The
+ * managed-app rule below does not apply to it (that rule is about irreversible
+ * work).
+ *
  * `skip` queues rather than executing or silently dropping. The dial's `skip`
  * means "don't apply this inference"; there is no such thing as declining a
  * tool call the user asked for on their behalf without telling them, so the
  * safe reading of `skip` here is "ask".
  */
 export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOptions): ToolGateRuling {
-  const { tier, capability, trust, principal = 'owner' } = options;
+  const { tier, capability, trust, principal = 'owner', followsLookup = false } = options;
 
   const dispatch = resolveDispatch(intent, { tier, capability });
 
@@ -104,9 +131,11 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
     return dispatch;
   }
 
-  if (!needsConfirmation(intent)) {
+  if (!needsConfirmation(intent, { followsLookup })) {
     return dispatch;
   }
+
+  const afterLookupOnly = !needsConfirmation(intent);
 
   // A borrowed agent is confirmed before anything irreversible, whatever the
   // owner's dial says — and WITHOUT consulting the feature flag, which is why
@@ -121,7 +150,7 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
   // This is also the compensating control that makes `capabilityForApp`'s `full`
   // safe (see ConnectService): the harness can now REACH destructive intents,
   // and reaching them produces a card instead of running them.
-  if (principal === 'managed-app') {
+  if (principal === 'managed-app' && !afterLookupOnly) {
     return {
       decision: 'queue',
       reason: 'confirmation-required',
@@ -131,6 +160,14 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
 
   if (trust == null || trust === 'auto') {
     return dispatch;
+  }
+
+  if (afterLookupOnly) {
+    return {
+      decision: 'queue',
+      reason: 'write-after-lookup',
+      explanation: `"${intent.name}" would change your data right after a lookup in the same chat turn, which this appliance is set to confirm first`,
+    };
   }
 
   return {

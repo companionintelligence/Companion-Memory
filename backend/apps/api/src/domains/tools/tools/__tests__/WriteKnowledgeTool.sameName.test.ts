@@ -439,8 +439,137 @@ describe('memory.remember with entity.create for a name the user already has', (
       expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0 });
     });
 
-    it('when the create carries an identity list, which an existing row would refuse', async () => {
+    it('for a new name that carries an email, which a new entity records', async () => {
       const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Robin Park',
+            properties: { emails: ['robin@example.com'] },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0, failures: 0 });
+      expect(graph.active().find((row) => row.name === 'Robin Park')?.properties).toEqual({
+        emails: ['robin@example.com'],
+      });
+    });
+  });
+
+  /**
+   * "Remember that Jordan Lee's email is …" for the Jordan Lee the user has: an identity list is
+   * refused on a row that already exists. The create used to skip the name match to keep the
+   * address, so it minted a second Jordan Lee holding it. The facts now go on the one Jordan Lee
+   * and the address is left out, with a message saying where to add it.
+   */
+  describe('with an email or phone for someone the user already has', () => {
+    it('saves the other facts on that person, leaves the address out and says so', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { emails: ['jordan@example.com'], phones: ['+1 555 010 0100'], likes: 'jazz' },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 1, failures: 0 });
+      expect(result.data?.results[0]).toMatchObject({ status: 'updated', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain(
+        'Did not save the email address and the phone number on the existing Person "Jordan Lee"',
+      );
+      expect(result.data?.results[0].message).toContain("add it with Edit Person on Jordan Lee's page");
+      expect(graph.active().filter((row) => row.entity_type === 'Person')).toHaveLength(1);
+      expect(graph.nodes.get(JORDAN)?.properties).toEqual({ city: 'Oakland', likes: 'jazz' });
+    });
+
+    it('writes nothing and says it was not saved when the address was all there was', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'jordan lee',
+            properties: { emails: ['jordan@example.com'] },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 0, failures: 0 });
+      expect(result.data?.results[0]).toMatchObject({ status: 'skipped', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain('Did not save the email address');
+      expect(graph.active().filter((row) => row.entity_type === 'Person')).toHaveLength(1);
+      expect(graph.nodes.get(JORDAN)).toMatchObject({
+        name: 'Jordan Lee',
+        properties: { city: 'Oakland' },
+      });
+    });
+
+    it('still links a relationship in the same call to that person', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { emails: ['jordan@example.com'] },
+          },
+          { kind: 'entity.create', entityType: 'Concept', name: 'bebop' },
+          {
+            kind: 'relationship.create',
+            relationshipType: 'LIKES',
+            from: { name: 'Jordan Lee' },
+            to: { name: 'bebop' },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 1, createdRelationships: 1, failures: 0 });
+      const bebop = graph.active().find((row) => row.name === 'bebop');
+      expect(graph.edges.all()).toEqual([
+        expect.objectContaining({
+          from_entity_id: JORDAN,
+          to_entity_id: bebop?.entity_id,
+          relationship_type: 'LIKES',
+        }),
+      ]);
+    });
+
+    it('still refuses a setting, such as the autonomy dial, on that person', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { emails: ['jordan@example.com'], planner: { trust_mode: 'hands_off' } },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ failures: 1, updatedNodes: 0 });
+      expect(result.data?.results[0].message).toContain('cannot write or remove "planner"');
+      expect(graph.nodes.get(JORDAN)?.properties).toEqual({ city: 'Oakland' });
+    });
+
+    it('does not report an address the person already has as lost', async () => {
+      const graph = makePipeline([
+        entityRow({ ...jordan(), properties: { city: 'Oakland', emails: ['Jordan@Example.com'] } }),
+      ]);
 
       const result = await graph.run({
         operations: [
@@ -453,11 +582,72 @@ describe('memory.remember with entity.create for a name the user already has', (
         ],
       });
 
+      expect(result.data?.results[0]).toMatchObject({ status: 'skipped', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain('already has the email address');
+      expect(result.data?.results[0].message).not.toContain('Did not save');
+    });
+
+    it('writes nothing when the only other fact is the description it already has', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            description: 'A friend from the climbing gym',
+            properties: { emails: ['jordan@example.com'] },
+          },
+        ],
+      });
+
+      expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 0, failures: 0 });
+      expect(result.data?.results[0]).toMatchObject({ status: 'skipped', entityId: JORDAN });
+      expect(result.data?.results[0].message).toContain('Did not save the email address');
+    });
+
+    it('still makes a new place for a phone number, since a place has no Edit Person', async () => {
+      const PLACE = '0199a1b2-0000-7000-8000-000000000009';
+      const graph = makePipeline([entityRow({ entity_id: PLACE, entity_type: 'Place', name: 'Nopa' })]);
+
+      const result = await graph.run({
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Place',
+            name: 'Nopa',
+            properties: { phones: ['+1 555 010 0199'] },
+          },
+        ],
+      });
+
       expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0, failures: 0 });
-      expect(graph.nodes.get(JORDAN)?.properties).toEqual({ city: 'Oakland' });
       expect(
-        graph.active().find((row) => row.entity_id !== JORDAN && row.name === 'Jordan Lee')?.properties,
-      ).toEqual({ emails: ['jordan@example.com'] });
+        graph.active().find((row) => row.entity_id !== PLACE && row.name === 'Nopa')?.properties,
+      ).toEqual({
+        phones: ['+1 555 010 0199'],
+      });
+    });
+
+    it('says so on a dry run too', async () => {
+      const graph = makePipeline([jordan()]);
+
+      const result = await graph.run({
+        dryRun: true,
+        operations: [
+          {
+            kind: 'entity.create',
+            entityType: 'Person',
+            name: 'Jordan Lee',
+            properties: { emails: ['jordan@example.com'], likes: 'jazz' },
+          },
+        ],
+      });
+
+      expect(result.data?.results[0].message).toContain('would update existing entity');
+      expect(result.data?.results[0].message).toContain('Did not save the email address');
+      expect(graph.nodes.get(JORDAN)?.properties).toEqual({ city: 'Oakland' });
     });
   });
 });

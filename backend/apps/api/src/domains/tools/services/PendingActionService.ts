@@ -74,7 +74,10 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  * these; change them together.
  *
  * This is consulted only for intents {@link needsConfirmation} already flags,
- * so an on-appliance read or write never reaches it.
+ * so an on-appliance read or write never reaches it, except a write a chat turn
+ * makes after a lookup (`ToolInvocationContext.followsLookup`). Such a write is
+ * never an external read, so `balanced` and `cautious` both answer `review` for
+ * it and only `hands_off` runs it unattended.
  */
 export function trustForToolCall(trustMode: TrustMode, privacy: IntentDefinition['privacy']): TrustDecision {
   if (trustMode === 'hands_off') {
@@ -222,15 +225,16 @@ export class PendingActionService {
     // Read fresh, not through PersonalizationService's 60 second cache: that
     // cache is per instance and per process, and Settings clears only its own,
     // so a cached Hands-off would outlive the owner turning it down.
+    const followsLookup = context.followsLookup === true;
     const trust =
-      needsConfirmation(schema) && context.userId && context.principal !== 'managed-app'
+      needsConfirmation(schema, { followsLookup }) && context.userId && context.principal !== 'managed-app'
         ? trustForToolCall(
             (await this.personalization.getProfile(context.userId, { fresh: true })).trustMode,
             schema.privacy,
           )
         : null;
 
-    return resolveToolGate(schema, { tier, capability, trust, principal: context.principal });
+    return resolveToolGate(schema, { tier, capability, trust, principal: context.principal, followsLookup });
   }
 
   /**
