@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import { EventService } from '@ci/domains/events';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
@@ -330,15 +331,16 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   mediaEvents?: 'photos' | 'media';
 };
 
-/** Image file extensions, as `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts lists them. */
-const IMAGE_FILENAME_SQL = String.raw`\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef)$`;
-/** The video ones, from the same list. */
-const VIDEO_FILENAME_SQL = String.raw`\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$`;
+/** Image file names, from the list `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts is built from. */
+const IMAGE_FILENAME_SQL = String.raw`\.(${IMAGE_FILE_EXTENSIONS})$`;
+/** The video ones, from the same place. */
+const VIDEO_FILENAME_SQL = String.raw`\.(${VIDEO_FILE_EXTENSIONS})$`;
 
 /**
  * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
  * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
- * `Media Type`, or a title that is such a file name. Constant SQL, no asker text.
+ * `Media Type`, or a title that is such a file name once trimmed, as it trims
+ * it. Constant SQL, no asker text.
  */
 function mediaEventSql(kind: 'photos' | 'media'): string {
   const mediaTypes =
@@ -347,8 +349,8 @@ function mediaEventSql(kind: 'photos' | 'media'): string {
       : `e.metadata ->> 'Media Type' LIKE 'image/%'`;
   const fileNames =
     kind === 'media'
-      ? `(n.name ~* '${IMAGE_FILENAME_SQL}' OR n.name ~* '${VIDEO_FILENAME_SQL}')`
-      : `n.name ~* '${IMAGE_FILENAME_SQL}'`;
+      ? `(btrim(n.name) ~* '${IMAGE_FILENAME_SQL}' OR btrim(n.name) ~* '${VIDEO_FILENAME_SQL}')`
+      : `btrim(n.name) ~* '${IMAGE_FILENAME_SQL}'`;
 
   return `EXISTS (
           SELECT 1

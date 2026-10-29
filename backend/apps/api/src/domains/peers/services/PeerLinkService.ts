@@ -132,15 +132,16 @@ export class PeerLinkService {
     @InjectRepository(PeerLinkEntity)
     private readonly repository: Repository<PeerLinkEntity>,
     private readonly logger: LoggerService,
-    // Re-activating a revoked link revokes the grants still addressed to it;
-    // see `upsert`.
+    // Adding back a peer whose link was ended revokes the grants still
+    // addressed to the ended link; see `upsert`.
     private readonly grantService: GrantService,
   ) {
     this.logger.setContext(PeerLinkService.name);
   }
 
   /**
-   * Link a peer (idempotent on (owner, handle) — re-linking refreshes it).
+   * Link a peer. Idempotent on the handle's live link, which a re-add
+   * refreshes; adding back a handle whose link was ended makes a new link.
    *
    * ═══ `peerIssuer` / `peerSubject`: WHAT THEY ARE, AND WHAT GUARDS THEM ═══
    *
@@ -235,16 +236,35 @@ export class PeerLinkService {
       );
     }
 
+    let revokedGrants = 0;
+
+    if (relinks) {
+      // ═══ THE ENDED LINK'S GRANTS END WITH IT ═══
+      //
+      // Grants address a peer by link id, so none of them reaches the new
+      // link. They are still revoked, because the Grants tab lists a grant
+      // until it is, and one shown as live for a peer the owner just added back
+      // at Stranger reads as consent that carried over. `revoke()` leaves them
+      // alone, so this is where they go.
+      //
+      // BEFORE the insert, not after: once the new row exists a retry reads it
+      // as the current link, so a failure here after the insert would leave
+      // these grants listed as live for good. They belong to an ended link and
+      // can answer nothing, so revoking them when the insert then fails costs
+      // nothing.
+      revokedGrants = await this.grantService.revokeForPeerLink(context, current.id);
+    }
+
     let saved: PeerLinkEntity;
 
     try {
       saved = await this.repository.save(record);
     } catch (err) {
-      // Two re-adds of one ended link (a double click, two devices) both read
-      // the ended row and both insert; the index lets one through.
-      if (relinks && uniqueViolation(err)?.constraint === HANDLE_CONSTRAINT) {
+      // Two adds of one handle (a double click, two devices) both read the same
+      // current row, or none, and both insert; the index lets one through.
+      if (existing == null && uniqueViolation(err)?.constraint === HANDLE_CONSTRAINT) {
         throw new ConflictException(
-          `${data.peerHandle} was added again a moment ago. Reload to see the link.`,
+          `${data.peerHandle} was added${relinks ? ' again' : ''} a moment ago. Reload to see the link.`,
         );
       }
 
@@ -266,15 +286,6 @@ export class PeerLinkService {
     }
 
     if (relinks) {
-      // ═══ THE ENDED LINK'S GRANTS END WITH IT ═══
-      //
-      // Grants address a peer by link id, so none of them reaches the new
-      // link. They are still revoked here, because the Grants tab lists a
-      // grant until it is, and one shown as live for a peer the owner just
-      // added back at Stranger reads as consent that carried over.
-      // `revoke()` leaves them alone, so this is where they go.
-      const revokedGrants = await this.grantService.revokeForPeerLink(context, current.id);
-
       // The counterpart of the line `revoke()` logs: a link coming back is as
       // much a change to who can ask as one going away.
       this.logger.log(

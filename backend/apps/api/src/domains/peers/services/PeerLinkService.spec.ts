@@ -229,7 +229,7 @@ describe('PeerLinkService.upsert — the peer identity binding', () => {
     );
   });
 
-  it('rethrows a 23505 naming ANOTHER constraint — a handle collision is not an identity clash', async () => {
+  it('reports a 23505 naming the HANDLE index as the handle, not as an identity clash', async () => {
     const { service, repository } = makeService();
     const handleClash = Object.assign(new Error('duplicate key'), {
       code: '23505',
@@ -238,7 +238,22 @@ describe('PeerLinkService.upsert — the peer identity binding', () => {
 
     repository.save.mockRejectedValue(handleClash);
 
-    await expect(service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO })).rejects.toBe(handleClash);
+    const refusal = service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO });
+
+    await expect(refusal).rejects.toThrow(/devon was added a moment ago/);
+    await expect(refusal).rejects.not.toThrow(/peerIssuer, peerSubject/);
+  });
+
+  it('rethrows a 23505 naming any other constraint untouched', async () => {
+    const { service, repository } = makeService();
+    const keyClash = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'peer_links_owner_key_live_uniq',
+    });
+
+    repository.save.mockRejectedValue(keyClash);
+
+    await expect(service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO })).rejects.toBe(keyClash);
   });
 
   it('rethrows the identity conflict untranslated when the write never touched the identity', async () => {
@@ -573,6 +588,37 @@ describe('PeerLinkService — a revoked peer does not authenticate', () => {
     await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toThrow(
       /devon was added again a moment ago/,
     );
+  });
+
+  it('answers two first adds of one handle with a 409 too', async () => {
+    // A double click on Add for a peer never linked before: both read nothing
+    // and both insert.
+    const { service, repository } = makeServiceOverRows([]);
+
+    repository.save.mockRejectedValue(
+      Object.assign(new Error('duplicate key'), {
+        code: '23505',
+        constraint: 'peer_links_owner_handle_uniq',
+      }),
+    );
+
+    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toThrow(
+      /devon was added a moment ago/,
+    );
+  });
+
+  it("revokes the ended link's grants even when the new link's insert fails", async () => {
+    // Once a new row exists a retry reads it as current and never revokes
+    // these, so they go first.
+    const rows = [link({ status: 'revoked', revokedAt: new Date('2026-02-01T00:00:00Z') })];
+    const { service, repository, grantService } = makeServiceOverRows(rows);
+
+    repository.save.mockRejectedValue(new Error('connection reset'));
+
+    await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toThrow(
+      'connection reset',
+    );
+    expect(grantService.revokeForPeerLink).toHaveBeenCalledWith(CTX, 'link-1');
   });
 
   it('revokes the live link of a handle, never the ended one beside it', async () => {
