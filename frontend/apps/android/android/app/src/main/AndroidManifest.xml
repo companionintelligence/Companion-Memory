@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -92,9 +92,15 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <!-- Location hardware is optional: the app is fully usable with tracking off. -->
+    <!-- Location hardware is optional: the app is fully usable with tracking off.
+         The background-geolocation library declares GPS as required, and the manifest
+         merger ORs uses-feature android:required across dependencies. Replace that
+         attribute here so Play does not filter devices without built-in GPS. -->
     <uses-feature android:name="android.hardware.location" android:required="false" />
-    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false"
+        tools:replace="android:required" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
