@@ -5,8 +5,8 @@ import Foundation
 /// Place). Does not enqueue a tracking outbox record and does not run in the background.
 ///
 /// iOS Always background samples live on `SignificantLocationMonitor` (a second
-/// manager). Android background tracking stays on
-/// `@capacitor-community/background-geolocation`. This class only does the one-shot
+/// manager). Android background tracking is the motion-gated tracker in the Android half
+/// of this plugin. This class only does the one-shot
 /// fix, so `stopUpdatingLocation` cannot tear the background monitor down.
 final class LocationTracker: NSObject, CLLocationManagerDelegate {
     static let shared = LocationTracker()

@@ -4,16 +4,16 @@ import type { OnboardingFormData } from './OnboardingPage';
 import { StepHeader } from './StepHeader';
 
 // The last clause of each hint is the chat tool gate (`PendingActionService`):
-// deleting, sending, completing a task and a connected MCP server's tools ask
-// first on Cautious and Balanced; reading from an outside service (the owner's
-// messages, streaming availability) asks first on Cautious only; Hands-off
-// waives all of it. Keep the three in step with `trustForToolCall` — this copy
+// deleting, sending, completing a task, a connected MCP server's tools and any
+// write chat makes after a lookup in the same turn ask first on Cautious and
+// Balanced; reading from an outside service (the owner's messages, streaming
+// availability) asks first on Cautious only; Hands-off waives all of it. Keep the three in step with `trustForToolCall` — this copy
 // and the Autonomy settings text are the only places the owner learns the rule.
 export const TRUST_OPTIONS = [
   {
     value: 'cautious' as const,
     label: 'Cautious',
-    hint: 'Ask before adding to-dos or placing them on your calendar, and before chat deletes, sends, reads from an outside service, or changes anything right after looking something up',
+    hint: 'Ask before adding to-dos or placing them on your calendar and before chat deletes, sends, reads from an outside service or changes anything right after looking something up',
   },
   {
     value: 'balanced' as const,

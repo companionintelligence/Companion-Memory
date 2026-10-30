@@ -1,9 +1,10 @@
 import { Fragment, useState, type ReactNode } from 'react';
 
-import { useOverflowsRight } from '@ci/common';
+import { useScrollOverflow } from '@ci/common';
 import { Badge, Button, Card, Collapsible, Input, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, ChevronDown, ChevronRight, type LucideIcon } from '@ci/shadcn/icons';
 
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
@@ -647,7 +648,7 @@ function ChipRow({
   wideClassName: string;
   children: ReactNode;
 }) {
-  const [ref, more] = useOverflowsRight<HTMLDivElement>();
+  const [ref, more] = useScrollOverflow<HTMLDivElement>();
 
   if (!phone) {
     return (
@@ -658,15 +659,16 @@ function ChipRow({
   }
 
   return (
-    <div
-      ref={ref}
-      data-more={more || undefined}
-      className="scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5 data-[more]:[mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
-      role="tablist"
-      aria-label={label}
-    >
-      {children}
-    </div>
+    <ScrollMoreArrows more={more}>
+      <div
+        ref={ref}
+        className="scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5"
+        role="tablist"
+        aria-label={label}
+      >
+        {children}
+      </div>
+    </ScrollMoreArrows>
   );
 }
 

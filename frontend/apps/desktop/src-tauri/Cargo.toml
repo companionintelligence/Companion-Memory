@@ -31,7 +31,7 @@ uuid = { version = "1", features = ["v4"] }
 flate2 = "1"
 tar = "0.4"
 zstd = "0.13"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # Apple on-device bridge (local_model/apple_bridge.rs, macOS only): the tiny
 # HTTP shim translating OpenAI-shaped requests into ci-apple-bridge's stdio
 # protocol.

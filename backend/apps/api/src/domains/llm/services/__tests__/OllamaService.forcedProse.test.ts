@@ -19,6 +19,7 @@ import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
 import { OllamaService, type ChatRequestContext } from '../OllamaService';
+import { OpenAiCompatChatDriver } from '../OpenAiCompatChatDriver';
 
 const MODEL = 'test-model';
 const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
@@ -109,6 +110,35 @@ function scriptedStreamingDriver(rounds: any[][]) {
 }
 
 async function setup(rounds: any[][]) {
+  return setupWith(scriptedStreamingDriver(rounds));
+}
+
+/**
+ * The real OpenAI-compatible driver, with only its HTTP client stubbed: each round streams the
+ * given deltas, as vLLM or Lemonade would. The scripted driver above hands every chunk through as
+ * it is, whatever `discardToolMarkup` says, so it cannot show what the real one drops.
+ */
+function realDriver(rounds: Array<Array<Record<string, unknown>>>) {
+  const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+  const create = jest.fn(async () => {
+    const deltas = rounds[Math.min(create.mock.calls.length, rounds.length) - 1] ?? [];
+
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const delta of deltas) {
+          yield { choices: [{ delta }] };
+        }
+      },
+    };
+  });
+
+  (driver as any).client.chat.completions.create = create;
+  (driver as any).listModels = jest.fn(async () => [MODEL]);
+
+  return { driver, create };
+}
+
+async function setupWith<T>(driver: T) {
   const tool = fakeSearchTool();
   const registry = new ToolRegistry(
     makeLogger(),
@@ -117,7 +147,6 @@ async function setup(rounds: any[][]) {
   );
   await registry.registerProvider(fakeProvider([tool]));
 
-  const driver = scriptedStreamingDriver(rounds);
   const llmEndpointService = { getOpenAiDriver: () => driver } as any;
   const service = new OllamaService(
     llmEndpointService,
@@ -384,5 +413,64 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(followUp.tools).toBeUndefined();
     expect(followUp.salvageTools).toBe(false);
     expect(followUp.discardToolMarkup).toBe(true);
+  });
+
+  it('asks once more in prose on an OpenAI-compatible endpoint when a round offered no tools writes a call', async () => {
+    const searchFor = (query: string) => ({
+      tool_calls: [
+        { index: 0, function: { name: 'knowledge_search', arguments: JSON.stringify({ query }) } },
+      ],
+    });
+    // Two tool rounds use up the offer. In the third, as Qwen on vLLM does, the model writes a
+    // preamble and its next call as markup. The driver strips the markup and emits no call.
+    const { driver, create } = realDriver([
+      [searchFor('first')],
+      [searchFor('second')],
+      [
+        { content: 'Let me check one more place.\n\n' },
+        { content: '<tool_call>\n<function=knowledge_search>\n<parameter=query>\nthird\n</parameter>\n' },
+        { content: '</function>\n</tool_call>' },
+      ],
+      [{ content: 'Here is what I found.' }],
+    ]);
+    const { service, tool } = await setupWith(driver);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(messages)).not.toContain('<tool_call>');
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Here is what I found.',
+    });
+  });
+
+  it('does not tell the model to use tool results when the turn has none', async () => {
+    // Chat with tools off: the native engine can still parse a call, which is dropped, and the
+    // round is asked again in prose. There are no tool results for that answer to stand on.
+    const { service, tool, driver } = await setup([
+      [proseChunk('Let me search for that.'), toolCallChunk()],
+      [proseChunk('I can only answer from what you tell me here.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: false,
+    });
+    await drain(stream);
+
+    expect(driver.chatStream).toHaveBeenCalledTimes(2);
+    expect(tool.execute).not.toHaveBeenCalled();
+
+    const nudge = driver.calls[1].messages[driver.calls[1].messages.length - 1];
+
+    expect(nudge.role).toBe('system');
+    expect(nudge.content).toContain('Answer the user now in plain prose');
+    expect(nudge.content).not.toContain('tool results');
   });
 });

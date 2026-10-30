@@ -4,9 +4,10 @@ ext {
     // Play has required target API 36 of every new upload since 31 Aug 2026.
     // Capacitor 7's documented matrix is still 7.x → 35, but @capacitor/android
     // reads compileSdk/targetSdk from this file, so raising them here is what
-    // Play actually inspects. Stay on Capacitor 7: a Capacitor 8 migration is
-    // still blocked on @capacitor-community/background-geolocation (no Cap 8
-    // release). AGP must be ≥ 8.10.0 or the 36 compileSdk is refused.
+    // Play actually inspects. Stay on Capacitor 7 for now: the migration is no
+    // longer blocked by @capacitor-community/background-geolocation (dropped
+    // 2026-10-26; the LocalHub plugin owns location), it is just not done -- see
+    // DELIVERY.md. AGP must be ≥ 8.10.0 or the 36 compileSdk is refused.
     compileSdkVersion = 36
     targetSdkVersion = 36
     androidxActivityVersion = '1.9.2'

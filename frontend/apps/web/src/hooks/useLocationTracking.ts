@@ -1,22 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
-  type BackgroundGeolocationError,
   type LocationCaptureOutcome,
   type LocationSampler,
   type LocationTrackingMode,
+  type NativeLocationError,
+  type NativeLocationEvent,
   BACKGROUND_MAX_ACCURACY_METERS,
+  HOME_GEOFENCE_RADIUS_METERS,
   LOCATION_MODE_CHANGE_EVENT,
   LOCATION_NEEDS_SETTINGS_EVENT,
   MIN_DISTANCE_METERS,
   MIN_INTERVAL_MS,
   addAppStateListener,
-  addBackgroundLocationWatcher,
   captureLocationFix,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
-  fixFromGeolocationPosition,
+  fixFromNativeLocationEvent,
   getNativeLocationAuthorization,
   isIosPlatform,
   isNativePlatform,
@@ -24,7 +24,6 @@ import {
   publishLocationNeedsSettingsUpgrade,
   publishLocationTrackingMode,
   readLocationTrackingMode,
-  removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
   startSignificantLocationUpdates,
   requestNotificationPermission,
@@ -68,16 +67,25 @@ async function ensureIosAlwaysAuthorization(): Promise<boolean> {
 /**
  * Location tracking: records `ci.position` fixes from this device.
  *
- * Native (iOS + Android) `when_in_use` uses `@capacitor-community/background-geolocation`
- * as a foreground-only watcher. `always` differs per platform. Android hands recording to
- * the LocalHub plugin's own location foreground service: started from the screen, it keeps
- * sampling after the app leaves the foreground AND after it is swiped out of recents (the
- * community plugin's bound service stopped with the activity), queues each fix natively so
- * nothing depends on this WebView, and delivers the fix here too -- the shared `source_id`
- * makes the second enqueue a no-op. No community watcher runs in Android Always. iOS Always
- * keeps the foreground watcher and adds significant-change monitoring, which records a real
- * move and stays quiet while the phone sits still, without the solid blue indicator. Plain
- * web falls back to `navigator.geolocation`.
+ * Native (iOS + Android) has ONE recorder, the LocalHub plugin's background monitor, and it
+ * runs only in `always`: on iOS, significant-change monitoring, which records a real move and
+ * stays quiet while the phone sits still; on Android, motion-gated sampling, where the fixes
+ * and an exit geofence decide when the phone is moving and GPS runs only then. Both queue
+ * each fix natively, so recording goes on after the WebView is gone; the event is still
+ * handed to `captureLocationFix` here, where the shared `source_id` makes the second
+ * enqueue a no-op.
+ *
+ * There is no on-screen trail. `when_in_use` on native records nothing on its own: a current
+ * location is fetched on request (`getCurrentDeviceLocation`) when a note or photo needs one.
+ * The foreground watcher that used to provide one came from
+ * `@capacitor-community/background-geolocation`, whose once-per-second GPS request never
+ * stopped when the app left the screen and which our own location foreground service kept
+ * alive on Android, doubling every trip's trail and undoing the battery saving.
+ *
+ * Plain web records nothing either (its browser trail went the same day, for the same
+ * reason): a browser has no background monitor, and the one thing worth a location there,
+ * placing a note or photo, asks for a single high-accuracy fix on demand through
+ * `getCurrentDeviceLocation`.
  *
  * Consent is per-device (localStorage). Settings → Location owns the disclosure.
  */
@@ -88,8 +96,8 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
   const [lastOutcome, setLastOutcome] = useState<LocationCaptureOutcome | null>(null);
   const [needsSettingsUpgrade, setNeedsSettingsUpgrade] = useState(false);
 
-  // One gate (150 m or 5 min) whether the app is on screen or not; a denser trail while
-  // the app happens to be open adds nothing.
+  // The same 150 m / 5 min gate the native side applies before it queues a fix; here it
+  // only keeps the web-side re-enqueue of an already-queued fix from being attempted.
   const samplerRef = useRef<LocationSampler | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -177,14 +185,14 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     };
   }, [watch]);
 
-  // Native watcher — one writer for iOS + Android. Web never starts this; it uses
-  // navigator.geolocation below instead.
+  // Native (iOS + Android): the background monitor is the only recorder, and only in Always.
+  // Web never starts this, and records nothing of its own.
   useEffect(() => {
     if (!watch) {
       return;
     }
 
-    if (mode === 'off' || !authenticated || !isNativePlatform()) {
+    if (mode !== 'always' || !authenticated || !isNativePlatform()) {
       setNeedsSettingsUpgrade(false);
       publishLocationNeedsSettingsUpgrade(false);
 
@@ -192,15 +200,14 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     }
 
     let cancelled = false;
-    let watcherId: string | null = null;
     let stopSignificant: (() => Promise<void>) | null = null;
 
-    const onLocation = (location: Parameters<typeof fixFromBackgroundGeolocationLocation>[0]) => {
+    const onLocation = (location: NativeLocationEvent) => {
       if (cancelled) {
         return;
       }
 
-      void captureLocationFix(fixFromBackgroundGeolocationLocation(location), {
+      void captureLocationFix(fixFromNativeLocationEvent(location), {
         sampler: samplerRef.current ?? undefined,
         authToken,
         provider: 'companion-mobile',
@@ -215,7 +222,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         });
     };
 
-    const onError = (error: BackgroundGeolocationError) => {
+    const onError = (error: NativeLocationError) => {
       if (!cancelled && error.code === 'NOT_AUTHORIZED') {
         setNeedsSettingsUpgrade(true);
         publishLocationNeedsSettingsUpgrade(true);
@@ -223,154 +230,56 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     };
 
     void (async () => {
-      if (mode === 'always') {
-        // Android 13+ requires POST_NOTIFICATIONS before the persistent tracking
-        // notification (the OS's price of admission for background sampling) can show.
-        // iOS Always does not post that notification.
-        if (!isIosPlatform()) {
-          await requestNotificationPermission();
-        }
-
-        if (isIosPlatform()) {
-          const granted = await ensureIosAlwaysAuthorization();
-
-          if (cancelled) {
-            return;
-          }
-
-          setNeedsSettingsUpgrade(!granted);
-          publishLocationNeedsSettingsUpgrade(!granted);
-        }
-      } else {
-        setNeedsSettingsUpgrade(false);
-        publishLocationNeedsSettingsUpgrade(false);
+      // Android 13+ requires POST_NOTIFICATIONS before the tracking notification (the OS's
+      // price of admission for a location foreground service; shown only while the phone is
+      // moving) can show. iOS Always does not post that notification.
+      if (!isIosPlatform()) {
+        await requestNotificationPermission();
       }
 
-      // Always, both platforms: the LocalHub tracker is the background recorder and builds
-      // the wire record natively from exactly what captureLocationFix would use here, so a
-      // record it queues with no WebView alive and this hook's re-enqueue of the same fix
-      // share a source_id. Android's is a foreground location service that prompts for
-      // location itself; iOS's is significant-change monitoring plus a resume geofence,
-      // restarted by the app delegate on every launch, which is what keeps it recording
-      // after the app is swiped away or the phone reboots. The notification text is for
-      // Android's service; iOS accepts and ignores it.
-      const significantOptions = {
-        deviceKey: deviceSourceKey(),
-        provider: 'companion-mobile',
-        owner: outboxOwnerStamp(),
-        minDistanceMeters: MIN_DISTANCE_METERS,
-        minIntervalMs: MIN_INTERVAL_MS,
-        maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
-        notificationTitle: 'Recording location',
-        notificationText: 'Companion is recording your location so it can place memories on the map.',
-      };
-
-      if (mode === 'always' && !isIosPlatform()) {
-        stopSignificant = await startSignificantLocationUpdates(significantOptions, onLocation, onError);
+      if (isIosPlatform()) {
+        const granted = await ensureIosAlwaysAuthorization();
 
         if (cancelled) {
-          void stopSignificant?.();
+          return;
         }
 
-        return;
+        setNeedsSettingsUpgrade(!granted);
+        publishLocationNeedsSettingsUpgrade(!granted);
       }
 
-      const id = await addBackgroundLocationWatcher(
+      // Both platforms: the LocalHub tracker is the background recorder and builds the wire
+      // record natively from exactly what captureLocationFix would use here, so a record it
+      // queues with no WebView alive and this hook's re-enqueue of the same fix share a
+      // source_id. Android walks its own prompts (fine, then Allow all the time) inside this
+      // call and arms the motion-gated tracker; iOS arms significant-change monitoring plus
+      // a resume geofence, restarted by the app delegate on every launch. The notification
+      // text is for Android's moving-only foreground service; iOS accepts and ignores it.
+      stopSignificant = await startSignificantLocationUpdates(
         {
-          // Foreground-only on this plugin, in every mode that reaches it. iOS Always's
-          // background samples go through significant-change monitoring below, which does
-          // not hold the blue pill; Android Always never gets here.
-          background: false,
-          distanceFilter: MIN_DISTANCE_METERS,
-          // iOS Always is requested above so the plugin does not skip the second prompt.
-          requestPermissions: !(mode === 'always' && isIosPlatform()),
+          deviceKey: deviceSourceKey(),
+          provider: 'companion-mobile',
+          owner: outboxOwnerStamp(),
+          minDistanceMeters: MIN_DISTANCE_METERS,
+          minIntervalMs: MIN_INTERVAL_MS,
+          maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
+          geofenceRadiusMeters: HOME_GEOFENCE_RADIUS_METERS,
+          notificationTitle: 'Recording location',
+          notificationText: 'Companion records your location while you are on the move.',
         },
         onLocation,
         onError,
       );
 
-      if (mode === 'always' && isIosPlatform()) {
-        stopSignificant = await startSignificantLocationUpdates(significantOptions, onLocation, onError);
-      }
-
       if (cancelled) {
-        if (id) {
-          void removeBackgroundLocationWatcher(id);
-        }
-
         void stopSignificant?.();
-
-        return;
       }
-
-      watcherId = id;
     })();
 
     return () => {
       cancelled = true;
-
-      if (watcherId) {
-        void removeBackgroundLocationWatcher(watcherId);
-      }
-
       void stopSignificant?.();
-
       samplerRef.current?.reset();
-    };
-  }, [watch, mode, authenticated, authToken]);
-
-  // Web-only foreground watcher. Native (iOS + Android) never starts this — the
-  // background-geolocation watcher above owns sampling there.
-  useEffect(() => {
-    if (
-      !watch ||
-      mode === 'off' ||
-      !authenticated ||
-      isNativePlatform() ||
-      typeof navigator === 'undefined' ||
-      !navigator.geolocation
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-    const sampler = samplerRef.current;
-
-    const send = (position: GeolocationPosition) => {
-      if (cancelled) {
-        return;
-      }
-
-      void captureLocationFix(fixFromGeolocationPosition(position), {
-        sampler: sampler ?? undefined,
-        authToken,
-        provider: 'browser',
-      })
-        .then((outcome) => {
-          if (!cancelled && outcome.status !== 'throttled') {
-            setLastOutcome(outcome);
-          }
-        })
-        .catch(() => {
-          // captureLocationFix reports failures in its result rather than throwing.
-        });
-    };
-
-    navigator.geolocation.getCurrentPosition(send, () => undefined, {
-      enableHighAccuracy: false,
-      maximumAge: 60_000,
-      timeout: 15_000,
-    });
-
-    const watchId = navigator.geolocation.watchPosition(send, () => undefined, {
-      enableHighAccuracy: false,
-      maximumAge: 60_000,
-    });
-
-    return () => {
-      cancelled = true;
-      navigator.geolocation.clearWatch(watchId);
-      sampler?.reset();
     };
   }, [watch, mode, authenticated, authToken]);
 

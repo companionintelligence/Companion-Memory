@@ -79,7 +79,7 @@ export function needsConfirmation(
   return removesData(intent.privacy) || intent.privacy.external || writesAfterLookup(intent, followsLookup);
 }
 
-/** A write that is not already destructive or external, from a chat round after a lookup. */
+/** Any write, destructive and external ones included, from a chat round after a lookup. */
 function writesAfterLookup(intent: DispatchableIntent, followsLookup: boolean): boolean {
   return followsLookup && intent.privacy.access !== 'read';
 }
@@ -131,11 +131,13 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
     return dispatch;
   }
 
-  if (!needsConfirmation(intent, { followsLookup })) {
+  // Flagged for removing data or leaving the appliance, or else only for following a lookup.
+  const flagged = needsConfirmation(intent);
+  const afterLookupOnly = !flagged && writesAfterLookup(intent, followsLookup);
+
+  if (!flagged && !afterLookupOnly) {
     return dispatch;
   }
-
-  const afterLookupOnly = !needsConfirmation(intent);
 
   // A borrowed agent is confirmed before anything irreversible, whatever the
   // owner's dial says — and WITHOUT consulting the feature flag, which is why
