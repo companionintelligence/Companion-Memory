@@ -96,27 +96,6 @@ interface ProductIdRow {
   product_id: string;
 }
 
-/**
- * Read/write surface for `ci.product_models` — the CATALOG half of the
- * product/instance split.
- *
- * `ci.objects` holds the owned UNITS ("the iPhone on my desk, serial F2LX…,
- * cracked screen"); this holds what those units are instances of ("iPhone 15
- * Pro 256GB Blue Titanium"). Before the table existed, buying three of the same
- * headphones produced three unrelated object rows with the brand/model
- * strings duplicated three times and nowhere to hang the canonical barcode,
- * spec sheet, MSRP or manual.
- *
- * ── The one rule ───────────────────────────────────────────────────────────
- *
- * EVERY READ FILTERS `merged_into_product_id IS NULL`.
- *
- * A tombstoned model is a row that LOST a merge; its data has already been
- * folded into the survivor. Returning one is not a stale read, it is a wrong
- * answer — the caller gets a product that nothing points at any more, mints
- * objects against it, and re-creates the duplicate the merge just removed.
- * The filter lives in {@link liveScope} so no read path can forget it.
- */
 /** A product's links that name another row. */
 interface ProductLinkFields {
   imageContentId?: string | null;
@@ -155,6 +134,27 @@ function productLinks(rows: readonly ProductLinkFields[]): OwnedLink[] {
   ];
 }
 
+/**
+ * Read/write surface for `ci.product_models` — the CATALOG half of the
+ * product/instance split.
+ *
+ * `ci.objects` holds the owned UNITS ("the iPhone on my desk, serial F2LX…,
+ * cracked screen"); this holds what those units are instances of ("iPhone 15
+ * Pro 256GB Blue Titanium"). Before the table existed, buying three of the same
+ * headphones produced three unrelated object rows with the brand/model
+ * strings duplicated three times and nowhere to hang the canonical barcode,
+ * spec sheet, MSRP or manual.
+ *
+ * ── The one rule ───────────────────────────────────────────────────────────
+ *
+ * EVERY READ FILTERS `merged_into_product_id IS NULL`.
+ *
+ * A tombstoned model is a row that LOST a merge; its data has already been
+ * folded into the survivor. Returning one is not a stale read, it is a wrong
+ * answer — the caller gets a product that nothing points at any more, mints
+ * objects against it, and re-creates the duplicate the merge just removed.
+ * The filter lives in {@link liveScope} so no read path can forget it.
+ */
 @Injectable()
 export class ProductModelService {
   constructor(

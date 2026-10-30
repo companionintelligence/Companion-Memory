@@ -225,44 +225,6 @@ export function detectionKeyFor(dto: CreateObjectObservationDto): string | null 
   return `obs:v${DETECTION_KEY_VERSION}:label:${sha256Hex([anchor, detector, label].join('\0'))}`;
 }
 
-/**
- * The only writer of `ci.object_observations` — the SIGHTING half of object
- * identity.
- *
- * The table shipped in migration `20260803223022` with a full column set, two
- * idempotency arbiters and a downstream edge projection
- * (`promote.edge_observation`) already built against it, and no writer at all.
- * Every consumer of the sighting layer — the CV listener's `Thing` branch, the
- * `capture.scan` promoter, and any future review UI — writes through here.
- *
- * ── The one rule ───────────────────────────────────────────────────────────
- *
- * DETECTION AND RESOLUTION ARE DIFFERENT CLAIMS, AND THIS CLASS NEVER LETS ONE
- * WRITE THE OTHER.
- *
- * `create`/`createMany` accept a {@link CreateObjectObservationDto}, which has
- * no way to express `resolvedObjectId`, `resolutionMethod` or
- * `confirmedByUser`; the write statement excludes those columns from its
- * `DO UPDATE SET` list, so a re-detection cannot touch them either. Resolution
- * arrives only through {@link resolve}, and `confirmed_by_user` only through
- * {@link confirm}. That is the type-level and SQL-level form of the
- * distinction the migration header states in prose: "a coffee mug is visible in
- * this photo" is not "I own this specific coffee mug".
- *
- * Nothing here writes `ci.objects`. Minting an owned unit from a sighting is
- * `ObjectResolutionService`'s job and it does not exist yet; until it does, a
- * sighting resolves to an object only when something else already created that
- * object and hands its id to {@link resolve}.
- *
- * ── Why raw SQL ────────────────────────────────────────────────────────────
- *
- * Three reasons, all structural: the table has TWO partial unique indexes and a
- * statement can name only one conflict target (so a mixed batch is two
- * statements); `location_coordinates` is `geography` and needs
- * `ST_MakePoint`; and `embedding` is `vector(768)`, unmapped by the entity by
- * design. Reads go back through the repository, which is what keeps 768 floats
- * per row out of every ordinary query.
- */
 /** A sighting's links that name another row: what a write or a resolution carries. */
 interface ObservationLinkFields {
   contentId?: string | null;
@@ -327,6 +289,44 @@ function observationLinks(rows: readonly ObservationLinkFields[]): OwnedLink[] {
   ];
 }
 
+/**
+ * The only writer of `ci.object_observations` — the SIGHTING half of object
+ * identity.
+ *
+ * The table shipped in migration `20260803223022` with a full column set, two
+ * idempotency arbiters and a downstream edge projection
+ * (`promote.edge_observation`) already built against it, and no writer at all.
+ * Every consumer of the sighting layer — the CV listener's `Thing` branch, the
+ * `capture.scan` promoter, and any future review UI — writes through here.
+ *
+ * ── The one rule ───────────────────────────────────────────────────────────
+ *
+ * DETECTION AND RESOLUTION ARE DIFFERENT CLAIMS, AND THIS CLASS NEVER LETS ONE
+ * WRITE THE OTHER.
+ *
+ * `create`/`createMany` accept a {@link CreateObjectObservationDto}, which has
+ * no way to express `resolvedObjectId`, `resolutionMethod` or
+ * `confirmedByUser`; the write statement excludes those columns from its
+ * `DO UPDATE SET` list, so a re-detection cannot touch them either. Resolution
+ * arrives only through {@link resolve}, and `confirmed_by_user` only through
+ * {@link confirm}. That is the type-level and SQL-level form of the
+ * distinction the migration header states in prose: "a coffee mug is visible in
+ * this photo" is not "I own this specific coffee mug".
+ *
+ * Nothing here writes `ci.objects`. Minting an owned unit from a sighting is
+ * `ObjectResolutionService`'s job and it does not exist yet; until it does, a
+ * sighting resolves to an object only when something else already created that
+ * object and hands its id to {@link resolve}.
+ *
+ * ── Why raw SQL ────────────────────────────────────────────────────────────
+ *
+ * Three reasons, all structural: the table has TWO partial unique indexes and a
+ * statement can name only one conflict target (so a mixed batch is two
+ * statements); `location_coordinates` is `geography` and needs
+ * `ST_MakePoint`; and `embedding` is `vector(768)`, unmapped by the entity by
+ * design. Reads go back through the repository, which is what keeps 768 floats
+ * per row out of every ordinary query.
+ */
 @Injectable()
 export class ObjectObservationService {
   constructor(
