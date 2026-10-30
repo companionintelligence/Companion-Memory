@@ -121,6 +121,7 @@
   "SEARCH_RECENT_REMOVE": "Remove “{{query}}” from recent searches",
   "SEARCH_RECENT_HEADING": "Recent",
   "SEARCH_FROM_THIS_PHONE_HEADING": "From this phone",
+  "MEMORY_NAME_SORT_CUT_SHORT": "Sorted by name from the newest 500 of each kind, so older ones are not in this list. Pick dates under When, or search, to find them.",
   "MEMORY_LOCAL_LIST_HEADING": "Saved on this phone",
   "MEMORY_LOCAL_LIST_DESCRIPTION": "The Memory server is not answering, so this list comes from what this phone has synced.",
   "MEMORY_LOCAL_LIST_FILTERS_IGNORED": "Semantic search needs the Memory server and is not applied here.",

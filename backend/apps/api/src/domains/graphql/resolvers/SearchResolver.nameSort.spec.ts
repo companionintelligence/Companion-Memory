@@ -159,16 +159,17 @@ function directionOf(order: unknown): 'ASC' | 'DESC' {
   return String(raw).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 }
 
-function serve(type: RowType, options: TimedOptions): EntityIdentifier<IndexableEntity>[] {
+function serve(rows: Row[], type: RowType, options: TimedOptions): EntityIdentifier<IndexableEntity>[] {
   const sign = directionOf(options.order) === 'ASC' ? 1 : -1;
   const { afterTime, afterId } = options;
 
-  return ROWS.filter(
-    (row) =>
-      row.type === type &&
-      (options.startTime == null || row.time >= options.startTime) &&
-      (options.endTime == null || row.time <= options.endTime),
-  )
+  return rows
+    .filter(
+      (row) =>
+        row.type === type &&
+        (options.startTime == null || row.time >= options.startTime) &&
+        (options.endTime == null || row.time <= options.endTime),
+    )
     .filter(
       (row) =>
         !afterTime ||
@@ -181,11 +182,11 @@ function serve(type: RowType, options: TimedOptions): EntityIdentifier<Indexable
     .map((row) => ({ id: row.id, type }));
 }
 
-function makeResolver() {
+function makeResolver(rows: Row[] = ROWS) {
   const timed = (type: RowType, fetch: string) => ({
-    [fetch]: jest.fn(async (_context: unknown, options: TimedOptions) => serve(type, options)),
+    [fetch]: jest.fn(async (_context: unknown, options: TimedOptions) => serve(rows, type, options)),
     [fetch.replace('getEntitiesFor', 'countEntitiesFor')]: jest.fn(
-      async () => ROWS.filter((row) => row.type === type).length,
+      async () => rows.filter((row) => row.type === type).length,
     ),
   });
   const empty = (fetch: string) => ({
@@ -198,7 +199,7 @@ function makeResolver() {
       const resolved = new Map<string, unknown>();
 
       for (const identifier of identifiers) {
-        const row = ROWS.find((candidate) => candidate.id === identifier.id)!;
+        const row = rows.find((candidate) => candidate.id === identifier.id)!;
         const { question, ...fields } = row.fields;
 
         resolved.set(`${identifier.type}:${identifier.id}`, {
@@ -245,21 +246,23 @@ function makeResolver() {
   );
 }
 
-const rowOf = (node: unknown): Row => {
+const rowOf = (node: unknown, rows: Row[] = ROWS): Row => {
   const { id } = GlobalUID.decode((node as { id: string }).id);
 
-  return ROWS.find((row) => row.id === id)!;
+  return rows.find((row) => row.id === id)!;
 };
 
-async function walk(resolver: SearchResolver, input: Partial<SearchInput>) {
+async function walk(resolver: SearchResolver, input: Partial<SearchInput>, source: Row[] = ROWS) {
   const rows: Row[] = [];
+  const cutShort: boolean[] = [];
   let after: string | null | undefined;
   let totalCount = 0;
 
   for (let guard = 0; guard < 100; guard++) {
     const page = await resolver.search(CONTEXT, { ...input, ...(after ? { after } : {}) } as SearchInput);
 
-    rows.push(...page.edges.map((edge) => rowOf(edge.node)));
+    rows.push(...page.edges.map((edge) => rowOf(edge.node, source)));
+    cutShort.push(page.nameSortCutShort);
     totalCount = page.totalCount;
 
     if (!page.pageInfo.hasNextPage) {
@@ -269,7 +272,17 @@ async function walk(resolver: SearchResolver, input: Partial<SearchInput>) {
     after = page.pageInfo.endCursor;
   }
 
-  return { rows, totalCount };
+  return { rows, totalCount, cutShort };
+}
+
+/** `count` notes an hour apart, the newest last, named so name order runs against time order. */
+function notes(count: number): Row[] {
+  return Array.from({ length: count }, (_, j) => ({
+    id: uuid(10_000 + j),
+    type: 'note' as const,
+    time: new Date(FIRST_MS + j * HOUR_MS),
+    fields: { title: `Note ${String(count - j).padStart(4, '0')}` },
+  }));
 }
 
 describe('SearchResolver timed browse, sorted by name', () => {
@@ -342,5 +355,49 @@ describe('SearchResolver timed browse, sorted by name', () => {
     } finally {
       cursorRow.time = originalTime;
     }
+  });
+});
+
+describe('SearchResolver timed browse, sorted by name, past the 500 rows a kind is read for', () => {
+  it("says the list is cut short when a kind has more, and lists that kind's newest 500", async () => {
+    const source = notes(501);
+    const { rows, totalCount, cutShort } = await walk(
+      makeResolver(source),
+      { first: 100, sortBy: 'name', sortOrder: 'asc' },
+      source,
+    );
+
+    expect(cutShort.length).toBeGreaterThan(1);
+    expect(cutShort.every(Boolean)).toBe(true);
+    expect(rows).toHaveLength(500);
+    // The oldest note, "Note 0501", is the one left out; the rest are in name order.
+    expect(rows.map((row) => row.fields.title)).not.toContain('Note 0501');
+    expect(rows[0]!.fields.title).toBe('Note 0001');
+    expect(rows.at(-1)!.fields.title).toBe('Note 0500');
+    expect(totalCount).toBe(501);
+  });
+
+  it('does not say so for a kind with exactly 500 rows', async () => {
+    const source = notes(500);
+    const { rows, cutShort } = await walk(
+      makeResolver(source),
+      { first: 100, sortBy: 'name', sortOrder: 'desc' },
+      source,
+    );
+
+    expect(rows).toHaveLength(500);
+    expect(cutShort.some(Boolean)).toBe(false);
+  });
+
+  it('does not say so for a time sort, which pages through every row', async () => {
+    const source = notes(501);
+    const { rows, cutShort } = await walk(
+      makeResolver(source),
+      { first: 100, sortBy: 'time', sortOrder: 'desc' },
+      source,
+    );
+
+    expect(rows).toHaveLength(501);
+    expect(cutShort.some(Boolean)).toBe(false);
   });
 });

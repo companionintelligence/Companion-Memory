@@ -14,6 +14,7 @@ const SEARCH_QUERY = gql(`
   query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $areas: [[Float!]!], $semantic: Boolean, $direction: String, $fileKinds: [String!], $shareToken: String, $first: Int, $after: String) {
     search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, areas: $areas, semantic: $semantic, direction: $direction, fileKinds: $fileKinds, shareToken: $shareToken, first: $first, after: $after }) {
       totalCount
+      nameSortCutShort
       pageInfo {
         hasNextPage
         endCursor
@@ -307,6 +308,8 @@ type ReturnType = [
     loadingMore: boolean;
     hasNextPage: boolean;
     totalCount: number;
+    /** A name sort that left out each big kind's older rows (see NameSortCutShortNote). */
+    nameSortCutShort: boolean;
     error: ApolloError | Error | undefined;
     activeEntity: MemoryEntity | null;
     /** The current filters, minus paging. See {@link SearchFilterVariables}. */
@@ -425,6 +428,7 @@ function useEntityService({
   const pageInfo = data?.search?.pageInfo;
   const hasNextPage = pageInfo?.hasNextPage ?? false;
   const totalCount = data?.search?.totalCount ?? 0;
+  const nameSortCutShort = data?.search?.nameSortCutShort ?? false;
 
   // Append the next server page (cursor-based) onto the accumulated results.
   const loadMore = useCallback(() => {
@@ -490,6 +494,7 @@ function useEntityService({
       loadingMore,
       hasNextPage,
       totalCount,
+      nameSortCutShort,
       error: error ?? loadMoreError,
       activeEntity,
       searchVariables,
