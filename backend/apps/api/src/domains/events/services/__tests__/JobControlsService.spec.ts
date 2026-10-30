@@ -244,8 +244,8 @@ describe('JobControlsService.update validation', () => {
     const { service, upserts } = makeHarness();
 
     // image-description declares LLM_OLLAMA_NUM_PARALLEL, which can sit above
-    // the shipped per-queue figure. Then that figure binds, and raising it is
-    // the way up.
+    // the shipped per-queue figure. Then that figure binds. Raising it is the
+    // way up.
     EventListenerRegistry.register('wide.job', 'WideListener', 'run', 'wide', {
       localConcurrency: config.queues.perQueueConcurrency + 10,
     });
@@ -262,6 +262,28 @@ describe('JobControlsService.update validation', () => {
         `It was given ${config.queues.perQueueConcurrency + 1}. ` +
         'Running more than that is a CI_QUEUE_PER_QUEUE_CONCURRENCY change and a restart, not a setting.',
     );
+    expect(upserts).toEqual([]);
+  });
+
+  it('does not send the operator to the env var when the hard ceiling binds', async () => {
+    const { service, upserts } = makeHarness();
+    const queues = config.queues as { concurrency: number };
+    const shipped = queues.concurrency;
+
+    await configureStore([]);
+    // A shipped figure above the hard ceiling. Raising CI_QUEUE_CONCURRENCY
+    // further would not let a setting past 64. Leaving it unset already runs
+    // at the shipped figure.
+    queues.concurrency = 100;
+
+    try {
+      await expect(service.update({ global: { concurrency: 65 } }, 'user-1')).rejects.toThrow(
+        /can be at most 64 \(the most any setting takes\)\. It was given 65\. Clear the setting to run at up to the shipped \d+\.$/,
+      );
+    } finally {
+      queues.concurrency = shipped;
+    }
+
     expect(upserts).toEqual([]);
   });
 

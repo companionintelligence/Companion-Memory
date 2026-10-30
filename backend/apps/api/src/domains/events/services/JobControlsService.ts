@@ -49,7 +49,8 @@ export interface JobControlNumberDto {
    * the two global fields; a stored value above it (from an older build) is
    * clamped on read. A queue takes values up to its ceiling against the
    * SHIPPED per-queue default, which can sit above this `max` while the
-   * operator has lowered that default.
+   * operator has lowered that default. No write takes more than
+   * {@link JobControlsDto.maxConcurrency}, even where this `max` is higher.
    *
    * On the two global fields this equals `default`, and that is the point: these
    * controls exist to cool a box down, so the shipped figure is both what you
@@ -151,9 +152,11 @@ export interface JobControlsDto {
   readonly queues: readonly JobQueueControlDto[];
   readonly crons: readonly JobCronControlDto[];
   /**
-   * The hard ceiling on any concurrency field. Each field's own cap is lower
-   * still (its `max`, or a queue's shipped ceiling), and a write above that is
-   * refused, so this is not the most a write takes.
+   * The hard ceiling on any concurrency write. A write takes the lower of this
+   * and the field's own cap (its `max`, or a queue's shipped ceiling). That cap
+   * is usually the lower one, so this is rarely the most a write takes. A
+   * shipped figure above it (CI_QUEUE_CONCURRENCY set high) still reports a
+   * `max` above it, which only leaving the field unset reaches.
    */
   readonly maxConcurrency: number;
 }
@@ -454,14 +457,19 @@ export class JobControlsService {
 
     if (value > most) {
       // A shipped figure above MAX_CONCURRENCY (CI_QUEUE_CONCURRENCY set high)
-      // is still cut to it, so the reason has to say which bound applied.
-      const why = cap.most > MAX_CONCURRENCY ? 'the most any setting takes' : cap.why;
+      // is still cut to it, so the reason has to say which bound applied. The
+      // remedy follows it: raising the env var cannot lift a setting past the
+      // hard ceiling, but no setting at all runs at the shipped figure.
+      const hardCapBinds = cap.most > MAX_CONCURRENCY;
+      const why = hardCapBinds ? 'the most any setting takes' : cap.why;
 
       throw new BadRequestException(
         `${field} can be at most ${most} (${why}). It was given ${String(value)}. ` +
-          (cap.env == null
-            ? 'Nothing on this page raises it.'
-            : `Running more than that is a ${cap.env} change and a restart, not a setting.`),
+          (hardCapBinds
+            ? `Clear the setting to run at up to the shipped ${cap.most}.`
+            : cap.env == null
+              ? 'Nothing on this page raises it.'
+              : `Running more than that is a ${cap.env} change and a restart, not a setting.`),
       );
     }
 
@@ -640,7 +648,8 @@ export class JobControlsService {
 /**
  * The shipped appliance-wide figure: the per-process config value times the
  * number of processes. It is what the appliance allows today, which is why
- * leaving the setting unset changes nothing, and it is the most a write takes.
+ * leaving the setting unset changes nothing. A write takes no more than this
+ * and never more than `MAX_CONCURRENCY`.
  */
 function shippedApplianceConcurrency(processes: number): number {
   return config.queues.concurrency * processes;

@@ -820,9 +820,16 @@ export class ImportRetentionService {
     );
 
     // `moved` is only ever set after the acquire took the file out of the
-    // inbox, and an earlier discard leaves the row `released`. So for a `moved`
-    // row, a file under the old name is a newcomer that happens to share it,
+    // inbox. An earlier discard leaves the row `released`. So for a `moved`
+    // row, a file under the old name is a newcomer that happens to share it
     // and says nothing about what the tree holds.
+    //
+    // A `released` row is still trusted here. A cancel during a copy across
+    // filesystems leaves the file in the inbox (the acquire checks the claim
+    // before it deletes the source). A cancel that lands between a rename and
+    // `markMoved` does not: its file left the inbox under a `released` row.
+    // Telling that apart from a claim that never moved needs a record of the
+    // move, which the row does not keep.
     if (unitPath != null || (source.status !== 'moved' && (await fileExists(source.sourcePath)))) {
       return { sourceId: source.id, sourcePath: source.sourcePath, unitPath };
     }
