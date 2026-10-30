@@ -411,6 +411,11 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios/ios/App
         env:
+          # The Xcode Safari extension build phase uses `gh release download`
+          # to fetch the pinned public extension asset. Authenticate that API
+          # request so shared macOS runner IPs cannot exhaust the anonymous
+          # GitHub API rate limit and fail the archive.
+          GH_TOKEN: ${{ github.token }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
