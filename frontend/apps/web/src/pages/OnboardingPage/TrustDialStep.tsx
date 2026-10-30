@@ -5,10 +5,11 @@ import { StepHeader } from './StepHeader';
 
 // The last clause of each hint is the chat tool gate (`PendingActionService`):
 // deleting, sending, completing a task, a connected MCP server's tools and any
-// write chat makes after a lookup in the same turn ask first on Cautious and
-// Balanced; reading from an outside service (the owner's messages, streaming
-// availability) asks first on Cautious only; Hands-off waives all of it. Keep the three in step with `trustForToolCall` — this copy
-// and the Autonomy settings text are the only places the owner learns the rule.
+// write or third-party read chat makes after a lookup in the same turn ask first on
+// Cautious and Balanced; any other read from an outside service (the owner's
+// messages, streaming availability) asks first on Cautious only; Hands-off waives
+// all of it. Keep the three in step with `trustForToolCall`. This copy and the
+// Autonomy settings text are the only places the owner learns the rule.
 export const TRUST_OPTIONS = [
   {
     value: 'cautious' as const,
@@ -18,7 +19,7 @@ export const TRUST_OPTIONS = [
   {
     value: 'balanced' as const,
     label: 'Balanced',
-    hint: 'High-confidence to-dos join the backlog; scheduling, deleting, sending, completing tasks, connected MCP tools and changes chat makes right after a lookup still ask first',
+    hint: 'High-confidence to-dos join the backlog; scheduling, deleting, sending, completing tasks, connected MCP tools and what chat changes or asks a third-party service right after a lookup still ask first',
   },
   {
     value: 'hands_off' as const,

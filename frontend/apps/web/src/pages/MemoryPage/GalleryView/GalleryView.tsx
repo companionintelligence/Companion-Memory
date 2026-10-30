@@ -26,6 +26,7 @@ import {
 import {
   ErrorState,
   MemoryEmptyState,
+  NameSortCutShortNote,
   formatLoadedCount,
   isChronologicalSort,
   orderDatedFirst,
@@ -56,7 +57,7 @@ function OnlineGalleryView() {
   const filteredBrowse = countActiveFilters(searchParams) > 0 || Boolean(searchParams.get('search')?.trim());
 
   const [
-    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount },
+    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount, nameSortCutShort },
     { setActiveEntity },
   ] = useEntityService();
 
@@ -144,6 +145,8 @@ function OnlineGalleryView() {
   return (
     <>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
+        {nameSortCutShort && <NameSortCutShortNote />}
+
         <EntityGrid>
           {ordered.map((item) => {
             // Media-bearing entities (image/video) render as real thumbnails and
