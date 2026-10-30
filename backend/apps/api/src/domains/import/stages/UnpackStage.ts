@@ -261,6 +261,10 @@ export class UnpackStage implements ImportStageRunner {
       scratchDir: context.scratchDir,
       sizeBytes: source.sizeBytes,
       log: (message) => this.logger.debug(message, { runId: context.runId }),
+      // A cancel releases an inbox claim and re-stages an upload. Either way
+      // the source is no longer this run's to delete.
+      stillClaimed: async () =>
+        (await this.stagedSources.findByRunId(context.userId, context.runId))?.status === 'claimed',
     });
 
     await this.stagedSources.markMoved(source.id);

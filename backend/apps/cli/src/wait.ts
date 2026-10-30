@@ -201,6 +201,24 @@ export function unsuccessfulRunsMessage(
   );
 }
 
+/**
+ * `--wait` for a command that started runs: follow `runIds` to the end and
+ * return {@link unsuccessfulRunsMessage} for them. An empty list (no `--wait`,
+ * or nothing started) follows nothing and returns null.
+ */
+export async function followRuns(
+  client: ImportApiClient,
+  term: Term,
+  runIds: readonly string[],
+  options: WaitOptions = {},
+): Promise<string | null> {
+  if (runIds.length === 0) {
+    return null;
+  }
+
+  return unsuccessfulRunsMessage(runIds, await waitForRuns(client, term, runIds, options));
+}
+
 /** One run's current position, as a single line. */
 function describe(run: RunDetail, prefixId: boolean): string {
   const active =

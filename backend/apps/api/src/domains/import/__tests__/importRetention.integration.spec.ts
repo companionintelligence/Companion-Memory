@@ -1058,6 +1058,23 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       await rm(dir, { recursive: true, force: true });
     });
 
+    it('keeps the unpacked tree when a different file has taken the old name in the inbox', async () => {
+      // `moved`: the acquire took the file out of the inbox. The file there
+      // now is a newcomer under the same name, not this run's unit, so it is no
+      // evidence that the tree holds nothing of it.
+      const { runId, sourcePath, dir } = await failedInboxRun('reused-name.zip');
+
+      await writeFile(path.join(dir, 'all.mbox'), 'mail');
+      await writeFile(sourcePath, 'a different export, same name');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/no longer whole/);
+      expect(await readdir(dir)).toEqual(['all.mbox']);
+      expect(await readFile(sourcePath, 'utf8')).toBe('a different export, same name');
+      expect(await sourceRow(sourcePath)).toMatchObject({ status: 'moved' });
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
     it('does not trust a released claim whose file is in neither the inbox nor the tree', async () => {
       // A cancel that raced the acquire: release() marked the row while the
       // rename landed and the unpack went on to expand and delete the archive.
