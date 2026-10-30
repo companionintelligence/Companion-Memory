@@ -38,16 +38,35 @@ export class FileChunkSearchIndexListener {
       return;
     }
 
+    // A chunk that already has an embedding keeps it: a chunk id is minted per
+    // parse, so the same id means the same content, and the maintenance sweep
+    // re-drives this listener for chunks that have an embedding but no device
+    // document (`file-chunk` lane, 2026-10-23). Those need the index statement
+    // below, not the model.
+    const ownerContext = { userId: payload.userId };
+    const embedded = await this.embeddingService.existingEntityIds(
+      ownerContext,
+      'file-chunk',
+      chunks.map((chunk) => chunk.id),
+    );
+    const toEmbed = chunks.filter((chunk) => !embedded.has(chunk.id));
+
     // One batched call instead of one-per-chunk, matching DenseEmbedStageBase's
     // pattern. A single row's content can't fail this call on its own — Ollama's
     // /api/embed is all-or-nothing for the array it's given — so a failure here
     // means the whole document, not one chunk.
-    let vectors: number[][];
+    const vectors = new Map<string, number[]>();
 
     try {
-      vectors = await this.embeddingGenerationService.generateEmbeddings(
-        chunks.map((chunk) => chunk.content),
-      );
+      if (toEmbed.length > 0) {
+        const generated = await this.embeddingGenerationService.generateEmbeddings(
+          toEmbed.map((chunk) => chunk.content),
+        );
+
+        for (const [index, chunk] of toEmbed.entries()) {
+          vectors.set(chunk.id, generated[index]);
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -63,15 +82,18 @@ export class FileChunkSearchIndexListener {
 
     const failedChunkIds: string[] = [];
 
-    for (const [index, chunk] of chunks.entries()) {
+    for (const chunk of chunks) {
       const userContext = { userId: chunk.userId };
+      const vector = vectors.get(chunk.id);
 
       try {
-        await this.embeddingService.upsert(userContext, {
-          entityType: 'file-chunk',
-          entityId: chunk.id,
-          embedding: vectors[index],
-        });
+        if (vector) {
+          await this.embeddingService.upsert(userContext, {
+            entityType: 'file-chunk',
+            entityId: chunk.id,
+            embedding: vector,
+          });
+        }
 
         await this.vectorService.upsert(userContext, {
           entityType: 'file-chunk',
@@ -92,9 +114,11 @@ export class FileChunkSearchIndexListener {
     }
 
     if (failedChunkIds.length > 0) {
-      // file-chunk has no backfill sweep or pipeline stage to catch a partially
-      // indexed document later, so anything short of every chunk landing must
-      // fail the job rather than let autoAcknowledge mark it done.
+      // file-chunk has no pipeline stage, and the maintenance sweep only
+      // re-drives a chunk with no embedding or no device document — a chunk
+      // whose embedding landed but whose tsvector did not would never be
+      // retried — so anything short of every chunk landing must fail the job
+      // rather than let autoAcknowledge mark it done.
       throw new Error(
         `Failed to index ${failedChunkIds.length}/${chunks.length} chunks for file ${payload.fileId}: ${failedChunkIds.join(', ')}`,
       );
@@ -103,6 +127,7 @@ export class FileChunkSearchIndexListener {
     this.logger.log('Document chunks indexed', {
       fileId: payload.fileId,
       indexed: chunks.length,
+      embedded: toEmbed.length,
     });
   }
 }

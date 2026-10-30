@@ -5,6 +5,11 @@ export interface PromptInput {
   enableTools?: boolean;
   enableThinking?: boolean;
   fileIds?: string[];
+  /**
+   * The action this turn is about, for a turn that starts a new thread from
+   * the Today action window. See `OllamaController.generate`.
+   */
+  actionId?: string;
 }
 
 export interface OllamaModel {

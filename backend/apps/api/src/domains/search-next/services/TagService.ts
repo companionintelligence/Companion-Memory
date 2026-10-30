@@ -423,6 +423,76 @@ export class TagService {
     });
   }
 
+  /**
+   * Replace the current user's complete tag set for one entity.
+   *
+   * Known-place editing submits one combined multi-tag field. Applying the
+   * additions and removals in separate mutations could leave a half-updated
+   * category set after a failure; this keeps that replacement atomic.
+   */
+  async replaceEntityTags(
+    context: UserServiceContext,
+    entity: EntityIdentifier<TaggableEntity>,
+    requestedLabels: string[],
+  ): Promise<boolean> {
+    const labels = [...new Set(requestedLabels.map((label) => this.validateLabel(label)))];
+
+    return this.dataSource.transaction(async (manager) => {
+      const tagRepository = manager.getRepository(TagEntity);
+      const entityTagRepository = manager.getRepository(EntityTagEntity);
+      const desiredTagIds = new Set<string>();
+
+      for (const label of labels) {
+        let tag = await tagRepository.findOne({ where: { label, userId: context.userId } });
+
+        if (tag == null) {
+          tag = await tagRepository.save(
+            tagRepository.create({
+              id: uuid7(),
+              label,
+              userId: context.userId,
+            }),
+          );
+        }
+
+        desiredTagIds.add(tag.id);
+      }
+
+      const current = await entityTagRepository
+        .createQueryBuilder('et')
+        .innerJoinAndSelect('et.tag', 'tag')
+        .where('et.entityId = :entityId', { entityId: entity.id })
+        .andWhere('et.entityType = :entityType', { entityType: entity.type })
+        .andWhere('tag.userId = :userId', { userId: context.userId })
+        .getMany();
+
+      for (const assignment of current) {
+        if (!desiredTagIds.has(assignment.tagId)) {
+          await entityTagRepository.delete({
+            tagId: assignment.tagId,
+            entityId: entity.id,
+            entityType: entity.type,
+          });
+        }
+      }
+
+      for (const tagId of desiredTagIds) {
+        await entityTagRepository
+          .createQueryBuilder()
+          .insert()
+          .values({
+            tagId,
+            entityType: entity.type,
+            entityId: entity.id,
+          })
+          .orIgnore()
+          .execute();
+      }
+
+      return true;
+    });
+  }
+
   async getTagsForEntity(
     context: ServiceContext,
     entityId: EntityIdentifier<TaggableEntity>,

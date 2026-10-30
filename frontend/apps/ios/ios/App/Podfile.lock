@@ -1,5 +1,5 @@
 PODS:
-  - Capacitor (7.6.7):
+  - Capacitor (7.6.9):
     - CapacitorCordova
   - CapacitorApp (7.1.2):
     - Capacitor
@@ -7,13 +7,11 @@ PODS:
     - Capacitor
   - CapacitorCamera (7.0.5):
     - Capacitor
-  - CapacitorCommunityBackgroundGeolocation (1.2.26):
-    - Capacitor
   - CapacitorCommunitySqlite (7.0.3):
     - Capacitor
     - SQLCipher
     - ZIPFoundation
-  - CapacitorCordova (7.6.7)
+  - CapacitorCordova (7.6.9)
   - CapacitorLocalNotifications (7.0.6):
     - Capacitor
   - CapacitorMlkitBarcodeScanning (7.5.0):
@@ -27,6 +25,8 @@ PODS:
   - CapacitorSplashScreen (7.0.5):
     - Capacitor
   - CapacitorStatusBar (7.0.6):
+    - Capacitor
+  - CiCapacitorAppLock (0.0.0):
     - Capacitor
   - CiCapacitorLocalHub (0.0.0):
     - Capacitor
@@ -101,7 +101,6 @@ DEPENDENCIES:
   - "CapacitorApp (from `../../node_modules/@capacitor/app`)"
   - "CapacitorBrowser (from `../../node_modules/@capacitor/browser`)"
   - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
-  - "CapacitorCommunityBackgroundGeolocation (from `../../node_modules/@capacitor-community/background-geolocation`)"
   - "CapacitorCommunitySqlite (from `../../node_modules/@capacitor-community/sqlite`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorLocalNotifications (from `../../node_modules/@capacitor/local-notifications`)"
@@ -110,6 +109,7 @@ DEPENDENCIES:
   - CapacitorSecureStoragePlugin (from `../../node_modules/capacitor-secure-storage-plugin`)
   - "CapacitorSplashScreen (from `../../node_modules/@capacitor/splash-screen`)"
   - "CapacitorStatusBar (from `../../node_modules/@capacitor/status-bar`)"
+  - CiCapacitorAppLock (from `../../../../packages/capacitor-app-lock`)
   - CiCapacitorLocalHub (from `../../../../packages/capacitor-local-hub`)
   - CiCapacitorSpeech (from `../../../../packages/capacitor-speech`)
   - "PowersyncCapacitor (from `../../node_modules/@powersync/capacitor`)"
@@ -142,8 +142,6 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/browser"
   CapacitorCamera:
     :path: "../../node_modules/@capacitor/camera"
-  CapacitorCommunityBackgroundGeolocation:
-    :path: "../../node_modules/@capacitor-community/background-geolocation"
   CapacitorCommunitySqlite:
     :path: "../../node_modules/@capacitor-community/sqlite"
   CapacitorCordova:
@@ -160,6 +158,8 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/splash-screen"
   CapacitorStatusBar:
     :path: "../../node_modules/@capacitor/status-bar"
+  CiCapacitorAppLock:
+    :path: "../../../../packages/capacitor-app-lock"
   CiCapacitorLocalHub:
     :path: "../../../../packages/capacitor-local-hub"
   CiCapacitorSpeech:
@@ -168,19 +168,19 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@powersync/capacitor"
 
 SPEC CHECKSUMS:
-  Capacitor: 8ef25ba872436d2c5ac2a4791f7255529bdcd93b
+  Capacitor: 46067d1c8df89760dbed78780d436327d588c726
   CapacitorApp: f01a913211780e0718dae9750442c3e23f96e106
   CapacitorBrowser: 6d09f59655e89aede71654ef08b98de55cf032b6
   CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
-  CapacitorCommunityBackgroundGeolocation: 750523ec6dd1cc94cf4e2bf7787605106753f73c
   CapacitorCommunitySqlite: 4813d82ad33001e612a39d313cb5d28066cbafda
-  CapacitorCordova: 139e2ed3d91c54b5aeae7941135c9f9aefc6da1d
+  CapacitorCordova: 2080fc0d6bfbc9dcc0e6d88e77fa624190d343ca
   CapacitorLocalNotifications: 2e3f5b717ec9cd2bd64d93c99a9470941e1c80be
   CapacitorMlkitBarcodeScanning: afd6fc431b550026a2c052e11ab2b71c7ae30011
   CapacitorPushNotifications: 0527809a9619ed775439d5ab2c2d996122b48319
   CapacitorSecureStoragePlugin: 450d402026ee3bcc018fa206504d9c0572fee78d
   CapacitorSplashScreen: 409eeaaeac603d264f209c0fcb718aa22fe1f7bb
   CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
+  CiCapacitorAppLock: 1bcfb9599da9bfbf2d515eee83b00ec9b806271b
   CiCapacitorLocalHub: 6f4edf12392375a81c8c4fe8226928d9eb5b090c
   CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
@@ -201,6 +201,6 @@ SPEC CHECKSUMS:
   SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
   ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
 
-PODFILE CHECKSUM: 9cd141b5a39655cd23e32f532bcf80e54d1bbe4f
+PODFILE CHECKSUM: cf58c5d20fedab47e5a18cd8c138c25f5a950ecf
 
 COCOAPODS: 1.17.0

@@ -4,7 +4,7 @@ import { Badge, Button, cn, Input } from '@ci/shadcn';
 import { Check, Search } from '@ci/shadcn/icons';
 
 import { compactNumber } from '../runFormat';
-import type { CatalogSource } from '../useImportApi';
+import type { CatalogSource, ImportBundle } from '../useImportApi';
 
 import { ECOSYSTEM_ICONS, pickableSections } from './sources';
 import { countFor, useObjectCounts } from './useObjectCounts';
@@ -12,6 +12,8 @@ import { unambiguousImporters, useSourceUsage } from './useSourceUsage';
 
 export interface PickStepProps {
   catalog: readonly CatalogSource[];
+  /** The multi-service bundles, each shown as one button in place of its members'. */
+  bundles: readonly ImportBundle[];
   picked: ReadonlySet<string>;
   onToggle: (key: string) => void;
   onContinue: () => void;
@@ -35,6 +37,7 @@ export interface PickStepProps {
  */
 export function PickStep({
   catalog,
+  bundles,
   picked,
   onToggle,
   onContinue,
@@ -47,7 +50,7 @@ export function PickStep({
   const objectCounts = useObjectCounts(catalog);
   const ownedImporters = useMemo(() => unambiguousImporters(catalog), [catalog]);
 
-  const sections = useMemo(() => pickableSections(catalog), [catalog]);
+  const sections = useMemo(() => pickableSections(catalog, bundles), [catalog, bundles]);
 
   // The filter matches a tile's own name AND the member names a bundle tile
   // carries — typing "gmail" must surface the Google tile, not an empty grid.

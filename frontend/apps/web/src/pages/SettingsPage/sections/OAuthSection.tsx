@@ -48,7 +48,8 @@ const DELETE_PROVIDER_KEY = gql(`
   }
 `);
 
-type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify' | 'github' | 'reddit' | 'slack';
+type OAuthProvider =
+  'google' | 'microsoft' | 'facebook' | 'spotify' | 'github' | 'reddit' | 'slack' | 'dropbox';
 
 interface ProviderFields {
   providerKeyId?: string;
@@ -87,6 +88,7 @@ export function OAuthSection() {
       github: { ...EMPTY_FIELDS },
       reddit: { ...EMPTY_FIELDS },
       slack: { ...EMPTY_FIELDS },
+      dropbox: { ...EMPTY_FIELDS },
     },
   });
 
@@ -105,6 +107,8 @@ export function OAuthSection() {
     redditClientSecret: false,
     slackClientId: false,
     slackClientSecret: false,
+    dropboxClientId: false,
+    dropboxClientSecret: false,
   });
 
   const [originalValues, setOriginalValues] = useState<Record<string, { clientId: string }>>({
@@ -115,6 +119,7 @@ export function OAuthSection() {
     github: { clientId: '' },
     reddit: { clientId: '' },
     slack: { clientId: '' },
+    dropbox: { clientId: '' },
   });
 
   const [validationErrors, setValidationErrors] = useState<
@@ -127,6 +132,7 @@ export function OAuthSection() {
     github: {},
     reddit: {},
     slack: {},
+    dropbox: {},
   });
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -152,6 +158,7 @@ export function OAuthSection() {
       github: { clientId: '' },
       reddit: { clientId: '' },
       slack: { clientId: '' },
+      dropbox: { clientId: '' },
     };
 
     setSettings((prev) => {
@@ -506,6 +513,7 @@ export function OAuthSection() {
         {renderProvider('microsoft', 'Microsoft')}
         {renderProvider('reddit', 'Reddit')}
         {renderProvider('slack', 'Slack')}
+        {renderProvider('dropbox', 'Dropbox')}
         {renderProvider('spotify', 'Spotify')}
       </div>
 

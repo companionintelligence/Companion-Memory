@@ -67,6 +67,15 @@ export type RecognizeParams = Record<string, never>;
 export interface FileImporter {
   recognize(ctx: ImportContext, entry: DirEntry, opts: RecognizeParams): Promise<Recognition>;
   fileImport(ctx: ImportContext, entry: DirEntry, params: import('./timeline').ImportParams): Promise<void>;
+  /**
+   * Optional. From file paths alone (relative to the export's folder): is
+   * there anything here this importer turns into records? `recognize` answers
+   * "is this one of mine" from the export's SHAPE, which a half-delivered
+   * export already has; this answers "is there anything in it to read yet".
+   * An importer that cannot tell from names leaves it out, and is taken to
+   * have something to read.
+   */
+  listingHasRecords?(relativePaths: readonly string[]): boolean;
 }
 
 // Settings accessor passed to API importers. Decouples the importer from the
@@ -146,6 +155,21 @@ export interface DirEntry {
 // ported — nothing referenced it, and the catalog it queried is superseded by
 // the registry, which is the single source of truth for what can be imported.
 
+/**
+ * How many folders down recognition looks for an export's top folder.
+ *
+ * Was 4, which is enough for an export dropped on its own but not for one
+ * NESTED inside another: a Google Takeout carries the whole of Drive, and an
+ * export another service wrote there sits several folders in — Meta writes a
+ * Facebook export under `Apps/Meta/meta-<date>/facebook-<user>-…`, which a
+ * Takeout puts five levels down. One level short, and it was imported as loose
+ * files by the catch-all importer instead of as Facebook data.
+ *
+ * The cost is a wider scan: every entry down to this depth is offered to every
+ * recogniser.
+ */
+export const DEFAULT_RECOGNIZE_MAX_DEPTH = 8;
+
 // Recognition runner over all registered data sources with file importer implementations.
 /** Options controlling how `dataSourcesRecognize` searches. */
 export interface RecognizeRunOptions {
@@ -158,9 +182,18 @@ export interface RecognizeRunOptions {
    * single-level behavior; the drag-and-drop recognize endpoint turns it on.
    */
   descend?: boolean;
-  /** Max directory depth to descend (default 4). */
+  /** Max directory depth to descend (default {@link DEFAULT_RECOGNIZE_MAX_DEPTH}). */
   maxDepth?: number;
-  /** Max entries to scan per directory level (default 200), a runaway guard. */
+  /**
+   * Max entries to scan per directory level. No limit by default.
+   *
+   * The default used to be 200, as a runaway guard, and it hid things: in a
+   * folder of 5,000 files only the first 200 — in whatever order the
+   * filesystem listed them — were ever offered to a recogniser, so an export
+   * folder or a loose `.gpx` past that point was silently left to the
+   * catch-all importer. A caller working to a time budget (the inbox scan's
+   * preview) still sets its own.
+   */
   maxEntriesPerDir?: number;
   /**
    * Restrict recognition to these importer names. The inbox scan sets this
@@ -272,8 +305,8 @@ export async function dataSourcesRecognize(
   }
 
   if (runOpts.descend && entry.fullPath && (await isDirectorySafe(entry.fullPath))) {
-    const maxDepth = runOpts.maxDepth ?? 4;
-    const maxEntries = runOpts.maxEntriesPerDir ?? 200;
+    const maxDepth = runOpts.maxDepth ?? DEFAULT_RECOGNIZE_MAX_DEPTH;
+    const maxEntries = runOpts.maxEntriesPerDir ?? Number.POSITIVE_INFINITY;
     // The count is cumulative across the whole descent, not per directory —
     // it feeds a progress line, and a number that resets at every subfolder
     // reads as the scan starting over.
@@ -454,8 +487,8 @@ export async function findImportRoots(
     return [rootPath];
   }
 
-  const maxDepth = runOpts.maxDepth ?? 4;
-  const maxEntries = runOpts.maxEntriesPerDir ?? 200;
+  const maxDepth = runOpts.maxDepth ?? DEFAULT_RECOGNIZE_MAX_DEPTH;
+  const maxEntries = runOpts.maxEntriesPerDir ?? Number.POSITIVE_INFINITY;
   const found: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > maxDepth) {

@@ -1,6 +1,7 @@
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 
 import { QuestionEntity } from '../entities/QuestionEntity';
+import { inferenceDispatchOpenSql } from '../inferenceDispatchGate';
 import { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL } from '../questionOrder';
 import { excludeForkedOriginsSql } from '../questionScope';
 
@@ -753,11 +754,13 @@ describe('QuestionService.enqueueNextFeedQueueQuestion', () => {
 
 // The attempt-history keying every findUnansweredByUserId caller supplies:
 // which pg-boss queue/event to read past dispatches from, and how long a
-// tried question sits out. Values mirror AnswerInferenceCron's production call.
+// tried question sits out, and the least time between two dispatches to one
+// owner. Values mirror AnswerInferenceCron's production call.
 const ATTEMPT_HISTORY = {
   queue: 'llm-background',
   eventName: 'infer.question.answer',
   cooldownHours: 6,
+  intervalMinutes: 20,
 } as const;
 
 describe('QuestionService.findUnansweredByUserId', () => {
@@ -968,8 +971,9 @@ describe('QuestionService asks the functional questions first', () => {
     const [sql, params] = ds.query.mock.calls[0] as [string, unknown[]];
 
     // The attempt history is read back from the same queue/event the caller
-    // dispatches on, and the cooldown rides in as a bound parameter.
-    expect(params).toEqual(['llm-background', 'infer.question.answer', 6]);
+    // dispatches on, and the cooldown and the per-owner interval ride in as
+    // bound parameters.
+    expect(params).toStrictEqual(['llm-background', 'infer.question.answer', 6, 20]);
     expect(sql).toMatch(/pgboss\.job/);
     expect(sql).toMatch(/pgboss\.archive/);
     expect(sql).toMatch(/last_attempt_at IS NULL OR att\.last_attempt_at < NOW\(\)/);
@@ -982,6 +986,65 @@ describe('QuestionService asks the functional questions first', () => {
     expect(attemptAt).toBeGreaterThan(-1);
     expect(tierAt).toBeGreaterThan(-1);
     expect(attemptAt).toBeLessThan(tierAt);
+  });
+
+  it('only offers owners the dispatch gate leaves open, by the same SQL the smart-rotation path asks', async () => {
+    // The cron used to send one inference a minute per owner whatever
+    // llm-background already held: 240 jobs an hour on a four-person box, and
+    // 941 waiting, ~4 h behind, on core-1. The gate is applied to the
+    // owner set itself, so a gated owner costs none of the per-question work.
+    const service = makeService();
+    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
+
+    const gate = flat(
+      inferenceDispatchOpenSql({
+        ownerText: 'usr.id::text',
+        queue: '$1',
+        eventName: '$2',
+        intervalMinutes: '$4',
+      }),
+    ).trim();
+    const owners = flat(sql).match(/CROSS JOIN \(([\s\S]*?)\) u LEFT JOIN attempts/)?.[1] ?? '';
+
+    expect(owners).toContain('FROM ci.users usr');
+    expect(owners).toContain(gate);
+  });
+});
+
+describe('QuestionService.isInferenceDispatchOpen', () => {
+  function makeService(rows: unknown[]) {
+    const dataSource = { query: jest.fn().mockResolvedValue(rows) };
+    const service = new QuestionService(
+      dataSource as never,
+      { create: jest.fn(), save: jest.fn() } as never,
+      { send: jest.fn() } as never,
+    );
+
+    return { service, query: dataSource.query };
+  }
+
+  const DISPATCH = { queue: 'llm-background', eventName: 'infer.question.answer', intervalMinutes: 20 };
+
+  it('asks the shared gate for one owner, binding the owner as text', async () => {
+    const { service, query } = makeService([{ open: true }]);
+
+    await expect(service.isInferenceDispatchOpen('user-1', DISPATCH)).resolves.toBe(true);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(params).toStrictEqual(['user-1', 'llm-background', 'infer.question.answer', 20]);
+    expect(sql.replace(/\s+/g, ' ')).toContain(
+      inferenceDispatchOpenSql({ ownerText: '$1', queue: '$2', eventName: '$3', intervalMinutes: '$4' })
+        .replace(/\s+/g, ' ')
+        .trim(),
+    );
+  });
+
+  it('reads anything but a true answer as closed', async () => {
+    await expect(makeService([{ open: false }]).service.isInferenceDispatchOpen('u', DISPATCH)).resolves.toBe(
+      false,
+    );
+    await expect(makeService([]).service.isInferenceDispatchOpen('u', DISPATCH)).resolves.toBe(false);
   });
 });
 

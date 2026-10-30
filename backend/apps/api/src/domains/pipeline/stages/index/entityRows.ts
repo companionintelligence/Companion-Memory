@@ -128,6 +128,10 @@ export async function loadPersonRows(
   // properties bag is the fallback for pre-migration rows — the same
   // COALESCE order PersonEntity's AfterLoad applies. The bag itself goes to the
   // builders RAW; they strip the normalized keys, mirroring the egress split.
+  //
+  // Re-applies all of `INDEX_EMBED_PERSON_SOURCE.predicate`: a slice selected
+  // before the user asked Memory to forget this person, or replayed from a dead
+  // letter after, must not write their embedding and tsvector back.
   return dataSource.query(
     `SELECT s.entity_id AS id,
             s.name,
@@ -156,7 +160,8 @@ export async function loadPersonRows(
       WHERE s.entity_id = ANY($1::uuid[])
         AND s.owner_user_id = $2::uuid
         AND s.entity_type = 'Person'
-        AND s.merged_into_entity_id IS NULL`,
+        AND s.merged_into_entity_id IS NULL
+        AND s.is_active IS NOT FALSE`,
     [ids, userId],
   );
 }

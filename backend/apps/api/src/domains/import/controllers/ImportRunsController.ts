@@ -29,6 +29,7 @@ import {
 import {
   DataSourceCatalogService,
   type DataSourceSummary,
+  type BundleCatalogEntry,
   type SourceCatalogEntry,
 } from '../services/DataSourceCatalogService';
 import { ImportRetentionService, type DiscardedRun } from '../services/ImportRetentionService';
@@ -213,6 +214,19 @@ export class ImportRunsController {
   }
 
   /**
+   * The export bundles — Google Takeout, Meta Accounts Center, Amazon Privacy
+   * Central — each ONE download that covers several of the catalog's sources.
+   * The wizard shows a bundle as one picker button and one export card in
+   * place of its members' own. Authored beside the guides so every export
+   * instruction the wizard shows comes from the backend.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('sources/bundles')
+  sourceBundles(): BundleCatalogEntry[] {
+    return this.catalog.bundles();
+  }
+
+  /**
    * How much of each memory kind this user's imports have actually put in
    * `ci.*`, per importer — what the picker's tiles show under "24K Mail",
    * "1.2M Photos". Read from the live tables themselves, never from run
@@ -314,7 +328,9 @@ export class ImportRunsController {
     const runs = await this.runs.listRuns(
       { userId },
       {
-        limit: Number.isFinite(parsed) ? parsed : undefined,
+        // A positive whole number, or the default. `-1` reached the query as
+        // a negative LIMIT and answered 500.
+        limit: Number.isInteger(parsed) && (parsed as number) > 0 ? parsed : undefined,
         before: parseBeforeCursor(beforeCreatedAt, beforeId),
       },
     );

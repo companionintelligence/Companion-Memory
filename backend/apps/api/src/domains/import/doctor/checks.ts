@@ -198,12 +198,17 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'ever fill it. On the reference corpus that is 16,325 outbound iMessages whose chat.db row has ' +
       'neither recipients nor a partner handle (see migration 20260819000941) — the counterpart is ' +
       'genuinely unrecorded, and a name invented from a filename is the defect migration ' +
-      '20260818220731 exists to undo. Note also what a re-import does NOT do here: from_entity_id and ' +
+      '20260818220731 exists to undo. Those rows were written before the push named the owner as the ' +
+      'sender of every outbound message: one imported now is from the owner and is not counted, so an ' +
+      'outbound row here comes from an older build, or from a run that could not read the owner. ' +
+      'Note also what a re-import does NOT do here: from_entity_id and ' +
       'to_entity_ids are absent from INGEST_REFRESH_COLUMNS.communication (deliberately — they are ' +
       'resolved server-side), so re-ingesting an existing triple leaves them as they are. The parser ' +
       'fixes that stage participant edges (imessage.ts outbound fan-out, googlevoice.ts ' +
       'counterpartEdges) apply to rows written for the first time; migration 20260819000959 is the ' +
-      'repair for rows already stored, and it too reads ci_import.staged_items.',
+      'repair for rows already stored, and it too reads ci_import.staged_items. Agent chat turns ' +
+      "(`POST /memory/turn`, category 'agent-turn') are not counted: they are the owner talking to an " +
+      'agent, and there is no person on the other end to link.',
     mirrors: null,
     sql: String.raw`
       WITH bad AS (
@@ -211,6 +216,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
           FROM ci.communications
          WHERE from_entity_id IS NULL
            AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
+           -- An agent chat turn (MemoryController.turn, AGENT_TURN_MESSAGE_CATEGORY)
+           -- is the owner talking to an agent: no Person is on the other end,
+           -- so an empty participant set is the honest value.
+           AND category IS DISTINCT FROM 'agent-turn'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,

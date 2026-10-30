@@ -7,8 +7,9 @@ import { ResponsiveLoader } from '@/components/ResponsiveLoader';
 
 import { EntityServiceProvider } from '../MemoryPage/useEntityService';
 
-import { parseBbox } from './bbox';
-import { resolveExplorerTypes } from './Components/ExplorerToolbar/filterParams';
+import { readAreasParam } from './bbox';
+import { readListParam, resolveExplorerTypes } from './Components/ExplorerToolbar/filterParams';
+import { ExplorerSkeleton } from './Components/MemorySkeletons';
 import { useExplorerWhenReset } from './useExplorerWhenReset';
 import { useSavedSearchResolution } from './useSavedSearchResolution';
 
@@ -81,6 +82,14 @@ export function MemoryPage() {
   // would read as "everything" — and the view explains why instead.
   const typeFilters = resolveExplorerTypes(searchParams, pathname);
 
+  // Who / Where / tags: one value per param occurrence; absent when empty so
+  // the request leaves the dimension out rather than sending `[]`.
+  const listParamOrUndefined = (params: URLSearchParams, key: string) => {
+    const values = readListParam(params, key);
+
+    return values.length > 0 ? values : undefined;
+  };
+
   return (
     <EntityServiceProvider
       args={[
@@ -90,23 +99,24 @@ export function MemoryPage() {
           excludeTypes: typeFilters.excludeTypes,
           skip: typeFilters.nothingLeft,
           eventTypes: searchParams.get('eventTypes')?.split(',').filter(Boolean) || undefined,
-          tags: searchParams.get('tags')?.split(',').filter(Boolean) || undefined,
+          tags: listParamOrUndefined(searchParams, 'tags'),
           startTime: searchParams.get('from') || undefined,
           endTime: searchParams.get('to') || undefined,
           sortBy: timeSortStale ? undefined : searchParams.get('sortBy') || undefined,
           sortOrder: timeSortStale ? undefined : searchParams.get('sortOrder') || undefined,
           // LifeScope-parity dimensions (who / where / connector / semantic).
           connectors: searchParams.get('connectors')?.split(',').filter(Boolean) || undefined,
-          people: searchParams.get('people')?.split(',').filter(Boolean) || undefined,
-          places: searchParams.get('places')?.split(',').filter(Boolean) || undefined,
+          people: listParamOrUndefined(searchParams, 'people'),
+          places: listParamOrUndefined(searchParams, 'places'),
           hasLocation: searchParams.get('hasLocation') === '1' || undefined,
-          bbox: parseBbox(searchParams.get('bbox')),
+          areas: readAreasParam(searchParams),
           semantic: searchParams.get('semantic') === '1' || undefined,
           direction: searchParams.get('direction') || undefined,
+          fileKinds: searchParams.get('fileKinds')?.split(',').filter(Boolean) || undefined,
         },
       ]}
     >
-      <ResponsiveLoader desktop={DesktopPage} mobile={MobilePage} />
+      <ResponsiveLoader desktop={DesktopPage} mobile={MobilePage} fallback={<ExplorerSkeleton />} />
     </EntityServiceProvider>
   );
 }

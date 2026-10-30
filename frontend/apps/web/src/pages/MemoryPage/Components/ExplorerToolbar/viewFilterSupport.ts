@@ -39,8 +39,9 @@ export type FilterDimension =
   | 'places'
   | 'hasLocation'
   | 'semantic'
-  | 'bbox'
+  | 'areas'
   | 'direction'
+  | 'fileKinds'
   | 'sort';
 
 /**
@@ -57,7 +58,7 @@ const UNSUPPORTED: Record<MemoryView, Partial<Record<FilterDimension, string>>> 
   },
   graph: {
     semantic: 'The graph ranks by connection, not by meaning, so semantic search has no effect here.',
-    bbox: 'The graph has no map viewport, so a map area cannot narrow it.',
+    areas: 'The graph has no map, so a map area cannot narrow it.',
     direction: 'The graph has no notion of sent or received, so a message direction cannot narrow it.',
     sort: 'The graph has no result order to sort — nodes are laid out by their connections.',
   },
@@ -84,8 +85,9 @@ const DIMENSION_PARAMS: Record<FilterDimension, string[]> = {
   places: ['places'],
   hasLocation: ['hasLocation'],
   semantic: ['semantic'],
-  bbox: ['bbox'],
+  areas: ['areas', 'bbox'],
   direction: ['direction'],
+  fileKinds: ['fileKinds'],
   sort: ['sortBy', 'sortOrder'],
 };
 

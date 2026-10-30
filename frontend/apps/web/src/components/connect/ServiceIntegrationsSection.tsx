@@ -191,6 +191,15 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     ],
   },
   {
+    rawId: '01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3',
+    logo: '/branding/dropbox/logo.svg',
+    name: 'Dropbox',
+    tracks: [
+      { icon: Files, label: 'Files' },
+      { icon: FileText, label: 'Documents' },
+    ],
+  },
+  {
     rawId: 'discord',
     logo: '/branding/discord/logo.svg',
     name: 'Discord',
@@ -260,16 +269,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     tracks: [
       { icon: Video, label: 'Watch history' },
       { icon: Users, label: 'Follows' },
-    ],
-    disabled: true,
-  },
-  {
-    rawId: 'dropbox',
-    logo: '/branding/dropbox/logo.svg',
-    name: 'Dropbox',
-    tracks: [
-      { icon: Files, label: 'Files' },
-      { icon: Folder, label: 'Shared folders' },
     ],
     disabled: true,
   },

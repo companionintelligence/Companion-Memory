@@ -5,11 +5,17 @@ import request from 'supertest';
 import { ContextService } from '@ci/common/context';
 import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import config from '@ci/configuration';
 
+import { EventListenerRegistry } from '../../event-registration';
+import { queueWorkerProcesses } from '../../jobConcurrency';
 import { JobControlsService } from '../../services/JobControlsService';
 import { JobMonitorService } from '../../services/JobMonitorService';
 import { JobQueryService } from '../../services/JobQueryService';
 import { JobsController } from '../JobsController';
+
+/** What the appliance-wide box takes at most: the shipped figure across every worker process. */
+const applianceMost = () => config.queues.concurrency * queueWorkerProcesses();
 
 /**
  * `POST /jobs/crons/run`, the one route on this controller that ACTS rather than
@@ -72,13 +78,14 @@ async function buildApp(
   monitor: ReturnType<typeof makeMonitorService>,
   query: ReturnType<typeof makeQueryService> = makeQueryService(),
   adminGuard: unknown = AlwaysAllowGuard,
+  controls: unknown = {},
 ) {
   const module = await Test.createTestingModule({
     controllers: [JobsController],
     providers: [
       { provide: JobMonitorService, useValue: monitor },
       { provide: JobQueryService, useValue: query },
-      { provide: JobControlsService, useValue: {} },
+      { provide: JobControlsService, useValue: controls },
     ],
   })
     .overrideGuard(JwtOrApiKeyAuthGuard)
@@ -94,10 +101,12 @@ async function buildApp(
 
   // Stands in for RequestContextMiddleware: `@Context()` reads the request
   // context out of AsyncLocalStorage, so a handler that takes one 500s with
-  // "Request context not found" without it. Only `POST /jobs/clear` reaches a
-  // handler body here — every other case in this file is answered by a guard or
-  // read straight off route metadata — which is why the omission surfaced as
-  // one failing test rather than a whole red file.
+  // "Request context not found" without it. When it was missing, only
+  // `POST /jobs/clear` reached a handler body (every other case was answered by
+  // a guard or read straight off route metadata), which is why the omission
+  // surfaced as one failing test rather than a whole red file. The
+  // `PUT /jobs/controls` range cases reach `updateControls` as well, which reads
+  // `context.userId` before the service refuses the body.
   app.use((_req: unknown, _res: unknown, next: () => void) => {
     ContextService.run({ traceId: 'test-trace', userId: 'user-1' }, () => next());
   });
@@ -297,6 +306,110 @@ describe('POST /jobs/clear', () => {
 
       expect(guards).toContain(ApplianceAdminGuard);
     });
+  });
+});
+
+/**
+ * `PUT /jobs/controls` with a concurrency out of range. The Jobs page shows the
+ * 400's `message` and nothing else, so the reason has to be in it: the route's
+ * zod pipe used to refuse 100 as a bare "Validation failed" before
+ * `JobControlsService.checkConcurrency` could say what the range is.
+ */
+describe('PUT /jobs/controls', () => {
+  let app: INestApplication;
+  let repository: { query: jest.Mock };
+
+  beforeEach(async () => {
+    // One real queue, so a queue's own cap is checked for range instead of
+    // being refused first as an unknown queue.
+    EventListenerRegistry.clear();
+    EventListenerRegistry.register(
+      'file.uploaded',
+      'ImageDescriptionListener',
+      'describe',
+      'image-description',
+    );
+    repository = { query: jest.fn() };
+    app = await buildApp(
+      AlwaysAllowGuard,
+      makeMonitorService(),
+      makeQueryService(),
+      AlwaysAllowGuard,
+      new JobControlsService(repository as never),
+    );
+  });
+
+  afterEach(async () => {
+    await app?.close();
+    EventListenerRegistry.clear();
+  });
+
+  it.each([
+    [
+      '0 for the per-queue default',
+      { global: { perQueueConcurrency: 0 } },
+      () => config.queues.perQueueConcurrency,
+    ],
+    ['2.5 for the whole appliance', { global: { concurrency: 2.5 } }, () => applianceMost()],
+  ])('explains the range when given %s and writes nothing', async (_label, body, most) => {
+    const response = await request(app.getHttpServer()).put('/jobs/controls').send(body).expect(400);
+
+    expect(response.body.message).toMatch(
+      new RegExp(`^Concurrency must be a whole number between 1 and ${most()}\\.`),
+    );
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  // The shipped figures are the `max` the card shows. A value above one used to
+  // be stored and then clamped, so 20 typed into the appliance box saved, read
+  // back as 20 and ran at 10.
+  it.each([
+    [
+      'one more than the appliance runs',
+      () => ({ global: { concurrency: applianceMost() + 1 } }),
+      () => `The appliance-wide limit can be at most ${applianceMost()} (the figure this build ships with)`,
+    ],
+    [
+      '100 for the whole appliance',
+      () => ({ global: { concurrency: 100 } }),
+      () => `The appliance-wide limit can be at most ${applianceMost()}`,
+    ],
+    [
+      'one more than the per-queue default ships with',
+      () => ({ global: { perQueueConcurrency: config.queues.perQueueConcurrency + 1 } }),
+      () => `The per-queue default can be at most ${config.queues.perQueueConcurrency}`,
+    ],
+    [
+      '100 for one queue',
+      () => ({ queues: [{ name: 'image-description', concurrency: 100 }] }),
+      () => `The "image-description" queue can be at most ${config.queues.perQueueConcurrency}`,
+    ],
+  ])('refuses %s with the cap named and writes nothing', async (_label, body, message) => {
+    const response = await request(app.getHttpServer()).put('/jobs/controls').send(body()).expect(400);
+
+    expect(response.body.message).toContain(message());
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  it('names the field it refused, since the pipe no longer reports a path', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/jobs/controls')
+      .send({ global: { concurrency: 4, perQueueConcurrency: 100 } })
+      .expect(400);
+
+    expect(response.body.message).toContain('The per-queue default can be at most');
+    expect(response.body.message).toContain('It was given 100.');
+    expect(repository.query).not.toHaveBeenCalled();
+  });
+
+  it('still refuses a concurrency that is not a number at the pipe', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/jobs/controls')
+      .send({ global: { concurrency: 'lots' } })
+      .expect(400);
+
+    expect(response.body.message).toBe('Validation failed');
+    expect(repository.query).not.toHaveBeenCalled();
   });
 });
 

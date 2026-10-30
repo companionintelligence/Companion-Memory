@@ -49,7 +49,10 @@ describe('CalendarEventService — calendar flags survive create and update', ()
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
 
+  let deltas: ReturnType<typeof noopGraphDeltaWriter>;
+
   beforeEach(async () => {
+    deltas = noopGraphDeltaWriter();
     baseRepo = {
       create: jest.fn((x: Partial<EventBaseEntity>) => x),
       save: jest.fn(async (x: Partial<EventBaseEntity>) => x),
@@ -81,7 +84,7 @@ describe('CalendarEventService — calendar flags survive create and update', ()
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
-        { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: GraphDeltaWriter, useValue: deltas },
       ],
     }).compile();
 
@@ -211,6 +214,118 @@ describe('CalendarEventService — calendar flags survive create and update', ()
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { category: 'social' });
 
       expect(patched()).toEqual({ category: 'social' });
+    });
+
+    it('clears the description when the event page saves it empty', async () => {
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: 'Agenda' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { description: '' });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: null });
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { description: { old: 'Agenda', new: null } } }),
+      );
+    });
+
+    it('treats a description of only whitespace as cleared', async () => {
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: 'Agenda' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { description: '   ' });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: null });
+    });
+
+    it('does not rewrite or record an empty description that is already empty', async () => {
+      // The drawer sends its whole form, so a title-only save of an event
+      // imported with '' hands back '' for the description too.
+      baseRepo.findOne.mockResolvedValue({ id: 'e1', name: 'Standup', description: '' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        title: 'Standup',
+        description: '',
+      });
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('records no detail edit for times handed back as stored', async () => {
+      // The Plan page's edit sends the start (and end) with every save.
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        start_time: new Date('2026-01-01T09:00:00Z'),
+        end_time: null,
+      } as unknown as UpdateEventDto);
+
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('records a detail edit that moved a column', async () => {
+      const stored = Object.assign(new EventEntity(), {
+        id: 'e1',
+        userId: 'user-1',
+        startTime: new Date('2026-01-01T09:00:00Z'),
+        endTime: null,
+        status: 'confirmed',
+      });
+      repo.findOne.mockResolvedValueOnce(stored).mockResolvedValueOnce({ ...stored, category: 'social' });
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { category: 'social' });
+
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { detail_updated: { new: true } } }),
+      );
+    });
+
+    it('leaves the description alone when the patch sends none', async () => {
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        description: null,
+        category: 'social',
+      } as unknown as UpdateEventDto);
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('does not rewrite or record a title that came back unchanged', async () => {
+      // The event page sends the stored title with every save of its description.
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Standup' });
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   '])('refuses an emptied title (%j) instead of saving around it', async (title) => {
+      await expect(service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title })).rejects.toThrow(
+        'An event needs a title.',
+      );
+
+      expect(baseRepo.update).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(deltas.entityUpdated).not.toHaveBeenCalled();
+    });
+
+    it('still saves a description next to the empty title of an event that never had one', async () => {
+      // The memory drawer sends every field, and an untitled event's title field is ''.
+      baseRepo.findOne.mockImplementation(async ({ where: { id } }: { where: { id: string } }) => ({
+        id,
+        name: null,
+        description: null,
+      }));
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        title: '',
+        description: 'Morning walk',
+      });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: 'Morning walk' });
+    });
+
+    it('records a real rename with the title it replaced', async () => {
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Team standup' });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { name: 'Team standup' });
+      expect(deltas.entityUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({ changedFields: { name: { old: 'Standup', new: 'Team standup' } } }),
+      );
     });
 
     it('refuses to clear the tombstone — un-deleting is restore(), not a field patch', async () => {

@@ -121,7 +121,7 @@ object LocalLlmPolicy {
      *  - the **path must equal** `/<hfRepo>/resolve/<commitHash>/<fileName>` for *this* model — the whole
      *    path, not a suffix (a suffix match accepted `/attacker/repo/resolve/main/resolve/<commit>/<file>`,
      *    leaving byte size as the only integrity check). The query string is ignored. A stale bundle still
-     *    asking for `resolve/main` (whose size drifts, see [LocalLlmModels.QWEN3_0_6B_INT4]) is refused.
+     *    asking for `resolve/main` (whose size drifts, see [LocalLlmModels.GEMMA_4_E2B_IT]) is refused.
      */
     fun downloadUrlProblem(info: LocalLlmModelInfo, url: String): String? {
         val uri =
@@ -158,8 +158,16 @@ object LocalLlmPolicy {
         return h == "huggingface.co" || h.endsWith(".huggingface.co")
     }
 
-    /** The backend to load on, and whether the caller's preference had to be overridden. */
-    data class AcceleratorChoice(val accelerator: LocalLlmAccelerator, val preferenceUnsupported: Boolean)
+    /**
+     * The backend to load on, and why it may differ from what was asked: [preferenceUnsupported] when the
+     * model does not list the requested backend, [gpuWithheld] when the GPU was wanted (asked for, or the
+     * model's default) but this device has less RAM than the model's `gpuMinDeviceMemoryBytes`.
+     */
+    data class AcceleratorChoice(
+        val accelerator: LocalLlmAccelerator,
+        val preferenceUnsupported: Boolean,
+        val gpuWithheld: Boolean = false,
+    )
 
     /**
      * `requested` is a preference: an absent one takes the model's first listed accelerator, and one
@@ -171,6 +179,26 @@ object LocalLlmPolicy {
         if (info.supportsAccelerator(requested)) return AcceleratorChoice(requested, preferenceUnsupported = false)
         return AcceleratorChoice(info.defaultAccelerator, preferenceUnsupported = true)
     }
+
+    /**
+     * [resolveAccelerator] with the device's RAM taken into account: a GPU choice on a device under the
+     * model's `gpuMinDeviceMemoryBytes` becomes the CPU, with [AcceleratorChoice.gpuWithheld] set. The GPU
+     * attempt is not merely likely to fail on such a phone — it can succeed and then have the app killed for
+     * memory mid-conversation — so it is not tried at all. A model that lists no CPU backend keeps the GPU.
+     *
+     * @param deviceMemoryBytes the advertised figure from [advertisedMemoryBytes].
+     */
+    fun resolveAccelerator(info: LocalLlmModelInfo, requested: LocalLlmAccelerator?, deviceMemoryBytes: Long): AcceleratorChoice {
+        val base = resolveAccelerator(info, requested)
+        if (base.accelerator != LocalLlmAccelerator.GPU || deviceMemoryBytes >= info.gpuMinDeviceMemoryBytes) return base
+        if (!info.supportsAccelerator(LocalLlmAccelerator.CPU)) return base
+        return base.copy(accelerator = LocalLlmAccelerator.CPU, gpuWithheld = true)
+    }
+
+    /** The sentence for a withheld GPU, naming both figures: "… has 6 GB of RAM; the GPU needs at least 8 GB …". */
+    fun gpuWithheldMessage(info: LocalLlmModelInfo, deviceMemoryBytes: Long): String =
+        "This device has ${formatBytes(deviceMemoryBytes)} of RAM; ${info.modelId} needs at least " +
+            "${formatBytes(info.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU."
 
     /** "512 MB", "3.4 GB", "4 GB" — for the sentences above; binary units under the familiar names. */
     fun formatBytes(bytes: Long): String {
@@ -203,4 +231,45 @@ object LocalLlmPolicy {
      * retuned together.
      */
     fun toolResultByteBudget(contextTokens: Int): Int = minOf(maxOf(contextTokens / 2, 256), 16_384)
+
+    // ---- tool declarations ----------------------------------------------------------------------
+
+    /**
+     * JSON bytes per token for a tool declaration, as measured: on a device, Gemma 4 E2B tokenised
+     * 18.1 KB of declarations (21 intents' name, description and parameter schema) plus the short
+     * system instruction to ~4,350 tokens -- about 4.2 bytes a token. 4 rounds towards counting
+     * MORE tokens than there are, which is the safe direction for a budget.
+     */
+    const val TOOL_DECLARATION_BYTES_PER_TOKEN = 4
+
+    /**
+     * The most tokens the tool *declarations* may take, together: a third of the window.
+     *
+     * Every declaration is in the prompt of every turn, so this is paid before the question, the
+     * model's reasoning, a tool result ([toolResultByteBudget], up to half the window in bytes) or
+     * the reply get any room. Nothing enforced this before, and on a device the appliance's 21
+     * local-tier intents came to ~4,350 tokens against Gemma 4's 4,000-token window: the first
+     * message could never fit, and every turn failed with the runtime's own "too long" error.
+     * [com.companionintelligence.localllm.intents.IntentToolProvider] binds tools in priority
+     * order until this is spent and leaves the rest out, by name in the log.
+     */
+    fun toolDeclarationTokenBudget(contextTokens: Int): Int = maxOf(contextTokens / 3, 0)
+
+    /** Tokens for [utf8Bytes] of declaration JSON, rounded up; see [TOOL_DECLARATION_BYTES_PER_TOKEN]. */
+    fun estimateDeclarationTokens(utf8Bytes: Int): Int =
+        if (utf8Bytes <= 0) 0 else (utf8Bytes + TOOL_DECLARATION_BYTES_PER_TOKEN - 1) / TOOL_DECLARATION_BYTES_PER_TOKEN
+
+    // ---- reasoning -------------------------------------------------------------------------------
+
+    /**
+     * The most tokens a thinking model may spend reasoning before it has to answer: a quarter of the window,
+     * never under [MIN_THINKING_TOKEN_BUDGET]. Without a cap a small model reasons until the window is full and
+     * then stops with no answer and no error (measured: Qwen3-0.6B, 1,024 tokens, two thirds of it prompt).
+     * A quarter leaves the prompt, a tool result and the reply their room; the runtime forces the answer when
+     * the budget is spent. The caller may still pass its own.
+     */
+    fun thinkingTokenBudget(contextTokens: Int): Int = maxOf(contextTokens / 4, MIN_THINKING_TOKEN_BUDGET)
+
+    /** A budget below this leaves nothing to reason with; the floor keeps a tiny window honest rather than mute. */
+    const val MIN_THINKING_TOKEN_BUDGET = 64
 }

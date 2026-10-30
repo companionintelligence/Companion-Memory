@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { BlueBubblesClientService } from '@ci/domains/bluebubbles';

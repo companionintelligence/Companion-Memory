@@ -148,8 +148,10 @@ export {
   parseAskActor,
   parseDisclosureRung,
   parseGrantQueryType,
+  parseNaturalLanguageGrant,
   ASK_ACTOR_KINDS,
   MAX_ACTOR_LABEL_LENGTH,
+  type ParsedNaturalLanguageGrant,
 } from './askInput';
 export { ASK_TTL_HOURS_ENV_VAR, DEFAULT_ASK_TTL_HOURS, askTtlHours, defaultAskExpiry } from './askDeadline';
 export { inferAnswerForm, buildDisclosedAnswer, formDisclosesItems, countFreeSummary } from './disclosure';
@@ -157,12 +159,16 @@ export {
   DISCLOSURE_RUNGS,
   applyDisclosureCeiling,
   disclosureCeiling,
+  groupDisclosureCeiling,
   minRung,
+  minTrustTier,
   narrowerForm,
   narrowestRung,
+  resolveGroupTier,
   rungAtLeast,
   rungForForm,
 } from './policy';
+export { AUDIT_SAID_PLACEHOLDER, computeAuditSaid, verifyAuditSaid } from './auditSaid';
 export {
   ASK_ARCHETYPES,
   askGrammarSchema,

@@ -107,7 +107,7 @@ describe('GraphDeltaWriter', () => {
   });
 
   describe('entityUpdated', () => {
-    it('fills a default name changed-field pair when the caller does not supply one', async () => {
+    it('stores changedFields as given, without a name entry whose old and new are the same', async () => {
       const { writer, query } = makeWriter();
 
       await writer.entityUpdated({
@@ -125,15 +125,10 @@ describe('GraphDeltaWriter', () => {
       expect(row.changeType).toBe('updated');
       expect(JSON.parse(row.changedFields as string)).toEqual({
         email: { old: 'a@x.com', new: 'b@x.com' },
-        // The default fill-in (GraphDeltaWriter.ts entityUpdated): when the
-        // caller's changedFields carries no `name` entry, one is synthesized
-        // from the CURRENT name on both sides — this is the only branch that
-        // proves that fill-in actually lands in the serialized payload.
-        name: { old: 'Ada Lovelace', new: 'Ada Lovelace' },
       });
     });
 
-    it('does NOT override an explicit name changed-field with the default', async () => {
+    it('keeps an explicit name changed-field', async () => {
       const { writer, query } = makeWriter();
 
       await writer.entityUpdated({

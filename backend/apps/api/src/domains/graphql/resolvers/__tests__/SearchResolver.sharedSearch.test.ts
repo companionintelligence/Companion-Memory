@@ -156,6 +156,7 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
         semantic: true,
         sortBy: 'time',
         sortOrder: 'desc',
+        areas: [[165.5, -47.5, 179.5, -33.5]],
       },
     });
 
@@ -164,6 +165,7 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     const [serviceContext, input] = execSpy.mock.calls[0];
     expect(serviceContext).toEqual({ userId: 'owner-9' });
     expect(input.eventTypes).toEqual(['visited']);
+    expect(input.areas).toEqual([[165.5, -47.5, 179.5, -33.5]]);
     expect(input.startTime).toBe('2024-01-01');
     expect(input.endTime).toBe('2024-12-31');
     expect(input.connectors).toEqual(['gmail']);
@@ -174,6 +176,21 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     // Viewer didn't choose a sort, so the owner's saved sort applies.
     expect(input.sortBy).toBe('time');
     expect(input.sortOrder).toBe('desc');
+  });
+
+  it('reads a legacy single bbox as one area, so rows saved before the list keep their rectangle', async () => {
+    const { resolver, savedSearchService, execSpy } = makeResolver();
+    savedSearchService.findByShareToken.mockResolvedValue({
+      userId: 'owner-9',
+      query: null,
+      entityTypes: [],
+      tags: [],
+      filters: { bbox: [122.5, 24, 146.5, 46], view: 'map' },
+    });
+
+    await resolver.search(viewerCtx, { shareToken: 'tok', first: 10 } as SearchInput);
+
+    expect(execSpy.mock.calls[0][1].areas).toEqual([[122.5, 24, 146.5, 46]]);
   });
 
   it('lets a viewer override only sort over the saved sort, never the filters', async () => {

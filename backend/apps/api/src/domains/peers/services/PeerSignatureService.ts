@@ -23,6 +23,7 @@ import {
   verifyContentDigest,
   verifySignatureBase,
 } from '../httpSignature';
+import { sovereignKeyIdFor } from '../sovereignKeyId';
 
 /**
  * How far a peer's clock may be ahead of ours before a signature is refused.
@@ -84,7 +85,7 @@ export type VerificationResult =
  */
 @Injectable()
 export class PeerSignatureService {
-  private cachedSigningKey: { key: KeyObject; thumbprint: string } | null | undefined;
+  private cachedSigningKey: { key: KeyObject; thumbprint: string; keyid?: string } | null | undefined;
 
   constructor(
     @Inject(CONSUMPTION_STORE)
@@ -173,11 +174,16 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unknown-key' };
     }
 
-    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH. Without this the
-    // `keyid` is decorative: a sender could name any key at all and still be
-    // verified against whichever one the link happens to hold, which quietly
-    // turns a key-identified request back into a link-identified one.
-    if (parsed.params.keyid !== thumbprint) {
+    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH: its thumbprint, or
+    // the sovereign `did:keri:D<x>` that spells out this very key. Without this
+    // the `keyid` is decorative: a sender could name any key at all and still be
+    // verified against whichever one the link happens to hold. A label on the
+    // stored JWK (`kid`, `aid`) is not the key, so it never counts.
+    const matchesKey =
+      parsed.params.keyid === thumbprint ||
+      parsed.params.keyid === sovereignKeyIdFor(request.peerPublicJwk as Record<string, unknown>);
+
+    if (!matchesKey) {
       return { ok: false, reason: 'unknown-key' };
     }
 
@@ -242,7 +248,7 @@ export class PeerSignatureService {
       components: [...REQUIRED_COMPONENTS, ...(hasBody ? [BODY_COMPONENT] : [])],
       created,
       expires: created + OUTBOUND_LIFETIME_MS / 1000,
-      keyid: signing.thumbprint,
+      keyid: signing.keyid ?? signing.thumbprint,
       alg: PEER_SIGNATURE_ALG,
       // 128 bits, base64url -- comfortably inside NONCE_PATTERN and far beyond
       // any birthday concern over the five minutes a nonce can live.
@@ -265,9 +271,21 @@ export class PeerSignatureService {
     };
   }
 
+  /** Whether this box has a signing key configured. */
+  get hasSigningKey(): boolean {
+    return this.signingKey() != null;
+  }
+
   /** This box's own key thumbprint, for publishing to peers. Null when unconfigured. */
   get publicThumbprint(): string | null {
     return this.signingKey()?.thumbprint ?? null;
+  }
+
+  /** This box's KERI AID if configured in the key. Null when unconfigured. */
+  get publicAid(): string | null {
+    const signing = this.signingKey();
+
+    return signing?.keyid?.startsWith('did:keri:') ? signing.keyid : null;
   }
 
   /**
@@ -277,7 +295,7 @@ export class PeerSignatureService {
    * none" -- so a missing key is resolved once rather than re-parsed and
    * re-warned on every outbound request.
    */
-  private signingKey(): { key: KeyObject; thumbprint: string } | null {
+  private signingKey(): { key: KeyObject; thumbprint: string; keyid?: string } | null {
     if (this.cachedSigningKey !== undefined) {
       return this.cachedSigningKey;
     }
@@ -295,8 +313,12 @@ export class PeerSignatureService {
       // The thumbprint identifies the PUBLIC half; `d` is dropped by taking
       // only the three required OKP members.
       const thumbprint = jwkThumbprint(jwk as Record<string, unknown>);
+      // A `kid` changes the outbound keyid only when it is the sovereign AID of
+      // this very key. Any other `kid` (a label, a CESR prefix) is left out, as
+      // it always was: peers verify the keyid, and would refuse it.
+      const keyid = typeof jwk.kid === 'string' && jwk.kid === sovereignKeyIdFor(jwk) ? jwk.kid : undefined;
 
-      this.cachedSigningKey = { key, thumbprint };
+      this.cachedSigningKey = { key, thumbprint, ...(keyid ? { keyid } : {}) };
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.

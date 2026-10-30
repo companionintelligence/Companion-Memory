@@ -1,7 +1,9 @@
 import { type ReactNode } from 'react';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { MEMORY_HUB_SECTIONS } from '@/components/MemoryHub';
 
 import App from './App';
 
@@ -20,6 +22,10 @@ const h = vi.hoisted(() => ({
     enabled: boolean;
     off?: string[];
   },
+  signOutPrompt: { open: false, unsentCaptures: 0 },
+  signedIn: true,
+  // The session check went unanswered: no token yet, but nobody said "signed out".
+  unreachable: false,
 }));
 
 vi.mock('@/common/feature', () => ({
@@ -35,20 +41,22 @@ vi.mock('@/hooks/useAuth', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => [
     {
-      expired: false,
-      authToken: 'test-token',
-      authenticated: true,
+      expired: !h.signedIn,
+      authToken: h.signedIn ? 'test-token' : null,
+      authenticated: h.signedIn,
       loading: false,
       initializing: false,
+      unreachable: h.unreachable,
       error: null,
+      signOutPrompt: h.signOutPrompt,
     },
-    { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+    { login: vi.fn(), logout: vi.fn(), confirmSignOut: vi.fn(), cancelSignOut: vi.fn(), signup: vi.fn() },
   ],
 }));
 
 vi.mock('@/hooks/useCurrentUser', () => ({
   useCurrentUser: () => ({
-    user: { id: '1', name: 'Test', email: 'test@example.com', onboarded: true },
+    user: h.signedIn ? { id: '1', name: 'Test', email: 'test@example.com', onboarded: true } : null,
     loading: false,
     error: null,
     refetch: vi.fn(),
@@ -74,6 +82,12 @@ vi.mock('@/components/ThemePicker', async (importOriginal) => {
     useTheme: () => ({ themeState: { mode: 'light' }, setTheme: vi.fn() }),
   };
 });
+
+// The app-wide spinner, made findable. Everything else in the module stays real.
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  LoadingPage: () => <div data-testid="loading-page" />,
+}));
 
 // A client whose link never emits: the pages under test are asserted on their
 // route matching, not their data, and a pending query is the quietest stand-in.
@@ -123,6 +137,51 @@ function notFound() {
 
 beforeEach(() => {
   h.features = { loading: true, enabled: false };
+  h.signOutPrompt = { open: false, unsentCaptures: 0 };
+  h.signedIn = true;
+  h.unreachable = false;
+});
+
+describe('signing out with captures that have not uploaded', () => {
+  // The question belongs to sign-out, not to one page: every Log out reaches it.
+  it('asks on whatever page the sign-out started from', async () => {
+    h.features = { loading: false, enabled: true };
+    h.signOutPrompt = { open: true, unsentCaptures: 2 };
+
+    renderAt('/self');
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent("2 captures haven't uploaded yet");
+  });
+});
+
+describe('the Memory hub', () => {
+  // Every section the strip links to is a child of one layout route. A section
+  // left outside it would tear the strip down on the way in. The pages never
+  // get data here (the Apollo link never answers), which is also the case that
+  // used to swap the whole page, strip included, for a spinner.
+  it.each(
+    MEMORY_HUB_SECTIONS.map((section) => [
+      section.label,
+      section.to === '/memory/events' ? '/memory/people' : '/memory/events?view=list',
+    ]),
+  )('keeps the same section strip when %s opens from another section (%s)', async (label, from) => {
+    h.features = { loading: false, enabled: true };
+
+    renderAt(from);
+
+    const strip = await screen.findByRole('navigation', { name: 'Memory sections' });
+
+    fireEvent.click(within(strip).getByRole('link', { name: label }));
+
+    // A first visit shows its fallback at once (no transitions). That is
+    // the section's skeleton, never the app-wide spinner.
+    expect(screen.queryByTestId('loading-page')).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(within(strip).getByRole('link', { name: label })).toHaveAttribute('aria-current', 'page'),
+    );
+    expect(screen.getByRole('navigation', { name: 'Memory sections' })).toBe(strip);
+  });
 });
 
 describe('App routing', () => {
@@ -166,6 +225,39 @@ describe('App routing', () => {
 
     await waitFor(() => expect(notFound()).toBeInTheDocument());
   });
+
+  // Signed out, only the global flags are known, so the gated routes are not in the table.
+  it.each(['/self', '/memory/chat', '/jobs'])(
+    'sends a signed-out visitor at %s to Log In, keeping the path, instead of 404',
+    async (path) => {
+      h.signedIn = false;
+      h.features = { loading: false, enabled: false };
+
+      renderAt(path);
+
+      await waitFor(() => expect(window.location.pathname).toBe('/login'));
+      expect(window.history.state?.usr).toEqual({ from: path });
+      expect(notFound()).not.toBeInTheDocument();
+    },
+  );
+
+  // A reload while Memory cannot answer leaves no token and no per-user flags, so the
+  // gated route is missing. Nobody signed out. Say Memory cannot be reached, as every
+  // other signed-in page does, and keep the address.
+  it.each(['/self', '/memory/chat', '/jobs'])(
+    'says Memory cannot be reached at %s during an outage instead of sending the person to Log In',
+    async (path) => {
+      h.signedIn = false;
+      h.unreachable = true;
+      h.features = { loading: false, enabled: false };
+
+      renderAt(path);
+
+      expect(await screen.findByText("Can't reach Memory")).toBeInTheDocument();
+      expect(window.location.pathname).toBe(path);
+      expect(notFound()).not.toBeInTheDocument();
+    },
+  );
 
   it('renders 404 for an unknown path once the flags have loaded', async () => {
     h.features = { loading: false, enabled: true };
@@ -222,10 +314,14 @@ describe('App routing', () => {
       ['/profile/appearance', '/self/settings/appearance'],
     ])('redirects %s to %s', async (from, to) => {
       h.features = { loading: false, enabled: true };
+      // On desktop /self/settings is only a stop on the way. ProfilePage sends it on to
+      // the settings dialog, sometimes before the first check below runs. So record each
+      // address the redirects write instead of sampling the last one.
+      const replaced = vi.spyOn(window.history, 'replaceState');
 
       renderAt(from);
 
-      await waitFor(() => expect(window.location.pathname).toBe(to));
+      await waitFor(() => expect(replaced.mock.calls.map(([, , url]) => url)).toContain(to));
       expect(notFound()).not.toBeInTheDocument();
     });
 

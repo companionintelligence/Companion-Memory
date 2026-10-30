@@ -5,6 +5,7 @@ import { Activity } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
+import { filterValueLabel } from '@/lib/sourceNames';
 import {
   readCsvParam,
   validateExactFilterValue,
@@ -67,6 +68,7 @@ export function ActivityFilter({ modal = true, label = 'Activity', renderTrigger
       values={values}
       options={data?.eventTypes ?? []}
       optionsKnown={data != null}
+      formatValue={filterValueLabel}
       loading={loading}
       onOpenChange={setOpen}
       onAdd={(value) => {

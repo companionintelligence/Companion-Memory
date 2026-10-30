@@ -10,6 +10,17 @@ describe('AssistantMessage', () => {
     expect(screen.getByText('answer').tagName).toBe('STRONG');
   });
 
+  it('uses nearly the full mobile conversation width without narrowing desktop replies', () => {
+    const { container } = render(<AssistantMessage content="A useful answer" />);
+
+    expect(container.firstElementChild).toHaveClass(
+      'max-w-[94%]',
+      'device:max-w-none',
+      'device:self-stretch',
+      'rounded-xl',
+    );
+  });
+
   it('renders nothing when empty and not forced', () => {
     const { container } = render(<AssistantMessage content="   " />);
 

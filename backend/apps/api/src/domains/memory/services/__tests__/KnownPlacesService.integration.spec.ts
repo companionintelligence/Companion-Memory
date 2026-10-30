@@ -560,6 +560,40 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
     expect(await activeLivesIn(ownerId)).toHaveLength(1);
   });
 
+  it('recategorizes the selected relationship without leaving the old role active', async () => {
+    const [home] = await service.getKnownPlaces(owner, 'home');
+
+    const school = await service.updateKnownPlace(owner, {
+      knownPlaceId: home.id,
+      label: 'Evening class',
+      kind: 'school',
+      locationId: home.locationId,
+      confidence: 1,
+    });
+
+    const active: Array<{ relationship_id: string; relationship_type: string; kind: string }> =
+      await dataSource.query(
+        `SELECT relationship_id, relationship_type, properties->>'kind' AS kind
+           FROM ci.relationships
+          WHERE owner_user_id = $1
+            AND to_entity_id = $2
+            AND relationship_type = ANY($3)
+            AND is_active
+          ORDER BY relationship_type`,
+        [ownerId, home.locationId, ['LIVES_IN', 'WORKS_AT', 'VISITED']],
+      );
+
+    expect(school).toMatchObject({ kind: 'school', locationId: home.locationId });
+    expect(school.id).not.toBe(home.id);
+    expect(active).toEqual([
+      {
+        relationship_id: school.id,
+        relationship_type: 'VISITED',
+        kind: 'school',
+      },
+    ]);
+  });
+
   it("does not show the owner's known places to anyone else", async () => {
     expect(await service.getKnownPlaces(stranger)).toEqual([]);
   });

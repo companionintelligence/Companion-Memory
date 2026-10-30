@@ -323,7 +323,10 @@ export async function createStagingHarness(options: { eventService?: EventServic
 
     // Whatever the push stage resolved into `ci.*` belongs to this harness user
     // alone, so it goes with them. Entities before identifiers and the user
-    // last: both reference what precedes them.
+    // last: both reference what precedes them. The push makes the owner's self
+    // Person when the account has none and points `ci.users.entity_id` at it, so
+    // that pointer is cleared first or the entity delete trips the foreign key.
+    await attempt(`UPDATE ci.users SET entity_id = NULL WHERE id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.entity_identifiers WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.entities WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.users WHERE id = $1::uuid`, [userId]);

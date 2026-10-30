@@ -14,7 +14,10 @@ const GET_FORECAST_EXTRAS = gql`
     predictionCalibration(limit: 14) {
       basis
       latest {
+        l0Top1Acc
+        ece
         driftFlag
+        modelVersion
       }
     }
     forecastHistory(days: 5) {

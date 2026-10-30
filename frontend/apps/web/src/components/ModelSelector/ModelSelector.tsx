@@ -1,10 +1,13 @@
 import { useCallback } from 'react';
 
+import { findLocalLlmModel } from '@ci/common';
 import { Select, Toggle, Tooltip, cn, useToast } from '@ci/shadcn';
-import { Brain, Eye, Wrench } from '@ci/shadcn/icons';
+import { Brain, Eye, Smartphone, Wrench } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 
 import { useModel } from '@/hooks';
+import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 
 interface Props {
   withToggles?: boolean;
@@ -46,6 +49,15 @@ export function ModelSelector({
     { selectModel, selectVisionModel, toggleThinking, toggleTools },
   ] = useModel();
 
+  // Where the chat is actually answered. The list below is the appliance's models and
+  // nothing else; when the phone's own model answers (`device`), showing an appliance
+  // model as "the model" misleads, so the composer names the on-device model instead.
+  // `auto` keeps the appliance picker and adds a note that the phone steps in when the
+  // appliance cannot be reached. Settings' and Capture's pickers are untouched: they set
+  // the appliance preference, which still matters for `auto` and for background work.
+  const [{ mode: localMode, modelId: localModelId }] = useLocalLlmPrefs();
+  const localLabel = localModelId ? (findLocalLlmModel(localModelId)?.label ?? localModelId) : null;
+
   const currentModel = visionOnly ? selectedVisionModel : selectedModel;
   const handleSelectModel = visionOnly ? selectVisionModel : selectModel;
   const models = visionOnly ? activeModels.filter((model) => model.vision === true) : activeModels;
@@ -85,6 +97,35 @@ export function ModelSelector({
   );
 
   const isComposer = variant === 'composer';
+
+  if (isComposer && !visionOnly && localMode === 'device') {
+    return (
+      <Link
+        to="/settings/on-device"
+        aria-label="Active model"
+        data-testid="on-device-model"
+        className="text-muted-foreground hover:text-foreground inline-flex h-8 min-w-0 flex-1 items-center gap-1.5 px-2 text-xs"
+      >
+        <Smartphone className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 truncate">
+          {localLabel ? `${localLabel} · on this phone` : 'Choose an on-device model'}
+        </span>
+      </Link>
+    );
+  }
+
+  const fallbackNote =
+    isComposer && !visionOnly && localMode === 'auto' && localLabel ? (
+      <Tooltip delayDuration={600}>
+        <Tooltip.Content>{`Answers on this phone with ${localLabel} when your Companion can't be reached.`}</Tooltip.Content>
+        <Tooltip.Trigger asChild>
+          <span className="text-muted-foreground inline-flex shrink-0" data-testid="on-device-fallback">
+            <Smartphone className="size-3.5" aria-label={`Falls back to ${localLabel} on this phone`} />
+          </span>
+        </Tooltip.Trigger>
+      </Tooltip>
+    ) : null;
+
   const resolvedTriggerClassName =
     triggerClassName ??
     (isComposer ? 'h-8 min-w-0 flex-1 border-0 bg-transparent shadow-none px-2 text-xs' : 'w-[150px]');
@@ -130,7 +171,14 @@ export function ModelSelector({
   );
 
   if (!withToggles) {
-    return selector;
+    return fallbackNote ? (
+      <div className="flex min-w-0 flex-row items-center gap-1">
+        {selector}
+        {fallbackNote}
+      </div>
+    ) : (
+      selector
+    );
   }
 
   return (
@@ -184,6 +232,7 @@ export function ModelSelector({
       </div>
 
       {selector}
+      {fallbackNote}
     </div>
   );
 }

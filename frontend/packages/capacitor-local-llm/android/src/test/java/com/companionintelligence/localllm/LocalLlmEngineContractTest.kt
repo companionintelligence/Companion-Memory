@@ -77,7 +77,7 @@ class LocalLlmEngineContractTest {
         // window must be another spec, or its tools would keep the old window's budget.
         val spec =
             LocalLlmEngine.LoadSpec(
-                info = LocalLlmModels.QWEN3_0_6B_INT4,
+                info = LocalLlmModels.GEMMA_4_E2B_IT,
                 modelPath = "/models/qwen3.litertlm",
                 maxTokens = 1024,
                 topK = 64,
@@ -129,7 +129,7 @@ class LocalLlmEngineContractTest {
     fun deleting_a_model_runs_its_block_and_returns_its_value_when_nothing_is_loaded() {
         val engine = LocalLlmEngine(RuntimeEnvironment.getApplication())
 
-        assertEquals("deleted", engine.withModelUnloaded("qwen3-0.6b-int4") { "deleted" })
+        assertEquals("deleted", engine.withModelUnloaded("gemma-4-e2b-it") { "deleted" })
     }
 
     @Test
@@ -144,7 +144,7 @@ class LocalLlmEngineContractTest {
         assertTrue(loading.await(5, TimeUnit.SECONDS))
 
         val deleted = AtomicBoolean(false)
-        val deleter = thread { engine.withModelUnloaded("qwen3-0.6b-int4") { deleted.set(true) } }
+        val deleter = thread { engine.withModelUnloaded("gemma-4-e2b-it") { deleted.set(true) } }
         Thread.sleep(300)
         assertFalse("the delete must wait for the load", deleted.get())
 
@@ -158,7 +158,7 @@ class LocalLlmEngineContractTest {
     fun an_exception_from_the_delete_block_propagates() {
         val engine = LocalLlmEngine(RuntimeEnvironment.getApplication())
         try {
-            engine.withModelUnloaded("qwen3-0.6b-int4") { throw IllegalStateException("disk error") }
+            engine.withModelUnloaded("gemma-4-e2b-it") { throw IllegalStateException("disk error") }
             throw AssertionError("expected propagation")
         } catch (e: IllegalStateException) {
             assertEquals("disk error", e.message)

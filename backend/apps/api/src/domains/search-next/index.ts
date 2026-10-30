@@ -48,6 +48,8 @@ export class SearchNextModule {}
 export { SearchService, TagService };
 export {
   type AnchoredSearchOptions,
+  RRF_DEFAULT_K,
+  reciprocalRankFusion,
   SEMANTIC_DISTANCE_THRESHOLD,
   SEMANTIC_MAX_RESULTS,
   type SearchModeTaken,
@@ -56,9 +58,23 @@ export {
   type SemanticSearchScope,
 } from './services/SearchService';
 export type { EntityCategory, EntityTag, RemoveTagResult, Tag, TimestampedTag, UpdateTagResult };
-export { INDEXABLE_ENTITIES, TAG_KINDS, TAGGABLE_ENTITIES } from './types';
-export type { EntityIdentifier, IndexableEntity, PromptSearchResult, TagKind, TaggableEntity } from './types';
-export { buildPromptQuery } from './promptQuery';
+export { DEVICE_INDEXED_ENTITIES, INDEXABLE_ENTITIES, TAG_KINDS, TAGGABLE_ENTITIES } from './types';
+export type {
+  DeviceIndexedEntity,
+  EntityIdentifier,
+  IndexableEntity,
+  PromptSearchResult,
+  TagKind,
+  TaggableEntity,
+} from './types';
+export { entityTimeSql } from './entityTime';
+export {
+  CONVERSATION_NAMESPACE,
+  DEVICE_PARTICIPANTS_MAX_CHARS,
+  DEVICE_RECORD_VERSION,
+  entityDeviceRecordSql,
+} from './entityDeviceRecord';
+export { buildPromptQuery, hasNameSubjectFrame, promptMediaClass } from './promptQuery';
 export { resolveAutoMode } from './services/SearchService';
 export {
   queryTokenCount,

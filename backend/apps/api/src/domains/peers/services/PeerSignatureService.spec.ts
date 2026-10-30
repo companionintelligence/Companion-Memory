@@ -156,6 +156,33 @@ describe('signOutbound', () => {
 
     expect(headers?.['signature-input']).toContain(`keyid="${service.publicThumbprint}"`);
   });
+
+  it('names its sovereign AID only when the kid is the did:keri:D<x> of this very key', () => {
+    const privateJwk = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+    const aid = `did:keri:D${privateJwk.x as string}`;
+    peersConfig.signingKeyJwk = JSON.stringify({ ...privateJwk, kid: aid });
+    const { service } = makeService();
+
+    expect(service.publicAid).toBe(aid);
+    expect(
+      service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })?.['signature-input'],
+    ).toContain(`keyid="${aid}"`);
+  });
+
+  it('keeps naming the thumbprint for any other kid, which peers would refuse as a keyid', () => {
+    for (const kid of ['my-box-key-2026', 'did:keri:EAnotherAid_00000000000000000000000000000000']) {
+      peersConfig.signingKeyJwk = JSON.stringify({
+        ...generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }),
+        kid,
+      });
+      const { service } = makeService();
+
+      expect(service.publicAid).toBeNull();
+      expect(
+        service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })?.['signature-input'],
+      ).toContain(`keyid="${service.publicThumbprint}"`);
+    }
+  });
 });
 
 describe('verifyInbound — the happy path', () => {
@@ -257,6 +284,28 @@ describe('verifyInbound — refusals', () => {
     // `keyid` names the peer's key, but the link holds a different one — so the
     // keyid check fires before any signature maths.
     await expectRefusal(verify(service, peer, { peerPublicJwk: stranger }), 'unknown-key');
+  });
+
+  it('refuses a sovereign keyid that spells out a key other than the one the link holds', async () => {
+    const { service } = makeService();
+    const privateJwk = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+    peersConfig.signingKeyJwk = JSON.stringify({ ...privateJwk, kid: `did:keri:D${privateJwk.x as string}` });
+    const headers = makeService().service.signOutbound({
+      method: 'POST',
+      targetUri: TARGET,
+      body: BODY,
+      now: NOW,
+    });
+    const stranger = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' });
+
+    // A label on the stored key naming the AID does not make it that key.
+    await expectRefusal(
+      verify(service, {
+        publicJwk: { ...stranger, kid: `did:keri:D${privateJwk.x as string}` },
+        headers: headers as Record<string, string>,
+      }),
+      'unknown-key',
+    );
   });
 
   it('refuses when the link holds an unusable key', async () => {

@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
+  countUnsentBeforeSignOut,
   createHookContext,
+  drainOutboxBeforeSignOut,
   fetchJson,
   FetchJsonError,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
   persistApiBaseUrl,
   setApiBaseUrl,
   syncNativeIntentConfig,
@@ -18,6 +22,7 @@ import {
   claimNativeOidcCode,
   hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
+  resetIngestFinishState,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
@@ -28,7 +33,10 @@ import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
+import { forgetFeatures } from '@/common/feature/rememberedFeatures';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
+
+import { forgetUser, MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 
 const authChannel = new BroadcastChannel('auth');
 
@@ -40,6 +48,17 @@ const API_KEY_ID_STORAGE = 'ci.apiKeyId';
 // What the stored key was minted with. Absent on a key issued before the app
 // started asking, which is exactly the signal `storedApiKeyCapability` reports.
 const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
+// The paired Memory origin, mirrored into the keystore for native consumers.
+const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
+
+/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
+async function removeStoredDeviceKey(): Promise<void> {
+  await secureStorageRemove(API_KEY_STORAGE);
+  await secureStorageRemove(API_KEY_ID_STORAGE);
+  await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+  forgetUser();
+  forgetFeatures();
+}
 
 /**
  * The authority this device asks for, and why it is the widest one.
@@ -104,7 +123,7 @@ function withCsrfHeader(headers?: HeadersInit): HeadersInit {
  * token and only mints when the cookie is absent/invalid, so calling this can
  * never invalidate another tab or an open server-rendered form.
  */
-async function primeCsrfCookie(): Promise<boolean> {
+async function primeCsrfCookie({ bounded = false }: { bounded?: boolean } = {}): Promise<boolean> {
   // Native is cookie-less: its cross-origin webview can neither read nor send the
   // SameSite cookie, so it captures the signed token from the response BODY and
   // echoes it as the header (see getCsrfToken). The request must also be
@@ -122,6 +141,7 @@ async function primeCsrfCookie(): Promise<boolean> {
       method: 'GET',
       credentials: native ? 'omit' : 'include',
       skipApiKey: true,
+      ...(bounded ? { timeout: MEMORY_ANSWER_DEADLINE_MS } : {}),
     });
 
     if (native) {
@@ -131,7 +151,14 @@ async function primeCsrfCookie(): Promise<boolean> {
     }
 
     return true;
-  } catch {
+  } catch (err: unknown) {
+    // The session check passes `bounded`: a prime that never answers must end that check
+    // as "Memory did not answer", not as a failed prime followed by a second wait for the
+    // refresh. Login and logout keep treating every failure as a failed prime.
+    if (bounded && isRequestTimeout(err)) {
+      throw err;
+    }
+
     return false;
   }
 }
@@ -197,12 +224,15 @@ async function postLogout(): Promise<void> {
  * Primes the csrf cookie first when it is missing (e.g. a cleared cookie with a
  * still-valid session), and on a 403 — a stale/invalid CSRF token, such as one
  * signed with a rotated server secret — re-primes and retries exactly once.
- * A 401 (invalid session) is never retried: that must fall through to login.
+ * A 401 (invalid session) is never retried here. The hook can instead ask the
+ * Hub bridge to repair a stale same-user session without repeating a request
+ * that the server has already rejected.
  */
 /**
  * If Traefik named a Hub person who does not match the Memory cookie, the
- * server replaces the session. Call this before refresh so the SPA never
- * hydrates the previous person's token / PowerSync replica.
+ * server replaces the session. Call this before the mount refresh, and after a
+ * later 401, so the SPA never hydrates the previous person's token / PowerSync
+ * replica or logs out a Hub-authenticated person over a stale Memory cookie.
  */
 async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }) | undefined> {
   if (isNativePlatform()) {
@@ -211,22 +241,59 @@ async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }
 
   try {
     if (!getCsrfToken()) {
-      await primeCsrfCookie();
+      await primeCsrfCookie({ bounded: true });
     }
 
     return await fetchJson<AuthResponse & { replaced?: boolean }>('/api/authenticate/hub-bridge', {
       method: 'POST',
       headers: withCsrfHeader(),
       credentials: 'include',
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
     });
-  } catch {
+  } catch (err: unknown) {
+    // The bridge is best effort, and any answer that is not a replaced session is
+    // ignored. Memory not answering at all is not: the refresh behind it would wait the
+    // same deadline again, so end the session check here.
+    if (isRequestTimeout(err)) {
+      throw err;
+    }
+
     return undefined;
   }
 }
 
+/** How often the session check is repeated while Memory does not answer it. */
+const UNREACHABLE_RETRY_MS = 5000;
+
+/**
+ * Whether a session call was cut off by its own deadline (`MEMORY_ANSWER_DEADLINE_MS`).
+ * None of these calls is handed a caller signal, so an abort here can only be that
+ * deadline (while waiting for the headers or for the body); `fetchJson` raises it as an
+ * `AbortError`, a runtime's own timeout as a `TimeoutError`. Matched by name rather than
+ * `instanceof`, since `DOMException` does not extend `Error` in every runtime.
+ */
+function isRequestTimeout(err: unknown): boolean {
+  const name = err != null && typeof err === 'object' ? (err as { name?: unknown }).name : undefined;
+
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
+/**
+ * Whether a failed session call means Memory did not answer, rather than that it
+ * answered "no session": a network failure, no answer within the deadline, or a 5xx
+ * from Memory or the gateway in front of it. A 4xx is an answer.
+ */
+function isUnansweredAuthError(err: unknown): boolean {
+  if (err instanceof FetchJsonError) {
+    return err.status >= 500;
+  }
+
+  return err instanceof TypeError || isRequestTimeout(err);
+}
+
 async function refreshSession(): Promise<AuthResponse | undefined> {
   if (!getCsrfToken()) {
-    await primeCsrfCookie();
+    await primeCsrfCookie({ bounded: true });
   }
 
   try {
@@ -234,6 +301,7 @@ async function refreshSession(): Promise<AuthResponse | undefined> {
       method: 'POST',
       headers: withCsrfHeader(),
       credentials: 'include',
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
     });
   } catch (err: unknown) {
     if (!(err instanceof FetchJsonError) || err.status !== 403) {
@@ -246,7 +314,7 @@ async function refreshSession(): Promise<AuthResponse | undefined> {
     // token. Gate the retry on that success (primeCsrfCookie returns res.ok): a
     // failed prime leaves the same rejected cookie in place, so the retry would
     // only burn the one-shot budget on a certain second 403 and log the user out.
-    if (!(await primeCsrfCookie())) {
+    if (!(await primeCsrfCookie({ bounded: true }))) {
       throw err;
     }
 
@@ -254,6 +322,7 @@ async function refreshSession(): Promise<AuthResponse | undefined> {
       method: 'POST',
       headers: withCsrfHeader(),
       credentials: 'include',
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
     });
   }
 }
@@ -316,6 +385,78 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   return created.key;
 }
 
+/**
+ * Decide what the keystore's copy of the Memory origin may do at launch. Resolves false when
+ * the person declined it and the stored credential was dropped instead.
+ *
+ * The origin the app paired with lives in localStorage, which only the app's own pages can
+ * write; `initApiBaseUrl` has already applied it. The keystore copy is a mirror for native
+ * App Intents (`syncNativeIntentConfig`), and the LocalHub plugin writes it for any caller
+ * that reaches the bridge. On Android's legacy bridge (run until 2026-10-26) that included a
+ * cross-origin iframe, and an origin planted there would, on the next launch, be where the
+ * device API key went.
+ *
+ * So the keystore never replaces a paired origin: a copy that disagrees is overwritten from
+ * localStorage. It only fills in an origin the app does not have (localStorage lost while
+ * the Keychain survived, as across an iOS reinstall), and only after the person agrees.
+ */
+async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean> {
+  const pairedOrigin = getPersistedApiBaseUrl();
+  const stored = storedOrigin?.replace(/\/+$/, '') || null;
+
+  if (pairedOrigin) {
+    if (stored !== pairedOrigin) {
+      await syncNativeIntentConfig();
+    }
+
+    return true;
+  }
+
+  if (!stored) {
+    return true;
+  }
+
+  // An origin with no key is what a sign-out cut short leaves (the key goes first). There is
+  // nothing to sign back in with, and a saved origin makes iOS skip the device picker, so
+  // the next sign-in would go to this box. Finish the sign-out instead of asking.
+  if (!(await secureStorageGet(API_KEY_STORAGE))) {
+    await secureStorageRemove(API_BASE_URL_STORAGE);
+
+    return true;
+  }
+
+  // Pairing only ever stores an http(s) address. Anything else (another scheme, or text with
+  // line breaks written to read as part of the question) came from somewhere else, so it is
+  // dropped like a declined one rather than shown in the prompt.
+  if (isHttpAddress(stored) && window.confirm(`Sign back in to your Memory at ${stored}?`)) {
+    persistApiBaseUrl(stored);
+
+    return true;
+  }
+
+  // Declined: drop the credential that came with it, so the app starts at device connect
+  // instead of quietly reusing a key for a server the person did not recognise.
+  await secureStorageRemove(API_BASE_URL_STORAGE);
+  await removeStoredDeviceKey();
+
+  return false;
+}
+
+/** An http(s) URL with no whitespace anywhere in it. */
+function isHttpAddress(value: string): boolean {
+  if (/\s/.test(value)) {
+    return false;
+  }
+
+  try {
+    const { protocol } = new URL(value);
+
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /** This device's stored key, or null when there is none or the store cannot be read. */
 async function storedDeviceKey(): Promise<string | null> {
   try {
@@ -370,6 +511,22 @@ async function completeOidcNativeSignIn(code: string, codeVerifier: string): Pro
   return mintAndStoreApiKey(jwt);
 }
 
+/** What a caller of `logout` can ask for. */
+export interface LogoutOptions {
+  /**
+   * Sign out without asking about captures that never uploaded, and delete them. Only for a
+   * caller whose own confirmation already covered them: account deletion, after which the
+   * key no longer works and the captures could never upload anyway.
+   */
+  discardUnsentCaptures?: boolean;
+}
+
+export interface SignOutPrompt {
+  open: boolean;
+  /** Queued captures of this account that signing out would delete. */
+  unsentCaptures: number;
+}
+
 type ReturnValue = [
   {
     expired: boolean;
@@ -393,11 +550,32 @@ type ReturnValue = [
      * error the response was meant to surface.
      */
     initializing: boolean;
+    /**
+     * True while the session could not be checked because Memory did not answer (a
+     * network failure or a 5xx from `/authenticate/refresh`, for example while its
+     * database is down). That is not "signed out": route gates show that Memory cannot
+     * be reached instead of Log In, and the check is retried until Memory answers.
+     */
+    unreachable: boolean;
     error: unknown | null;
+    /**
+     * The question a phone sign-out asks when captures are still queued after its last
+     * upload try (`UnsentCapturesSignOutDialog` shows it). `unsentCaptures` keeps its value
+     * after the answer, so the closing dialog does not change its text.
+     */
+    signOutPrompt: SignOutPrompt;
   },
   {
     login: (username: string, password: string) => Promise<void>;
-    logout: () => void;
+    /**
+     * Sign out. On a phone with captures that never reached this account, it asks first:
+     * `signOutPrompt` opens, and nothing is signed out or deleted until `confirmSignOut`.
+     */
+    logout: (options?: LogoutOptions) => Promise<void>;
+    /** "Sign out" on the `signOutPrompt` question: delete the unsent captures and sign out. */
+    confirmSignOut: () => Promise<void>;
+    /** "Cancel" on the `signOutPrompt` question: stay signed in, with the queue as it is. */
+    cancelSignOut: () => void;
     signup: (name: string, email: string, password: string, signup_code?: string) => Promise<void>;
     /**
      * After Portal cloud-connect: trade a portal OIDC bearer for a Memory API
@@ -430,11 +608,13 @@ function useAuth(): ReturnValue {
   const [loginError, setLoginError] = useState<unknown | null>(null);
   const [refreshError, setRefreshError] = useState<unknown | null>(null);
   const [initializing, setInitializing] = useState<boolean>(true);
+  const [unreachable, setUnreachable] = useState<boolean>(false);
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   // Native-only: present once the keystore API key is loaded/minted. Drives the
   // authenticated state on native, where there is no JWT in `accessToken`.
   const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
+  const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
 
   const decoded = useMemo(() => (accessToken ? jwtDecode<JwtPayload>(accessToken) : null), [accessToken]);
   const isExpired = useCallback(() => (decoded ? Date.now() >= decoded.exp * 1000 : true), [decoded]);
@@ -558,7 +738,8 @@ function useAuth(): ReturnValue {
     [],
   );
 
-  const logout = useCallback(async () => {
+  // The sign-out itself, once there is nothing left to ask. `logout` decides whether to ask.
+  const signOut = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
     // The stored copy when none is in memory: the desktop never loads its stored key back on
     // start, and a phone can sign out before the keystore restore lands. Deleting that copy
@@ -589,24 +770,26 @@ function useAuth(): ReturnValue {
     if (isTauriPlatform()) {
       // The desktop keeps its key in this page's storage; a revoked key left there
       // would only be read back as a credential that no longer works.
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
     }
 
     if (isNativePlatform()) {
       // No cookie session to revoke; the key was revoked above. Clear the local copy.
       setApiKey(null);
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
       // A saved public origin makes iOS skip the device picker, so the next
       // Companion login would still talk to the previous box and never list
       // the new account's Memory servers. Drop the pairing with the key.
       clearPersistedApiBaseUrl();
       await syncNativeIntentConfig();
+      // The Local Hub outbox outlives the session. Rows still queued belong to
+      // the account that just left (`logout` asked before deleting its unsent
+      // ones), and would otherwise upload into whichever account signs in next
+      // on this phone.
+      await clearOutboxAfterSignOut();
       setNativeApiKey(null);
       setAccessToken(null);
+      setUnreachable(false);
       setLoginLoading(false);
       setLoginError(null);
       navigate('/');
@@ -623,7 +806,10 @@ function useAuth(): ReturnValue {
       console.error('Logout failed on server:', error);
     }
 
+    // Enrichment this account still owes must not be requested under the next one.
+    resetIngestFinishState();
     setAccessToken(null);
+    setUnreachable(false);
     setLoginLoading(false);
     setLoginError(null);
 
@@ -631,6 +817,58 @@ function useAuth(): ReturnValue {
 
     navigate('/');
   }, [navigate]);
+
+  // The logout already under way. On a phone it can spend up to SIGN_OUT_DRAIN_TIMEOUT_MS on
+  // its last upload with nothing on screen, and a second tap on Log out in that time must
+  // not start a second drain, or a second sign-out alongside the first.
+  const logoutInFlight = useRef<Promise<void> | null>(null);
+
+  const logout = useCallback(
+    (options: LogoutOptions = {}) => {
+      if (logoutInFlight.current) {
+        return logoutInFlight.current;
+      }
+
+      const run = (async () => {
+        // Discarding: the captures can never upload (the account is gone), so there is
+        // nothing to upload first and nothing to ask about.
+        if (isNativePlatform() && !options.discardUnsentCaptures) {
+          // One last, bounded upload of what this account queued while offline, while its
+          // key is still the one requests carry.
+          await drainOutboxBeforeSignOut();
+
+          // Signing out deletes whatever is still queued. When some of it is this account's,
+          // ask first, and touch nothing until the answer: Cancel keeps the session and the
+          // queue, so the captures can still upload once the phone is back online.
+          const unsentCaptures = await countUnsentBeforeSignOut();
+
+          if (unsentCaptures > 0) {
+            setSignOutPrompt({ open: true, unsentCaptures });
+
+            return;
+          }
+        }
+
+        await signOut();
+      })().finally(() => {
+        logoutInFlight.current = null;
+      });
+
+      logoutInFlight.current = run;
+
+      return run;
+    },
+    [signOut],
+  );
+
+  const confirmSignOut = useCallback(async () => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+    await signOut();
+  }, [signOut]);
+
+  const cancelSignOut = useCallback(() => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+  }, []);
 
   const signup = useCallback(
     async (name: string, email: string, password: string, signup_code?: string) => {
@@ -681,10 +919,45 @@ function useAuth(): ReturnValue {
 
       setAccessToken(data?.accessToken ?? null);
     } catch (err: unknown) {
+      if (err instanceof FetchJsonError && err.status === 401) {
+        let bridged: Awaited<ReturnType<typeof alignHubSession>>;
+
+        try {
+          bridged = await alignHubSession();
+        } catch {
+          // Memory answered the refresh, then stopped answering the bridge.
+          setUnreachable(true);
+
+          return;
+        }
+
+        if (bridged?.replaced && bridged.accessToken) {
+          const nextSubject = jwtDecode<JwtPayload>(bridged.accessToken).sub;
+
+          // A changed Hub identity must never inherit the previous account's
+          // local replica. A repaired session for the same person can keep it.
+          if (!decoded?.sub || decoded.sub !== nextSubject) {
+            await disconnectAndClearPowerSyncForLogout();
+          }
+
+          setAccessToken(bridged.accessToken);
+
+          return;
+        }
+      }
+
+      if (isUnansweredAuthError(err)) {
+        // Memory did not answer. Keep the token: it may still be good, and an outage is
+        // not a sign-out. The retry below asks again until Memory answers.
+        setUnreachable(true);
+
+        return;
+      }
+
       setRefreshError(err);
       setAccessToken(null);
     }
-  }, []);
+  }, [decoded?.sub]);
 
   useEffect(() => {
     (async () => {
@@ -700,8 +973,8 @@ function useAuth(): ReturnValue {
             return;
           }
 
-          if (storedOrigin) {
-            persistApiBaseUrl(storedOrigin);
+          if (!(await adoptKeystoreOrigin(storedOrigin))) {
+            return;
           }
 
           const storedKey = await secureStorageGet(API_KEY_STORAGE);
@@ -728,13 +1001,54 @@ function useAuth(): ReturnValue {
           const data = await refreshSession();
           setAccessToken(data?.accessToken ?? null);
         }
-      } catch {
-        // No valid session cookie, user will need to log in
+      } catch (err: unknown) {
+        // No valid session cookie, user will need to log in. Unless Memory did not
+        // answer at all, which says nothing about the session: retry instead.
+        if (isUnansweredAuthError(err)) {
+          setUnreachable(true);
+        }
       } finally {
         setInitializing(false);
       }
     })();
   }, []);
+
+  // While the session check goes unanswered, ask again until Memory answers either way.
+  useEffect(() => {
+    if (!unreachable) {
+      return;
+    }
+
+    // A check can now run longer than the interval (it waits out its deadline), so a
+    // tick leaves the previous one to finish rather than stacking requests on a Memory
+    // that is not answering.
+    let asking = false;
+
+    const timer = setInterval(() => {
+      if (asking) {
+        return;
+      }
+
+      asking = true;
+      refreshSession()
+        .then((data) => {
+          setAccessToken(data?.accessToken ?? null);
+          setUnreachable(false);
+        })
+        .catch((err: unknown) => {
+          if (!isUnansweredAuthError(err)) {
+            // Memory answered: there is no session after all.
+            setAccessToken(null);
+            setUnreachable(false);
+          }
+        })
+        .finally(() => {
+          asking = false;
+        });
+    }, UNREACHABLE_RETRY_MS);
+
+    return () => clearInterval(timer);
+  }, [unreachable]);
 
   useAutoRefreshToken(accessToken, refresh);
 
@@ -907,11 +1221,15 @@ function useAuth(): ReturnValue {
       authenticated: Boolean(accessToken) || Boolean(nativeApiKey),
       loading: loginLoading || initializing,
       initializing,
+      unreachable,
       error: loginError ?? refreshError,
+      signOutPrompt,
     },
     {
       login,
       logout,
+      confirmSignOut,
+      cancelSignOut,
       signup,
       completePortalMemoryConnect,
       completeMemoryPasswordConnect,

@@ -121,6 +121,8 @@ describe('SavedSearchPicker', () => {
     expect(opened.get('search')).toBe('paris');
     expect(opened.get('tags')).toBe('vacation');
     expect(opened.has('view')).toBe(false);
+    // The explorer remembers which search it is showing, so Save can update it.
+    expect(opened.get('loaded_search')).toBe('trip-1');
     expect(screen.getByTestId('location')).toHaveTextContent('/plan/tasks?view=board');
     expect(screen.getByTestId('location')).not.toHaveTextContent('search=');
   });

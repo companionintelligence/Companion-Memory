@@ -13,8 +13,27 @@ import config from '@ci/configuration';
  * - Every token a Portal mints once it can address tokens carries `"ci_appliance_binding": 1`, so a
  *   token without an appliance audience from that Portal is known to be unaddressed rather than
  *   older than the feature.
+ * - The phone signs in once and holds the authorization code. It lists the person's Memories with
+ *   that unspent code (`POST /api/users/me/apps/by-code`, body `{"code", "code_verifier"}`), then
+ *   spends the code on the one picked, adding `resource=urn:ci:device:<device id>` (the value the
+ *   list gives for it) to the code exchange. The Portal honours the resource only for client
+ *   `ci-server` with the on-device redirect `companion://auth/callback`, and only for a person in an
+ *   organization that device is registered to. A resource it won't honour is 400 `invalid_target`,
+ *   before the code is spent; an unknown, expired or spent code is `invalid_grant`. No refresh grant
+ *   returns an id_token, so a code exchange is the only way to get one. The phone side is in
+ *   `frontend/apps/web/src/pages/DeviceConnectPage/oidc.ts`.
+ * - A Memory's own "Sign in with Companion" gets a stamped id_token with no appliance audience. It
+ *   is a credential at no Memory: a stamped token issued to {@link MEMORY_SIGN_IN_CLIENT} and not
+ *   addressed to this appliance is refused (`PortalTokenService.authorityFor`).
  */
 export const APPLIANCE_AUDIENCE_PREFIX = 'urn:ci:device:';
+
+/**
+ * The client every Memory signs its users in as, and the phone app too (`OidcController`,
+ * `DeviceConnectPage/oidc.ts`). A token issued to it is only ever meant for one Memory, so from a
+ * Portal that addresses tokens it counts here only when it is addressed here.
+ */
+export const MEMORY_SIGN_IN_CLIENT = 'ci-server';
 
 /** The claim a Portal that addresses tokens to appliances puts on every token it mints. */
 export const APPLIANCE_BINDING_CLAIM = 'ci_appliance_binding';

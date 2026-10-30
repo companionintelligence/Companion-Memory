@@ -1,5 +1,7 @@
 export { AuthProvider, useAuth } from './useAuth';
 export { useSessionAuth } from './useSessionAuth';
+export { useLiveChanges } from './useLiveChanges';
+export { useRefetchOnReturn } from './useRefetchOnReturn';
 export { CaptureModalProvider, useCaptureModal } from './useCaptureModal';
 export { useChatRequester } from './useChatRequester';
 export { useCounter } from './useCounter';
@@ -8,6 +10,9 @@ export { useModalControls } from './useModalControls';
 export { ModelProvider, useModel } from './useModel';
 export { useLocationTracking, isLocationTrackingEnabled } from './useLocationTracking';
 export { useNativeShell } from './useNativeShell';
+export { useBackClosesSheet } from './useBackClosesSheet';
 export { usePreventOverscroll } from './usePreventOverscroll';
 export { useStatusBarScrollToTop } from './useStatusBarScrollToTop';
 export { useRecentSearches } from './useRecentSearches';
+export { classifyDeviceBreakpoint, useDeviceBreakpoint } from './useDeviceBreakpoint';
+export type { DeviceBreakpointState } from './useDeviceBreakpoint';

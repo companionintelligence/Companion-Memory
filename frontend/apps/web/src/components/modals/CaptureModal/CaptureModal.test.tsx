@@ -2,7 +2,7 @@ import { DeviceLayoutProvider, isNativePlatform } from '@ci/common';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureFromCamera, chooseFiles } from '@/lib/captureMedia';
+import { captureFromCamera, chooseAudioFiles, chooseFiles, chooseFromLibrary } from '@/lib/captureMedia';
 import { enqueueMemoryUpload } from '@/lib/memoryUploadQueue';
 import { canRecordAudio, startAudioRecording } from '@/lib/recordAudio';
 
@@ -24,6 +24,7 @@ vi.mock('@ci/common', async (importOriginal) => {
 
 vi.mock('@/lib/captureMedia', () => ({
   captureFromCamera: vi.fn(),
+  chooseAudioFiles: vi.fn(),
   chooseFiles: vi.fn(),
   chooseFromLibrary: vi.fn(),
 }));
@@ -48,6 +49,8 @@ vi.mock('@ci/capture', () => ({
 const mockedIsNativePlatform = vi.mocked(isNativePlatform);
 const mockedCaptureFromCamera = vi.mocked(captureFromCamera);
 const mockedChooseFiles = vi.mocked(chooseFiles);
+const mockedChooseAudioFiles = vi.mocked(chooseAudioFiles);
+const mockedChooseFromLibrary = vi.mocked(chooseFromLibrary);
 const mockedCanRecordAudio = vi.mocked(canRecordAudio);
 const mockedStartAudioRecording = vi.mocked(startAudioRecording);
 const mockedEnqueue = vi.mocked(enqueueMemoryUpload);
@@ -78,7 +81,13 @@ describe('CaptureModal', () => {
     mockedIsNativePlatform.mockReturnValue(false);
     mockedCaptureFromCamera.mockResolvedValue(null);
     mockedChooseFiles.mockResolvedValue([]);
+    mockedChooseAudioFiles.mockResolvedValue([]);
+    mockedChooseFromLibrary.mockResolvedValue([]);
     mockedCanRecordAudio.mockReturnValue(false);
+    mockedStartAudioRecording.mockReset();
+    mockedChooseFiles.mockClear();
+    mockedChooseAudioFiles.mockClear();
+    mockedChooseFromLibrary.mockClear();
     mockedEnqueue.mockClear();
     setViewport(true);
   });
@@ -118,21 +127,20 @@ describe('CaptureModal', () => {
     expect(stage.parentElement).toHaveClass('h-full');
   });
 
-  it('opens the native camera as soon as Capture opens on the phone', async () => {
-    const clip = new File(['v'], 'IMG.mov', { type: 'video/quicktime' });
+  it('lands on the picker on the phone and does not open the camera by itself', async () => {
     mockedIsNativePlatform.mockReturnValue(true);
-    mockedCaptureFromCamera.mockResolvedValue(clip);
 
     renderCapture();
 
-    // No mode: the system camera keeps its own Photo/Video toggle.
-    await waitFor(() => expect(mockedCaptureFromCamera).toHaveBeenCalledWith(undefined));
-    await waitFor(() =>
-      expect(mockedEnqueue).toHaveBeenCalledWith([clip], expect.objectContaining({ authToken: 'tok' })),
-    );
+    const stage = await screen.findByTestId('capture-stage');
+
+    expect(stage).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Photo' })).toHaveAttribute('aria-pressed', 'true');
+    expect(mockedCaptureFromCamera).not.toHaveBeenCalled();
+    expect(mockedStartAudioRecording).not.toHaveBeenCalled();
   });
 
-  it('waits for a tap on the web, where an unprompted picker would be blocked', async () => {
+  it('waits for a tap on the web too', async () => {
     renderCapture();
 
     await screen.findByTestId('capture-stage');
@@ -148,29 +156,50 @@ describe('CaptureModal', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Photo' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Photo' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
 
     expect(mockedCaptureFromCamera).toHaveBeenCalledWith('photo');
     await waitFor(() =>
-      expect(mockedEnqueue).toHaveBeenCalledWith([photo], expect.objectContaining({ authToken: 'tok' })),
+      expect(mockedEnqueue).toHaveBeenCalledWith(
+        [photo],
+        expect.objectContaining({
+          authToken: 'tok',
+          memoryCapture: true,
+          // Fresh from the camera: now is when it was taken.
+          capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        }),
+      ),
     );
     expect(screen.queryByPlaceholderText('Ask about this content...')).not.toBeInTheDocument();
   });
 
-  it('re-runs the selected mode from the stage', async () => {
+  it('switching the mode bar only switches the tab; the stage runs the mode', async () => {
+    mockedCanRecordAudio.mockReturnValue(true);
+
     renderCapture();
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Video' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Video' }));
-    fireEvent.click(screen.getByTestId('capture-stage'));
+    fireEvent.click(screen.getByRole('button', { name: 'Audio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
 
+    expect(mockedCaptureFromCamera).not.toHaveBeenCalled();
+    expect(mockedChooseFiles).not.toHaveBeenCalled();
+    expect(mockedChooseAudioFiles).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('capture-audio-panel')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Files' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByTestId('capture-stage'));
+    expect(mockedChooseFiles).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Video' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
+    fireEvent.click(screen.getByTestId('capture-stage'));
     expect(mockedCaptureFromCamera).toHaveBeenNthCalledWith(1, 'video');
     expect(mockedCaptureFromCamera).toHaveBeenNthCalledWith(2, 'video');
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Video' })).toHaveAttribute('aria-pressed', 'true'),
-    );
   });
 
-  it('keeps files and audio reachable from the mode bar', async () => {
+  it('keeps files and audio reachable from the stage', async () => {
     mockedCanRecordAudio.mockReturnValue(true);
     mockedStartAudioRecording.mockResolvedValue({
       stop: vi.fn(async () => new File(['a'], 'AUD.m4a', { type: 'audio/mp4' })),
@@ -181,10 +210,97 @@ describe('CaptureModal', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
     expect(mockedChooseFiles).toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Audio' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
+    expect(await screen.findByTestId('capture-audio-panel')).toBeInTheDocument();
+  });
+
+  it('opens the audio recorder idle and only records on the Record tap', async () => {
+    const take = new File(['a'], 'AUD.m4a', { type: 'audio/mp4' });
+    const stop = vi.fn(async () => take);
+    mockedCanRecordAudio.mockReturnValue(true);
+    mockedStartAudioRecording.mockResolvedValue({ stop, cancel: vi.fn() });
+
+    renderCapture();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Audio' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Audio' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
+
+    const panel = await screen.findByTestId('capture-audio-panel');
+
+    expect(panel).toHaveAttribute('data-status', 'idle');
+    expect(screen.getByText('Ready to record')).toBeInTheDocument();
+    expect(screen.queryByText('Recording')).not.toBeInTheDocument();
+    expect(mockedStartAudioRecording).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record' }));
+
     expect(await screen.findByText('Recording')).toBeInTheDocument();
+    expect(mockedStartAudioRecording).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() =>
+      expect(mockedEnqueue).toHaveBeenCalledWith([take], expect.objectContaining({ authToken: 'tok' })),
+    );
+  });
+
+  it('leaves the audio recorder without recording when cancelled while idle', async () => {
+    mockedCanRecordAudio.mockReturnValue(true);
+
+    renderCapture();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Audio' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Audio' }));
+    fireEvent.click(screen.getByTestId('capture-stage'));
+    await screen.findByTestId('capture-audio-panel');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByTestId('capture-stage')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Audio' })).toHaveAttribute('aria-pressed', 'true');
+    expect(mockedStartAudioRecording).not.toHaveBeenCalled();
+  });
+
+  it('points "Choose from library" at the selected kind', async () => {
+    renderCapture();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Choose from library' })).toBeInTheDocument(),
+    );
+
+    // Photo (the default): the photo library. A pick is not fresh, so no
+    // capture moment rides along — the bytes carry their own date or none.
+    mockedChooseFromLibrary.mockResolvedValueOnce([new File(['p'], 'old.jpg', { type: 'image/jpeg' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose from library' }));
+    await waitFor(() => expect(mockedChooseFromLibrary).toHaveBeenCalledTimes(1));
+    expect(mockedChooseFromLibrary).toHaveBeenLastCalledWith('photo');
+    await waitFor(() => expect(mockedEnqueue).toHaveBeenCalledTimes(1));
+    expect(mockedEnqueue).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ capturedAt: expect.anything() }),
+    );
+
+    // Video: the same library, narrowed to clips.
+    fireEvent.click(screen.getByRole('button', { name: 'Video' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose from library' }));
+    await waitFor(() => expect(mockedChooseFromLibrary).toHaveBeenCalledTimes(2));
+    expect(mockedChooseFromLibrary).toHaveBeenLastCalledWith('video');
+
+    // Audio: audio files, never the photo library.
+    fireEvent.click(screen.getByRole('button', { name: 'Audio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose from library' }));
+    await waitFor(() => expect(mockedChooseAudioFiles).toHaveBeenCalledTimes(1));
+
+    // Files: the same document picker the Files mode itself opens.
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose from library' }));
+    await waitFor(() => expect(mockedChooseFiles).toHaveBeenCalledTimes(1));
+
+    expect(mockedChooseFromLibrary).toHaveBeenCalledTimes(2);
   });
 
   it('portals the mobile shell to document.body so header tooltips cannot paint over it', async () => {

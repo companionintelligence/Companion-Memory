@@ -40,6 +40,8 @@ export class NoteResolver {
     const serviceContext = toServiceContext(context);
 
     const entity = await this.noteService.create(serviceContext, {
+      // A client-minted id (an offline replica's), or none: the service mints one.
+      id: input.id ? GlobalUID.parse('note', input.id) : undefined,
       title: input.title,
       content: input.content,
     });
@@ -87,6 +89,23 @@ export class NoteResolver {
     const serviceContext = toServiceContext(context);
 
     const id = GlobalUID.parse('note', input.id);
+
+    if (input.expectedUpdatedAt) {
+      const outcome = await this.noteService.updateIfUnchanged(
+        serviceContext,
+        id,
+        { title: input.title, content: input.content },
+        input.expectedUpdatedAt,
+      );
+
+      if (outcome == null) {
+        return { success: false };
+      }
+
+      // Not written: the note changed since the client saw it. The note as stored goes
+      // back with `success: false`, so the client can tell whether the change was its own.
+      return { success: outcome.written, note: NoteType.toType(outcome.note) };
+    }
 
     const entity = await this.noteService.update(serviceContext, id, {
       title: input.title,

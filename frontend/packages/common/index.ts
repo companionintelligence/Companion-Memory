@@ -4,11 +4,16 @@ export { LoadingPage } from './src/components/loading-page';
 export { Portal } from './src/components/portal';
 export {
   MOBILE_BREAKPOINT,
+  TABLET_MAX_BREAKPOINT,
+  TABLET_MIN_BREAKPOINT,
   DeviceLayoutProvider,
+  resolveDeviceSizeClass,
   useDeviceLayout,
   useOverflowsRight,
   usePageTitle,
+  useScrollOverflow,
 } from './src/hooks';
+export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
@@ -17,10 +22,12 @@ export {
   buildApiUrl,
   clearPersistedApiBaseUrl,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
   getWebOrigin,
   initApiBaseUrl,
   isIosPlatform,
   isLocalApplianceOrigin,
+  isAndroidPlatform,
   isNativePlatform,
   isTauriPlatform,
   needsNativeCloudConnect,
@@ -30,19 +37,38 @@ export {
   subscribeApiBaseUrl,
 } from './src/utils/apiBase';
 export {
+  APP_LOCK_GRACES,
+  APP_LOCK_GRACE_LABELS,
+  appLockPlugin,
+  describeBiometry,
+  lockScreenQueueNote,
+} from './src/utils/appLock';
+export type {
+  AppLockBiometry,
+  AppLockGrace,
+  AppLockPluginBridge,
+  AppLockSettings,
+  AppLockStatus,
+  LockScreenQueueCounts,
+} from './src/utils/appLock';
+export {
   CONNECTION_REPROBE_INTERVAL_MS,
   LOCAL_PROBE_TIMEOUT_MS,
   REMOTE_PROBE_TIMEOUT_MS,
   ConnectionModeProvider,
   resolveConnectionMode,
   useConnectionMode,
+  useOptionalConnectionMode,
+  getLatestConnectionMode,
+  isConnectionModeResolved,
+  memoryAnswers,
+  requestConnectionRefresh,
+  registerCachedDataProbe,
 } from './src/utils/connectionMode';
-export type { ConnectionMode } from './src/utils/connectionMode';
+export type { CachedDataProbe, ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
 export {
   BACKGROUND_MAX_ACCURACY_METERS,
-  BACKGROUND_MIN_DISTANCE_METERS,
-  BACKGROUND_MIN_INTERVAL_MS,
   HOME_GEOFENCE_RADIUS_METERS,
   LOCATION_ENABLED_STORAGE_KEY,
   LOCATION_MODE_CHANGE_EVENT,
@@ -57,7 +83,7 @@ export {
   captureNote,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
   forgetQueuedNote,
   haversineMeters,
@@ -73,7 +99,7 @@ export {
   writeLocationTrackingMode,
 } from './src/utils/deviceSources';
 export type {
-  BackgroundGeolocationLocation,
+  NativeLocationEvent,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
@@ -91,14 +117,34 @@ export {
   apiFetch,
   fetchJson,
   streamingFetch,
+  type ApiFetchInit,
   type FetchJsonIssue,
 } from './src/utils/fetchJson';
-export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
+export {
+  OFFLINE_ALLOWED_PATH_PREFIXES,
+  OFFLINE_WRITE_MESSAGE,
+  OfflineWriteError,
+  applianceWritesBlocked,
+  assertApplianceWritable,
+  isOfflineWriteError,
+  subscribeOfflineWriteBlocked,
+} from './src/utils/offlineWrites';
+export type { OfflineWriteBlockedEvent } from './src/utils/offlineWrites';
+export {
+  discoverLanAppliances,
+  localHubPlugin,
+  localHubSession,
+  type DiscoveredLanAppliance,
+  type DiscoverLanAppliancesOptions,
+  type DiscoverLanAppliancesResult,
+  type LocalHubSession,
+} from './src/utils/localHub';
 export {
   cancelLocalLlmDownload,
   deleteLocalLlmModel,
   downloadLocalLlmModel,
   ensureLocalLlmLoaded,
+  isAnswerCutShort,
   isContextExhausted,
   isLocalLlmReady,
   LocalLlmGenerationError,
@@ -107,6 +153,7 @@ export {
   onLocalLlmDownloadProgress,
   probeLocalLlm,
   resetLocalLlmConversation,
+  setLocalSearchReplicaFile,
   streamLocalLlm,
   unloadLocalLlm,
 } from './src/utils/localLlm';
@@ -131,6 +178,7 @@ export {
   LOCAL_LLM_MODEL_LIST,
   evaluateModelFit,
   findLocalLlmModel,
+  gpuAllowedOn,
   formatBytes,
   localLlmModelsFor,
 } from './src/utils/localLlmCatalog';
@@ -143,6 +191,7 @@ export type {
   LocalLlmModelSpec,
   LocalLlmPlatform,
 } from './src/utils/localLlmCatalog';
+export { LOCAL_TOOLS_OFF_REFUSAL, isLocalWriteRequest } from './src/utils/localLlmToolsOff';
 export {
   DEFAULT_LOCAL_LLM_PREFS,
   getLocalLlmPrefs,
@@ -155,9 +204,11 @@ export {
   OUTBOX_MAX_ATTEMPTS,
   OUTBOX_MAX_ITEMS,
   OUTBOX_WARN_AT,
+  clearOutbox,
   enqueueOutboxItem,
   getOutboxItem,
   listOutbox,
+  outboxOwnerStamp,
   recordOutboxAttempt,
   removeOutboxItem,
   retryOutboxItem,
@@ -181,6 +232,10 @@ export {
   NOTE_OUTBOX_KIND,
   POSITION_OUTBOX_KIND,
   OutboxQueueProvider,
+  SIGN_OUT_DRAIN_TIMEOUT_MS,
+  clearOutboxAfterSignOut,
+  countUnsentBeforeSignOut,
+  drainOutboxBeforeSignOut,
   finishStagesFor,
   flushOutbox,
   isPermanentFlushFailure,
@@ -193,10 +248,10 @@ export {
 } from './src/utils/outboxFlush';
 export type { FlushOutboxOptions, FlushOutboxSummary, OutboxQueueState } from './src/utils/outboxFlush';
 export {
+  SECURE_STORE_KEYS,
   addAppStateListener,
   addAppUrlOpenListener,
   addBackButtonListener,
-  addBackgroundLocationWatcher,
   startSignificantLocationUpdates,
   closeBrowser,
   exitApp,
@@ -210,9 +265,9 @@ export {
   isDeviceLocationError,
   openAuthSession,
   openExternalUrl,
+  openLinkOutsideApp,
   openNativeAppSettings,
   openNativeLocationSettings,
-  removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
   requestNotificationPermission,
   scanQrCode,
@@ -221,16 +276,18 @@ export {
   secureStorageRemove,
   secureStorageSet,
   setStatusBarStyle,
+  setSystemBarsBackground,
   syncNativeIntentConfig,
   takeNativePhoto,
 } from './src/utils/nativeBridge';
 export type {
-  BackgroundGeolocationError,
+  NativeLocationError,
   BarcodeScanErrorCode,
   DeviceLocationErrorCode,
   LocalNotification,
   NativeCurrentLocation,
   NativeLocationAuthorization,
+  SignificantLocationOptions,
 } from './src/utils/nativeBridge';
 export { AuthSessionCancelledError, BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {

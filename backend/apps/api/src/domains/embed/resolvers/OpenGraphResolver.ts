@@ -11,10 +11,106 @@ import {
   type UnfurlResolver,
 } from './types';
 
-const META_RE = /<meta\b[^>]*>/gi;
-const LINK_RE = /<link\b[^>]*>/gi;
-const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
-const ATTR_RE = /([a-zA-Z:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+/**
+ * How much of a page the head scan reads, in characters.
+ *
+ * The fetch already stops at {@link MAX_HTML_BYTES}; this is the second bound,
+ * on the parse, so its cost never depends on what a remote server chose to send.
+ * The scans below are linear, so this is about a ceiling, not about speed. It
+ * equals the fetch cap, so every page that got a card before still gets one: a
+ * head with 150 KB of inline styles or JSON-LD before its og: tags is common.
+ */
+export const MAX_HEAD_SCAN_CHARS = MAX_HTML_BYTES;
+
+/**
+ * One `name=value` pair inside a tag.
+ *
+ * The lookbehind lets a match start only at the beginning of a run of name
+ * characters. Without it, a long run with no `=` after it was retried from
+ * every position inside it, each retry scanning to the end of the run: quadratic
+ * in the length of one tag, and a tag can be the whole head. A match that starts
+ * mid-run could only ever succeed where the run's own start succeeds, so this
+ * changes no result.
+ */
+const ATTR_RE = /(?<![a-zA-Z:_-])([a-zA-Z:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+
+/** ASCII word characters, which is what `\b` tests in a non-unicode regex. */
+function isWordCharCode(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95
+  );
+}
+
+/**
+ * Every `<name …>` tag in `html`, in order: what `/<name\b[^>]*>/gi` matched,
+ * found in one forward pass.
+ *
+ * That regex was quadratic on a page with many `<meta` openings and no `>`:
+ * each opening scanned to the end of the input before failing, and the next
+ * opening did it again. Here, an opening with no `>` after it ends the scan,
+ * because no later opening can have one either.
+ */
+function tagsNamed(html: string, name: string): string[] {
+  const opening = new RegExp(`<${name}`, 'gi');
+  const tags: string[] = [];
+
+  for (let match = opening.exec(html); match; match = opening.exec(html)) {
+    const afterName = match.index + match[0].length;
+
+    // `\b`: `<metadata>` is not a `<meta>` tag.
+    if (afterName < html.length && isWordCharCode(html.charCodeAt(afterName))) {
+      continue;
+    }
+
+    const close = html.indexOf('>', afterName);
+
+    if (close === -1) {
+      break;
+    }
+
+    tags.push(html.slice(match.index, close + 1));
+    opening.lastIndex = close + 1;
+  }
+
+  return tags;
+}
+
+/**
+ * The text of the first `<title>` element, as `/<title[^>]*>([\s\S]*?)<\/title>/i`
+ * captured it, without retrying the lazy scan from every later `<title`. Only
+ * the first opening can match: if it has no `>` or no `</title>` after it, no
+ * later opening does either.
+ */
+function firstTitle(html: string): string | undefined {
+  const opening = /<title/i.exec(html);
+
+  if (!opening) {
+    return undefined;
+  }
+
+  const textStart = html.indexOf('>', opening.index + opening[0].length) + 1;
+
+  if (textStart === 0) {
+    return undefined;
+  }
+
+  const closing = /<\/title>/gi;
+  closing.lastIndex = textStart;
+  const end = closing.exec(html);
+
+  return end ? html.slice(textStart, end.index) : undefined;
+}
+
+/**
+ * The character a numeric reference names. `String.fromCodePoint` throws a
+ * RangeError past U+10FFFF, so one `&#99999999;` in a remote page's og:title
+ * used to fail the whole unfurl; HTML reads such a reference as U+FFFD.
+ */
+function fromCodePoint(codePoint: number): string {
+  return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    ? String.fromCodePoint(codePoint)
+    : '�';
+}
 
 function decode(s: string): string {
   return s
@@ -24,8 +120,8 @@ function decode(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16)));
+    .replace(/&#(\d+);/g, (_, n) => fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => fromCodePoint(Number.parseInt(n, 16)));
 }
 
 function attrs(tag: string): Record<string, string> {
@@ -47,12 +143,13 @@ export interface ParsedHead {
 
 /** Pulls OpenGraph / Twitter / standard meta out of the <head> of an HTML page. */
 export function parseHead(html: string, baseUrl: string): ParsedHead {
+  const scanned = html.length > MAX_HEAD_SCAN_CHARS ? html.slice(0, MAX_HEAD_SCAN_CHARS) : html;
   // Only the head matters, and a truncated body must not poison it.
-  const headEnd = html.search(/<\/head>|<body\b/i);
-  const head = headEnd > 0 ? html.slice(0, headEnd) : html;
+  const headEnd = scanned.search(/<\/head>|<body\b/i);
+  const head = headEnd > 0 ? scanned.slice(0, headEnd) : scanned;
   const meta = new Map<string, string>();
 
-  for (const tag of head.match(META_RE) ?? []) {
+  for (const tag of tagsNamed(head, 'meta')) {
     const a = attrs(tag);
     const key = (a.property ?? a.name ?? a.itemprop ?? '').toLowerCase();
     const value = a.content;
@@ -62,7 +159,7 @@ export function parseHead(html: string, baseUrl: string): ParsedHead {
   }
 
   let oembedHref: string | undefined;
-  for (const tag of head.match(LINK_RE) ?? []) {
+  for (const tag of tagsNamed(head, 'link')) {
     const a = attrs(tag);
     if (
       (a.rel ?? '').toLowerCase() === 'alternate' &&
@@ -79,9 +176,9 @@ export function parseHead(html: string, baseUrl: string): ParsedHead {
     }
   }
 
-  const titleMatch = TITLE_RE.exec(head);
+  const title = firstTitle(head);
 
-  return { meta, title: titleMatch ? str(decode(titleMatch[1]), 500) : undefined, oembedHref };
+  return { meta, title: title !== undefined ? str(decode(title), 500) : undefined, oembedHref };
 }
 
 export function dataFromHead(head: ParsedHead, pageUrl: string): UnfurlData {

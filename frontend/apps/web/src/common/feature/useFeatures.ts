@@ -10,7 +10,17 @@ import {
 
 import { useAuth } from '@/hooks';
 
+import {
+  recallFeatures,
+  recallGlobalFeatures,
+  rememberFeatures,
+  rememberGlobalFeatures,
+} from './rememberedFeatures';
+
 type Features = Record<string, boolean>;
+
+/** The remembered-flags subject for an API-key session, which has no JWT subject of its own. */
+const API_KEY_SUBJECT = 'api-key';
 
 type ReturnValue = {
   isFeatureEnabled: (featureName: string) => boolean;
@@ -34,6 +44,12 @@ function useFeatures(): ReturnValue {
 
   const hasFetched = useRef(false);
   const hasFetchedGlobal = useRef(false);
+  // Whether each map holds an answer worth consulting: fetched this session, or the set
+  // remembered from the last successful fetch when this one failed (rememberedFeatures.ts).
+  // Kept apart from `hasFetched`, which also decides whether a later call fetches again:
+  // a remembered set must not stop the next real fetch.
+  const userKnown = useRef(false);
+  const globalKnown = useRef(false);
 
   // Refs cannot drive a re-render, so `loading` needs its own state. "Settled"
   // means answered, not answered successfully: a failed fetch leaves the flags
@@ -46,6 +62,10 @@ function useFeatures(): ReturnValue {
   // ago by the time the response lands.
   const liveSubject = useRef(subject);
   const liveOrigin = useRef(origin);
+  // Who the remembered flags belong to. A desktop session has a JWT subject. The phone's
+  // session is an API key with no token to decode, so its subject is null — and the key
+  // identifies the one person paired to this phone, so a fixed marker stands for them.
+  const rememberedAs = subject ?? (authenticated && !authToken ? API_KEY_SUBJECT : null);
 
   const fetchFeatures = useCallback(
     async (force = false) => {
@@ -65,6 +85,7 @@ function useFeatures(): ReturnValue {
 
       const forSubject = subject;
       const forOrigin = origin;
+      const forRemembered = rememberedAs;
 
       try {
         const data = await fetchJson<Features>(
@@ -88,9 +109,23 @@ function useFeatures(): ReturnValue {
         if (data) {
           setFeatures(data);
           hasFetched.current = true;
+          userKnown.current = true;
+
+          if (forRemembered) {
+            rememberFeatures(forOrigin, forRemembered, data);
+          }
         }
       } catch (err) {
         console.error('Failed to fetch features', err);
+
+        // The appliance did not answer: the flags it last gave this person at this box
+        // still describe their account, and the routes behind them must not vanish.
+        const remembered = recallFeatures(forOrigin, forRemembered);
+
+        if (remembered && liveSubject.current === forSubject && liveOrigin.current === forOrigin) {
+          setFeatures(remembered);
+          userKnown.current = true;
+        }
       } finally {
         // Same reasoning: settling here would report the *new* session's flags
         // as known on the strength of a fetch made for the previous one.
@@ -99,7 +134,7 @@ function useFeatures(): ReturnValue {
         }
       }
     },
-    [authToken, authenticated, nativeOriginReady, origin, subject],
+    [authToken, authenticated, nativeOriginReady, origin, rememberedAs, subject],
   );
 
   const fetchGlobalFeatures = useCallback(
@@ -112,20 +147,31 @@ function useFeatures(): ReturnValue {
         return;
       }
 
+      const forOrigin = origin;
+
       try {
         const data = await fetchJson<Features>('/api/_internal/features/global');
 
         if (data) {
           setGlobalFeatures(data);
           hasFetchedGlobal.current = true;
+          globalKnown.current = true;
+          rememberGlobalFeatures(forOrigin, data);
         }
       } catch (err) {
         console.error('Failed to fetch features', err);
+
+        const remembered = recallGlobalFeatures(forOrigin);
+
+        if (remembered && liveOrigin.current === forOrigin) {
+          setGlobalFeatures(remembered);
+          globalKnown.current = true;
+        }
       } finally {
         setGlobalSettled(true);
       }
     },
-    [nativeOriginReady],
+    [nativeOriginReady, origin],
   );
 
   // Per-user flags belong to the session that fetched them, and this provider
@@ -146,6 +192,7 @@ function useFeatures(): ReturnValue {
     liveSubject.current = subject;
     liveOrigin.current = origin;
     hasFetched.current = false;
+    userKnown.current = false;
     setFeatures({});
     setUserSettled(false);
   }, [authenticated, origin, subject]);
@@ -160,11 +207,11 @@ function useFeatures(): ReturnValue {
 
   const isFeatureEnabled = useCallback(
     (featureName: string) => {
-      if (hasFetched.current && features[featureName] === true) {
+      if (userKnown.current && features[featureName] === true) {
         return true;
       }
 
-      if (hasFetchedGlobal.current && globalFeatures[featureName] === true) {
+      if (globalKnown.current && globalFeatures[featureName] === true) {
         return true;
       }
 

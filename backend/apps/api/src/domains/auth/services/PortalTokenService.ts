@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
 import { SYSTEM_USER } from '@ci/common/context';
@@ -16,6 +16,7 @@ import { type User, UserService } from '@ci/domains/user';
 
 import {
   isApplianceAudience,
+  MEMORY_SIGN_IN_CLIENT,
   mintedByAddressingPortal,
   thisApplianceAudience,
 } from '../utils/applianceAudience';
@@ -68,6 +69,14 @@ const PORTAL_JWS_ALGS: ReadonlySet<string> = new Set([
   'PS512',
 ]);
 
+/**
+ * What a refused Memory sign-in token is answered with. A phone app from before addressed pairing
+ * sends exactly such a token to `POST /api/keys`, and shows this text as it stands; it reads a
+ * message containing "unauthorized" as "sign in again", which would only repeat the refusal.
+ */
+export const MEMORY_SIGN_IN_REFUSED_MESSAGE =
+  'This Companion sign-in was not issued for this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.';
+
 /** The scopes a service token's `scope` claim can grant: the api-key scopes, nothing else. */
 const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
   MEMORY_SCOPE,
@@ -76,7 +85,7 @@ const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
   CAPTURE_SCOPE,
 ]);
 
-/** What a capture agent, or a token not addressed to this appliance, may do: record captures. */
+/** What a capture agent, or another client's token not addressed to this appliance, may do: record captures. */
 const CAPTURE_ONLY = {
   limits: { scopes: [CAPTURE_SCOPE], capability: WRITE_CAPABILITY },
   credentialRoutes: false,
@@ -149,8 +158,10 @@ class PortalVerifyTimeoutError extends Error {
  * (`ci-server`), so a token's client id alone does not say which Memory it was
  * meant for. The Portal can now say: a token addressed to an appliance carries
  * `urn:ci:device:<device id>` in `aud` (see `utils/applianceAudience.ts`). Only a
- * token addressed to this appliance carries the user's full authority; one
- * addressed to another is refused; capture clients and unaddressed tokens get
+ * token addressed to this appliance carries the user's full authority, and one
+ * addressed to another is refused. So is a `ci-server` token from such a Portal
+ * that is addressed to no appliance: that is the id_token a Memory receives at
+ * its own sign-in. Capture clients, and other clients' unaddressed tokens, get
  * the capture scope. See {@link PortalTokenService.authorityFor}.
  *
  * ## Service accounts
@@ -237,22 +248,29 @@ export class PortalTokenService implements PortalTokenVerifier {
   }
 
   /**
-   * What a human's verified token may do here.
+   * What a human's verified token may do here, or null when it may do nothing.
    *
-   * | token                                                   | authority                         |
-   * |---------------------------------------------------------|-----------------------------------|
-   * | issued to a capture client                              | capture scope, write              |
-   * | addressed to this appliance                             | full                              |
-   * | not addressed, from a Portal that addresses tokens      | capture scope, write              |
-   * | not addressed, from a Portal from before addressing     | full except the admin guards      |
+   * | token                                                             | authority                    |
+   * |-------------------------------------------------------------------|------------------------------|
+   * | issued to a capture client                                        | capture scope, write         |
+   * | addressed to this appliance                                       | full                         |
+   * | not addressed, from a Portal that addresses tokens, `ci-server`   | refused                      |
+   * | not addressed, from a Portal that addresses tokens, other clients | capture scope, write         |
+   * | not addressed, from a Portal from before addressing               | full except the admin guards |
    *
    * "From a Portal that addresses tokens" is read off the token itself (the
    * `ci_appliance_binding` claim), not from configuration or discovery. Memory can be upgraded
    * before the Portal: until the Portal stamps its tokens, phone pairing keeps working as it did,
    * and an hour after the Portal starts stamping (the life of the last unstamped token) the
    * unaddressed case is closed on every Memory at once.
+   *
+   * A stamped `ci-server` token addressed to no appliance is what a Memory receives when someone
+   * signs in to it with Companion: the Portal addresses only the phone's pairing exchange. Such a
+   * token is refused rather than confined, so one Memory's sign-in is no credential at any other,
+   * whichever address (provisioned host, tailnet name, LAN address) the other is reached at. The
+   * phone never sends one: it pairs only with a token addressed to the Memory it picked.
    */
-  private authorityFor(address: TokenAddress, payload: JWTPayload): Omit<PortalPrincipal, 'user'> {
+  private authorityFor(address: TokenAddress, payload: JWTPayload): Omit<PortalPrincipal, 'user'> | null {
     if (this.captureClients().includes(address.client)) {
       return CAPTURE_ONLY;
     }
@@ -261,7 +279,19 @@ export class PortalTokenService implements PortalTokenVerifier {
       return FULL_AUTHORITY;
     }
 
-    return mintedByAddressingPortal(payload) ? CAPTURE_ONLY : BEFORE_ADDRESSING;
+    if (!mintedByAddressingPortal(payload)) {
+      return BEFORE_ADDRESSING;
+    }
+
+    if (address.client === MEMORY_SIGN_IN_CLIENT) {
+      this.logger.debug('Portal token refused: a Memory sign-in token addressed to no appliance', {
+        client: address.client,
+      });
+
+      return null;
+    }
+
+    return CAPTURE_ONLY;
   }
 
   private getJwks(): ReturnType<typeof createRemoteJWKSet> {
@@ -378,7 +408,10 @@ export class PortalTokenService implements PortalTokenVerifier {
   /**
    * Verify a portal token and return the corresponding CI-Server user, or null
    * if the token is not a valid portal token (so the caller can fall back to
-   * the legacy strategies).
+   * the legacy strategies). A token the Portal did sign but that this Memory
+   * refuses outright (a `ci-server` token addressed to no appliance, see
+   * {@link PortalTokenService.authorityFor}) throws `UnauthorizedException`
+   * instead, saying what to do: no other credential in the request is tried.
    */
   async verifyAndProvision(token: string): Promise<PortalPrincipal | null> {
     if (!this.enabled) {
@@ -407,9 +440,15 @@ export class PortalTokenService implements PortalTokenVerifier {
       return null;
     }
 
+    // Decided before anyone is looked up: a token that may do nothing here resolves no account.
+    const authority = this.authorityFor(address, payload);
+    if (!authority) {
+      throw new UnauthorizedException(MEMORY_SIGN_IN_REFUSED_MESSAGE);
+    }
+
     const user = await this.provisionUser(payload);
 
-    return user ? { user, ...this.authorityFor(address, payload) } : null;
+    return user ? { user, ...authority } : null;
   }
 
   /**

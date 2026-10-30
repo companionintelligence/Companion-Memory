@@ -117,6 +117,8 @@ export function PersonPage() {
   const profile = useFragment(PERSON_EDITOR_FIELDS, person);
   const [editMode, setEditMode] = useState(false);
   const [editPersonOpen, setEditPersonOpen] = useState(false);
+  // Bumped after each save so Change History loads the row that save just wrote.
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   usePageTitle(person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory');
 
@@ -254,13 +256,15 @@ export function PersonPage() {
                 if (!result.data?.updatePerson.success) {
                   throw new Error('Update was rejected');
                 }
+
+                setHistoryRefreshKey((key) => key + 1);
               }}
             />
           </div>
         </div>
 
         <EntityRelationshipCards entityId={id!} />
-        <EntityEvolutionPanel entityId={id!} entityName={person.name} />
+        <EntityEvolutionPanel entityId={id!} entityName={person.name} refreshKey={historyRefreshKey} />
       </PageContent>
     );
   }
@@ -284,6 +288,7 @@ export function PersonPage() {
           personId={person.id}
           open={editPersonOpen}
           onClose={() => setEditPersonOpen(false)}
+          onSaved={() => setHistoryRefreshKey((key) => key + 1)}
         />
       )}
     </>

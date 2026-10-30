@@ -274,14 +274,62 @@ For a sideload build, use `./gradlew assembleDebug` — it needs no keystore.
 
 ## On-device live reload
 
-Run the web dev server (`yarn workspace @ci/fe-web dev`, bound to `0.0.0.0`), then:
+The script is `yarn android` (= `cap run android`, with two things done first — see
+below). It used to be called `run`, but Yarn's own `run` command shadows a script of
+that name: a bare `yarn run` only prints the script list and exits 0, so nothing was
+ever built or deployed.
+
+**Phone on USB.** Start the full dev stack from the repo root with `make dev` (API,
+worker and the Vite web server), then build and deploy against it as the phone's
+own `localhost`:
 
 ```bash
-CAP_SERVER_URL=http://<lan-or-tailscale-ip>:5173 yarn run   # = cap run android
+cd frontend/apps/android
+CAP_SERVER_URL=http://localhost:5173 yarn android --target <serial>   # adb devices -l
 ```
 
-Point the in-app `/server` setting at your API origin so data calls resolve. Unset
-`CAP_SERVER_URL` for a bundled build.
+`scripts/dev-android.cjs` is what `yarn android` runs. Before handing every
+argument on to `cap run android`, it:
+
+- **Finds the SDK the way the Makefile does** — `ANDROID_HOME`, then
+  `ANDROID_SDK_ROOT`, then the `sdk.dir` Android Studio writes into the git-ignored
+  `android/local.properties` — and exports it for the Capacitor CLI. The CLI's
+  device runner reads the two variables only (its own Linux fallback is
+  `~/Android/sdk`, which is not Android Studio's `~/Android/Sdk`), so without this
+  it fails at once with `ERR_SDK_NOT_FOUND` on a machine where Gradle is perfectly
+  happy. No path is ever guessed: with none of the three set it stops with the fix
+  in the message.
+- **Re-applies `adb reverse tcp:<port> tcp:<port>`** whenever `CAP_SERVER_URL` names
+  the device's own loopback. The rule lives in the adb server, so it is gone after
+  every phone reboot (and whenever adb restarts); the installed app then opens to a
+  blank page until it is back. `--target <serial>` and `ANDROID_SERIAL` pick the
+  device when more than one is attached. A LAN / tailnet URL and a bundled build
+  (no `CAP_SERVER_URL`) need no tunnel and skip this step.
+
+Through the tunnel nothing needs to listen on the LAN (`DEV_LISTEN_HOST` is not
+required), Vite's `/api` proxy carries data calls to the dev stack's API, and the
+in-app `/server` setting needs no change: the app stores the Capacitor server URL as
+its API origin on first load. Note the dev stack takes port 5173 only when it is
+free; a second worktree's stack gets another port, and the URL decides which port is
+tunnelled.
+
+**Phone over Wi-Fi.** Run `make dev` with `DEV_LISTEN_HOST=0.0.0.0` set (without it
+Vite and the API listen on `127.0.0.1` only and the device cannot reach them), use
+`CAP_SERVER_URL=http://<lan-or-tailscale-ip>:5173`, and no tunnel is involved.
+
+`CAP_SERVER_URL` is baked into the APK (`assets/capacitor.config.json`): the
+WebView loads the whole web app from that URL. Unset it for a bundled build.
+
+**Signing in.** Vite proxies `/api`, so the dev-server URL is a complete API origin.
+On first launch the app routes to `/device-connect` (Portal). To sign in to the local
+server with an email/password account instead, there is no in-app field yet
+(`/device-connect/advanced` only stores the Portal URL): set the origin by hand from
+`chrome://inspect` → the app's WebView → console, then open `/login` and choose
+"Sign in with email instead":
+
+```js
+localStorage.setItem('ci.apiBaseUrl', 'http://localhost:5173'); location.href = '/login';
+```
 
 ## App icons & splash
 
@@ -291,19 +339,64 @@ into `android/` with
 
 ```bash
 cd frontend/apps/android
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
-# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
-# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
+# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²)
 #                splash.png, splash-dark.png (2732²)
+# icon-only/-foreground/-background are the Companion Memory store icon (see below), NOT mirrors
+# of @companionintelligence/assets logos/app-icon-source.png (the company aperture mark).
 npx @capacitor/assets generate \
-  --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#0b1418' \
+  --iconBackgroundColor '#041620' --iconBackgroundColorDark '#041620' \
   --splashBackgroundColor '#ffffff' --splashBackgroundColorDark '#0b1418'
 ```
 
-The current icon is the CI globe mark (rendered from
-`frontend/apps/web/public/logo.svg` at 1024px). Re-run after changing the artwork,
-then rebuild. (`assets/` is shared in shape with the iOS package but generated
-separately; `icon-only.png` is what the iOS side needs, so keep it present.)
+**The installed icon must match the Play listing** (Play rejected 1007 under Misleading
+Claims when it did not, #3056). The listing shows the Companion Memory icon: a solid teal
+brain with a white node network and a dark M on `#041620`. The sources are built from that
+one opaque 1024² master:
+
+- `assets/icon-only.png` — the master itself (full-bleed, opaque). Source of the legacy
+  `ic_launcher.png` / `ic_launcher_round.png`.
+- `assets/icon-foreground.png` — the master with the ground removed (colour-to-alpha against
+  `#041620`, so the glow becomes translucent teal); composited over `#041620` it gives the master
+  back to within 1/255.
+- `assets/icon-background.png` — flat `#041620`, the same colour as
+  `res/values/ic_launcher_background.xml` and every `mipmap-*/ic_launcher_background.png`. Keep all
+  of them equal or the foreground shows a faint seam.
+
+The adaptive XML insets both layers 16.7 %, so each layer PNG is the 72 dp visible window and the
+brain sits well inside the 66 dp safe zone.
+
+**The committed `res/` is not byte-for-byte what that command writes.** Run against these sources
+it carries the same artwork, but it writes the adaptive layers at 36–192 px (the committed ones are
+54–288 px), pads the legacy square icon by a flat 8 px and does not round its corners (the committed
+ones keep a rounded-square mask), and rewrites `mipmap-anydpi-v26/ic_launcher*.xml` without the
+`<monochrome>` element. Prefer editing the committed layers; if you do regenerate, restore the layer
+sizes and the XML from git and re-add the two stencils below.
+
+**Two single-colour rasters are NOT produced by that command and survive it only if
+re-added.** Android tints a notification's small icon and (from Android 13) a themed
+launcher icon as a stencil: it reads the alpha channel and fills the shape with the bar's
+or the launcher's colour, so the multi-colour launcher icon cannot serve — on Samsung it
+showed as a filled blob that never matched the bar. Both are the brain silhouette with the M knocked
+out, white on transparent (the vector master's alpha, aligned to the raster node for node; the node
+network is left out because it turns to mush at these sizes):
+
+- `android/app/src/main/res/drawable-*/ic_stat_memory.png` — 24 dp (24/36/48/72/96 px),
+  the silhouette filling 84 % of the box height, the M stroked slightly heavier so it reads at
+  24 px. Every notification the app posts uses it: the location
+  foreground service and the resume nudge (`@ci/capacitor-local-hub`), the model download
+  and the generation service (`@ci/capacitor-local-llm`). The plugins look it up by name
+  in the host app's resources (`NotificationIcons.kt` in each) rather than shipping it,
+  since it is the app's brand, and fall back to what they used before if a host has none.
+- `android/app/src/main/res/mipmap-*/ic_launcher_monochrome.png` — the 108 dp adaptive
+  layer (54–288 px) with the silhouette 52 % of the layer high (inside the 66 dp safe circle),
+  referenced by the `<monochrome>`
+  element in `mipmap-anydpi-v26/ic_launcher*.xml`. `@capacitor/assets generate` rewrites
+  those XML files without it: put the element back after regenerating.
+
+The splash (`assets/splash*.png`) still shows the CI globe; before Android 12 that is what
+`@drawable/splash` draws, and Android 12+ shows the launcher icon instead. Re-run after
+changing the artwork, then rebuild. (`assets/` is shared in shape with the iOS package but
+generated separately; `icon-only.png` is what the iOS side needs, so keep it present.)
 
 ## Native auth (wired)
 
@@ -345,6 +438,55 @@ with a web no-op fallback. Android 13+ needs the `POST_NOTIFICATIONS` runtime pe
 (declared). All native-bridge helpers are unit-tested in
 `frontend/apps/web/src/test/nativeBridge.test.ts`.
 
+**Location (Always mode).** One recorder, the LocalHub plugin's background monitor, and no
+on-screen trail. `when_in_use` records nothing by itself (a current location is fetched on
+request, e.g. placing a note or photo), and `always` is the monitor below. Until 2026-10-26
+the foreground trail was `@capacitor-community/background-geolocation`, kept "foreground-only"
+for a trail while the app was open. That plugin asks the OS for a high-accuracy fix every
+**1 second** for as long as its watcher exists and never removes the request when the app
+leaves the screen; on its own Android cuts a backgrounded app off from location, but a
+location foreground service of our own grants the whole process background location, so the
+moment a trip started the old watcher ran alongside the tracker -- a double trail and the 1 Hz
+GPS cost the tracker was built to remove (the phone's own battery stats had put that one
+request at about a quarter of a day's drain). The on-screen trail added nothing the background
+trail did not, so the plugin is gone from both shells, which also unblocks Capacitor 8.
+
+Background samples come from `@ci/capacitor-local-hub`'s `startSignificantLocationUpdates`
+-- **motion-gated sampling**, under `android/src/main/java/.../localhub/location/`. GPS runs
+only while the phone is moving, and every signal that decides that needs nothing beyond the
+location grants Always already holds. The fixes themselves say when the phone has stopped
+(five minutes without 50 m of movement from where movement was last confirmed, or three once
+the permission-free stationary-detect sensor has reported it physically at rest); an exit
+geofence of 100 m around the resting spot says when it starts again. That geofence is the
+**only** restart signal: Android evaluates it with cheap location, it survives the process
+being frozen or killed, and it is one of the few events that may start a location foreground
+service from the background. No sensor can fill that role -- since Android 9 a backgrounded
+app with no foreground service receives no sensor events, one-shot triggers included
+(verified on a device: the significant-motion trigger fired for the system's listeners and
+never reached the app, frozen a minute after it stopped). The cost is that the first stretch
+of every trip, the radius plus Play Services' latency, is not sampled, and a walk shorter
+than the radius is not sampled at all. A location foreground service, with the notification
+Android requires, exists only in between. The activity-recognition API is deliberately
+**not** used: it is a separate "Physical activity" permission that reads as a different kind
+of monitoring than location, and iOS's significant-change monitoring asks for nothing of the
+sort. Each fix that clears the 150 m / 5 min gate is queued into the encrypted outbox **from
+native code**, so recording continues after the WebView is gone; the plugin also emits it as
+`significantLocation`, and the web side's own enqueue collapses on the shared `source_id`
+(the record builder is pinned to the same fixture as the web one, see
+`PositionRecordJsonTest`). Two runtime grants, walked one prompt at a time by the plugin:
+fine location, then background location (`Allow all the time`), which is what lets Play
+Services hold the geofence; nothing is armed until both are held. Refusing either emits
+`significantLocationError` `NOT_AUTHORIZED`, which is what lights up "Open Settings". A
+reboot or an app update wipes the fence; `TrackingRestoreReceiver` puts it back (or restarts
+the service mid-trip), retrying through WorkManager while Play Services comes up. Should the
+background grant lapse later (lowered in Settings, or reset by Android on an app unused for
+months), no fence can be set and the tracker posts one notification asking for an app open,
+where the web side re-prompts. Check the footprint on a device with `adb shell dumpsys
+location`: while the phone is still there must be **no** `ProviderRequest` carrying this
+app's uid, `dumpsys activity services com.ci.memory` must list no `LocationService`, and
+`adb shell dumpsys activity service com.google.android.gms` → "Geofencing:" must list the
+fence.
+
 These bridges live in `@ci/common/src/utils/nativeBridge.ts` and reach the plugins via
 the runtime `window.Capacitor.Plugins` global (no `@capacitor/*` import in the web
 bundle); the standalone mobile project declares the actual plugin packages.
@@ -371,10 +513,8 @@ download is verified against that size, and a pinned URL cannot drift under it.
 
 | Model | Size | Min RAM | Backends | Reasoning | Photos | Memory tools | Platforms |
 |---|---|---|---|---|---|---|---|
-| Qwen3 0.6B | 328 MB | 4 GB | CPU | ✓ | | ✓ | iOS, Android |
-| Qwen2.5 1.5B Instruct | 1.5 GB | 6 GB | GPU, CPU | | | | iOS, Android |
-| Gemma 4 E2B | 2.4 GB | 8 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
-| Gemma 4 E4B | 3.4 GB | 12 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E2B | 2.4 GB | 6 GB (GPU from 8 GB) | CPU, GPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E4B | 3.4 GB | 12 GB | CPU, GPU | ✓ | ✓ | ✓ | Android |
 
 Left out on purpose: Gemma 3n, Gemma3-1B-IT and the FunctionGemma fine-tunes. Hugging Face serves them
 `gated` (an account plus a licence click-through), so an anonymous download answers `401 GatedRepo` — the
@@ -408,7 +548,7 @@ bytes + 512 MiB) instead of a global 1 GiB, and `downloadModel` refuses any URL 
 `capacitorPluginContract.test.ts` parses `definitions.ts`, the Kotlin and the Swift catalogs and both
 method lists, so the halves cannot drift.
 
-**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator).**
+**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator; the app links 0.18.0 since the bump, re-measure on a device).**
 
 - A cancelled conversation cannot be reused, so after **Stop** — or a failed turn — the next message starts a
   fresh conversation and the model forgets earlier turns, even though the chat still shows them. Replaying
@@ -419,7 +559,7 @@ method lists, so the halves cannot drift.
   GPU load probes one token and falls back to the CPU itself (`fellBackToCpu`). The plugin manifest declares
   `libOpenCL.so` / `libvndksupport.so` (`required=false`), which Android 12+ needs before an app targeting API 31+
   may open the vendor OpenCL library; that effect needs a real GPU device to confirm.
-- The catalog is pinned to revisions that load on 0.14.0. Qwen3's `main` needs 0.17.1+, so bump LiteRT-LM on both
+- The catalog is pinned to revisions that load on the runtime both platforms link (0.18.0). Qwen3's pin is the 0.17.1+ re-export; any further repin goes on both
   platforms *before* repinning it.
 - **Play Console:** the Android plugin manifest again declares `FOREGROUND_SERVICE_DATA_SYNC` and
   `foregroundServiceType="dataSync"` on both `LocalLlmGenerationService` and WorkManager's
@@ -447,7 +587,7 @@ photo input on Gemma 4, whether the tool-result budget leaves a small model room
 Agent Skills, Mobile Actions (FunctionGemma), audio input, the benchmark screen, importing a model file,
 and NPU backends.
 
-- minSdk stays 23; the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
+- minSdk stays 24 (Play's automatic protection needs at least 24); the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
   (LiteRT-LM's AAR requires Android 12), so older devices keep the rest of the app.
 - The package declares itself **Android-only** — it has no `ios/` folder and does not
   appear in the iOS Podfile. iOS ships its own in-app Swift implementation of the same
@@ -481,25 +621,17 @@ waiting on two app-store releases. Destructive and external intents always queue
 **A tool's result is bounded before the model sees it.** The appliance answers a tool call with the whole result,
 pretty-printed — 25 hits from `knowledge_search` is ~45 KB — and a small model's context window cannot take that in:
 Qwen3-0.6B's is 1,024 tokens, and its system prompt and tool declarations already use ~500 of them. So `IntentTool`
-passes every successful result through `ToolResultShaper` before it goes back to LiteRT-LM, with a budget of
-`LocalLlmPolicy.toolResultByteBudget(maxTokens)` — half the window in bytes, never under 256 or over 16,384 (512 for
-Qwen3-0.6B, 2,000 for Gemma 4) — which `loadModel` works out from the window it just configured. A result that fits
-goes through byte for byte. Otherwise JSON is pruned and re-emitted compactly: unset columns (`null`, `false`, `""`,
-`[]`, `{}`) and foreign-key UUIDs are dropped, since a hit is mostly those; each object is written answer-first (`type`
-/ `link` / `title`, then when, then what it says, the rest, bookkeeping last) and loses its last members first; strings
-are capped; and every list — the `items` of a search, the `nodes` and `edges` of `memory_recall` — gets an equal share
-of what the object's other members leave, in which the first three hits share the room and a closing note says how
-many were left out. Anything that is not JSON is cut at the budget and ends `…[truncated]`, and so is JSON whose
-budget is too small for that (under about 800 bytes: at Qwen3-0.6B's 512 the synthetic dentist and graph results end
-that way). A refusal or a failed call is a sentence and is not shaped; an error response's body is cut to its first 200
-characters before it becomes one. This is a port of iOS's `ToolResultShaper` (`LocalLLMPolicy.swift`, which is in turn
-the device twin of the appliance's `toolResultBudget.ts`) and is written to give the same text for the same input:
-`SwiftParityTest` checks it against answers the Swift shaper gave for ~360 inputs, and fails when the Swift
-shaper's code is no longer the one those answers were recorded from; after a change to either side,
-`frontend/packages/capacitor-local-llm/android/scripts/regenerate-swift-parity.sh` (it needs `swiftc`) records them
-again. `IntentTool` logs sizes only (`knowledge_search returned 45598 bytes; passing 482 to the model
-(budget 512)`), never the result. The budget is an estimate no device run has measured; `toolResultByteBudget` is the one
-place to tune it, on both platforms.
+passes every successful result through `ToolResultShaper` before it goes back to LiteRT-LM,
+within the model's tool-result budget. The shaper preserves identity and references, reduces the
+result structurally, and reserves the full space needed for its omission note. Nested input is
+bounded before parsing; member removal is bounded rather than repeatedly copying a large map.
+Plain scalar arrays can shrink with their parent, and canonically equivalent keys use a stable
+raw spelling tie-break. These rules match the Swift implementation.
+
+`SwiftParityTest` compares Android output with the current Swift shaper's generated fixtures,
+including timestamp rendering. After changing the shaper, run
+`frontend/packages/capacitor-local-llm/android/scripts/regenerate-swift-parity.sh`; do not edit
+expected output by hand. The logger records byte counts and budgets, never a tool result's content.
 
 **The binding is per-platform, because the runtimes genuinely differ:**
 
@@ -548,7 +680,7 @@ itself Android-only); moving it there needs a podspec + vendored xcframework + P
 > `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves `gated: "auto"`, so the `.task`
 > URL in `LocalLlmModels.kt` / `definitions.ts` answered `401 GatedRepo` to an anonymous download —
 > meaning no new Android user could fetch the only model offered. Android now ships the same
-> ungated Qwen3-0.6B iOS already used (`litert-community/Qwen3-0.6B`); both platforms ship the
+> ungated Qwen3 iOS already used (`litert-community/Qwen3-*`); both platforms ship the
 > identical model file. See `LocalLLMModels.swift` and `LocalLlmModels.kt` for the measurements.
 
 **Also fixed 2026-08-26, same pass:**
@@ -569,6 +701,10 @@ itself Android-only); moving it there needs a podspec + vendored xcframework + P
   (iOS 26+) is the fuller answer and a separate, UX-affecting change.
 - **The Android AAR and iOS xcframework had drifted** (0.11.0 vs 0.14.0 of the same upstream
   LiteRT-LM release) with no record of why. Reconciled to 0.14.0 on both.
+- **Bumped to 0.18.0 on both (2026-10-12).** Android: Kotlin plugin 2.4.21 (the AAR carries 2.4 metadata),
+  minSdk 24 (the AAR declares it), `Capabilities` → `ModelInfo`. iOS: re-vendored `swift/` with the
+  patches in `Vendor/LiteRTLM/PATCHES.md` re-applied, two of them now upstream. Qwen3 repinned to the
+  0.17.1+ re-export (`a6e678a1…`, 344,671,744 bytes).
 - **The RAM floor was unreconciled 2x between platforms** (Android 3 GB total RAM vs iOS 6 GB
   physical memory) for models with the same ~2 GB estimated peak RSS. Both now gate at 4 GB.
 - **LiteRT-LM's own constrained-decoding flag** (`enableConversationConstrainedDecoding`) is now

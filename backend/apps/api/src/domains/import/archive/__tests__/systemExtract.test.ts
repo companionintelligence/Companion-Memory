@@ -217,9 +217,23 @@ describeIfZip('systemExtract', () => {
 
     expect(result.ok).toBe(true);
     expect(fs.readFileSync(path.join(outside, 'José.vcf'), 'utf8')).toBe('original');
-    // The entry still lands, inside the extraction dir, under a real directory.
-    expect(fs.lstatSync(path.join(dest, 'Takeout')).isDirectory()).toBe(true);
-    expect(fs.readFileSync(path.join(dest, 'Takeout', 'José.vcf'), 'utf8')).toBe('from the archive');
+    // Whatever the extractor did, no link is left in the extraction dir.
+    expect(fs.lstatSync(path.join(dest, 'Takeout')).isSymbolicLink()).toBe(false);
+
+    if (process.platform === 'darwin') {
+      // macOS never reaches the Debian state above. Info-ZIP 6.00 exits 2 on
+      // `Takeout exists but is not directory` and writes the link as a plain
+      // file, and the `ditto` fallback does the same with the link's target
+      // text, so there is no link for the repair to remove and no directory
+      // for the entry to land under. Nothing escapes; the entry is reported
+      // as unrepaired instead.
+      expect(fs.lstatSync(path.join(dest, 'Takeout')).isFile()).toBe(true);
+      expect(result.nameRepair?.unrepaired).toBe(1);
+    } else {
+      // The entry still lands, inside the extraction dir, under a real directory.
+      expect(fs.lstatSync(path.join(dest, 'Takeout')).isDirectory()).toBe(true);
+      expect(fs.readFileSync(path.join(dest, 'Takeout', 'José.vcf'), 'utf8')).toBe('from the archive');
+    }
 
     fs.rmSync(work, { recursive: true, force: true });
   });

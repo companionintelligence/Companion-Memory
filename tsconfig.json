@@ -15,7 +15,15 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+
+    // scripts/stage1-guards.test.ts imports the plain-ESM guards
+    // (check-depcheck-ratchet.mjs, docs-check.mjs). allowJs lets tsc read their
+    // JSDoc types instead of failing with TS7016 (no declaration file) and the
+    // TS7006 that follows from the untyped import. checkJs stays off: the .mjs
+    // files are not themselves held to this config's strict checks.
+    "allowJs": true,
+    "checkJs": false
   },
   "include": ["playwright.config.ts", "tests/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist", "dev-dist", ".yarn", "backend", "frontend"]

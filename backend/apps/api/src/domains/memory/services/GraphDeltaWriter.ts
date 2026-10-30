@@ -32,6 +32,45 @@ export interface RecordGraphDeltaInput {
   manager?: EntityManager;
 }
 
+/** A value with its object keys sorted, so two jsonb reads of one bag compare equal. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : v,
+  );
+}
+
+/**
+ * The `changedFields` of an edit: each of `keys` whose value differs between
+ * `before` and `after`, as `{ old, new }`. Missing, null, '' and [] are all "empty",
+ * so a form that sends every field back unchanged records nothing.
+ */
+export function changedFieldsBetween(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  keys: Iterable<string>,
+): Record<string, GraphDeltaChangedField> {
+  const isEmpty = (value: unknown) =>
+    value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+  const changed: Record<string, GraphDeltaChangedField> = {};
+
+  for (const key of keys) {
+    const was = before[key];
+    const now = after[key];
+
+    if ((isEmpty(was) && isEmpty(now)) || sortedJson(was) === sortedJson(now)) {
+      continue;
+    }
+
+    changed[key] = { old: isEmpty(was) ? null : was, new: isEmpty(now) ? null : now };
+  }
+
+  return changed;
+}
+
 /**
  * App-written trail into `ci.graph_deltas`.
  * Replaces statement-level DB triggers so writers are visible in app code
@@ -167,6 +206,11 @@ export class GraphDeltaWriter {
     });
   }
 
+  /**
+   * `changedFields` is stored as given. It used to gain a `name` entry with the
+   * current name on both sides when the caller sent none, which put an
+   * `old == new` pair in every edit's delta that the panel then had to hide.
+   */
   entityUpdated(args: {
     entityId: string;
     entityType: string;
@@ -178,11 +222,6 @@ export class GraphDeltaWriter {
     changedByUserId?: string | null;
     manager?: EntityManager;
   }): Promise<void> {
-    const fields = { ...args.changedFields };
-    if (fields.name === undefined) {
-      fields.name = { old: args.name ?? null, new: args.name ?? null };
-    }
-
     return this.record({
       nodeType: 'entity',
       changeType: 'updated',
@@ -193,7 +232,7 @@ export class GraphDeltaWriter {
       changeReason: args.changeReason,
       changedByUserId: args.changedByUserId,
       manager: args.manager,
-      changedFields: fields,
+      changedFields: args.changedFields,
     });
   }
 

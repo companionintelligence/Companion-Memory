@@ -24,7 +24,7 @@ function makeListener(place: Record<string, unknown> | null = null) {
     logger as never,
   );
 
-  return { listener, placeService, embeddingService, vectorService, logger };
+  return { listener, placeService, embeddingGenerationService, embeddingService, vectorService, logger };
 }
 
 describe('PlaceSearchIndexListener.unindexPlace', () => {
@@ -93,6 +93,30 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
           { text: 'cafe', weight: 3 },
         ],
       },
+    );
+  });
+
+  it('removes a place the user asked Memory to forget instead of indexing it again on a later write', async () => {
+    const { listener, embeddingGenerationService, embeddingService, vectorService } = makeListener({
+      id: 'place-9',
+      user: { id: 'user-1' },
+      name: 'Ravenwood Cottage',
+      description: 'Weekend cabin',
+      isActive: false,
+    });
+
+    await listener.updatePlace({ placeId: 'place-9' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'place', entityId: 'place-9' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'place', entityId: 'place-9' },
     );
   });
 

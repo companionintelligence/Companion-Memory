@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
 import {
   excludeForkedOriginsSql,
@@ -51,6 +52,27 @@ const FEED_QUEUE_LIMIT = 3;
  * shorter path re-dispatch inside the longer path's window.
  */
 export const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
+
+/**
+ * How long a dispatched inference may wait UNSTARTED before pg-boss drops it
+ * (`EventSendOptions.retentionMinutes`). An hour: three of the default
+ * per-owner intervals, so an ordinary wait behind a title or a lane sibling
+ * never reaches it.
+ *
+ * The job is only ever a guess at an unanswered question, and the next tick
+ * makes a fresh one, so replaying a stale backlog buys nothing and costs GPU
+ * time. On core-1 (2026-10-17) the queue fell ~4 h behind with 941 of them
+ * waiting, every one due to run, oldest first, long after it was current.
+ * The per-owner cap in `inferenceDispatchGate.ts` is what stops a backlog
+ * FORMING — this clears whatever is left of one if the queue falls behind
+ * with jobs already waiting.
+ *
+ * Per job and not on the queue: `llm-background` also carries thread titles,
+ * which must survive a long wait. A dropped job lands in `pgboss.archive`,
+ * which the selectors read as an attempt, so that question sits out its
+ * cooldown like any other attempt instead of being re-sent straight away.
+ */
+export const INFERENCE_QUEUE_RETENTION_MINUTES = 60;
 
 @Injectable()
 export class SmartRotationListener {
@@ -101,6 +123,25 @@ export class SmartRotationListener {
       }
 
       case 'answer_infer': {
+        // Before the selection, and said separately: "this person's last
+        // inference has not settled, or was only just sent" is a different
+        // situation from "nothing left to ask", and folding the two together is
+        // how a backed-up queue looked like a quiet one.
+        const open = await this.questionService.isInferenceDispatchOpen(userId, {
+          queue: LLM_BACKGROUND_QUEUE,
+          eventName: Events.INFER_QUESTION_ANSWER,
+          intervalMinutes: config.llm.answerInferenceIntervalMinutes,
+        });
+
+        if (!open) {
+          this.logger.log(
+            'Smart rotation answer infer skipped — an inference is still outstanding, or one was sent within the interval',
+            { userId, intervalMinutes: config.llm.answerInferenceIntervalMinutes },
+          );
+
+          return;
+        }
+
         const questionId = await this.findNextUnansweredQuestionId(userId);
 
         if (!questionId) {
@@ -125,6 +166,7 @@ export class SmartRotationListener {
           },
           {
             singletonKey: `infer:${userId}:${questionId}`,
+            retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
           },
         );
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type RequestContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -71,6 +71,24 @@ export type PlanningUpdateTaskInput = z.infer<typeof PlanningUpdateTaskInputSche
 export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Task> {
   readonly schema: IntentDefinition = {
     name: 'planning.updateTask',
+    local: {
+      description:
+        'Change fields on a task; only the given fields change. Not for marking done. dueAt is an ISO 8601 instant; dates are YYYY-MM-DD.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', format: 'uuid' },
+          title: { type: 'string', minLength: 1, maxLength: 500 },
+          dueAt: { type: 'string' },
+          scheduledFor: { type: 'string' },
+          deferUntil: { type: 'string', description: 'YYYY-MM-DD to push it out to.' },
+          priority: { type: 'integer', minimum: 0, maximum: 5, description: '0 highest, 5 lowest.' },
+          notes: { type: 'string', maxLength: 10000 },
+        },
+        required: ['taskId'],
+        additionalProperties: false,
+      },
+    },
     domain: 'planning',
     title: 'Update a task',
     description:

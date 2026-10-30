@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { Person } from '@ci/domains/memory';
 import type { PeerLink } from '@ci/domains/peers';
@@ -51,12 +51,19 @@ function makePerson(overrides: Partial<Person> = {}): Person {
   } as unknown as Person;
 }
 
-function build(overrides: Record<string, unknown> = {}, personOverrides: Record<string, unknown> = {}) {
+function build(
+  overrides: Record<string, unknown> = {},
+  personOverrides: Record<string, unknown> = {},
+  featureEnabled?: boolean,
+) {
   const service = {
     findAll: jest.fn().mockResolvedValue([makeLink()]),
     findById: jest.fn().mockResolvedValue(makeLink()),
     upsert: jest.fn().mockImplementation((_ctx, dto) => Promise.resolve(makeLink({ ...dto }))),
     revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+    // The handle's current link is the one `findById` read, unless a test says
+    // a newer link has replaced it.
+    findByHandle: jest.fn((ctx: unknown): Promise<PeerLink | null> => service.findById(ctx)),
     ...overrides,
   };
 
@@ -68,10 +75,15 @@ function build(overrides: Record<string, unknown> = {}, personOverrides: Record<
     ...personOverrides,
   };
 
-  const resolver = new PeerLinkResolver(service as never, personService as never);
+  const featureService =
+    featureEnabled === undefined
+      ? undefined
+      : { isFeatureEnabled: jest.fn().mockResolvedValue(featureEnabled) };
+
+  const resolver = new PeerLinkResolver(service as never, personService as never, featureService as never);
   const context = { userId: OWNER } as never;
 
-  return { resolver, service, personService, context };
+  return { resolver, service, personService, featureService, context };
 }
 
 describe('PeerLinkResolver', () => {
@@ -117,6 +129,23 @@ describe('PeerLinkResolver', () => {
 
       expect(service.revoke).not.toHaveBeenCalled();
     });
+
+    it('leaves the live link alone when asked to revoke an ended one under the same handle', async () => {
+      // `revoke` ends the handle's CURRENT link, which for a peer added back
+      // since is the new one. The ended link is already what was asked for.
+      const ended = makeLink({
+        id: 'link-old',
+        status: 'revoked',
+        revokedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const { resolver, service, context } = build({ findById: jest.fn().mockResolvedValue(ended) });
+
+      const payload = await resolver.revokePeerLink(context, GlobalUID.encode('peer-link', 'link-old'));
+
+      expect(service.revoke).not.toHaveBeenCalled();
+      expect(payload.success).toBe(true);
+      expect(payload.peerLink?.status).toBe('revoked');
+    });
   });
 
   describe('trust tier', () => {
@@ -143,6 +172,54 @@ describe('PeerLinkResolver', () => {
       });
 
       expect(service.upsert.mock.calls[0][1]).toMatchObject({ trustTier: 'family' });
+    });
+
+    it('asks for a live link, so re-adding a revoked handle makes a link that works', async () => {
+      // `upsert` keeps a stored `revoked` status unless told otherwise, so
+      // re-adding a revoked peer used to answer success with the link still dead.
+      // `active` on an ended link is a new link beside it (PeerLinkService.spec).
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({ status: 'active', trustTier: 'stranger' });
+    });
+
+    it('never re-activates on update: editing a revoked link leaves it revoked', async () => {
+      const { resolver, service, context } = build({
+        findById: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+      });
+
+      await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        displayName: 'Ada L.',
+      });
+
+      expect(service.upsert.mock.calls[0][1].status).toBeUndefined();
+    });
+
+    it('SECURITY: refuses to edit an ended link whose peer was added again since, without writing', async () => {
+      // `upsert` writes the handle's current row, which is the NEW link. This
+      // edit would copy the ended link's tier and identity onto it.
+      const { resolver, service, context } = build({
+        findById: jest
+          .fn()
+          .mockResolvedValue(
+            makeLink({ id: 'link-old', status: 'revoked', revokedAt: new Date(), trustTier: 'family' }),
+          ),
+        findByHandle: jest.fn().mockResolvedValue(makeLink({ id: 'link-new', trustTier: 'stranger' })),
+      });
+
+      await expect(
+        resolver.updatePeerLink(context, {
+          id: GlobalUID.encode('peer-link', 'link-old'),
+          displayName: 'Ada',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(service.upsert).not.toHaveBeenCalled();
     });
 
     it('preserves the existing tier when an update does not mention it', async () => {
@@ -447,6 +524,31 @@ describe('PeerLinkResolver', () => {
       expect(JSON.stringify(link)).not.toContain('ssn');
       expect(JSON.stringify(link)).not.toContain('do-not-leak');
       expect(JSON.stringify(result)).not.toContain('do-not-leak');
+    });
+  });
+
+  describe('feature-flag gating (G5c)', () => {
+    it('stays dark across all five operations when the `ask` feature flag is disabled', async () => {
+      const { resolver, service, context } = build({}, {}, false);
+      const gid = GlobalUID.encode('peer-link', '01a0-link');
+
+      await expect(resolver.myPeerLinks(context)).resolves.toEqual([]);
+      await expect(resolver.peerLink(context, gid)).resolves.toBeNull();
+      await expect(
+        resolver.createPeerLink(context, {
+          peerHandle: 'ada',
+          memoryEndpoint: 'https://ada.example/agent',
+        }),
+      ).resolves.toEqual({ success: false });
+      await expect(resolver.updatePeerLink(context, { id: gid, displayName: 'Ada' })).resolves.toEqual({
+        success: false,
+      });
+      await expect(resolver.revokePeerLink(context, gid)).resolves.toEqual({ success: false });
+
+      expect(service.findAll).not.toHaveBeenCalled();
+      expect(service.findById).not.toHaveBeenCalled();
+      expect(service.upsert).not.toHaveBeenCalled();
+      expect(service.revoke).not.toHaveBeenCalled();
     });
   });
 });

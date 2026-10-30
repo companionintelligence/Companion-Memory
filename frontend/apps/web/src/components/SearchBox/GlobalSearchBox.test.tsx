@@ -21,6 +21,13 @@ const h = vi.hoisted(() => ({
     tags: [] as { id: string; label: string }[],
     loading: false,
     error: undefined as unknown,
+  } as {
+    data: unknown[];
+    tags: { id: string; label: string }[];
+    loading: boolean;
+    error: unknown;
+    /** Where the results came from; the box opens device answers at the saved record page. */
+    source?: string;
   },
 }));
 
@@ -205,6 +212,28 @@ describe('GlobalSearchBox on /memory/events', () => {
     fireEvent.click(await screen.findByText('Search Memory for'));
 
     await waitFor(() => expect(params().get('search')).toBe('latte'));
+  });
+
+  it('tapping "Search Memory for …" on a list page lets go of the box, so the panel closes and the query stays', async () => {
+    renderAt('/memory/events');
+
+    // jsdom reports the document as never focused, which the box reads as the
+    // window losing focus (and so keeps its panel); a real focused tab says yes.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    const input = screen.getByRole('textbox');
+    input.focus();
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    // Typing already ran the search; the tap must still visibly do something.
+    const row = await screen.findByText('Search Memory for');
+    fireEvent.click(row);
+
+    await waitFor(() => expect(params().get('search')).toBe('latte'));
+    expect(document.activeElement).not.toBe(input);
+    await waitFor(() => expect(screen.queryByText('Search Memory for')).not.toBeInTheDocument());
+    expect(input).toHaveValue('latte');
   });
 });
 
@@ -415,6 +444,58 @@ describe('GlobalSearchBox suggestions', () => {
     fireEvent.click(await screen.findByText('Alice'));
 
     expect(path()).toBe('/people/42');
+  });
+
+  it('a suggestion answered from this phone opens the record this phone holds, whatever its type', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+      source: 'device',
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan.pdf'));
+
+    expect(path()).toBe('/memory/saved/file/f1');
+  });
+
+  // Files have no detail page; this tap used to do nothing at all, online or off.
+  it('selecting a file suggestion opens the gallery searched for its name', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan 2026.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan 2026.pdf'));
+
+    expect(`${path()}?${params().toString()}`).toBe('/memory?view=gallery&search=scan+2026.pdf');
   });
 });
 

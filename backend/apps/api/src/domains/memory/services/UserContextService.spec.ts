@@ -101,3 +101,97 @@ describe('UserContextService', () => {
     });
   });
 });
+
+/**
+ * Self > About you lists family as "<name> (<role>)". PARENT_OF names a parent
+ * or a child depending on which way the edge points, so the list has to know
+ * the direction: before it was kept, the user's mother and the user's son both
+ * came back as plain `PARENT_OF`.
+ */
+describe('UserContextService family members', () => {
+  const ME = 'me';
+  const node = (entity_id: string, name: string) => ({ entity_id, name, properties: {} });
+
+  async function familyOf(
+    edges: Array<{ from_entity_id: string; to_entity_id: string; relationship_type: string }>,
+  ) {
+    const graphQuery = {
+      traverseGraph: jest.fn().mockResolvedValue({
+        nodes: new Map([
+          [ME, node(ME, 'Alex Rivera')],
+          ['mom', node('mom', 'Morgan Rivera')],
+          ['son', node('son', 'Riley Rivera')],
+          ['sis', node('sis', 'Jordan Rivera')],
+        ]),
+        edges,
+      }),
+    };
+    const service = new UserContextService(
+      graphQuery as never,
+      {} as never,
+      { setContext: () => {}, warn: () => {}, error: () => {} } as never,
+    );
+    // Everything but the family read is beside the point here.
+    const internals = service as unknown as Record<string, unknown>;
+    jest
+      .spyOn(internals as never, 'resolveUserEntity' as never)
+      .mockResolvedValue(node(ME, 'Alex Rivera') as never);
+    jest.spyOn(internals as never, 'getTopPreferences' as never).mockResolvedValue([] as never);
+    jest.spyOn(internals as never, 'getTopDislikes' as never).mockResolvedValue([] as never);
+    jest.spyOn(internals as never, 'getQuickStats' as never).mockResolvedValue({ totalEntities: 4 } as never);
+    jest.spyOn(internals as never, 'getUsernameFromUsersTable' as never).mockResolvedValue('alex' as never);
+
+    return (await service.getUserContextForLLM('user-1'))?.familyMembers ?? [];
+  }
+
+  it('says which way each relationship points from the user', async () => {
+    const family = await familyOf([
+      { from_entity_id: 'mom', to_entity_id: ME, relationship_type: 'PARENT_OF' },
+      { from_entity_id: ME, to_entity_id: 'son', relationship_type: 'PARENT_OF' },
+      { from_entity_id: 'sis', to_entity_id: ME, relationship_type: 'SIBLING_OF' },
+    ]);
+
+    expect(family.map((member) => [member.name, member.relationship, member.direction])).toEqual([
+      ['Morgan Rivera', 'PARENT_OF', 'incoming'],
+      ['Riley Rivera', 'PARENT_OF', 'outgoing'],
+      ['Jordan Rivera', 'SIBLING_OF', 'incoming'],
+    ]);
+  });
+});
+
+/**
+ * The owner has no pointer yet, and the only identity claim is an `is_self`
+ * row: resolveUserEntity caches it in `ci.users.entity_id`. Onboarding and an
+ * import can point the account at its self Person between this read and that
+ * write, so the write itself must still require the pointer to be empty.
+ */
+describe('UserContextService self fallback', () => {
+  it('caches the is_self row only while the pointer is still empty, checked in the UPDATE', async () => {
+    const query = jest.fn(async (sql: string, _params?: unknown[]): Promise<unknown[]> => {
+      if (sql.includes('FROM ci.users')) {
+        return [{ entity_id: null }];
+      }
+
+      if (sql.includes('FROM ci.entities')) {
+        return [{ entity_id: 'self-1' }];
+      }
+
+      return [];
+    });
+    const graphQuery = { getNode: jest.fn().mockResolvedValue({ entity_id: 'self-1', name: 'Alex Rivera' }) };
+    const service = new UserContextService(
+      graphQuery as never,
+      { query } as never,
+      { setContext: () => {}, warn: () => {}, error: () => {} } as never,
+    );
+
+    const entity = await (
+      service as unknown as { resolveUserEntity(userId: string): Promise<{ entity_id: string } | null> }
+    ).resolveUserEntity('user-1');
+
+    expect(entity?.entity_id).toBe('self-1');
+    const write = query.mock.calls.find(([sql]) => sql.includes('UPDATE ci.users'));
+    expect(write?.[0]).toMatch(/WHERE id = \$1 AND entity_id IS NULL/);
+    expect(write?.[1]).toEqual(['user-1', 'self-1']);
+  });
+});

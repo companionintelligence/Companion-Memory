@@ -15,8 +15,11 @@ import json
 import os
 import sys
 
-Q3 = "qwen3-0.6b-int4"
-Q25 = "qwen2.5-1.5b-instruct"
+# The catalog ships no iOS model since 2026-10-13 (the Qwen entries were dropped; iOS chat is to come from
+# Apple Intelligence). Both plan slots point at the Android Gemma 4 E2B id so the cell shapes still parse;
+# this bench cannot run on a phone until a model ships on iOS again.
+Q3 = "gemma-4-e2b-it"
+Q25 = "gemma-4-e2b-it"
 PROMPTS = ["p1", "p2", "p3"]
 
 # The sampler the app ships for Qwen3 (catalog default) and the one Qwen's model card recommends for

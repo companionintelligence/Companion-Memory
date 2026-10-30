@@ -157,6 +157,24 @@ point here instead of each carrying their own copy — a count restated in
 five files went stale in four of them once already. Before quoting a number
 from this section, re-derive it.
 
+### Playwright under Yarn PnP
+
+Since `@playwright/test` 1.63 (#2865), Playwright loads its TypeScript config through a
+synchronous module hook that calls `require()` with a `conditions` option. Yarn PnP does not
+support that option, so on every Node version tried (22.15.1, 22.21.1, 24.22.1) any
+`playwright test` dies before it lists a test:
+
+```
+Error: Some options passed to require() aren't supported by PnP yet (conditions)
+```
+
+`PLAYWRIGHT_FORCE_ASYNC_LOADER=1` switches Playwright to its async loader, which PnP handles. The
+root `package.json` sets it on `e2e`, `e2e:desktop`, `e2e:ui` and `e2e:headed`, so `yarn e2e`
+(which `e2e.yml` runs) and `yarn e2e:desktop` (which `desktop-e2e.yml` runs) work as written.
+Check it without a stack: `yarn e2e --list` should end with `Total: N tests in M files`. Anything
+that calls `yarn playwright test` directly has to set the variable itself. Drop it once a
+Playwright release or a Yarn PnP release supports `conditions`.
+
 ### Native suites are not in `make test`
 
 `make test` covers the JS and Python stacks only. The two native suites need

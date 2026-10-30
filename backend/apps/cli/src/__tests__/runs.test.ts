@@ -63,6 +63,17 @@ describe('ci runs', () => {
     await expect(runsCommand(ctx, undefined, { limit: 'lots' })).rejects.toBeInstanceOf(CliError);
   });
 
+  it.each(['-1', '0', '2.5', ''])(
+    'refuses --limit %j, which is not a whole number of runs',
+    async (limit) => {
+      const listRuns = vi.fn(async () => []);
+      const ctx = harness({ listRuns });
+
+      await expect(runsCommand(ctx, undefined, { limit })).rejects.toBeInstanceOf(CliError);
+      expect(listRuns).not.toHaveBeenCalled();
+    },
+  );
+
   it('shows the stage bar for one run', async () => {
     const ctx = harness({
       getRun: async () => ({
@@ -184,6 +195,16 @@ describe('ci runs', () => {
 
     expect(ctx.term.text()).not.toContain('stalled');
     expect(ctx.term.text()).not.toContain('interrupted');
+  });
+
+  it('refuses a bad --timeout before fetching or printing the run', async () => {
+    // `getRun` is not stubbed: fetching the run first would throw a different error.
+    const ctx = harness({});
+
+    await expect(runsCommand(ctx, 'run-1', { wait: true, timeout: 'abc' })).rejects.toThrow(
+      '--timeout takes a number of seconds, not "abc"',
+    );
+    expect(ctx.term.text()).toBe('');
   });
 
   it('follows one run to a terminal state with --wait', async () => {

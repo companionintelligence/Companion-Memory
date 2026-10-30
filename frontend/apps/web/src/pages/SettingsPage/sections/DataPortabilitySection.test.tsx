@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DataPortabilitySection } from './DataPortabilitySection';
@@ -48,6 +48,21 @@ function fileInput(): HTMLInputElement {
 function chooseFile(name: string, contents = '{}') {
   const file = new File([contents], name);
   fireEvent.change(fileInput(), { target: { files: [file] } });
+}
+
+/** jsdom never reports a path for a file input: `fireEvent.change` puts `files` on the element
+ *  and `value` stays ''. Give it the value a browser would hold, so a reset can be seen. */
+function chooseFileLikeABrowser(name: string) {
+  let value = `C:\\fakepath\\${name}`;
+
+  Object.defineProperty(fileInput(), 'value', {
+    configurable: true,
+    get: () => value,
+    set: (next: string) => {
+      value = next;
+    },
+  });
+  chooseFile(name);
 }
 
 function openImportDialog() {
@@ -103,6 +118,19 @@ describe('DataPortabilitySection', () => {
 
     fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
     expect(replaceButton()).toBeEnabled();
+  });
+
+  it('keeps iOS from autocorrecting the retyped address, without making it a type=email field', () => {
+    render(<DataPortabilitySection />);
+    openImportDialog();
+
+    const field = screen.getByLabelText(/to confirm/i);
+    expect(field).toHaveAttribute('inputmode', 'email');
+    expect(field).toHaveAttribute('autocapitalize', 'none');
+    expect(field).toHaveAttribute('autocorrect', 'off');
+    expect(field).toHaveAttribute('spellcheck', 'false');
+    expect(field).toHaveAttribute('autocomplete', 'off');
+    expect(field).not.toHaveAttribute('type', 'email');
   });
 
   it('accepts the confirmation email case- and whitespace-insensitively', async () => {
@@ -193,6 +221,10 @@ describe('DataPortabilitySection', () => {
     expect(
       await screen.findByText(/Could not import that archive\. Check the file and confirmation email/i),
     ).toBeInTheDocument();
+    // Inside the dialog: on the page it sits behind the overlay.
+    expect(
+      within(screen.getByRole('dialog')).getByText(/Could not import that archive/i),
+    ).toBeInTheDocument();
 
     // The dialog stays open on failure — a silent close would look like success.
     expect(screen.getByText('Import your data?')).toBeInTheDocument();
@@ -221,22 +253,52 @@ describe('DataPortabilitySection', () => {
     expect(screen.queryByText(/Could not import that archive/i)).not.toBeInTheDocument();
   });
 
-  it('leaves stale file/email/error in place when Cancel is clicked, since only re-opening resets them', async () => {
-    // Real current behavior: the footer's Cancel button only flips `importOpen`
-    // to false directly — it does not run the `onOpenChange` reset. Reopening
-    // via the "Import from file" trigger goes through the same controlled
-    // `open` prop, so the stale draft is still there. Documented here so a
-    // future change to either path has to touch this test on purpose.
+  it('clears the file and confirmation when Cancel is clicked, so reopening starts over', async () => {
     render(<DataPortabilitySection />);
     openImportDialog();
     chooseFile('export.ndjson');
     fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
+    expect(replaceButton()).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     openImportDialog();
 
+    expect(screen.getByRole('button', { name: /choose export file/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/to confirm/i)).toHaveValue('');
+    expect(replaceButton()).toBeDisabled();
+  });
+
+  it('empties the file input once it has read the file, so the same file can be chosen again', () => {
+    render(<DataPortabilitySection />);
+    openImportDialog();
+    chooseFileLikeABrowser('export.ndjson');
+
     expect(screen.getByRole('button', { name: 'export.ndjson' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/to confirm/i)).toHaveValue(h.email);
+    expect(fileInput().value).toBe('');
+  });
+
+  it('stays open while the import runs, whichever way it is dismissed', async () => {
+    let finish: (value: unknown) => void = () => {};
+
+    uploadAccountImport.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    render(<DataPortabilitySection />);
+    openImportDialog();
+    chooseFile('export.ndjson');
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
+    fireEvent.click(replaceButton());
+    await screen.findByRole('button', { name: /importing/i });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByText('Import your data?')).toBeInTheDocument();
+
+    finish({ tablesImported: 1, rowsImported: 2, filesRestored: 0, format: 'ndjson' });
+    expect(await screen.findByText(/2 rows across 1 tables/)).toBeInTheDocument();
+    expect(screen.queryByText('Import your data?')).not.toBeInTheDocument();
   });
 });
 

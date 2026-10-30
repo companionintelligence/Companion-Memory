@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { gql } from '@/graphql';
 import type { GetItemQuery } from '@/graphql/graphql';
 import { formatAmount, formatMinor } from '@/lib/money';
+import { formatThingDate } from '@/lib/thingDate';
 
 /**
  * The receipt line that minted this thing carries the price and the quantity,
@@ -101,9 +102,11 @@ export function AcquisitionCard({
   const receipt = data?.receipt;
   // Prefer the receipt's own date over the item's — the item's `acquiredAt` may
   // have been estimated by an importer, the receipt's is documentary.
-  const rawDate = receipt?.purchasedAt ?? acquiredAt ?? null;
-  const date = rawDate == null ? null : new Date(rawDate);
-  const dateLabel = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : null;
+  const receiptDate = receipt?.purchasedAt == null ? null : new Date(receipt.purchasedAt);
+  const dateLabel =
+    receiptDate && !Number.isNaN(receiptDate.getTime())
+      ? receiptDate.toLocaleDateString()
+      : formatThingDate(acquiredAt);
 
   const linePrice = formatMinor(acquisition?.totalPriceMinor, acquisition?.currency);
   // The item's own price is a MAJOR-unit float in the item's own currency —

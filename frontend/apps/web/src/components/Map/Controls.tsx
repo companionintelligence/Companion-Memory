@@ -28,7 +28,13 @@ export function Controls({ className, position = 'top-left' }: Props) {
             <Tooltip delayDuration={600}>
               <Tooltip.Content side={tooltipSide}>Zoom in</Tooltip.Content>
               <Tooltip.Trigger asChild>
-                <Button variant="outline" size="icon" onClick={zoomIn} className={mapControlButtonClassName}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Zoom in"
+                  onClick={zoomIn}
+                  className={mapControlButtonClassName}
+                >
                   <Plus />
                 </Button>
               </Tooltip.Trigger>
@@ -37,7 +43,13 @@ export function Controls({ className, position = 'top-left' }: Props) {
             <Tooltip delayDuration={600}>
               <Tooltip.Content side={tooltipSide}>Zoom out</Tooltip.Content>
               <Tooltip.Trigger asChild>
-                <Button variant="outline" size="icon" onClick={zoomOut} className={mapControlButtonClassName}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Zoom out"
+                  onClick={zoomOut}
+                  className={mapControlButtonClassName}
+                >
                   <Minus />
                 </Button>
               </Tooltip.Trigger>
@@ -50,6 +62,7 @@ export function Controls({ className, position = 'top-left' }: Props) {
               <Button
                 variant="outline"
                 size="icon"
+                aria-label="Center visible pins"
                 onClick={centerVisibleMarkers}
                 className={mapControlButtonClassName}
               >
@@ -64,6 +77,8 @@ export function Controls({ className, position = 'top-left' }: Props) {
               <Button
                 variant={displayRoutes ? 'default' : 'outline'}
                 size="icon"
+                aria-label={displayRoutes ? 'Hide routes' : 'Show routes'}
+                aria-pressed={displayRoutes}
                 onClick={toggleRoutes}
                 className={cn(
                   displayRoutes ? 'border-transparent dark:border-transparent' : mapControlButtonClassName,

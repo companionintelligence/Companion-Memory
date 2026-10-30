@@ -52,7 +52,7 @@ internal object ToolResultCases {
                 "an id alone is the address" to mapOf("type" to "note", "title" to "T", "id" to UUID),
                 "an id that is not a UUID" to mapOf("type" to "note", "title" to "T", "id" to "abc"),
                 "an id beside a link is dropped" to mapOf("type" to "note", "title" to "T", "id" to UUID, "link" to "/notes/x"),
-                "an id beside an empty link goes with it" to mapOf("type" to "note", "title" to "T", "id" to UUID, "link" to ""),
+                "an id beside an empty link stays, since the empty link is itself pruned" to mapOf("type" to "note", "title" to "T", "id" to UUID, "link" to ""),
                 "an id beside a null link stays" to mapOf("type" to "note", "title" to "T", "id" to UUID, "link" to null),
                 "an id beside a numeric link stays" to mapOf("type" to "note", "title" to "T", "id" to UUID, "link" to 5),
                 "a link that is a UUID stays" to mapOf("type" to "note", "title" to "T", "link" to UUID),
@@ -64,7 +64,7 @@ internal object ToolResultCases {
                 "a nested object is pruned by the same rules" to mapOf("type" to "note", "title" to "T", "meta" to mapOf("threadId" to UUID, "id" to UUID, "link" to UUID, "name" to "N", "inner" to mapOf("id" to UUID, "x" to UUID))),
                 "entityType beside a type is dropped" to mapOf("type" to "note", "entityType" to "note", "title" to "T"),
                 "entityType without a type stays" to mapOf("entityType" to "note", "title" to "T"),
-                "entityType beside a null type is dropped with it" to mapOf("type" to null, "entityType" to "note", "title" to "T"),
+                "entityType beside a null type stays, since the type itself is dropped" to mapOf("type" to null, "entityType" to "note", "title" to "T"),
                 "entityType beside a different type" to mapOf("type" to "photo", "entityType" to "content", "title" to "T"),
                 "entityType in a nested object" to mapOf("type" to "note", "title" to "T", "owner" to mapOf("entityType" to "person", "name" to "P")),
                 "everything unset leaves nothing" to mapOf("a" to null, "b" to "", "c" to false, "d" to emptyList<Any>(), "e" to emptyMap<String, Any>(), "f" to listOf(null, "", false, emptyList<Any>(), emptyMap<String, Any>())),
@@ -74,7 +74,7 @@ internal object ToolResultCases {
         for ((name, hit) in prune) {
             add("prune: $name", 700, pretty(hit + PAD))
         }
-        for (name in listOf("an id beside a link is dropped", "an id beside an empty link goes with it", "UUID elements of an array go", "entityType beside a type is dropped", "everything unset leaves nothing", "a nested object is pruned by the same rules")) {
+        for (name in listOf("an id beside a link is dropped", "an id beside an empty link stays, since the empty link is itself pruned", "UUID elements of an array go", "entityType beside a type is dropped", "everything unset leaves nothing", "a nested object is pruned by the same rules")) {
             val hit = prune.getValue(name)
 
             add("prune in a list: $name", 900, pretty(mapOf("summary" to "S", "totalMatches" to null, "items" to listOf(hit + PAD, hit + PAD + mapOf("title" to "second")))))
@@ -218,7 +218,17 @@ internal object ToolResultCases {
             )
         for ((name, doc) in lists) for (budget in listOf(100, 300, 800)) add("lists: $name", budget, pretty(doc))
 
-        // ---- the closing note's reserve is a share of a small budget ------------------------------------------------------------
+        // ---- depth: a container nested past the cap is dropped, the shallow part stays ---------------------------------------
+        fun nest(levels: Int): Map<String, Any?> {
+            var value: Any? = mapOf("leaf" to "the deepest value " + "x".repeat(50))
+
+            repeat(levels) { value = mapOf("label" to "y".repeat(40), "level" to value) }
+
+            return mapOf("type" to "note", "link" to "/notes/n", "title" to "deep", "nest" to value)
+        }
+        for (levels in listOf(10, 15, 16, 17, 18, 24, 40)) add("depth: nested $levels levels", 4000, pretty(nest(levels)))
+
+        // ---- the closing note's exact size is held back only once some hits are left out -----------------------------------------
         for (budget in listOf(64, 80, 100, 120, 150, 180, 220, 300, 400, 560, 700)) {
             add("five hits in an array", budget, pretty((0 until 5).map { mapOf("title" to "T$it", "type" to "x") }))
             add("five hits in an envelope", budget, pretty(mapOf("summary" to "S", "items" to (0 until 5).map { mapOf("title" to "T$it", "type" to "x") })))

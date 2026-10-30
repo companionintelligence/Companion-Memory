@@ -9,7 +9,7 @@ const { spawnSync } = require('child_process');
 const { Command } = require('commander');
 const config = require('config');
 const { Client } = require('pg');
-const { z } = require('zod');
+const { z } = require('zod/v3');
 
 const schema = z.object({
   type: z.literal('postgres'),

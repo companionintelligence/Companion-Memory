@@ -508,6 +508,158 @@ describe('BulkIngestController', () => {
     });
   });
 
+  describe('the reason a batch the database refused is reported with', () => {
+    /** What TypeORM throws for a failed statement: the driver's fields copied onto the error. */
+    function queryFailed(message: string, fields: { code: string; constraint?: string }): Error {
+      return Object.assign(new Error(message), fields, { driverError: { ...fields, message } });
+    }
+
+    const fix = { time: '2026-10-23T09:05:00.000Z', source: 'gps' as const };
+
+    it('explains a position with no location instead of echoing the chunk name', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed(
+          'new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"',
+          {
+            code: '23514',
+            constraint: 'valid_positioning',
+          },
+        ),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toEqual({
+        ingested: 0,
+        duplicate: 0,
+        rejected: [
+          {
+            index: 0,
+            reason:
+              'A position in this batch has neither a location nor a reference_entity_id with relative_coordinates that include x.',
+          },
+        ],
+      });
+    });
+
+    it('answers any other database error with its SQLSTATE, not the driver text', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed(
+          'null value in column "source" of relation "_hyper_13_2_chunk" violates not-null constraint',
+          {
+            code: '23502',
+          },
+        ),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [{ index: 0, reason: 'The database refused this batch (SQLSTATE 23502).' }],
+      });
+      expect(JSON.stringify(res)).not.toContain('_hyper_');
+    });
+
+    it('carries the same reason down the NDJSON path', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed(
+          'new row for relation "_hyper_13_2_chunk" violates check constraint "valid_positioning"',
+          {
+            code: '23514',
+            constraint: 'valid_positioning',
+          },
+        ),
+      );
+
+      const res = await controller.ingestPositions(ctx, ndjsonReq(`${JSON.stringify(fix)}\n`), undefined);
+
+      expect(JSON.stringify(res)).toContain('A position in this batch has neither a location');
+      expect(JSON.stringify(res)).not.toContain('_hyper_');
+    });
+
+    it('says the database was away for a SQLSTATE that means it was restarting', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        queryFailed('the database system is in recovery mode', { code: '57P03' }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [
+          { index: 0, reason: 'The database was unavailable while this batch was written (57P03).' },
+        ],
+      });
+    });
+
+    it('keeps the server address of a refused connection out of the reason', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('connect ECONNREFUSED 172.18.0.2:5432'), {
+          code: 'ECONNREFUSED',
+          syscall: 'connect',
+        }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(res).toMatchObject({
+        rejected: [
+          { index: 0, reason: 'The database was unavailable while this batch was written (ECONNREFUSED).' },
+        ],
+      });
+      expect(JSON.stringify(res)).not.toContain('172.18.0.2');
+    });
+
+    it('does not read a broken socket (EPIPE) as a SQLSTATE', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('write EPIPE'), { code: 'EPIPE', syscall: 'write' }),
+      );
+
+      const res = await controller.ingestPositions(ctx, jsonReq(), { records: [fix] });
+
+      expect(JSON.stringify(res)).not.toContain('SQLSTATE EPIPE');
+      expect(JSON.stringify(res)).toContain('The database was unavailable');
+    });
+
+    it('swaps the driver text when the capture log INSERT is the statement that failed', async () => {
+      const { controller, dataSource } = makeController();
+      (dataSource.query as jest.Mock).mockRejectedValueOnce(
+        queryFailed('value too long for type character varying(255) in relation "capture_events"', {
+          code: '22001',
+        }),
+      );
+
+      const res = await controller.ingest(ctx, { events: [ev('a')] });
+
+      expect(res).toMatchObject({
+        rejected: [{ index: 0, reason: 'The database refused this batch (SQLSTATE 22001).' }],
+      });
+      expect(JSON.stringify(res)).not.toContain('capture_events');
+    });
+
+    it('swaps the driver text when the materialized_id link UPDATE fails', async () => {
+      const { controller, dataSource } = makeController({ captureInserted: [true] });
+      const query = dataSource.query as jest.Mock;
+      const fallback = query.getMockImplementation()!;
+      query.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (/^\s*UPDATE ci\.capture_events/.test(sql)) {
+          throw queryFailed('deadlock detected on relation "capture_events"', { code: '40P01' });
+        }
+
+        return fallback(sql, params);
+      });
+
+      await expect(controller.ingest(ctx, { events: [ev('a')] })).rejects.toThrow(
+        'The database refused this batch (SQLSTATE 40P01).',
+      );
+    });
+  });
+
   describe('POST /v1/notes (durable capture outbox replay)', () => {
     const note = (id: string, capturedAt = '2026-08-13T10:00:00.000Z') => ({
       id,
@@ -690,6 +842,29 @@ describe('BulkIngestController', () => {
       expect((itemService.createMany as jest.Mock).mock.calls[0][1]).toHaveLength(2);
     });
 
+    it('rejects an off-the-globe position line with the axis in the reason, and keeps the rest', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }]);
+
+      const body = [
+        JSON.stringify({ time: '2026-01-01T00:00:00.000Z', source: 'gps', location: { x: 500, y: 20 } }),
+        JSON.stringify({ time: '2026-01-01T00:01:00.000Z', source: 'gps', location: { x: -122.4, y: 37.8 } }),
+      ].join('\n');
+
+      const res = await controller.ingestPositions(ctx, ndjsonReq(body), undefined);
+
+      expect(res.ingested).toBe(1);
+      expect(res.rejected).toEqual([
+        {
+          line: 1,
+          reason: expect.stringContaining('location.x is a longitude and must be between -180 and 180'),
+        },
+      ]);
+      expect((positionService.create as jest.Mock).mock.calls[0][1]).toEqual([
+        expect.objectContaining({ location: { x: -122.4, y: 37.8 } }),
+      ]);
+    });
+
     it('reports a repeated capture key as duplicate (positions, same as the envelope path)', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }]);
@@ -753,5 +928,52 @@ describe('bulk envelope validation (the shapes the route ValidationPipes enforce
     const body = caught!.getResponse() as { message: string; errors: Array<{ path: (string | number)[] }> };
     expect(body.message).toBe('Validation failed');
     expect(body.errors[0].path).toEqual(['records', 0, 'communication_type']);
+  });
+
+  /**
+   * `ci.position.location` is geography(Point, 4326), and PostGIS wraps an
+   * out-of-range point instead of refusing it: `{x: 500, y: 200}` was stored as
+   * `POINT(140 -20)` and answered `ingested 1` (RC2 QA, D5).
+   */
+  it('refuses a position whose coordinates are off the globe, naming the axis', () => {
+    const pipe = new ValidationPipe(ingestPositionsSchema);
+    const fix = (location: { x: number; y: number }) => ({
+      records: [{ time: '2026-01-01T00:00:00.000Z', source: 'gps', location }],
+    });
+    const issues = (location: { x: number; y: number }) => {
+      try {
+        pipe.transform(fix(location));
+      } catch (err) {
+        return (
+          (err as BadRequestException).getResponse() as { errors: Array<{ path: unknown; message: string }> }
+        ).errors;
+      }
+
+      return [];
+    };
+
+    expect(issues({ x: 500, y: 200 })).toEqual([
+      expect.objectContaining({
+        path: ['records', 0, 'location', 'x'],
+        message: 'location.x is a longitude and must be between -180 and 180',
+      }),
+      expect.objectContaining({
+        path: ['records', 0, 'location', 'y'],
+        message: 'location.y is a latitude and must be between -90 and 90',
+      }),
+    ]);
+    expect(issues({ x: -122.4, y: 91 })).toEqual([
+      expect.objectContaining({ message: 'location.y is a latitude and must be between -90 and 90' }),
+    ]);
+    expect(issues({ x: -180.0001, y: 0 })).toHaveLength(1);
+
+    // The edges of the range are real places.
+    for (const location of [
+      { x: 180, y: 90 },
+      { x: -180, y: -90 },
+      { x: -122.4, y: 37.8 },
+    ]) {
+      expect(issues(location)).toEqual([]);
+    }
   });
 });

@@ -3,14 +3,21 @@ import { useEffect, useState } from 'react';
 import { Badge, Button } from '@ci/shadcn';
 
 import { DropZone } from '../DropZone';
-import { groupImportFiles } from '../groupImportFiles';
+import { groupImportFiles, splitLooseFiles } from '../groupImportFiles';
 import { formatBytes } from '../InboxPanel';
 import { SourceGuide } from '../SourceGuide';
 import { useImportApi, type InboxScan } from '../useImportApi';
 import { zipFilesStore } from '../zipStore';
 
 import { LiveRunList } from './LiveRunList';
-import { bundleToGuide, serviceLogoUrl, shortTitle, sourceToGuide, type ExportEntry } from './sources';
+import {
+  bundleLogoUrl,
+  bundleToGuide,
+  serviceLogoUrl,
+  shortTitle,
+  sourceToGuide,
+  type ExportEntry,
+} from './sources';
 
 /**
  * One dropped file's place in the upload queue. Files upload ONE AT A TIME (a
@@ -29,9 +36,9 @@ interface UploadItem {
   readonly error?: string;
   /**
    * The File this row will upload — kept so a failed row can be retried
-   * without re-dropping. For a folder row this is the packed zip, so it is
-   * absent until packing succeeds (and a row whose PACKING failed cannot be
-   * retried from here; re-drop the folder).
+   * without re-dropping. For a packed row (a folder, or loose files packed
+   * together) this is the zip, so it is absent until packing succeeds (and a
+   * row whose PACKING failed cannot be retried from here; re-drop the files).
    */
   readonly file?: File;
   /** Free-text progress for non-byte phases, e.g. "packing 132 of 400 files". */
@@ -56,10 +63,11 @@ export interface ExportStepProps {
  *
  * The card is the authored export instructions with the upload INSIDE them —
  * the steps end at "upload it here", and here is where that is. An upload
- * starts an unpack+parse run immediately (one run per file: a drop is one
- * archive), so extraction happens while the person works through their other
- * services; the final Sync step only pushes. The live pipeline renders on the
- * card, and its parse counts are the "your drop landed" feedback.
+ * starts an unpack+parse run immediately (one run per archive uploaded; a
+ * folder, or a set of loose files, is packed into one first), so extraction
+ * happens while the person works through their other services; the final Sync
+ * step only pushes. The live pipeline renders on the card, and its parse counts
+ * are the "your drop landed" feedback.
  */
 export function ExportStep({
   entries,
@@ -120,10 +128,11 @@ export function ExportStep({
    * Above this many files in one drop, park the batch and suggest the inbox
    * before uploading. Takeout is the canonical trigger: any file bigger than
    * the chosen part size (a long video) is exported LOOSE beside the zip
-   * parts, so a large Photos library arrives as hundreds of bare files — each
-   * of which would become its own upload and its own run. The inbox imports
-   * the whole folder as ONE unit with no HTTP at all. A confirmation, not a
-   * wall: fifty legitimate archives is unusual but allowed.
+   * parts, so a large Photos library arrives as hundreds of bare files, too
+   * big together to pack into one archive in the tab, so each would become its
+   * own upload and its own run. The inbox imports the whole folder as ONE unit
+   * with no HTTP at all. A confirmation, not a wall: fifty legitimate archives
+   * is unusual but allowed.
    */
   const MANY_FILES_SUGGEST_INBOX = 50;
 
@@ -157,28 +166,53 @@ export function ExportStep({
     // uploaded as one archive — one drop, one run, exactly the unit the inbox
     // uses for a directory. Shipping a tree as per-file uploads is what turned
     // one Takeout folder into 150 runs; shipping it as one multipart request
-    // is what hung the tab on a ChatGPT export. Loose files stay one unit
-    // each, with per-file byte progress.
+    // is what hung the tab on a ChatGPT export. Loose files that are not
+    // archives (23 photos picked with Choose files) are packed the same way,
+    // so they make one run rather than 23; loose archives stay one unit each
+    // (see splitLooseFiles), with per-file byte progress.
     interface UploadUnit {
       name: string;
       sizeBytes: number;
-      /** The folder's files, when this unit still needs packing into a zip. */
+      /** The files this unit still needs packing into a zip, if any. */
       pack: File[] | null;
       file: File | undefined;
+      /** Loose files packed together: the zip is named `name`, not after its first file. */
+      loose?: boolean;
     }
 
-    const units: UploadUnit[] = groupImportFiles(files).flatMap((batch): UploadUnit[] =>
-      batch.kind === 'directory'
-        ? [
-            {
-              name: `${batch.name}.zip`,
-              sizeBytes: batch.files.reduce((sum, file) => sum + file.size, 0),
-              pack: batch.files,
-              file: undefined,
-            },
-          ]
-        : batch.files.map((file) => ({ name: file.name, sizeBytes: file.size, pack: null, file })),
-    );
+    const units: UploadUnit[] = groupImportFiles(files).flatMap((batch): UploadUnit[] => {
+      if (batch.kind === 'directory') {
+        return [
+          {
+            name: `${batch.name}.zip`,
+            sizeBytes: batch.files.reduce((sum, file) => sum + file.size, 0),
+            pack: batch.files,
+            file: undefined,
+          },
+        ];
+      }
+
+      const { pack, single } = splitLooseFiles(batch.files);
+      // A slash in the card title ("Twitter / X") would reach the server as a
+      // path: the upload parser keeps only what follows the last one. The
+      // run's label read " X (3 files).zip".
+      const packTitle = shortTitle(guide.title).replace(/\s*[/\\]+\s*/g, ' - ');
+
+      return [
+        ...(pack.length > 0
+          ? [
+              {
+                name: `${packTitle} (${pack.length} files).zip`,
+                sizeBytes: pack.reduce((sum, file) => sum + file.size, 0),
+                pack,
+                file: undefined,
+                loose: true,
+              },
+            ]
+          : []),
+        ...single.map((file) => ({ name: file.name, sizeBytes: file.size, pack: null, file })),
+      ];
+    });
 
     setUploads(
       units.map((unit) => ({
@@ -207,6 +241,11 @@ export function ExportStep({
           file = await zipFilesStore(unit.pack, (done, total) => {
             patchUpload(index, { phase: `packing ${done} of ${total} files` });
           });
+
+          if (unit.loose) {
+            file = new File([file], unit.name, { type: 'application/zip' });
+          }
+
           patchUpload(index, { sizeBytes: file.size, file, phase: undefined });
         } catch (err: unknown) {
           patchUpload(index, {
@@ -294,9 +333,7 @@ export function ExportStep({
 
       <SourceGuide
         guide={guide}
-        logo={
-          entry.kind === 'bundle' ? `/import-logos/${entry.bundle.logo}` : serviceLogoUrl(entry.source.id)
-        }
+        logo={entry.kind === 'bundle' ? bundleLogoUrl(entry.bundle) : serviceLogoUrl(entry.source.id)}
         badges={
           startedRuns.length > 0 ? (
             <Badge variant="outline" className="border-primary text-primary">
@@ -330,8 +367,8 @@ export function ExportStep({
               That drop is {pendingFiles.length} separate files — the import inbox handles big folders better.
             </p>
             <p className="text-muted-foreground">
-              Each dropped file uploads on its own and becomes its own import run; at this count that is slow
-              and noisy. Instead, copy the whole folder into the import inbox directory
+              Uploading this many files through the browser is slow. Instead, copy the whole folder into the
+              import inbox directory
               {/* The scan is fetched when the drop parks — render the path only
                   once it has arrived AND the folder is real; a null deref here
                   took the whole card down. */}

@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   hideSplashScreen: vi.fn(async () => {}),
   syncNativeIntentConfig: vi.fn(async () => {}),
   setStatusBarStyle: vi.fn(async () => {}),
+  setSystemBarsBackground: vi.fn(async () => {}),
+  isIosPlatform: vi.fn(() => false),
   exitApp: vi.fn(async () => {}),
   addAppStateListener: vi.fn(),
   addBackButtonListener: vi.fn(),
@@ -30,6 +32,8 @@ vi.mock('@ci/common', async (importOriginal) => ({
   hideSplashScreen: h.hideSplashScreen,
   syncNativeIntentConfig: h.syncNativeIntentConfig,
   setStatusBarStyle: h.setStatusBarStyle,
+  setSystemBarsBackground: h.setSystemBarsBackground,
+  isIosPlatform: h.isIosPlatform,
   exitApp: h.exitApp,
   addAppStateListener: h.addAppStateListener,
   addBackButtonListener: h.addBackButtonListener,
@@ -65,6 +69,8 @@ beforeEach(() => {
   h.hideSplashScreen.mockReset().mockResolvedValue(undefined);
   h.syncNativeIntentConfig.mockReset().mockResolvedValue(undefined);
   h.setStatusBarStyle.mockReset().mockResolvedValue(undefined);
+  h.setSystemBarsBackground.mockReset().mockResolvedValue(undefined);
+  h.isIosPlatform.mockReset().mockReturnValue(false);
   h.exitApp.mockReset().mockResolvedValue(undefined);
   h.addAppStateListener.mockReset();
   h.addBackButtonListener.mockReset();
@@ -88,6 +94,7 @@ describe('useNativeShell — inert on web', () => {
     expect(h.hideSplashScreen).not.toHaveBeenCalled();
     expect(h.syncNativeIntentConfig).not.toHaveBeenCalled();
     expect(h.setStatusBarStyle).not.toHaveBeenCalled();
+    expect(h.setSystemBarsBackground).not.toHaveBeenCalled();
     expect(h.addAppStateListener).not.toHaveBeenCalled();
     expect(h.addBackButtonListener).not.toHaveBeenCalled();
   });
@@ -124,7 +131,46 @@ describe('useNativeShell — native mount', () => {
   });
 });
 
+describe('useNativeShell — which shell', () => {
+  it('tags the document as the Android shell, where the WebView is inset natively', () => {
+    h.addAppStateListener.mockResolvedValue(vi.fn());
+    h.addBackButtonListener.mockResolvedValue(vi.fn());
+
+    const { unmount } = renderHook(() => useNativeShell());
+
+    expect(document.documentElement.classList.contains('ci-android')).toBe(true);
+    expect(document.documentElement.classList.contains('ci-ios')).toBe(false);
+
+    unmount();
+    expect(document.documentElement.classList.contains('ci-native')).toBe(false);
+    expect(document.documentElement.classList.contains('ci-android')).toBe(false);
+  });
+
+  it('tags the document as the iOS shell, whose CSS keeps its own safe-area floors', () => {
+    h.isIosPlatform.mockReturnValue(true);
+    h.addAppStateListener.mockResolvedValue(vi.fn());
+    h.addBackButtonListener.mockResolvedValue(vi.fn());
+
+    renderHook(() => useNativeShell());
+
+    expect(document.documentElement.classList.contains('ci-ios')).toBe(true);
+    expect(document.documentElement.classList.contains('ci-android')).toBe(false);
+  });
+});
+
 describe('useNativeShell — status bar sync', () => {
+  it('paints the window behind the system bars with the same resolved colour as the status bar', async () => {
+    h.addAppStateListener.mockResolvedValue(vi.fn());
+    h.addBackButtonListener.mockResolvedValue(vi.fn());
+    document.body.style.backgroundColor = 'rgb(11, 31, 40)';
+    document.documentElement.classList.add('dark');
+
+    renderHook(() => useNativeShell());
+
+    await waitFor(() => expect(h.setStatusBarStyle).toHaveBeenCalledWith('DARK', '#0b1f28'));
+    expect(h.setSystemBarsBackground).toHaveBeenCalledWith('#0b1f28');
+  });
+
   it('applies dark glyphs over a light bar for the light theme, using the resolved body background', async () => {
     h.addAppStateListener.mockResolvedValue(vi.fn());
     h.addBackButtonListener.mockResolvedValue(vi.fn());

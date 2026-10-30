@@ -45,4 +45,21 @@ describe('ViewCrashBoundary', () => {
     expect(screen.getByText('Recovered')).toBeInTheDocument();
     spy.mockRestore();
   });
+
+  it('catches a thrown value that is falsy, such as a promise rejected with no reason', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    function ThrowsUndefined(): never {
+      throw undefined;
+    }
+
+    render(
+      <ViewCrashBoundary fallback={<p>Could not stay open</p>}>
+        <ThrowsUndefined />
+      </ViewCrashBoundary>,
+    );
+
+    expect(screen.getByText('Could not stay open')).toBeInTheDocument();
+    spy.mockRestore();
+  });
 });

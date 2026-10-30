@@ -87,6 +87,22 @@ export interface StartRunInput {
   declaredSources?: readonly string[];
 
   /**
+   * The platform a connection fetched this run's bytes from ('dropbox',
+   * 'google_drive'), when one did. Stamped on what the catch-all importer
+   * produces, so a photo that lives in Dropbox is ledgered as arriving from
+   * Dropbox rather than from "generic". See migration 20261005230949.
+   */
+  originPlatform?: string | null;
+
+  /**
+   * The connection that fetched this run's bytes, when one did. Stamped as
+   * `connection_id` on every record the run produces, so disconnecting it
+   * removes them — unless something else also delivered the same record. See
+   * migration 20261005231545.
+   */
+  originConnectionId?: string | null;
+
+  /**
    * Stage kinds to execute, in order. Defaults to {@link DEFAULT_STAGES}.
    * Naming them explicitly is how a re-run of a failed push will skip
    * re-reading a 40GB tree.
@@ -419,8 +435,10 @@ export class ImportRunService {
       }
 
       const runRows = await manager.query<Array<{ id: string }>>(
-        `INSERT INTO ci_import.import_runs (user_id, label, source, status, requested_stages, declared_sources)
-              VALUES ($1::uuid, $2, $3, 'queued', $4::text[], $5::text[])
+        `INSERT INTO ci_import.import_runs
+                (user_id, label, source, status, requested_stages, declared_sources,
+                 origin_platform, origin_connection_id)
+              VALUES ($1::uuid, $2, $3, 'queued', $4::text[], $5::text[], $6, $7::uuid)
            RETURNING id`,
         [
           ctx.userId,
@@ -428,6 +446,8 @@ export class ImportRunService {
           input.source ?? 'wizard',
           kinds,
           input.declaredSources ?? null,
+          input.originPlatform ?? null,
+          input.originConnectionId ?? null,
         ],
       );
 
@@ -1365,6 +1385,13 @@ export class ImportRunService {
    *
    * The run is reopened alongside it — a finished run with a queued stage would
    * be a row that contradicts itself, and the rollup would never move again.
+   *
+   * In the SAME statement, so the two commit together. `ImportRetentionService`
+   * reads a `queued` stage in a finished run as a leftover nothing will reach,
+   * which is only true if no instant exists where this stage is already
+   * `queued` and the run is still closed. Two statements opened exactly that
+   * instant, and a discard or a sweep landing in it would take the run this
+   * retry is about to hand a worker.
    */
   async retryStage(ctx: UserServiceContext, runId: string, stageId: string): Promise<boolean> {
     const rows = await this.dataSource.query<Array<{ id: string; seq: number }>>(
@@ -1379,7 +1406,13 @@ export class ImportRunService {
               SELECT 1 FROM ci_import.import_runs r
                WHERE r.id = s.run_id AND r.user_id = $3::uuid
             )
-      RETURNING s.id, s.seq)
+      RETURNING s.id, s.seq, s.run_id),
+       reopened AS (
+         UPDATE ci_import.import_runs r
+            SET status = 'queued', error = NULL, finished_at = NULL
+           FROM requeued q
+          WHERE r.id = q.run_id
+      RETURNING r.id)
        SELECT id, seq FROM requeued`,
       [stageId, runId, ctx.userId],
     );
@@ -1387,13 +1420,6 @@ export class ImportRunService {
     if (rows.length === 0) {
       return false;
     }
-
-    await this.dataSource.query(
-      `UPDATE ci_import.import_runs
-          SET status = 'queued', error = NULL, finished_at = NULL
-        WHERE id = $1::uuid`,
-      [runId],
-    );
 
     await this.enqueueStage(ctx.userId, runId, { id: rows[0].id } as ImportStage);
 
@@ -2032,6 +2058,14 @@ export class ImportRunService {
    * `create_missing` builds the path on a stage whose detail is still `{}`,
    * which is every stage that failed before producing anything.
    *
+   * The failure's `phase` also becomes the stage's own, so the row says where
+   * the stage stopped and agrees with the `phase=` the error line carries. An
+   * unpack that failed while extracting used to read "acquiring" next to an
+   * error saying `phase=extracting`, because the listener's progress throttle
+   * had dropped the `extracting` write (it no longer drops phase changes). No
+   * failure, or one whose phase is missing or empty, leaves the column as it
+   * was.
+   *
    * Fenced by `claimToken` when one is given (see {@link claimStage}). False
    * means the claim was taken back first: the failure belongs to an attempt
    * that no longer owns the stage, so neither the stage nor the run is failed
@@ -2050,6 +2084,7 @@ export class ImportRunService {
          UPDATE ci_import.import_stages
             SET status = 'failed', error = $2, finished_at = now(), updated_at = now(),
                 claim_token = NULL,
+                phase = COALESCE(NULLIF($3::jsonb->>'phase', ''), phase),
                 detail = CASE
                   WHEN $3::jsonb IS NULL THEN detail
                   ELSE jsonb_set(

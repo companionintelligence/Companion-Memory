@@ -366,9 +366,14 @@ export class ReceiptService {
       qb.andWhere('receipt.user_id = :userId', { userId: context.userId });
     }
 
-    if (filter.merchantName != null) {
-      qb.andWhere('lower(btrim(receipt.merchant_name)) = lower(btrim(:merchantName))', {
-        merchantName: filter.merchantName,
+    // A search box, not a lookup key: Receipts' "Search by merchant..." is the
+    // only caller, and "amaz" has to find Amazon. Case-insensitive substring,
+    // with the LIKE wildcards in what was typed matched literally.
+    const merchantQuery = filter.merchantName?.trim();
+
+    if (merchantQuery) {
+      qb.andWhere('receipt.merchant_name ILIKE :merchantPattern', {
+        merchantPattern: `%${merchantQuery.replace(/[\\%_]/g, (char) => `\\${char}`)}%`,
       });
     }
 

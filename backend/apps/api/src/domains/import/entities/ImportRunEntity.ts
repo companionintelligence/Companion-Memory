@@ -79,6 +79,14 @@ export class ImportRunEntity {
   @Column({ type: 'text', array: true, name: 'declared_sources', nullable: true })
   declaredSources!: string[] | null;
 
+  /** The platform a connection fetched this run's bytes from, when one did. */
+  @Column({ type: 'text', name: 'origin_platform', nullable: true })
+  originPlatform!: string | null;
+
+  /** The connection that fetched this run's bytes, when one did. */
+  @Column({ type: 'uuid', name: 'origin_connection_id', nullable: true })
+  originConnectionId!: string | null;
+
   /**
    * Derived CACHE over {@link ImportStageEntity}, maintained by the stage
    * runners. Never the source of truth for whether work remains.

@@ -1,0 +1,84 @@
+// Kotlin, like the other @ci/capacitor-* modules, so this module bootstraps the Kotlin
+// Gradle plugin itself in a per-subproject buildscript block. See
+// @ci/capacitor-local-llm's android/build.gradle for why this uses a plain local `def`
+// rather than `ext.kotlin_version`.
+ext {
+    junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
+    androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
+    androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
+    androidxEspressoCoreVersion = project.hasProperty('androidxEspressoCoreVersion') ? rootProject.ext.androidxEspressoCoreVersion : '3.6.1'
+    // androidx.biometric: BiometricPrompt + BiometricManager, which route to the OS prompt
+    // on every API level this app supports and handle the device-credential fallback
+    // (a separate confirm-credential activity below API 30). 1.1.0 is the current stable.
+    androidxBiometricVersion = project.hasProperty('androidxBiometricVersion') ? rootProject.ext.androidxBiometricVersion : '1.1.0'
+}
+
+buildscript {
+    def appLockKotlinVersion = '2.0.21'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.10.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$appLockKotlinVersion"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace "com.companionintelligence.applock"
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+    defaultConfig {
+        // Must not exceed the app's own minSdk (24). androidx.biometric runs on 24+;
+        // the STRONG|CREDENTIAL authenticator combination is API 30+, and AppLockPlugin
+        // picks WEAK|CREDENTIAL below that.
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    lintOptions {
+        abortOnError false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = "21"
+    }
+}
+
+// AppLockPolicyTest reads ../src/definitions.ts off disk to check that the Grace wire
+// values are members of the TypeScript AppLockGrace union. Declare the file as a test
+// input or the task stays UP-TO-DATE through exactly the edit it exists to catch (see the
+// same note in @ci/capacitor-speech).
+tasks.withType(Test).configureEach {
+    inputs.file("${projectDir}/../src/definitions.ts").withPropertyName('appLockPluginDefinitions')
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation project(':capacitor-android')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.biometric:biometric:$androidxBiometricVersion"
+
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+}

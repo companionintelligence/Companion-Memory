@@ -69,7 +69,7 @@ interface ServiceParams {
   includeTypes?: string[];
   excludeTypes?: string[];
   tags?: string[];
-  bbox?: number[];
+  areas?: number[][];
 }
 
 function renderService(params: ServiceParams) {
@@ -145,12 +145,18 @@ describe('useEntityService', () => {
     expect(lastOptions().variables.tags).toEqual(['travel', 'food']);
   });
 
-  it('only sends bbox once all four coordinates are present', () => {
-    renderService({ searchQuery: '', bbox: [1, 2, 3] });
-    expect(lastOptions().variables.bbox).toBeUndefined();
+  it('sends only the areas that carry all four coordinates', () => {
+    renderService({ searchQuery: '', areas: [[1, 2, 3]] });
+    expect(lastOptions().variables.areas).toBeUndefined();
 
-    renderService({ searchQuery: '', bbox: [1, 2, 3, 4] });
-    expect(lastOptions().variables.bbox).toEqual([1, 2, 3, 4]);
+    renderService({
+      searchQuery: '',
+      areas: [
+        [1, 2, 3, 4],
+        [5, 6],
+      ],
+    });
+    expect(lastOptions().variables.areas).toEqual([[1, 2, 3, 4]]);
   });
 
   it('paginates by requesting the next cursor and appending, not replacing, results', async () => {

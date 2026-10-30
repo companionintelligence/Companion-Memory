@@ -475,6 +475,36 @@ describe('ReceiptService.find', () => {
     expect(seek?.sql).toBe('receipt.purchased_at IS NULL AND receipt.receipt_id < :afterId');
   });
 
+  it('matches part of the merchant name, in any case', async () => {
+    const harness = makeQueryBuilderHarness([]);
+
+    await harness.service.find(CONTEXT, { merchantName: ' amaz ' });
+
+    expect(harness.wheres).toContainEqual({
+      sql: 'receipt.merchant_name ILIKE :merchantPattern',
+      params: { merchantPattern: '%amaz%' },
+    });
+  });
+
+  it('matches LIKE wildcards in the search literally', async () => {
+    const harness = makeQueryBuilderHarness([]);
+
+    await harness.service.find(CONTEXT, { merchantName: '100%_off\\' });
+
+    expect(harness.wheres).toContainEqual({
+      sql: 'receipt.merchant_name ILIKE :merchantPattern',
+      params: { merchantPattern: '%100\\%\\_off\\\\%' },
+    });
+  });
+
+  it('does not filter on a blank search', async () => {
+    const harness = makeQueryBuilderHarness([]);
+
+    await harness.service.find(CONTEXT, { merchantName: '   ' });
+
+    expect(harness.wheres.some(({ sql }) => sql.includes('merchant_name'))).toBe(false);
+  });
+
   it('reports hasMore and a cursor only when the sentinel row came back', async () => {
     const rows = [
       { id: 'r1', purchasedAt: new Date('2026-03-02T10:00:00Z') },

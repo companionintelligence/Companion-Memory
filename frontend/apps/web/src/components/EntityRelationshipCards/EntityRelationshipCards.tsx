@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { gql as apolloGql, useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
@@ -23,6 +23,8 @@ const CARD_MIN_WIDTH = 180;
 const CARD_GAP_PX = 12;
 const MAX_VISIBLE_CARDS = 10;
 const DEFAULT_VISIBLE_CARDS = 5;
+/** Collapsed, never fewer than this: one card per row on a phone was one connection. */
+const MIN_VISIBLE_CARDS = 3;
 /** Grid items default to min-width:auto, so a nowrap tag or long subject
  *  expands the track and paints off the rounded card. min-w-0 + clip keeps
  *  every child inside the tile. */
@@ -162,7 +164,11 @@ function getVisibleCardCount(width: number): number {
     return Math.min(MAX_VISIBLE_CARDS, Math.max(DEFAULT_VISIBLE_CARDS, cardsPerRow));
   }
 
-  return Math.min(MAX_VISIBLE_CARDS, cardsPerRow);
+  // At least MIN_VISIBLE_CARDS, in whole rows, so the grid wraps onto a second
+  // row without leaving it half empty: three on a phone, four two across.
+  const rows = Math.ceil(MIN_VISIBLE_CARDS / cardsPerRow);
+
+  return Math.min(MAX_VISIBLE_CARDS, rows * cardsPerRow);
 }
 
 export function getEntityDetailPath(entityType: string, entityId: string): string | null {
@@ -336,7 +342,10 @@ export function EntityRelationshipCards({
 }: Props) {
   const apolloClient = useApolloClient();
   const fmt = useDateTimeFormat();
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  // A callback ref held in state, not a ref object: the card returns null until
+  // its graph arrives, so on the first render there is no element, and an effect
+  // keyed on nothing ran once against that null and never measured the row.
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
   const [expanded, setExpanded] = useState(false);
   const [tagsByEntityKey, setTagsByEntityKey] = useState<Record<string, string[]>>({});
@@ -349,8 +358,7 @@ export function EntityRelationshipCards({
   });
 
   useEffect(() => {
-    const element = containerRef.current;
-    if (!element) {
+    if (!container) {
       return;
     }
 
@@ -360,11 +368,11 @@ export function EntityRelationshipCards({
       }
     });
 
-    observer.observe(element);
-    setVisibleCardCount(getVisibleCardCount(element.clientWidth));
+    observer.observe(container);
+    setVisibleCardCount(getVisibleCardCount(container.clientWidth));
 
     return () => observer.disconnect();
-  }, []);
+  }, [container]);
 
   const relationshipCards = useMemo<RelationshipCard[]>(() => {
     if (!data) {
@@ -557,7 +565,7 @@ export function EntityRelationshipCards({
   );
 
   return (
-    <div ref={containerRef} className="space-y-3">
+    <div ref={setContainer} className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{heading}</h2>
         {!loading && sortedCards.length > 0 && (

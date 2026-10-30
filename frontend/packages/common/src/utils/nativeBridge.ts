@@ -10,9 +10,9 @@
  * falls back to `localStorage`, and external links fall back to a normal navigation.
  */
 
-import { isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
+import { isAndroidPlatform, isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
 import { streamingFetch } from './fetchJson';
-import type { BackgroundGeolocationLocation } from './deviceSources/location';
+import type { NativeLocationEvent } from './deviceSources/location';
 
 /**
  * `capacitor-secure-storage-plugin`. **Legacy — read-only, for migration.** It used to hold
@@ -46,7 +46,8 @@ interface LocalHubPlugin {
   secureGet(options: { key: string }): Promise<{ value: string | null }>;
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
-  openUrl(options: { url: string }): Promise<void>;
+  /** `external`: not a sign-in, so Android skips the Auth Tab (see the plugin's definitions). */
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
   /**
    * iOS only. In-app Safari authentication sheet. Resolves when the sheet
    * finishes and rejects with `code: 'CANCELLED'` if the user dismisses it.
@@ -63,46 +64,42 @@ interface LocalHubPlugin {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
   /**
-   * iOS only. Significant-change monitoring: fires when the phone moves, without the
-   * blue background indicator. `addListener` is the Capacitor bridge, not a custom method.
+   * Background samples for Always. iOS: significant-change monitoring, which fires when
+   * the phone moves, without the blue background indicator. Android: the plugin's
+   * motion-gated tracker (GPS only while moving; fixes queued natively; an exit geofence
+   * restarts it). `addListener` is the Capacitor bridge, not a custom method.
    */
   addListener?(
     eventName: 'significantLocation' | 'significantLocationError',
-    listener: (event: BackgroundGeolocationLocation & { code?: string }) => void,
+    listener: (event: NativeLocationEvent & { code?: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
-  startSignificantLocationUpdates?(): Promise<void>;
+  startSignificantLocationUpdates?(options?: SignificantLocationOptions): Promise<void>;
   stopSignificantLocationUpdates?(): Promise<void>;
 }
 
-export interface BackgroundGeolocationError {
-  code: string;
-  message: string;
+/**
+ * Mirror of `SignificantLocationOptions` in `@ci/capacitor-local-hub`'s definitions.ts,
+ * declared locally for the same reason every plugin interface here is. Both platforms build
+ * the wire record from these in a process that may have no JavaScript; the geofence radius
+ * and the notification text are Android's and iOS ignores them.
+ */
+export interface SignificantLocationOptions {
+  deviceKey: string;
+  provider?: string;
+  owner?: string | null;
+  minDistanceMeters?: number;
+  minIntervalMs?: number;
+  maxAccuracyMeters?: number;
+  /** Radius of the exit geofence Android sets where the phone came to rest. */
+  geofenceRadiusMeters?: number;
+  notificationTitle?: string;
+  notificationText?: string;
 }
 
-/**
- * `@capacitor-community/background-geolocation`. Declared locally, not imported from the
- * plugin package, for the same reason every other plugin interface here is: it keeps the
- * web bundle free of `@capacitor/*` native deps. One writer only — a second `addWatcher`
- * call replaces rather than adds a session on both platforms, so callers must
- * `removeWatcher` their previous id before starting a new one.
- */
-interface BackgroundGeolocationPlugin {
-  addWatcher(
-    options: {
-      /** Set to keep sampling once the app leaves the foreground; omit for foreground-only. */
-      backgroundMessage?: string;
-      backgroundTitle?: string;
-      requestPermissions?: boolean;
-      stale?: boolean;
-      distanceFilter?: number;
-    },
-    callback: (
-      location: BackgroundGeolocationLocation | undefined,
-      error?: BackgroundGeolocationError,
-    ) => void,
-  ): Promise<string>;
-  removeWatcher(options: { id: string }): Promise<void>;
-  openSettings(): Promise<void>;
+/** Why a native location session stopped; `NOT_AUTHORIZED` is the one the UI acts on. */
+export interface NativeLocationError {
+  code: string;
+  message: string;
 }
 
 /** One-shot fix from {@link getCurrentDeviceLocation} — placing a pin, not tracking. */
@@ -234,10 +231,19 @@ interface BarcodeScannerPlugin {
   scan(options?: { formats?: string[] }): Promise<{ barcodes: Array<{ rawValue: string }> }>;
 }
 
+/**
+ * The Android shell's own `SystemBarsPlugin` (frontend/apps/android). The shell insets the
+ * WebView by the system bars there (`WebViewInsets`), which leaves a strip above and
+ * below showing the *window* background; this paints it with the app's colour.
+ */
+interface SystemBarsPlugin {
+  setBackgroundColor(options: { color: string }): Promise<void>;
+}
+
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
+  SystemBars?: SystemBarsPlugin;
   LocalHub?: LocalHubPlugin;
-  BackgroundGeolocation?: BackgroundGeolocationPlugin;
   Browser?: BrowserPlugin;
   App?: AppPlugin;
   SplashScreen?: SplashScreenPlugin;
@@ -352,6 +358,19 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
 
   return legacyValue;
 }
+
+/**
+ * Every key the app writes to the native credential store: the device API key, its id and
+ * capability, and the paired Memory origin mirrored for native consumers. The LocalHub
+ * plugin's `secureSet` accepts these and nothing else on both platforms, so a new key has to
+ * be added there too (`capacitorPluginContract.test.ts` checks the three lists agree).
+ */
+export const SECURE_STORE_KEYS = [
+  'ci.apiKey',
+  'ci.apiKeyId',
+  'ci.apiKeyCapability',
+  'ci.apiBaseUrl',
+] as const;
 
 /**
  * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, or
@@ -538,6 +557,29 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 }
 
+/**
+ * Open a link that is not a sign-in outside the app: a provider's page, say. On Android it
+ * goes to whichever app handles it (the browser, or the provider's own app) rather than the
+ * sign-in Auth Tab, which hands any `companion://` address the page navigates to back to
+ * the app as a sign-in result. iOS opens Safari either way. Elsewhere this is
+ * {@link openExternalUrl}.
+ */
+export async function openLinkOutsideApp(url: string): Promise<void> {
+  if (isNativePlatform()) {
+    const hub = resolveLocalHub();
+
+    if (!hub?.openUrl) {
+      throw new Error('Could not open the link outside the app.');
+    }
+
+    await hub.openUrl({ url, external: true });
+
+    return;
+  }
+
+  await openExternalUrl(url);
+}
+
 /** User dismissed the in-app sign-in sheet. Callers should stay quiet. */
 export class AuthSessionCancelledError extends Error {
   constructor() {
@@ -583,69 +625,42 @@ export async function openAuthSession(url: string, callbackScheme = 'companion')
 }
 
 /**
- * Starts a `@capacitor-community/background-geolocation` watcher — the one writer for
- * both iOS and Android native location. No-op (`null`) on web, which keeps using
- * `navigator.geolocation` instead.
+ * Always-mode background samples on both native platforms. Returns a stop function, or
+ * `null` off native.
  *
- * `options.background`, when true, keeps sampling after the app leaves the foreground
- * (Android shows a persistent notification while this is active; iOS shows the blue
- * status-bar indicator). When false, updates are only guaranteed in the foreground on
- * both platforms. Returns the watcher id `removeBackgroundLocationWatcher` needs, or
- * `null` if no watcher was started.
- */
-export async function addBackgroundLocationWatcher(
-  options: { background: boolean; distanceFilter?: number; requestPermissions?: boolean },
-  onLocation: (location: BackgroundGeolocationLocation) => void,
-  onError: (error: BackgroundGeolocationError) => void,
-): Promise<string | null> {
-  const plugin = plugins()?.BackgroundGeolocation;
-
-  if (!isNativePlatform() || !plugin) {
-    return null;
-  }
-
-  return plugin.addWatcher(
-    {
-      requestPermissions: options.requestPermissions ?? true,
-      distanceFilter: options.distanceFilter,
-      ...(options.background
-        ? {
-            backgroundTitle: 'Recording location',
-            backgroundMessage: 'Companion is recording your location so it can place memories on the map.',
-          }
-        : {}),
-    },
-    (location, error) => {
-      if (error) {
-        onError(error);
-
-        return;
-      }
-
-      if (location) {
-        onLocation(location);
-      }
-    },
-  );
-}
-
-/**
- * iOS Always background samples. Significant-change monitoring fires when the phone
- * moves a meaningful distance and does not turn on the blue location indicator.
- * Returns a stop function, or `null` off iOS.
+ * iOS: significant-change monitoring, which fires when the phone moves a meaningful
+ * distance and does not turn on the blue location indicator. Every event is a fix for the
+ * caller to queue.
  *
- * Android keeps {@link addBackgroundLocationWatcher} with `background: true`: the
- * system requires that persistent notification for a background location service.
+ * Android: motion-gated sampling in the LocalHub plugin. GPS runs only while the phone is
+ * moving, and each fix that clears the gate is queued into the outbox natively -- which is
+ * what keeps working after the WebView is gone -- and then also delivered here. The caller
+ * queues it again; the shared `source_id` makes that a no-op.
+ *
+ * This is the only recorder on either platform: there is no on-screen trail.
+ * `@capacitor-community/background-geolocation`, which used to provide one, held a 1 Hz
+ * high-accuracy GPS request that our own location foreground service kept alive in the
+ * background, doubling every trip's trail and undoing the battery saving.
  */
 export async function startSignificantLocationUpdates(
-  onLocation: (location: BackgroundGeolocationLocation) => void,
-  onError: (error: BackgroundGeolocationError) => void,
+  options: SignificantLocationOptions,
+  onLocation: (location: NativeLocationEvent) => void,
+  onError: (error: NativeLocationError) => void,
 ): Promise<(() => Promise<void>) | null> {
   const hub = plugins()?.LocalHub;
 
-  if (!isIosPlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
+  if (!isNativePlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
     return null;
   }
+
+  // The native monitor is one per process, not one per caller. A React effect that re-runs
+  // (every dependency change, and twice per mount in development) starts a second session
+  // and then runs the first one's cleanup -- which, if it reached the plugin, would stop the
+  // session the newer effect just started. So each start takes a generation number and a
+  // stop only reaches the plugin while its generation is still the latest; a superseded stop
+  // just drops its own listeners. Seen on a device: start, start, stop within 200 ms left
+  // Android's tracker disarmed while the hook believed Always was on.
+  const generation = ++significantLocationGeneration;
 
   const locationHandle = await hub.addListener('significantLocation', (event) => {
     onLocation(event);
@@ -655,7 +670,7 @@ export async function startSignificantLocationUpdates(
   });
 
   try {
-    await hub.startSignificantLocationUpdates();
+    await hub.startSignificantLocationUpdates(options);
   } catch (err) {
     await locationHandle.remove();
     await errorHandle.remove();
@@ -663,41 +678,32 @@ export async function startSignificantLocationUpdates(
   }
 
   return async () => {
-    await hub.stopSignificantLocationUpdates?.();
     await locationHandle.remove();
     await errorHandle.remove();
+
+    if (generation === significantLocationGeneration) {
+      await hub.stopSignificantLocationUpdates?.();
+    }
   };
 }
 
-/** Stops a watcher started by {@link addBackgroundLocationWatcher}. No-op on web. */
-export async function removeBackgroundLocationWatcher(id: string): Promise<void> {
-  const plugin = plugins()?.BackgroundGeolocation;
-
-  if (!isNativePlatform() || !plugin) {
-    return;
-  }
-
-  try {
-    await plugin.removeWatcher({ id });
-  } catch {
-    // Already removed, or the plugin is mid-teardown — nothing further to recover.
-  }
-}
+let significantLocationGeneration = 0;
 
 /**
- * Opens the OS location settings screen for the continuous background-tracking
- * permission (Settings → Location, via the background-geolocation plugin). No-op on web.
- * For the one-shot "use my location" denied case, see {@link openNativeAppSettings} instead.
+ * Opens this app's OS settings page so the user can raise the location grant to Always /
+ * Allow all the time. No-op on web. The same screen {@link openNativeAppSettings} opens on
+ * iOS; kept as its own name because the settings section means "fix the background-location
+ * grant" by it, and because this one opens on Android too.
  */
 export async function openNativeLocationSettings(): Promise<void> {
-  const plugin = plugins()?.BackgroundGeolocation;
+  const hub = plugins()?.LocalHub;
 
-  if (!isNativePlatform() || !plugin) {
+  if (!isNativePlatform() || !hub?.openAppSettings) {
     return;
   }
 
   try {
-    await plugin.openSettings();
+    await hub.openAppSettings();
   } catch {
     // Best-effort — nothing to recover into if the OS refuses.
   }
@@ -1043,6 +1049,28 @@ export async function setStatusBarStyle(style: 'DARK' | 'LIGHT', backgroundColor
     }
   } catch {
     // Plugin unavailable or unsupported on this platform — ignore.
+  }
+}
+
+/**
+ * Android only. Paints the window behind the status and navigation bars with the app's
+ * resolved background colour. On Android 15+ the WebView is inset by the system bars
+ * (`WebViewInsets` in the Android shell), so those
+ * strips show the window background rather than web content, and without this call they
+ * show the launch splash drawable. Pair it with {@link setStatusBarStyle} on every theme
+ * change. A no-op on iOS and web, and when the shell predates the plugin.
+ */
+export async function setSystemBarsBackground(color: string): Promise<void> {
+  const systemBars = plugins()?.SystemBars;
+
+  if (!isAndroidPlatform() || !systemBars) {
+    return;
+  }
+
+  try {
+    await systemBars.setBackgroundColor({ color });
+  } catch {
+    // Older shell without the plugin, or the activity is gone — ignore.
   }
 }
 

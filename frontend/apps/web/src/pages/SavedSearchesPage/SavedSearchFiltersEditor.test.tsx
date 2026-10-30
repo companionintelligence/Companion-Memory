@@ -1,11 +1,11 @@
 import { useState } from 'react';
 
 import { fireEvent, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import type { EditableFilters } from './savedSearchFiltersEdit';
+import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
 import { SavedSearchFiltersEditor } from './SavedSearchFiltersEditor';
 
 const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -16,10 +16,29 @@ afterEach(() => {
 });
 
 /** The editor is presentational: hold the value the way its host does. */
-function Host({ initial = {} }: { initial?: EditableFilters }) {
+function Host({
+  initial = {},
+  onChange,
+}: {
+  initial?: EditableFilters;
+  onChange?: (next: EditableFilters) => void;
+}) {
   const [value, setValue] = useState<EditableFilters>(initial);
 
-  return <SavedSearchFiltersEditor value={value} onChange={setValue} />;
+  return (
+    <SavedSearchFiltersEditor
+      value={value}
+      onChange={(next) => {
+        onChange?.(next);
+        setValue(next);
+      }}
+    />
+  );
+}
+
+/** What the last edit would save, as the edit dialog sends it. */
+function lastSaved(onChange: ReturnType<typeof vi.fn>) {
+  return toFiltersInput(onChange.mock.calls.at(-1)?.[0] as EditableFilters);
 }
 
 /**
@@ -52,5 +71,49 @@ describe('SavedSearchFiltersEditor dates', () => {
     renderWithProviders(<Host initial={{ endTime: '2026-10-01T06:59:59.999Z' }} />);
 
     expect(screen.getByLabelText('To')).toHaveValue('2026-09-30');
+  });
+
+  it('ignores a five-digit year instead of throwing', () => {
+    const onChange = vi.fn();
+
+    renderWithProviders(<Host onChange={onChange} />);
+
+    // The date input accepts it; `new Date('20261-10-01T00:00:00')` is invalid.
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '20261-10-01' } });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('SavedSearchFiltersEditor rolling When', () => {
+  it('says a rolling preset is stored and a picked date replaces it instead of being ignored', () => {
+    const onChange = vi.fn();
+
+    renderWithProviders(<Host initial={{ datePreset: 'last-month' }} onChange={onChange} />);
+
+    expect(screen.getByTestId('filters-rolling-when')).toHaveTextContent('When: Last month');
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-01' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-10-23' } });
+
+    const saved = lastSaved(onChange);
+
+    expect(saved?.datePreset).toBeUndefined();
+    expect(saved?.startTime).toBeDefined();
+    expect(saved?.endTime).toBeDefined();
+    expect(screen.queryByTestId('filters-rolling-when')).not.toBeInTheDocument();
+  });
+
+  it('removes the rolling preset on its own', () => {
+    const onChange = vi.fn();
+
+    renderWithProviders(
+      <Host initial={{ datePreset: 'last-week', people: ['Jane Smith'] }} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Last week' }));
+
+    expect(screen.queryByTestId('filters-rolling-when')).not.toBeInTheDocument();
+    expect(lastSaved(onChange)).toEqual({ people: ['Jane Smith'] });
   });
 });

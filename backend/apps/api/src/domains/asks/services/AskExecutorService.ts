@@ -8,6 +8,8 @@ import {
   type IndexableEntity,
   type PromptSearchResult,
   SearchService,
+  hasNameSubjectFrame,
+  promptMediaClass,
 } from '@ci/domains/search-next';
 
 import { type Ask } from '../entities/AskEntity';
@@ -123,17 +125,26 @@ export class AskExecutorService {
     }
 
     const responderContext: UserServiceContext = { userId: ask.responderUserId };
-    const includeTypes = toIncludeTypes(ask.query);
+    // The archetype the asker declared — OR a relationship/person-recognition
+    // question frame in the prompt itself (closing G1) — decides whether the
+    // prompt is a NAME or a topic. `subjectIsName` can only ever narrow: it
+    // turns an OR of loose words into one required phrase.
+    const subjectIsName =
+      NAME_SUBJECT_QUERY_TYPES.has(ask.query.queryType.toLowerCase()) ||
+      hasNameSubjectFrame(ask.query.prompt);
+    const canonical = askedClass(ask.query, subjectIsName);
+    const includeTypes = toIncludeTypes(canonical);
+    // A photo's place and capture date live on its event, so a photo ask also
+    // searches photo events. Only the photo (and video) ones: see
+    // `SearchService.searchPrompt`'s `mediaEvents`.
+    const mediaEvents = canonical === 'photos' || canonical === 'media' ? canonical : undefined;
 
     const result = await this.searchService.searchPrompt(responderContext, {
       prompt: ask.query.prompt,
-      // The archetype the asker declared decides whether the prompt is a NAME or
-      // a topic. That is the only part of the ask besides the text itself that
-      // reaches search, and it can only ever narrow: `subjectIsName` turns an
-      // OR of loose words into one required phrase.
-      subjectIsName: NAME_SUBJECT_QUERY_TYPES.has(ask.query.queryType.toLowerCase()),
+      subjectIsName,
       maxResults: options.maxResults ?? DEFAULT_MAX_RESULTS,
       ...(includeTypes ? { includeTypes } : {}),
+      ...(includeTypes && mediaEvents ? { mediaEvents } : {}),
     });
 
     if (result.truncated) {
@@ -157,14 +168,25 @@ export class AskExecutorService {
  */
 export type AskExecution = PromptSearchResult;
 
-function toIncludeTypes(query: AskQuery): IndexableEntity[] | undefined {
-  if (query.dataClass == null) {
-    return undefined;
-  }
+/**
+ * The data class an ask is about: the one it names, or for none the kind its
+ * prompt names.
+ *
+ * Same canonical form the grant evaluator matched on — if these diverged, a
+ * peer could satisfy one and evade the other.
+ *
+ * With no class named, "photos of …" (or "videos of …") in the prompt stands in
+ * for the class. `buildPromptQuery` no longer lets those words count as a match
+ * (they matched every photo or video event), so the kind is carried here, as a
+ * filter, instead. Only ever narrows: an ask with no class searched every type.
+ * A class that canonicalizes to nothing is "no class named" here exactly as it
+ * is to the grant evaluator.
+ */
+function askedClass(query: AskQuery, subjectIsName: boolean): string | null {
+  return canonicalDataClass(query.dataClass) ?? promptMediaClass(query.prompt, { subjectIsName });
+}
 
-  // Same canonical form the grant evaluator matched on — if these diverged, a
-  // peer could satisfy one and evade the other.
-  const canonical = canonicalDataClass(query.dataClass);
+function toIncludeTypes(canonical: string | null): IndexableEntity[] | undefined {
   if (canonical == null) {
     return undefined;
   }

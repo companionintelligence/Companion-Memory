@@ -14,7 +14,12 @@ import { ApiKeyGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { untrustedBlock } from '@ci/common/prompt/untrustedBlock';
-import { CommunicationService, CommunicationType, UserContextService } from '@ci/domains/memory';
+import {
+  AGENT_TURN_MESSAGE_CATEGORY,
+  CommunicationService,
+  CommunicationType,
+  UserContextService,
+} from '@ci/domains/memory';
 
 import { AgentMemoryService } from '../services/AgentMemoryService';
 import { ForecastContextService } from '../services/ForecastContextService';
@@ -22,14 +27,14 @@ import { MemoryCompactionService } from '../services/MemoryCompactionService';
 import { RecallService } from '../services/RecallService';
 import {
   agentMemorySchema,
+  memoryDriftSchema,
   recallSchema,
   turnSchema,
   type AgentMemoryDto,
+  type MemoryDriftDto,
   type RecallDto,
   type TurnDto,
 } from '../types';
-
-const TURN_MESSAGE_CATEGORY = 'agent-turn';
 
 function createAgentTurnMessageId(input: {
   userId: string;
@@ -157,6 +162,38 @@ export class MemoryController {
   }
 
   /**
+   * Lists memory fragments flagged as `conflicted` so agents or users can
+   * reconcile contradictory claims (`knowl` governance pattern).
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(MEMORY_SCOPE)
+  @RequireCapability(READ_CAPABILITY)
+  @Get('conflicts')
+  async conflicts(@Context() context: RequestContext) {
+    const items = await this.agentMemoryService.findConflicts(toServiceContext(context));
+
+    return { items };
+  }
+
+  /**
+   * Checks active governed memories for evidence/path drift against a set of
+   * modified files (`knowl` staleness drift detection).
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(MEMORY_SCOPE)
+  @RequireCapability(READ_CAPABILITY)
+  @HttpCode(200)
+  @Post('drift')
+  async drift(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(memoryDriftSchema)) input: MemoryDriftDto,
+  ) {
+    return this.agentMemoryService.detectDrift(toServiceContext(context), input.changedPaths, {
+      markConflicted: input.markConflicted,
+    });
+  }
+
+  /**
    * Ingests a conversation turn into the database.
    *
    * Invoked by:
@@ -202,7 +239,11 @@ export class MemoryController {
           id,
           time: new Date(Date.now() + created),
           communication_type: CommunicationType.CHAT,
-          direction: message.role === 'user' ? 'inbound' : 'outbound',
+          // Direction is from the owner's side, as for every other message:
+          // what the owner typed to the agent was sent by them (outbound) and
+          // the agent's reply was written to them (inbound). Recall reads it
+          // as "I wrote" / "someone else wrote to me" (SerializerService).
+          direction: message.role === 'user' ? 'outbound' : 'inbound',
           thread_id: sessionId,
           participants_metadata: {
             platform,
@@ -212,7 +253,7 @@ export class MemoryController {
           subject: `${platform} conversation`,
           content,
           preview: content.slice(0, 240),
-          category: TURN_MESSAGE_CATEGORY,
+          category: AGENT_TURN_MESSAGE_CATEGORY,
         });
         created += 1;
       } catch (err) {

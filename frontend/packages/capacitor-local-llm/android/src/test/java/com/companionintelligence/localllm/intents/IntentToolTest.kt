@@ -27,7 +27,7 @@ import org.robolectric.shadows.ShadowLog
 @RunWith(RobolectricTestRunner::class)
 class IntentToolTest {
 
-    /** What a tool on Qwen3-0.6B's 1,024-token window is given: the smallest window the app ships. */
+    /** What a tool on a 1,024-token window is given (Qwen3-0.6B's, the smallest window the app ever shipped). */
     private val budget = LocalLlmPolicy.toolResultByteBudget(1024)
 
     @Test
@@ -287,10 +287,13 @@ class IntentToolTest {
         applianceServer(manifestOf("knowledge.search"), "{}").use { server ->
             val client = CompanionIntentClient(server.baseUrl, "k")
 
-            assertTrue(LocalLlmModels.QWEN3_0_6B_INT4.supportsTools)
-            assertFalse("Qwen2.5's chat template has no tool slot", LocalLlmModels.QWEN2_5_1_5B_INSTRUCT.supportsTools)
+            // No catalog model lacks a tool slot any more (Qwen2.5 was dropped on 2026-10-13); a toolless
+            // entry is still a legal catalog shape, so one is built here.
+            val toolless = LocalLlmModels.GEMMA_4_E2B_IT.copy(modelId = "toolless-test", capabilities = setOf("thinking"))
+            assertTrue(LocalLlmModels.GEMMA_4_E2B_IT.supportsTools)
+            assertFalse(toolless.supportsTools)
 
-            assertTrue(IntentToolProvider.toolsForLoad(loadSpec(info = LocalLlmModels.QWEN2_5_1_5B_INSTRUCT), client).isEmpty())
+            assertTrue(IntentToolProvider.toolsForLoad(loadSpec(info = toolless), client).isEmpty())
             assertTrue(IntentToolProvider.toolsForLoad(loadSpec(), null).isEmpty())
             assertTrue("neither asked the appliance for its catalogue", server.requests.isEmpty())
             assertEquals(1, IntentToolProvider.toolsForLoad(loadSpec(), client).size)
@@ -330,7 +333,7 @@ class IntentToolTest {
         dispatch: DispatchRuling? = DispatchRuling("execute", "read-only", "ok"),
     ) = ManifestIntent(name, tool, title, description, parameters, dispatch)
 
-    private fun loadSpec(info: LocalLlmModelInfo = LocalLlmModels.QWEN3_0_6B_INT4, maxTokens: Int = 1024) =
+    private fun loadSpec(info: LocalLlmModelInfo = LocalLlmModels.GEMMA_4_E2B_IT, maxTokens: Int = 1024) =
         LocalLlmEngine.LoadSpec(
             info = info,
             modelPath = "/models/model.litertlm",

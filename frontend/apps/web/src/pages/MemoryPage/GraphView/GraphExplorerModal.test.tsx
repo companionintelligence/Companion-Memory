@@ -67,6 +67,12 @@ vi.mock('@/pages/MemoryPage/useEntityService', () => ({
 
 vi.mock('@/pages/MemoryPage/Components', () => ({
   Empty: ({ title }: { title: string }) => <div>{title}</div>,
+  ErrorState: ({ description, onRetry }: { description?: string; onRetry?: () => void }) => (
+    <div role="alert">
+      <p>{description}</p>
+      {onRetry && <button onClick={onRetry}>Try again</button>}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/SearchBox/useDropdown', () => ({
@@ -112,12 +118,16 @@ vi.mock('./GraphCanvas3D', () => ({
  * /graph/data — the contract these tests cover. The unfiltered default now
  * takes the dots path instead, covered by its own block below.
  */
-function renderShell(initialEntries: string[] = ['/?from=2024-01-01']) {
-  return render(
+function shell(initialEntries: string[] = ['/?from=2024-01-01']) {
+  return (
     <MemoryRouter initialEntries={initialEntries}>
       <GraphTabPanel variant="desktop" />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+}
+
+function renderShell(initialEntries?: string[]) {
+  return render(shell(initialEntries));
 }
 
 async function nodeGroup(name: string) {
@@ -524,6 +534,46 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       expect(screen.queryAllByTestId('force-link')).toHaveLength(0);
     });
 
+    it('shows a plain message with Try again, not the raw error, and refetches on retry', async () => {
+      // One stable object per state, like the hook's memoised result: a fresh
+      // `counts` object on every render re-runs the explorer's effects forever.
+      const loaded = {
+        loading: false,
+        error: null,
+        nodes: DOT_NODES,
+        userEntityId: 'user-1',
+        counts: { PersonType: 2, Event: 1 },
+        truncated: false,
+      };
+      const failed = {
+        loading: false,
+        error: 'Fetch failed: 500 Internal Server Error',
+        nodes: [],
+        userEntityId: null,
+        counts: {},
+        truncated: false,
+      };
+
+      useGraphDotsMock.mockImplementation((options: { refreshKey?: number }) =>
+        options.refreshKey ? loaded : failed,
+      );
+
+      renderShell(['/']);
+
+      expect(
+        await screen.findByText("We couldn't load your graph. Check your connection and try again."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Fetch failed/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node')).toHaveLength(DOT_NODES.length);
+      });
+      expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ refreshKey: 1 }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('preloads edges among busy dots when switching to 3D overview', async () => {
       // `init` is declared even though the mock ignores it: the assertion below
       // reads `edgeCall[1]` to check the POSTed body, and vi.fn types its
@@ -569,6 +619,77 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       } finally {
         globalThis.fetch = previousFetch;
       }
+    });
+
+    it('opens the clicked dot’s card once its neighbourhood has loaded', async () => {
+      // The real fetch takes a moment; until it lands the focus canvas is empty, and the
+      // selection must survive that wait for the card to open.
+      let focusLoaded = false;
+
+      useNodeGraphServiceMock.mockImplementation(({ entityId, skip }) =>
+        skip || !entityId
+          ? { data: null, loading: false, error: null, refresh: vi.fn() }
+          : focusLoaded
+            ? { data: FOCUS_SUBGRAPH, loading: false, error: null, refresh: vi.fn() }
+            : { data: null, loading: true, error: null, refresh: vi.fn() },
+      );
+
+      const { rerender } = renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+
+      await waitFor(() => expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument());
+      expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+
+      focusLoaded = true;
+      rerender(shell(['/']));
+
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Frida Friend');
+    });
+
+    it('opens the second clicked dot’s card too, after a trip back to the overview', async () => {
+      // useNodeGraphService keeps the last subgraph it fetched until the next one lands, so the
+      // second focus waits on Frida's neighbourhood, not on nothing.
+      const EVENT_SUBGRAPH = {
+        nodes: [
+          { ...node('event-1', 'Coffee Meetup'), entity_type: 'Event' },
+          node('user-1', 'Owner Person'),
+        ],
+        links: [link('rel-5', 'user-1', 'event-1')],
+      };
+      const subgraphs: Record<string, typeof FOCUS_SUBGRAPH> = {
+        'friend-1': FOCUS_SUBGRAPH,
+        'event-1': EVENT_SUBGRAPH,
+      };
+      const loaded = new Set(['friend-1']);
+      let lastData: typeof FOCUS_SUBGRAPH | null = null;
+
+      useNodeGraphServiceMock.mockImplementation(({ entityId, skip }) => {
+        if (!skip && entityId && loaded.has(entityId)) {
+          lastData = subgraphs[entityId];
+
+          return { data: lastData, loading: false, error: null, refresh: vi.fn() };
+        }
+
+        return { data: lastData, loading: !skip && Boolean(entityId), error: null, refresh: vi.fn() };
+      });
+
+      const { rerender } = renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Frida Friend');
+
+      fireEvent.click(screen.getByTestId('graph-back-to-overview'));
+      await waitFor(() => expect(screen.queryByTestId('graph-back-to-overview')).not.toBeInTheDocument());
+
+      fireEvent.click(await nodeGroup('Coffee Meetup'));
+      await waitFor(() => expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument());
+      expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+
+      loaded.add('event-1');
+      rerender(shell(['/']));
+
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Coffee Meetup');
     });
 
     it('expands a clicked dot straight into focus mode', async () => {

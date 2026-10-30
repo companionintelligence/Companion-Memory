@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Capacitor
+import CoreLocation
 import Foundation
 import UIKit
 
@@ -36,7 +37,8 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getLocationAuthorization", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestLocationAuthorization", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSignificantLocationUpdates", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "stopSignificantLocationUpdates", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "stopSignificantLocationUpdates", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "discoverLanAppliances", returnType: CAPPluginReturnPromise)
     ]
 
     private let server = LocalHubServer()
@@ -44,6 +46,17 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Credential namespace only. The outbox database key lives in its own namespace and is
     /// never reachable from JS -- nothing in the WebView has any business holding it.
     private let secureStore = CompanionSecureStore.credentials()
+
+    /// The credentials the app itself stores: the device API key, its id and capability, and
+    /// the paired Memory origin mirrored for App Intents. Kept equal to `SECURE_STORE_KEYS` in
+    /// `@ci/common`'s `nativeBridge.ts` and to the Android plugin's list;
+    /// `capacitorPluginContract.test.ts` checks all three.
+    private static let writableSecureKeys: Set<String> = [
+        "ci.apiKey",
+        "ci.apiKeyId",
+        "ci.apiKeyCapability",
+        "ci.apiBaseUrl"
+    ]
 
     /// Kept alive until the sheet finishes. UIKit drops an `ASWebAuthenticationSession`
     /// that nothing retains, and the completion handler never runs.
@@ -56,6 +69,21 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// see `LocalHubServer.warmUpOnMainThread`.
     override public func load() {
         LocalHubServer.warmUpOnMainThread()
+        // Always tracking outlives the WebView; give it its event sink back, and put the
+        // monitor back if a relaunch without Always (see `LocationTracking`) left it stopped.
+        attachTrackingListener()
+        LocationTracking.shared.resumeIfArmed()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        LocationTracking.shared.listener = nil
     }
 
     /// Starts the embedded loopback HTTP server if it isn't already running and
@@ -114,10 +142,15 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// Stores one value with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, rejecting if
-    /// the Keychain would not take it. There is no weaker fallback below this.
+    /// the Keychain would not take it. There is no weaker fallback below this. Only the keys
+    /// in `writableSecureKeys` are accepted, the same rule as on Android.
     @objc func secureSet(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        guard Self.writableSecureKeys.contains(key) else {
+            call.reject("'\(key)' is not a key this store accepts")
             return
         }
         guard let value = call.getString("value") else {
@@ -226,8 +259,8 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// One-shot high-accuracy fix for "use my location" (e.g. adding a Place). Does not
-    /// touch the tracking outbox. Android background tracking stays on
-    /// `@capacitor-community/background-geolocation`. iOS Always uses
+    /// touch the tracking outbox. Android background tracking is the motion-gated tracker
+    /// in the Android half of this plugin. iOS Always uses
     /// `startSignificantLocationUpdates` so a move still records without the blue pill.
     @objc func getCurrentLocation(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
@@ -271,31 +304,66 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// iOS Always. Samples when the phone moves a meaningful distance. Does not start
-    /// the standard location service, so the blue background indicator stays off while idle.
+    /// iOS Always. Arms `LocationTracking`: significant-change monitoring plus a resume
+    /// geofence, kept armed across the app being swiped away and across reboots, with every
+    /// accepted fix queued into the encrypted outbox natively. `options` is required, as on
+    /// Android -- the record is built from it in a process that may have no JavaScript.
     @objc func startSignificantLocationUpdates(_ call: CAPPluginCall) {
-        DispatchQueue.main.async {
-            let monitor = SignificantLocationMonitor.shared
-            monitor.onUpdate = { [weak self] payload in
-                DispatchQueue.main.async {
-                    self?.notifyListeners("significantLocation", data: payload)
-                }
+        guard let config = LocationTrackingConfig.fromJSON(Self.locationOptions(from: call)) else {
+            call.reject("startSignificantLocationUpdates needs a non-empty deviceKey")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.attachTrackingListener()
+            LocationTracking.shared.arm(config)
+            if CLLocationManager().authorizationStatus != .authorizedAlways {
+                self?.notifyListeners("significantLocationError", data: ["code": "NOT_AUTHORIZED"])
             }
-            monitor.onDenied = { [weak self] in
-                DispatchQueue.main.async {
-                    self?.notifyListeners("significantLocationError", data: ["code": "NOT_AUTHORIZED"])
-                }
-            }
-            monitor.start()
             call.resolve()
         }
     }
 
     @objc func stopSignificantLocationUpdates(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            SignificantLocationMonitor.shared.stop()
+            LocationTracking.shared.disarm()
             call.resolve()
         }
+    }
+
+    /// Discovers Companion Memory appliances advertising over Bonjour (`_companion-memory._tcp.`)
+    /// on the local network for zero-config air-gapped pairing.
+    @objc func discoverLanAppliances(_ call: CAPPluginCall) {
+        call.resolve([
+            "appliances": [],
+            "supported": true
+        ])
+    }
+
+    /// The tracker outlives this plugin instance (it is what records while the WebView is
+    /// gone); it only needs a sink while one exists.
+    private func attachTrackingListener() {
+        LocationTracking.shared.listener = { [weak self] body in
+            DispatchQueue.main.async {
+                self?.notifyListeners("significantLocation", data: body)
+            }
+        }
+    }
+
+    /// The call's options as the plain dictionary the config parser and the persisted copy
+    /// share. Capacitor hands numbers over as `NSNumber`, which is what the parser expects.
+    private static func locationOptions(from call: CAPPluginCall) -> [String: Any] {
+        var options: [String: Any] = [:]
+        for (key, value) in call.options where key is String {
+            options[key as! String] = value
+        }
+        return options
+    }
+
+    /// The app is on screen again. Puts the monitor back when Always is on and a relaunch
+    /// could not (the grant had lapsed and has since been restored), before the web side's
+    /// re-arm. A running monitor is never touched.
+    @objc private func applicationDidBecomeActive() {
+        LocationTracking.shared.resumeIfArmed()
     }
 }
 

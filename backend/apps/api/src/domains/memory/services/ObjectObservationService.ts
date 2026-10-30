@@ -2,7 +2,17 @@ import { createHash } from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { Between, DataSource, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm';
+import {
+  Between,
+  DataSource,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Not,
+  Raw,
+  Repository,
+} from 'typeorm';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -18,6 +28,13 @@ import type {
   FindObjectObservationsFilter,
   ResolveObjectObservationDto,
 } from '../types';
+
+/**
+ * The `metadata` key that puts a sighting a person unlinked back in the review
+ * queue ({@link ObjectObservationService.sendBackToReview}). Any later answer
+ * from a person ({@link ObjectObservationService.confirm}) takes it off.
+ */
+const SENT_BACK_TO_REVIEW = 'sentBackToReview';
 
 /**
  * Decimal places a bbox is rounded to before it enters a detection key.
@@ -450,11 +467,13 @@ export class ObjectObservationService {
       return null;
     }
 
-    if (existing.confirmedByUser) {
+    if (existing.confirmedByUser || existing.resolutionMethod === 'user') {
       // Same rule as the write path: a human's answer is not a machine's to
-      // revise. Returned unchanged rather than thrown, because a resolver
-      // sweeping a batch should skip these, not abort.
-      this.logger.log('Observation is user-confirmed, leaving resolution untouched', {
+      // revise. Method `user` without the flag is a "no" (`rejectObservation`)
+      // or a retraction, and that is an answer too. Returned unchanged rather
+      // than thrown, because a resolver sweeping a batch should skip these,
+      // not abort.
+      this.logger.log('Observation was answered by a person, leaving resolution untouched', {
         observationId: id,
       });
 
@@ -485,12 +504,16 @@ export class ObjectObservationService {
    * in place under method `'user'`: "I am no longer certain" is not "this was
    * never linked", and throwing the link away would lose the only record of
    * what the human thought.
+   *
+   * Every answer takes the {@link SENT_BACK_TO_REVIEW} mark off, except the one
+   * that sets it ({@link sendBackToReview}, through `sendBackToReview: true`).
    */
   async confirm(
     context: ServiceContext,
     id: string,
     confirmed = true,
     resolution?: Pick<ResolveObjectObservationDto, 'resolvedObjectId' | 'resolvedProductId'>,
+    options: { sendBackToReview?: boolean } = {},
   ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
@@ -506,6 +529,12 @@ export class ObjectObservationService {
         // A human's answer has no meaningful sub-1 confidence: they either said
         // it or they did not.
         resolutionConfidence: confirmed ? 1 : null,
+        // An answer, so the sighting no longer waits in the review queue for
+        // one, unless the answer is "ask me again".
+        metadata: () =>
+          options.sendBackToReview
+            ? `metadata || '{"${SENT_BACK_TO_REVIEW}": true}'::jsonb`
+            : `metadata - '${SENT_BACK_TO_REVIEW}'`,
         ...(resolution?.resolvedObjectId !== undefined && {
           resolvedObjectId: resolution.resolvedObjectId,
         }),
@@ -516,6 +545,36 @@ export class ObjectObservationService {
     );
 
     return this.findById(context, id);
+  }
+
+  /**
+   * Record that a HUMAN said this sighting is not the thing it was linked to,
+   * and put it back in the review queue so they can say which thing it is.
+   *
+   * Not the same answer as "not a thing" (`confirm(id, false)` with the link
+   * cleared), which takes the sighting out of the queue for good. "That is not
+   * my mug" still leaves a thing in the photo that may be another of theirs.
+   * It is still a person's answer (method `user`), so neither the resolution
+   * ladder nor the vision listener links it to anything again; the
+   * {@link SENT_BACK_TO_REVIEW} mark is what puts it in front of the person.
+   *
+   * A sighting linked to nothing is returned unchanged: "not this thing" says
+   * nothing about one that was already answered "not a thing".
+   */
+  async sendBackToReview(context: ServiceContext, id: string): Promise<ObjectObservation | null> {
+    const existing = await this.findById(context, id);
+
+    if (existing == null || (existing.resolvedObjectId == null && existing.resolvedProductId == null)) {
+      return existing;
+    }
+
+    return this.confirm(
+      context,
+      id,
+      false,
+      { resolvedObjectId: null, resolvedProductId: null },
+      { sendBackToReview: true },
+    );
   }
 
   async findById(context: ServiceContext, id: string): Promise<ObjectObservation | null> {
@@ -546,6 +605,9 @@ export class ObjectObservationService {
           resolvedObjectId: filter.resolved ? Not(IsNull()) : IsNull(),
         }),
         ...(filter.confirmedByUser != null && { confirmedByUser: filter.confirmedByUser }),
+        ...(filter.reviewedByUser != null && {
+          resolutionMethod: filter.reviewedByUser ? 'user' : Not('user' as const),
+        }),
         ...(filter.observedFrom != null &&
           filter.observedTo != null && {
             observedAt: Between(filter.observedFrom, filter.observedTo),
@@ -565,11 +627,50 @@ export class ObjectObservationService {
    * The review queue: sightings nobody has confirmed and nothing has resolved,
    * newest first.
    *
-   * Matches `object_observations_review_idx` exactly — the partial index the
-   * migration added for this one query.
+   * Served by `object_observations_review_idx`, the partial index the migration
+   * added for this query. It also leaves out sightings a person already
+   * answered "not a thing" (`rejectObservation`: unconfirmed, unlinked, method
+   * `user`). They match the index predicate too, so they stayed at the top of
+   * the queue however often they were rejected, and the resolution sweep that
+   * reads this queue could link them again. The index does not carry that
+   * extra predicate, so rejected rows are still in it and get filtered out on
+   * read.
+   *
+   * A sighting a person unlinked from a thing ("No" on the thing's page,
+   * {@link sendBackToReview}) is answered too, but it carries the
+   * {@link SENT_BACK_TO_REVIEW} mark and is the one answered row the queue
+   * shows: the person still has to say which thing it is. `sentBack: false`
+   * leaves those out, for a machine sweep that could only skip them.
    */
-  async findForReview(context: ServiceContext, limit = 100, offset = 0): Promise<ObjectObservation[]> {
-    return this.find(context, { confirmedByUser: false, resolved: false, limit, offset });
+  async findForReview(
+    context: ServiceContext,
+    limit = 100,
+    offset = 0,
+    { sentBack = true }: { sentBack?: boolean } = {},
+  ): Promise<ObjectObservation[]> {
+    const waiting = {
+      ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      confirmedByUser: false,
+      resolvedObjectId: IsNull(),
+    };
+
+    return this.observationRepository.find({
+      where: [
+        { ...waiting, resolutionMethod: Not('user' as const) },
+        ...(sentBack
+          ? [
+              {
+                ...waiting,
+                resolutionMethod: 'user' as const,
+                metadata: Raw((column) => `(${column} ->> '${SENT_BACK_TO_REVIEW}') = 'true'`),
+              },
+            ]
+          : []),
+      ],
+      order: { observedAt: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
   }
 
   /**

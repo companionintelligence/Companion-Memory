@@ -53,6 +53,8 @@ interface Props {
    * produce a second, drifting copy of that policy.
    */
   prompt: string;
+  /** Whether the server stripped characters that render as nothing from `prompt`. See {@link AskerQuote}. */
+  promptHiddenCharactersRemoved?: boolean;
   /** The structured ask as SENT, rendered legibly. */
   scopeSummary: string;
   /**
@@ -117,6 +119,7 @@ export function AskReviewCard({
   askerAvatarUrl,
   tier,
   prompt,
+  promptHiddenCharactersRemoved = false,
   scopeSummary,
   searchBreadth,
   items = [],
@@ -179,7 +182,11 @@ export function AskReviewCard({
       {/* Attributed and isolated rather than wrapped in quote marks: the asker
           controls every character here, including the ones that used to close
           the quote and let them finish the sentence in the app's voice. */}
-      <AskerQuote prompt={prompt} attribution={`${askerName} asked:`} />
+      <AskerQuote
+        prompt={prompt}
+        attribution={`${askerName} asked:`}
+        hiddenCharactersRemoved={promptHiddenCharactersRemoved}
+      />
 
       {/* WHO is asking, when they said. Its own line rather than a chip beside
           the name: "Ana is asking" and "something Ana delegated to is asking"

@@ -16,6 +16,9 @@ import {
   mergeIngestedProperties,
   stableJson,
   unionKeysFor,
+  USER_EDITED_KEYS,
+  userEditedKeys,
+  userEditedSql,
 } from '../utils/ingestedProperties';
 
 import { type EntityIdentifierBatchEntry, EntityIdentifierService } from './EntityIdentifierService';
@@ -31,9 +34,16 @@ const USER_ENTITY_TYPE = 'User';
 // A provisioned self entity is a `Person` (the owner's display name), NOT an
 // entity_type='User' row — see resolveSelfEntity. linked_table `import:self` +
 // linked_id uuidv5(`self:user:<id>`) make it stable and idempotent so re-runs
-// and concurrent ingests resolve to the same row.
+// and concurrent ingests resolve to the same row — and onboarding creates its
+// self Person under the same key (GraphIngestService.selfEntityLink), so the
+// two resolve to the same row as well.
 const SELF_ENTITY_TYPE = 'Person';
 const SELF_SOURCE_SYSTEM = 'self';
+
+/** The natural key of an account's self Person: one per account. */
+function selfKeyFor(ownerId: string): string {
+  return `self:user:${ownerId}`;
+}
 
 export interface GraphEntityInputDto {
   /** Importer-stable natural key, e.g. `apple_contacts:contact:John Doe`. */
@@ -228,10 +238,13 @@ export interface GraphIngestResult {
  */
 function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly string[]): boolean {
   const merged = mergeIngestedProperties(current.properties, incoming.properties, unionKeys);
+  const handSet = userEditedKeys(current.properties);
 
   return (
-    (incoming.name != null && incoming.name !== current.name) ||
-    (incoming.description != null && incoming.description !== current.description) ||
+    (incoming.name != null && incoming.name !== current.name && !handSet.includes('name')) ||
+    (incoming.description != null &&
+      incoming.description !== current.description &&
+      !handSet.includes('description')) ||
     stableJson(merged) !== stableJson(current.properties ?? {})
   );
 }
@@ -241,9 +254,11 @@ function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly 
  * properties are MERGED with the incoming ones rather than replaced — see
  * `utils/ingestedProperties.ts` — and its name and description take the
  * incoming value unless that is null, the rule bulkUpsert's ingest refreshes
- * already follow. The importer never sends a description at all, so the plain
+ * already follow. Most importers send no description at all, so the plain
  * `description = EXCLUDED.description` this replaced erased whatever a merge
- * or a person edit had written there on every refresh.
+ * or a person edit had written there on every refresh. A name or description a
+ * person set by hand (listed in `properties.user_edited_keys`) is kept whatever
+ * arrives, like the hand-set properties the merge skips.
  *
  * The merge runs in the statement, against the row as it stands once the
  * conflict has locked it, so a person merge (or any other writer) that
@@ -256,8 +271,10 @@ function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly 
  */
 const ENTITY_CONFLICT_ACTION =
   '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL ' +
-  'DO UPDATE SET name = COALESCE(EXCLUDED."name", "entities"."name"), ' +
-  'description = COALESCE(EXCLUDED."description", "entities"."description"), ' +
+  `DO UPDATE SET name = CASE WHEN ${userEditedSql('"entities"."properties"', "'name'")} ` +
+  'THEN "entities"."name" ELSE COALESCE(EXCLUDED."name", "entities"."name") END, ' +
+  `description = CASE WHEN ${userEditedSql('"entities"."properties"', "'description'")} ` +
+  'THEN "entities"."description" ELSE COALESCE(EXCLUDED."description", "entities"."description") END, ' +
   `properties = ${mergedPropertiesSql('"entities"."properties"', 'EXCLUDED."properties"', ':unionKeys::text[]')}, ` +
   'updated_at = now() ' +
   'WHERE "entities"."merged_into_entity_id" IS NULL';
@@ -297,6 +314,20 @@ export class GraphIngestService {
 
   static linkedIdFor(key: string): string {
     return uuidv5(key, IMPORT_NAMESPACE);
+  }
+
+  /**
+   * Where an account's self Person sits in the linked-key index: the
+   * coordinates {@link ensureSelfEntityForOwner} upserts it on. Onboarding
+   * creates its self Person under these too (`PersonService.create` resolves an
+   * existing row on them instead of inserting another), so whichever of the two
+   * gets there first makes the row and the other one is handed that row.
+   */
+  static selfEntityLink(ownerId: string): { linkedTable: string; linkedId: string } {
+    return {
+      linkedTable: `import:${SELF_SOURCE_SYSTEM}`,
+      linkedId: GraphIngestService.linkedIdFor(selfKeyFor(ownerId)),
+    };
   }
 
   /**
@@ -692,12 +723,15 @@ export class GraphIngestService {
         continue;
       }
 
+      // The hand-set list is never taken from a source: the conflict merge
+      // skips it, and a brand-new row must not start with one either.
+      const { [USER_EDITED_KEYS]: _sourceList, ...sourced } = input.properties ?? {};
       const row = this.nodeRepository.create({
         entityId: uuidv7(),
         entityType: input.entityType,
         name: input.name ?? null,
         description: input.description ?? null,
-        properties: input.properties ?? {},
+        properties: sourced,
         linkedTable,
         linkedId,
         userId: ownerId,
@@ -1123,13 +1157,21 @@ export class GraphIngestService {
    * ci.users.entity_id to it, so a fresh import yields a complete graph with
    * preferences actually attached to the user.
    *
-   * Idempotent and concurrency-safe: the Person upserts on its linked key, the
-   * pointer is only set while still NULL, and we re-resolve afterwards so a
-   * pointer a concurrent writer won is honoured over the row we created. Returns
-   * null only when there is no ci.users row to anchor (a non-user context).
+   * Idempotent and concurrency-safe: the Person upserts on its linked key (the
+   * one onboarding creates its self Person under too), the pointer is only set
+   * while still NULL, and we re-resolve before claiming the owner's identifiers
+   * so a pointer a concurrent writer won is honoured — and claimed for — over
+   * the row we created. Returns null only when there is no ci.users row to
+   * anchor (a non-user context).
+   *
+   * An account with no pointer but a live `is_self` Person off that key (one
+   * onboarding made before it used the key, and crashed before pointing the
+   * account at it; or a pointer an operator cleared) has that Person adopted
+   * instead of a second one minted beside it.
    */
   private async ensureSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
-    const existing = await this.resolveSelfEntity(ownerId);
+    const existing =
+      (await this.resolveSelfEntity(ownerId)) ?? (await this.adoptUnpointedSelfEntity(ownerId));
     if (existing) {
       const users: Array<{ name: string | null; email: string | null }> =
         await this.nodeRepository.manager.query(`SELECT name, email FROM ci.users WHERE id = $1`, [ownerId]);
@@ -1161,7 +1203,7 @@ export class GraphIngestService {
     // Provision the self Person through the same set-based upsert (a batch of
     // one), so its idempotency/race handling matches every other ingested entity.
     const selfDto: GraphEntityInputDto = {
-      key: `self:user:${ownerId}`,
+      key: selfKeyFor(ownerId),
       entityType: SELF_ENTITY_TYPE,
       name: displayName,
       sourceSystem: SELF_SOURCE_SYSTEM,
@@ -1186,18 +1228,38 @@ export class GraphIngestService {
       [ownerId, selfEntityId],
     );
 
-    await this.entityIdentifierService.claimForSelf(ownerId, selfEntityId, {
+    // Honour whatever pointer actually won; fall back to the row we created.
+    // The owner's identifiers go to that Person, read BEFORE claiming: a writer
+    // that pointed the account between our read and our write may have named
+    // another Person, and claiming the owner's address for a row the account
+    // does not point at would strand it there. Onboarding creates its self
+    // Person under this same key, so racing it ends on this very row.
+    const self = (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
+    if (self.id !== selfEntityId) {
+      await this.markSelfEntity(ownerId, self.id);
+      // Two live is_self rows would leave the owner's identity ambiguous for
+      // every reader that takes one (PersonService.findSelf) and hide this one
+      // from the duplicate and self-collation passes, which skip is_self rows.
+      // Nothing is deleted; the warning names both rows.
+      await this.unmarkSelfEntity(ownerId, selfEntityId);
+      this.logger.warn('Provisioned a self entity, but the account was pointed at another one', {
+        ownerId,
+        selfEntityId,
+        pointer: self.id,
+      });
+    }
+
+    await this.entityIdentifierService.claimForSelf(ownerId, self.id, {
       emails: email ? [email] : [],
       names: [displayName],
     });
     if (email) {
-      await this.entityIdentifierService.repointToEntity(ownerId, selfEntityId, 'email', email, 'self');
+      await this.entityIdentifierService.repointToEntity(ownerId, self.id, 'email', email, 'self');
     }
 
     this.logger.log('Provisioned self entity for owner', { ownerId, selfEntityId, displayName });
 
-    // Honour whatever pointer actually won; fall back to the row we created.
-    return (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
+    return self;
   }
 
   private async markSelfEntity(ownerId: string, entityId: string): Promise<void> {
@@ -1210,6 +1272,64 @@ export class GraphIngestService {
           AND owner_user_id = $2::uuid`,
       [entityId, ownerId],
     );
+  }
+
+  /** {@link markSelfEntity} undone: the row stays, no longer claiming to be the owner. */
+  private async unmarkSelfEntity(ownerId: string, entityId: string): Promise<void> {
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.entities
+          SET is_self = FALSE,
+              properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('is_self', FALSE),
+              updated_at = now()
+        WHERE entity_id = $1::uuid
+          AND owner_user_id = $2::uuid`,
+      [entityId, ownerId],
+    );
+  }
+
+  /**
+   * Point an account that has no pointer at the `is_self` Person it already
+   * has, and return the Person the account points at afterwards: that one, or
+   * the one a concurrent writer pointed it at first. Null when the account has
+   * no live `is_self` Person, or still resolves to none (a pointer naming no
+   * row, which the guarded write leaves alone).
+   *
+   * The lookup is the one `UserContextService.resolveUserEntity` falls back on —
+   * the oldest live `is_self` Person — so the import and the dossier settle on
+   * the same row.
+   */
+  private async adoptUnpointedSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
+    const [selfRow]: Array<{ entity_id: string }> = await this.nodeRepository.manager.query(
+      `SELECT entity_id
+         FROM ci.entities
+        WHERE owner_user_id = $1::uuid
+          AND entity_type = 'Person'
+          AND merged_into_entity_id IS NULL
+          AND is_active IS DISTINCT FROM FALSE
+          AND (is_self IS TRUE OR properties ->> 'is_self' = 'true')
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [ownerId],
+    );
+    if (!selfRow?.entity_id) {
+      return null;
+    }
+
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`,
+      [ownerId, selfRow.entity_id],
+    );
+
+    const self = await this.resolveSelfEntity(ownerId);
+    if (self) {
+      this.logger.log('Pointed the account at the self Person it already had', {
+        ownerId,
+        selfEntityId: selfRow.entity_id,
+        pointer: self.id,
+      });
+    }
+
+    return self;
   }
 
   /**

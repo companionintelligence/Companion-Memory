@@ -73,6 +73,14 @@ export class PlaceEntity {
   @Column({ type: 'uuid', name: 'parent_place_id', nullable: true })
   parentPlaceId!: string | null;
 
+  /**
+   * `ci.entities.is_active`. False once the user asked Memory to forget the
+   * place (`memory.forget` in archive mode), and on a merge tombstone. Search,
+   * the explorer and the map leave such a row out.
+   */
+  @Column({ type: 'boolean', name: 'is_active', default: true })
+  isActive!: boolean;
+
   // Backward compatibility fields - populated from properties JSONB after load
   type!: string | null;
 
@@ -186,6 +194,7 @@ export class PlaceEntity {
       boundary: entity.boundary || null,
       placeKind: entity.placeKind || null,
       parentPlaceId: entity.parentPlaceId || null,
+      isActive: entity.isActive,
       latitude: entity.latitude ?? null,
       longitude: entity.longitude ?? null,
       userId: entity.user?.id || null,

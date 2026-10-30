@@ -284,7 +284,7 @@ Phased **Now** (next release train) / **Next** (following quarter) / **Later**. 
 ### Later
 | Item | Effort | Notes |
 |---|---|---|
-| **PowerSync local-first client** | XL | Server scaffold + `GET /api/powersync/token` + `sync-rules.yaml` exist; the on-device SQLite client is unwired. Changes both stores' privacy answers (on-device retention) — re-file when it lands. |
+| **PowerSync local-first client** | XL | The client is wired. After sign-in the app opens an on-device SQLite working set and asks `GET /api/powersync/token` for sync credentials, but it only syncs when the Memory server sets `POWERSYNC_URL` and `POWERSYNC_JWT_SECRET`. The Marketplace stack sets neither and ships no PowerSync service, so store installs keep no synced data on the phone: the app asks once per sign-in or app start, gets a 503 with `POWERSYNC_NOT_CONFIGURED` and stays on GraphQL. Turning PowerSync on for servers that store users reach puts their notes, messages and threads on the phone, so re-check both stores' privacy answers before that ships. |
 | **Share extension / share target** | XL | Capture a photo/URL/text from any app into Companion. iOS Share Extension + App Group; Android `ACTION_SEND` intent-filter; ingest endpoint. |
 | **Home-screen widgets** | L | WidgetKit + Android App Widget: recent memory + one-tap capture (App-Intent-backed). |
 | **Notification preferences** (per-category opt-in + quiet hours) | M | Once multiple push categories exist, stored server-side against the device record. |

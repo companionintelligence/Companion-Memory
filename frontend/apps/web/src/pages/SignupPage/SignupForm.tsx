@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useState, type BaseSyntheticEvent 
 import { buildApiUrl, fetchJson, FetchJsonError } from '@ci/common';
 import {
   Alert,
+  EmailInput,
   Form,
   Input,
   LoadingButton,
@@ -169,7 +170,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSubmit)} className="w-full space-y-6">
+      <form noValidate onSubmit={form.handleSubmit(handleSubmit)} className="w-full space-y-6">
         <Form.Field
           control={form.control}
           name="name"
@@ -191,7 +192,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
             <Form.Item>
               <Form.Label>Email</Form.Label>
               <Form.Control>
-                <Input {...field} autoComplete="username" />
+                <EmailInput {...field} autoComplete="username" />
               </Form.Control>
               <Form.Message />
             </Form.Item>

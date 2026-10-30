@@ -31,7 +31,7 @@ import {
   toGlobalResourceType,
   type RelatedEntityOpenTarget,
 } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
-import { TagInput } from '@/components/TagInput';
+import { TagInput, useTagSuggestions } from '@/components/TagInput';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
@@ -41,6 +41,7 @@ import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DELETE_TARGETS } from './deleteTargets';
 import { useEntityDrawerHost } from './drawerHost';
 import { GET_DRAWER_NODE, genericEntityGlobalId, isDetailNode } from './drawerNode';
+import { ignoreHistoryMouseButtons } from './historyMouseButtons';
 import { useReadOnly } from './readOnly';
 
 // The field/meta contract now lives with the shared editor so the full-page
@@ -88,7 +89,7 @@ export function fullPagePath(resourceType: string | null, rawId: string | null):
 function FullPageLink({ to, label }: { to: string; label: string }) {
   const inRouter = useInRouterContext();
   const className =
-    '-mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground';
+    'inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground sm:-mt-1';
   const link = inRouter ? (
     <Link to={to} aria-label={label} className={className}>
       <FileSymlink className="size-4" />
@@ -674,6 +675,7 @@ export function EntityDetailScaffold({
   const entityKey = ref.globalId ?? ref.rawId ?? '';
   const [editing, setEditing] = useState(false);
   const [activeKey, setActiveKey] = useState(entityKey);
+  const tagSuggestions = useTagSuggestions(undefined, editing && taggable);
 
   if (activeKey !== entityKey) {
     setActiveKey(entityKey);
@@ -715,6 +717,7 @@ export function EntityDetailScaffold({
   return (
     <Sheet.Content
       data-testid="entity-detail-sheet"
+      onPointerDownOutside={ignoreHistoryMouseButtons}
       className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl pt-[var(--safe-area-top)] pb-[var(--safe-area-bottom)] [&>button]:top-[calc(var(--safe-area-top)+1rem)]"
       // Radix's default open-autofocus lands on the first tabbable descendant —
       // here that is always the header's ChatWithAgentMenu IconButton, whose
@@ -730,59 +733,64 @@ export function EntityDetailScaffold({
         (event.currentTarget as HTMLElement | null)?.focus();
       }}
     >
-      <Sheet.Header className="gap-2 border-b border-border/60 bg-background/45 p-5 pr-12 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-2">
-          {/* `min-w-0` + `break-words`, together: a flex item will not shrink below
-              its longest unbreakable word, so a title holding a long URL (an
-              Instagram message whose "title" is its text) kept its full width,
-              ran under the close button, and shoved the four action icons off the
-              right edge, out of reach. Allowed to shrink, the title wraps the URL
-              at the width the icons leave it. */}
-          <Sheet.Title className="min-w-0 break-words text-xl leading-tight tracking-tight">
-            {title}
-          </Sheet.Title>
-          <div className="flex shrink-0 items-center gap-1">
-            {fullPage != null && <FullPageLink to={fullPage} label={t('ENTITY_DETAILS_OPEN_PAGE')} />}
-            {!readOnly && <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />}
-            {canEnterEditMode && !editing && (
-              <IconButton
-                variant="ghost"
-                className="-mt-1 size-8 shrink-0"
-                label={t('ENTITY_DETAILS_EDIT')}
-                onClick={startEditing}
-              >
-                <Pencil className="size-4" />
-              </IconButton>
-            )}
-            {canDelete && !editing && (
-              <IconButton
-                variant="ghost"
-                className="-mt-1 size-8 shrink-0 text-muted-foreground hover:text-destructive"
-                label={`Delete ${deleteTarget?.noun ?? 'entity'}`}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                <Trash2 className="size-4" />
-              </IconButton>
-            )}
-          </div>
+      <Sheet.Header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-2 border-b border-border/60 bg-background/45 p-3 pr-12 backdrop-blur-xl sm:p-5 sm:pr-12">
+        {/* The title spans both content columns on a phone, so the action
+            controls below cannot squeeze a long name. The sheet's own Close
+            remains absolutely positioned at top-right. Desktop restores the
+            title/actions first row. */}
+        <Sheet.Title className="col-span-2 col-start-1 row-start-1 min-w-0 break-words text-xl leading-tight tracking-tight sm:col-span-1">
+          {title}
+        </Sheet.Title>
+
+        <div
+          data-testid="entity-detail-actions"
+          className="col-start-2 row-start-2 flex shrink-0 items-center gap-1 justify-self-end sm:row-start-1"
+        >
+          {fullPage != null && <FullPageLink to={fullPage} label={t('ENTITY_DETAILS_OPEN_PAGE')} />}
+          {!readOnly && <ChatWithAgentMenu context={chatContext} className="size-8 shrink-0 sm:-mt-1" />}
+          {canEnterEditMode && !editing && (
+            <IconButton
+              variant="ghost"
+              className="size-8 shrink-0 sm:-mt-1"
+              label={t('ENTITY_DETAILS_EDIT')}
+              onClick={startEditing}
+            >
+              <Pencil className="size-4" />
+            </IconButton>
+          )}
+          {canDelete && !editing && (
+            <IconButton
+              variant="ghost"
+              className="size-8 shrink-0 text-muted-foreground hover:text-destructive sm:-mt-1"
+              label={`Delete ${deleteTarget?.noun ?? 'entity'}`}
+              onClick={() => setConfirmingDelete(true)}
+            >
+              <Trash2 className="size-4" />
+            </IconButton>
+          )}
         </div>
+
         {/* Always render a description so Radix has an accessible description to
             point `aria-describedby` at (otherwise it logs a console warning). */}
         {subtitle != null && subtitle !== '' ? (
           <Sheet.Description
             className={cn(
-              'text-xs text-muted-foreground',
-              subtitleKind === 'label' ? 'font-medium uppercase tracking-wide' : 'break-words',
+              'col-start-1 row-start-2 min-w-0 self-center text-xs text-muted-foreground sm:col-span-2',
+              subtitleKind === 'label'
+                ? 'truncate font-medium uppercase tracking-wide'
+                : 'line-clamp-2 break-words sm:line-clamp-none',
             )}
           >
             {subtitle}
           </Sheet.Description>
         ) : (
-          <Sheet.Description className="sr-only">{`Details for ${title}`}</Sheet.Description>
+          <Sheet.Description className="sr-only col-start-1 row-start-2 sm:col-span-2">
+            {`Details for ${title}`}
+          </Sheet.Description>
         )}
       </Sheet.Header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:p-5">
         {/* Keyed per entity: a related card swaps the entity under the same
             *Details body, and EntityMedia's once-per-mount refresh must not
             carry over to the next entity's media. */}
@@ -817,6 +825,8 @@ export function EntityDetailScaffold({
             <TagInput
               key={ref.globalId}
               tags={currentTags}
+              suggestions={tagSuggestions}
+              inputAriaLabel={`Tags for ${title}`}
               readOnly={!editing}
               onTagAdded={async (label) => {
                 try {
@@ -867,7 +877,7 @@ export function EntityDetailScaffold({
       </div>
 
       {editing && (
-        <Sheet.Footer className="gap-2 border-t border-border/60 bg-background/55 backdrop-blur-xl">
+        <Sheet.Footer className="gap-2 border-t border-border/60 bg-background/55 p-3 backdrop-blur-xl sm:p-4">
           {saveError && (
             <p role="alert" className="text-sm text-destructive">
               {saveError}

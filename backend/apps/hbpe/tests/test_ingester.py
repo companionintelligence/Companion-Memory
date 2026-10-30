@@ -391,6 +391,43 @@ async def test_notify_path_still_reserialises(monkeypatch, fast_debounce):
 
 
 @pytest.mark.asyncio
+async def test_the_serialiser_is_handed_an_iso_string_not_a_date(
+    monkeypatch, fast_debounce
+):
+    """
+    ``serialize_day`` takes the day as ``YYYY-MM-DD`` and the summary read
+    parses it with ``date.fromisoformat``, which raises ``TypeError`` for a
+    ``date``. The summary merge swallows that ("Summary token merge failed
+    (non-fatal): fromisoformat: argument must be str"), so a re-serialise that
+    passed a ``date`` quietly dropped the day's summary tokens every time.
+
+    The tests above stub ``serialize_day`` and record ``str(d)``, which makes a
+    ``date`` and its ISO string indistinguishable; this one keeps the argument
+    as it arrived and parses it the way the real read does.
+    """
+    from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    received: list[object] = []
+
+    def fake_serialize_day(_self, user_id, d):
+        received.append(d)
+        date.fromisoformat(d)  # the summary read's own parse
+        return 3
+
+    monkeypatch.setattr(TokenSerializer, "serialize_day", fake_serialize_day)
+
+    ingester = EventIngester({USER: FakeEngine()})
+    _notify(ingester, TODAY)
+
+    await _wait_for(lambda: received, "the NOTIFY path to re-tokenise today")
+    await _settled(ingester)
+    assert received == [TODAY]
+
+
+@pytest.mark.asyncio
 async def test_notify_for_an_older_day_invalidates_without_reserialising(
     monkeypatch, fast_debounce
 ):

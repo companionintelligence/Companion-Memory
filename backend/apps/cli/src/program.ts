@@ -13,14 +13,22 @@ import { asksShowCommand } from './commands/asks/show';
 import { backfillCommand } from './commands/backfill';
 import { dataSourcesCommand } from './commands/datasources';
 import { doctorCommand } from './commands/doctor';
+import {
+  fleetClaimCommand,
+  fleetRegisterCommand,
+  fleetReleaseCommand,
+  fleetStatusCommand,
+} from './commands/fleet';
 import { grantsCreateCommand } from './commands/grants/create';
 import { grantsHistoryCommand } from './commands/grants/history';
 import { grantsListCommand } from './commands/grants/list';
+import { grantsParseCommand } from './commands/grants/parse';
 import { grantsRevokeCommand } from './commands/grants/revoke';
 import { grantsShowCommand } from './commands/grants/show';
 import { grantsUpdateCommand } from './commands/grants/update';
 import { importCommand } from './commands/import';
 import { inboxCommand } from './commands/inbox';
+import { mcpInitHooksCommand, mcpServeCommand } from './commands/mcp';
 import { memoryCheckCommand, memoryConfigureCommand, memoryStatusCommand } from './commands/memory';
 import { peersAddCommand } from './commands/peers/add';
 import { peersListCommand } from './commands/peers/list';
@@ -139,7 +147,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Upload archives and run them through unpack → parse → media → push')
     .option('--label <label>', 'display name for the run; defaults to the filename')
     .option('--stages <list>', 'comma-separated stages to run; default is all four')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((paths: string[], options) => importCommand(context(), paths, options));
@@ -152,7 +160,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--skip <sources>', 'drop units recognized as these data sources')
     .option('--units <paths>', 'exact unit paths from a scan')
     .option('--label <label>', 'display name for the runs')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((options) => inboxCommand(context(), options));
@@ -173,7 +181,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--run <id>', 'restrict to this run (repeatable)', collect, [])
     .option('--dry-run', 'list what would be pushed')
     .option('--retry-failed', 're-push the rows a finished push could not write (needs --run)')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((options) => pushCommand(context(), options));
@@ -237,6 +245,78 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--clear-api-key', 'remove the appliance-saved backend credential')
     .option('--json', 'machine-readable output')
     .action((options) => memoryConfigureCommand(context(), options));
+
+  // ---------------------------------------------------------------------------
+  // MCP — stdio-to-Streamable-HTTP bridge for local MCP hosts (Claude Desktop, Cursor, Goose)
+  // ---------------------------------------------------------------------------
+
+  const mcp = program
+    .command('mcp')
+    .description('Model Context Protocol (MCP) utilities and local stdio bridge');
+
+  mcp
+    .command('serve')
+    .description('Bridge stdin/stdout JSON-RPC to the appliance’s Streamable HTTP /mcp endpoint')
+    .option('--stdio', 'run as a line-delimited JSON-RPC stdio bridge')
+    .action((options) => mcpServeCommand(context(), options));
+
+  mcp
+    .command('init-hooks')
+    .description('Emit MCP server and session lifecycle hook configs for Claude Code, Cursor, or Gemini')
+    .option('--host <host>', 'target host: all (default), claude-code, cursor, gemini')
+    .option('--json', 'machine-readable output')
+    .action((options) => mcpInitHooksCommand(context(), options));
+
+  // ---------------------------------------------------------------------------
+  // Fleet — multi-agent worktree coordination (`knowl fleet` pattern)
+  // ---------------------------------------------------------------------------
+
+  const fleet = program
+    .command('fleet')
+    .description('Coordinate parallel coding agents across git worktrees and detect file-claim collisions');
+
+  fleet
+    .command('status')
+    .description('Show active agent sessions across worktrees and any file collisions')
+    .option('--state-file <path>', 'override fleet state file path [~/.ci/fleet.json]')
+    .option('--json', 'machine-readable output')
+    .action((options) => fleetStatusCommand(context(), options));
+
+  fleet
+    .command('register')
+    .argument('<agentId>', 'unique identifier for the agent session')
+    .description('Register an active agent session and optional claimed files')
+    .option('--worktree <path>', 'git worktree path for this agent')
+    .option('--branch <branch>', 'git branch name')
+    .option('--task <summary>', 'short description of the agent task')
+    .option('--file <path>', 'claim a file path (repeatable)', collect, [])
+    .option('--state-file <path>', 'override fleet state file path [~/.ci/fleet.json]')
+    .option('--json', 'machine-readable output')
+    .action((agentId: string, options) =>
+      fleetRegisterCommand(context(), agentId, {
+        ...options,
+        files: options.file,
+      }),
+    );
+
+  fleet
+    .command('claim')
+    .argument('<agentId>', 'agent session identifier')
+    .argument('<files...>', 'file paths to claim')
+    .description('Claim additional files for an active agent session and check for collisions')
+    .option('--state-file <path>', 'override fleet state file path [~/.ci/fleet.json]')
+    .option('--json', 'machine-readable output')
+    .action((agentId: string, files: string[], options) =>
+      fleetClaimCommand(context(), agentId, files, options),
+    );
+
+  fleet
+    .command('release')
+    .argument('<agentId>', 'agent session identifier')
+    .description('Release an agent session and all of its claimed files')
+    .option('--state-file <path>', 'override fleet state file path [~/.ci/fleet.json]')
+    .option('--json', 'machine-readable output')
+    .action((agentId: string, options) => fleetReleaseCommand(context(), agentId, options));
 
   // ---------------------------------------------------------------------------
   // Peers — who this box will exchange asks with (backend/.../graphql/resolvers/PeerLinkResolver.ts)
@@ -349,6 +429,19 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Every grant ever written — active, revoked and superseded')
     .option('--json', 'machine-readable output')
     .action((id: string | undefined, options) => grantsHistoryCommand(context(), id, options));
+
+  grants
+    .command('parse')
+    .argument(
+      '<sentence>',
+      'natural-language consent instruction, e.g. "allow alice@portal.example to ask about photos for 7 days"',
+    )
+    .description(
+      'Parse a natural-language consent sentence into structured grant fields (pass --apply to create)',
+    )
+    .option('--apply', 'create the parsed standing grant on the appliance')
+    .option('--json', 'machine-readable output')
+    .action((sentence: string, options) => grantsParseCommand(context(), sentence, options));
 
   // ---------------------------------------------------------------------------
   // Asks — the interpersonal-question lifecycle (.../resolvers/AskResolver.ts)

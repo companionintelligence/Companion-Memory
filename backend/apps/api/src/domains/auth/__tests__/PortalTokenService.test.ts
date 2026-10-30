@@ -41,9 +41,11 @@ jest.mock('jose', () => ({
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 
+import { UnauthorizedException } from '@nestjs/common';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 import {
+  MEMORY_SIGN_IN_REFUSED_MESSAGE,
   PORTAL_JWKS_COOLDOWN_MS,
   PORTAL_JWKS_FETCH_TIMEOUT_MS,
   PortalTokenService,
@@ -393,9 +395,35 @@ describe('PortalTokenService', () => {
       expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     });
 
-    it('confines an unaddressed token from a Portal that addresses tokens to the capture scope', async () => {
-      // e.g. the id_token a different Memory received when its owner signed in there.
+    it('refuses a stamped ci-server token addressed to no appliance, without looking anyone up', async () => {
+      // The id_token a Memory receives when someone signs in to it with Companion, or the one a
+      // phone app from before addressed pairing sends. Here it is no credential: not for keys, not
+      // for capture, not for anything. The answer says what to do instead.
+      signedInAs({ aud: 'ci-server', azp: 'ci-server', ci_appliance_binding: 1 });
+
+      const refused = service.verifyAndProvision(TOKEN);
+
+      await expect(refused).rejects.toThrow(UnauthorizedException);
+      await expect(refused).rejects.toThrow(MEMORY_SIGN_IN_REFUSED_MESSAGE);
+      expect(federatedIdentityService.findUserId).not.toHaveBeenCalled();
+      expect(userService.findAccountByEmail).not.toHaveBeenCalled();
+    });
+
+    it('refuses it the same way when only aud names the client', async () => {
       signedInAs({ aud: 'ci-server', ci_appliance_binding: 1 });
+
+      await expect(service.verifyAndProvision(TOKEN)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('words the refusal so an older phone app shows it, rather than asking for a new sign-in', () => {
+      // That app reads any message containing "unauthorized" as "sign in again".
+      expect(MEMORY_SIGN_IN_REFUSED_MESSAGE).not.toMatch(/unauthorized/i);
+      expect(MEMORY_SIGN_IN_REFUSED_MESSAGE).toMatch(/up-to-date app/);
+    });
+
+    it("confines another client's stamped token addressed to no appliance to the capture scope", async () => {
+      portalConfig.audience = 'ci-server,ci-hub,ci-import-tools,ci-even';
+      signedInAs({ aud: 'ci-hub', azp: 'ci-hub', ci_appliance_binding: 1 });
 
       expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
     });

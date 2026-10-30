@@ -46,6 +46,8 @@ import {
   rhythmClaims,
   rhythmLabel,
   rhythmWaitingLabel,
+  PHONE_SHEET_VH,
+  scrollTopForSelectedHour,
   spanForDay,
   topClusters,
   utcDateKey,
@@ -950,10 +952,10 @@ interface VerticalCalendarProps {
   footer?: ReactNode;
   className?: string;
   /**
-   * Room after the last hour, matching the phone add-to-calendar sheet
-   * (`max-h-[70vh]`). Without it the evening sits under the sheet.
+   * The phone add sheet is open. Scroll the tapped hour to just above it.
+   * Does not lengthen the day — midnight stays the end of the scroller.
    */
-  scrollEndInset?: boolean;
+  liftSelectedHour?: boolean;
 }
 
 /**
@@ -982,7 +984,7 @@ export function VerticalCalendar({
   timeZone,
   footer,
   className,
-  scrollEndInset = false,
+  liftSelectedHour = false,
 }: VerticalCalendarProps) {
   const fmt = useDateTimeFormat();
   const zone = timeZone ?? detectBrowserTimeZone();
@@ -1066,15 +1068,18 @@ export function VerticalCalendar({
     }
 
     const y = (zonedMinutesOfDay(new Date(selectedMinute), zone) / MINUTES_PER_DAY) * GRID_HEIGHT_PX;
-    const viewTop = pane.scrollTop;
-    const viewBottom = viewTop + pane.clientHeight;
+    const paneBottom = pane.getBoundingClientRect().bottom;
+    const sheetTop = window.innerHeight * (1 - PHONE_SHEET_VH);
+    const occlusion = liftSelectedHour ? Math.max(0, paneBottom - sheetTop) : 0;
 
-    if (y >= viewTop && y <= viewBottom) {
-      return;
-    }
-
-    pane.scrollTop = Math.max(0, y - pane.clientHeight / 3);
-  }, [selectedMinute, zone]);
+    pane.scrollTop = scrollTopForSelectedHour({
+      hourY: y,
+      scrollTop: pane.scrollTop,
+      clientHeight: pane.clientHeight,
+      scrollHeight: pane.scrollHeight,
+      occlusionPx: occlusion,
+    });
+  }, [liftSelectedHour, selectedMinute, zone]);
 
   const handleMoveEvent = useCallback(
     (eventId: string, startTime: Date) => {
@@ -1189,14 +1194,7 @@ export function VerticalCalendar({
         })}
       </div>
 
-      <div
-        ref={scrollRef}
-        className={cn(
-          'min-h-0 flex-1 overflow-auto',
-          scrollEndInset && 'pb-[calc(70vh+env(safe-area-inset-bottom,0px))]',
-        )}
-        data-testid="vertical-calendar-scroll"
-      >
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" data-testid="vertical-calendar-scroll">
         <div className="flex min-w-0">
           {/* Hours the days read against. Predicted colour lives in each
               column, behind committed time, so the axis stays a clock. */}

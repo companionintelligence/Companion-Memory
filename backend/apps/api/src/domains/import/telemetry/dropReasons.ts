@@ -168,6 +168,10 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // Deliberate policy exclusions.
   bulk_filtered: 'filtered',
   draft: 'filtered',
+  // facebook: an event invitation the person declined, or never answered, is
+  // not an occurrence.
+  declined_event: 'filtered',
+  unanswered_invitation: 'filtered',
   excluded_reply: 'filtered',
   excluded_retweet: 'filtered',
   outside_timeframe: 'filtered',

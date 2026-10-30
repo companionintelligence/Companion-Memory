@@ -1,6 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  DiscoverLanAppliancesResult,
   LocalHubPlugin,
   LocalHubSecureGetResult,
   LocalHubStartResult,
@@ -78,5 +79,10 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
 
   async stopSignificantLocationUpdates(): Promise<void> {
     // Nothing started on web.
+  }
+
+  async discoverLanAppliances(): Promise<DiscoverLanAppliancesResult> {
+    // Browsers cannot perform raw UDP mDNS discovery; callers fall back to manual URL entry.
+    return { appliances: [], supported: false };
   }
 }

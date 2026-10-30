@@ -12,6 +12,24 @@ function stubFetch(res: Response) {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(res));
 }
 
+/** Headers arrive, then the body stalls; like a real fetch, aborting the request signal errors the body stream. */
+function stubStalledBody(init: ResponseInit) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, requestInit?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          requestInit?.signal?.addEventListener('abort', () =>
+            controller.error(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        },
+      });
+
+      return new Response(body, init);
+    }),
+  );
+}
+
 function fetchRejection(): Promise<FetchJsonError> {
   return fetchJson('/api/signup', { method: 'POST' }).then(
     () => {
@@ -144,6 +162,81 @@ describe('fetchJson error responses', () => {
 
     expect(err).not.toBeInstanceOf(FetchJsonError);
     expect((err as Error).name).toBe('AbortError');
+  });
+
+  it('aborts a success body that stalls after the headers once `timeout` passes', async () => {
+    vi.useFakeTimers();
+    stubStalledBody({ status: 200 });
+
+    const pending = fetchJson('/api/session', { timeout: 1_000 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(999);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Checked before awaiting, so a timer that no longer covers the body fails here
+    // instead of hanging the test.
+    expect(settled).toBe(true);
+
+    const err = await pending;
+
+    expect(err).not.toBeInstanceOf(FetchJsonError);
+    expect((err as Error).name).toBe('AbortError');
+  });
+
+  it('reads a stalled error body under its own bound, not `timeout`', async () => {
+    vi.useFakeTimers();
+    stubStalledBody({ status: 502, statusText: 'Bad Gateway' });
+
+    const pending = fetchJson('/api/session', { timeout: 1_000 }).catch((e: unknown) => e);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // The deadline ended at the 502's headers: it does not abort the body read.
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(settled).toBe(true);
+
+    const err = await pending;
+
+    expect(err).toBeInstanceOf(FetchJsonError);
+    expect((err as FetchJsonError).message).toBe('Fetch failed: 502 Bad Gateway');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clears the timeout once the success body is read', async () => {
+    vi.useFakeTimers();
+    stubFetch(jsonResponse(200, 'OK', { accessToken: 'token' }));
+
+    await expect(fetchJson('/api/session', { timeout: 1_000 })).resolves.toEqual({ accessToken: 'token' });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clears the timeout when reading a success body fails', async () => {
+    vi.useFakeTimers();
+    // The connection drops mid-body, well before the deadline.
+    const body = new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError('terminated'));
+      },
+    });
+    stubFetch(new Response(body, { status: 200 }));
+
+    await expect(fetchJson('/api/session', { timeout: 1_000 })).rejects.toThrow('terminated');
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('returns parsed JSON for 2xx responses', async () => {

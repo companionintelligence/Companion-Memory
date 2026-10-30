@@ -14,7 +14,10 @@ import type { CiEntityDescriptor, IntentDomain, IntentManifest, ManifestIntent }
 // when the caller names a tier. Additive: a 1.1.0 client that never passes `tier` sees byte-identical
 // output. The bump is so an on-device client can tell "this appliance computes rulings for me" from
 // "this appliance is old enough that I must fall back to reading localCapable + privacy myself".
-const MANIFEST_VERSION = '1.2.0';
+// 1.3.0 — the local tier may receive an intent's lean `description` / `parameters`
+// (IntentDefinition.local) in place of the full ones, when the tool declares them. Only with
+// `tier=local`; every other caller still sees the full schema, byte-identical to before.
+const MANIFEST_VERSION = '1.3.0';
 
 /**
  * Public read API over the intent catalog — the single seam through which REST (the agent-domain
@@ -48,26 +51,32 @@ export class IntentCatalogService {
   ): IntentManifest {
     const { tier, capability, userId } = options;
 
-    const intents: ManifestIntent[] = this.tools.getOutboundCatalogTools({ userId }).map((schema) => ({
-      name: schema.name,
-      tool: intentToolName(schema.name),
-      domain: schema.domain,
-      title: schema.title,
-      description: schema.description,
-      parameters: schema.parameters,
-      privacy: schema.privacy,
-      // No `?? false` fallback: the field is required on IntentDefinition precisely so the
-      // manifest never has to guess, and a silent `false` here would publish "not available
-      // offline" for an intent whose author simply forgot to label it.
-      localCapable: schema.localCapable,
-      consumes: schema.consumes ?? [],
-      produces: schema.produces ?? [],
-      phrases: schema.phrases ?? [],
-      // Only when asked. Without a tier there is no such thing as "the" ruling — the same intent
-      // executes on the appliance and queues on-device — so publishing one unconditionally would
-      // be publishing a guess.
-      ...(tier ? { dispatch: resolveDispatch(schema, { tier, capability }) } : {}),
-    }));
+    const intents: ManifestIntent[] = this.tools.getOutboundCatalogTools({ userId }).map((schema) => {
+      // The on-device tier gets the lean form where a tool has one (see IntentDefinition.local):
+      // its declarations are in every prompt of a model with a window a tenth of the appliance's.
+      const published = tier === 'local' && schema.local ? schema.local : schema;
+
+      return {
+        name: schema.name,
+        tool: intentToolName(schema.name),
+        domain: schema.domain,
+        title: schema.title,
+        description: published.description,
+        parameters: published.parameters,
+        privacy: schema.privacy,
+        // No `?? false` fallback: the field is required on IntentDefinition precisely so the
+        // manifest never has to guess, and a silent `false` here would publish "not available
+        // offline" for an intent whose author simply forgot to label it.
+        localCapable: schema.localCapable,
+        consumes: schema.consumes ?? [],
+        produces: schema.produces ?? [],
+        phrases: schema.phrases ?? [],
+        // Only when asked. Without a tier there is no such thing as "the" ruling — the same intent
+        // executes on the appliance and queues on-device — so publishing one unconditionally would
+        // be publishing a guess.
+        ...(tier ? { dispatch: resolveDispatch(schema, { tier, capability }) } : {}),
+      };
+    });
 
     intents.sort((a, b) => a.name.localeCompare(b.name));
 

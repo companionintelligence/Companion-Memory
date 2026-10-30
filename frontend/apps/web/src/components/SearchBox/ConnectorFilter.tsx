@@ -6,6 +6,7 @@ import { Database } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
+import { sourceFilterLabel } from '@/lib/sourceNames';
 import {
   explorerSearchTypeFilters,
   readCsvParam,
@@ -105,6 +106,7 @@ export function ConnectorFilter({ modal = true, label = 'How', includeTypes, ren
       values={values}
       options={data?.sourceSystems ?? []}
       optionsKnown={data != null}
+      formatValue={sourceFilterLabel}
       loading={loading}
       onOpenChange={setOpen}
       onAdd={(value) => {

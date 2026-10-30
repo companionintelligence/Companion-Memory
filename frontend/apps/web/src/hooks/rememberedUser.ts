@@ -1,0 +1,108 @@
+/**
+ * The signed-in profile a phone last saw, kept so a cold start while the appliance is
+ * unreachable still opens the app.
+ *
+ * `ProtectedRoute` and `RedirectKnownUser` treat "no user" as "signed out" and send the
+ * phone to cloud-connect. A phone's credential is an API key in the keystore, which never
+ * expires on its own, so with the appliance down the `me` query failing is an OUTAGE,
+ * not a sign-out — and the phone holds a synced copy of the user's memory precisely for
+ * that case (docs/architecture/mobile-local-search-plan.md). Found by U7, the offline
+ * end-to-end test: a cold start with the API stopped landed on "Received status code
+ * 500" at cloud-connect, and nothing offline was reachable behind it.
+ *
+ * Kept per origin, so a phone re-paired to another box never answers with the previous
+ * box's profile, and forgotten with the device key on sign-out.
+ */
+import type { ApolloError } from '@apollo/client';
+
+const STORAGE_KEY = 'ci.rememberedUser';
+
+/**
+ * How long the boot requests (the session check and the `me` profile) wait for Memory
+ * before the page treats it as not answering. A Memory that accepts the connection and
+ * never replies (hung, or swamped) fails no request, so without a deadline the page sits
+ * on the loader instead of the "Can't reach Memory" card. Generous on purpose: a busy
+ * dev build takes 5-18 s per page, and that must still open the page, not the card.
+ */
+export const MEMORY_ANSWER_DEADLINE_MS = 25_000;
+
+interface Remembered<User> {
+  origin: string;
+  user: User;
+}
+
+/** Keep `user` as what `origin` last said the signed-in profile was. */
+export function rememberUser<User>(origin: string, user: User): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ origin, user } satisfies Remembered<User>));
+  } catch {
+    // Storage full or blocked: the next cold start without the appliance will sign out, as before.
+  }
+}
+
+/** The profile `origin` last said, or null when none was kept for it. */
+export function recallUser<User>(origin: string): User | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<Remembered<User>>;
+
+    return parsed.origin === origin && parsed.user != null ? parsed.user : null;
+  } catch {
+    return null;
+  }
+}
+
+export function forgetUser(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing kept, or storage blocked: nothing to forget.
+  }
+}
+
+/**
+ * Whether a failed `me` query says the appliance could not answer, as opposed to it
+ * answering that this credential is no good. A transport failure (dead origin, the Vite
+ * proxy's 500 while the dev API is down, a gateway timeout) is an outage; a 401/403 is the
+ * server rejecting the key, and so is any GraphQL-level error, which only an answering
+ * server produces.
+ */
+export function isApplianceOutage(
+  error: Pick<ApolloError, 'networkError' | 'graphQLErrors'> | undefined,
+): boolean {
+  if (!error?.networkError) {
+    return false;
+  }
+
+  const status = (error.networkError as { statusCode?: unknown }).statusCode;
+
+  return status !== 401 && status !== 403;
+}
+
+/**
+ * Whether a failed `me` query leaves it unknown who is signed in, as opposed to the server
+ * saying this credential is no good. Wider than {@link isApplianceOutage}, which decides
+ * when a phone may answer with a kept profile: here a server that answers with a GraphQL
+ * error that is not about the credential (the database is down, so `me` fails with
+ * INTERNAL_SERVER_ERROR) has not said anyone is signed out either.
+ */
+export function isProfileUnanswered(
+  error: Pick<ApolloError, 'networkError' | 'graphQLErrors'> | undefined,
+): boolean {
+  if (!error) {
+    return false;
+  }
+
+  if (error.networkError) {
+    return isApplianceOutage(error);
+  }
+
+  const codes = (error.graphQLErrors ?? []).map((graphQLError) => graphQLError.extensions?.code);
+
+  return codes.length > 0 && !codes.some((code) => code === 'UNAUTHENTICATED' || code === 'FORBIDDEN');
+}

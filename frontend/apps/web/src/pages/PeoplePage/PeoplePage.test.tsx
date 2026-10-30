@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -236,6 +236,19 @@ function pageInfo({ hasNextPage = false, endCursor = null as string | null } = {
   return { __typename: 'PageInfo' as const, hasNextPage, endCursor };
 }
 
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
 /**
  * Renders the current route's query string so a test can assert on it directly
  * — the same technique GlobalSearchBox's suite uses to check what a typed
@@ -323,6 +336,23 @@ function mocks({ candidates = [] as unknown[] } = {}) {
 }
 
 describe('PeoplePage', () => {
+  afterEach(() => setViewport(false));
+
+  // The first page used to load behind a full-screen spinner that covered
+  // the Memory section strip too.
+  it('shows person-shaped placeholder rows while the first page loads', async () => {
+    renderWithProviders(<PeoplePage />, { mocks: mocks() });
+
+    const status = screen.getByRole('status');
+
+    expect(status).toHaveTextContent('Loading people');
+    expect(status.querySelectorAll('[data-slot="skeleton"].rounded-full')).toHaveLength(8);
+    expect(document.querySelector('.animate-spin')).toBeNull();
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('routes to the decoded uuid, not the global id, when a person row is opened', async () => {
     navigate.mockClear();
     renderWithProviders(<PeoplePage />, { mocks: mocks() });
@@ -607,7 +637,7 @@ describe('PeoplePage', () => {
     }
   });
 
-  it('offers Merge into one person and Use as the kept person on a merge candidate', async () => {
+  it('offers one clear merge action and names the record that will be kept', async () => {
     renderWithProviders(<PeoplePage />, {
       mocks: mocks({
         candidates: [
@@ -634,10 +664,53 @@ describe('PeoplePage', () => {
     });
 
     expect(await screen.findByRole('button', { name: 'Merge into one person' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use as the kept person' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use Ada Lovelace as the kept person' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Keep this one' })).not.toBeInTheDocument();
     expect(screen.queryByText('Merge into one person?')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the people list near the top on phones and reveals more merge cards on request', async () => {
+    setViewport(true);
+
+    const liamId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff711');
+    const stevenId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff712');
+    const graceId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff713');
+    const hopperId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff714');
+
+    renderWithProviders(<PeoplePage />, {
+      mocks: mocks({
+        candidates: [
+          candidateEdge([
+            mergePerson({ id: liamId, name: 'Liam Broza' }),
+            mergePerson({ id: stevenId, name: 'Steven Berry' }),
+          ]),
+          {
+            ...candidateEdge(
+              [
+                mergePerson({ id: graceId, name: 'Grace Hopper' }),
+                mergePerson({ id: hopperId, name: 'G. Hopper' }),
+              ],
+              { id: 'candidate-2' },
+            ),
+            cursor: 'candidate-2',
+          },
+        ],
+      }),
+    });
+
+    expect(await screen.findByText('Liam Broza')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Grace Hopper' })).not.toBeInTheDocument();
+
+    const keep = screen.getByRole('button', { name: 'Use Liam Broza as the kept person' });
+    expect(keep).toHaveTextContent('Keep');
+    expect(keep.className).toContain('border');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more' }));
+
+    expect(await screen.findByRole('link', { name: 'Grace Hopper' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show only one' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   /**
@@ -894,7 +967,7 @@ describe('PeoplePage', () => {
 
     const heading = await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
     // The card, not the People list below it (which shares Ada's cache entry).
-    const card = within(heading.closest('.rounded-md.border') as HTMLElement);
+    const card = within(heading.closest('[data-merge-candidate]') as HTMLElement);
 
     // Ada's own row, and the evidence number under Bo — both "shared".
     const adaRow = card.getByText('(212) 555-0118').closest('div');

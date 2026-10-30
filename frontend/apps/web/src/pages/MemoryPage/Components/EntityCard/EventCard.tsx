@@ -39,6 +39,10 @@ export const EVENT_FRAGMENT = gql(`
         id
         name
         properties
+        # Full precision from the place's location_point. The drawer falls
+        # back to these when the event has no point of its own.
+        latitude
+        longitude
       }
     }
     previewUrl

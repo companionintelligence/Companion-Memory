@@ -8,7 +8,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FULL_CAPABILITY, RequireCapability } from '@ci/common/decorators';
@@ -18,7 +18,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import { LastAdminDeletionRefused, UserService } from '@ci/domains/user';
 
-import { DataDeletionService } from '../services/DataDeletionService';
+import { type AccountDeletionResult, DataDeletionService } from '../services/DataDeletionService';
 
 /**
  * Full account deletion asks the caller to retype the account's email, the same
@@ -73,9 +73,11 @@ export class PrivacyController {
    *
    * Kept as an immediate delete rather than routed through
    * `UserService.requestDeletion`: this is the user-data-deletion request that
-   * also revokes third-party OAuth grants on the spot, which the grace-period
-   * path does not do. No first-party client calls it; the web and mobile apps
-   * use `DELETE /account`.
+   * also revokes third-party OAuth grants on the spot and purges at once, which
+   * the grace-period path does not do. It shares that path's machinery, though:
+   * the account is ended the same way, and its rows go through the same batched
+   * purge with the deadline set to now. No first-party client calls it; the web
+   * and mobile apps use `DELETE /account`.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireCapability(FULL_CAPABILITY)
@@ -103,24 +105,30 @@ export class PrivacyController {
       throw new BadRequestException('Confirmation email does not match this account');
     }
 
-    // Before anything is purged: the appliance's last administrator does not leave the other
-    // people on it without one, whichever route deletes the account (`DELETE /account` applies
-    // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
+    // The appliance's last administrator does not leave the other people on it without one, whichever
+    // route deletes the account (`DELETE /account` applies the same rule): 409 `SUCCESSOR_REQUIRED` or
+    // `SUCCESSOR_NOT_FOUND`, and nothing revoked or deleted. Otherwise the grants are revoked, the
+    // account is ended in one short transaction (with the successor's promotion), and its rows are
+    // purged in batches outside it; see DataDeletionService.deleteAccount.
+    let result: AccountDeletionResult;
+
     try {
-      await this.userService.handOverAdministration(serviceContext, serviceContext.userId, {
+      result = await this.dataDeletionService.deleteAccount(serviceContext, {
         successorEmail: body.successorEmail,
       });
     } catch (error) {
       throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
 
-    const result = await this.dataDeletionService.deleteAccount(serviceContext);
-
     return {
-      status: 'deleted',
+      // `deleting`: the account is ended and its purge is still running (or will be finished by the
+      // hourly purge). Nobody can sign in to it either way.
+      status: result.status,
       userDeleted: result.userDeleted,
       totalDeleted: result.totalDeleted,
       deletedCounts: result.deletedCounts,
+      detachedCounts: result.detachedCounts,
+      deletedObjects: result.deletedObjects,
       connectionsRevoked: result.revocations.filter((r) => r.tokenRevoked).length,
       connectionsProcessed: result.revocations.length,
       auditId: result.auditId,

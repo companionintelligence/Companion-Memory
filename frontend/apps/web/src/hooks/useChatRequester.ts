@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   apiKeyHeaders,
+  LOCAL_TOOLS_OFF_REFUSAL,
   ensureLocalLlmLoaded,
   findLocalLlmModel,
   getLocalLlmPrefs,
+  isAnswerCutShort,
+  isLocalWriteRequest,
   isContextExhausted,
   isLocalLlmReady,
   resetLocalLlmConversation,
@@ -15,7 +18,7 @@ import {
 import { useToast } from '@ci/shadcn';
 
 import type { FormData } from '@/components/Chat';
-import { Channel, FrameEncoder } from '@/components/Chat/utils';
+import { Channel, FrameDecoder, FrameEncoder } from '@/components/Chat/utils';
 
 import { useModel } from './useModel';
 import { useSessionAuth } from './useSessionAuth';
@@ -23,6 +26,12 @@ import { useSessionAuth } from './useSessionAuth';
 type Opts = {
   threadId: string | null;
   onNewThread?: (threadId: string) => void;
+  /**
+   * The action this conversation is about (the Today action window). Sent only
+   * with a turn that starts a new thread, so the server can open the thread
+   * with the action and link the action to it.
+   */
+  actionId?: string | null;
 };
 
 type ReturnType = [
@@ -99,10 +108,15 @@ function pipeMonitor(
   onFlush: () => void,
 ): ReadableStream<Uint8Array> {
   let hasSeenFirstChunk = false;
+  // The server sends keep-alive frames (Channel.KEEPALIVE) from the moment the turn starts, so the
+  // body's first bytes are not the reply's. Counting them hid the "working" dots at once and left
+  // the page blank until the model spoke. Frames are decoded only until one on another channel
+  // arrives.
+  const decoder = new FrameDecoder();
 
   const monitor = new TransformStream({
     transform(chunk, controller) {
-      if (!hasSeenFirstChunk) {
+      if (!hasSeenFirstChunk && decoder.push(chunk).some((frame) => frame.channel !== Channel.KEEPALIVE)) {
         hasSeenFirstChunk = true;
         onFirstChunk();
       }
@@ -118,7 +132,7 @@ function pipeMonitor(
   return body.pipeThrough(monitor);
 }
 
-export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
+export function useChatRequester({ threadId, onNewThread, actionId }: Opts): ReturnType {
   const { headers: sessionHeaders } = useSessionAuth();
   const [{ selectedModel, thinkingEnabled, toolsEnabled, activeModels }] = useModel();
   const { toast } = useToast();
@@ -126,6 +140,8 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
   const abortControllerRef = useRef<AbortController | null>(null);
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
+  const actionIdRef = useRef(actionId);
+  actionIdRef.current = actionId;
   const activeThreadIdRef = useRef<string | null>(threadId);
   if (threadId) {
     activeThreadIdRef.current = threadId;
@@ -202,8 +218,11 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
         return false;
       }
 
+      // Only the tool count is read from the load; `undefined` means "not known this session".
+      let loaded: { toolCount?: number };
+
       try {
-        await ensureLocalLlmLoaded(prefs.modelId, {
+        loaded = await ensureLocalLlmLoaded(prefs.modelId, {
           accelerator: prefs.accelerator ?? undefined,
           enableSpeculativeDecoding: prefs.speculativeDecoding,
           useIntentTools: prefs.intentTools,
@@ -243,6 +262,17 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
 
       setLocal({ modelId: prefs.modelId, stats: null });
 
+      // A model with no tools cannot add, save, forget or delete anything, and a small one will say it did
+      // anyway. The appliance refuses these in code before the model sees them; so does this. An unknown
+      // tool count (a model resident from before this session) is not "no tools".
+      if (loaded.toolCount === 0 && isLocalWriteRequest(prompt)) {
+        push(Channel.TEXT, LOCAL_TOOLS_OFF_REFUSAL);
+        streamController.close();
+        openBody(body);
+
+        return true;
+      }
+
       const generate = () =>
         streamLocalLlm(prompt, {
           enableThinking: prefs.thinking && spec.capabilities.includes('thinking'),
@@ -277,6 +307,13 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
           // on screen is truncated and would otherwise read as complete.
           if (result.cancelled && !controller.signal.aborted) {
             toast.info('The reply stopped early — this phone is running too hot to keep going.');
+          }
+
+          // Reasoning that filled the window: tokens were produced, no answer arrived, nothing failed.
+          if (!controller.signal.aborted && isAnswerCutShort(result)) {
+            toast.info(
+              'The on-device model ran out of room before it could answer. Try a shorter question, or turn off "Think before answering" in Settings → On-device model.',
+            );
           }
 
           streamController.close();
@@ -488,6 +525,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
             prompt,
             model: selectedModel,
             threadId: threadIdRef.current,
+            ...(threadIdRef.current == null && actionIdRef.current ? { actionId: actionIdRef.current } : {}),
             enableTools: toolsEnabled,
             enableThinking: thinkingEnabled,
             fileIds: data.fileIds,

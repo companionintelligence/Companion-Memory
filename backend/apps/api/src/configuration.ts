@@ -3,8 +3,9 @@ import './bootstrap';
 import path from 'node:path';
 
 import config from 'config';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
+import { enforceNoCommittedSecrets } from './common/committedSecrets';
 import { isDeclaredEmbedModel } from './common/embeddings/embedModelIdentity';
 import { resolveLlmUrlForRuntime } from './domains/llm/services/llmEndpointShared';
 
@@ -260,6 +261,9 @@ export const ConfigSchema = z.object({
       slack: z.object({
         id: z.string(),
       }),
+      dropbox: z.object({
+        id: z.string(),
+      }),
     }),
     openid: z.object({
       callbackUrl: z.string(),
@@ -294,8 +298,9 @@ export const ConfigSchema = z.object({
       hubOrigins: z.string().optional().default(''),
       // Docker-network origin Memory uses to ring Hub's targeted wake. The
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
-      // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
-      hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+      // appliance-local hop. Override with CI_HUB_INTERNAL_URL; unset, it is
+      // worked out after parsing (see `resolveHubInternalUrl`).
+      hubInternalUrl: z.string().optional().default(''),
 
       /**
        * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
@@ -399,6 +404,18 @@ export const ConfigSchema = z.object({
        * longer per attempt, on a plain single-node appliance too, so it is a deliberate trade.
        */
       answerInferenceTimeoutMs: z.coerce.number().int().positive().default(270_000),
+      /**
+       * The least time between two answer-inference dispatches for ONE owner, in minutes.
+       *
+       * Both selectors (`AnswerInferenceCron`, the smart-rotation `answer_infer` work) skip an
+       * owner whose last `infer.question.answer` job was created more recently than this, and
+       * skip an owner who still has one waiting or running whatever this says — see
+       * `inferenceDispatchGate.ts`. 20 is the smart-rotation cadence: three inferences an hour
+       * per person. The legacy cron used to send one a MINUTE per person with no backlog check,
+       * which on a four-person appliance was 240 jobs an hour, around the clock, and a queue that
+       * never drained.
+       */
+      answerInferenceIntervalMinutes: z.coerce.number().int().positive().default(20),
       chat: z
         .object({
           groundedRecall: z
@@ -852,7 +869,10 @@ export const ConfigSchema = z.object({
        * Off leaves `purge_after` unenforced — deletion revokes access and keeps
        * the data. Any deployment that tells its users their data is deleted must
        * leave this on; it exists so an operator mid-incident can stop an
-       * irreversible job without editing code.
+       * irreversible job without editing code. It stops every purge: the hourly
+       * run and the one `POST /users/me/delete` starts inline. Deletion requests
+       * still end accounts (access, share links and peer links are closed); their
+       * rows wait until it is switched back on.
        */
       enabled: booleanStringSchema.default(true),
       /**
@@ -1629,6 +1649,46 @@ if (!parsed.llm.utilityModel) {
   parsed.llm.utilityModel = DEFAULT_UTILITY_MODEL;
 }
 
+/**
+ * Where Memory rings the Hub's wake endpoint (`HubDoorbellService`): `CI_HUB_INTERNAL_URL` when set,
+ * else the origin of `HUB_INFERENCE_URL`, else {@link DEFAULT_HUB_INTERNAL_URL}.
+ *
+ * No Hub sets `CI_HUB_INTERNAL_URL`. Every Hub does hand its apps `HUB_INFERENCE_URL`, built from its
+ * own container name and API port (`http://ci-hub:5002/api/inference/v1` on Hub 0.3.7), so its origin
+ * is the Hub as this container reaches it. The old default, `http://ci-os-hub:3000`, named a port the
+ * Hub does not listen on: every Dispatch rang a refused connection, OpenClaw never heard it, and the
+ * thread said "OpenClaw did not check in" two minutes later.
+ */
+export const DEFAULT_HUB_INTERNAL_URL = 'http://ci-os-hub:5002';
+
+export function resolveHubInternalUrl(
+  configured: string | undefined,
+  hubInferenceUrl: string | undefined,
+): string {
+  const explicit = configured?.trim();
+
+  if (explicit) {
+    return explicit;
+  }
+
+  try {
+    const url = new URL(hubInferenceUrl?.trim() ?? '');
+
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    // Unset or not a URL: the Hub's default address.
+  }
+
+  return DEFAULT_HUB_INTERNAL_URL;
+}
+
+parsed.auth.connect.hubInternalUrl = resolveHubInternalUrl(
+  parsed.auth.connect.hubInternalUrl,
+  process.env.HUB_INFERENCE_URL,
+);
+
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's
 // custom-environment-variables.json maps one env var per field, not a fallback
@@ -1726,6 +1786,24 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
 
   console.warn(msg);
 }
+
+// Secrets that still hold a value committed to this repository: a replace-me-
+// placeholder from .env.default, or the variable's own name that default.json
+// falls back to. Refused in production mode, a warning in development (where
+// existing .env files carry them). See common/committedSecrets.ts.
+enforceNoCommittedSecrets(
+  {
+    AUTH_TOKEN_SECRET: parsed.auth.jwt.authTokenSecret,
+    AUTH_REFRESH_TOKEN_SECRET: parsed.auth.jwt.refreshTokenSecret,
+    AUTH_SESSION_PEPPER: parsed.auth.session.fieldPepper,
+    AUTH_CSRF_TOKEN_SECRET: parsed.auth.csrf.secret,
+    OBJECT_STORE_USERNAME: parsed.staticfiles.auth.accessKeyId,
+    OBJECT_STORE_PASSWORD: parsed.staticfiles.auth.secretAccessKey,
+    SIDECAR_AUTH_SECRET: parsed.services.sidecarAuthSecret,
+    POWERSYNC_JWT_SECRET: parsed.powersync.jwtSecret,
+  },
+  process.env.NODE_ENV,
+);
 
 // The sidecars refuse every request without this bearer, so an API that lacks it
 // is one whose imports never summarise and whose forecasts never train — and a

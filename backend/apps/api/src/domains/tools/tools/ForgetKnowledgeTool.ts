@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { isIntegrityConstraintViolation } from '@ci/common/constants';
+import type { RequestContext } from '@ci/common/context';
 import { normalizeEmbeddableType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
@@ -152,6 +153,61 @@ function listIds(ids: string[]): string {
     : ids.join(', ');
 }
 
+/**
+ * The graph types archive cannot hide, under the word a refusal names them by.
+ *
+ * Archive only flips the `ci.entities` half of a node (`deactivateEntities`). A message, a file, a
+ * content record (a photo's, a document's) and a thing are each a detail row that the half does not
+ * reach, and search, the explorer and chat read the detail rows, so an archived one went on showing
+ * while the call reported it archived. Archive refuses them and says to delete them instead. An
+ * event has an archive of its own, the trash, and a person, place or concept IS its `ci.entities`
+ * row.
+ */
+const ARCHIVE_CANNOT_HIDE: Readonly<Record<string, string>> = {
+  Communication: 'message',
+  File: 'file',
+  Content: 'content',
+  Item: 'thing',
+  Object: 'thing',
+  Thing: 'thing',
+  // The catalog model a thing is an instance of: a `ci.product_models` row, listed beside things.
+  Product: 'thing',
+};
+
+/**
+ * Why an archive of these nodes is refused, or `undefined` when archive can take all of them. The
+ * same words before the call is queued ({@link ForgetKnowledgeTool.checkCall}) and when it runs.
+ */
+function archiveRefusal(
+  nodes: readonly Pick<GraphNodeEntity, 'entity_id' | 'entity_type'>[],
+): string | undefined {
+  const refused = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    const kind = ARCHIVE_CANNOT_HIDE[node.entity_type];
+
+    if (kind) {
+      refused.set(kind, [...(refused.get(kind) ?? []), node.entity_id]);
+    }
+  }
+
+  if (refused.size === 0) {
+    return undefined;
+  }
+
+  const named = Array.from(refused, ([kind, ids]) => `${kind} ${listIds(ids)}`).join('; ');
+
+  return `Archive cannot hide messages, files, content or things: archiving one only marks its graph node, and it would still show in search, the explorer and chat. Nothing was changed. Refused: ${named}. Deleting them is the only way to remove them: ask the owner first, because mode "archive_and_delete" deletes them for good and cannot be undone.`;
+}
+
+/** An archive {@link archiveRefusal} turned down. Nothing was written, and the same call is refused again. */
+class ArchiveRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ArchiveRefusedError';
+  }
+}
+
 /** One line about a wrapped file that stayed: what still uses it, and how to delete it anyway. */
 function keptFileWarning(kept: KeptFile): string {
   const users: string[] = [];
@@ -210,7 +266,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content, of an event or of a message's attachments goes with it, bytes included, only when nothing else uses it: if another content record, another message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A message also takes the content records its attachments name (a Messenger photo's record, a Discord attachment link) unless another message or an event still holds them. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). Archive is refused for messages, files, content and things, which would still show in search, the explorer and chat: delete those instead. archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content, of an event or of a message's attachments goes with it, bytes included, only when nothing else uses it: if another content record, another message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A message also takes the content records its attachments name (a Messenger photo's record, a Discord attachment link) unless another message or an event still holds them. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -251,6 +307,28 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   ) {
     super();
     this.logger.setContext(ForgetKnowledgeTool.name);
+  }
+
+  /**
+   * Refuses an archive of a message, file, content record or thing before it is queued for
+   * confirmation (see `ToolHandle.checkCall`), so the owner is never asked to approve a call that
+   * can only be refused. Ids that aren't the caller's, or don't exist, are left to `execute`, which
+   * reports them as not found.
+   */
+  async checkCall(context: RequestContext, input: unknown): Promise<string | undefined> {
+    const parsed = ForgetKnowledgeInputSchema.safeParse(input);
+
+    if (!parsed.success || !context.userId || parsed.data.mode === 'archive_and_delete') {
+      return undefined;
+    }
+
+    const entityIds = Array.from(new Set(parsed.data.entityIds ?? []));
+
+    if (entityIds.length === 0) {
+      return undefined;
+    }
+
+    return archiveRefusal(await this.graphUtility.getNodesByIds(entityIds, context.userId));
   }
 
   protected validateInput(input: unknown): ForgetKnowledgeInput {
@@ -307,6 +385,14 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     }
 
     const uniqueEntitySnapshots = entitySnapshots;
+
+    // Before anything is written, so a refused call changes nothing. `checkCall` turned this down
+    // before it was queued; a call queued before that, or run without asking, is turned down here.
+    const refusal = hardDelete ? undefined : archiveRefusal(uniqueEntitySnapshots.map((entry) => entry.node));
+
+    if (refusal) {
+      throw new ArchiveRefusedError(refusal);
+    }
 
     const explicitRelationships = relationshipIds.length
       ? await this.graphUtility.getRelationships(ownerId, {
@@ -900,10 +986,14 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * An integrity violation is not worth another try. `BaseTool` marks every failure retryable,
    * which is right for a timeout or a deadlock and wrong here: a foreign key that still references
    * the row refuses the same delete the same way every time, and an agent told otherwise will keep
-   * asking. So it says so, and says what to do instead. Everything else is left as `BaseTool`
-   * has it.
+   * asking. So it says so, and says what to do instead. A refused archive is the same: the same
+   * call is refused the same way. Everything else is left as `BaseTool` has it.
    */
   protected handleError(error: unknown): ToolError {
+    if (error instanceof ArchiveRefusedError) {
+      return { code: 'ARCHIVE_REFUSED', message: error.message, retryable: false };
+    }
+
     const partial = error instanceof PartialForgetError ? error : null;
     const cause = partial ? partial.cause : error;
     const progress = partial
@@ -930,7 +1020,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     return {
       code: 'CONSTRAINT_VIOLATION',
-      message: `Cannot delete: ${blocker} still references one of the entities. Retrying will not change that. Use mode "archive" to forget without erasing.${alreadyDeleted(partial?.deletedEntityIds ?? [])}${storedContentsGone(partial?.storedObjectsDeletedFor ?? [], false)}`,
+      message: `Cannot delete: ${blocker} still references one of the entities. Retrying will not change that. Use mode "archive" to forget without erasing, except for messages, files, content and things, which archive cannot hide.${alreadyDeleted(partial?.deletedEntityIds ?? [])}${storedContentsGone(partial?.storedObjectsDeletedFor ?? [], false)}`,
       retryable: false,
       details: { constraint, table, ...progress },
     };
@@ -956,7 +1046,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    *
    * Archive handles only the types whose record IS the `ci.entities` row. Every
    * other graph type (Event/Item/Content/Communication/File) is the base or
-   * mirror half of a pair whose detail row `deactivateEntities` does not touch,
+   * mirror half of a pair whose detail row `deactivateEntities` does not touch
+   * (which is why archive now refuses those, see {@link ARCHIVE_CANNOT_HIDE}),
    * so `event.deleted` for an event that still exists in `ci.events` would be
    * false to every future consumer of that event, and unindexing it would
    * desync search from a record the rest of the app still lists. (An Event
@@ -977,8 +1068,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * A `File` node that has a `ci.files` row does not either: {@link purgeFiles}
    * deletes the file and announces `file.deleted`, whose payload is the id of the
    * `ci.files` row, because that and not the node's id is what the file's search
-   * rows are keyed by. That is why there is no `file` case below. In archive mode
-   * the node is deactivated and the stored file is left listed, as it always was.
+   * rows are keyed by. That is why there is no `file` case below. Archive refuses a
+   * `File` node before it gets here.
    */
   private async unindexEntity(node: GraphNodeEntity, hardDelete: boolean): Promise<void> {
     // Reuses the canonical graph→search alias table rather than restating

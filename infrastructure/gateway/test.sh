@@ -2,6 +2,9 @@
 # Unit test for entrypoint.sh: the trusted-proxies block it writes from
 # TRUSTED_PROXY_CIDRS. Runs on any POSIX sh, no Docker; the final `exec` is
 # pointed at `true`. Wired into `make test` by scripts/xtask/commands/test.ts.
+#
+# Also reads nginx.conf for its request-body limits and its upstream connect
+# timeout (the last two sections below): static checks, since no nginx runs here.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,5 +40,88 @@ grep -q "include" "$conf" && fail "junk token reached the config"
 grep -q "traefik" "$conf" && fail "hostname token reached the config"
 grep -q "ignoring invalid" "$work/stderr" || fail "junk was not reported"
 [ "$(grep -c '^set_real_ip_from' "$conf")" = "2" ] || fail "expected exactly two trust lines"
+
+# ── nginx.conf: request bodies are small unless a location streams them
+nginx_conf="$here/nginx.conf"
+
+# Each `location` block, flattened to one line: "<location line> | <body>".
+# Comment-only lines are left out, so prose naming a directive satisfies nothing.
+blocks=$(awk '
+  /^    location / { name = $0; body = ""; inside = 1; next }
+  inside && /^    }$/ { print name " |" body; inside = 0; next }
+  inside && /^[[:space:]]*#/ { next }
+  inside { body = body " " $0 }
+' "$nginx_conf")
+
+grep -q '^    client_max_body_size 1m;$' "$nginx_conf" || fail "server block lost its 1m body limit"
+
+# Only the object-store passthrough may still take gigabytes.
+big=$(printf '%s\n' "$blocks" | grep -E 'client_max_body_size [0-9]+[gG];' | grep -v '^    location /static/ ' || true)
+[ -z "$big" ] || fail "a location other than /static/ allows a body in gigabytes: $big"
+
+# A location that lifts the limit must stream the body to the API, which
+# checks the caller first; buffered, nginx would store it before anyone did.
+unlimited=$(printf '%s\n' "$blocks" | grep 'client_max_body_size 0;' || true)
+[ -n "$unlimited" ] || fail "no location takes large uploads"
+printf '%s\n' "$unlimited" | while IFS= read -r block; do
+  case "$block" in
+    *"proxy_request_buffering off;"*) ;;
+    *) fail "unlimited body without proxy_request_buffering off: ${block%% |*}" ;;
+  esac
+done
+
+# Every route that takes big bodies must reach one of those locations.
+set -f  # the patterns hold `?`; keep the shell from globbing them
+for path in /api/import/uploads /api/files/upload /api/account/import/stream \
+            /api/v1/files /api/v1/communications /api/v1/positions \
+            /v1/files /v1/contents /v1/things /v1/browser-activity; do
+  matched=no
+  for pattern in $(printf '%s\n' "$unlimited" | sed -n 's/^    location ~ \([^ ]*\) {.*/\1/p'); do
+    if printf '%s' "$path" | grep -Eq "$pattern"; then matched=yes; fi
+  done
+  [ "$matched" = yes ] || fail "$path would be capped at the default body size"
+done
+set +f
+
+# GraphQL and the rest of /v1 keep the API's own 10mb.
+printf '%s\n' "$blocks" | grep -F 'location ~ ^/api/graphql/?$ {' | grep -q 'client_max_body_size 10m;' \
+  || fail "GraphQL lost its 10m limit"
+printf '%s\n' "$blocks" | grep -F 'location /v1/ {' | grep -q 'client_max_body_size 10m;' \
+  || fail "/v1/ lost its 10m limit"
+
+# ── nginx.conf: a stopped upstream answers fast. Every upstream is on the same
+# network, so a connect that takes seconds means it is gone; at nginx's 60s
+# default a sign-in sat on a dead api address for about 40s. The server block
+# sets it once and no location may set its own, so a new one cannot miss it.
+grep -q '^    proxy_connect_timeout 5s;$' "$nginx_conf" || fail "server block lost its 5s connect timeout"
+own=$(printf '%s\n' "$blocks" | grep -F 'proxy_connect_timeout' || true)
+[ -z "$own" ] || fail "a location sets its own connect timeout instead of the server's 5s: ${own%% |*}"
+
+# ── nginx.conf: upstream names are looked up again, not once at start. A
+# container recreated on a new address (an update, a crash and `up -d`) was
+# unreachable until the gateway restarted. Every upstream server carries
+# `resolve` (which needs a `zone`), the resolver overrides Docker's 600s TTL,
+# and every proxy_pass names one of those upstreams, never a host of its own,
+# which nginx would resolve once.
+grep -Eq '^  resolver 127\.0\.0\.11 valid=[0-9]+s ' "$nginx_conf" || fail "resolver lost its valid= override of Docker's TTL"
+upstreams=$(awk '
+  /^  upstream / { name = $2; body = ""; inside = 1; next }
+  inside && /^  }$/ { print name " |" body; inside = 0; next }
+  inside && /^[[:space:]]*#/ { next }
+  inside { body = body " " $0 }
+' "$nginx_conf")
+[ -n "$upstreams" ] || fail "no upstream blocks found"
+printf '%s\n' "$upstreams" | while IFS= read -r block; do
+  case "$block" in *" zone "*) ;; *) fail "upstream ${block%% |*} has no zone, which resolve needs" ;; esac
+  servers=$(printf '%s\n' "$block" | grep -o 'server [^;]*;' || true)
+  [ -n "$servers" ] || fail "upstream ${block%% |*} has no server"
+  printf '%s\n' "$servers" | grep -v ' resolve' | grep -q . && fail "upstream ${block%% |*} has a server without resolve"
+  true
+done
+names=$(printf '%s\n' "$upstreams" | sed 's/ |.*//')
+grep -E '^[[:space:]]*proxy_pass ' "$nginx_conf" | sed -E 's#.*proxy_pass https?://([^/:;]+).*#\1#' | while IFS= read -r host; do
+  printf '%s\n' "$names" | grep -qx "$host" \
+    || fail "proxy_pass names $host, not one of the upstreams above (a name of its own is resolved once, at start)"
+done
 
 echo "gateway: ok"

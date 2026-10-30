@@ -6,4 +6,45 @@
          permission does not expose the device to the network, only to the app's own
          localhost port. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Motion-gated Always-mode location recording (location/). GPS runs only while the
+         phone is moving: the fixes themselves and the permission-free stationary-detect
+         sensor say when it stops, an exit geofence says when it starts again, and a location
+         foreground service exists only in between, queueing each fix natively. The host app
+         already declares the location permissions; they are repeated here so the module is
+         complete on its own and the merger unions them. ACCESS_BACKGROUND_LOCATION is what
+         lets Play Services hold the exit geofence and deliver it to a process with no
+         activity (see LocationTracker). Deliberately no ACTIVITY_RECOGNITION. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Normal permission, no prompt: lets TrackingRestoreReceiver put the exit geofence back
+         (or restart the service mid-trip) after a reboot, which Play Services does not survive. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application>
+        <service
+            android:name=".location.LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+        <!-- The exit geofence's PendingIntent target: an explicit broadcast from Play Services. -->
+        <receiver
+            android:name=".location.GeofenceReceiver"
+            android:exported="false" />
+        <!-- Re-registers the exit geofence (or restarts the location service) after the two
+             events that wipe it: a reboot and an update of this app. Exported because a
+             manifest receiver with a filter must say, and safely so: both actions are
+             protected broadcasts only the system can send. See TrackingRestoreReceiver. -->
+        <receiver
+            android:name=".location.TrackingRestoreReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

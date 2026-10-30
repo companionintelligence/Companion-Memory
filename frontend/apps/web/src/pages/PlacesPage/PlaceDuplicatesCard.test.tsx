@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -50,7 +50,22 @@ const GROUP = {
   places: [place(PLACE_A, -117.748), place(PLACE_B, -117.749)],
 };
 
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
 describe('PlaceDuplicatesCard', () => {
+  afterEach(() => setViewport(false));
+
   it('renders nothing when there is nothing to review', async () => {
     renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
       mocks: [duplicatesMock([])],
@@ -69,6 +84,32 @@ describe('PlaceDuplicatesCard', () => {
     // Each member shows its coordinates so an identically named pair can be told apart.
     expect(screen.getByText(/33\.69500, -117\.74800/)).toBeInTheDocument();
     expect(screen.getByText(/33\.69500, -117\.74900/)).toBeInTheDocument();
+  });
+
+  it('shows one clearly actionable group at a time on mobile', async () => {
+    setViewport(true);
+    const secondGroup = {
+      ...GROUP,
+      value: 'Second duplicate group',
+      places: [
+        { ...place(PLACE_A, -117.75), name: 'Second A' },
+        { ...place(PLACE_B, -117.751), name: 'Second B' },
+      ],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [duplicatesMock([GROUP, secondGroup])],
+    });
+
+    expect((await screen.findAllByText(GROUP.value)).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Second duplicate group')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Keep this place' })[0]).toHaveClass('border');
+    expect(screen.getByRole('button', { name: 'Different places' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge places' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more suggestions' }));
+
+    expect(await screen.findByText('Second duplicate group')).toBeInTheDocument();
   });
 
   it('merges only after the confirm dialog is accepted, then tells the page', async () => {

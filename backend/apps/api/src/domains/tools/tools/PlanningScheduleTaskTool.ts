@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -68,6 +68,20 @@ export type PlanningScheduleTaskInput = z.infer<typeof PlanningScheduleTaskInput
 export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput, PlaceOutcome> {
   readonly schema: IntentDefinition = {
     name: 'planning.scheduleTask',
+    local: {
+      description:
+        'Put a task on the calendar: at startAt (ISO 8601 instant), or in the next free slot, preferring date (YYYY-MM-DD).',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', format: 'uuid' },
+          startAt: { type: 'string', description: 'ISO 8601 instant to place it at.' },
+          date: { type: 'string', description: 'YYYY-MM-DD to prefer when auto-placing.' },
+        },
+        required: ['taskId'],
+        additionalProperties: false,
+      },
+    },
     domain: 'planning',
     title: 'Schedule a task',
     description:

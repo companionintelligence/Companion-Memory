@@ -107,6 +107,14 @@ describe('PlaybackBar', () => {
     expect(await transport()).toHaveAccessibleName('Play back my life');
   });
 
+  it('gives mobile speed and gap actions readable labels instead of icon-only controls', async () => {
+    renderBar();
+    await transport();
+
+    expect(screen.getByRole('button', { name: /Playback speed/ })).toHaveTextContent('Speed1h/s');
+    expect(screen.getByRole('button', { name: 'Skip empty stretches' })).toHaveTextContent('Skip gaps');
+  });
+
   it('toggles between play and pause', async () => {
     renderBar();
 
@@ -244,5 +252,31 @@ describe('PlaybackBar', () => {
     expect(screen.getByRole('group', { name: 'Playback' })).toHaveClass(
       'bottom-[calc(0.75rem+var(--safe-area-bottom))]',
     );
+  });
+
+  it('tells the map how far up it reaches while it is mounted, and takes that back when it goes', async () => {
+    const source = fakeSource(fixture(5));
+    const { unmount } = renderWithProviders(
+      <div data-testid="map">
+        <PlaybackProvider args={[{ pins: [pin(0), pin(4)], source }]}>
+          <PlaybackBar />
+        </PlaybackProvider>
+      </div>,
+      { route: '/memory?view=map' },
+    );
+    const map = screen.getByTestId('map');
+
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('');
+
+    await transport();
+
+    // jsdom lays nothing out, so the measured value is 0px; what matters here
+    // is that the trace status's `var(--playback-bar-clearance, …)` has
+    // something to read while the bar is up and falls back once it is gone.
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('0px');
+
+    unmount();
+
+    expect(map.style.getPropertyValue('--playback-bar-clearance')).toBe('');
   });
 });

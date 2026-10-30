@@ -42,7 +42,7 @@ Prerequisites:
 
 - [Rust](https://rustup.rs) (stable)
 - [Docker](https://www.docker.com/products/docker-desktop/) (Compose CLI ≥
-  2.24 — see the note on `!reset` below)
+  2.24.4, see the note on `!override` below)
 - Platform Tauri build dependencies:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux** (Ubuntu/Debian): `build-essential pkg-config curl wget file
@@ -95,10 +95,12 @@ in CI where `linuxdeploy` is installed, via `-b deb,rpm,appimage`).
 
 ## Icon
 
-`src-tauri/icons/app-icon-source.png` is the Companion Memory logo from
-`CI-Marketplace/apps/ci-memory/metadata/logo.png` (2048×2048). Every other
-file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`)
-— re-run that after replacing the source, don't hand-edit the generated sizes.
+`src-tauri/icons/app-icon-source.png` is the Companion Memory store icon (2048×2048) as a
+transparent squircle: Tauri applies no platform mask, so a square source would render as a
+hard square in the macOS Dock and on Windows. The artwork is the same opaque 1024² icon the
+App Store and Play listings show, scaled up and masked with the squircle's alpha. Every other
+file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`) — re-run that
+after replacing the source, don't hand-edit the generated sizes.
 
 ## Local model (chat + embeddings) without a separate Ollama install
 
@@ -151,8 +153,15 @@ working. Resolved once per launch, cheapest option first:
    binding non-loopback additionally disables its own host-header guard. Any
    LAN peer could run inference on your GPU and — more seriously — delete and
    recreate models, which the API's "use whatever model is served" fallback
-   turns into a persistent model-substitution foothold. A single-address bind
-   means the kernel drops anything arriving on the machine's real NICs.
+   turns into a persistent model-substitution foothold.
+
+   A single-address bind does not keep the LAN out by itself: Linux delivers a
+   packet for the bridge gateway address that arrives on a real network
+   interface, and every container on the machine can reach it. So the relay also
+   checks each connection's source address and serves only the subnets of the
+   appliance's own compose networks (`docker network inspect`, filtered on the
+   `com.docker.compose.project` label). Anything else is dropped and logged in
+   `desktop.log`.
 
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).
@@ -204,16 +213,16 @@ This needed two things neither `docker-compose.yml` nor
   `http://127.0.0.1:8642`, and the callback would never arrive. Setting
   `APP_BASE_URL` explicitly skips that derivation.
 
-## A note on the `!reset` compose tag
+## A note on the `!override` compose tag
 
-`docker-compose.desktop.yml` uses the Compose Specification's `!reset` tag to
-clear `hbpe-service`'s ROCm device passthrough (`devices`, `group_add`) that
-`docker-compose.production.yml` unconditionally adds — Compose merges
-list-valued keys across `-f` files by *concatenation*, so a plain override
-can't remove them, and without `!reset` the stack would hard-fail
-(`docker compose up`) on any machine that isn't an AMD ROCm box. This needs
-Docker Compose CLI ≥ 2.24. If `docker compose up` fails with a parse error on
-`!reset`, upgrade Docker/Compose.
+`docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
+to replace the gateway's `8642:8642` mapping from `docker-compose.production.yml`
+with `127.0.0.1:8642:8642`, so the appliance answers on this machine only.
+Compose merges list-valued keys across `-f` files by *concatenation*, so a plain
+`ports:` entry would add the loopback mapping beside the all-interfaces one
+instead of replacing it. `!override` first shipped in Docker Compose 2.24.4.
+Older CLIs ignore the tag and concatenate anyway, so the app checks the version
+before it starts the stack and asks you to update Docker/Compose below 2.24.4.
 
 ## Deferred for v1
 

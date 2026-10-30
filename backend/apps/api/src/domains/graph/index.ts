@@ -22,6 +22,17 @@ import {
 } from './entities/ObjectIdentifierEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
 import {
+  computeEntityAliasSimilarity,
+  EntityGraphGatewayService,
+  type ExistingGraphEntity,
+  type GraphEntityCandidate,
+  type GraphEntityProvenance,
+  type GraphWriterOrigin,
+  normalizeEntityKey,
+  normalizeEntityName,
+  type ReconciledEntityAction,
+} from './services/EntityGraphGatewayService';
+import {
   type EntityIdentifierBatchEntry,
   EntityIdentifierService,
   type IdentifierKey,
@@ -60,6 +71,7 @@ import { RelationshipService } from './services/RelationshipService';
     UserModule,
   ],
   providers: [
+    EntityGraphGatewayService,
     EntityIdentifierService,
     GraphExpansionService,
     GraphIngestService,
@@ -73,6 +85,7 @@ import { RelationshipService } from './services/RelationshipService';
     RelationshipService,
   ],
   exports: [
+    EntityGraphGatewayService,
     EntityIdentifierService,
     GraphExpansionService,
     GraphIngestService,
@@ -86,14 +99,25 @@ import { RelationshipService } from './services/RelationshipService';
 export class GraphModule {}
 
 export {
+  computeEntityAliasSimilarity,
+  EntityGraphGatewayService,
   EntityIdentifierService,
   GraphExpansionService,
   GraphIngestService,
   GraphService,
   ItemRelationshipService,
   NodeService,
+  normalizeEntityKey,
+  normalizeEntityName,
   ObjectIdentifierService,
   RelationshipService,
+};
+export type {
+  ExistingGraphEntity,
+  GraphEntityCandidate,
+  GraphEntityProvenance,
+  GraphWriterOrigin,
+  ReconciledEntityAction,
 };
 export { unusableIdentifiers };
 export {

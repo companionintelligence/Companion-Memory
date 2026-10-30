@@ -1,6 +1,8 @@
-import { type ReactNode, useId } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 
-import { Checkbox, Input, Label, Textarea } from '@ci/shadcn';
+import { Button, Checkbox, Input, Label, Textarea } from '@ci/shadcn';
+
+import type { PlaceLookup, PlaceLookupResult } from '@/api/usePlaceLookup';
 
 import type { EventDraft, EventDraftProblem } from './eventDraft';
 
@@ -35,6 +37,9 @@ function Section({
   );
 }
 
+/** Native date and time controls get a plain box on touch devices; see `Field`. */
+const PLAIN_PICKER = 'pointer-coarse:appearance-none';
+
 function Field({
   id,
   label,
@@ -44,6 +49,7 @@ function Field({
   type,
   listId,
   step,
+  inputMode,
 }: {
   id: string;
   label: string;
@@ -53,6 +59,7 @@ function Field({
   type?: string;
   listId?: string;
   step?: string;
+  inputMode?: 'decimal' | 'numeric' | 'text';
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -63,6 +70,7 @@ function Field({
         id={id}
         type={type}
         step={step}
+        inputMode={inputMode}
         list={listId}
         value={value}
         placeholder={placeholder}
@@ -72,9 +80,70 @@ function Field({
         // beside them and the clock ran off the row's edge. Neither `min-w-0`
         // nor the flex cell can help; an ordinary box can. The native picker
         // still opens on tap.
-        className={type === 'date' || type === 'time' ? 'pointer-coarse:appearance-none' : undefined}
+        className={type === 'date' || type === 'time' ? PLAIN_PICKER : undefined}
         onChange={(event) => onChange(event.target.value)}
       />
+    </div>
+  );
+}
+
+/**
+ * One line of "when": a single word above a date and, unless all-day, a clock
+ * beside it. One label for the pair — "Starts" over a date and "At" over its
+ * clock read as two unrelated fields, and the clock's own name moves to
+ * `aria-label` so it stays nameable without a second caption.
+ *
+ * Always its own row. Two of these side by side looked fine on a wide form,
+ * but the calendar's slot drawer is a narrow panel on a wide viewport: the
+ * `sm:` columns matched, each half got ~180px, the fixed clock took 128 of it,
+ * and the date was a sliver showing the month.
+ */
+function WhenRow({
+  id,
+  label,
+  timeLabel,
+  date,
+  clock,
+  allDay,
+  onDate,
+  onClock,
+}: {
+  id: string;
+  label: string;
+  timeLabel: string;
+  date: string;
+  clock: string;
+  allDay: boolean;
+  onDate: (value: string) => void;
+  onClock: (value: string) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <Label htmlFor={`${id}-date`} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+      {/* Each control is as wide as what it shows. Stretched to the row they
+          left a blank run after the picker icon, which the browser draws right
+          after the value rather than at the far edge. */}
+      <div className="flex flex-wrap gap-3">
+        <Input
+          id={`${id}-date`}
+          type="date"
+          value={date}
+          className={`w-auto flex-none ${PLAIN_PICKER}`}
+          onChange={(event) => onDate(event.target.value)}
+        />
+        {!allDay && (
+          <Input
+            id={`${id}-clock`}
+            type="time"
+            aria-label={timeLabel}
+            value={clock}
+            className={`w-auto flex-none ${PLAIN_PICKER}`}
+            onChange={(event) => onClock(event.target.value)}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -98,6 +167,11 @@ interface Props {
   /** Set once the caller has tried to submit an invalid draft. */
   problem?: EventDraftProblem | null;
   disabled?: boolean;
+  /**
+   * Turns the Place name into coordinates (see `usePlaceLookup`). Without it
+   * there is no "Look up" button: the coordinates are typed or left blank.
+   */
+  lookupPlace?: PlaceLookup;
 }
 
 /**
@@ -110,9 +184,100 @@ interface Props {
  * `locationCoordinates`, so a manually created event stays invisible on the
  * map without them.
  */
-export function EventForm({ value, onChange, problem, disabled }: Props) {
+export function EventForm({ value, onChange, problem, disabled, lookupPlace }: Props) {
   const uid = useId();
   const eventTypeListId = `${uid}-event-types`;
+
+  type LookupState =
+    | { kind: 'idle' }
+    | { kind: 'busy' }
+    | { kind: 'found'; address: string | null }
+    | { kind: 'approximate'; address: string | null; latitude: number; longitude: number }
+    | { kind: 'none' }
+    | { kind: 'unconfigured' }
+    | { kind: 'error' };
+  const [lookup, setLookup] = useState<LookupState>({ kind: 'idle' });
+
+  // An answer is about the name it was asked for, so a new name makes it stale:
+  // typed here, or put there by the caller (TaskSlate swaps in a fresh draft,
+  // Place and all, when the slot moves). Otherwise "use this area" would stay
+  // on offer and pin the old place's coordinates on the new draft.
+  const [answeredName, setAnsweredName] = useState(value.locationName);
+  if (answeredName !== value.locationName) {
+    setAnsweredName(value.locationName);
+    setLookup({ kind: 'idle' });
+  }
+
+  const canLookUp = Boolean(lookupPlace) && value.locationName.trim().length > 0 && lookup.kind !== 'busy';
+
+  // The draft as of the last render. An answer lands after an await, and the
+  // geocode throttle is shared with the import pipeline, so that can be seconds
+  // later; whatever was typed meanwhile has to survive it.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  // Bumped by every lookup and on unmount, so only the latest one on a form
+  // that is still there gets to answer.
+  const lookupTicket = useRef(0);
+  useEffect(
+    () => () => {
+      lookupTicket.current += 1;
+    },
+    [],
+  );
+
+  const fillCoordinates = (
+    draft: EventDraft,
+    latitude: number,
+    longitude: number,
+    address: string | null,
+  ) => {
+    // Both at once: two `set` calls would each spread the same stale value.
+    onChange({ ...draft, latitude: String(latitude), longitude: String(longitude) });
+    setLookup({ kind: 'found', address });
+  };
+
+  const lookUpPlace = async () => {
+    if (!lookupPlace || !canLookUp) {
+      return;
+    }
+
+    const name = value.locationName.trim();
+    const ticket = ++lookupTicket.current;
+    setLookup({ kind: 'busy' });
+
+    let result: PlaceLookupResult;
+
+    try {
+      result = await lookupPlace(name);
+    } catch {
+      // `usePlaceLookup` never throws, but any other lookup handed in might,
+      // and a throw would leave the button on "Looking up…" for good.
+      result = { status: 'error' };
+    }
+
+    // Asked again since, or the name in the box is not this one any more. The
+    // reset above has already cleared what was on screen for it.
+    if (ticket !== lookupTicket.current || valueRef.current.locationName.trim() !== name) {
+      return;
+    }
+
+    if (result.status === 'ok' && result.approximate) {
+      // Only the area around the name (a café looked up as "…, San Francisco"
+      // comes back as the middle of the city). Filling that in would put the
+      // event in the wrong spot without a word, so it waits for a yes.
+      setLookup({
+        kind: 'approximate',
+        address: result.address,
+        latitude: result.latitude,
+        longitude: result.longitude,
+      });
+    } else if (result.status === 'ok') {
+      fillCoordinates(valueRef.current, result.latitude, result.longitude, result.address);
+    } else {
+      setLookup({ kind: result.status });
+    }
+  };
 
   const set = <K extends keyof EventDraft>(key: K, next: EventDraft[K]) => {
     onChange({ ...value, [key]: next });
@@ -172,52 +337,27 @@ export function EventForm({ value, onChange, problem, disabled }: Props) {
           </Label>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="flex gap-3">
-            <div className="min-w-0 flex-1">
-              <Field
-                id={`${uid}-start-date`}
-                label="Starts"
-                type="date"
-                value={value.startDate}
-                onChange={(next) => set('startDate', next)}
-              />
-            </div>
-            {!value.isAllDay && (
-              <div className="w-32 shrink-0">
-                <Field
-                  id={`${uid}-start-clock`}
-                  label="At"
-                  type="time"
-                  value={value.startClock}
-                  onChange={(next) => set('startClock', next)}
-                />
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-3">
-            <div className="min-w-0 flex-1">
-              <Field
-                id={`${uid}-end-date`}
-                label="Ends"
-                type="date"
-                value={value.endDate}
-                onChange={(next) => set('endDate', next)}
-              />
-            </div>
-            {!value.isAllDay && (
-              <div className="w-32 shrink-0">
-                <Field
-                  id={`${uid}-end-clock`}
-                  label="At"
-                  type="time"
-                  value={value.endClock}
-                  onChange={(next) => set('endClock', next)}
-                />
-              </div>
-            )}
-          </div>
+        <div className="grid gap-3">
+          <WhenRow
+            id={`${uid}-start`}
+            label="Starts at"
+            timeLabel="Start time"
+            date={value.startDate}
+            clock={value.startClock}
+            allDay={value.isAllDay}
+            onDate={(next) => set('startDate', next)}
+            onClock={(next) => set('startClock', next)}
+          />
+          <WhenRow
+            id={`${uid}-end`}
+            label="Ends at"
+            timeLabel="End time"
+            date={value.endDate}
+            clock={value.endClock}
+            allDay={value.isAllDay}
+            onDate={(next) => set('endDate', next)}
+            onClock={(next) => set('endClock', next)}
+          />
         </div>
 
         {messageFor('startDate') && <p className="text-sm text-destructive">{PROBLEM_MESSAGES.startDate}</p>}
@@ -227,20 +367,77 @@ export function EventForm({ value, onChange, problem, disabled }: Props) {
       </Section>
 
       <Section title="Where" description="Coordinates are optional — they put the event on the map.">
-        <Field
-          id={`${uid}-location-name`}
-          label="Place"
-          value={value.locationName}
-          placeholder="Where it happened"
-          onChange={(next) => set('locationName', next)}
-        />
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <Field
+              id={`${uid}-location-name`}
+              label="Place"
+              value={value.locationName}
+              placeholder="Where it happened"
+              onChange={(next) => set('locationName', next)}
+            />
+          </div>
+          {lookupPlace && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0"
+              disabled={!canLookUp || disabled}
+              onClick={() => void lookUpPlace()}
+            >
+              {lookup.kind === 'busy' ? 'Looking up…' : 'Look up'}
+            </Button>
+          )}
+        </div>
+
+        {lookup.kind === 'found' && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {lookup.address ? `Matched ${lookup.address} — coordinates filled in.` : 'Coordinates filled in.'}
+          </p>
+        )}
+        {lookup.kind === 'approximate' && (
+          <p role="status" className="text-xs text-muted-foreground">
+            Only found {lookup.address || 'the area around it'}, not that exact place, so the coordinates were
+            not filled in. Add a street address and look it up again, or{' '}
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              disabled={disabled}
+              onClick={() => fillCoordinates(value, lookup.latitude, lookup.longitude, lookup.address)}
+            >
+              use this area
+            </Button>
+            .
+          </p>
+        )}
+        {lookup.kind === 'none' && (
+          <p role="status" className="text-xs text-muted-foreground">
+            No match for that name. Try adding a city, or type the coordinates.
+          </p>
+        )}
+        {lookup.kind === 'unconfigured' && (
+          <p role="status" className="text-xs text-muted-foreground">
+            Looking places up isn&apos;t set up on this appliance yet. Type the coordinates instead.
+          </p>
+        )}
+        {lookup.kind === 'error' && (
+          <p role="status" className="text-xs text-destructive">
+            Could not look that up right now. Try again shortly.
+          </p>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field
             id={`${uid}-latitude`}
             label="Latitude"
-            type="number"
-            step="any"
+            // Text, not number: a number input grows spin buttons that nudge a
+            // coordinate by one, which means nothing on a map. `decimal` still
+            // brings up the numeric keyboard on a phone; validation is the
+            // draft's (`coordinates`), not the browser's.
+            inputMode="decimal"
             value={value.latitude}
             placeholder="37.7749"
             onChange={(next) => set('latitude', next)}
@@ -248,8 +445,7 @@ export function EventForm({ value, onChange, problem, disabled }: Props) {
           <Field
             id={`${uid}-longitude`}
             label="Longitude"
-            type="number"
-            step="any"
+            inputMode="decimal"
             value={value.longitude}
             placeholder="-122.4194"
             onChange={(next) => set('longitude', next)}

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -6,6 +6,7 @@ import { fenceUntrusted, untrustedBlock } from '@ci/common/prompt/untrustedBlock
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
 import { EventService } from '@ci/domains/events';
 import { GraphExpansionService } from '@ci/domains/graph';
+import { PersonService, UserContextService } from '@ci/domains/memory';
 import { type RetrievalPolicy, RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 import {
   type IndexableEntity,
@@ -127,6 +128,42 @@ export interface RecallOptions {
    * 'message' (which has its own channel).
    */
   excludeTypes?: IndexableEntity[];
+  /**
+   * Override whether exponential recency decay is applied to message-channel
+   * hits. Defaults to the user's `memoryRecencyDecayEnabled` setting (true).
+   */
+  recencyDecay?: boolean;
+}
+
+const DEFAULT_RECENCY_HALF_LIFE_DAYS = 90;
+const DEFAULT_RECENCY_MIN_MULTIPLIER = 0.25;
+
+/**
+ * Exponential temporal recency decay (`knowl` pattern): weights a base relevance
+ * score by $2^{-\text{ageDays} / \text{halfLifeDays}}$, floored at `minMultiplier`
+ * so foundational older memories never decay to zero.
+ */
+export function applyRecencyDecay(
+  baseScore: number,
+  timestamp: Date | string | null | undefined,
+  options: { now?: Date; halfLifeDays?: number; minMultiplier?: number } = {},
+): number {
+  if (!timestamp) {
+    return baseScore;
+  }
+
+  const parsed = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return baseScore;
+  }
+
+  const now = options.now ?? new Date();
+  const halfLifeDays = options.halfLifeDays ?? DEFAULT_RECENCY_HALF_LIFE_DAYS;
+  const minMultiplier = options.minMultiplier ?? DEFAULT_RECENCY_MIN_MULTIPLIER;
+  const ageDays = Math.max(0, (now.getTime() - parsed.getTime()) / (1000 * 60 * 60 * 24));
+  const decay = Math.max(minMultiplier, Math.pow(2, -ageDays / halfLifeDays));
+
+  return baseScore * decay;
 }
 
 /**
@@ -150,6 +187,8 @@ export class RecallService {
     private readonly events: EventService,
     private readonly logger: LoggerService,
     private readonly retrievalPolicy: RetrievalPolicyService,
+    @Optional() private readonly personService?: PersonService,
+    @Optional() private readonly userContextService?: UserContextService,
   ) {
     this.logger.setContext(RecallService.name);
   }
@@ -319,10 +358,26 @@ export class RecallService {
           );
           const memoryById = new Map(memories.map((memory) => [memory.id, memory]));
           const seenText = new Set(lines.map((line) => line.text));
+          const useRecencyDecay = options.recencyDecay ?? (await this.isRecencyDecayEnabled(context.userId));
 
-          for (const hit of messageHits) {
+          const orderedHits = useRecencyDecay
+            ? [...messageHits].sort((a, b) => {
+                const memA = memoryById.get(a.id);
+                const memB = memoryById.get(b.id);
+                const scoreA = applyRecencyDecay(a.score ?? 1, memA?.createdAt);
+                const scoreB = applyRecencyDecay(b.score ?? 1, memB?.createdAt);
+
+                return scoreB - scoreA;
+              })
+            : messageHits;
+
+          for (const hit of orderedHits) {
             const memory = memoryById.get(hit.id);
-            const text = memory?.content?.trim();
+            if (!memory || memory.status === 'superseded') {
+              continue;
+            }
+
+            const text = memory.content?.trim();
 
             if (text && !seenText.has(text)) {
               // An agent-memory fragment is a raw turn with no direction column
@@ -338,7 +393,7 @@ export class RecallService {
                   // The only timestamp this table has. Unlike an imported
                   // message's `time`, `created_at` on a fragment written by the
                   // agent IS when it happened.
-                  at: memory?.createdAt ? new Date(memory.createdAt).toISOString() : null,
+                  at: memory.createdAt ? new Date(memory.createdAt).toISOString() : null,
                 },
               });
               seenText.add(text);
@@ -519,5 +574,25 @@ export class RecallService {
       .replace(/[^\w\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  private async isRecencyDecayEnabled(userId: string): Promise<boolean> {
+    if (!this.userContextService || !this.personService || !userId) {
+      return true;
+    }
+
+    try {
+      const selfIdentity = await this.userContextService.getSelfIdentity(userId);
+      if (!selfIdentity) {
+        return true;
+      }
+
+      const self = await this.personService.findById({ userId }, selfIdentity.entityId);
+      const planner = (self?.properties?.planner ?? {}) as Record<string, unknown>;
+
+      return planner.memory_recency_decay_enabled !== false;
+    } catch {
+      return true;
+    }
   }
 }

@@ -82,6 +82,13 @@ export interface ExpansionLimits {
   maxOccurrencesPerSeries: number;
   /** Dates the generator may produce for one series, in-window or not. */
   maxIterations: number;
+  /**
+   * Periods (one FREQ step each) the generator may walk for one series, whether
+   * or not they produce a date. The walk normally stops on its own at the
+   * window's end; this is the ceiling for a series whose DTSTART is so far back
+   * that reaching the window is itself the cost.
+   */
+  maxPeriods: number;
   /** Occurrences one `findInRange` call may synthesize across all series. */
   maxTotalOccurrences: number;
 }

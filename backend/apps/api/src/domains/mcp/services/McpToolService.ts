@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
-import { z, type ZodTypeAny } from 'zod';
+import { z, type ZodTypeAny } from 'zod/v3';
 
 import { ContextService } from '@ci/common/context';
 import { INTENTS_SCOPE, type ApiKeyCapability } from '@ci/common/decorators';
@@ -20,6 +20,7 @@ import {
   intentToolName,
   outcomeOf,
   type ToolInvocationOutcome,
+  toolErrorMessage,
 } from '@ci/domains/tools';
 
 import type { McpRegisteredTool, McpToolDefinition } from '../types';
@@ -596,14 +597,14 @@ export class McpToolService implements OnModuleInit {
     if (prop.enum && prop.enum.length > 0) {
       const values = prop.enum.map(String) as [string, ...string[]];
 
-      return z.enum(values);
+      return unwrapSingleton(z.enum(values));
     }
 
     switch (prop.type) {
       case 'string':
-        return z.string();
+        return unwrapSingleton(z.string());
       case 'number':
-        return z.number();
+        return unwrapSingleton(z.number());
       case 'integer': {
         let schema = z.number().int();
 
@@ -615,11 +616,11 @@ export class McpToolService implements OnModuleInit {
           schema = schema.max(prop.maximum);
         }
 
-        return schema;
+        return unwrapSingleton(schema);
       }
 
       case 'boolean':
-        return z.boolean();
+        return unwrapSingleton(z.boolean());
       case 'array':
         if (prop.items) {
           return z.array(this.jsonPropertyToZod(prop.items));
@@ -636,6 +637,17 @@ export class McpToolService implements OnModuleInit {
         return z.unknown();
     }
   }
+}
+
+/**
+ * A scalar argument the model wrapped in a one-element array (`sort: ["recent"]`) is read as the
+ * element. Seen on a device: Gemma 4 E2B generalised the array shape of the `entityTypes` beside it,
+ * was told the argument was invalid, and gave up on the question. A phone's model gets one attempt
+ * at a call, and the spelling is not worth it; a real list where a scalar is declared (two or more
+ * elements) is still refused as before.
+ */
+function unwrapSingleton<T extends ZodTypeAny>(schema: T): ZodTypeAny {
+  return z.preprocess((value) => (Array.isArray(value) && value.length === 1 ? value[0] : value), schema);
 }
 
 /**
@@ -694,7 +706,7 @@ export function describeFailure(error: unknown): { code: string; message: string
 
   return {
     code: error.constructor?.name ?? error.name ?? 'UNKNOWN_ERROR',
-    message: error.message,
+    message: toolErrorMessage(error),
     retryable: false,
   };
 }

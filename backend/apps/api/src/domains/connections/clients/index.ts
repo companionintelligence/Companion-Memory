@@ -1,6 +1,7 @@
 export { ClientFactory } from './ClientFactory';
 export { FacebookClient } from './FacebookClient';
 export { GitHubClient } from './GitHubClient';
+export { DropboxClient } from './DropboxClient';
 export { RedditClient } from './RedditClient';
 export { GoogleClient } from './GoogleClient';
 export { MicrosoftClient } from './MicrosoftClient';

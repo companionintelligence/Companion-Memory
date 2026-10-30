@@ -136,6 +136,22 @@ export interface IntentDefinition {
   title: string;
   description: string;
   parameters: JSONSchema;
+  /**
+   * A leaner description and parameter schema for the on-device (`local`) tier, substituted for
+   * `description` and `parameters` when the manifest is requested with `tier=local`.
+   *
+   * Every tool declaration sits in the prompt of every on-device turn, and the full schemas are
+   * written for a large model: on a phone the 21 local-tier intents came to ~18 KB, ~4,350 tokens,
+   * against Gemma 4's 4,000-token window, so no message could ever fit. A 2B model is also better
+   * served by a tight schema than a sprawling one. The lean form keeps the parameters a small model
+   * will actually use and says in a sentence what the tool is for.
+   *
+   * It must be a strict subset of the full schema: every property it names exists in `parameters`
+   * with the same `type`, any `enum` is a subset, and everything the full schema requires it
+   * requires too, because the appliance still validates the call against the FULL schema. The
+   * catalog's real-tools test enforces that. Optional: an intent without one is published in full.
+   */
+  local?: { description: string; parameters: JSONSchema };
   privacy: IntentPrivacy;
   /**
    * Whether this intent can genuinely be served by the on-device (local) tier.
@@ -321,6 +337,14 @@ export interface ToolInvocationContext extends ToolRequestContext {
    * Ignored for an owner principal.
    */
   principalName?: string | null;
+
+  /**
+   * This call comes from a chat round after the turn already ran a lookup. The
+   * gate then asks before any write under a dial that asks before a delete; see
+   * `ToolGateOptions.followsLookup`. Absent means false, so no other caller
+   * changes behaviour.
+   */
+  followsLookup?: boolean;
 
   /**
    * The `ci.pending_actions` row this call is the confirmed replay of.

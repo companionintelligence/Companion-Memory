@@ -409,6 +409,16 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Events' })).not.toHaveAttribute('aria-current');
   });
 
+  // The collapsed rail fills the current group's icon; assistive tech has to
+  // hear the same thing the expanded head and the submenu rows already say.
+  it('marks the current root page on the collapsed rail too', () => {
+    renderRail('/memory', { expanded: false });
+
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+    expect(screen.getByRole('link', { name: 'Memory' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Planning' })).not.toHaveAttribute('aria-current');
+  });
+
   // Reflections moved from Memory into Self — one sub-section list, same
   // collapsible pattern, driven by SELF_SECTIONS instead of MEMORY_HUB_SECTIONS.
   it('shows Self sections when expanded, and keeps them open on a self route', () => {

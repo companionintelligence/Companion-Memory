@@ -17,7 +17,7 @@ class LocalLlmModelsTest {
 
     @Test
     fun an_unknown_model_id_is_rejected_rather_than_falling_back_to_a_known_entry() {
-        assertSame(LocalLlmModels.QWEN3_0_6B_INT4, LocalLlmModels.find("qwen3-0.6b-int4"))
+        assertSame(LocalLlmModels.GEMMA_4_E4B_IT, LocalLlmModels.find("gemma-4-e4b-it"))
         assertSame(LocalLlmModels.GEMMA_4_E2B_IT, LocalLlmModels.find("gemma-4-e2b-it"))
 
         // A silent fallback here would be a real failure mode rather than a hypothetical: the
@@ -27,15 +27,19 @@ class LocalLlmModelsTest {
         // the caller did not ask for.
         assertNull(LocalLlmModels.find("gemma3-1b-it-int4"))
         assertNull(LocalLlmModels.find(""))
-        assertNull(LocalLlmModels.find("QWEN3-0.6B-INT4"))
+        assertNull(LocalLlmModels.find("GEMMA-4-E2B-IT"))
+        assertNull(LocalLlmModels.find("qwen3-1.7b-int4"))
+        // Dropped on 2026-10-13: the 0.6B could not hold the tool protocol, Qwen2.5 had no tool slot.
+        assertNull(LocalLlmModels.find("qwen3-0.6b-int4"))
+        assertNull(LocalLlmModels.find("qwen2.5-1.5b-instruct"))
     }
 
     // ---- catalog invariants ---------------------------------------------------------------
 
     @Test
-    fun the_catalog_offers_exactly_the_four_models_in_the_v2_contract() {
+    fun the_catalog_offers_exactly_the_two_models_in_the_v2_contract() {
         assertEquals(
-            listOf("qwen3-0.6b-int4", "qwen2.5-1.5b-instruct", "gemma-4-e2b-it", "gemma-4-e4b-it"),
+            listOf("gemma-4-e2b-it", "gemma-4-e4b-it"),
             LocalLlmModels.ALL.map { it.modelId },
         )
     }
@@ -86,24 +90,25 @@ class LocalLlmModelsTest {
             // Every model must be able to fall back to the CPU — it is what a failed GPU init retries on.
             assertTrue("${info.modelId} must run on the CPU", info.supportsAccelerator(LocalLlmAccelerator.CPU))
         }
-        assertEquals(LocalLlmAccelerator.CPU, LocalLlmModels.QWEN3_0_6B_INT4.defaultAccelerator)
-        assertEquals(LocalLlmAccelerator.GPU, LocalLlmModels.GEMMA_4_E2B_IT.defaultAccelerator)
+        // The CPU: the GPU backend corrupts digits read from tool responses with Gemma 4 on this runtime.
+        assertEquals(LocalLlmAccelerator.CPU, LocalLlmModels.GEMMA_4_E2B_IT.defaultAccelerator)
+        assertEquals(LocalLlmAccelerator.CPU, LocalLlmModels.GEMMA_4_E4B_IT.defaultAccelerator)
     }
 
     @Test
     fun capabilities_are_what_each_model_can_actually_do() {
         // Load-bearing, not decorative: loadModel binds tools only when `tools` is listed, generate
         // sends enable_thinking=true only when `thinking` is, and images are refused without `vision`.
-        assertEquals(setOf("thinking", "tools"), LocalLlmModels.QWEN3_0_6B_INT4.capabilities)
-        assertEquals(emptySet<String>(), LocalLlmModels.QWEN2_5_1_5B_INSTRUCT.capabilities)
         assertEquals(setOf("thinking", "vision", "tools"), LocalLlmModels.GEMMA_4_E2B_IT.capabilities)
         assertEquals(setOf("thinking", "vision", "tools"), LocalLlmModels.GEMMA_4_E4B_IT.capabilities)
 
         assertTrue(LocalLlmModels.GEMMA_4_E4B_IT.supportsVision)
-        assertFalse(LocalLlmModels.QWEN3_0_6B_INT4.supportsVision)
-        assertTrue(LocalLlmModels.QWEN3_0_6B_INT4.supportsThinking)
-        assertFalse(LocalLlmModels.QWEN2_5_1_5B_INSTRUCT.supportsThinking)
-        assertFalse(LocalLlmModels.QWEN2_5_1_5B_INSTRUCT.supportsTools)
+        assertTrue(LocalLlmModels.GEMMA_4_E2B_IT.supportsVision)
+        assertTrue(LocalLlmModels.GEMMA_4_E2B_IT.supportsThinking)
+        // Every model in the catalog can call tools: a phone that cannot hold one of these has no offline chat.
+        for (info in LocalLlmModels.ALL) {
+            assertTrue(info.modelId, info.supportsTools)
+        }
     }
 
     @Test
@@ -113,8 +118,6 @@ class LocalLlmModelsTest {
         // the flag every turn, and must not pay for a new conversation (lost history) to toggle it.
         assertTrue(LocalLlmModels.GEMMA_4_E2B_IT.thinkingFixedPerConversation)
         assertTrue(LocalLlmModels.GEMMA_4_E4B_IT.thinkingFixedPerConversation)
-        assertFalse(LocalLlmModels.QWEN3_0_6B_INT4.thinkingFixedPerConversation)
-        assertFalse(LocalLlmModels.QWEN2_5_1_5B_INSTRUCT.thinkingFixedPerConversation)
         // Only meaningful for a model that can think at all.
         for (info in LocalLlmModels.ALL.filter { it.thinkingFixedPerConversation }) {
             assertTrue(info.modelId, info.supportsThinking)
@@ -123,13 +126,22 @@ class LocalLlmModelsTest {
 
     @Test
     fun the_availability_floor_is_the_smallest_models_ram_requirement() {
-        assertEquals(4L * 1024 * 1024 * 1024, LocalLlmModels.smallestMinDeviceMemoryBytes)
-        assertEquals(LocalLlmModels.QWEN3_0_6B_INT4.minDeviceMemoryBytes, LocalLlmModels.smallestMinDeviceMemoryBytes)
+        // 6 GB: Gemma 4 E2B on the CPU (its GPU needs 8 GB, see gpuMinDeviceMemoryBytes). Below that a phone is
+        // refused on-device chat outright rather than offered a model that cannot follow the tool protocol
+        // (Qwen3-0.6B) or that does not fit (Qwen3-1.7B), both dropped 2026-10-13.
+        assertEquals(6L * 1024 * 1024 * 1024, LocalLlmModels.smallestMinDeviceMemoryBytes)
+        assertEquals(LocalLlmModels.GEMMA_4_E2B_IT.minDeviceMemoryBytes, LocalLlmModels.smallestMinDeviceMemoryBytes)
+        // The GPU floors: E2B's is above its own floor, E4B's equals it (12 GB holds it either way).
+        assertEquals(8L * 1024 * 1024 * 1024, LocalLlmModels.GEMMA_4_E2B_IT.gpuMinDeviceMemoryBytes)
+        assertEquals(LocalLlmModels.GEMMA_4_E4B_IT.minDeviceMemoryBytes, LocalLlmModels.GEMMA_4_E4B_IT.gpuMinDeviceMemoryBytes)
+        for (info in LocalLlmModels.ALL) {
+            assertTrue("${info.modelId}: GPU floor under the model's floor", info.gpuMinDeviceMemoryBytes >= info.minDeviceMemoryBytes)
+        }
     }
 
     @Test
     fun an_unknown_capability_or_accelerator_fails_loudly_at_construction() {
-        val base = LocalLlmModels.QWEN3_0_6B_INT4
+        val base = LocalLlmModels.GEMMA_4_E2B_IT
         assertThrows { base.copy(capabilities = setOf("telepathy")) }
         assertThrows { base.copy(accelerators = listOf("npu")) }
         assertThrows { base.copy(accelerators = emptyList()) }
@@ -160,6 +172,10 @@ class LocalLlmModelsTest {
         assertEquals(
             LocalLlmModels.ALL.map { it.minDeviceMemoryBytes },
             literals("""^\s+minDeviceMemoryBytes = ([0-9_]+)L,$""").map { it.replace("_", "").toLong() },
+        )
+        assertEquals(
+            LocalLlmModels.ALL.map { it.gpuMinDeviceMemoryBytes },
+            literals("""^\s+gpuMinDeviceMemoryBytes = ([0-9_]+)L,$""").map { it.replace("_", "").toLong() },
         )
         assertEquals(LocalLlmModels.ALL.map { it.fileName }, literals("""^\s+fileName = "([^"]+)",$"""))
     }
@@ -229,6 +245,7 @@ class LocalLlmModelsTest {
                 numberField(entry, "sizeBytes"),
             )
             assertEquals("${info.modelId}: minDeviceMemoryBytes", info.minDeviceMemoryBytes, gibField(entry, "minDeviceMemoryBytes"))
+            assertEquals("${info.modelId}: gpuMinDeviceMemoryBytes", info.gpuMinDeviceMemoryBytes, gibField(entry, "gpuMinDeviceMemoryBytes"))
 
             assertEquals("${info.modelId}: capabilities", info.capabilities, stringListField(entry, "capabilities").toSet())
             assertEquals("${info.modelId}: accelerators (order is the default)", info.accelerators, stringListField(entry, "accelerators"))

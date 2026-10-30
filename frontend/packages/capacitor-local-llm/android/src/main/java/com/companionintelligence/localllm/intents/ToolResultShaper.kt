@@ -38,17 +38,16 @@ import java.text.Normalizer
  * - a result that already fits is returned untouched;
  * - the output is never longer than the budget, in UTF-8 bytes (those are what a token budget is estimated from),
  *   and a budget under [MINIMUM_BUDGET_BYTES] is raised to it;
- * - anything that is not JSON is cut at the budget on a character boundary and ends in [TRUNCATION_MARKER];
- * - JSON in is JSON out — valid, nothing escaped twice — with each cut list closed by an element that says how many
- *   results were left out, so the model knows the list was cut rather than exhaustive. A search envelope keeps its
- *   header. **The exception is a budget too small for that**, and then the *pruned, compact* text is cut at the
- *   budget and ends in the marker, like text that is not JSON. That happens when a list's first hit cannot be made
- *   to fit, when an object's own members leave no room for its lists, and when the closing element overshoots: the
- *   room held back for it is `min(96, share / 6)` ([omissionReserve]) and the element is 67 bytes plus its digits,
- *   so a list given under about 414 bytes can run over by a few bytes. Measured with iOS's shaper on the synthetic
- *   results the tests read, that is a cut at 512 bytes — the budget of the smallest window the app ships — for the
- *   dentist and the graph, and at 9 to 15 percent of the budgets between 300 and 2,048, none of them above 800. It
- *   is what iOS does, ported as it is; changing the reserve is a change to both platforms and to the parity file.
+ * - JSON in is JSON out — valid, never cut mid-token — from a budget big enough for a header, one hit and the
+ *   closing note (about 340 bytes on the realistic results; the tests hold 400). A search envelope keeps its header
+ *   and closes its list with an element that says how many results were left out, so the model knows the list was
+ *   cut rather than exhaustive. The note's own size is held back exactly, for the count it will actually carry
+ *   ([bound], [omissionNote]), not guessed at as a share of the budget, so it can no longer itself be the reason a
+ *   budget that should have been enough was not;
+ * - anything that is not JSON — or is nested deeper than [MAXIMUM_PARSE_DEPTH], which this port's own reader cannot
+ *   be trusted with on a small stack any more than `JSONSerialization` can on iOS's — is cut at the budget on a
+ *   character boundary and says so, as is JSON under that budget (a header too big for its own object, or a list
+ *   whose first hit cannot be made to fit).
  *
  * **Why JSON is read and written here instead of by `org.json`.** Writing: `JSONObject.toString()` escapes
  * every `/` (a byte apiece in every link), keeps keys in insertion order where this puts what identifies an
@@ -69,13 +68,18 @@ import java.text.Normalizer
  * - two things `JSONSerialization` forgives that the strict reader here does not, so that text is cut as text:
  *   a trailing comma and a byte-order mark;
  * - a number that overflows a double (`1e999`), which has no JSON form: iOS cuts the text as it was sent, here
- *   the hits before the first one that holds such a number are written and the list is closed as usual;
- * - the order of two keys that are canonically equivalent but not identical, which Swift takes from a dictionary
- *   with a random order and this takes from the text.
+ *   the hits before the first one that holds such a number are written and the list is closed as usual.
  *
- * And two things that are only here, which change no answer iOS could give: the member-dropping loop of [fit] is
- * linear (iOS rebuilds the object once per member: 20,000 members take a minute), and a `StackOverflowError` from
- * a pathologically nested result (see [MAX_DEPTH]) is answered with a cut of the text, not thrown.
+ * Two keys that are canonically equivalent but not identical (a precomposed and a decomposed accented letter) used
+ * to be a third way the platforms could differ: Swift's own `<` treats them as equal, so the order between them
+ * fell through to a Swift dictionary's random per-process order, which this port could never reproduce. [members]
+ * now breaks that tie the same way Swift does, on the raw (not normalised) code points of the key, so the two
+ * platforms agree on it deterministically instead of only on average.
+ *
+ * One thing is only here, and changes no answer iOS could give: a `StackOverflowError` from a result nested deeper
+ * than this port's own reader can safely recurse through is answered with a cut of the text, not thrown. In
+ * practice nothing reaches that far — [nests] refuses anything nested past [MAXIMUM_PARSE_DEPTH] before the reader
+ * ever sees it — but the catch stays as the backstop for a JVM whose stack margins turn out smaller than measured.
  */
 object ToolResultShaper {
     /** Below this a budget cannot hold the markers, so it is raised to it. */
@@ -84,12 +88,21 @@ object ToolResultShaper {
     const val TRUNCATION_MARKER = "…[truncated]"
 
     /**
-     * Held back from a list's budget so the closing "N more omitted" element cannot itself overflow: the element is
-     * ~70 bytes, and a small budget cannot spare all of that, so the reserve is a share of it ([omissionReserve]).
+     * The closing element of a list that lost hits, and its size: held back, exactly, so it cannot itself overflow.
+     * Used to be guessed at as a share of the budget ([bound] sized a reserve of `min(96, budget / 6)` for it,
+     * which a small list's note could still overshoot by a few bytes); now [bound] tries every hit first with
+     * nothing held back, and only when some are left out does it reserve exactly this string's size, for the
+     * count it will actually carry.
      */
-    private const val OMISSION_RESERVE_BYTES = 96
+    private fun omissionNote(omitted: Int): String = quoted("[$omitted more results omitted — refine the query to narrow them down]")
 
-    private fun omissionReserve(budget: Int): Int = minOf(OMISSION_RESERVE_BYTES, budget / 6)
+    /**
+     * The deepest a value is kept. Real results are under ten levels deep; a nested object is written by
+     * recursion, and a deep one overflowed a 512 KB stack (400 levels), which neither platform can catch cheaply
+     * once it happens. Anything deeper is dropped, so nothing the shaper recurses into below [prune] is deeper
+     * than this.
+     */
+    const val MAXIMUM_DEPTH = 16
 
     /** How many leading hits share the room at most, and the least one is given before fewer share it. */
     const val MAXIMUM_BREADTH = 3
@@ -105,11 +118,15 @@ object ToolResultShaper {
     private const val HEADER_STRING_CAP = 200
 
     /**
-     * How deeply JSON may nest before it is treated as not JSON. The reader recurses, and so does everything
-     * after it, so an unbounded depth is a `StackOverflowError` on the thread LiteRT-LM called the tool from.
-     * iOS's `JSONSerialization` stops at about this depth as well.
+     * The deepest a document may be and still be handed to [StrictJsonReader]: the reader recurses, and so does
+     * everything after it, so an unbounded depth is a `StackOverflowError` on the thread LiteRT-LM called the tool
+     * from. [nests] refuses anything deeper than this, by a byte-level scan, before the reader (or anything after
+     * it) ever recurses once — the same role iOS's guard plays ahead of `JSONSerialization`, which overflowed a
+     * 512 KB stack at 512 levels of nesting (a 256 KB one at 400). A deeper document is cut as text, which is what
+     * anything that is not JSON gets. Kept equal to iOS's own limit: both are generous margins above what a real
+     * result nests (under ten levels), so there is no reason to measure a different number for the JVM.
      */
-    private const val MAX_DEPTH = 512
+    const val MAXIMUM_PARSE_DEPTH = 64
 
     fun shape(text: String, budgetBytes: Int): String {
         val budget = maxOf(budgetBytes, MINIMUM_BUDGET_BYTES)
@@ -119,15 +136,17 @@ object ToolResultShaper {
         return try {
             shapeJson(text, budget)
         } catch (e: StackOverflowError) {
-            // Nesting at MAX_DEPTH is that many levels of recursion in each pass below: on a JVM, 512 nested
-            // objects take between 384 and 512 KB of stack, and the thread LiteRT-LM calls a tool from may
-            // have less than that to spare. An Error that nothing catches ends the process; what cannot be
-            // shaped is cut like any other text.
+            // Nothing reaches this in practice: nests() below refuses anything nested past MAXIMUM_PARSE_DEPTH
+            // before the reader (or prune, or the writer) ever recurses once. It stays as a backstop in case a
+            // thread's stack margin turns out smaller than measured. An Error that nothing catches ends the
+            // process; what cannot be shaped is cut like any other text.
             truncated(text, budget)
         }
     }
 
     private fun shapeJson(text: String, budget: Int): String {
+        if (!nests(text, MAXIMUM_PARSE_DEPTH)) return truncated(text, budget)
+
         val document = StrictJsonReader(text).readDocument() ?: return truncated(text, budget)
         val pruned = prune(document.value)
 
@@ -144,6 +163,42 @@ object ToolResultShaper {
         if (shaped == null) return truncated(pruned?.let { json(it) } ?: text, budget)
 
         return if (utf8Length(shaped) <= budget) shaped else truncated(shaped, budget)
+    }
+
+    /**
+     * Whether the brackets of [text] nest no deeper than [limit], counted without parsing: a string's contents
+     * (and an escaped quote in it) are skipped, everything else that opens or closes a container is counted. A
+     * flat scan, so it cannot itself overflow a stack however deep (or long) the text actually is — unlike asking
+     * the reader to find out, which is what it stands guard in front of.
+     */
+    private fun nests(text: String, limit: Int): Boolean {
+        var depth = 0
+        var inString = false
+        var escaped = false
+
+        for (unit in text) {
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    unit == '\\' -> escaped = true
+                    unit == '"' -> inString = false
+                }
+
+                continue
+            }
+
+            when (unit) {
+                '"' -> inString = true
+                '{', '[' -> {
+                    depth++
+
+                    if (depth > limit) return false
+                }
+                '}', ']' -> depth--
+            }
+        }
+
+        return true
     }
 
     /** Cuts [text] to [budget] bytes, at a character boundary, ending in [TRUNCATION_MARKER]. */
@@ -212,40 +267,49 @@ object ToolResultShaper {
      *   `connectionId`, `userId`…). The model cannot read one and no tool it has takes an id.
      * - `id` when the hit has a `link`, which already carries it, and `entityType` next to a `type`.
      *
-     * Numbers, `true` and every non-empty string stay, and so does the order of an array.
+     * Numbers, `true` and every non-empty string stay, and so does the order of an array. A container deeper
+     * than [MAXIMUM_DEPTH] goes.
      */
-    private fun prune(value: Any?): Any? =
+    private fun prune(value: Any?, depth: Int = 0): Any? =
         when (value) {
             is String -> if (value.isEmpty()) null else value
-            is ParsedArray -> pruneArray(value)
-            is ParsedObject -> pruneObject(value)
+            is ParsedArray -> pruneArray(value, depth)
+            is ParsedObject -> pruneObject(value, depth)
             is Boolean -> if (value) value else null
             else -> value
         }
 
-    private fun pruneArray(array: ParsedArray): ParsedArray? {
+    private fun pruneArray(array: ParsedArray, depth: Int): ParsedArray? {
+        if (depth >= MAXIMUM_DEPTH) return null
+
         val kept = ArrayList<Any?>()
 
         for (element in array.elements) {
             if (element is String && isUuid(element)) continue
 
-            kept.add(prune(element) ?: continue)
+            kept.add(prune(element, depth + 1) ?: continue)
         }
 
         return if (kept.isEmpty()) null else ParsedArray(kept)
     }
 
-    private fun pruneObject(obj: ParsedObject): ParsedObject? {
+    private fun pruneObject(obj: ParsedObject, depth: Int): ParsedObject? {
+        if (depth >= MAXIMUM_DEPTH) return null
+
         val members = obj.members
-        val linked = members["link"] is String
+
+        // Only a link and a type that survive make the id and the entityType redundant: an empty `link` and a
+        // null `type` are pruned themselves, and dropping the id or entityType beside them left nothing at all.
+        val linked = (members["link"] as? String)?.isNotEmpty() ?: false
+        val typed = members["type"]?.let { prune(it, depth + 1) } != null
         val kept = LinkedHashMap<String, Any?>()
 
         for ((key, member) in members) {
-            if (key == "entityType" && members.containsKey("type")) continue
+            if (key == "entityType" && typed) continue
             if (key == "id" && linked) continue
             if (member is String && key != "id" && key != "link" && isUuid(member)) continue
 
-            kept[key] = prune(member) ?: continue
+            kept[key] = (if (key in TIME_KEYS && member is String) renderedTime(member) else prune(member, depth + 1)) ?: continue
         }
 
         return if (kept.isEmpty()) null else ParsedObject(kept)
@@ -277,13 +341,15 @@ object ToolResultShaper {
      * two, and keeping a few edges beside a few nodes beats keeping every node and no edge, because the edges are
      * what says how the people relate. An object with no list is [fit].
      *
-     * A list is a member that is an array of more than one element: one element is just a member.
+     * A list is an array of two or more things with parts of their own — hits, nodes, edges. An array of plain
+     * values (`tags`, `labels`) is one member of the object it is in, and is dropped like one when the object has
+     * to lose members ([isList]): treating it as a list left the object's other members written whole.
      */
     private fun lists(obj: ParsedObject, budget: Int): String? {
         // `items` first, then the rest by the order `members` writes them in, then by name.
         val listKeys =
             obj.members
-                .filter { ((it.value as? ParsedArray)?.elements?.size ?: 0) > 1 }
+                .filter { isList(it.value) }
                 .keys
                 .sortedWith { lhs, rhs ->
                     val left = if (lhs == "items") -1 else rank(lhs)
@@ -324,35 +390,63 @@ object ToolResultShaper {
     }
 
     /**
+     * A list is an array of more than one element where at least one of them is itself an object: hits, nodes,
+     * edges have parts of their own. An array of plain values (`tags: ["a","b"]`) is not — it stays an ordinary
+     * member of its parent object, written whole by [json]/[members], and is subject to member-dropping like any
+     * other member when the parent object has to lose some.
+     */
+    private fun isList(value: Any?): Boolean {
+        val array = value as? ParsedArray ?: return false
+
+        if (array.elements.size <= 1) return false
+
+        return array.elements.any { it is ParsedObject }
+    }
+
+    /**
      * Leading hits written in `lead … tail`, each held to an equal share of the room (the first
      * [MAXIMUM_BREADTH] of them; the rest take what is left), then a closing element saying how many were left
      * out. Null when not even the first hit can be made to fit. [lead] and [tail] are the list's own text, brackets
      * included: `[` and `]` for a bare list, `"items":[` and `]` inside an object.
      */
     private fun bound(items: List<Any?>, lead: String, tail: String, budget: Int): String? {
-        var room = budget - utf8Length(lead) - utf8Length(tail) - omissionReserve(budget)
-        val breadth = breadth(items.size, room)
+        val frame = utf8Length(lead) + utf8Length(tail)
+
+        // First every hit, with nothing held back: when all of them fit there is no note to make room for.
+        val everything = take(items, budget - frame)
+
+        if (everything.size == items.size) return lead + everything.joinToString(",") + tail
+
+        // Otherwise some are left out, and the closing note has to fit as well: room for it (and the comma
+        // before it) is held back, sized for the largest count it could carry, so it cannot overflow.
+        val note = omissionNote(items.size)
+        val kept = take(items, budget - frame - utf8Length(note) - 1)
+
+        if (kept.isEmpty() && items.isNotEmpty()) return null
+        if (items.size <= kept.size) return lead + kept.joinToString(",") + tail
+
+        val closing = omissionNote(items.size - kept.size)
+
+        return lead + (kept + closing).joinToString(",") + tail
+    }
+
+    /** The leading hits that fit in [room], each as JSON, the first [MAXIMUM_BREADTH] held to an equal share. */
+    private fun take(items: List<Any?>, room: Int): List<String> {
+        var remaining = room
+        val breadth = breadth(items.size, remaining)
         val kept = ArrayList<String>()
 
         for ((index, item) in items.withIndex()) {
             val separator = if (kept.isEmpty()) 0 else 1
-            val share = if (index < breadth) room / (breadth - index) else room
+            val share = if (index < breadth) remaining / (breadth - index) else remaining
 
             val text = fit(item, share - separator) ?: break
 
             kept.add(text)
-            room -= utf8Length(text) + separator
+            remaining -= utf8Length(text) + separator
         }
 
-        if (kept.isEmpty() && items.isNotEmpty()) return null
-
-        val omitted = items.size - kept.size
-
-        if (omitted > 0) {
-            kept.add(quoted("[$omitted more results omitted — refine the query to narrow them down]"))
-        }
-
-        return lead + kept.joinToString(",") + tail
+        return kept
     }
 
     /**
@@ -384,23 +478,24 @@ object ToolResultShaper {
         val obj = item as? ParsedObject ?: return null
         val ordered = members(capStrings(obj, STRING_CAPS.last()) as ParsedObject) ?: return null
 
-        // The longest prefix of the members, of at least MINIMUM_MEMBERS and not all of them (the whole object was
-        // the last of the steps above), that fits. A prefix is always longer than the one before it, so one pass
-        // that adds a member at a time and stops at the first that does not fit finds what trying every prefix from
-        // the longest down finds, and finds it in time linear in the members: an object of 20,000 members took a
-        // minute the other way round, building and measuring 20,000 strings of up to 240 KB.
+        // The longest run of leading members that fits, in one pass: measuring every prefix afresh is quadratic,
+        // and 8,000 members took 45 seconds. `ordered.size` itself is never the answer (the whole object, at this
+        // same string cap, was already tried and failed above), but letting the loop run over it costs nothing
+        // and keeps this the same shape as the Swift it is ported from.
         var size = 2 // the braces
         var keep = 0
 
-        for (count in 1 until ordered.size) {
-            size += utf8Length(ordered[count - 1]) + (if (count > 1) 1 else 0) // and the comma before it
+        for ((index, member) in ordered.withIndex()) {
+            size += utf8Length(member) + (if (index > 0) 1 else 0)
 
             if (size > limit) break
 
-            if (count >= MINIMUM_MEMBERS) keep = count
+            keep = index + 1
         }
 
-        return if (keep == 0) null else ordered.subList(0, keep).joinToString(",", "{", "}")
+        if (keep < MINIMUM_MEMBERS) return null
+
+        return ordered.subList(0, keep).joinToString(",", "{", "}")
     }
 
     /**
@@ -467,6 +562,27 @@ object ToolResultShaper {
 
     /** When it happened, then what it says: the two things a question about the user's own memory asks. */
     private val TIME_KEYS = listOf("startTime", "endTime", "time", "dueDate", "date", "createdAt", "takenAt", "birthDate")
+    /**
+     * An ISO 8601 instant as the appliance writes one (`2022-11-28T06:45:59.000Z`, with or without fractional
+     * seconds, `Z` or an offset), captured as the date, the hour-and-minute and the offset part.
+     */
+    private val ISO_INSTANT = Regex("^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2})(?::\\d{2}(?:\\.\\d+)?)?(Z|[+-]\\d{2}:?\\d{2})$")
+
+    /**
+     * A time key's value as the model should read it: `2022-11-28 06:45 UTC` for an instant, a date (`1980-01-01`)
+     * untouched, anything else as it came. On a device a 2B model copying the 24-character instant wrote
+     * `20202-1-128T06:5:59.00Z` and `2022-9-2519:4:1.0.0Z`; it copies a 16-character date-and-minute. Seconds and
+     * milliseconds answer no question a chat asks. The instant is NOT converted to local time: both platforms
+     * must shape identically wherever the phone is, and an offset is written out as it came so nothing is lost.
+     */
+    private fun renderedTime(value: String): String? {
+        if (value.isEmpty()) return null
+
+        val match = ISO_INSTANT.matchEntire(value) ?: return value
+        val (date, clock, zone) = match.destructured
+
+        return if (zone == "Z") "$date $clock UTC" else "$date $clock $zone"
+    }
     private val BODY_KEYS = listOf("content", "text", "description", "notes")
 
     /**
@@ -519,7 +635,17 @@ object ToolResultShaper {
             when {
                 rank(lhs.key) != rank(rhs.key) -> rank(lhs.key).compareTo(rank(rhs.key))
                 lhs.size != rhs.size -> lhs.size.compareTo(rhs.size)
-                else -> compareCodePoints(lhs.order, rhs.order)
+                else -> {
+                    // Swift's `<` is canonical: a precomposed and a decomposed form of the same letter compare
+                    // equal under it (so the NFC-normalised compare below, this port's approximation of that,
+                    // also reports them equal) and the order between them used to fall through to a Swift
+                    // dictionary's random per-process iteration order. A second, raw (not normalised) code-point
+                    // compare breaks that tie the same way Swift now does, so the two platforms agree
+                    // deterministically instead of only on average.
+                    val canonical = compareCodePoints(lhs.order, rhs.order)
+
+                    if (canonical != 0) canonical else compareCodePoints(lhs.key, rhs.key)
+                }
             }
         }
 
@@ -642,8 +768,12 @@ object ToolResultShaper {
 
     /**
      * A strict JSON reader (RFC 8259): no comments, no trailing commas, no unquoted keys or words, nothing after
-     * the value but whitespace, no lone surrogate escapes, and nesting no deeper than [MAX_DEPTH]. Any scalar
-     * may stand alone, as `JSONSerialization` with `.fragmentsAllowed` reads it on iOS.
+     * the value but whitespace, no lone surrogate escapes, and nesting no deeper than [MAXIMUM_PARSE_DEPTH]. Any
+     * scalar may stand alone, as `JSONSerialization` with `.fragmentsAllowed` reads it on iOS.
+     *
+     * [shapeJson] never lets this reader see anything nested past [MAXIMUM_PARSE_DEPTH] in the first place
+     * ([nests] refuses it first), so the check below is a second, redundant guard — in case the two ever drift,
+     * recursing to the limit a byte-level scan already ruled out is still cheap.
      *
      * An integer that fits `Long` — or, if it is not negative, an unsigned 64-bit one — is kept as written, and
      * anything else goes through a `Double`; this is how `NSNumber` holds them on iOS, which is why a number
@@ -666,9 +796,9 @@ object ToolResultShaper {
                 null
             }
 
-        /** [depth] is how many containers enclose the value; one more than [MAX_DEPTH] deep is refused. */
+        /** [depth] is how many containers enclose the value; one more than [MAXIMUM_PARSE_DEPTH] deep is refused. */
         private fun readValue(depth: Int): Any? {
-            if (depth > MAX_DEPTH || position >= text.length) throw NotJson
+            if (depth > MAXIMUM_PARSE_DEPTH || position >= text.length) throw NotJson
 
             return when (text[position]) {
                 '{' -> readObject(depth)

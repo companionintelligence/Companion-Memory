@@ -61,10 +61,25 @@ fn build_apple_bridge() {
         return;
     }
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
+    // Desktop release builds must ship the helper signed for notarization.
+    // Keep ordinary local builds best-effort: most contributors do not have a
+    // Developer ID identity available in their keychain.
+    let require_signed_bridge =
+        std::env::var("REQUIRE_SIGNED_APPLE_BRIDGE").as_deref() == Ok("true");
+    println!("cargo:rerun-if-env-changed=REQUIRE_SIGNED_APPLE_BRIDGE");
+    println!("cargo:rerun-if-env-changed=APPLE_SIGNING_IDENTITY");
+
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
     let package_dir = Path::new(&manifest_dir).join("apple-bridge");
-    println!("cargo:rerun-if-changed={}", package_dir.join("Sources").display());
-    println!("cargo:rerun-if-changed={}", package_dir.join("Package.swift").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        package_dir.join("Sources").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        package_dir.join("Package.swift").display()
+    );
 
     let swift_available = Command::new("xcrun")
         .arg("--find")
@@ -73,6 +88,9 @@ fn build_apple_bridge() {
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !swift_available {
+        if require_signed_bridge {
+            panic!("Xcode/swift is required to build the signed Apple on-device bridge for desktop release");
+        }
         println!(
             "cargo:warning=Xcode/swift not found — skipping the Apple on-device bridge. \
              local_model::apple_bridge::is_available will report unavailable; the app \
@@ -81,9 +99,17 @@ fn build_apple_bridge() {
         return;
     }
 
-    let build_result = Command::new("swift").args(["build", "-c", "release"]).current_dir(&package_dir).status();
+    let build_result = Command::new("swift")
+        .args(["build", "-c", "release"])
+        .current_dir(&package_dir)
+        .status();
     let built_ok = matches!(build_result, Ok(status) if status.success());
     if !built_ok {
+        if require_signed_bridge {
+            panic!(
+                "`swift build` failed for the Apple on-device bridge required by desktop release"
+            );
+        }
         println!(
             "cargo:warning=`swift build` failed for the Apple on-device bridge (needs Xcode 26+ with the \
              macOS 26 SDK — see build_apple_bridge's doc comment) — skipping it. \
@@ -95,11 +121,30 @@ fn build_apple_bridge() {
 
     let built_binary = package_dir.join(".build/release/ci-apple-bridge");
     let dest_dir = Path::new(&manifest_dir).join("resources/apple-bridge");
-    if let Err(e) = std::fs::create_dir_all(&dest_dir).and_then(|_| std::fs::copy(&built_binary, dest_dir.join("ci-apple-bridge")).map(|_| ()))
+    if let Err(e) = std::fs::create_dir_all(&dest_dir)
+        .and_then(|_| std::fs::copy(&built_binary, dest_dir.join("ci-apple-bridge")).map(|_| ()))
     {
+        if require_signed_bridge {
+            panic!("Failed to install the Apple on-device bridge required by desktop release: {e}");
+        }
         println!(
             "cargo:warning=Failed to install the built Apple on-device bridge into resources/apple-bridge: {e} \
              — skipping it. The app still works via the Ollama fallback."
         );
+        return;
+    }
+
+    if require_signed_bridge {
+        let signing_identity = std::env::var("APPLE_SIGNING_IDENTITY")
+            .expect("APPLE_SIGNING_IDENTITY is required for the desktop release bridge");
+        let bridge_binary = dest_dir.join("ci-apple-bridge");
+        let sign_result = Command::new("codesign")
+            .args(["--force", "--options", "runtime", "--timestamp", "--sign"])
+            .arg(&signing_identity)
+            .arg(&bridge_binary)
+            .status();
+        if !matches!(sign_result, Ok(status) if status.success()) {
+            panic!("codesign failed for the Apple on-device bridge required by desktop release");
+        }
     }
 }

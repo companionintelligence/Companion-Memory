@@ -63,8 +63,71 @@ describe('AskExecutorService.execute', () => {
 
     expect(searchService.searchPrompt).toHaveBeenCalledWith(
       { userId: 'responder-1' },
-      { prompt: 'lake', subjectIsName: false, maxResults: 50, includeTypes: ['file'] },
+      { prompt: 'lake', subjectIsName: false, maxResults: 50, includeTypes: ['file'], mediaEvents: 'photos' },
     );
+  });
+
+  it('searches photo events beside files for a photo ask, and no events for other file classes', async () => {
+    // A photo's place and capture date are on its event, so "photos from
+    // Lisbon" filtered to files alone could only ever answer "none".
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'media', prompt: 'Lisbon' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'files', prompt: 'Lisbon' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'x', dataClass: 'events', prompt: 'Lisbon' } }));
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).toMatchObject({
+      includeTypes: ['file'],
+      mediaEvents: 'media',
+    });
+    expect(searchService.searchPrompt.mock.calls[1][1]).not.toHaveProperty('mediaEvents');
+    expect(searchService.searchPrompt.mock.calls[2][1]).not.toHaveProperty('mediaEvents');
+  });
+
+  it('reads "photos of …" in a class-less ask as the photos class', async () => {
+    // buildPromptQuery no longer lets the word 'photos' match (it matched every
+    // photo event, so "photos of the volcano" answered "at least one" for
+    // anyone with photos). The kind it named becomes the type filter instead.
+    const { service, searchService } = makeService();
+
+    await service.execute(
+      fakeAsk({ query: { queryType: 'content', prompt: 'Do you have any photos of the volcano?' } }),
+    );
+
+    expect(searchService.searchPrompt).toHaveBeenCalledWith(
+      { userId: 'responder-1' },
+      {
+        prompt: 'Do you have any photos of the volcano?',
+        subjectIsName: false,
+        maxResults: 50,
+        includeTypes: ['file'],
+        mediaEvents: 'photos',
+      },
+    );
+  });
+
+  it('reads "videos of …" as the media class and a blank class as no class', async () => {
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'content', prompt: 'Any videos of the volcano?' } }));
+    // A zero-width class canonicalizes to nothing, which the grant evaluator
+    // also reads as "no class named".
+    await service.execute(
+      fakeAsk({ query: { queryType: 'content', dataClass: '​', prompt: 'photos of the volcano' } }),
+    );
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).toHaveProperty('includeTypes', ['file']);
+    expect(searchService.searchPrompt.mock.calls[1][1]).toHaveProperty('includeTypes', ['file']);
+  });
+
+  it('does not read a kind into a name ask or a capitalised name', async () => {
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'relationship', prompt: 'photos smith' } }));
+    await service.execute(fakeAsk({ query: { queryType: 'content', prompt: 'my Google Photos backup' } }));
+
+    expect(searchService.searchPrompt.mock.calls[0][1]).not.toHaveProperty('includeTypes');
+    expect(searchService.searchPrompt.mock.calls[1][1]).not.toHaveProperty('includeTypes');
   });
 
   it('leaves an unknown data class unfiltered (still responder-scoped)', async () => {
@@ -155,6 +218,17 @@ describe('AskExecutorService name-subject binding', () => {
       );
     },
   );
+
+  it('SECURITY (G1): forces subjectIsName=true when a topic queryType carries a lowercase "do you know" prompt', async () => {
+    const { service, searchService } = makeService();
+
+    await service.execute(fakeAsk({ query: { queryType: 'content', prompt: 'do you know david miller' } }));
+
+    expect(searchService.searchPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subjectIsName: true }),
+    );
+  });
 });
 
 describe('AskExecutorService.executeWithMeta', () => {

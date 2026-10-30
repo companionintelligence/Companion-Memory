@@ -1,5 +1,5 @@
 import type { Point } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ObjectLifecycleState, Item } from './entities/ItemEntity';
 import type {
@@ -571,6 +571,11 @@ export interface FindObjectObservationsFilter {
   /** `true` = only rows linked to an owned unit; `false` = only unlinked. */
   resolved?: boolean;
   confirmedByUser?: boolean;
+  /**
+   * `true` = only sightings a person has answered (`resolution_method = 'user'`,
+   * either way); `false` = only those nobody has.
+   */
+  reviewedByUser?: boolean;
   observedFrom?: Date;
   observedTo?: Date;
   limit?: number;
@@ -1048,6 +1053,14 @@ export enum CommunicationType {
   VOICE_NOTE = 'voice_note',
   POST = 'post',
 }
+
+/**
+ * `category` of the messages `POST /memory/turn` stores: one side of a
+ * conversation with an agent such as OpenClaw or Hermes. The agent's replies
+ * are stored inbound, like mail, so anything that reads inbound messages as
+ * received mail has to leave these out.
+ */
+export const AGENT_TURN_MESSAGE_CATEGORY = 'agent-turn';
 
 export enum CommunicationDirection {
   INBOUND = 'inbound',

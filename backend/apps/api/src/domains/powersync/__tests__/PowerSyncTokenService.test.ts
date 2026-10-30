@@ -23,7 +23,7 @@ jest.mock('@ci/configuration', () => {
 import { ServiceUnavailableException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
-import { PowerSyncTokenService } from '../services/PowerSyncTokenService';
+import { POWERSYNC_NOT_CONFIGURED_BODY, PowerSyncTokenService } from '../services/PowerSyncTokenService';
 
 interface DecodedToken {
   header: { kid?: string; alg?: string };
@@ -44,8 +44,36 @@ describe('PowerSyncTokenService', () => {
     });
   });
 
+  it('is configured only when both the URL and the JWT secret are set', () => {
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = 'https://ps.test';
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = '';
+    mockPowersync.jwtSecret = 'shh-secret';
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = 'https://ps.test';
+    expect(service.isConfigured()).toBe(true);
+  });
+
   it('throws 503 when PowerSync is not configured', () => {
     expect(() => service.issueToken('user-1')).toThrow(ServiceUnavailableException);
+  });
+
+  it('throws the same body the controller answers with, code included', () => {
+    let thrown: unknown;
+
+    try {
+      service.issueToken('user-1');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ServiceUnavailableException);
+    expect((thrown as ServiceUnavailableException).getResponse()).toEqual(POWERSYNC_NOT_CONFIGURED_BODY);
+    expect((thrown as ServiceUnavailableException).message).toBe('PowerSync is not configured');
   });
 
   it('issues a token scoped to the user (sub, aud, kid) when configured', () => {

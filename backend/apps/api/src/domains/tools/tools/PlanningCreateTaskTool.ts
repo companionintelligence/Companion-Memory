@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -50,6 +50,22 @@ export type PlanningCreateTaskInput = z.infer<typeof PlanningCreateTaskInputSche
 export class PlanningCreateTaskTool extends BaseTool<PlanningCreateTaskInput, Task> {
   readonly schema: IntentDefinition = {
     name: 'planning.createTask',
+    local: {
+      description:
+        'Add a task to the to-do list. dueAt is an ISO 8601 instant; scheduledFor is a YYYY-MM-DD date.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', minLength: 1, maxLength: 500 },
+          dueAt: { type: 'string', description: 'ISO 8601 instant it is due by.' },
+          scheduledFor: { type: 'string', description: 'YYYY-MM-DD to work on it.' },
+          priority: { type: 'integer', minimum: 0, maximum: 5, description: '0 highest, 5 lowest.' },
+          notes: { type: 'string', maxLength: 10000 },
+        },
+        required: ['title'],
+        additionalProperties: false,
+      },
+    },
     domain: 'planning',
     title: 'Create a task',
     description:

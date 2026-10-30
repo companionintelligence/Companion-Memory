@@ -217,15 +217,178 @@ const ASK_FRAME_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Words that say what KIND of thing is asked about, not what it shows.
+ *
+ * "Do you have any photos of the volcano?" used to answer "at least one" for
+ * anyone with photos and no volcano: 'photo' is on every photo event, so the
+ * OR of terms was satisfied by the kind word alone. Videos are the same: every
+ * video event's title opens with 'Video'. As a loose term the kind word is not
+ * evidence of anything the asker named. It is dropped from the terms and the
+ * ask executor turns it into a type filter instead (see
+ * {@link promptMediaClass}). The value is the data class it stands for.
+ *
+ * Only ever dropped as a loose TERM: inside a run of capitalised words
+ * ("Google Photos") or in a name ask it stays, because there it is part of
+ * what has to match.
+ */
+const MEDIA_KIND_WORDS: ReadonlyMap<string, 'photos' | 'media'> = new Map([
+  ['photo', 'photos'],
+  ['photos', 'photos'],
+  ['picture', 'photos'],
+  ['pictures', 'photos'],
+  ['pic', 'photos'],
+  ['pics', 'photos'],
+  ['image', 'photos'],
+  ['images', 'photos'],
+  ['video', 'media'],
+  ['videos', 'media'],
+]);
+
+/**
+ * Nouns a kind word can MODIFY instead of naming: "a picture frame" is a frame,
+ * "a photo album" a book, "a video game" a game. Followed by one of these the
+ * kind word is part of the thing's name, so it neither narrows the ask to files
+ * nor drops out of it: the two words bind as one phrase.
+ *
+ * A closed list rather than "any word that follows", because the words that
+ * follow a kind word are mostly not nouns: "photos taken in Lisbon", "pictures
+ * last October". Leaving a compound out keeps today's reading; adding a word
+ * that is not one would stop a real photo ask from narrowing to photos.
+ */
+const MEDIA_COMPOUND_HEADS: ReadonlySet<string> = new Set([
+  'album',
+  'albums',
+  'book',
+  'books',
+  'booth',
+  'booths',
+  'call',
+  'calls',
+  'camera',
+  'cameras',
+  'card',
+  'cards',
+  'frame',
+  'frames',
+  'game',
+  'games',
+  'hanger',
+  'hangers',
+  'hook',
+  'hooks',
+  'id',
+  'ledge',
+  'paper',
+  'player',
+  'players',
+  'printer',
+  'printers',
+  'projector',
+  'rail',
+  'recorder',
+  'shoot',
+  'stand',
+  'stands',
+  'tape',
+  'tapes',
+]);
+
+/**
+ * Does the word at `index` of `run` modify the next one ("picture frame") rather
+ * than name a kind? Not when both are capitalised: "Video Game Awards" is a name
+ * that binds whole as a capitalised run, and splitting "Video Game" off it
+ * would let any mention of a video game and an award answer for it.
+ */
+function modifiesNext(run: readonly string[], index: number): boolean {
+  const next = run[index + 1];
+
+  return (
+    next != null &&
+    MEDIA_COMPOUND_HEADS.has(next.toLowerCase()) &&
+    !(isCapitalised(run[index]) && isCapitalised(next))
+  );
+}
+
+/**
+ * The data class a word names when it is a {@link MEDIA_KIND_WORDS} word.
+ *
+ * A trailing apostrophe, "'s" or hyphen is ignored: "photo's" and "photos'"
+ * are the same kind word, and Postgres reduces both to 'photo', so keeping
+ * them as terms would bring back the match on every photo event.
+ */
+function mediaKindOf(word: string): 'photos' | 'media' | undefined {
+  return MEDIA_KIND_WORDS.get(word.toLowerCase().replace(/(?:['’]s?|-)+$/u, ''));
+}
+
+/**
  * Characters that may sit INSIDE one word. Everything else separates words and
  * ends a capitalised run, so "Alice, Bob" is two names rather than the phrase
  * `'alice' <-> 'bob'` that would match neither of them.
+ *
+ * A `.` or `_` between two letters or digits is matched here too, so a file
+ * name ("PXL_20261021_115500_010.jpg") comes out as one candidate. Only a
+ * candidate that {@link FILE_NAME_PATTERN} accepts stays whole; see
+ * {@link promptWords}. A sentence's closing `.` is followed by nothing, so it
+ * always ends the word.
  */
-const WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+const WORD_PATTERN = /[\p{L}\p{N}](?:[\p{L}\p{N}'’-]|[._](?=[\p{L}\p{N}]))*/gu;
+
+/** One word with no `.` or `_` inside it. */
+const PLAIN_WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+
+/**
+ * A word that ends in a file extension. Postgres indexes a file name as one
+ * lexeme ("pxl_20261021_115500_010.jpg"); split into `pxl`, `20261021`, … the
+ * prompt could never match it.
+ *
+ * Anything else with a `.` or `_` inside is split there, as before: Postgres
+ * reads "alice.wong" as one lexeme too, which no "Alice Wong" carries, and
+ * splits "photos_of_me" back into 'photo' on its own, which every photo event
+ * carries. The media extensions mirror `MEDIA_FILENAME_RE` in
+ * `search-ingress/searchTexts.ts`.
+ */
+const FILE_NAME_PATTERN =
+  /\.(?:jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv|mp3|m4a|wav|flac|pdf|docx?|xlsx?|pptx?|txt|csv|md|json|zip)$/iu;
+
+/** The prompt's words and where each starts, with only file names kept whole. */
+function* promptWords(prompt: string): Generator<{ word: string; start: number }> {
+  for (const match of prompt.matchAll(WORD_PATTERN)) {
+    const word = match[0];
+    const start = match.index ?? 0;
+
+    if (!/[._]/u.test(word) || FILE_NAME_PATTERN.test(word)) {
+      yield { word, start };
+      continue;
+    }
+
+    for (const part of word.matchAll(PLAIN_WORD_PATTERN)) {
+      yield { word: part[0], start: start + (part.index ?? 0) };
+    }
+  }
+}
 
 /** A word is "named" if it opens with an uppercase letter. */
 function isCapitalised(word: string): boolean {
   return /^\p{Lu}/u.test(word);
+}
+
+/**
+ * Does the prompt open with an explicit person-recognition / relationship
+ * question frame ("do you know …", "have you met …", "who is …")?
+ *
+ * Closes G1 (`docs/asks-system-guide.md` §9): the asker controls BOTH
+ * capitalisation and `queryType`, so sending `queryType: 'content'` with a
+ * lowercase prompt `"do you know david miller"` used to skip `subjectIsName`
+ * and treat `'david'` and `'miller'` as loose OR-joined topic terms — matching
+ * Steve Miller and answering `"Yes."` unattended. Detecting the relationship
+ * speech-act frame on the prompt text itself forces the residual subject to
+ * bind as a required phrase regardless of `queryType` or casing.
+ */
+const NAME_SUBJECT_FRAME_RE =
+  /^\s*(?:(?:do|does|did)\s+(?:you|we|they|he|she|i)\s+(?:ever\s+)?(?:know|meet|remember)|(?:have|has|had)\s+(?:you|we|they|he|she|i)\s+(?:ever\s+)?(?:met|known|heard\s+of)|who\s+(?:is|was|are|were)|(?:are|is|was|were)\s+(?:you|we|they|he|she)\s+(?:friends|acquainted|familiar|related)\s+with)\b/iu;
+
+export function hasNameSubjectFrame(prompt: string): boolean {
+  return NAME_SUBJECT_FRAME_RE.test(prompt);
 }
 
 /**
@@ -250,10 +413,7 @@ function toAdjacentRuns(prompt: string): string[][] {
     }
   };
 
-  for (const match of prompt.matchAll(WORD_PATTERN)) {
-    const word = match[0];
-    const start = match.index ?? 0;
-
+  for (const { word, start } of promptWords(prompt)) {
     // Anything other than plain spaces between the previous word and this one
     // (a comma, a question mark, a newline) is a boundary.
     if (current.length > 0 && !/^[ \t]*$/.test(prompt.slice(cursor, start))) {
@@ -286,7 +446,7 @@ function toAdjacentRuns(prompt: string): string[][] {
 export function buildPromptQuery(prompt: string, options: BuildPromptQueryOptions = {}): PromptQueryGroup[] {
   const runs = toAdjacentRuns(prompt);
 
-  if (options.subjectIsName) {
+  if (options.subjectIsName || hasNameSubjectFrame(prompt)) {
     // The residual IS the name. Every run is required, so "Alice? Bob?" asks
     // about both rather than about either — an ask that names two people and
     // gets "Yes" for one of them is the same fabrication in a different shape.
@@ -295,12 +455,28 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
 
   const groups: PromptQueryGroup[] = [];
 
+  // A loose term, unless it only names the kind of thing asked about.
+  const pushTerm = (word: string) => {
+    if (mediaKindOf(word) == null) {
+      groups.push({ kind: 'term', text: word });
+    }
+  };
+
   for (const run of runs) {
     let index = 0;
 
     while (index < run.length) {
+      // "picture frame": a kind word in a thing's name, which has to match whole.
+      if (mediaKindOf(run[index]) != null && modifiesNext(run, index)) {
+        groups.push({ kind: 'phrase', text: `${run[index]} ${run[index + 1]}` });
+
+        index += 2;
+        continue;
+      }
+
       if (!isCapitalised(run[index])) {
-        groups.push({ kind: 'term', text: run[index] });
+        pushTerm(run[index]);
+
         index += 1;
         continue;
       }
@@ -313,7 +489,7 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
       // A lone capitalised word carries no adjacency to enforce — it is just a
       // word, and requiring it would silently narrow every sentence-initial one.
       if (end - index === 1) {
-        groups.push({ kind: 'term', text: run[index] });
+        pushTerm(run[index]);
       } else {
         groups.push({ kind: 'phrase', text: run.slice(index, end).join(' ') });
       }
@@ -323,4 +499,51 @@ export function buildPromptQuery(prompt: string, options: BuildPromptQueryOption
   }
 
   return groups;
+}
+
+/**
+ * Which media class a topic ask says it is about: 'photos' for "photos of …"
+ * or "any pictures …", 'media' once it names videos, `null` for neither.
+ *
+ * A {@link MEDIA_KIND_WORDS} word counts when it stands on its own, which is
+ * exactly when {@link buildPromptQuery} drops it from the terms. One that
+ * modifies the next word ("picture frame") is part of a name, not a kind. The ask
+ * executor reads the class as a type filter so the kind still narrows the
+ * search once it stops counting as a match. A name ask, or the word inside a
+ * capitalised name, says nothing about kind and answers `null`.
+ */
+export function promptMediaClass(
+  prompt: string,
+  options: BuildPromptQueryOptions = {},
+): 'photos' | 'media' | null {
+  if (options.subjectIsName || hasNameSubjectFrame(prompt)) {
+    return null;
+  }
+
+  let found: 'photos' | 'media' | null = null;
+
+  for (const run of toAdjacentRuns(prompt)) {
+    for (const [index, word] of run.entries()) {
+      const kind = mediaKindOf(word);
+
+      // Part of a capitalised run of two or more ("Google Photos"): a name.
+      const inName =
+        isCapitalised(word) &&
+        ((index > 0 && isCapitalised(run[index - 1])) ||
+          (index < run.length - 1 && isCapitalised(run[index + 1])));
+
+      if (kind == null || inName || modifiesNext(run, index)) {
+        continue;
+      }
+
+      // 'media' covers photos too, so it wins once any video word is named.
+      if (kind === 'media') {
+        return 'media';
+      }
+
+      found = kind;
+    }
+  }
+
+  return found;
 }

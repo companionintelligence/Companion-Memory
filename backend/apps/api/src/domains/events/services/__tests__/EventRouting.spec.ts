@@ -184,6 +184,26 @@ describe('event routing', () => {
       }
     });
 
+    it('hands a per-job retention to pg-boss, and only when the caller asked for one', async () => {
+      // pg-boss turns `retentionMinutes` into the row's keep_until, after which
+      // its archive sweep drops the job unrun. Answer inference relies on that
+      // so a backed-up llm-background does not replay hours of stale guesses.
+      EventListenerRegistry.register('infer.question.answer', 'InferListener', 'infer', 'llm-background');
+      const service = makePgBossService();
+
+      await (service.send.bind(service) as LooseSend)(
+        'infer.question.answer',
+        { ownerId: 'u1', questionId: 'q1' },
+        { singletonKey: 'infer:u1:q1', retentionMinutes: 60 },
+      );
+
+      expect(bossSend.mock.calls[0][2]).toStrictEqual({
+        priority: DEFAULT_JOB_PRIORITY,
+        singletonKey: 'infer:u1:q1',
+        retentionMinutes: 60,
+      });
+    });
+
     it('enqueues nothing and warns when no queue listens to the event', async () => {
       EventListenerRegistry.register('note.created', 'NoteListener', 'onCreated', 'search-index');
       const service = makePgBossService();

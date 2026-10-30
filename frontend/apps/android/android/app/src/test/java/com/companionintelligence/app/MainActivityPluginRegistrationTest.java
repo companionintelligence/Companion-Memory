@@ -87,6 +87,14 @@ public class MainActivityPluginRegistrationTest {
             FcmStatusPlugin.class,
             registered.get(0)
         );
+        assertSame(
+            "SystemBarsPlugin must be the SECOND class handed to the Bridge.Builder, for the same reason: "
+                + "registered after super.onCreate() it would be silently ignored, and the strips WebViewInsets "
+                + "exposes beside the system bars would keep showing the launch splash. Registered order was: "
+                + registered,
+            SystemBarsPlugin.class,
+            registered.get(1)
+        );
         assertTrue(
             "Auth Tab must be registered in onCreate before the activity starts, or sign-in falls "
                 + "out to the system browser and never gets the in-app companion:// callback.",

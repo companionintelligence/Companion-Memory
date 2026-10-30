@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Post, Put, Req, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext } from '@ci/common/context';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';

@@ -351,9 +351,20 @@ export class BlueBubblesConfigService implements OnModuleInit {
     );
   }
 
+  /**
+   * Stamp a live delivery, and only on a connector that is switched on.
+   *
+   * The webhook controller already refuses a delivery while it is off, but it
+   * reads the row before this write. Without `AND enabled` here, a delivery that
+   * read the row just before an administrator switched the connector off would
+   * still stamp it, and every account's Services card would read that as
+   * activity on a connector that is off.
+   */
   async recordWebhookReceived(id: string): Promise<void> {
     await this.repo.manager.query(
-      `UPDATE ci.bluebubbles_config SET last_webhook_received_at = now(), updated_at = now() WHERE id = $1`,
+      `UPDATE ci.bluebubbles_config
+          SET last_webhook_received_at = now(), updated_at = now()
+        WHERE id = $1 AND enabled`,
       [id],
     );
   }

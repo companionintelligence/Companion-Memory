@@ -316,6 +316,41 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     expect(harness.resolveObservation).not.toHaveBeenCalled();
   });
 
+  it('never links a sighting a human answered "not a thing"', async () => {
+    const harness = makeHarness({ label: [{ object_id: OBJECT }] });
+    // What rejectObservation leaves: unconfirmed, unlinked, method `user`.
+    harness.findById.mockResolvedValue(
+      observation({ confirmedByUser: false, resolvedObjectId: null, resolutionMethod: 'user' }),
+    );
+
+    const outcome = await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
+
+    expect(outcome).toMatchObject({
+      applied: false,
+      objectId: null,
+      reason: 'user-rejected; left untouched',
+    });
+    expect(harness.resolveObservation).not.toHaveBeenCalled();
+  });
+
+  it('calls a retraction that kept its link a retraction, not a rejection', async () => {
+    const harness = makeHarness({ label: [{ object_id: OBJECT }] });
+    // What confirm(id, false) leaves when no resolution is passed: unconfirmed,
+    // still linked, method `user`.
+    harness.findById.mockResolvedValue(
+      observation({ confirmedByUser: false, resolvedObjectId: OTHER_OBJECT, resolutionMethod: 'user' }),
+    );
+
+    const outcome = await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
+
+    expect(outcome).toMatchObject({
+      applied: false,
+      objectId: OTHER_OBJECT,
+      reason: 'user-retracted; left untouched',
+    });
+    expect(harness.resolveObservation).not.toHaveBeenCalled();
+  });
+
   it('returns null for an observation that does not exist', async () => {
     const harness = makeHarness();
     harness.findById.mockResolvedValue(null as never);
@@ -331,5 +366,15 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     // The retired inventory listener wrote speculative possessions straight from a
     // vision guess; ci.object_observations exists to stop exactly that.
     expect(harness.statements.some(({ sql }) => sql.includes('INSERT INTO ci.objects'))).toBe(false);
+  });
+});
+
+describe('ObjectResolutionService.resolveUnresolved', () => {
+  it('sweeps only the sightings nobody has answered, not the ones a person sent back to review', async () => {
+    const harness = makeHarness();
+
+    await harness.service.resolveUnresolved(CONTEXT, { limit: 25 });
+
+    expect(harness.findForReview).toHaveBeenCalledWith(CONTEXT, 25, 0, { sentBack: false });
   });
 });

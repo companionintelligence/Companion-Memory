@@ -35,5 +35,29 @@ export interface ToolHandle<TOutput = unknown> {
    */
   privacyFor?(context: ToolRequestContext, input: unknown): Promise<IntentPrivacy | undefined>;
 
+  /**
+   * Why `input` could never run, or `undefined` when it is well formed.
+   *
+   * Asked before a call is parked for the owner's confirmation. `execute` validates its input
+   * anyway, but a queued call only reaches `execute` after someone has approved it, so a
+   * malformed one (a name where an id belongs, `entityId` for `entityIds`) used to become an
+   * Approvals card that could only fail. Answered here, the caller gets the reason at once and a
+   * model can correct its call in the same turn. Optional: a tool that answers nothing is queued
+   * as before.
+   */
+  checkInput?(input: unknown): string | undefined;
+
+  /**
+   * Why this caller's call could never run, for a reason only a lookup can tell, or `undefined`
+   * when nothing stands in its way.
+   *
+   * Asked before a call is parked for confirmation, after {@link checkInput}, for the same reason:
+   * a well-formed call can still be one `execute` refuses whatever the owner says (archiving a
+   * message, which archive cannot hide), and that refusal belongs to the caller now, not to an
+   * Approvals card that can only fail. A lookup that fails is not a refusal: the call is queued as
+   * before and `execute` decides. Optional.
+   */
+  checkCall?(context: ToolRequestContext, input: unknown): Promise<string | undefined>;
+
   execute(context: ToolRequestContext, input: unknown): Promise<ToolResult<TOutput>>;
 }

@@ -287,12 +287,30 @@ export class JobControlsService {
       const { concurrency, perQueueConcurrency, nonInteractive } = input.global;
 
       if (concurrency !== undefined) {
-        writes.push(numberWrite('global', GLOBAL_CONCURRENCY, this.checkConcurrency(concurrency)));
+        writes.push(
+          numberWrite(
+            'global',
+            GLOBAL_CONCURRENCY,
+            this.checkConcurrency(concurrency, 'The appliance-wide limit', {
+              most: config.queues.concurrency * queueWorkerProcesses(),
+              why: 'the figure this build ships with',
+              env: 'CI_QUEUE_CONCURRENCY',
+            }),
+          ),
+        );
       }
 
       if (perQueueConcurrency !== undefined) {
         writes.push(
-          numberWrite('global', GLOBAL_PER_QUEUE_CONCURRENCY, this.checkConcurrency(perQueueConcurrency)),
+          numberWrite(
+            'global',
+            GLOBAL_PER_QUEUE_CONCURRENCY,
+            this.checkConcurrency(perQueueConcurrency, 'The per-queue default', {
+              most: config.queues.perQueueConcurrency,
+              why: 'the figure this build ships with',
+              env: 'CI_QUEUE_PER_QUEUE_CONCURRENCY',
+            }),
+          ),
         );
       }
 
@@ -336,7 +354,24 @@ export class JobControlsService {
       }
 
       if (queue.concurrency !== undefined) {
-        writes.push(numberWrite('queue', queue.name, this.checkConcurrency(queue.concurrency)));
+        // The most this queue can ever run, against the SHIPPED per-queue
+        // default rather than the operator's current one: a number between the
+        // two is still worth storing, because it takes effect once that default
+        // is raised again. The card already says "Running at N" until then.
+        writes.push(
+          numberWrite(
+            'queue',
+            queue.name,
+            this.checkConcurrency(queue.concurrency, `The "${queue.name}" queue`, {
+              most: maxQueueConcurrency(config.queues.perQueueConcurrency, entry.localConcurrency),
+              why:
+                entry.localConcurrency != null && entry.localConcurrency < config.queues.perQueueConcurrency
+                  ? 'the limit its code declares'
+                  : 'the per-queue figure this build ships with',
+              env: entry.localConcurrency != null ? null : 'CI_QUEUE_PER_QUEUE_CONCURRENCY',
+            }),
+          ),
+        );
       }
     }
 
@@ -369,15 +404,50 @@ export class JobControlsService {
     return writes;
   }
 
-  private checkConcurrency(value: number | null): number | null {
+  /**
+   * `field` names the control in the refusal. The route's zod pipe used to
+   * check this range and report the path of the offending field; this message
+   * is the only place a caller that sent more than one number can now learn
+   * which one was refused.
+   *
+   * `cap.most` is the most the control can ever run. For the two global
+   * numbers that is the `max` the snapshot reports. For a queue it is the
+   * ceiling against the SHIPPED per-queue default, which the snapshot's `max`
+   * only equals while the operator has not lowered that default (see `plan`).
+   * A value above it used to be stored and then clamped, so 20 typed into a box
+   * that runs at 10 saved, showed 20 and ran 10. It is refused now, naming the
+   * number, because the snapshot's read-path clamp exists for rows an older
+   * build wrote, not as a second meaning for a fresh write.
+   */
+  private checkConcurrency(
+    value: number | null,
+    field: string,
+    cap: { most: number; why: string; env: string | null },
+  ): number | null {
     if (value === null) {
       return null;
     }
 
-    if (!Number.isInteger(value) || value < 1 || value > MAX_CONCURRENCY) {
+    const most = Math.min(cap.most, MAX_CONCURRENCY);
+
+    if (!Number.isInteger(value) || value < 1) {
       throw new BadRequestException(
-        `Concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}. There is deliberately no ` +
-          `spelling for "unlimited", and 0 is a disable expressed as a number — use the mode for that.`,
+        `Concurrency must be a whole number between 1 and ${most}. ${field} was given ` +
+          `${String(value)}. There is no setting for "unlimited", and 0 does not stop a queue: pause ` +
+          `or disable it instead.`,
+      );
+    }
+
+    if (value > most) {
+      // A shipped figure above MAX_CONCURRENCY (CI_QUEUE_CONCURRENCY set high)
+      // is still cut to it, so the reason has to say which bound applied.
+      const why = cap.most > MAX_CONCURRENCY ? 'the most any setting takes' : cap.why;
+
+      throw new BadRequestException(
+        `${field} can be at most ${most} (${why}). It was given ${String(value)}. ` +
+          (cap.env == null
+            ? 'Nothing on this page raises it.'
+            : `Running more than that is a ${cap.env} change and a restart, not a setting.`),
       );
     }
 

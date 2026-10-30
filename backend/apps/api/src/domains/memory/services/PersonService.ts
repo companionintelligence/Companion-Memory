@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
@@ -6,6 +6,7 @@ import { v7 as uuid7 } from 'uuid';
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { chunkedConflictInsert, keysetSeek } from '@ci/common/persistence';
+import { USER_EDITED_KEYS, userEditedKeys, userEditedListSql } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -23,8 +24,36 @@ import {
   personAppearanceListSql,
 } from './appearanceBrowse';
 import { EntityService } from './EntityService';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { type JsonbLeafPatch, buildJsonbLeafPatchSql } from './jsonbLeafPatch';
 import { type PurgedPeople, purgePersonAggregates } from './personPurge';
+
+/**
+ * Keys a sync stamps into a person's bag on every run, whatever else it changes:
+ * Google Contacts' `last_synced_at` and Facebook's `facebook_data.last_synced`.
+ */
+const SYNC_STAMP_KEYS = new Set(['last_synced', 'last_synced_at']);
+
+/**
+ * A properties value without its sync stamps, at any depth, for Change History.
+ * A re-sync that moves only a stamp has not changed the person, and recording
+ * one would add a row per contact on every sync.
+ */
+function withoutSyncStamps(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutSyncStamps);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !SYNC_STAMP_KEYS.has(key))
+        .map(([key, nested]) => [key, withoutSyncStamps(nested)]),
+    );
+  }
+
+  return value;
+}
 
 /** Map properties JSONB identity keys onto the typed Person columns. */
 function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
@@ -102,6 +131,50 @@ const PERSON_NAME_LOOKS_IMPLAUSIBLE_SQL = `CASE
   ELSE 0
 END`;
 
+/**
+ * A jsonb value with the form's empties (JSON null, `""`, `[]`) read as SQL
+ * NULL, so a field the form sends back blank compares equal to one the row
+ * never had.
+ */
+function emptyJsonbSql(value: string): string {
+  return `NULLIF(NULLIF(NULLIF(${value}, 'null'::jsonb), '""'::jsonb), '[]'::jsonb)`;
+}
+
+/**
+ * `{"user_edited_keys": […]}` for a hand edit in {@link PersonService.patch}, or
+ * `{}` when there is nothing to list: the keys already listed, plus each
+ * patched key whose stored value differs from the one arriving (missing, null,
+ * `""` and `[]` all read as empty, so clearing a value that was there counts and
+ * "clearing" an absent one does not), plus `name` / `description` when this
+ * edit changes the column (NULL and `''` alike: the form sends a blank
+ * description as `''`). Evaluated inside the UPDATE, so `properties`, `name`
+ * and `description` are the row as it was before this statement.
+ */
+function handEditedKeysSql(data: { name?: string; description?: string }): string {
+  const sources = [
+    `SELECT held.member #>> '{}' AS key FROM jsonb_array_elements(${userEditedListSql('properties')}) AS held(member) ` +
+      `WHERE jsonb_typeof(held.member) = 'string'`,
+    `SELECT patched.key FROM jsonb_each(:propertiesPatch::jsonb) AS patched(key, value) ` +
+      `WHERE ${emptyJsonbSql('properties -> patched.key')} IS DISTINCT FROM ${emptyJsonbSql('patched.value')}`,
+    ...(data.name !== undefined
+      ? [`SELECT 'name' WHERE NULLIF(name, '') IS DISTINCT FROM NULLIF(CAST(:editedName AS text), '')`]
+      : []),
+    ...(data.description !== undefined
+      ? [
+          `SELECT 'description' WHERE NULLIF(description, '') IS DISTINCT FROM ` +
+            `NULLIF(CAST(:editedDescription AS text), '')`,
+        ]
+      : []),
+  ];
+
+  return (
+    `(SELECT CASE WHEN listed.keys IS NULL THEN '{}'::jsonb ` +
+    `ELSE jsonb_build_object('${USER_EDITED_KEYS}', listed.keys) END ` +
+    `FROM (SELECT jsonb_agg(DISTINCT edited.key ORDER BY edited.key) AS keys ` +
+    `FROM (${sources.join(' UNION ')}) AS edited) AS listed)`
+  );
+}
+
 @Injectable()
 export class PersonService extends EntityService<PersonEntity, Person> {
   constructor(
@@ -109,6 +182,9 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     personRepository: Repository<PersonEntity>,
     private readonly logger: LoggerService,
     private readonly eventService: EventService,
+    // Change History. Optional so unit harnesses that build the service by hand
+    // keep working; the module always provides it.
+    @Optional() private readonly graphDeltaWriter?: GraphDeltaWriter,
   ) {
     super(personRepository, PersonEntity);
     this.logger.setContext(PersonService.name);
@@ -156,7 +232,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     // always fires here.
     let entity: PersonEntity;
     try {
-      entity = await this.repository.manager.transaction((manager) => {
+      entity = await this.repository.manager.transaction(async (manager) => {
         const instance = this.repository.create({
           id: data.id || uuid7(),
           name: data.name,
@@ -169,7 +245,21 @@ export class PersonService extends EntityService<PersonEntity, Person> {
           ...typedColumnsFromProperties(properties),
         });
 
-        return this.persistCreate(manager, instance);
+        const saved = await this.persistCreate(manager, instance);
+
+        await this.graphDeltaWriter?.entityCreated({
+          entityId: saved.id,
+          entityType: 'Person',
+          name: saved.name,
+          description: saved.description,
+          properties: saved.properties,
+          ownerUserId: context.userId,
+          changeSource: 'PersonService.create',
+          changedByUserId: context.userId,
+          manager,
+        });
+
+        return saved;
       });
     } catch (err) {
       // Lost a race to a concurrent insert of the same linked key (23505) —
@@ -535,12 +625,40 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     return query.getCount();
   }
 
-  async update(context: ServiceContext, id: string, data: UpdatePersonDto): Promise<Person | null> {
+  /**
+   * @param options.source Who is writing, for Change History (`change_source`):
+   *   the syncs and background writers that come through here name themselves,
+   *   e.g. `TransformGoogleContacts.processContact`.
+   */
+  async update(
+    context: ServiceContext,
+    id: string,
+    data: UpdatePersonDto,
+    options: { source?: string } = {},
+  ): Promise<Person | null> {
     const { properties, ...rest } = data;
+    let beforeRow = null as PersonEntity | null;
 
     const after = await this.applyUpdate(context, id, (before) => {
+      beforeRow = before;
+      const stored = (before.properties ?? {}) as Record<string, unknown>;
+      // What a person set in Edit Person (`patch` with `handEdit`) outranks the
+      // syncs and background writers that come through here (Google and
+      // Facebook contacts, memory compaction): their value for a hand-set key,
+      // or a hand-set name or description, is dropped, as an import's is.
+      const handSet = new Set(userEditedKeys(stored));
+      // Written back as stored rather than left out, so a name-only update of a
+      // hand-named person is still a (no-op) write and not an empty one.
+      const columns = {
+        ...rest,
+        ...(handSet.has('name') && rest.name !== undefined ? { name: before.name } : {}),
+        ...(handSet.has('description') && rest.description !== undefined
+          ? { description: before.description }
+          : {}),
+      };
+
       if (!properties) {
-        return rest;
+        return columns;
       }
 
       // Callers routinely round-trip an egress bag, and toEgressType strips
@@ -548,12 +666,26 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       // An absent normalized key therefore means "unchanged", not "cleared":
       // carry the stored value over, and only sync a typed column when its
       // storage key is explicitly present in the incoming bag.
-      const stored = (before.properties ?? {}) as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...properties };
       for (const [storageKey] of NORMALIZED_PERSON_FIELDS) {
         if (!(storageKey in properties) && storageKey in stored) {
           merged[storageKey] = stored[storageKey];
         }
+      }
+
+      for (const key of handSet) {
+        if (key in stored) {
+          merged[key] = stored[key];
+        } else {
+          delete merged[key];
+        }
+      }
+
+      // The list is only ever written by a hand edit, never taken from a caller's bag.
+      if (USER_EDITED_KEYS in stored) {
+        merged[USER_EDITED_KEYS] = stored[USER_EDITED_KEYS];
+      } else {
+        delete merged[USER_EDITED_KEYS];
       }
 
       const typedAll = typedColumnsFromProperties(properties);
@@ -565,19 +697,19 @@ export class PersonService extends EntityService<PersonEntity, Person> {
         isSelf?: boolean;
       } = {};
 
-      if ('first_name' in properties) {
+      if ('first_name' in properties && !handSet.has('first_name')) {
         typed.firstName = typedAll.firstName;
       }
 
-      if ('middle_name' in properties) {
+      if ('middle_name' in properties && !handSet.has('middle_name')) {
         typed.middleName = typedAll.middleName;
       }
 
-      if ('last_name' in properties) {
+      if ('last_name' in properties && !handSet.has('last_name')) {
         typed.lastName = typedAll.lastName;
       }
 
-      if ('birth_date' in properties) {
+      if ('birth_date' in properties && !handSet.has('birth_date')) {
         typed.birthDate = typedAll.birthDate;
       }
 
@@ -586,7 +718,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       }
 
       return {
-        ...rest,
+        ...columns,
         ...typed,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         properties: merged as any, // TypeORM will handle JSON serialization
@@ -597,6 +729,10 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       return null;
     }
 
+    if (beforeRow) {
+      await this.recordUpdate(context, beforeRow, after, options.source ?? 'PersonService.update');
+    }
+
     await this.eventService.send(PersonUpdatedEvent, {
       personId: id,
     });
@@ -605,16 +741,63 @@ export class PersonService extends EntityService<PersonEntity, Person> {
   }
 
   /**
+   * One Change History row for an {@link update}: name, description and every
+   * property key whose value moved between the row as it was and as it is now.
+   * A sync that writes the same bag back records nothing, sync stamps aside
+   * (see {@link withoutSyncStamps}).
+   */
+  private async recordUpdate(
+    context: ServiceContext,
+    before: PersonEntity,
+    after: PersonEntity,
+    source: string,
+  ): Promise<void> {
+    const was = withoutSyncStamps(before.properties ?? {}) as Record<string, unknown>;
+    const now = withoutSyncStamps(after.properties ?? {}) as Record<string, unknown>;
+    const changedFields = {
+      ...changedFieldsBetween(
+        { name: before.name, description: before.description },
+        { name: after.name, description: after.description },
+        ['name', 'description'],
+      ),
+      ...changedFieldsBetween(was, now, new Set([...Object.keys(was), ...Object.keys(now)])),
+    };
+
+    if (Object.keys(changedFields).length === 0) {
+      return;
+    }
+
+    await this.graphDeltaWriter?.entityUpdated({
+      entityId: after.id,
+      entityType: 'Person',
+      name: after.name,
+      changedFields,
+      ownerUserId: after.userId ?? null,
+      changeSource: source,
+      changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+    });
+  }
+
+  /**
    * Partial update for the structured-person editor: merges `propertiesPatch`
    * into the existing properties JSONB (single-statement `properties || patch`,
    * so concurrent patches to different keys don't clobber each other) and
    * updates name/description only when provided. A patch key set to null
    * clears that property.
+   *
+   * `handEdit` is the Edit Person form saving: every key whose value this
+   * statement changes or clears (and `name` / `description`, when they change)
+   * is added to `properties.user_edited_keys`, and a later import or sync leaves
+   * those alone (`USER_EDITED_KEYS` in graph/utils/ingestedProperties.ts, and
+   * {@link update}). The form sends every field back on each save, so the
+   * comparison is with the stored value, in the same statement: an unchanged
+   * field is not claimed.
    */
   async patch(
     context: ServiceContext,
     id: string,
     data: { name?: string; description?: string; propertiesPatch?: Record<string, unknown> },
+    options: { handEdit?: boolean } = {},
   ): Promise<Person | null> {
     const set: Record<string, unknown> = {};
     if (data.name !== undefined) {
@@ -625,8 +808,17 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       set.description = data.description;
     }
 
-    if (data.propertiesPatch && Object.keys(data.propertiesPatch).length > 0) {
-      set.properties = () => `properties || :propertiesPatch::jsonb`;
+    const hasPatch = data.propertiesPatch != null && Object.keys(data.propertiesPatch).length > 0;
+    const claimsColumn =
+      options.handEdit === true && (data.name !== undefined || data.description !== undefined);
+
+    if (hasPatch || claimsColumn) {
+      set.properties = options.handEdit
+        ? () => `(COALESCE(properties, '{}'::jsonb) || :propertiesPatch::jsonb) || ${handEditedKeysSql(data)}`
+        : () => `properties || :propertiesPatch::jsonb`;
+    }
+
+    if (hasPatch && data.propertiesPatch) {
       // Keep typed columns in sync with the structured-person editor patch.
       const typed = typedColumnsFromProperties(data.propertiesPatch);
       if ('first_name' in data.propertiesPatch) {
@@ -655,6 +847,11 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       return this.findById(context, id);
     }
 
+    // What the row held, so Change History can say what this edit changed.
+    const before = this.graphDeltaWriter
+      ? await this.repository.findOne({ where: { id, ...this.scopeToUser(context) } })
+      : null;
+
     let qb = this.repository
       .createQueryBuilder()
       .update()
@@ -667,7 +864,15 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     }
 
     if (set.properties) {
-      qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch));
+      qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch ?? {}));
+    }
+
+    if (options.handEdit && data.name !== undefined) {
+      qb = qb.setParameter('editedName', data.name);
+    }
+
+    if (options.handEdit && data.description !== undefined) {
+      qb = qb.setParameter('editedDescription', data.description);
     }
 
     const result = await qb.execute();
@@ -676,11 +881,52 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       return null;
     }
 
+    if (before) {
+      await this.recordPatch(context, before, data);
+    }
+
     await this.eventService.send(PersonUpdatedEvent, {
       personId: id,
     });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * One Change History row for a {@link patch}, holding only the fields whose
+   * value moved. The Edit Person form sends every field back, changed or not,
+   * so the patch itself is not the change.
+   */
+  private async recordPatch(
+    context: ServiceContext,
+    before: PersonEntity,
+    data: { name?: string; description?: string; propertiesPatch?: Record<string, unknown> },
+  ): Promise<void> {
+    const patchKeys = Object.keys(data.propertiesPatch ?? {});
+    // `!== undefined`, not `??`: an explicit null is a clear that `patch` writes.
+    const name = data.name !== undefined ? data.name : before.name;
+    const description = data.description !== undefined ? data.description : before.description;
+    const changedFields = {
+      ...changedFieldsBetween({ name: before.name, description: before.description }, { name, description }, [
+        'name',
+        'description',
+      ]),
+      ...changedFieldsBetween(before.properties ?? {}, data.propertiesPatch ?? {}, patchKeys),
+    };
+
+    if (Object.keys(changedFields).length === 0) {
+      return;
+    }
+
+    await this.graphDeltaWriter?.entityUpdated({
+      entityId: before.id,
+      entityType: 'Person',
+      name,
+      changedFields,
+      ownerUserId: before.userId,
+      changeSource: 'PersonService.patch',
+      changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+    });
   }
 
   /**

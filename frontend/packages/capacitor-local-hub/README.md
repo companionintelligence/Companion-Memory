@@ -115,6 +115,7 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 | --- | --- | --- |
 | `POST` | `/api/outbox` | Enqueue one item. `201`, or `507` when full. |
 | `GET` | `/api/outbox` | List items oldest-first. Optional `?status=pending\|needs_attention\|all` (default `all`). |
+| `DELETE` | `/api/outbox` | Remove every item. Sign-out only. `200 {"deleted": n}`. |
 | `GET` | `/api/outbox/{id}` | One item **including** `payload`. `404` if unknown. |
 | `DELETE` | `/api/outbox/{id}` | Remove one item (successful flush, or deliberate user discard). `204` / `404`. |
 | `POST` | `/api/outbox/{id}/attempt` | Record a flush outcome. `204` on success, `200` with the updated item on failure, `404` if unknown. |
@@ -128,7 +129,8 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
   "kind": "note",                          // opaque to the sidecar ("note" | "capture" | …)
   "payload": { "text": "…" },              // opaque JSON object the flusher POSTs onward
   "capturedAt": "2026-08-13T10:00:00.000Z",// ISO-8601, CLIENT time at capture
-  "idempotencyKey": "01J…"                 // client-generated ULID/UUID
+  "idempotencyKey": "01J…",                // client-generated ULID/UUID
+  "owner": "https://memory.example.com 1a2b…" // optional; opaque account + server stamp
 }
 // 201
 { "id": "…", "status": "pending", "capturedAt": "2026-08-13T10:00:00.000Z", "seq": 1 }
@@ -142,8 +144,14 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
   differing `payload` on a replay is ignored -- first write wins. Answering `201` on a
   replay is deliberate: the caller retried because it never saw the first response, so it
   should not have to special-case the second one.
-- Missing/blank `kind`, `capturedAt`, or `idempotencyKey`, or a `payload` that isn't a JSON
-  object, are rejected `400 {"error":"invalid_request","detail":"…"}`.
+- `owner` names the account and Memory server the capture belongs to. The sidecar stores it
+  and hands it back on every item; it never interprets it. The web flusher sends a row only
+  under the session it was stamped for, so a capture queued by one person cannot upload
+  into the next account signed in on the same phone. A row from a client that sent no
+  `owner` (or from before the column existed) reads back as `"owner": null`.
+- Missing/blank `kind`, `capturedAt`, or `idempotencyKey`, a `payload` that isn't a JSON
+  object, or an `owner` that is present but not a non-empty string, are rejected
+  `400 {"error":"invalid_request","detail":"…"}`.
 - `507 {"error":"outbox_full","detail":"…"}` when the queue is at its cap (below).
 
 **List** — `GET /api/outbox`
@@ -152,7 +160,7 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 {
   "items": [
     { "id": "…", "kind": "note", "capturedAt": "…", "seq": 1,
-      "status": "pending", "attempts": 0, "lastError": null }
+      "status": "pending", "attempts": 0, "lastError": null, "owner": "…" }
   ],
   "counts":   { "pending": 1, "needsAttention": 0, "total": 1 },
   "capacity": { "max": 5000, "used": 1, "warnAt": 4000 }
@@ -166,7 +174,8 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 - **List responses deliberately omit `payload`** -- payloads can be large (media, long
   notes) and a queue-depth poll shouldn't stream them. Use `GET /api/outbox/{id}` for the
   full item.
-- `lastError` is always present, `null` when there has been no failure.
+- `lastError` is always present, `null` when there has been no failure. `owner` is always
+  present too, `null` on a row queued without one.
 
 **Attempt** — `POST /api/outbox/{id}/attempt`
 
@@ -292,8 +301,10 @@ out of `start()`. The failure mode is a visible, retryable error — never a que
 mysteriously empty. These rows have never reached any server; losing them would be precisely
 what the outbox exists to prevent.
 
-This is a file-level cutover, not a `SQLiteOpenHelper` version step, so `DATABASE_VERSION`
-stays at `1` and `onUpgrade` still throws. (`SECURITY_ARCHITECTURE.md` §2.1 suggested bumping
+This is a file-level cutover, not a `SQLiteOpenHelper` version step. `DATABASE_VERSION` went
+to `2` later, for the `owner` column alone: `onUpgrade` adds it to an existing table
+(`NULL` on every row already queued) and still throws for any other step. The plaintext
+import copies the v1 columns by name, so a predecessor file without `owner` still imports. (`SECURITY_ARCHITECTURE.md` §2.1 suggested bumping
 it; against a brand-new file that would be a no-op, since `onCreate` runs and `onUpgrade` never
 fires. The guard against destructive upgrades is worth more than the version number.)
 
@@ -408,6 +419,104 @@ These are deliberate follow-up slices, not oversights:
   observable API. Getting it wrong would mean a slower cold start, not a weaker database.
 - **iOS: builds, launches, and creates the outbox -- but the ciphertext assertion above has
   no iOS equivalent yet.** See the section below.
+
+## Motion-gated background location (Android; implemented)
+
+`startSignificantLocationUpdates` / `stopSignificantLocationUpdates` have an Android half
+under `android/src/main/java/com/companionintelligence/localhub/location/`. iOS keeps
+significant-change monitoring; the JS contract is one method on both.
+
+**Why.** A location request that stays open for as long as Always is on keeps the GPS
+receiver on around the clock, including the hours the phone spends sitting still.
+`@capacitor-community/background-geolocation`'s once-per-second request measured at about a
+quarter of the phone's daily drain; the always-on `LocationService` that replaced it (while
+the background-location grant was off the table) idled better but still held a request all
+day.
+
+**What runs.** GPS only while moving, decided by signals that need nothing beyond the
+location grants Always already holds. The activity-recognition API is deliberately not
+used: it is its own "Physical activity" runtime permission, which reads as a different kind
+of monitoring than location, and iOS's significant-change monitoring asks for nothing of
+the sort.
+
+| Signal | Source | Permission | Role |
+|---|---|---|---|
+| moving → still | the fixes: no 50 m of movement from where movement was last confirmed, for 5 minutes | location | stop `LocationService`, set a 100 m exit geofence at the resting spot |
+| moving → still (sooner) | `TYPE_STATIONARY_DETECT` one-shot sensor (five seconds at rest); armed only while the service runs | none | never stops GPS by itself (a red light fires it too); shortens the fixes clock to 3 minutes |
+| still → moving | the exit geofence, and nothing else | location + background location | evaluated by Android with cheap location, survives the process being frozen or killed, exempt for starting a location foreground service from the background |
+| service refused | `startForegroundService` throws `ForegroundServiceStartNotAllowedException` | — | treated as "still": fence the fused provider's last known fix (then the last fix seen) and wait for the exit; with no location at all, stay "moving" and restart on the next resume |
+| service missing on resume | state says moving, `LocationService.isRunning` is false | — | start it (allowed: the app is on screen); a running service, swiped notification or not, is never touched |
+| reboot / app update | `TrackingRestoreReceiver` (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) | `RECEIVE_BOOT_COMPLETED` (normal) | put the fence back, or restart the service mid-trip; `TrackingRestoreWorker` retries while Play Services comes up |
+| background grant lapsed | the fence cannot be registered and `ACCESS_BACKGROUND_LOCATION` is no longer held | — | one notification asking for an app open, where the web side re-prompts; never posted while the app is on screen |
+
+The geofence broadcast reaches `GeofenceReceiver` with no WebView, no plugin instance and no
+JavaScript. `LocationService` (foreground service type `location`, with the notification
+Android requires) runs in between and feeds every fix to `LocationTracker`.
+
+**Why no sensor restarts sampling.** Since Android 9 an app in the background with no
+foreground service receives no sensor events, one-shot triggers included. On a device, the
+significant-motion trigger fired for the system's own listeners while this app's, registered
+the same way, never heard it: the app had been frozen a minute after the stop. The
+activity-recognition API is the OS-sanctioned route around that (Play Services delivers it
+as a PendingIntent) and is exactly the permission this design declines. The stationary
+sensor is unaffected, because it is only needed while the service is running, which keeps
+the app eligible. The trade-off, stated plainly: the first stretch of every trip (the fence
+radius plus Play Services' evaluation latency, typically a few hundred metres on foot and a
+kilometre or two by car) is not sampled, and a trip shorter than the radius is not sampled
+at all.
+
+**When Android refuses the service.** A location foreground service may not be started from
+the background, and "background" is wider than it sounds: an app launched behind the lock
+screen (uid state `TOP_SLEEPING`, which is what `cap run`'s install-and-launch does to a locked
+phone) or re-armed while another app is on screen is refused too. An earlier revision swallowed
+that exception and recorded "moving" anyway: no GPS, no fence, and nothing that could ever
+wake it. A phone sat in that state for three days (2026-10-09 15:52 to 10-12), and every trip in
+between went unrecorded; `dumpsys activity services` showed the record with
+`startForegroundCount=0`, `uidState: TPSL`, `code:DENIED`. Now `startSampling` reports the
+refusal, and the tracker fences the phone's last known location and waits for the exit, the
+one restart Android always allows. A second guard runs on every resume: if the state says
+moving and the service is not alive in this process (refused with nothing to fence, or the
+process died mid-trip before the sticky restart), it is started then, while the app is on
+screen and the start is permitted. It is never restarted while running, so a swiped-away
+notification stays away.
+
+**What is recorded.** The tracker applies the web side's gate (150 m or 5 min, fixes looser
+than 200 m dropped) and queues each accepted fix into the encrypted outbox from native code,
+through the same `OutboxStore` the HTTP sidecar uses (`OutboxStores.shared`, one instance per
+process so the idempotency check stays atomic). The record is `PositionRecordJson`, built
+field for field like `buildPositionRecord` in `@ci/common` and pinned to the same fixture in
+`PositionRecordJsonTest` and `deviceSourceLocation.test.ts`; the `source_id`
+(`<deviceKey>:<epochMillis>`) is the outbox's idempotency key, so when the plugin is alive
+and also hands the fix to JS as `significantLocation`, the web side's re-enqueue is a no-op.
+Fixes are recorded whether or not the app is on screen: there is no second recorder.
+
+**What JS hands over** (`SignificantLocationOptions` in `src/definitions.ts`): the device
+key, provider, outbox owner stamp, the gate numbers, the geofence radius and the
+notification copy — every value the web side owns, persisted in SharedPreferences so a
+broadcast-started process builds exactly the record the web side would have. Nothing is
+invented natively; a missing `deviceKey` rejects the call.
+
+**Permissions.** `@CapacitorPlugin(permissions = …)` declares two aliases — `location`,
+`backgroundLocation` — and `startSignificantLocationUpdates` walks them in the order
+Android insists on (fine first; background on its own prompt, a Settings page from API 31).
+Either refused → the call resolves, nothing is armed, and `significantLocationError`
+`NOT_AUTHORIZED` fires, the iOS shape. No `ACTIVITY_RECOGNITION` anywhere in the manifest.
+
+**State** lives in `SharedPreferencesTrackingStateStore` (config, moving/still, the last
+queued fix for the gate, the last seen fix for the geofence centre, the still clock and the
+stationary-sensor note) so a new process picks up mid-journey; a state saved by the
+always-on predecessor (config + last queued fix only) reads as "moving", and the first fix
+sets the rest. `LocationTrackerTest` drives the state machine through a fake platform and
+the test support's `FakeOutbox`; `LocationSamplingGateTest` and `PositionRecordJsonTest` pin
+the pure pieces.
+
+**Verifying on a device.** `adb shell dumpsys location`: at rest, no `ProviderRequest`
+with this app's uid. `adb shell dumpsys activity services <pkg>`: no `LocationService` at
+rest, one while moving. `adb shell dumpsys activity service com.google.android.gms` →
+"Geofencing:" lists the registered fence (empty = none). `adb shell dumpsys batterystats
+--charged` after a day: the `gnss` line should cover the moving minutes, not the whole
+period. Logcat tags: `LocationService`, `LocationPlatform`, `LocationGeofence`,
+`LocationRestore`.
 
 ## Package layout
 
@@ -557,6 +666,43 @@ the most important one.
   check); this is a straightforward byte-array XOR loop with no exotic API surface, so
   it carries the same "should be correct, unverified" caveat as the rest of the file
   rather than any GCDWebServer-specific uncertainty.
+
+### iOS Always location tracking -- relaunch handling (2026-10-20, uncompiled)
+
+Until this change iOS Always was `SignificantLocationMonitor` started by JavaScript and
+emitting to JavaScript: swiping the app away ended it, nothing restarted it on the
+background relaunches iOS performs for a location event or after a reboot, and a fix with
+no WebView to receive it was lost. It now mirrors the Android design one file at a time:
+
+- `LocationTrackingConfig.swift`, `LocationSamplingGate.swift`, `PositionRecordJson.swift`
+  are the Kotlin files of the same names, by hand. `PositionRecordJsonTest.kt` and the web
+  side's `deviceSourceLocation.test.ts` pin the record shape; the Swift builder has no test
+  of its own yet (no Mac in the environment this was written in) and must be checked against
+  that fixture at the first Xcode build.
+- `LocationTracking.swift` is the tracker: armed state in `UserDefaults`
+  (`TrackingStateStore`), `arm` / `disarm` from the plugin, `onFix` running the gate and
+  enqueueing into the encrypted outbox through `OutboxStore.shared()` -- one connection for
+  the whole process, which `LocalHubServer` now uses too -- and `handleAppLaunch`, which
+  `AppDelegate.application(_:didFinishLaunchingWithOptions:)` calls on every launch. With
+  Always armed it restarts the monitor before the method returns, which is what makes iOS
+  deliver the fix that caused a background relaunch.
+- `SignificantLocationMonitor` additionally keeps one `CLCircularRegion` of
+  `minDistanceMeters` around the last queued fix, exit-only, re-centred on each accepted
+  fix. A region exit is the relaunch trigger iOS is most reliable about after a reboot; the
+  fix Core Location already holds is used when at most two minutes old.
+- A lapsed Always grant (the periodic reminder, or Settings) means a relaunch can start
+  nothing: the tracker posts one local notification, "Location recording paused", and the
+  next app open re-arms through the web side's two-step prompt. The plugin's `load()` and
+  `didBecomeActive` also call `resumeIfArmed()`, so an open repairs it even without the tap.
+
+Not covered, by design of the platform: an app the person force-quit from the switcher is
+not relaunched by iOS for location events until it is next opened.
+
+**Verify on the Mac before trusting any of it:** build; turn Always on; swipe the app
+away; drive ~1 km; open the app and check `GET /api/outbox` lists `positions` rows captured
+while it was gone. Then reboot with Always on and repeat. Expect the geofence to need the
+`location` background mode that `Info.plist` already declares, and expect the record
+fixture test to be the first thing to add once `swiftc` is at hand.
 
 ### Outbox on iOS -- additional unverified surface
 

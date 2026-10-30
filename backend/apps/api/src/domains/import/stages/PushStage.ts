@@ -31,6 +31,7 @@ import {
   CalendarEventService,
   CommunicationService,
   ContentService,
+  type CreateCommunicationDto,
   type CreateContentDto,
   ItemService,
   ObjectObservationService,
@@ -47,6 +48,7 @@ import {
   edgeProjectionSourcesFor,
   isRepresentedElsewhere,
   toCanonical,
+  withOrigin,
   type CanonicalRecord,
   type Destination,
 } from '../push/canonical';
@@ -79,11 +81,11 @@ import {
 import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
+  isOwnerContact,
   makeIsSelf,
-  matchOwner,
   NOBODY_IS_SELF,
   readSelfIdentity,
-  shouldMapContactToSelf,
+  readSentLabelSenders,
   type SelfIdentity,
 } from '../push/self';
 import {
@@ -111,6 +113,12 @@ type TrustMode = 'cautious' | 'balanced' | 'hands_off';
 const PUSH_BATCH = 500;
 
 /** The `staged_items` columns a {@link StagedItem} is built from, camel-cased. */
+/** What a batch row carries about its run's origin — see `withOrigin`. */
+interface RunOrigin {
+  originPlatform?: string | null;
+  originConnectionId?: string | null;
+}
+
 const STAGED_ITEM_COLUMNS = `id, run_id AS "runId", user_id AS "userId", data_source AS "dataSource",
               classification, content_hash AS "contentHash", occurred_at AS "occurredAt",
               timespan_end AS "timespanEnd", latitude, longitude, filename,
@@ -284,6 +292,44 @@ export const DESTINATION_ORDER: readonly Destination[] = [
  * the provenance is the only thing that tells the two apart afterwards.
  */
 const PRODUCT_IDENTIFIER_SOURCE = 'import';
+
+/**
+ * A mail's direction once its sender is known.
+ *
+ * The email parsers read a message with no receiving-MTA headers as outbound
+ * (`DirectionBasis: 'no_delivery_trace'`, email_direction.ts): on a real export
+ * that is the owner's sent copy. It is only an absence, though, and the parser
+ * cannot know who the owner is. Here the push does: when the sender resolved to
+ * somebody other than the owner, the From carries an address (so it is that
+ * person's, not the owner's: an owner address maps to the self Person), and the
+ * owner is among the To/Cc, it is mail somebody sent the owner, so inbound.
+ *
+ * A Gmail Sent label (`sent_label`) and delivery headers (`delivery_trace`) are
+ * the parser's own evidence and are never overruled. Mail the owner sent from
+ * an address Memory does not know to a third party stays outbound: the owner is
+ * not a recipient.
+ */
+export function directionAfterSender<D extends string | undefined>(
+  direction: D,
+  record: CanonicalRecord,
+  participants: Map<string, string[]>,
+  from: string | undefined,
+  selfEntityId: string | null,
+): D | 'inbound' {
+  const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+
+  if (direction !== 'outbound' || metadata.DirectionBasis !== 'no_delivery_trace' || selfEntityId == null) {
+    return direction;
+  }
+
+  const sender = typeof metadata.From === 'string' ? metadata.From : '';
+  const senderIsSomeoneElse = from != null && from !== selfEntityId && /[^\s<>"]+@[^\s<>"]+/.test(sender);
+  const ownerIsRecipient = [...(participants.get('to') ?? []), ...(participants.get('cc') ?? [])].includes(
+    selfEntityId,
+  );
+
+  return senderIsSomeoneElse && ownerIsRecipient ? 'inbound' : direction;
+}
 
 /** One staged row's journey through a batch: what it is, where it goes, what happened. */
 interface RowPlan {
@@ -553,10 +599,18 @@ export class PushStage implements ImportStageRunner {
     // (see push/self), and a run is hundreds of thousands of records — this
     // cannot be a per-record, or even a per-batch, lookup. Also drives owner
     // contact → self Person redirect during entity push.
-    const isSelf = await this.resolveIsSelf(context);
+    //
+    // The owner's self Person comes FIRST, and is made here when the account has
+    // none: onboarding is what creates it, and an import can run before then.
+    // Without it `selfEntityId` is null for the whole run, so mail the owner
+    // sent from their account address is filed under a Person of its own and a
+    // header-less mail to the owner keeps the parser's `outbound` (see
+    // {@link directionAfterSender}). It also has to precede `resolveIsSelf`,
+    // which reads the names and addresses the Person holds.
     const selfEntityId = await this.retrying(context, 'reading the owner', () =>
-      this.resolveSelfEntityId(context.userId),
+      this.resolveSelfEntityId(context),
     );
+    const isSelf = await this.resolveIsSelf(context);
     const trustMode = await this.retrying(context, 'reading the owner’s trust mode', () =>
       this.resolveTrustMode(context.userId),
     );
@@ -1269,6 +1323,18 @@ export class PushStage implements ImportStageRunner {
         return { names: [], email: null, phones: [] };
       }),
     );
+    // The addresses the owner's own Sent mail in this run went out from. Fail-safe
+    // to none, as the identity above is: they only add owner addresses.
+    const sentFrom = await this.retrying(context, 'reading the owner’s sent addresses', () =>
+      readSentLabelSenders(this.dataSource, context.runId).catch((err: unknown): string[] => {
+        if (isTransientDatabaseError(err)) {
+          throw err;
+        }
+
+        return [];
+      }),
+    );
+    identity.emails = [...new Set([...(identity.emails ?? []), ...sentFrom])];
 
     // Several staged rows can share a natural key — the same artist reached by
     // two parsers in one archive — so the key maps to a LIST. Ingest is given
@@ -1940,9 +2006,19 @@ export class PushStage implements ImportStageRunner {
    * parser staged it, and a record's participants and its edges stay near each
    * other rather than being scattered across batches.
    */
-  private async nextBatch(runId: string): Promise<StagedItem[]> {
-    return this.dataSource.query<StagedItem[]>(
-      `SELECT ${STAGED_ITEM_COLUMNS}
+  /**
+   * The next rows to push, each carrying its run's `origin_platform` — the
+   * platform a connection fetched the run's bytes from, if one did (see
+   * `withOrigin`). Read with the batch rather than in a query of its
+   * own so it shares the batch read's retry and adds no round trip.
+   */
+  private async nextBatch(runId: string): Promise<Array<StagedItem & RunOrigin>> {
+    return this.dataSource.query<Array<StagedItem & RunOrigin>>(
+      `SELECT ${STAGED_ITEM_COLUMNS},
+              (SELECT r.origin_platform FROM ci_import.import_runs r
+                WHERE r.id = staged_items.run_id) AS "originPlatform",
+              (SELECT r.origin_connection_id FROM ci_import.import_runs r
+                WHERE r.id = staged_items.run_id) AS "originConnectionId"
          FROM ci_import.staged_items
         WHERE run_id = $1::uuid AND push_status = 'pending'
         ORDER BY id
@@ -2070,13 +2146,57 @@ export class PushStage implements ImportStageRunner {
     }
   }
 
-  private async resolveSelfEntityId(userId: string): Promise<string | null> {
+  /**
+   * The owner's self Person, made first when the account has none yet.
+   *
+   * `ci.users.entity_id` stays NULL until onboarding finishes (or something
+   * self-anchored is ingested), and an import can start before that. Left
+   * NULL, the whole run treats the owner as nobody — see the call in `run`.
+   * {@link GraphIngestService.ensureSelfEntityForOwner} is the one place the
+   * server makes that Person: a set-based upsert on a stable key, a pointer only
+   * set while still NULL, and a re-read so a concurrent winner is honoured, so
+   * the several workers of one import end on ONE Person, and onboarding
+   * finishing afterwards finds the pointer and reuses that Person
+   * (`OnboardingService.createPersonForUser`). Onboarding running at the same
+   * time creates its self Person under the same key, so it is handed that same
+   * row rather than making a second; and an account left with an `is_self`
+   * Person but no pointer has that Person adopted, not joined by another. An
+   * account that already has a pointer is returned as it is, untouched: nothing
+   * is provisioned, claimed or re-marked for it.
+   *
+   * Fail-soft on anything but the database being away: a provisioning error
+   * leaves the run on the null-owner behaviour it always had, logged, rather
+   * than stranding an import that is otherwise fine. The outage case is
+   * rethrown for {@link retrying} to wait out.
+   */
+  private async resolveSelfEntityId(context: StageRunContext): Promise<string | null> {
     const rows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1::uuid`,
-      [userId],
+      [context.userId],
     );
+    const existing = rows[0]?.entity_id ?? null;
 
-    return rows[0]?.entity_id ?? null;
+    if (existing != null) {
+      return existing;
+    }
+
+    try {
+      const provisioned = await this.graph.ensureSelfEntityForOwner({ userId: context.userId });
+
+      return provisioned?.id ?? null;
+    } catch (err) {
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not provision the owner; mail from their own address stays unattributed', {
+        runId: context.runId,
+        userId: context.userId,
+        error: (err as Error).message,
+      });
+
+      return null;
+    }
   }
 
   /**
@@ -2105,39 +2225,20 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
   ): boolean {
     const props = input.properties ?? {};
-    const candidates: string[] = [];
-    if (typeof input.name === 'string') {
-      candidates.push(input.name);
-    }
+    const strings = (single: unknown, list: unknown): string[] =>
+      [single, ...(Array.isArray(list) ? list : [])].filter(
+        (value): value is string => typeof value === 'string' && value.trim().length > 0,
+      );
 
-    if (typeof props.email === 'string') {
-      candidates.push(props.email);
-    }
-
-    for (const email of Array.isArray(props.emails) ? props.emails : []) {
-      if (typeof email === 'string') {
-        candidates.push(email);
-      }
-    }
-
-    if (typeof props.phone === 'string') {
-      candidates.push(props.phone);
-    }
-
-    for (const phone of Array.isArray(props.phones) ? props.phones : []) {
-      if (typeof phone === 'string') {
-        candidates.push(phone);
-      }
-    }
-
-    for (const candidate of candidates) {
-      const match = matchOwner(identity, candidate);
-      if (shouldMapContactToSelf(match, trustMode)) {
-        return true;
-      }
-    }
-
-    return false;
+    return isOwnerContact(
+      identity,
+      {
+        name: typeof input.name === 'string' ? input.name : null,
+        emails: strings(props.email, props.emails),
+        phones: strings(props.phone, props.phones),
+      },
+      trustMode,
+    );
   }
 
   /**
@@ -2151,7 +2252,7 @@ export class PushStage implements ImportStageRunner {
    */
   private async pushBatch(
     context: StageRunContext,
-    batch: StagedItem[],
+    batch: Array<StagedItem & RunOrigin>,
     counts: DestinationCounts,
     isSelf: IsSelf,
     selfEntityId: string | null,
@@ -2166,7 +2267,10 @@ export class PushStage implements ImportStageRunner {
     );
 
     const plans: RowPlan[] = batch.map((row) => {
-      const record = toCanonical(row);
+      const record = withOrigin(toCanonical(row), {
+        platform: row.originPlatform,
+        connectionId: row.originConnectionId,
+      });
 
       return {
         row,
@@ -2595,6 +2699,31 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
+   * Put a communication's sender and recipients on it, and correct the
+   * direction of header-less mail once the sender is known
+   * ({@link directionAfterSender}). The one place `sendMany` and its per-row
+   * retry `send` decide this, so a retried row cannot come out different.
+   */
+  private applyCorrespondents(
+    input: CreateCommunicationDto,
+    record: CanonicalRecord,
+    participants: Map<string, string[]>,
+    selfEntityId: string | null,
+  ): void {
+    const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
+
+    input.direction = directionAfterSender(input.direction, record, participants, from, selfEntityId);
+
+    if (from) {
+      input.from_entity_id = from;
+    }
+
+    if (to.length) {
+      input.to_entity_ids = to;
+    }
+  }
+
+  /**
    * Catalogue the attachments a message LINKS to rather than carries.
    *
    * The other shape of the communication-attachment lane. Sources whose export
@@ -2744,15 +2873,7 @@ export class PushStage implements ImportStageRunner {
               ? toFacebookMessengerCommunicationInput(plan.record, isSelf)
               : toCommunicationInput(plan.record);
 
-          const { from, to } = this.resolveCorrespondents(plan.participants, input.direction, selfEntityId);
-
-          if (from) {
-            input.from_entity_id = from;
-          }
-
-          if (to.length) {
-            input.to_entity_ids = to;
-          }
+          this.applyCorrespondents(input, plan.record, plan.participants, selfEntityId);
 
           return input;
         });
@@ -2994,15 +3115,7 @@ export class PushStage implements ImportStageRunner {
         // group chat kept the owner's own entity in `to_entity_ids` because
         // `stripSelf` had nothing to strip. A retried batch produced quietly
         // different rows from a batch that happened to succeed.
-        const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
-
-        if (from) {
-          input.from_entity_id = from;
-        }
-
-        if (to.length) {
-          input.to_entity_ids = to;
-        }
+        this.applyCorrespondents(input, record, participants, selfEntityId);
 
         return wroteAnything(await this.communications.createManyDetailed(ctx, [input]));
       }

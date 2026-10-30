@@ -95,7 +95,7 @@ describe('ToolsOffNotice', () => {
   });
 
   it('is silent when the phone’s own model answers: the appliance’s tools are not what that chat uses', () => {
-    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'device', modelId: 'qwen3-0.6b-int4' }));
+    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'device', modelId: 'gemma-4-e2b-it' }));
     resetLocalLlmPrefsCache();
 
     render(<ToolsOffNotice />);
@@ -104,7 +104,7 @@ describe('ToolsOffNotice', () => {
   });
 
   it('still speaks in auto mode, where the appliance answers first', () => {
-    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'auto', modelId: 'qwen3-0.6b-int4' }));
+    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'auto', modelId: 'gemma-4-e2b-it' }));
     resetLocalLlmPrefsCache();
 
     render(<ToolsOffNotice />);

@@ -43,6 +43,12 @@ data class OutboxItem(
     val lastError: String?,
     /** Raw JSON text exactly as it was enqueued, or `null` on projections that omit it. */
     val payload: String?,
+    /**
+     * Opaque stamp naming the account and server the capture was taken for, set by the web
+     * layer at enqueue. `null` on rows written before the column existed. The flusher compares
+     * it with the session it is about to send under; the sidecar only stores and returns it.
+     */
+    val owner: String? = null,
 )
 
 /** Aggregate counts backing the `counts` block of `GET /api/outbox`. */
@@ -81,13 +87,22 @@ interface OutboxQueue {
     /** The depth at which callers should start warning; echoed alongside [maxItems]. */
     val warnAt: Int
 
-    fun enqueue(kind: String, payloadJson: String, capturedAt: String, idempotencyKey: String): EnqueueOutcome
+    fun enqueue(
+        kind: String,
+        payloadJson: String,
+        capturedAt: String,
+        idempotencyKey: String,
+        owner: String? = null,
+    ): EnqueueOutcome
 
     fun list(statusFilter: String?): List<OutboxItem>
 
     fun get(id: String): OutboxItem?
 
     fun delete(id: String): Boolean
+
+    /** Removes every item, whatever its status. Only sign-out uses it. Returns how many went. */
+    fun deleteAll(): Int
 
     fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem?
 
@@ -221,7 +236,8 @@ class OutboxStore(
                 $COLUMN_IDEMPOTENCY_KEY TEXT NOT NULL UNIQUE,
                 $COLUMN_STATUS TEXT NOT NULL,
                 $COLUMN_ATTEMPTS INTEGER NOT NULL DEFAULT 0,
-                $COLUMN_LAST_ERROR TEXT
+                $COLUMN_LAST_ERROR TEXT,
+                $COLUMN_OWNER TEXT
             )
             """.trimIndent(),
         )
@@ -236,12 +252,21 @@ class OutboxStore(
      * a file-level import in [importLegacyPlaintextOutbox], not a `SQLiteOpenHelper` version
      * step, because the plain driver cannot open a SQLCipher file at all and vice versa.
      *
-     * So this stays at v1 and still refuses to run: this table holds user captures that have
-     * not reached the server yet, so a destructive upgrade would be exactly the silent data
-     * loss the whole design exists to prevent. Future versions MUST migrate rather than drop.
+     * v2 adds [COLUMN_OWNER]. Existing rows keep `NULL` there, which the flusher reads as
+     * "queued before stamping existed". Anything else still refuses to run: this table holds
+     * user captures that have not reached the server yet, so a destructive upgrade would be
+     * exactly the silent data loss the whole design exists to prevent. Future versions MUST
+     * migrate rather than drop.
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        throw IllegalStateException("No outbox migration path from $oldVersion to $newVersion")
+        var version = oldVersion
+        if (version == 1 && newVersion >= 2) {
+            db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COLUMN_OWNER TEXT")
+            version = 2
+        }
+        if (version != newVersion) {
+            throw IllegalStateException("No outbox migration path from $oldVersion to $newVersion")
+        }
     }
 
     /**
@@ -257,6 +282,7 @@ class OutboxStore(
         payloadJson: String,
         capturedAt: String,
         idempotencyKey: String,
+        owner: String?,
     ): EnqueueOutcome = synchronized(writeLock) {
         val db = database()
         db.beginTransactionNonExclusive()
@@ -280,6 +306,7 @@ class OutboxStore(
                 put(COLUMN_IDEMPOTENCY_KEY, idempotencyKey)
                 put(COLUMN_STATUS, STATUS_PENDING)
                 put(COLUMN_ATTEMPTS, 0)
+                put(COLUMN_OWNER, owner)
             }
             // seq is an INTEGER PRIMARY KEY, so it aliases the rowid insert() returns.
             val seq = db.insertOrThrow(TABLE_NAME, null, values)
@@ -322,6 +349,16 @@ class OutboxStore(
     /** Removes one item. Returns false if [id] was already gone. */
     override fun delete(id: String): Boolean = synchronized(writeLock) {
         database().delete(TABLE_NAME, "$COLUMN_ID = ?", arrayOf(id)) > 0
+    }
+
+    /**
+     * Removes every item. Sign-out calls this once its last drain is done: what is still
+     * queued then belongs to the account leaving the device, and must not upload under the
+     * next one. `seq` keeps counting from where it was (AUTOINCREMENT), so FIFO order holds
+     * for whatever is queued afterwards.
+     */
+    override fun deleteAll(): Int = synchronized(writeLock) {
+        database().compileStatement("DELETE FROM $TABLE_NAME").use { it.executeUpdateDelete() }
     }
 
     /**
@@ -554,6 +591,9 @@ class OutboxStore(
                 .takeIf { it >= 0 && !cursor.isNull(it) }
                 ?.let { cursor.getString(it) },
             payload = if (includePayload) cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_PAYLOAD)) else null,
+            owner = cursor.getColumnIndex(COLUMN_OWNER)
+                .takeIf { it >= 0 && !cursor.isNull(it) }
+                ?.let { cursor.getString(it) },
         )
 
     companion object {
@@ -566,7 +606,7 @@ class OutboxStore(
          */
         const val LEGACY_PLAINTEXT_DATABASE_NAME = "ci_local_hub_outbox.db"
 
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
         const val TABLE_NAME = "outbox"
 
@@ -579,6 +619,7 @@ class OutboxStore(
         const val COLUMN_STATUS = "status"
         const val COLUMN_ATTEMPTS = "attempts"
         const val COLUMN_LAST_ERROR = "last_error"
+        const val COLUMN_OWNER = "owner"
 
         const val STATUS_PENDING = "pending"
         const val STATUS_NEEDS_ATTENTION = "needs_attention"
@@ -601,12 +642,27 @@ class OutboxStore(
             COLUMN_STATUS,
             COLUMN_ATTEMPTS,
             COLUMN_LAST_ERROR,
+            COLUMN_OWNER,
         )
 
         private val FULL_COLUMNS = LIST_COLUMNS + COLUMN_PAYLOAD
 
-        /** Everything, including the idempotency key, which the API projections never expose. */
-        private val MIGRATION_COLUMNS = FULL_COLUMNS + COLUMN_IDEMPOTENCY_KEY
+        /**
+         * What the plaintext predecessor holds: its v1 schema, idempotency key included, which
+         * the API projections never expose. Listed out rather than derived from [FULL_COLUMNS]
+         * because that file has no [COLUMN_OWNER], and asking for it would fail the import.
+         */
+        private val MIGRATION_COLUMNS = arrayOf(
+            COLUMN_SEQ,
+            COLUMN_ID,
+            COLUMN_KIND,
+            COLUMN_CAPTURED_AT,
+            COLUMN_STATUS,
+            COLUMN_ATTEMPTS,
+            COLUMN_LAST_ERROR,
+            COLUMN_PAYLOAD,
+            COLUMN_IDEMPOTENCY_KEY,
+        )
     }
 }
 

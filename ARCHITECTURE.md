@@ -173,10 +173,10 @@ the contract, and everything behind it can move without a cross-repo import
 sweep.
 
 **The baseline is not clean.**
-`backend/apps/api/.dependency-cruiser-known-violations.json` currently holds 42
-grandfathered entries — 41 `no-cross-domain-internals` and 1 `no-circular` —
-of which 15 come from spec files. `yarn workspace @ci/be-api depcheck` runs
-with `--ignore-known`, so those 42 pass silently; only *new* violations fail.
+`backend/apps/api/.dependency-cruiser-known-violations.json` currently holds 63
+grandfathered entries (60 active known violations — 59 `no-cross-domain-internals`
+and 1 `no-circular`, of which 24 come from spec files). `yarn workspace @ci/be-api depcheck`
+runs with `--ignore-known`, so those 60 pass silently; only *new* violations fail.
 Accepting a new baseline is `yarn workspace @ci/be-api depcheck:accept`, which
 should be a deliberate, reviewed act, not a way to get a branch green. The
 number above is the target to drive to zero, and it is the honest measure of

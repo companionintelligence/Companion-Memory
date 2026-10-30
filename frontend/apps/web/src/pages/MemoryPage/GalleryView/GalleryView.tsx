@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import {
   AnswerGridItem,
@@ -32,11 +33,24 @@ import {
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
 import { useEntityService } from '../useEntityService';
 
+import { LocalGalleryView } from './LocalGalleryView';
 import { getEntityMedia, type EntityMedia } from './media';
 import { MediaLightbox } from './MediaLightbox';
 import { MediaTile } from './MediaTile';
 
+/**
+ * The gallery tab. While the Memory server does not answer and this phone
+ * holds a replica, the photos come from the phone's preview store
+ * (LocalGalleryView); otherwise from the appliance. See
+ * api/powersync/deviceFallback.ts.
+ */
 export function GalleryView() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? <LocalGalleryView /> : <OnlineGalleryView />;
+}
+
+function OnlineGalleryView() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [searchParams] = useSearchParams();
   const filteredBrowse = countActiveFilters(searchParams) > 0 || Boolean(searchParams.get('search')?.trim());

@@ -614,6 +614,58 @@ function slotForecastLine(
   return `${weekday} ${daypart}s you usually have ${best.cluster.name}.`;
 }
 
+/**
+ * Phone add-to-calendar sheet, as a fraction of the viewport.
+ * The sheet's class is `max-h-[40vh]` — keep these two the same.
+ */
+const PHONE_SHEET_VH = 0.4;
+
+/** A little air between the tapped hour and the top of that sheet. */
+const SHEET_HOUR_GAP_PX = 12;
+
+/**
+ * Where the day scroller should sit so a tapped hour stays visible.
+ *
+ * With no sheet, an hour already on screen stays put, and one below the pane
+ * is brought up to the top third. With the sheet open, the hour is placed just
+ * above the sheet. The result never goes past the end of the grid, so midnight
+ * stays the bottom of the day instead of opening empty space under it.
+ */
+function scrollTopForSelectedHour({
+  hourY,
+  scrollTop,
+  clientHeight,
+  scrollHeight,
+  occlusionPx,
+}: {
+  hourY: number;
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
+  occlusionPx: number;
+}): number {
+  const maxScroll = scrollHeight > clientHeight ? scrollHeight - clientHeight : Number.POSITIVE_INFINITY;
+
+  if (occlusionPx <= 0) {
+    const viewBottom = scrollTop + clientHeight;
+
+    if (hourY >= scrollTop && hourY <= viewBottom) {
+      return scrollTop;
+    }
+
+    return Math.min(maxScroll, Math.max(0, hourY - clientHeight / 3));
+  }
+
+  const safeBottom = clientHeight - occlusionPx - SHEET_HOUR_GAP_PX;
+  const offset = hourY - scrollTop;
+
+  if (offset >= 0 && offset <= Math.max(0, safeBottom)) {
+    return scrollTop;
+  }
+
+  return Math.min(maxScroll, Math.max(0, hourY - Math.max(0, safeBottom)));
+}
+
 // ── Lanes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -650,6 +702,8 @@ export {
   dropInstant,
   movedStart,
   slotForecastLine,
+  scrollTopForSelectedHour,
+  PHONE_SHEET_VH,
   RHYTHM_NOISE_FLOOR,
   BUCKET_MINUTES,
   BUCKETS_PER_DAY,

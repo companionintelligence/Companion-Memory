@@ -1,24 +1,8 @@
-import { waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { UserMessage } from './UserMessage';
-
-function setViewport(mobile: boolean) {
-  window.matchMedia = ((query: string) => ({
-    matches: query.includes('max-width') ? mobile : false,
-    media: query,
-    onchange: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })) as unknown as typeof window.matchMedia;
-}
-
-afterEach(() => setViewport(false));
 
 describe('UserMessage', () => {
   it('renders the message content as markdown', () => {
@@ -27,18 +11,10 @@ describe('UserMessage', () => {
     expect(getByText('there').tagName).toBe('STRONG');
   });
 
-  it('uses a wider max-width bubble on mobile', async () => {
-    setViewport(true);
+  it('lets mobile messages use the conversation width while retaining the desktop cap', () => {
     const { container } = renderWithProviders(<UserMessage content="hi" />);
 
-    await waitFor(() => expect(container.querySelector('.max-w-\\[60\\%\\]')).not.toBeNull());
-  });
-
-  it('uses a narrower max-width bubble on desktop', () => {
-    setViewport(false);
-    const { container } = renderWithProviders(<UserMessage content="hi" />);
-
-    expect(container.querySelector('.max-w-\\[40\\%\\]')).not.toBeNull();
+    expect(container.firstElementChild).toHaveClass('max-w-[94%]', 'device:max-w-[40%]', 'rounded-xl');
   });
 
   it('renders a timestamp when createdAt is provided', () => {

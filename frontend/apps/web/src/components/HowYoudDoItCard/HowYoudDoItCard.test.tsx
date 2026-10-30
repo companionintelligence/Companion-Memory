@@ -24,6 +24,13 @@ function result(overrides: Partial<HowYoudDoItResult> = {}): HowYoudDoItResult {
 }
 
 describe('HowYoudDoItCard', () => {
+  it('renders a Markdown brief as formatted text', () => {
+    render(<HowYoudDoItCard result={result({ personaBrief: '**Personality:** Curious and methodical.' })} />);
+
+    expect(screen.getByText('Personality:').tagName).toBe('STRONG');
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  });
+
   it('renders the task, brief, numbered approach and confidence', () => {
     render(<HowYoudDoItCard result={result()} />);
 

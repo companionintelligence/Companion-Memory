@@ -1,4 +1,10 @@
-import { formatBytes, type LocalLlmCapability, type LocalLlmMode, type LocalLlmModelState } from '@ci/common';
+import {
+  formatBytes,
+  gpuAllowedOn,
+  type LocalLlmCapability,
+  type LocalLlmMode,
+  type LocalLlmModelState,
+} from '@ci/common';
 import { Badge, Button, Card, Label, Progress, Select, Switch } from '@ci/shadcn';
 import { Download, Smartphone, Trash2 } from '@ci/shadcn/icons';
 
@@ -59,6 +65,10 @@ export function OnDeviceModelSection() {
   }
 
   const selected = probe.models.find((model) => model.spec.modelId === prefs.modelId);
+
+  // The GPU is withheld on a phone under the model's GPU floor; the native side enforces it, this mirrors it.
+
+  const gpuAllowed = selected ? gpuAllowedOn(selected.spec, probe.availability.totalMemoryBytes) : false;
   const selectedReady = selected?.status.status === 'ready';
   const loadedSelected = probe.loaded.loaded && probe.loaded.modelId === prefs.modelId;
   const activeMode = MODE_OPTIONS.find((option) => option.value === prefs.mode) ?? MODE_OPTIONS[0];
@@ -182,7 +192,7 @@ export function OnDeviceModelSection() {
               <div className="grid gap-2">
                 <Label htmlFor="on-device-accelerator">Run on</Label>
                 <Select
-                  value={prefs.accelerator ?? selected.spec.accelerators[0]}
+                  value={gpuAllowed ? (prefs.accelerator ?? selected.spec.accelerators[0]) : 'cpu'}
                   onValueChange={(value) => {
                     setPrefs({ accelerator: value as 'cpu' | 'gpu' });
                     // The next render sees the new pref; reload picks it up from storage.
@@ -194,16 +204,24 @@ export function OnDeviceModelSection() {
                   </Select.Trigger>
                   <Select.Content>
                     {selected.spec.accelerators.map((accelerator) => (
-                      <Select.Item key={accelerator} value={accelerator}>
+                      <Select.Item
+                        key={accelerator}
+                        value={accelerator}
+                        disabled={accelerator === 'gpu' && !gpuAllowed}
+                      >
                         {accelerator === 'gpu'
-                          ? 'GPU (faster, uses more battery)'
-                          : 'CPU (slower, most compatible)'}
+                          ? gpuAllowed
+                            ? 'GPU (faster, but can garble numbers and dates from your memory)'
+                            : `GPU (needs a ${formatBytes(selected.spec.gpuMinDeviceMemoryBytes)} phone)`
+                          : 'CPU (slower, reads your memory exactly)'}
                       </Select.Item>
                     ))}
                   </Select.Content>
                 </Select>
                 <p className="text-muted-foreground text-xs">
-                  If the GPU cannot start this model, it falls back to the CPU on its own.
+                  {gpuAllowed
+                    ? 'If the GPU cannot start this model, it falls back to the CPU on its own.'
+                    : `This phone has ${formatBytes(probe.availability.totalMemoryBytes ?? 0)} of memory; ${selected.spec.label} needs at least ${formatBytes(selected.spec.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU.`}
                 </p>
               </div>
             ) : null}

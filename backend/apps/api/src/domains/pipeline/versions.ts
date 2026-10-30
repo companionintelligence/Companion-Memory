@@ -111,6 +111,10 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * v2 — the probe moved from sharp's bundled libvips to the system `vips`
    * tools (VipsService). HEIC now reads: sharp's libheif had no HEVC decoder,
    * so every iPhone original probed as unreadable.
+   *
+   * Bump `MEDIA_DIMENSIONS_STAGE_VERSION` in
+   * `domains/maintenance/mediaDimensionsCandidates.ts` with it (a spec there
+   * fails until you do).
    */
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 2,
 
@@ -215,14 +219,32 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * moved): the bump re-vectors that type's corpus — local Postgres work, no
    * provider, no bill — without touching its embeddings.
    */
-  [STAGE_IDS.INDEX_VECTOR]: 1,
-  [STAGE_IDS.INDEX_VECTOR_COMMUNICATION]: 1,
-  [STAGE_IDS.INDEX_VECTOR_EVENT]: 1,
-  /** v2 — the recipe gained the last-seen place name (weight 8). */
-  [STAGE_IDS.INDEX_VECTOR_ITEM]: 2,
-  [STAGE_IDS.INDEX_VECTOR_PERSON]: 1,
-  [STAGE_IDS.INDEX_VECTOR_FILE]: 1,
-  [STAGE_IDS.INDEX_VECTOR_BROWSER_ACTIVITY]: 1,
+  /**
+   * v2 (every device-indexed type, 2026-10-19) — the statement now also writes
+   * the row's plain-text document to `ci_search.mobile_search_documents`
+   * (migration 20261019212935). Re-running the stage is how an existing
+   * install's corpus gets its documents; nothing else backfills them.
+   */
+  [STAGE_IDS.INDEX_VECTOR]: 2,
+  [STAGE_IDS.INDEX_VECTOR_COMMUNICATION]: 2,
+  /**
+   * v3 (2026-10-29) — a photo or video event's recipe gained its capture month,
+   * year and season (`eventWeightedTexts`), so an ask for "photos from October"
+   * finds it. Re-running the stage is how photos already indexed get them.
+   */
+  [STAGE_IDS.INDEX_VECTOR_EVENT]: 3,
+  /** v2 — the recipe gained the last-seen place name (weight 8). v3 — documents, as above. */
+  [STAGE_IDS.INDEX_VECTOR_ITEM]: 3,
+  [STAGE_IDS.INDEX_VECTOR_PERSON]: 2,
+  [STAGE_IDS.INDEX_VECTOR_FILE]: 2,
+  /**
+   * v2 (2026-10-23) — browser activity became a device-indexed type. The
+   * statement already wrote documents for the listed types; the bump re-runs
+   * the stage so every existing visit gets its record (title, url, a
+   * description) without touching its embedding. This is the only backfill
+   * for the type: the maintenance sweep skips rows the pipeline ledger covers.
+   */
+  [STAGE_IDS.INDEX_VECTOR_BROWSER_ACTIVITY]: 2,
 
   /**
    * v1 — initial writer for `ci.position`'s seven address columns.

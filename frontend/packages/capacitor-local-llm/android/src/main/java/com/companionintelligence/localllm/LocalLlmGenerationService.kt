@@ -40,7 +40,7 @@ class LocalLlmGenerationService : Service() {
             NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Companion is thinking")
                 .setContentText("Generating an on-device reply")
-                .setSmallIcon(android.R.drawable.ic_menu_info_details)
+                .setSmallIcon(NotificationIcons.small(this, android.R.drawable.ic_menu_info_details))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build()
@@ -58,6 +58,14 @@ class LocalLlmGenerationService : Service() {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not enter the foreground; stopping the generation service", e)
+            state.ended()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // The promise to Android is kept; a stop that arrived while it was pending is carried out now,
+        // by this side -- see GenerationServiceState for the crash that stopService() caused here.
+        if (state.enteredForeground()) {
             stopSelf()
         }
 
@@ -77,15 +85,30 @@ class LocalLlmGenerationService : Service() {
         }
     }
 
+    override fun onDestroy() {
+        state.ended()
+        super.onDestroy()
+    }
+
     companion object {
+        /** Start/stop ordering, shared by the service and its callers; see [GenerationServiceState]. */
+        internal val state = GenerationServiceState()
+
         /** Starts protecting an in-flight generation. Safe to call even if already running. */
         fun start(context: Context) {
+            state.starting()
             ContextCompat.startForegroundService(context, Intent(context, LocalLlmGenerationService::class.java))
         }
 
-        /** Ends the protection once generation completes, errors, or is cancelled. */
+        /**
+         * Ends the protection once generation completes, errors, or is cancelled. Only acts when the service
+         * is in the foreground; before that the service stops itself, so Android's start-foreground promise
+         * is never broken by a stop that came first.
+         */
         fun stop(context: Context) {
-            context.stopService(Intent(context, LocalLlmGenerationService::class.java))
+            if (state.stopRequested()) {
+                context.stopService(Intent(context, LocalLlmGenerationService::class.java))
+            }
         }
     }
 }

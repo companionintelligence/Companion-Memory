@@ -1,5 +1,11 @@
 import { canonicalDataClass } from './canonical';
-import type { AnswerForm, DisclosedAnswer, DisclosureRung, TrustTier } from './types';
+import {
+  TRUST_TIERS,
+  type AnswerForm,
+  type DisclosedAnswer,
+  type DisclosureRung,
+  type TrustTier,
+} from './types';
 
 /**
  * The disclosure ladder, coarsest first. Every rung discloses strictly less than
@@ -108,6 +114,46 @@ const TIER_CEILINGS: Readonly<Record<TrustTier, Readonly<Record<string, Disclosu
 /** The narrowest rung this tier imposes on ANY class — its floor. */
 function strictestIn(table: Readonly<Record<string, DisclosureRung>>): DisclosureRung {
   return Object.values(table).reduce<DisclosureRung>(minRung, table['*'] ?? 'boolean');
+}
+
+const TIER_INDEX: Readonly<Record<TrustTier, number>> = TRUST_TIERS.reduce(
+  (acc, tier, index) => ({ ...acc, [tier]: index }),
+  {} as Record<TrustTier, number>,
+);
+
+/**
+ * The stricter (lower-trust) of two trust tiers (`household` > `family` >
+ * `trusted` > `peer` > `stranger`). Unknown values clamp to `'stranger'`.
+ */
+export function minTrustTier(a: TrustTier, b: TrustTier): TrustTier {
+  const indexA = TIER_INDEX[a] ?? TIER_INDEX.stranger;
+  const indexB = TIER_INDEX[b] ?? TIER_INDEX.stranger;
+
+  return indexA >= indexB ? (TRUST_TIERS[indexA] ?? 'stranger') : (TRUST_TIERS[indexB] ?? 'stranger');
+}
+
+/**
+ * Group-thread / multi-party trust-tier floor clamp (`open-instinct` pattern).
+ *
+ * When a question or agent turn occurs in a room or thread with multiple
+ * participants, the effective trust tier for any shared response is the
+ * STRICTEST (lowest-trust) tier among all participants. An empty or unknown
+ * participant list fails closed to `'stranger'`.
+ */
+export function resolveGroupTier(tiers: readonly TrustTier[]): TrustTier {
+  if (!tiers || tiers.length === 0) {
+    return 'stranger';
+  }
+
+  return tiers.reduce<TrustTier>((acc, tier) => minTrustTier(acc, tier), tiers[0] ?? 'stranger');
+}
+
+/**
+ * Disclosure ceiling for a multi-party / group thread context, clamping to the
+ * strictest participant's tier before evaluating the class ceiling.
+ */
+export function groupDisclosureCeiling(tiers: readonly TrustTier[], dataClass?: unknown): DisclosureRung {
+  return disclosureCeiling(resolveGroupTier(tiers), dataClass);
 }
 
 /**

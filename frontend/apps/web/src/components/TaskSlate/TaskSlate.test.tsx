@@ -610,7 +610,7 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
     compose([createMock(sent)]);
 
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
-    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2026-08-05' } });
+    fireEvent.change(screen.getByLabelText('Ends at'), { target: { value: '2026-08-05' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
     const alert = screen.getByRole('alert');

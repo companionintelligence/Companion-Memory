@@ -181,6 +181,7 @@ ignore_errors = true
 # A named module outranks the ``ci.hbpe.*`` pattern.
 module = [
     "ci.hbpe.pipeline.reserialize_queue",
+    "ci.summary.parser_worker",
 ]
 ignore_errors = false
 

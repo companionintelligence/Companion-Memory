@@ -6,6 +6,7 @@ import { EventService } from '@ci/domains/events';
 import { ImageDescriptionBackfillRequestEvent } from '@ci/domains/files';
 import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
+import { ChatModelPreferenceService } from './ChatModelPreferenceService';
 import { OllamaService } from './OllamaService';
 
 /**
@@ -31,7 +32,25 @@ import { OllamaService } from './OllamaService';
  */
 @Injectable()
 export class ImageDescriptionPreferenceService {
-  private readonly cache = new Map<string, { enabled: boolean; expiresAt: number }>();
+  /**
+   * `chatModel` is the user's stored chat-model choice the value was read
+   * under. The default and the override both belong to a model, so a value read
+   * for one model must not answer for another: it used to, for up to the full
+   * 60 s after a switch, and flipping the switch in that window stored the
+   * opposite of what the person meant for the new model.
+   */
+  private readonly cache = new Map<
+    string,
+    { enabled: boolean; chatModel: string | null; expiresAt: number }
+  >();
+
+  /**
+   * Bumped by {@link invalidate}. A read that started before a write and
+   * finishes after it carries the old answer; without this it put that answer
+   * back in the cache right after `setEnabled` cleared it, and background jobs
+   * used it for the next 60 s.
+   */
+  private readonly generations = new Map<string, number>();
 
   constructor(
     private readonly personService: PersonService,
@@ -44,20 +63,34 @@ export class ImageDescriptionPreferenceService {
      * it a user who has no self entity gets the old error rather than a new one.
      */
     @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * Read to tell when the cached value belongs to a different chat model.
+     * It keeps its own 60 s cache, cleared in this process when the choice is
+     * set, so most checks are a map lookup; when that cache has expired the
+     * check reads the self entity once. Optional so hand-built services (the
+     * unit tests) still construct; without it the cache only expires.
+     */
+    @Optional() private readonly chatModelPreference?: ChatModelPreferenceService,
   ) {}
 
   invalidate(userId: string): void {
     this.cache.delete(userId);
+    this.generations.set(userId, (this.generations.get(userId) ?? 0) + 1);
   }
 
   async isEnabled(userId: string): Promise<boolean> {
+    const generation = this.generations.get(userId) ?? 0;
+    const chatModel = (await this.chatModelPreference?.getChatModel(userId)) ?? null;
     const cached = this.cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.chatModel === chatModel && cached.expiresAt > Date.now()) {
       return cached.enabled;
     }
 
     const enabled = await this.readEnabled(userId);
-    this.cache.set(userId, { enabled, expiresAt: Date.now() + 60_000 });
+
+    if ((this.generations.get(userId) ?? 0) === generation) {
+      this.cache.set(userId, { enabled, chatModel, expiresAt: Date.now() + 60_000 });
+    }
 
     return enabled;
   }

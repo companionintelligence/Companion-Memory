@@ -203,10 +203,18 @@
 /*
  * Capacitor WKWebView is edge-to-edge (`overlaysWebView: true`) but can report
  * safe-area-inset-top as 0. Dynamic Island / notch is ~59px; home indicator ~34px.
+ *
+ * iOS only. The Android WebView is inset by the system bars natively (`WebViewInsets`
+ * in the Android shell), so there
+ * the real `env()` values -- normally 0 -- are right, and these floors would pad a
+ * second time: 59px of blank above content that already starts below the status bar.
  */
-html.ci-native {
+html.ci-native.ci-ios {
   --safe-area-top: max(env(safe-area-inset-top, 0px), 59px);
   --safe-area-bottom: max(env(safe-area-inset-bottom, 0px), 34px);
+}
+
+html.ci-native {
   overflow: hidden;
   overscroll-behavior: none;
 }

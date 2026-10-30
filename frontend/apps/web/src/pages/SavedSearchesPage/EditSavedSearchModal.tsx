@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 
 import { useMutation, type Reference, isReference } from '@apollo/client';
-import { ENTITY_TYPE_MAP, ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
+import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Button, Dialog, Input, Label, Textarea } from '@ci/shadcn';
 
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
-import { useDropdown } from '@/components/SearchBox/useDropdown';
+import { savedEntityTypesFor, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
@@ -44,6 +44,10 @@ export const UPDATE_SAVED_SEARCH = gql(`
           hasLocation
           semantic
           direction
+          fileKinds
+          view
+          areas
+          bbox
         }
       }
     }
@@ -127,9 +131,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
           name,
           description,
           query,
-          entityTypes: selectedEntityTypes.map(
-            (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
-          ),
+          entityTypes: savedEntityTypesFor(selectedEntityTypes),
           filters: toFiltersInput(filters),
           tags,
         },
@@ -141,7 +143,18 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Content className="sm:max-w-[600px]">
+      <Dialog.Content
+        className="sm:max-w-[600px]"
+        // Radix would focus the first field, the name, on open. On a phone
+        // that raises the keyboard over half the dialog before the person has
+        // read it, and the name is rarely what they came to change. Park
+        // focus on the dialog itself instead: Escape still closes it and Tab
+        // reaches the name first.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
+      >
         <Dialog.Header>
           <Dialog.Title>Update Saved Search</Dialog.Title>
         </Dialog.Header>

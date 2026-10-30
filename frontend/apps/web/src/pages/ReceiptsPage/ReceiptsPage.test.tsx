@@ -163,6 +163,23 @@ describe('ReceiptsPage', () => {
     expect(total).not.toHaveTextContent('$');
   });
 
+  it('keeps the phone filters together and uses compact receipt rows', async () => {
+    renderWithProviders(<ReceiptsPage />, {
+      route: '/memory/receipts',
+      mocks: [receiptsMock({}, [makeReceipt()], 7)],
+    });
+
+    expect(await screen.findByText('Hornbach')).toBeInTheDocument();
+
+    const toolbar = screen.getByTestId('receipts-toolbar');
+    expect(toolbar).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_9rem]', 'device:flex');
+    expect(toolbar).toContainElement(screen.getByPlaceholderText('Search by merchant...'));
+    expect(toolbar).toContainElement(screen.getByLabelText('Extraction state'));
+    expect(toolbar).toContainElement(screen.getByText('7 receipts'));
+
+    expect(screen.getByTestId('receipt-row')).toHaveClass('gap-2', 'p-2', 'device:gap-3', 'device:p-3');
+  });
+
   it('counts a single line as "1 line" and several as "lines"', async () => {
     renderWithProviders(<ReceiptsPage />, {
       route: '/memory/receipts',

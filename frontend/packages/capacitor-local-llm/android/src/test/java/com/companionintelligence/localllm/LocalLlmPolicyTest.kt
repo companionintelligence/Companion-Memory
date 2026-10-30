@@ -16,10 +16,13 @@ class LocalLlmPolicyTest {
     private val gib = 1024L * 1024 * 1024
     private val mib = 1024L * 1024
 
-    private val qwen3 = LocalLlmModels.QWEN3_0_6B_INT4
-    private val qwen25 = LocalLlmModels.QWEN2_5_1_5B_INSTRUCT
+    /** The smaller catalog model, and the larger one with the higher floor and bigger file, for the comparisons below. */
+    private val qwen3 = LocalLlmModels.GEMMA_4_E2B_IT
+    private val qwen25 = LocalLlmModels.GEMMA_4_E4B_IT
     private val e2b = LocalLlmModels.GEMMA_4_E2B_IT
     private val e4b = LocalLlmModels.GEMMA_4_E4B_IT
+    /** No catalog model is CPU-only since the 0.6B was dropped (2026-10-13); the shape is still legal. */
+    private val cpuOnly = LocalLlmModels.GEMMA_4_E2B_IT.copy(modelId = "cpu-only-test", accelerators = listOf("cpu"))
 
     /** The model's one allowed url, with the host swappable so a rejection can be pinned on the host alone. */
     private fun pinnedUrl(info: LocalLlmModelInfo, host: String = "huggingface.co") =
@@ -54,7 +57,7 @@ class LocalLlmPolicyTest {
 
         val lowRam = LocalLlmPolicy.availability(sdkInt = 34, deviceMemoryBytes = 3 * gib, smallestModelMinMemoryBytes = smallest)
         assertFalse(lowRam.available)
-        assertTrue(lowRam.reason!!, lowRam.reason!!.contains("3 GB") && lowRam.reason!!.contains("4 GB"))
+        assertTrue(lowRam.reason!!, lowRam.reason!!.contains("3 GB") && lowRam.reason!!.contains("6 GB"))
     }
 
     // ---- advertised memory ------------------------------------------------------------------
@@ -85,17 +88,17 @@ class LocalLlmPolicyTest {
 
     @Test
     fun a_model_is_refused_below_its_ram_floor_and_accepted_at_it() {
-        assertNull(LocalLlmPolicy.ramShortfallMessage(qwen3, 4 * gib))
-        assertNull(LocalLlmPolicy.ramShortfallMessage(qwen25, 6 * gib))
+        assertNull(LocalLlmPolicy.ramShortfallMessage(qwen3, 6 * gib))
+        assertNull(LocalLlmPolicy.ramShortfallMessage(qwen25, 12 * gib))
         assertNull(LocalLlmPolicy.ramShortfallMessage(e2b, 8 * gib))
         assertNull(LocalLlmPolicy.ramShortfallMessage(e4b, 16 * gib))
 
-        val tooSmall = LocalLlmPolicy.ramShortfallMessage(e2b, 6 * gib)
+        val tooSmall = LocalLlmPolicy.ramShortfallMessage(e2b, 4 * gib)
         assertNotNull(tooSmall)
         // The sentence is shown to the user: name the model and both numbers.
-        assertTrue(tooSmall!!, tooSmall.contains("gemma-4-e2b-it") && tooSmall.contains("6 GB") && tooSmall.contains("8 GB"))
+        assertTrue(tooSmall!!, tooSmall.contains("gemma-4-e2b-it") && tooSmall.contains("4 GB") && tooSmall.contains("6 GB"))
 
-        assertNotNull(LocalLlmPolicy.ramShortfallMessage(qwen3, 4 * gib - 1))
+        assertNotNull(LocalLlmPolicy.ramShortfallMessage(qwen3, 6 * gib - 1))
         assertNotNull(LocalLlmPolicy.ramShortfallMessage(e4b, 8 * gib))
     }
 
@@ -148,22 +151,20 @@ class LocalLlmPolicyTest {
 
         val short = LocalLlmPolicy.diskShortfallMessage(qwen3, 0, freeBytes = needed - 1)
         assertNotNull(short)
-        assertTrue(short!!, short.contains("qwen3-0.6b-int4") && short.contains("Not enough free storage"))
+        assertTrue(short!!, short.contains("gemma-4-e2b-it") && short.contains("Not enough free storage"))
     }
 
     @Test
     fun the_old_one_gib_floor_is_gone_a_small_model_fits_where_a_big_one_does_not() {
-        // 900 MB free: the old global gate ("< 1 GiB free => unavailable") refused every model here.
-        val free = 900L * mib
-        assertNull("the 344 MB model needs ~841 MB and fits", LocalLlmPolicy.diskShortfallMessage(qwen3, 0, free))
-        assertNotNull(LocalLlmPolicy.diskShortfallMessage(qwen25, 0, free))
+        // 3.25 GB free: the gate is per model, not a global "< 1 GiB free => unavailable" refusal.
+        val free = 3328L * mib
+        assertNull("the 2.4 GB model needs ~2.9 GB and fits", LocalLlmPolicy.diskShortfallMessage(qwen3, 0, free))
         assertNotNull(LocalLlmPolicy.diskShortfallMessage(e4b, 0, free))
 
-        // 3 GB free is plenty for the first three models and not for the 3.6 GB one — the case the
-        // old gate waved through and let fail 80% of the way in.
-        val threeGb = 3L * gib
-        assertNull(LocalLlmPolicy.diskShortfallMessage(qwen25, 0, threeGb))
-        assertNotNull(LocalLlmPolicy.diskShortfallMessage(e4b, 0, threeGb))
+        // 4.5 GB free is plenty for the 3.4 GB model too — the case the old gate waved through and
+        // let fail 80% of the way in was the one just above.
+        val fourAndAHalfGb = 4608L * mib
+        assertNull(LocalLlmPolicy.diskShortfallMessage(e4b, 0, fourAndAHalfGb))
     }
 
     // ---- the download host allow-list and pinning --------------------------------------------
@@ -215,13 +216,13 @@ class LocalLlmPolicyTest {
                 // Right commit and file name in someone else's repository.
                 "https://huggingface.co/attacker/${qwen3.hfRepo.substringAfter('/')}/resolve/$commit/$file",
                 // Another of the catalog's repositories.
-                "https://huggingface.co/${e2b.hfRepo}/resolve/$commit/$file",
+                "https://huggingface.co/${e4b.hfRepo}/resolve/$commit/$file",
                 // Extra segments after the file, and path traversal.
                 "https://huggingface.co${LocalLlmPolicy.downloadPathFor(qwen3)}/extra",
                 "https://huggingface.co${LocalLlmPolicy.downloadPathFor(qwen3)}/../../other.bin",
                 "https://huggingface.co/${qwen3.hfRepo}/resolve/$commit/../$commit/$file",
                 // Encoded look-alikes are not the same string.
-                "https://huggingface.co/${qwen3.hfRepo}/resolve/$commit/${file.replace("Q", "%51")}",
+                "https://huggingface.co/${qwen3.hfRepo}/resolve/$commit/${file.replace("g", "%67")}",
                 // Trailing slash.
                 "https://huggingface.co${LocalLlmPolicy.downloadPathFor(qwen3)}/",
             )
@@ -232,8 +233,8 @@ class LocalLlmPolicyTest {
 
     @Test
     fun a_url_for_a_different_models_file_is_refused_under_this_model_id() {
-        assertNotNull(LocalLlmPolicy.downloadUrlProblem(qwen3, pinnedUrl(e2b)))
-        assertNotNull(LocalLlmPolicy.downloadUrlProblem(e2b, pinnedUrl(qwen3)))
+        assertNotNull(LocalLlmPolicy.downloadUrlProblem(e2b, pinnedUrl(e4b)))
+        assertNotNull(LocalLlmPolicy.downloadUrlProblem(e4b, pinnedUrl(e2b)))
         for (a in LocalLlmModels.ALL) {
             for (b in LocalLlmModels.ALL) {
                 if (a !== b) assertNotNull("${a.modelId} accepted ${b.modelId}'s url", LocalLlmPolicy.downloadUrlProblem(a, pinnedUrl(b)))
@@ -293,8 +294,9 @@ class LocalLlmPolicyTest {
 
     @Test
     fun an_absent_accelerator_takes_the_models_first_listed_one() {
+        assertEquals(LocalLlmAccelerator.CPU, LocalLlmPolicy.resolveAccelerator(cpuOnly, null).accelerator)
         assertEquals(LocalLlmAccelerator.CPU, LocalLlmPolicy.resolveAccelerator(qwen3, null).accelerator)
-        assertEquals(LocalLlmAccelerator.GPU, LocalLlmPolicy.resolveAccelerator(e2b, null).accelerator)
+        assertEquals(LocalLlmAccelerator.CPU, LocalLlmPolicy.resolveAccelerator(e2b, null).accelerator)
         assertFalse(LocalLlmPolicy.resolveAccelerator(e2b, null).preferenceUnsupported)
     }
 
@@ -303,10 +305,42 @@ class LocalLlmPolicyTest {
         assertEquals(LocalLlmAccelerator.CPU, LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.CPU).accelerator)
         assertEquals(LocalLlmAccelerator.GPU, LocalLlmPolicy.resolveAccelerator(qwen25, LocalLlmAccelerator.GPU).accelerator)
 
-        // Qwen3 lists only the CPU, so a GPU request is overridden — and says so.
-        val choice = LocalLlmPolicy.resolveAccelerator(qwen3, LocalLlmAccelerator.GPU)
+        // A model that lists only the CPU has a GPU request overridden — and says so.
+        val choice = LocalLlmPolicy.resolveAccelerator(cpuOnly, LocalLlmAccelerator.GPU)
         assertEquals(LocalLlmAccelerator.CPU, choice.accelerator)
         assertTrue(choice.preferenceUnsupported)
+    }
+
+    @Test
+    fun the_gpu_is_withheld_on_a_phone_under_the_models_gpu_floor_and_the_cpu_is_used_instead() {
+        // Gemma 4 E2B: 6 GB floor, GPU from 8 GB. A 6 GB phone gets the CPU when it asks for the GPU, and says so.
+        val withheld = LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.GPU, 6 * gib)
+        assertEquals(LocalLlmAccelerator.CPU, withheld.accelerator)
+        assertTrue(withheld.gpuWithheld)
+        assertFalse(withheld.preferenceUnsupported)
+        // A model whose default is the GPU is withheld the same way without a request.
+        val gpuFirst = e2b.copy(accelerators = listOf("gpu", "cpu"))
+        assertTrue(LocalLlmPolicy.resolveAccelerator(gpuFirst, null, 6 * gib).gpuWithheld)
+        assertEquals(LocalLlmAccelerator.CPU, LocalLlmPolicy.resolveAccelerator(gpuFirst, null, 6 * gib).accelerator)
+        // Exactly at the GPU floor, and above it, the GPU stands.
+        assertEquals(LocalLlmAccelerator.GPU, LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.GPU, 8 * gib).accelerator)
+        assertFalse(LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.GPU, 8 * gib).gpuWithheld)
+        assertEquals(LocalLlmAccelerator.GPU, LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.GPU, 12 * gib).accelerator)
+        // One below the floor is withheld — the advertised figure is a whole number of GiB, so this is the 6 GB case.
+        assertTrue(LocalLlmPolicy.resolveAccelerator(e2b, LocalLlmAccelerator.GPU, 8 * gib - 1).gpuWithheld)
+        // The default (the CPU, since 2026-10-13) and a CPU request are never "withheld": there was no GPU to withhold.
+        for (requested in listOf(null, LocalLlmAccelerator.CPU)) {
+            val cpu = LocalLlmPolicy.resolveAccelerator(e2b, requested, 6 * gib)
+            assertEquals(LocalLlmAccelerator.CPU, cpu.accelerator)
+            assertFalse(cpu.gpuWithheld)
+        }
+        // A model that lists only the GPU keeps it: there is nothing to fall to.
+        val gpuOnly = e2b.copy(accelerators = listOf("gpu"))
+        assertEquals(LocalLlmAccelerator.GPU, LocalLlmPolicy.resolveAccelerator(gpuOnly, null, 6 * gib).accelerator)
+        assertFalse(LocalLlmPolicy.resolveAccelerator(gpuOnly, null, 6 * gib).gpuWithheld)
+
+        val sentence = LocalLlmPolicy.gpuWithheldMessage(e2b, 6 * gib)
+        assertTrue(sentence, sentence.contains("6 GB") && sentence.contains("8 GB") && sentence.contains("CPU"))
     }
 
     @Test
@@ -351,6 +385,53 @@ class LocalLlmPolicyTest {
             // Bytes against tokens, but a token is never less than a byte: a budget under the window in tokens
             // cannot fill it, however the text tokenises.
             assertTrue("${info.modelId}: $budget bytes in a ${info.defaultMaxTokens} token window", budget < info.defaultMaxTokens)
+        }
+    }
+
+    @Test
+    fun tool_declarations_may_take_a_third_of_the_context_window_in_tokens() {
+        assertEquals("Qwen3-0.6B's window", 341, LocalLlmPolicy.toolDeclarationTokenBudget(1024))
+        assertEquals("Gemma 4's window", 1333, LocalLlmPolicy.toolDeclarationTokenBudget(4000))
+        assertEquals("an 8k window", 2730, LocalLlmPolicy.toolDeclarationTokenBudget(8192))
+        assertEquals("nonsense gets nothing", 0, LocalLlmPolicy.toolDeclarationTokenBudget(-5))
+    }
+
+    @Test
+    fun declaration_tokens_are_estimated_at_four_bytes_each_rounding_up() {
+        assertEquals(0, LocalLlmPolicy.estimateDeclarationTokens(0))
+        assertEquals(1, LocalLlmPolicy.estimateDeclarationTokens(1))
+        assertEquals(1, LocalLlmPolicy.estimateDeclarationTokens(4))
+        assertEquals(2, LocalLlmPolicy.estimateDeclarationTokens(5))
+        // The device measurement: 18.1 KB of declarations came to ~4,350 tokens with the instruction. The
+        // estimate must land at or above the real count, never below -- a budget that undercounts overflows.
+        assertTrue(LocalLlmPolicy.estimateDeclarationTokens(18_132) >= 4_290)
+    }
+
+    @Test
+    fun the_declarations_the_appliance_published_on_device_do_not_fit_gemma_4s_default_window() {
+        // What this budget exists for: 21 intents, ~18.1 KB, against a 4,000-token window.
+        val tokens = LocalLlmPolicy.estimateDeclarationTokens(18_132)
+        assertTrue(tokens > LocalLlmPolicy.toolDeclarationTokenBudget(4000))
+        assertTrue("nor an 8k one -- the schemas have to get leaner, not just the window bigger", tokens > LocalLlmPolicy.toolDeclarationTokenBudget(8192))
+        assertTrue("a 16k window could", tokens <= LocalLlmPolicy.toolDeclarationTokenBudget(16_384))
+    }
+
+    @Test
+    fun a_thinking_model_may_reason_for_a_quarter_of_the_window() {
+        assertEquals("Qwen3-0.6B's window", 256, LocalLlmPolicy.thinkingTokenBudget(1024))
+        assertEquals("Gemma 4's window", 1000, LocalLlmPolicy.thinkingTokenBudget(4000))
+        assertEquals("an 8k window", 2048, LocalLlmPolicy.thinkingTokenBudget(8192))
+        assertEquals("a tiny window keeps the floor", 64, LocalLlmPolicy.thinkingTokenBudget(100))
+        assertEquals(64, LocalLlmPolicy.thinkingTokenBudget(0))
+    }
+
+    @Test
+    fun the_reasoning_budget_and_a_tool_result_together_leave_the_window_room_for_the_reply() {
+        for (window in listOf(1024, 4000, 8192)) {
+            // A result is budgeted in bytes; at ~3 bytes a token it is at most a sixth of the window in tokens.
+            val resultTokens = LocalLlmPolicy.toolResultByteBudget(window) / 3
+            val spent = LocalLlmPolicy.thinkingTokenBudget(window) + resultTokens
+            assertTrue("$window: $spent", spent < window / 2)
         }
     }
 

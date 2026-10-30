@@ -75,6 +75,7 @@ import {
 } from './entities/ReceiptEntity';
 import { type ReceiptLineItem, ReceiptLineItemEntity } from './entities/ReceiptLineItemEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
+import { CaptureContentListener } from './listeners/CaptureContentListener';
 import { GraphEventListener } from './listeners/GraphEventListener';
 import { CalendarEventService } from './services/CalendarEventService';
 import { CommunicationService } from './services/CommunicationService';
@@ -164,6 +165,8 @@ import { UserContextService } from './services/UserContextService';
     ItemService,
     UserContextService,
     GraphEventListener,
+    // Turns a phone capture's FileUploadedEvent into a content row.
+    CaptureContentListener,
     PersonService,
     PersonActivityService,
     EntityMergeBlockService,
@@ -332,6 +335,7 @@ export {
 // The pipeline's `metadata.location_source` / `promote.stage` vocabulary as the location refresh reads it;
 // pipeline/__tests__/sourceLocationVocabulary.spec.ts holds the stages to it.
 export { SOURCE_LOCATION_VOCABULARY } from './services/sourceLocationMerge';
+export { changedFieldsBetween } from './services/GraphDeltaWriter';
 export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
 // objects and then could not delete its records.
@@ -349,7 +353,8 @@ export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/Cale
 // impose SCHEDULE_EVENT_TYPES and LIVE_EVENT_SQL on it.
 export * from './recurrence';
 export type { PlaceKind } from './entities/PlaceEntity';
-export type { PlaceVisitStats } from './services/PlaceService';
+export type { PhotosAtNamedPlace, PlaceVisitStats } from './services/PlaceService';
+export { PHOTO_AT_PLACE_METERS, queryNamesPlace } from './services/PlaceService';
 export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';
 export { previewFromContent } from './entities/CommunicationEntity';
 export type { BlockReason } from './services/EntityMergeBlockService';
@@ -460,6 +465,10 @@ export {
   searchReachesEvents,
   type MediaEventSearchDeps,
 } from './services/mediaEventSearch';
+// The How filter's rule for content, for the callers that count or filter
+// content in their own SQL (the activity heatmap) rather than through
+// ContentService.
+export { effectiveSourceSystemPredicate } from './services/contentFacetsSql';
 // The object-identity service surface. Exported for the same reason the
 // observation DTOs above are: the API layer, the maintenance jobs and the
 // import path all speak these shapes, and a second definition of any of them is
@@ -530,6 +539,7 @@ export type {
   ReceiptLineItem,
 };
 export {
+  AGENT_TURN_MESSAGE_CATEGORY,
   CommunicationDirection,
   CommunicationType,
   CreateCommunicationDto,

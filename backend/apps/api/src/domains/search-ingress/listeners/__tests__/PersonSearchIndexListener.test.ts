@@ -163,6 +163,37 @@ describe('PersonSearchIndexListener merge tombstones', () => {
   });
 });
 
+describe('PersonSearchIndexListener archived (forgotten) people', () => {
+  it('removes an archived person from the search index when a later write re-emits it', async () => {
+    const { listener, embeddingGenerationService, embeddingService, indexSkipService, vectorService } =
+      makeListener({
+        id: 'p7',
+        userId: 'u1',
+        name: 'Jane Smith',
+        description: null,
+        properties: undefined,
+        isActive: false,
+      });
+
+    await listener.updatePerson({ personId: 'p7' });
+
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'p7' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'p7' },
+    );
+    // Like a tombstone, absent by the user's choice, not for want of content.
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
+  });
+});
+
 describe('PersonSearchIndexListener userId guard', () => {
   it('refuses to index a person with no associated user', async () => {
     const { listener, embeddingService, vectorService, logger } = makeListener({

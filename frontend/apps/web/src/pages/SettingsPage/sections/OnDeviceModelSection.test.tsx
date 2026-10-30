@@ -120,9 +120,10 @@ describe('OnDeviceModelSection', () => {
     installFakeNative('ios');
     const ios = render(<OnDeviceModelSection />);
 
-    expect(await screen.findByText('Qwen3 0.6B')).toBeInTheDocument();
-    expect(screen.getByText('Qwen2.5 1.5B Instruct')).toBeInTheDocument();
+    // iOS ships no LiteRT-LM model since 2026-10-13: nothing to list and nothing to download.
+    await screen.findByText(/on-device model/i);
     expect(screen.queryByText('Gemma 4 E2B')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /download/i })).not.toBeInTheDocument();
 
     ios.unmount();
     installFakeNative('android');
@@ -152,25 +153,25 @@ describe('OnDeviceModelSection', () => {
 
     render(<OnDeviceModelSection />);
 
-    const row = await screen.findByTestId('on-device-model-qwen3-0.6b-int4');
+    const row = await screen.findByTestId('on-device-model-gemma-4-e2b-it');
 
     fireEvent.click(within(row).getByRole('button', { name: /download/i }));
 
     expect(plugin.downloadModel).toHaveBeenCalledWith({
-      modelId: 'qwen3-0.6b-int4',
-      url: expect.stringContaining('/resolve/154c5de0fc0fc5002a7da570ba8c67edffa32ca2/'),
+      modelId: 'gemma-4-e2b-it',
+      url: expect.stringContaining('/resolve/361a4010ad6d88fc5c86e148e333c0342b99763d/'),
     });
 
     await act(async () => {
       emit('modelDownloadProgress', {
-        modelId: 'qwen3-0.6b-int4',
+        modelId: 'gemma-4-e2b-it',
         status: 'downloading',
         bytesDownloaded: 172_335_872,
         totalBytes: 344_437_808,
       });
     });
 
-    const bar = await within(row).findByRole('progressbar', { name: /downloading qwen3/i });
+    const bar = await within(row).findByRole('progressbar', { name: /downloading gemma 4 e2b/i });
 
     expect(bar).toBeInTheDocument();
     expect(within(row).getByText(/164 MB of 328 MB/)).toBeInTheDocument();
@@ -179,50 +180,53 @@ describe('OnDeviceModelSection', () => {
   it('renders, and still shows live progress, when the bridge hands back a bare listener handle (the real iOS shell)', async () => {
     // The mount effect used to chain `.then` onto `addListener(...)`; the shell's legacy stub returns no Promise, so the
     // page threw out of its effect and fell to the error boundary instead of showing the models.
-    const { emit } = installFakeNative('ios', {}, { bareListenerHandles: true });
+    // Android, because iOS lists no model since 2026-10-13 and the assertion needs a row to update.
+    const { emit } = installFakeNative('android', {}, { bareListenerHandles: true });
 
     render(<OnDeviceModelSection />);
 
-    const row = await screen.findByTestId('on-device-model-qwen3-0.6b-int4');
+    const row = await screen.findByTestId('on-device-model-gemma-4-e2b-it');
 
     await act(async () => {
       emit('modelDownloadProgress', {
-        modelId: 'qwen3-0.6b-int4',
+        modelId: 'gemma-4-e2b-it',
         status: 'downloading',
         bytesDownloaded: 172_335_872,
         totalBytes: 344_437_808,
       });
     });
 
-    expect(await within(row).findByRole('progressbar', { name: /downloading qwen3/i })).toBeInTheDocument();
+    expect(
+      await within(row).findByRole('progressbar', { name: /downloading gemma 4 e2b/i }),
+    ).toBeInTheDocument();
   });
 
   it('cancels an in-flight download', async () => {
     const { plugin } = installFakeNative('android', {
       status: {
-        'qwen3-0.6b-int4': { status: 'downloading', bytesDownloaded: 1000, totalBytes: 344_437_808 },
+        'gemma-4-e2b-it': { status: 'downloading', bytesDownloaded: 1000, totalBytes: 344_437_808 },
       },
     });
 
     render(<OnDeviceModelSection />);
 
-    const row = await screen.findByTestId('on-device-model-qwen3-0.6b-int4');
+    const row = await screen.findByTestId('on-device-model-gemma-4-e2b-it');
 
     fireEvent.click(within(row).getByRole('button', { name: /cancel/i }));
 
-    expect(plugin.cancelDownload).toHaveBeenCalledWith({ modelId: 'qwen3-0.6b-int4' });
+    expect(plugin.cancelDownload).toHaveBeenCalledWith({ modelId: 'gemma-4-e2b-it' });
   });
 
   it('surfaces a failed download with a retry, and the native error text', async () => {
     installFakeNative('android', {
       status: {
-        'qwen3-0.6b-int4': { status: 'error', error: 'Downloaded size (1) did not match expected size (2)' },
+        'gemma-4-e2b-it': { status: 'error', error: 'Downloaded size (1) did not match expected size (2)' },
       },
     });
 
     render(<OnDeviceModelSection />);
 
-    const row = await screen.findByTestId('on-device-model-qwen3-0.6b-int4');
+    const row = await screen.findByTestId('on-device-model-gemma-4-e2b-it');
 
     expect(within(row).getByRole('alert')).toHaveTextContent(/did not match expected size/);
     expect(within(row).getByRole('button', { name: /retry download/i })).toBeInTheDocument();
@@ -241,7 +245,7 @@ describe('OnDeviceModelSection', () => {
 
     await waitFor(() => expect(plugin.loadModel).toHaveBeenCalledTimes(1));
     expect(plugin.loadModel).toHaveBeenCalledWith(
-      expect.objectContaining({ modelId: 'gemma-4-e2b-it', accelerator: 'gpu' }),
+      expect.objectContaining({ modelId: 'gemma-4-e2b-it', accelerator: 'cpu' }),
     );
     expect(await screen.findByText(/Gemma 4 E2B settings/)).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}')).toMatchObject({
@@ -251,17 +255,9 @@ describe('OnDeviceModelSection', () => {
     });
   });
 
-  it('shows the reasoning and Memory-lookup switches only for a model that supports them', async () => {
-    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'qwen2.5-1.5b-instruct' }));
-    installFakeNative('android', { status: { 'qwen2.5-1.5b-instruct': { status: 'ready' } } });
-    const first = render(<OnDeviceModelSection />);
-
-    expect(await screen.findByText(/Qwen2\.5 1\.5B Instruct settings/)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/think before answering/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/look things up in memory/i)).not.toBeInTheDocument();
-
-    first.unmount();
-    resetLocalLlmPrefsCache();
+  it('shows the reasoning and Memory-lookup switches for a model that supports them', async () => {
+    // Every catalog model can think and call tools since 2026-10-13 (Qwen2.5, which could do neither, was
+    // dropped), so there is no longer a live case for the switches being hidden.
     localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'gemma-4-e2b-it' }));
     installFakeNative('android', { status: { 'gemma-4-e2b-it': { status: 'ready' } } });
     render(<OnDeviceModelSection />);
@@ -281,14 +277,14 @@ describe('OnDeviceModelSection', () => {
   });
 
   it('deleting the selected model drops the preference and reverts chat to the appliance', async () => {
-    const { plugin } = installFakeNative('android', { status: { 'qwen3-0.6b-int4': { status: 'ready' } } });
+    const { plugin } = installFakeNative('android', { status: { 'gemma-4-e2b-it': { status: 'ready' } } });
 
-    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'qwen3-0.6b-int4', mode: 'device' }));
+    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'gemma-4-e2b-it', mode: 'device' }));
     render(<OnDeviceModelSection />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /delete qwen3 0\.6b/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /delete gemma 4 e2b/i }));
 
-    await waitFor(() => expect(plugin.deleteModel).toHaveBeenCalledWith({ modelId: 'qwen3-0.6b-int4' }));
+    await waitFor(() => expect(plugin.deleteModel).toHaveBeenCalledWith({ modelId: 'gemma-4-e2b-it' }));
     await waitFor(() =>
       expect(JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}')).toMatchObject({
         modelId: null,
@@ -297,10 +293,30 @@ describe('OnDeviceModelSection', () => {
     );
   });
 
+  it('withholds the GPU on a phone under the model’s GPU floor and says why', async () => {
+    installFakeNative('android', {
+      totalMemoryBytes: 6 * GIB,
+      status: { 'gemma-4-e2b-it': { status: 'ready' } },
+      loaded: { loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' },
+    });
+    localStorage.setItem(
+      'ci.localLlm.prefs',
+      JSON.stringify({ mode: 'device', modelId: 'gemma-4-e2b-it', accelerator: 'gpu' }),
+    );
+
+    render(<OnDeviceModelSection />);
+
+    expect(
+      await screen.findByText(/needs at least 8\.0 GB to run on the GPU, so it runs on the CPU/i),
+    ).toBeInTheDocument();
+    // The picker shows what will actually be used, not the stored preference.
+    expect(screen.getByRole('combobox', { name: /run on/i })).toHaveTextContent(/CPU/);
+  });
+
   it('unloads a resident model on request', async () => {
     const { plugin } = installFakeNative('android', {
-      status: { 'qwen3-0.6b-int4': { status: 'ready' } },
-      loaded: { loaded: true, modelId: 'qwen3-0.6b-int4', accelerator: 'cpu' },
+      status: { 'gemma-4-e2b-it': { status: 'ready' } },
+      loaded: { loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' },
     });
 
     render(<OnDeviceModelSection />);

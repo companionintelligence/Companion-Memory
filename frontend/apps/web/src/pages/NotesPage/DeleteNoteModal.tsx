@@ -8,6 +8,12 @@ import { gql } from '@/graphql';
 interface Props {
   noteId: string;
   onClose: () => void;
+  /**
+   * Deletes the note some other way than the `deleteNote` mutation — the
+   * phone's local copy (LocalNotesList), which PowerSync then deletes on the
+   * appliance. The dialog is the same either way.
+   */
+  onDelete?: () => Promise<void>;
 }
 
 export const DELETE_NOTE = gql(`
@@ -19,7 +25,7 @@ export const DELETE_NOTE = gql(`
   }
 `);
 
-export function DeleteNoteModal({ noteId, onClose }: Props) {
+export function DeleteNoteModal({ noteId, onClose, onDelete }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [deleteNote, { loading: deleting }] = useMutation(DELETE_NOTE, {
     update(cache, { data }) {
@@ -69,13 +75,17 @@ export function DeleteNoteModal({ noteId, onClose }: Props) {
     setError(null);
 
     try {
-      await deleteNote({
-        variables: {
-          input: {
-            id: noteId,
+      if (onDelete) {
+        await onDelete();
+      } else {
+        await deleteNote({
+          variables: {
+            input: {
+              id: noteId,
+            },
           },
-        },
-      });
+        });
+      }
 
       onClose();
     } catch {

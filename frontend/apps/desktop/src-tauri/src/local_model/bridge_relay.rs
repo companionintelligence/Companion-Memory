@@ -22,9 +22,23 @@
 //! falls back to "whatever model is served".
 //!
 //! So: bind the sidecar to loopback, and put a plain TCP relay on the ONE
-//! address containers actually arrive from. The relay's listen socket is bound
-//! to that single address — not `0.0.0.0` — so the kernel drops anything
-//! arriving on the machine's real NICs before this process sees it.
+//! address containers actually arrive from, bound to that single address
+//! rather than `0.0.0.0`.
+//!
+//! ## Who may connect
+//!
+//! A single-address bind does not keep the LAN out on its own. Linux follows
+//! the weak host model: a packet for `172.17.0.1` that arrives on `wlan0` or
+//! `eth0` is still delivered to this socket, so a machine on the same network
+//! segment that routes that address via this host reaches the relay unless a
+//! host firewall drops it. And every container on the host, not just the
+//! appliance's, arrives from a docker network. So the accept loop checks each
+//! peer's source address and serves only the subnets of the appliance's own
+//! compose networks (`docker network inspect`, filtered on the compose project
+//! label). LAN packets keep their LAN source address, so they fall outside;
+//! so do containers on other networks. The list is read lazily and refreshed
+//! on a miss, because on a first launch the relay starts before compose has
+//! created the network; see [`PeerFilter`].
 //!
 //! ## When the gateway cannot be discovered
 //!
@@ -49,7 +63,7 @@ use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long a relayed connection waits to reach the loopback sidecar. Local
 /// connect, so this only ever trips when the sidecar has died.
@@ -65,6 +79,135 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// cut off real token streaming (which keeps producing bytes well inside this
 /// window) while still bounding the leak from a truly stalled peer.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The shortest gap between two re-reads of the appliance's network subnets.
+/// A refused peer triggers a re-read (the network may be newer than the last
+/// one), so without this a stream of refused connections would spawn a
+/// `docker` process each. Short, because a container refused inside the
+/// window gets a failed model call.
+const SUBNET_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// An IPv4 network in CIDR form, as `docker network inspect` prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ipv4Subnet {
+    network: Ipv4Addr,
+    prefix_len: u8,
+}
+
+impl Ipv4Subnet {
+    fn contains(&self, ip: IpAddr) -> bool {
+        let IpAddr::V4(ip) = ip else {
+            return false;
+        };
+        // checked_shl: a shift by 32 (a /0) is None, which is the empty mask.
+        let mask = u32::MAX
+            .checked_shl(32 - u32::from(self.prefix_len))
+            .unwrap_or(0);
+
+        u32::from(ip) & mask == u32::from(self.network) & mask
+    }
+}
+
+/// Parses the subnets out of `docker network inspect`'s
+/// `{{range .IPAM.Config}}{{.Subnet}} {{end}}` output. IPv6 entries are
+/// skipped: the relay listens on IPv4 only. A `/0` is refused as well, since it
+/// would admit every address there is.
+fn parse_subnets(output: &str) -> Vec<Ipv4Subnet> {
+    output
+        .split_whitespace()
+        .filter_map(|token| {
+            let (address, prefix_len) = token.split_once('/')?;
+            let network = address.parse::<Ipv4Addr>().ok()?;
+            let prefix_len = prefix_len.parse::<u8>().ok()?;
+
+            (1..=32).contains(&prefix_len).then_some(Ipv4Subnet {
+                network,
+                prefix_len,
+            })
+        })
+        .collect()
+}
+
+/// The IPv4 subnets of the appliance's compose networks: every network the
+/// compose project created, found by its project label. Empty when Docker
+/// cannot be asked or the project has no network yet, which refuses every
+/// peer rather than guessing.
+fn discover_appliance_subnets() -> Vec<Ipv4Subnet> {
+    let label = format!(
+        "label=com.docker.compose.project={}",
+        crate::stack_manager::PROJECT_NAME
+    );
+    let names = match crate::stack_manager::docker_command()
+        .args(["network", "ls", "--filter", &label, "--format", "{{.Name}}"])
+        .output()
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        _ => return Vec::new(),
+    };
+
+    if names.is_empty() {
+        return Vec::new();
+    }
+
+    match crate::stack_manager::docker_command()
+        .args([
+            "network",
+            "inspect",
+            "--format",
+            "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+        ])
+        .args(&names)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            parse_subnets(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Decides which peers the relay serves: those whose source address sits in
+/// one of the appliance's network subnets.
+///
+/// The subnets are read on demand rather than once at spawn. The relay starts
+/// before the first `compose up` (local-model resolution runs first), so on a
+/// first launch the compose network does not exist yet. A peer that is not in
+/// the known list triggers one re-read, at most once per
+/// [`SUBNET_REFRESH_INTERVAL`], and is refused if it is still not in it.
+struct PeerFilter<D: FnMut() -> Vec<Ipv4Subnet>> {
+    discover: D,
+    known: Vec<Ipv4Subnet>,
+    refreshed_at: Option<Instant>,
+}
+
+impl<D: FnMut() -> Vec<Ipv4Subnet>> PeerFilter<D> {
+    fn new(discover: D) -> Self {
+        PeerFilter {
+            discover,
+            known: Vec::new(),
+            refreshed_at: None,
+        }
+    }
+
+    fn admits(&mut self, peer: IpAddr) -> bool {
+        if self.known.iter().any(|subnet| subnet.contains(peer)) {
+            return true;
+        }
+
+        let due = self
+            .refreshed_at
+            .is_none_or(|at| at.elapsed() >= SUBNET_REFRESH_INTERVAL);
+        if due {
+            self.known = (self.discover)();
+            self.refreshed_at = Some(Instant::now());
+        }
+
+        self.known.iter().any(|subnet| subnet.contains(peer))
+    }
+}
 
 #[derive(Debug)]
 pub struct RelayHandle {
@@ -141,13 +284,28 @@ pub fn discover_host_gateway() -> Result<Ipv4Addr, String> {
         .ok_or_else(|| "`docker network inspect bridge` reported no IPv4 gateway".to_string())
 }
 
-/// Listens on `bind_ip:port` and forwards every connection to
-/// `127.0.0.1:port`.
+/// Listens on `bind_ip:port` and forwards every connection from the
+/// appliance's own containers to `127.0.0.1:port`. Any other peer is dropped;
+/// see the module comment.
 ///
 /// Same port on both sides deliberately: containers reach the sidecar at
 /// `host.docker.internal:11434`, which is the port `services.ollama.host`
 /// already names, so nothing downstream needs an override.
 pub fn spawn(bind_ip: Ipv4Addr, port: u16) -> Result<RelayHandle, String> {
+    spawn_filtered(bind_ip, port, port, discover_appliance_subnets)
+}
+
+/// [`spawn`] with the target port and the subnet source passed in, so a test
+/// can run the real accept loop against an echo server on loopback.
+fn spawn_filtered<D>(
+    bind_ip: Ipv4Addr,
+    port: u16,
+    target_port: u16,
+    discover: D,
+) -> Result<RelayHandle, String>
+where
+    D: FnMut() -> Vec<Ipv4Subnet> + Send + 'static,
+{
     let requested = SocketAddr::new(IpAddr::V4(bind_ip), port);
     let listener =
         TcpListener::bind(requested).map_err(|e| format!("could not listen on {requested}: {e}"))?;
@@ -164,14 +322,35 @@ pub fn spawn(bind_ip: Ipv4Addr, port: u16) -> Result<RelayHandle, String> {
     let accept_thread = std::thread::Builder::new()
         .name("ollama-bridge-relay".to_string())
         .spawn(move || {
+            let mut peers = PeerFilter::new(discover);
             for stream in listener.incoming() {
                 if accept_shutdown.load(Ordering::SeqCst) {
                     break;
                 }
                 match stream {
                     Ok(inbound) => {
+                        let peer = match inbound.peer_addr() {
+                            Ok(peer) => peer,
+                            Err(e) => {
+                                log::debug!(
+                                    "ollama bridge relay: could not read a peer address: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        if !peers.admits(peer.ip()) {
+                            // Warn, not debug: if the filter ever refuses the
+                            // appliance's own containers, the model errors they
+                            // report have no other explanation in the log.
+                            log::warn!(
+                                "ollama bridge relay: refused {peer}, which is not on one of the \
+                                 appliance's docker networks"
+                            );
+                            let _ = inbound.shutdown(Shutdown::Both);
+                            continue;
+                        }
                         std::thread::spawn(move || {
-                            if let Err(e) = relay_connection(inbound, port) {
+                            if let Err(e) = relay_connection(inbound, target_port) {
                                 log::debug!("ollama bridge relay: connection ended: {e}");
                             }
                         });
@@ -269,6 +448,93 @@ mod tests {
         assert_eq!(parse_gateway("<no value> "), None);
     }
 
+    #[test]
+    fn parses_the_subnets_docker_prints() {
+        // `{{range .IPAM.Config}}{{.Subnet}} {{end}}` over two networks, one
+        // of them dual-stack.
+        let subnets = parse_subnets("172.18.0.0/16 fd00:dead:beef::/64 \n192.168.32.0/20 \n");
+        assert_eq!(
+            subnets,
+            vec![
+                Ipv4Subnet {
+                    network: Ipv4Addr::new(172, 18, 0, 0),
+                    prefix_len: 16
+                },
+                Ipv4Subnet {
+                    network: Ipv4Addr::new(192, 168, 32, 0),
+                    prefix_len: 20
+                },
+            ]
+        );
+
+        // Nothing usable: no subnets, an unparseable prefix, a /0.
+        assert!(parse_subnets("").is_empty());
+        assert!(parse_subnets("<no value> 10.0.0.0/33 0.0.0.0/0").is_empty());
+    }
+
+    /// The address checks the relay applies to every peer. A LAN machine keeps
+    /// its LAN address when it routes to the bridge gateway, so it must fall
+    /// outside the appliance's subnets even when both are private ranges.
+    #[test]
+    fn only_addresses_inside_an_appliance_subnet_are_admitted() {
+        let compose = parse_subnets("172.18.0.0/16 192.168.32.0/20");
+        let admits = |ip: [u8; 4]| {
+            compose
+                .iter()
+                .any(|subnet| subnet.contains(IpAddr::V4(Ipv4Addr::from(ip))))
+        };
+
+        assert!(admits([172, 18, 0, 5]));
+        assert!(admits([192, 168, 47, 255]));
+
+        // The default bridge, a home LAN next to the compose range, loopback.
+        assert!(!admits([172, 17, 0, 2]));
+        assert!(!admits([192, 168, 1, 23]));
+        assert!(!admits([192, 168, 48, 1]));
+        assert!(!admits([127, 0, 0, 1]));
+
+        let v6 = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+        assert!(!compose.iter().any(|subnet| subnet.contains(v6)));
+    }
+
+    /// The compose network may not exist when the relay starts, so a miss
+    /// re-reads the subnets. A second miss right after must not: each re-read
+    /// spawns `docker`, and a refused peer that keeps reconnecting would
+    /// otherwise spawn one per connection.
+    #[test]
+    fn a_miss_rereads_the_subnets_but_not_on_every_connection() {
+        let reads = std::cell::Cell::new(0);
+        let mut filter = PeerFilter::new(|| {
+            reads.set(reads.get() + 1);
+            if reads.get() == 1 {
+                // First read: compose has not created its network yet.
+                Vec::new()
+            } else {
+                parse_subnets("172.18.0.0/16")
+            }
+        });
+        let container = IpAddr::V4(Ipv4Addr::new(172, 18, 0, 5));
+        let lan_peer = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 23));
+
+        assert!(!filter.admits(lan_peer));
+        assert_eq!(reads.get(), 1);
+
+        // Inside the refresh interval: refused without asking Docker again.
+        assert!(!filter.admits(container));
+        assert!(!filter.admits(lan_peer));
+        assert_eq!(reads.get(), 1);
+
+        // Once the interval has passed, the next miss re-reads and finds it.
+        filter.refreshed_at = Instant::now().checked_sub(SUBNET_REFRESH_INTERVAL);
+        assert!(filter.admits(container));
+        assert_eq!(reads.get(), 2);
+
+        // A known peer needs no read at all; an unknown one is still refused.
+        assert!(filter.admits(container));
+        assert!(!filter.admits(lan_peer));
+        assert_eq!(reads.get(), 2);
+    }
+
     /// Stands in for the sidecar: echoes one line back, uppercased, so the test
     /// proves bytes crossed in BOTH directions rather than just connecting.
     fn spawn_echo_server() -> (u16, JoinHandle<()>) {
@@ -321,6 +587,39 @@ mod tests {
 
         relay_thread.join().expect("relay thread");
         echo_thread.join().expect("echo thread");
+    }
+
+    /// The accept loop itself, end to end on loopback: a peer inside the
+    /// appliance's subnets is relayed, one outside them is dropped before a
+    /// single byte reaches the sidecar.
+    #[test]
+    fn the_accept_loop_drops_peers_outside_the_appliance_subnets() {
+        let exchange = |allowed: &'static str| {
+            let (echo_port, _echo_thread) = spawn_echo_server();
+            let relay = spawn_filtered(Ipv4Addr::LOCALHOST, 0, echo_port, move || {
+                parse_subnets(allowed)
+            })
+            .expect("relay on an ephemeral loopback port");
+
+            let mut client = TcpStream::connect(relay.bind_addr).expect("connect to the relay");
+            let _ = client.write_all(b"hello sidecar\n");
+            let _ = client.shutdown(Shutdown::Write);
+
+            // A refused peer sees the connection closed (or reset): either
+            // way it reads nothing back.
+            let mut response = String::new();
+            let _ = client.read_to_string(&mut response);
+
+            relay.shutdown();
+            response
+        };
+
+        assert_eq!(exchange("127.0.0.0/8"), "HELLO SIDECAR\n");
+        assert_eq!(
+            exchange("172.18.0.0/16"),
+            "",
+            "a loopback peer is outside 172.18.0.0/16 and must get nothing"
+        );
     }
 
     /// `spawn` must refuse rather than silently serve nothing when the address

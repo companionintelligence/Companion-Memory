@@ -28,7 +28,12 @@ export interface DisclosureRow {
   disclosedCount: number;
   consentBasis?: string | null;
   createdAt: string;
-  query: { queryType: string; dataClass?: string | null; prompt: string };
+  query: {
+    queryType: string;
+    dataClass?: string | null;
+    prompt: string;
+    promptHiddenCharactersRemoved?: boolean;
+  };
 }
 
 interface Props {
@@ -104,7 +109,11 @@ export function DisclosureHistory({ rows }: Props) {
                 </span>
               </div>
 
-              <AskerQuote prompt={row.query.prompt} attribution={`${who} asked:`} />
+              <AskerQuote
+                prompt={row.query.prompt}
+                attribution={`${who} asked:`}
+                hiddenCharactersRemoved={row.query.promptHiddenCharactersRemoved}
+              />
 
               <div className="text-muted-foreground flex flex-col gap-0.5 text-xs">
                 <p>{outcomeSentence(row.outcome, who)}</p>

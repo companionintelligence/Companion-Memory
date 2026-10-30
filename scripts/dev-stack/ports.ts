@@ -26,6 +26,9 @@ export const DEFAULTS = {
   hbpe: 8002,
   summary: 8001,
   parser: 8003,
+  // Not 8080: the shared dev Caddy owns it. The api hands this URL to clients
+  // verbatim, so the phone's `adb reverse` must name the same port (yarn android).
+  powersync: 18080,
 };
 
 /** The host port each service of one stack was allocated. */
@@ -37,6 +40,8 @@ export interface StackPorts {
   hbpePort: number;
   summaryPort: number;
   parserPort: number;
+  /** Allocated whether or not the stack runs the service; it costs nothing idle. */
+  powersyncPort: number;
 }
 
 /** Host ports Docker has published, split by owning compose project. */
@@ -147,15 +152,17 @@ export async function allocPort(preferred: number, dockerPorts: PublishedPorts):
 
 /** Every service's port for one stack, allocated concurrently. */
 export async function allocStackPorts(dockerPorts: PublishedPorts): Promise<StackPorts> {
-  const [apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort] = await Promise.all([
-    allocPort(DEFAULTS.api, dockerPorts),
-    allocPort(DEFAULTS.web, dockerPorts),
-    allocPort(DEFAULTS.db, dockerPorts),
-    allocPort(DEFAULTS.objectStore, dockerPorts),
-    allocPort(DEFAULTS.hbpe, dockerPorts),
-    allocPort(DEFAULTS.summary, dockerPorts),
-    allocPort(DEFAULTS.parser, dockerPorts),
-  ]);
+  const [apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort, powersyncPort] =
+    await Promise.all([
+      allocPort(DEFAULTS.api, dockerPorts),
+      allocPort(DEFAULTS.web, dockerPorts),
+      allocPort(DEFAULTS.db, dockerPorts),
+      allocPort(DEFAULTS.objectStore, dockerPorts),
+      allocPort(DEFAULTS.hbpe, dockerPorts),
+      allocPort(DEFAULTS.summary, dockerPorts),
+      allocPort(DEFAULTS.parser, dockerPorts),
+      allocPort(DEFAULTS.powersync, dockerPorts),
+    ]);
 
-  return { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort };
+  return { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort, powersyncPort };
 }

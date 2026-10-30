@@ -34,8 +34,9 @@ vi.mock('@/hooks/useAuth', () => ({
       loading: false,
       initializing: false,
       error: null,
+      signOutPrompt: { open: false, unsentCaptures: 0 },
     },
-    { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+    { login: vi.fn(), logout: vi.fn(), confirmSignOut: vi.fn(), cancelSignOut: vi.fn(), signup: vi.fn() },
   ],
 }));
 

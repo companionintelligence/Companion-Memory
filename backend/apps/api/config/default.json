@@ -60,6 +60,9 @@
       },
       "slack": {
         "id": "019e3c66-b5d2-7f03-c9e5-1a4f6b9d0c08"
+      },
+      "dropbox": {
+        "id": "01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3"
       }
     },
     "oauth": {
@@ -75,7 +78,7 @@
     },
     "connect": {
       "hubOrigins": "",
-      "hubInternalUrl": "http://ci-os-hub:3000",
+      "hubInternalUrl": "",
       "devDirectWakeUrl": "",
       "devDirectWakeToken": ""
     },

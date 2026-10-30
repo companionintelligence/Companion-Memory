@@ -44,6 +44,7 @@ import org.robolectric.RobolectricTestRunner
 class ToolResultShaperInvariantsTest {
     private val marker = ToolResultShaper.TRUNCATION_MARKER
     private val closingNote = Regex("""\[\d+ more results omitted — refine the query to narrow them down]""")
+    private val renderedInstant = Regex("^(\\d{4}-\\d{2}-\\d{2}) (\\d{2}:\\d{2}) (?:UTC|[+-]\\d{2}:?\\d{2})$")
     private val uuid = Regex("""[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}""")
 
     // ---- the properties ---------------------------------------------------------------------------
@@ -141,6 +142,14 @@ class ToolResultShaperInvariantsTest {
     /** Whether [string] is one of [inputs], or one of them cut short and ended with an ellipsis, or the note that closes a list. */
     private fun derived(string: String, inputs: TreeSet<String>): Boolean {
         if (string in inputs || closingNote.matches(string)) return true
+        // A rendered instant (`2022-11-28 06:45 UTC`) comes from an input instant that starts `2022-11-28T06:45`.
+        renderedInstant.matchEntire(string)?.let { match ->
+            val (date, clock) = match.destructured
+            val prefix = "${date}T$clock"
+
+            return inputs.ceiling(prefix)?.startsWith(prefix) == true
+        }
+
         if (!string.endsWith("…")) return false
 
         // Every string that starts with `head` sorts at or after it, and the first of those is the least of them all.
@@ -636,40 +645,49 @@ class ToolResultShaperInvariantsTest {
     }
 
     @Test
-    fun the_deepest_nesting_that_is_followed_never_overflows_the_stack_even_on_a_small_one() {
-        val deep = "{\"a\":".repeat(512) + quote("x".repeat(3_000)) + "}".repeat(512)
-        val subject = subject(deep, "512 nested objects", plain = false)
-
-        // 512 levels of `{"a":` are 3,072 bytes before there is anything inside them: the budget must clear that.
+    fun nesting_past_the_parse_depth_is_refused_before_the_reader_runs_whatever_the_stack_and_nesting_at_it_is_followed() {
+        // Before MAXIMUM_PARSE_DEPTH existed, how deep a document could nest and still be followed depended on
+        // how much stack the reader had to recurse through to find out — 512 levels needed about 512 KB
+        // (measured: 384 KB was not enough). nests() now refuses anything past MAXIMUM_PARSE_DEPTH by a flat,
+        // non-recursive scan before the reader (or anything after it) ever runs, so a document nested past it is
+        // refused on ANY stack, including a tiny one, and nothing here needs real headroom any more: the reader
+        // itself recurses no deeper than the limit.
+        val limit = ToolResultShaper.MAXIMUM_PARSE_DEPTH
+        val atLimit = "{\"a\":".repeat(limit) + quote("x".repeat(3_000)) + "}".repeat(limit)
+        val pastLimit = "{\"a\":".repeat(512) + quote("x".repeat(3_000)) + "}".repeat(512)
         val budget = 5_000
 
-        // 512 KB is about what the JVM needs for this (measured: 384 KB was not enough), so 128 KB overflows
-        // inside the shaper, and the answer must be the plain cut, not an Error.
-        for (kilobytes in listOf(128, 256, 4_096)) {
-            var failure: Throwable? = null
-            var shaped = ""
+        for (kilobytes in listOf(64, 128, 4_096)) {
+            for ((label, text, followed) in listOf(Triple("at the limit", atLimit, true), Triple("past the limit", pastLimit, false))) {
+                var failure: Throwable? = null
+                var shaped = ""
 
-            // Only the shaping runs on the small stack: reading the answer back with org.json is recursive too.
-            val thread =
-                Thread(null, {
-                    try {
-                        shaped = ToolResultShaper.shape(deep, budget)
-                    } catch (e: Throwable) {
-                        failure = e
-                    }
-                }, "shape-on-a-${kilobytes}KB-stack", kilobytes * 1024L)
+                // Only the shaping runs on the small stack: reading the answer back with org.json is recursive too.
+                val thread =
+                    Thread(null, {
+                        try {
+                            shaped = ToolResultShaper.shape(text, budget)
+                        } catch (e: Throwable) {
+                            failure = e
+                        }
+                    }, "shape-$label-on-a-${kilobytes}KB-stack", kilobytes * 1024L)
 
-            thread.start()
-            thread.join()
+                thread.start()
+                thread.join()
 
-            assertNull("on a ${kilobytes}KB stack: $failure", failure)
-            assertTrue("on a ${kilobytes}KB stack: within the budget (${utf8(shaped)} bytes)", utf8(shaped) <= budget)
-            assertTrue("on a ${kilobytes}KB stack: JSON or a cut that says so", shaped.endsWith(marker) || StrictJsonCheck.isValid(shaped))
+                assertNull("$label on a ${kilobytes}KB stack: $failure", failure)
+                assertTrue("$label on a ${kilobytes}KB stack: within the budget (${utf8(shaped)} bytes)", utf8(shaped) <= budget)
 
-            if (kilobytes == 4_096) assertTrue("with room to spare it is shaped as JSON", StrictJsonCheck.isValid(shaped))
+                if (followed) {
+                    assertTrue("$label on a ${kilobytes}KB stack: followed, and shaped as JSON", StrictJsonCheck.isValid(shaped))
+                } else {
+                    assertTrue("$label on a ${kilobytes}KB stack: refused up front, and cut as text", shaped.endsWith(marker))
+                }
+            }
         }
 
-        check(subject, budget)
+        check(subject(atLimit, "$limit nested objects", plain = false), budget)
+        check(subject(pastLimit, "512 nested objects", plain = false), budget)
     }
 
     // ---- the pieces, on text that is awkward ------------------------------------------------------
@@ -733,7 +751,7 @@ class ToolResultShaperInvariantsTest {
 
         const val SEED_BASE = 20_261_003L
 
-        /** The budgets that sit on an edge: the floor, either side of it, and where the reserve changes. */
+        /** The budgets that sit on an edge: the floor, either side of it, and other round numbers nearby. */
         val EDGE_BUDGETS = listOf(0, 1, 63, 64, 65, 96, 97, 255, 256)
 
         val USUAL_BUDGETS = listOf(300, 400, 512, 700, 1024, 2048, 4096, 10_000)

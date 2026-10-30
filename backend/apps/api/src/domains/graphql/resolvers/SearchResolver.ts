@@ -8,7 +8,14 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { SHARE_DISCLOSURE, SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
-import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
+import {
+  type FileKind,
+  FileService,
+  SavedSearchService,
+  normalizeFileKinds,
+  resolveSavedSearchDateRange,
+  savedSearchAreas,
+} from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
 import {
   CommunicationService,
@@ -77,6 +84,31 @@ const FETCH_MULTIPLIER = 4;
 // a single page is never truncated — the old 25 cap fell short of the 30-row
 // client page, capping plain-text search and disabling load-more.
 const QUERY_CANDIDATE_LIMIT = 300;
+// Per-type pool for a name sort on the timed browse. A name has no place in the
+// SQL keyset, which walks time, so "Name (A-Z)" with no search text is paged
+// in memory like the query path: each type's newest rows up to this many,
+// sorted by name, sliced against the cursor. Below this many rows of a type the
+// list is complete; above it, only the newest rows of that type are in it.
+const NAME_SORT_CANDIDATE_LIMIT = 500;
+/**
+ * Kinds the text and tag searches return that carry no time of their own, only their last write:
+ * a chat thread (its last message or title), a planner task, a feed action and a document excerpt.
+ * {@link SearchResolver.getEntityTimestamp} has to give them that write time, because it is also
+ * their cursor, so a date window kept them as if they had happened then: a chat started today
+ * came back under "Last week". A date window leaves them out instead, as the timed browse never
+ * fetches them and the explorer's When filter already sets them aside (`UNDATED_UNLISTED_TYPES`
+ * in the web app's `filterParams.ts`). The API and shared links get the same answer.
+ *
+ * Notes, files, content, people and places also ride a row stamp here, and stay: an agent's or a
+ * saved search's date range has always included them, and the explorer leaves them out itself.
+ */
+const ROW_DATED_TYPES: ReadonlySet<ResolvedEntity['type']> = new Set([
+  'thread',
+  'task',
+  'action',
+  'file-chunk',
+]);
+
 /**
  * Pin caps for the map read (`mapPins`).
  *
@@ -189,12 +221,27 @@ interface EventFilter {
   people?: string[];
   places?: string[];
   hasLocation?: boolean;
-  bbox?: number[];
+  areas?: number[][];
 }
 
-/** Where / located-only / map viewport: only events carry a place, so these pin the browse to events. */
+/** Where / located-only / map areas: only events carry a place, so these pin the browse to events. */
 function isPlaceScoped(filter: EventFilter): boolean {
-  return filter.places != null || filter.hasLocation != null || filter.bbox != null;
+  return filter.places != null || filter.hasLocation != null || filter.areas != null;
+}
+
+/**
+ * The map areas a search input asks for: `areas` plus the legacy single
+ * `bbox`, keeping only entries that are exactly four finite numbers, or
+ * undefined when none survive. A malformed entry is dropped rather than
+ * failing the search, as the single box always was.
+ */
+function requestedAreas(input: Pick<SearchInput, 'areas' | 'bbox'>): number[][] | undefined {
+  const candidates = [...(input.areas ?? []), ...(input.bbox != null ? [input.bbox] : [])];
+  const valid = candidates.filter(
+    (area) => Array.isArray(area) && area.length === 4 && area.every((value) => Number.isFinite(value)),
+  );
+
+  return valid.length > 0 ? valid : undefined;
 }
 
 /**
@@ -263,9 +310,12 @@ function searchCursorOf({ result, sortTime }: OrderedResult): string {
  * primary key. Ids are uuidv7 (time-ordered) so a single raw-uuid tiebreak is a
  * consistent total order across the merged entity types. `id` is null when the
  * cursor predates this format or its GlobalUID can't be decoded — callers then
- * fall back to the legacy time-only window.
+ * fall back to the legacy time-only window. `globalId` is the id portion as it
+ * was minted (null when absent or undecodable), for matching a result's own id.
  */
-function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | null } | null {
+function decodeSearchCursor(
+  cursor?: string | null,
+): { time: Date; id: string | null; globalId: string | null } | null {
   if (!cursor) {
     return null;
   }
@@ -290,7 +340,7 @@ function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | 
       }
     }
 
-    return { time, id };
+    return { time, id, globalId: id != null ? globalId : null };
   } catch {
     return null;
   }
@@ -458,10 +508,7 @@ export class SearchResolver {
       connectors: input.connectors && input.connectors.length > 0 ? input.connectors : undefined,
       people: input.people && input.people.length > 0 ? input.people : undefined,
       places: input.places && input.places.length > 0 ? input.places : undefined,
-      bbox:
-        input.bbox && input.bbox.length === 4 && input.bbox.every((value) => Number.isFinite(value))
-          ? input.bbox
-          : undefined,
+      areas: requestedAreas(input),
       // Forced: a pin is a coordinate. See MapPinsType / findMapPins.
       hasLocation: true,
       ids,
@@ -556,6 +603,8 @@ export class SearchResolver {
         hasLocation: filters.hasLocation,
         semantic: filters.semantic,
         direction: filters.direction,
+        fileKinds: filters.fileKinds,
+        areas: savedSearchAreas(filters),
         // Viewer paging carries over only when the ceiling permits it; sort
         // prefers the viewer's choice, falling back to the owner's saved sort.
         sortBy: input.sortBy ?? filters.sortBy,
@@ -610,19 +659,17 @@ export class SearchResolver {
     const people = input.people && input.people.length > 0 ? input.people : undefined;
     const places = input.places && input.places.length > 0 ? input.places : undefined;
     const hasLocation = input.hasLocation === true ? true : undefined;
-    // Map "Search this area" viewport box [minLon, minLat, maxLon, maxLat]; ignored
-    // unless it carries exactly four finite numbers.
-    const bbox =
-      input.bbox && input.bbox.length === 4 && input.bbox.every((value) => Number.isFinite(value))
-        ? input.bbox
-        : undefined;
+    // Map areas (drawn, or the "Search this area" viewport), ORed; each must
+    // carry exactly four finite numbers to count.
+    const areas = requestedAreas(input);
     const eventFilter =
-      people != null || places != null || hasLocation != null || bbox != null
-        ? { people, places, hasLocation, bbox }
+      people != null || places != null || hasLocation != null || areas != null
+        ? { people, places, hasLocation, areas }
         : undefined;
     // Sent / received: a dimension only messages carry, so like the Where
     // family it pins the browse — to communications (see browseWants).
     const direction = messageDirection(input.direction);
+    const fileKinds = normalizeFileKinds(input.fileKinds);
 
     // No filter signal at all -> fall back to recent timed entities (preserves prior behavior).
     const noInputs =
@@ -632,7 +679,8 @@ export class SearchResolver {
       !hasDate &&
       eventFilter == null &&
       connectors == null &&
-      direction == null;
+      direction == null &&
+      fileKinds == null;
 
     // Build a candidate identifier set from the strongest available signal, then AND the
     // remaining filter dimensions on as post-filters so all filters combine (LifeScope parity).
@@ -642,6 +690,9 @@ export class SearchResolver {
     // see the branch's comment and `countTimedEntities` for why this can't just be
     // `identifiers.length` (or the Paginator's derived totalCount from it).
     let timedTotalCount: number | undefined;
+    // Whether SQL already paged strictly past the cursor row (the timed keyset). Every other
+    // source hands the whole candidate list over and the Paginator finds the cursor in it.
+    let seeksPastCursor = false;
 
     const first = Math.min(Math.max(input.first ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const afterCursor = decodeSearchCursor(input.after);
@@ -672,7 +723,12 @@ export class SearchResolver {
       // the same top-N rows). Fall back to the legacy inclusive window (endTime when
       // reading down, startTime when reading up) when the cursor lacks a decodable id
       // (older cursors).
-      const keyset = afterCursor?.time != null && afterCursor.id != null;
+      // A name sort cannot window by the cursor's time: the cursor is the last row of a
+      // name-ordered page, not the oldest row read so far, so a time keyset skipped rows and
+      // ended early. It reads one fixed pool every page and lets the Paginator find the cursor.
+      const byName = input.sortBy === 'name';
+      const keyset = !byName && afterCursor?.time != null && afterCursor.id != null;
+      seeksPastCursor = keyset;
       // With no filters at all, bound to "now" so we return recent items, not the entire
       // history. This is the *filter's* upper bound — stable across pages — as opposed to
       // the legacy `afterCursor?.time` window fallback below, which is a pagination artifact
@@ -689,12 +745,13 @@ export class SearchResolver {
         eventFilter,
         connectors,
         direction,
+        fileKinds,
       };
 
       // Without a decodable id the cursor can only bound the walk by its time, inclusively. That
       // bound belongs to the edge of the window the walk has already left behind: the upper edge
       // when reading down, the lower edge when reading up.
-      const legacyBound = keyset ? undefined : afterCursor?.time;
+      const legacyBound = keyset || byName ? undefined : afterCursor?.time;
 
       [identifiers, timedTotalCount] = await Promise.all([
         this.searchByTimedEntities(serviceContext, {
@@ -705,7 +762,7 @@ export class SearchResolver {
           afterTime: keyset ? afterCursor!.time : undefined,
           afterId: keyset ? afterCursor!.id! : undefined,
           // Over-fetch per type so the merged page holds the globally first `first` rows in `order`.
-          limit: first * FETCH_MULTIPLIER,
+          limit: byName ? NAME_SORT_CANDIDATE_LIMIT : first * FETCH_MULTIPLIER,
         }),
         this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
       ]);
@@ -733,6 +790,17 @@ export class SearchResolver {
     // events *and* communications (PEOPLE_LINKED_TYPES), each matched by its
     // own service. Every other kind drops out — it has no link to a person and
     // no direction, so it could never match.
+    // Kind filter for candidates the index produced: the timed browse applied
+    // it in SQL; a query or a tag hands back files of every kind.
+    if (fileKinds != null && candidateSource !== 'timed') {
+      const fileIds = identifiers
+        .filter((identifier) => identifier.type === 'file')
+        .map((identifier) => identifier.id);
+      const kept = await this.fileService.filterIdsByKind(serviceContext, fileIds, fileKinds);
+
+      identifiers = identifiers.filter((identifier) => identifier.type !== 'file' || kept.has(identifier.id));
+    }
+
     if ((eventFilter != null || direction != null) && candidateSource !== 'timed') {
       const pinnedToEvents = eventFilter != null && isPlaceScoped(eventFilter);
       const pinnedToMessages = direction != null;
@@ -775,10 +843,23 @@ export class SearchResolver {
     // entries whose row came from one of the named sources. A kind with no
     // source column cannot match and drops out, exactly as the timed path
     // leaves it unfetched (see browseWants).
+    //
+    // Content is asked of the ledger instead: its own column says `file` for
+    // a photo from Google Photos or a document from Dropbox, and the timed
+    // path matches it on the delivering platform too.
     if (connectors != null && candidateSource !== 'timed') {
       const allowed = new Set(connectors);
+      const keptContent = await this.contentService.idsMatchingSourceSystems(
+        serviceContext,
+        entries.filter((entry) => entry.type === 'content').map((entry) => entry.entity.id),
+        connectors,
+      );
 
       entries = entries.filter((entry) => {
+        if (entry.type === 'content') {
+          return keptContent.has(entry.entity.id);
+        }
+
         const source = SearchResolver.getEntitySourceSystem(entry);
 
         return source != null && allowed.has(source);
@@ -786,9 +867,16 @@ export class SearchResolver {
     }
 
     // Date filter (when date wasn't the candidate source — the timed path filters in SQL).
-    // Entities without a domain timestamp are dropped while a date filter is active.
+    // Entities without a domain timestamp, and the kinds dated only by their last write
+    // (ROW_DATED_TYPES), are dropped while a date filter is active.
     if (hasDate && candidateSource !== 'timed') {
       entries = entries.filter((entry) => {
+        // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
+        // knowing what it is dated by, as the timed browse gives a named kind its rows too.
+        if (ROW_DATED_TYPES.has(entry.type) && !input.includeTypes?.some((type) => type === entry.type)) {
+          return false;
+        }
+
         const timestamp = SearchResolver.getEntityTimestamp(entry);
 
         if (timestamp == null) {
@@ -839,7 +927,9 @@ export class SearchResolver {
     } = Paginator.paginate(ordered, {
       getId: searchCursorOf,
       first,
-      after: input.after ?? undefined,
+      after: seeksPastCursor
+        ? (input.after ?? undefined)
+        : SearchResolver.reanchorCursor(ordered, input.after ?? undefined, afterCursor?.globalId ?? null),
     });
 
     const edges = slice.map((item) => ({
@@ -943,6 +1033,7 @@ export class SearchResolver {
       eventFilter,
       connectors,
       direction,
+      fileKinds,
       order = 'DESC',
       limit = 25,
     }: {
@@ -962,6 +1053,8 @@ export class SearchResolver {
       connectors?: string[];
       /** Sent / received — communications only, see browseWants. */
       direction?: string;
+      /** Which kinds of file — files only, see fileKinds.ts. */
+      fileKinds?: readonly FileKind[];
       /**
        * Which way every table is read, and the cursor walked: each type's rows ORDERED, and SEEKED
        * past (afterTime, afterId), in this direction, so the window a type contributes starts at the
@@ -993,7 +1086,7 @@ export class SearchResolver {
       people?: string[];
       places?: string[];
       hasLocation?: boolean;
-      bbox?: number[];
+      areas?: number[][];
     } = {
       limit,
       order: { startTime: order },
@@ -1049,9 +1142,11 @@ export class SearchResolver {
       endTime?: Date;
       afterTime?: Date;
       afterId?: string;
+      kinds?: readonly FileKind[];
     } = {
       limit,
       order,
+      ...(fileKinds ? { kinds: fileKinds } : {}),
     };
 
     const fileChunkOptions: {
@@ -1205,6 +1300,7 @@ export class SearchResolver {
       eventFilter,
       connectors,
       direction,
+      fileKinds,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
@@ -1215,6 +1311,7 @@ export class SearchResolver {
       eventFilter?: EventFilter;
       connectors?: string[];
       direction?: string;
+      fileKinds?: readonly FileKind[];
     },
   ): Promise<number> {
     const wants = (type: IndexableEntity) =>
@@ -1248,7 +1345,12 @@ export class SearchResolver {
             ...(direction ? { direction } : {}),
           })
         : 0,
-      wants('file') ? this.fileService.countEntitiesForFiles(context, dateOptions) : 0,
+      wants('file')
+        ? this.fileService.countEntitiesForFiles(context, {
+            ...dateOptions,
+            ...(fileKinds ? { kinds: fileKinds } : {}),
+          })
+        : 0,
       wants('file-chunk') ? this.fileChunkService.countEntitiesForFileChunks(context, dateOptions) : 0,
       wants('note') ? this.noteService.countEntitiesForNotes(context, dateOptions) : 0,
       wants('content')
@@ -1309,7 +1411,7 @@ export class SearchResolver {
    * Three gates, in order of how specific they are:
    *
    *  1. the caller's explicit include/exclude type filter;
-   *  2. the event-only dimensions (who / where / connector / bbox / hasLocation),
+   *  2. the event-only dimensions (who / where / connector / areas / hasLocation),
    *     which exist only on the event timeline, so setting any restricts the
    *     browse to events;
    *  3. the opt-in gate — {@link BROWSE_OPT_IN_TYPES} plus `file`.
@@ -1432,9 +1534,27 @@ export class SearchResolver {
     }
 
     if (effective === 'name') {
-      return [...entries].sort(
-        (a, b) => direction * SearchResolver.getEntityName(a).localeCompare(SearchResolver.getEntityName(b)),
-      );
+      // Rows with no name go last either way, rather than heading an A-Z list. Equal names
+      // fall back to the raw id so the order, and with it the cursor's place, is the same on
+      // every request. Each name is read once, not on every comparison.
+      const names = new Map(entries.map((entry) => [entry, SearchResolver.getEntityName(entry)]));
+
+      return [...entries].sort((a, b) => {
+        const aName = names.get(a)!;
+        const bName = names.get(b)!;
+
+        if ((aName === '') !== (bName === '')) {
+          return aName === '' ? 1 : -1;
+        }
+
+        const nameOrder = aName.localeCompare(bName);
+
+        if (nameOrder !== 0) {
+          return direction * nameOrder;
+        }
+
+        return direction * SearchResolver.compareRawIds(a, b);
+      });
     }
 
     return [...entries].sort((a, b) => {
@@ -1448,11 +1568,39 @@ export class SearchResolver {
       // Deterministic same-timestamp tiebreak on the raw id (uuidv7 → time-ordered),
       // mirroring the SQL keyset's `id DESC` so cursor pagination through a cluster
       // of identical timestamps is stable across pages.
-      const aId = String((a.entity as { id?: unknown }).id ?? '');
-      const bId = String((b.entity as { id?: unknown }).id ?? '');
-
-      return direction * aId.localeCompare(bId);
+      return direction * SearchResolver.compareRawIds(a, b);
     });
+  }
+
+  /** Tiebreak on the raw entity id, shared by the time and name sorts. */
+  private static compareRawIds(a: ResolvedEntity, b: ResolvedEntity): number {
+    const aId = String((a.entity as { id?: unknown }).id ?? '');
+    const bId = String((b.entity as { id?: unknown }).id ?? '');
+
+    return aId.localeCompare(bId);
+  }
+
+  /**
+   * The `after` to hand the Paginator for a list paged in memory.
+   *
+   * The Paginator finds its place by the cursor's exact string, `<time>::<id>`, and the time half
+   * moves when the cursor row is written to between pages (a note edited, a file's updated_at bumped
+   * by parsing). The exact match then failed and the next page started the list over from the top.
+   * This finds the row by its id and hands over the cursor it has now, which is the same string when
+   * nothing changed. A row that left the list altogether still restarts it.
+   */
+  private static reanchorCursor(
+    items: OrderedResult[],
+    after: string | undefined,
+    globalId: string | null,
+  ): string | undefined {
+    if (after == null || globalId == null) {
+      return after;
+    }
+
+    const row = items.find((item) => item.result.id === globalId);
+
+    return row ? searchCursorOf(row) : after;
   }
 
   /**
@@ -1543,11 +1691,42 @@ export class SearchResolver {
     return typeof value === 'string' && value.length > 0 ? value : null;
   }
 
+  /**
+   * What a name sort orders by: the first non-blank of the fields the rows show
+   * as their title. A message's is its subject, or for chat-style sources with
+   * none, its preview, as CommunicationRow shows it (its LLM summary only when
+   * it has neither); reading only name/title/summary gave every message an
+   * empty name and stacked them at the top. An answer is shown by its question,
+   * a receipt by its merchant and a document excerpt by its section title or
+   * file name (AnswerRow, ReceiptRow, getFileChunkTitle).
+   */
   private static getEntityName(entry: ResolvedEntity): string {
-    const entity = entry.entity as Record<string, unknown>;
-    const value = entity.name ?? entity.title ?? entity.summary ?? '';
+    if (entry.type === 'file-chunk') {
+      return SearchResolver.firstNonBlank([entry.entity.chunk.sectionTitle, entry.entity.file?.filename]);
+    }
 
-    return typeof value === 'string' ? value : '';
+    const entity = entry.entity as Record<string, unknown>;
+    const question = entity.question as { text?: unknown } | null | undefined;
+
+    return SearchResolver.firstNonBlank([
+      entity.name,
+      entity.title,
+      entity.subject,
+      entity.preview,
+      entity.summary,
+      entity.merchantName,
+      question?.text,
+    ]);
+  }
+
+  private static firstNonBlank(values: unknown[]): string {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim() !== '') {
+        return value.trim();
+      }
+    }
+
+    return '';
   }
 
   private toSearchResult(resolved: ResolvedEntity): SearchResult {

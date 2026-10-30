@@ -6,9 +6,12 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColum
  * {@link CloudFileIngestLedgerService.findCurrent} looks for. 'failed' —
  * every attempt in the download-with-retry loop failed; the row still
  * records what was tried so the NEXT sync tick retries automatically (a
- * 'failed' row never satisfies the skip check).
+ * 'failed' row never satisfies the skip check). 'not_export' — archives
+ * only: the file's listing was checked at this revision and no importer
+ * recognised it as an export, so nothing was downloaded; the row exists so the
+ * same listing is not fetched and checked again on every tick.
  */
-export type CloudFileIngestStatus = 'downloaded' | 'failed';
+export type CloudFileIngestStatus = 'downloaded' | 'failed' | 'not_export';
 
 /**
  * One row per (connection, provider file id) — the download ledger described

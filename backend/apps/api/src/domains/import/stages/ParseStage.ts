@@ -12,6 +12,7 @@ import {
   type DataSourceRecognition,
   type DirEntry,
 } from '../datasources/registry';
+import { MEDIA_STORE_DIRNAME } from '../datasources/timeline';
 import { COLLAPSED_DISTINCT_PATH, StagedWriter, type StagedCounts } from '../staging/StagedWriter';
 import { describeStageFailure, withStageContext } from '../telemetry/stageError';
 import { buildStageSummary, SUMMARY_KEY, type StageUnitInput } from '../telemetry/stageSummary';
@@ -314,7 +315,13 @@ export class ParseStage implements ImportStageRunner {
         // and nothing sweeps it, because the purge cron owns `uploadsDir` and the
         // scratch service owns `scratchDir`. Pointing it at this run's scratch
         // puts those bytes under the reclaim that already runs when the run ends.
-        mediaStoreDir: context.scratchDir,
+        //
+        // A dot directory INSIDE the scratch tree, not the tree itself: `generic`
+        // runs last and walks this same tree, and handed the root it re-staged
+        // every attachment the specialised importers had just written as a
+        // standalone photo — with the sender's GPS as a fix on the user. See
+        // MEDIA_STORE_DIRNAME.
+        mediaStoreDir: path.join(context.scratchDir, MEDIA_STORE_DIRNAME),
         // Set only on the surviving `generic` match by `dropGenericWhenSpecialised`
         // — every other match's `excludePaths` is undefined, and every importer
         // but `generic` ignores the field regardless.

@@ -1,11 +1,10 @@
 import { useState } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Button, Dialog, Input, Label, Textarea, useToast } from '@ci/shadcn';
 
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
-import { useDropdown } from '@/components/SearchBox/useDropdown';
+import { savedEntityTypesFor, useDropdown } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 
 import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
@@ -74,9 +73,7 @@ export function CreateSavedSearchModal({ onClose }: Props) {
             name: trimmed,
             description: description.trim() || undefined,
             query: query.trim() || undefined,
-            entityTypes: selectedEntityTypes.map(
-              (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
-            ),
+            entityTypes: savedEntityTypesFor(selectedEntityTypes),
             filters: toFiltersInput(filters),
           },
         },

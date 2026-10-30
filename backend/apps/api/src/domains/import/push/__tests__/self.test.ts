@@ -1,6 +1,8 @@
 import {
   decideSelfCollation,
   isExactOwnerIdentifier,
+  isOwnerContact,
+  readSentLabelSenders,
   makeIsSelf,
   matchOwner,
   matchOwnerIdentifier,
@@ -119,9 +121,33 @@ describe('readSelfIdentity', () => {
     await expect(readSelfIdentity(db, 'user-1')).resolves.toEqual({
       names: ['Liam Broza'],
       email: 'liam.broza@example.com',
+      emails: [],
       phones: ['+15551212'],
     });
     expect(calls[0].params).toEqual(['user-1']);
+  });
+
+  it("collects the self Person's own addresses, from its properties and its identifier rows", async () => {
+    const { db, calls } = readerFor([
+      { name: null, email: 'liam.broza@example.com', phones_json: null },
+      {
+        name: 'Liam Broza',
+        email: null,
+        phones_json: [],
+        emails_json: ['liam.broza@example.com', 'liam@work.example'],
+      },
+      { name: null, email: null, phones_json: [], emails_json: ['lb@alias.example'] },
+      { name: null, email: null, phones_json: ['4155550100'], emails_json: [] },
+    ] as never);
+
+    await expect(readSelfIdentity(db, 'user-1')).resolves.toEqual({
+      names: ['Liam Broza'],
+      email: 'liam.broza@example.com',
+      emails: ['liam.broza@example.com', 'liam@work.example', 'lb@alias.example'],
+      phones: ['4155550100'],
+    });
+    expect(calls[0].sql).toContain('FROM ci.entity_identifiers i');
+    expect(calls[0].sql).toContain("i.kind IN ('email', 'phone')");
   });
 
   it('asks for the account row and the un-merged is_self Person, in one round-trip', async () => {
@@ -145,6 +171,7 @@ describe('readSelfIdentity', () => {
     await expect(readSelfIdentity(db, 'user-1')).resolves.toEqual({
       names: [],
       email: null,
+      emails: [],
       phones: [],
     });
   });
@@ -173,6 +200,67 @@ describe('matchOwner / shouldMapContactToSelf', () => {
     expect(shouldMapContactToSelf(name, 'cautious')).toBe(false);
     expect(shouldMapContactToSelf(name, 'balanced')).toBe(true);
     expect(shouldMapContactToSelf(name, 'hands_off')).toBe(true);
+  });
+});
+
+describe('a second address on the self Person', () => {
+  const id = identity({ emails: ['Liam@Work.example'] });
+
+  it('is the owner, as an identifier, a participant and a contact', () => {
+    expect(matchOwnerIdentifier(id, 'email', 'liam@work.example')).toMatchObject({ kind: 'email' });
+    expect(matchOwner(id, '"LB" <liam@work.example>')).toMatchObject({ kind: 'email' });
+    expect(isOwnerContact(id, { name: 'LB', emails: ['liam@work.example'], phones: [] }, 'cautious')).toBe(
+      true,
+    );
+  });
+
+  it('is never read as a name: only the account address lends its local part', () => {
+    const work = identity({ names: [], email: null, emails: ['info@work.example'] });
+
+    expect(makeIsSelf(work)).toBe(NOBODY_IS_SELF);
+    expect(matchOwner(work, 'Info')).toBeNull();
+  });
+
+  it('counts only a value with an @ as an address', () => {
+    const junk = identity({ names: [], email: null, emails: ['Info'] });
+
+    expect(matchOwner(junk, 'Info')).toBeNull();
+    expect(matchOwnerIdentifier(junk, 'email', 'info')).toBeNull();
+  });
+});
+
+describe('isOwnerContact', () => {
+  const id = identity({ phones: ['+1 415-555-0100'] });
+
+  it("is not the owner when the contact has the owner's name but somebody else's address", () => {
+    // A mail from "Liam Broza" <stranger@example.net>: the push filed it as sent by the owner.
+    for (const trust of ['cautious', 'balanced', 'hands_off'] as const) {
+      expect(
+        isOwnerContact(id, { name: 'Liam Broza', emails: ['stranger@example.net'], phones: [] }, trust),
+      ).toBe(false);
+    }
+
+    expect(
+      isOwnerContact(id, { name: 'Liam Broza', emails: [], phones: ['+1 212-555-0199'] }, 'balanced'),
+    ).toBe(false);
+  });
+
+  it("is the owner when one of the contact's handles is the owner's, whatever the name", () => {
+    expect(
+      isOwnerContact(
+        id,
+        { name: 'LB', emails: ['other@example.org', 'Liam.Broza@example.com'], phones: [] },
+        'cautious',
+      ),
+    ).toBe(true);
+    expect(isOwnerContact(id, { name: null, emails: [], phones: ['(415) 555-0100'] }, 'cautious')).toBe(true);
+  });
+
+  it('still matches a contact with no handle by name, outside cautious', () => {
+    // A WhatsApp sender name: the case the name match exists for.
+    expect(isOwnerContact(id, { name: 'Liam Broza', emails: [], phones: [] }, 'balanced')).toBe(true);
+    expect(isOwnerContact(id, { name: 'Liam Broza', emails: [], phones: [] }, 'cautious')).toBe(false);
+    expect(isOwnerContact(id, { name: 'Alice Example', emails: [], phones: [] }, 'hands_off')).toBe(false);
   });
 });
 
@@ -252,5 +340,61 @@ describe('decideSelfCollation', () => {
     expect(decideSelfCollation('hands_off', name)).toBe('review');
     expect(decideSelfCollation('balanced', email)).toBe('review');
     expect(decideSelfCollation('cautious', email)).toBe('review');
+  });
+});
+
+describe('readSentLabelSenders', () => {
+  it("reads the From addresses of the run's Sent mail as the owner's", async () => {
+    const query = jest.fn(async () => [
+      { sender: '"Liam Broza" <Liam@Alias.example>' },
+      { sender: 'liam@alias.example' },
+      { sender: 'old.account@example.org' },
+      { sender: 'Liam Broza' },
+      { sender: null },
+    ]);
+
+    await expect(readSentLabelSenders({ query } as never, 'run-1')).resolves.toEqual([
+      'liam@alias.example',
+      'old.account@example.org',
+    ]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("'sent_label'"), ['run-1']);
+  });
+
+  it('leaves out an address that also sent this run a mail with a refused Sent label', async () => {
+    const query = jest.fn(async () => [
+      { sender: '"Liam Broza" <liam@alias.example>', refused: false },
+      // Got a Sent label through somehow, but forged one elsewhere in the run.
+      { sender: 'Mallory <mallory@evil.example>', refused: false },
+      { sender: '"Mallory" <Mallory@Evil.example>', refused: true },
+      // Only ever refused: never a candidate.
+      { sender: 'Eve <eve@evil.example>', refused: true },
+    ]);
+
+    await expect(readSentLabelSenders({ query } as never, 'run-1')).resolves.toEqual(['liam@alias.example']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("'SentLabelRefused'"), ['run-1']);
+  });
+
+  it('maps a contact holding one of those addresses to the owner', () => {
+    const identity = {
+      names: ['Liam Broza'],
+      email: 'liam@example.com',
+      emails: ['liam@alias.example'],
+      phones: [],
+    };
+
+    expect(
+      isOwnerContact(
+        identity,
+        { name: 'Liam Broza', emails: ['liam@alias.example'], phones: [] },
+        'balanced',
+      ),
+    ).toBe(true);
+    expect(
+      isOwnerContact(
+        identity,
+        { name: 'Liam Broza', emails: ['stranger@example.net'], phones: [] },
+        'balanced',
+      ),
+    ).toBe(false);
   });
 });

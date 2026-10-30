@@ -24,6 +24,7 @@ import {
   volumeFromMl,
   volumeToMl,
 } from '@/lib/measurements';
+import { fromThingDateInput, toThingDateInput } from '@/lib/thingDate';
 
 export interface ThingModalItem {
   id: string;
@@ -302,17 +303,6 @@ function toInput(value: number | null | undefined): string {
   return value == null ? '' : String(value);
 }
 
-/** The `YYYY-MM-DD` a date input needs, from whatever the API returned. */
-function toDateInput(value: string | null | undefined): string {
-  if (!value) {
-    return '';
-  }
-
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
-}
-
 /** A blank field means "no value", never 0 — the server rejects 0 measurements. */
 function toNumber(value: string): number | null {
   const trimmed = value.trim();
@@ -324,10 +314,6 @@ function toNumber(value: string): number | null {
   const parsed = Number(trimmed);
 
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function toDate(value: string): string | null {
-  return value.trim() === '' ? null : new Date(value).toISOString();
 }
 
 /** Comma-separated text → the term array the API takes; empty means "none recorded". */
@@ -364,11 +350,11 @@ function fromForm(item: ThingModalItem): ItemForm {
     colors: item.colors?.join(', ') ?? '',
     colorHex: item.colorHex ?? '',
     materials: item.materials?.join(', ') ?? '',
-    acquiredAt: toDateInput(item.acquiredAt),
+    acquiredAt: toThingDateInput(item.acquiredAt),
     acquisitionMethod: (item.acquisitionMethod as ItemAcquisitionMethod | null) ?? '',
     acquiredFrom: item.acquiredFrom ?? '',
-    manufacturedAt: toDateInput(item.manufacturedAt),
-    expiresAt: toDateInput(item.expiresAt),
+    manufacturedAt: toThingDateInput(item.manufacturedAt),
+    expiresAt: toThingDateInput(item.expiresAt),
   };
 }
 
@@ -421,6 +407,21 @@ export function ThingModal({ open, onClose, item, create = false, detailPagePath
     volumeMl: volumeToMl(toNumber(formData.volume), formData.unitSystem),
   });
 
+  /**
+   * What to send for a date field: the stored value when the input still shows
+   * the day it was read as, else the picked day. Every save sends all three, so
+   * a brand fix would otherwise cut an importer's order time to a midnight.
+   */
+  const dateInput = (field: 'acquiredAt' | 'manufacturedAt' | 'expiresAt') => {
+    const stored = create ? null : item?.[field];
+
+    if (stored != null && formData[field] === toThingDateInput(stored)) {
+      return stored;
+    }
+
+    return fromThingDateInput(formData[field]);
+  };
+
   const commonInput = () => ({
     name: formData.name.trim(),
     category: formData.category.trim() || null,
@@ -430,11 +431,11 @@ export function ThingModal({ open, onClose, item, create = false, detailPagePath
     currentValue: toNumber(formData.currentValue),
     purchasePrice: toNumber(formData.purchasePrice),
     condition: formData.condition || null,
-    acquiredAt: toDate(formData.acquiredAt),
+    acquiredAt: dateInput('acquiredAt'),
     acquisitionMethod: formData.acquisitionMethod || null,
     acquiredFrom: formData.acquiredFrom.trim() || null,
-    manufacturedAt: toDate(formData.manufacturedAt),
-    expiresAt: toDate(formData.expiresAt),
+    manufacturedAt: dateInput('manufacturedAt'),
+    expiresAt: dateInput('expiresAt'),
     colors: toTerms(formData.colors),
     colorHex: formData.colorHex.trim() || null,
     materials: toTerms(formData.materials),

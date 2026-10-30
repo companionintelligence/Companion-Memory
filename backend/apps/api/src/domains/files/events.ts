@@ -30,6 +30,13 @@ export type FileUploadedPayload = {
   thingCapture: boolean;
   skipDescription?: boolean;
   model?: string;
+  /**
+   * The upload was a deliberate "save to Memory" (the phone's Capture sheet).
+   * Present only when true; see UploadFileDto.memoryCapture.
+   */
+  memoryCapture?: boolean;
+  /** ISO instant the device made the media; only with `memoryCapture`. See UploadFileDto.capturedAt. */
+  capturedAt?: string;
 };
 
 /**

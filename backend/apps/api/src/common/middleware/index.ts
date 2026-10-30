@@ -1,1 +1,1 @@
-export { BodyParserMiddleware } from './BodyParserMiddleware';
+export { BodyParserMiddleware, isGraphqlRequest } from './BodyParserMiddleware';

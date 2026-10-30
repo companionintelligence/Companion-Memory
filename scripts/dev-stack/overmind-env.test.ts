@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildOvermindEnv } from './overmind-env';
+import { buildOvermindEnv, powersyncEnabled, powersyncUrl } from './overmind-env';
 import { allocPort, DEFAULTS, type PublishedPorts, type StackPorts } from './ports';
 
 /** What `docker ps` shows a worktree started beside another stack: the
@@ -17,6 +17,7 @@ const SOLO: StackPorts = {
   hbpePort: DEFAULTS.hbpe,
   summaryPort: DEFAULTS.summary,
   parserPort: DEFAULTS.parser,
+  powersyncPort: DEFAULTS.powersync,
 };
 
 const STACK = { host: 'ci-server-feat-x.localhost', socket: '.overmind.sock' };
@@ -45,4 +46,48 @@ test('a STATIC_PROXY_TARGET left in .env or the shell cannot point vite at anoth
   );
 
   assert.equal(env.STATIC_PROXY_TARGET, 'http://127.0.0.1:58800');
+});
+
+test('the api listens on loopback unless DEV_LISTEN_HOST opens it up', () => {
+  const on = (platform: NodeJS.Platform, base: NodeJS.ProcessEnv = {}) =>
+    buildOvermindEnv(base, SOLO, { ...STACK, platform }).API_LISTEN_HOST;
+
+  assert.equal(on('darwin'), '127.0.0.1');
+  // Native Linux Docker reaches the host through the bridge gateway, so the
+  // sidecars' callbacks need more than loopback there.
+  assert.equal(on('linux'), '0.0.0.0');
+
+  assert.equal(on('darwin', { DEV_LISTEN_HOST: '0.0.0.0' }), '0.0.0.0');
+  assert.equal(on('linux', { DEV_LISTEN_HOST: '127.0.0.1' }), '127.0.0.1');
+
+  // An API_LISTEN_HOST left in .env does not override the choice.
+  assert.equal(on('darwin', { API_LISTEN_HOST: '0.0.0.0' }), '127.0.0.1');
+});
+
+test('POWERSYNC_URL is the opt-in: absent in .env, absent for the api', () => {
+  assert.equal(powersyncEnabled({}), false);
+  assert.equal(powersyncEnabled({ POWERSYNC_URL: '  ' }), false);
+  assert.equal(buildOvermindEnv({}, SOLO, STACK).POWERSYNC_URL, undefined);
+});
+
+test('a loopback POWERSYNC_URL follows the port this stack published, a remote one passes through', async () => {
+  // A sibling stack already holds the conventional port.
+  const port = await allocPort(DEFAULTS.powersync, {
+    own: new Set(),
+    foreign: new Set([DEFAULTS.powersync]),
+  });
+  assert.notEqual(port, DEFAULTS.powersync);
+
+  const ports = { ...SOLO, powersyncPort: port };
+
+  assert.equal(powersyncUrl({ POWERSYNC_URL: 'http://localhost:18080' }, ports), `http://localhost:${port}`);
+  assert.equal(powersyncUrl({ POWERSYNC_URL: 'http://127.0.0.1:18080/' }, ports), `http://127.0.0.1:${port}`);
+  assert.equal(
+    powersyncUrl({ POWERSYNC_URL: 'https://sync.example.ts.net' }, ports),
+    'https://sync.example.ts.net',
+  );
+  assert.equal(
+    buildOvermindEnv({ POWERSYNC_URL: 'http://localhost:18080' }, ports, STACK).POWERSYNC_URL,
+    `http://localhost:${port}`,
+  );
 });

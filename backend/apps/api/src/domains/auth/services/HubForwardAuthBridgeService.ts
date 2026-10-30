@@ -59,6 +59,14 @@ export interface HubBridgeResult {
   refused?: HubBridgeRefusal;
 }
 
+/** `GET /authenticate/hub-identity`; see {@link HubForwardAuthBridgeService.describeIdentity}. */
+export interface HubIdentityDescription {
+  username: string | null;
+  accountId: string | null;
+  /** Why the Hub person would not be signed in, or null when they would be (or nothing was checked). */
+  refused: HubBridgeRefusal | null;
+}
+
 /** Where a Hub person with a stable id belongs in Memory; see {@link HubForwardAuthBridgeService.locate}. */
 type Placement =
   | { kind: 'linked'; user: User }
@@ -233,15 +241,23 @@ export class HubForwardAuthBridgeService {
    * another address now" — the email comparison it used to make cannot. It is null for a Hub that
    * sends no stable id (compare by email, as before), for someone this Memory has no account for
    * yet, and for a person {@link alignSession} would refuse.
+   *
+   * `refused` tells the last of those apart from the others: it is the reason `alignSession` would
+   * give (the same `refused` it answers with) and null otherwise, for a Hub that sends no stable id
+   * too.
    */
-  async describeIdentity(req: Request): Promise<{ username: string | null; accountId: string | null }> {
+  async describeIdentity(req: Request): Promise<HubIdentityDescription> {
     const identity = this.verifyIdentity(req);
     if (!identity) {
-      return { username: null, accountId: null };
+      return { username: null, accountId: null, refused: null };
     }
 
     if (!identity.stableId) {
-      return { username: identity.username, accountId: null };
+      return {
+        username: identity.username,
+        accountId: null,
+        refused: await this.refusalByEmail(req, identity.username),
+      };
     }
 
     const placement = await this.locate(
@@ -253,7 +269,34 @@ export class HubForwardAuthBridgeService {
     return {
       username: identity.username,
       accountId: placement.kind === 'linked' || placement.kind === 'adopt' ? placement.user.id : null,
+      refused: placement.kind === 'refused' ? placement.reason : null,
     };
+  }
+
+  /**
+   * What {@link alignByEmail} would refuse this person for, read-only. It keeps a live session already
+   * signed in to the address before it looks for the account, so that browser is never refused.
+   */
+  private async refusalByEmail(req: Request, username: string): Promise<HubBridgeRefusal | null> {
+    const existing = await this.userService.findAccountByEmail(username);
+    if (existing === 'ambiguous') {
+      return 'account_ambiguous';
+    }
+
+    if (!existing || this.userService.isEmailProven(existing)) {
+      return null;
+    }
+
+    const session = await this.readSession(req);
+    if (
+      session &&
+      emailsEqual(session.email, username) &&
+      (await this.liveSessionUserId(session)) === session.userId
+    ) {
+      return null;
+    }
+
+    return 'account_unproven';
   }
 
   /**
@@ -348,7 +391,7 @@ export class HubForwardAuthBridgeService {
       return { username, replaced: false, refused: placed.reason };
     }
 
-    if (session?.userId === placed.user.id) {
+    if (session?.userId === placed.user.id && (await this.liveSessionUserId(session)) === placed.user.id) {
       return { username, replaced: false };
     }
 
@@ -363,7 +406,11 @@ export class HubForwardAuthBridgeService {
     const { username } = identity;
     const session = await this.readSession(req);
 
-    if (session && emailsEqual(session.email, username)) {
+    if (
+      session &&
+      emailsEqual(session.email, username) &&
+      (await this.liveSessionUserId(session)) === session.userId
+    ) {
       return { username, replaced: false };
     }
 
@@ -486,6 +533,8 @@ export class HubForwardAuthBridgeService {
     { issuer, subject }: HubStableId,
     signedInAs: SignedInAs = SIGNED_IN_AS_NOBODY,
   ): Promise<Placement> {
+    // Only the signed (issuer, subject) and username decide the account. The KERI AID the Hub
+    // sends beside them is unsigned (see `UnsignedKeriHints`), so it never takes part here.
     const linkedUserId = await this.federatedIdentityService.findUserId(issuer, subject);
     if (linkedUserId) {
       const linked = await this.userService.findById({ userId: SYSTEM_USER }, linkedUserId);
@@ -535,9 +584,9 @@ export class HubForwardAuthBridgeService {
   }
 
   /**
-   * The account this browser's session belongs to, when the session is still live (its
-   * `ci.sessions` row exists and has not expired). A signed session cookie alone is not enough:
-   * logging out deletes the row and leaves the cookie's signature valid.
+   * The account this browser's session belongs to, when the session is still live. A signed
+   * session cookie alone is not enough: logging out deletes the row and leaves the cookie's
+   * signature valid. The previous token is live during rotation grace, just as it is for refresh.
    */
   private async liveSessionUserId(session: MemorySession | null): Promise<string | null> {
     if (!session) {
@@ -545,9 +594,7 @@ export class HubForwardAuthBridgeService {
     }
 
     try {
-      return (await this.authService.sessionEstablishedAt(session.userId, session.token))
-        ? session.userId
-        : null;
+      return (await this.authService.resolveLiveSession(session.token))?.userId ?? null;
     } catch {
       return null;
     }

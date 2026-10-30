@@ -126,6 +126,10 @@ export class ImportApiClient {
     return this.options.baseUrl;
   }
 
+  get apiKey(): string | null {
+    return this.options.apiKey;
+  }
+
   // ---------------------------------------------------------------------------
   // Catalog
   // ---------------------------------------------------------------------------

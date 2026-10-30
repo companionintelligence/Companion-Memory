@@ -67,6 +67,7 @@ import { ThreadLoader } from './loaders/ThreadLoader';
 import { ThreadMessagesLoader } from './loaders/ThreadMessagesLoader';
 import { UnfurlLoader } from './loaders/UnfurlLoader';
 import { ComplexityPlugin } from './plugins/ComplexityPlugin';
+import { GRAPHQL_LIMITS } from './requestLimits';
 import { ActionResolver } from './resolvers/ActionResolver';
 import { ActivityResolver } from './resolvers/ActivityResolver';
 import { AnswerResolver } from './resolvers/AnswerResolver';
@@ -146,6 +147,12 @@ import { UserResolver } from './resolvers/UserResolver';
       // selects; nothing bounded how deep it nests. The deepest document the
       // web app ships measures 8, so the default 12 leaves real headroom.
       validationRules: [createDepthLimitRule(config.graphql.maxDepth)],
+      // Neither rule above runs until graphql-js has validated the whole
+      // document with its built-in rules, which costs quadratic time in the
+      // number of same-named fields. The token limit makes the parser refuse
+      // an oversized document outright; breadth is measured before Apollo by
+      // GraphqlRequestLimitsMiddleware. Both are sized in ./requestLimits.ts.
+      parseOptions: { maxTokens: GRAPHQL_LIMITS.maxTokens },
     }),
     AsksModule,
     AgentModule,
@@ -258,3 +265,5 @@ import { UserResolver } from './resolvers/UserResolver';
   exports: [NestGraphQLModule],
 })
 export class GraphQLModule {}
+
+export { GraphqlRequestLimitsMiddleware } from './GraphqlRequestLimitsMiddleware';

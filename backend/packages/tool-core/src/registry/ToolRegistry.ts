@@ -478,7 +478,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     const gate = await this.pendingActions.evaluate(schema, context);
 
     if (gate.decision !== 'execute') {
-      return this.refuseOrQueue(toolName, tool, schema, context, input, gate);
+      return this.refuseOrQueue(toolName, tool, schema, context, input, coerced, gate);
     }
 
     if (privacy.external) {
@@ -542,6 +542,34 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
   }
 
   /**
+   * The tool's own reason this call could never run ({@link ToolHandle.checkCall}), or `undefined`.
+   *
+   * A lookup that throws is not a refusal: the call is queued as it was before the tool could
+   * answer, and `execute` makes the same decision after it is approved.
+   */
+  private async callRefusal(
+    tool: TTool,
+    context: ToolInvocationContext,
+    input: unknown,
+  ): Promise<string | undefined> {
+    if (!tool.checkCall) {
+      return undefined;
+    }
+
+    try {
+      return await tool.checkCall(context, input);
+    } catch (error) {
+      this.logger.warn(`Could not check this call to ${tool.schema.name} before queueing it`, {
+        intent: tool.schema.name,
+        userId: context.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return undefined;
+    }
+  }
+
+  /**
    * {@link privacyOf} for a resolved tool and an already-coerced input.
    *
    * A per-call answer that throws (a lookup the tool needed failed) is read as destructive rather
@@ -576,7 +604,11 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
    *
    * A `deny` (which `capabilityAllows` above has already caught — this is the belt to its braces)
    * is refused outright and **never** written to the queue. A `queue` is parked and named, so the
-   * caller has an id to approve.
+   * caller has an id to approve — unless the tool says the input could never run
+   * ({@link ToolHandle.checkInput}), which is answered as `TOOL_INVALID_INPUT` with nothing queued.
+   * `coerced` is the input as `execute` would receive it, so it is what gets checked; the row keeps
+   * `input`, because the confirmed replay coerces it again on its way back through
+   * {@link executeTool}.
    *
    * Deliberately NOT emitted as `tool.invoked`, for the same reason a refusal is not: nothing was
    * invoked, and feeding a queued proposal into the behavioural signal would teach prediction that
@@ -588,6 +620,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     schema: IntentDefinition,
     context: ToolInvocationContext,
     input: unknown,
+    coerced: unknown,
     gate: ToolGateRuling,
   ): Promise<ToolResult> {
     if (gate.decision === 'deny') {
@@ -619,6 +652,29 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
         error: {
           code: 'TOOL_CONFIRMATION_UNAVAILABLE',
           message: `${gate.explanation}, but this call has no user to confirm it`,
+          retryable: false,
+        },
+      };
+    }
+
+    const invalid = tool.checkInput?.(coerced) ?? (await this.callRefusal(tool, context, coerced));
+
+    if (invalid !== undefined) {
+      // A card the owner can only approve into a failure is not a question worth asking them. The
+      // caller hears why now, while it can still correct the call.
+      this.logger.warn(`Refused to queue a call that could not run: ${toolName}`, {
+        toolName,
+        intent: tool.schema.name,
+        userId: context.userId,
+        reason: invalid,
+      });
+
+      return {
+        success: false,
+        error: {
+          code: 'TOOL_INVALID_INPUT',
+          message: `Nothing was queued for confirmation: ${invalid}`,
+          // The same input fails the same way; only a corrected call can succeed.
           retryable: false,
         },
       };

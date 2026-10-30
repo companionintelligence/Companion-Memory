@@ -41,6 +41,37 @@ describe('ci push', () => {
     expect(ctx.term.text()).toContain('2 run(s) queued for push.');
   });
 
+  it('exits 1 when --wait sees a push end failed', async () => {
+    const ctx = harness({
+      listUnpushed: async () => [unpushed('run-1')],
+      startPush: async () => ({ runs: [unpushed('run-1', { status: 'running' })] }),
+      getRun: async () => ({ ...unpushed('run-1', { status: 'failed', error: 'push failed' }), stages: [] }),
+    });
+
+    const outcome = pushCommand(ctx, { wait: true });
+
+    await expect(outcome).rejects.toBeInstanceOf(CliError);
+    await expect(outcome).rejects.toMatchObject({ exitCode: 1 });
+    await expect(outcome).rejects.toThrow('1 of 1 run(s) did not finish: run-1 failed (push failed).');
+  });
+
+  it('refuses a bad --timeout before pushing anything', async () => {
+    const asked: Array<string[] | undefined> = [];
+    const ctx = harness({
+      listUnpushed: async () => [unpushed('run-1')],
+      startPush: async (runIds?: string[]) => {
+        asked.push(runIds);
+
+        return { runs: [unpushed('run-1')] };
+      },
+    });
+
+    await expect(pushCommand(ctx, { wait: true, timeout: 'abc' })).rejects.toThrow(
+      '--timeout takes a number of seconds, not "abc"',
+    );
+    expect(asked).toEqual([]);
+  });
+
   it('“nothing to push” is a state, not an error', async () => {
     const ctx = harness({ listUnpushed: async () => [] });
 
@@ -94,6 +125,22 @@ describe('ci push --retry-failed', () => {
 
   const detail = (id: string, status: string) => ({ ...unpushed(id, { status }), stages: [] });
 
+  it('refuses a bad --timeout before re-queuing anything', async () => {
+    const asked: string[] = [];
+    const ctx = harness({
+      retryFailedPush: async (runId: string) => {
+        asked.push(runId);
+
+        return { items: 437, entities: 0, requeued: true };
+      },
+    });
+
+    await expect(
+      pushCommand(ctx, { run: [RUN], retryFailed: true, wait: true, timeout: 'abc' }),
+    ).rejects.toThrow('--timeout takes a number of seconds, not "abc"');
+    expect(asked).toEqual([]);
+  });
+
   it('re-queues the named run and says how many rows went back', async () => {
     const asked: string[] = [];
     const ctx = harness({
@@ -127,6 +174,18 @@ describe('ci push --retry-failed', () => {
 
     expect(polled).toEqual([RUN]);
     expect(ctx.term.text()).toContain('completed');
+  });
+
+  it('exits 1 when the re-queued push is cancelled before it closes out', async () => {
+    const ctx = harness({
+      retryFailedPush: async () => ({ items: 437, entities: 0, requeued: true }),
+      getRun: async (runId: string) => detail(runId, 'cancelled'),
+    });
+
+    const outcome = pushCommand(ctx, { run: [RUN], retryFailed: true, wait: true });
+
+    await expect(outcome).rejects.toMatchObject({ exitCode: 1 });
+    await expect(outcome).rejects.toThrow(`1 of 1 run(s) did not finish: ${RUN} was cancelled.`);
   });
 
   it('says so when nothing was stranded, and does not wait on a run it did not re-queue', async () => {

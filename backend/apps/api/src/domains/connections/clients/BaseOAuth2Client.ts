@@ -45,6 +45,15 @@ export abstract class BaseOAuth2Client extends BaseClient {
    */
   protected readonly revocationEndpoint: string | null = null;
 
+  /**
+   * True when {@link revoke} ends the grant using the connection's ACCESS
+   * token alone (Dropbox). That matters for a connection CI Portal brokered:
+   * Portal holds only the provider's refresh token, and for such a provider
+   * it has no way to present that for revocation — but this appliance still
+   * holds a real access token that can. See DataDeletionService.
+   */
+  readonly revokesWithAccessToken: boolean = false;
+
   protected abstract scopes: string[];
 
   protected abstract extraAuthParams: Record<string, string>;

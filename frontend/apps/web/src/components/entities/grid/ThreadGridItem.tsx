@@ -2,6 +2,8 @@ import { type MouseEvent } from 'react';
 
 import { ThreadIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { threadIdOf, threadLabel } from '@/pages/ChatPage/useRecentThreads';
 
 import { EntityGridItem } from './EntityGridItem';
 
@@ -20,13 +22,16 @@ interface Props {
 
 export function ThreadGridItem({ thread, onClick }: Props) {
   const data = useFragment(THREAD_FRAGMENT, thread);
+  const fmt = useDateTimeFormat();
 
   return (
     <EntityGridItem onClick={onClick}>
       <EntityGridItem.Header>
         <ThreadIcon className="shrink-0" />
 
-        <div className="text-md font-semibold truncate">{data.name}</div>
+        <div className="text-md font-semibold truncate">
+          {threadLabel({ id: threadIdOf(data.id), name: data.name }, fmt)}
+        </div>
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { ChatSidebar } from './ChatSidebar';
 import type { Thread } from './types';
@@ -18,9 +18,13 @@ function setup(overrides: Partial<Parameters<typeof ChatSidebar>[0]> = {}) {
     onRefresh: vi.fn(),
     ...overrides,
   };
-  render(<ChatSidebar {...props} />);
+  const view = render(<ChatSidebar {...props} />);
 
-  return props;
+  return {
+    ...props,
+    rerender: (next: Partial<Parameters<typeof ChatSidebar>[0]>) =>
+      view.rerender(<ChatSidebar {...props} {...next} />),
+  };
 }
 
 describe('ChatSidebar', () => {
@@ -31,7 +35,9 @@ describe('ChatSidebar', () => {
 
   it('shows a loading state', () => {
     setup({ threads: [], loading: true });
-    expect(screen.getByText('Loading threads...')).toBeInTheDocument();
+    // Placeholder rows, named for a screen reader, not a spinner.
+    expect(screen.getByRole('status')).toHaveTextContent('Loading threads');
+    expect(screen.queryByText('No threads found')).not.toBeInTheDocument();
   });
 
   it('lists thread names and selects one on click', () => {
@@ -89,6 +95,118 @@ describe('ChatSidebar', () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  describe('collapsed rail', () => {
+    function collapse() {
+      fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+    }
+
+    it('shows each thread as its own tile, with no dot on an idle one', () => {
+      setup({ threads: [thread('t1', 'Coffee with Jordan Lee'), thread('t2', 'Trip planning')] });
+      collapse();
+
+      expect(screen.getAllByTestId('thread-mark').map((tile) => tile.textContent)).toEqual(['CW', 'TP']);
+      expect(screen.queryByTestId('thread-mark-busy')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('thread-mark-failed')).not.toBeInTheDocument();
+    });
+
+    it('marks the open thread as current and opens another on click', () => {
+      const { onSelectThread } = setup({ selectedThreadId: 't1' });
+      collapse();
+
+      expect(screen.getByLabelText('First chat')).toHaveAttribute('aria-current', 'true');
+      expect(screen.getByLabelText('Second chat')).not.toHaveAttribute('aria-current');
+
+      fireEvent.click(screen.getByLabelText('Second chat'));
+      expect(onSelectThread).toHaveBeenCalledWith('t2');
+    });
+
+    it('says in its name that a reply is being written', () => {
+      setup({ threads: [{ ...thread('t1', 'First chat'), generationStatus: 'running' } as Thread] });
+      collapse();
+
+      expect(screen.getByLabelText('First chat, Replying…')).toBeInTheDocument();
+      expect(screen.getByTestId('thread-mark-busy')).toBeInTheDocument();
+    });
+
+    it('starts a new thread from the rail', () => {
+      const { onNewThread } = setup();
+      collapse();
+
+      fireEvent.click(screen.getByLabelText('New thread'));
+      expect(onNewThread).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("says a thread's state in the open list too, and marks the open row", () => {
+    setup({
+      threads: [
+        { ...thread('t1', 'First chat'), generationStatus: 'failed' } as Thread,
+        thread('t2', 'Second chat'),
+      ],
+      selectedThreadId: 't2',
+    });
+
+    expect(screen.getByText('Last reply failed')).toHaveClass('sr-only');
+    expect(screen.getByText('Second chat').closest('button')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('First chat').closest('button')).not.toHaveAttribute('aria-current');
+  });
+
+  describe('keeping the open thread in view', () => {
+    // The list is a 500px view from 0; a row is wherever `rows` puts it, else inside the view.
+    let rows: Record<string, [top: number, bottom: number]>;
+    let scrollTo: MockInstance;
+
+    beforeEach(() => {
+      rows = {};
+      scrollTo = vi.spyOn(Element.prototype, 'scrollTo').mockImplementation(() => {});
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const [top, bottom] = rows[this.getAttribute('data-thread-id') ?? ''] ?? [0, 500];
+
+        return { top, bottom, left: 0, right: 80, width: 80, height: bottom - top } as DOMRect;
+      });
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('centres an open thread that is out of sight', () => {
+      rows.t2 = [900, 940];
+      setup({ selectedThreadId: 't2' });
+
+      // 900 down, less half of the 500px view minus the 40px row.
+      expect(scrollTo).toHaveBeenCalledWith({ top: 670 });
+    });
+
+    it('leaves a visible one alone', () => {
+      setup({ selectedThreadId: 't1' });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('nudges a row cut off at the bottom just far enough, rather than centring it under the pointer', () => {
+      rows.t2 = [480, 520];
+      setup({ selectedThreadId: 't2' });
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 20 });
+    });
+
+    it('waits for the open thread to load, then leaves the list alone when another is deleted', () => {
+      rows.t2 = [900, 940];
+      const { rerender } = setup({ threads: [], selectedThreadId: 't2' });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      rerender({
+        threads: [thread('t1', 'First chat'), thread('t2', 'Second chat'), thread('t3', 'Third chat')],
+      });
+      expect(scrollTo).toHaveBeenCalledWith({ top: 670 });
+
+      // Scrolled away to delete an old thread: the list must not jump back.
+      scrollTo.mockClear();
+      rerender({ threads: [thread('t1', 'First chat'), thread('t2', 'Second chat')] });
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+  });
+
   describe('auto-collapse on resize', () => {
     function setInnerWidth(width: number) {
       Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width });
@@ -127,6 +245,17 @@ describe('ChatSidebar', () => {
       expect(screen.getByText('New Thread')).toBeInTheDocument();
 
       setInnerWidth(400);
+      fireEvent(window, new Event('resize'));
+
+      expect(screen.queryByText('New Thread')).not.toBeInTheDocument();
+    });
+
+    it('keeps a sidebar you collapsed when a resize stays above the breakpoint', () => {
+      setInnerWidth(1024);
+      setup();
+
+      fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+      setInnerWidth(1200);
       fireEvent(window, new Event('resize'));
 
       expect(screen.queryByText('New Thread')).not.toBeInTheDocument();

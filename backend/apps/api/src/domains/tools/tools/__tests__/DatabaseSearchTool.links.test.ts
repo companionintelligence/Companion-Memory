@@ -3,7 +3,7 @@ import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { SearchService } from '@ci/domains/search-next';
 
-import { DatabaseSearchTool, itemLink, stripStorageAddress } from '../DatabaseSearchTool';
+import { DatabaseSearchTool, itemLink, stripOwnerRecord, stripStorageAddress } from '../DatabaseSearchTool';
 
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 
@@ -38,12 +38,16 @@ function makeTool(options: {
   files?: { findByIds: jest.Mock };
   content?: { findByIds: jest.Mock; findIdsByFileIds: jest.Mock };
   people?: { findByIds: jest.Mock };
+  answers?: { findByIds: jest.Mock };
+  threads?: { findByIds: jest.Mock };
+  places?: { findByIds: jest.Mock };
+  browserActivities?: { findByIds: jest.Mock };
 }) {
   const noop = emptyResolver();
 
   return new DatabaseSearchTool(
-    noop as any, // answerService
-    noop as any, // browserActivityService
+    (options.answers ?? noop) as any, // answerService
+    (options.browserActivities ?? noop) as any, // browserActivityService
     noop as any, // communicationService
     noop as any, // conceptService
     (options.content ?? { ...emptyResolver(), findIdsByFileIds: jest.fn() }) as any,
@@ -53,11 +57,11 @@ function makeTool(options: {
     noop as any, // itemService
     noop as any, // noteService
     (options.people ?? noop) as any,
-    noop as any, // placeService
+    (options.places ?? noop) as any, // placeService
     noop as any, // productModelService
     noop as any, // receiptService
     noop as any, // taskService
-    noop as any, // threadService
+    (options.threads ?? noop) as any, // threadService
     options.search,
     logger(),
   );
@@ -186,5 +190,92 @@ describe('DatabaseSearchTool — item links', () => {
 
     expect(result.data?.items).toEqual([]);
     expect(content.findIdsByFileIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('DatabaseSearchTool drops the account record', () => {
+  // ThreadService, AnswerService and PlaceService load the `user` relation, so a
+  // thread hit handed the model the whole account row. Seen in a stored tool
+  // message after "Show me photos from Blue Bottle Coffee" matched an earlier
+  // thread. BrowserActivityService loads it too and passes the raw entity on,
+  // password hash included.
+  const owner = {
+    id: CONTEXT.userId,
+    name: 'Hb Tester',
+    email: 'tester@example.com',
+    entityId: 'e1',
+    onboarded: true,
+    role: 'admin',
+    passwordSetAt: new Date('2026-10-01T00:00:00Z'),
+    emailProvenAt: new Date('2026-10-01T00:00:00Z'),
+  };
+
+  it('keeps it out of thread and answer hits but keeps every other field', async () => {
+    const thread = {
+      id: 't1',
+      name: 'Blue Bottle Coffee',
+      description: null,
+      isArchived: false,
+      generationStatus: 'idle',
+      kind: 'chat',
+      user: owner,
+    };
+    const answer = { id: 'a1', answer: 'Oat milk flat white', user: owner };
+    const tool = makeTool({
+      search: searchOf([
+        { type: 'thread', id: 't1' },
+        { type: 'answer', id: 'a1' },
+      ]),
+      threads: { findByIds: jest.fn().mockResolvedValue([thread]) },
+      answers: { findByIds: jest.fn().mockResolvedValue([answer]) },
+    });
+
+    const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
+    const { user: _threadUser, ...threadFields } = thread;
+    const { user: _answerUser, ...answerFields } = answer;
+
+    expect(result.data?.items).toEqual([
+      { ...threadFields, type: 'thread' },
+      { ...answerFields, type: 'answer' },
+    ]);
+    const sent = JSON.stringify(result.data);
+    expect(sent).not.toContain('tester@example.com');
+    expect(sent).not.toContain('passwordSetAt');
+    expect(sent).not.toContain('emailProvenAt');
+  });
+
+  it('keeps it out of place and browser-visit hits, where the raw row carries the password hash', async () => {
+    const place = { id: 'pl1', name: 'Blue Bottle Coffee', userId: CONTEXT.userId, user: owner };
+    const visit = {
+      id: 'b1',
+      url: 'https://bluebottlecoffee.com',
+      title: 'Blue Bottle Coffee',
+      user_id: CONTEXT.userId,
+      user: { ...owner, password: '$2b$10$not-a-real-hash' },
+    };
+    const tool = makeTool({
+      search: searchOf([
+        { type: 'place', id: 'pl1' },
+        { type: 'browser-activity', id: 'b1' },
+      ]),
+      places: { findByIds: jest.fn().mockResolvedValue([place]) },
+      browserActivities: { findByIds: jest.fn().mockResolvedValue([visit]) },
+    });
+
+    const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
+    const { user: _placeUser, ...placeFields } = place;
+    const { user: _visitUser, ...visitFields } = visit;
+
+    expect(result.data?.items).toEqual([
+      { ...placeFields, type: 'place', link: '/places/pl1' },
+      { ...visitFields, type: 'browser-activity' },
+    ]);
+    const sent = JSON.stringify(result.data);
+    expect(sent).not.toContain('tester@example.com');
+    expect(sent).not.toContain('not-a-real-hash');
+  });
+
+  it('stripOwnerRecord leaves an entity with no user untouched', () => {
+    expect(stripOwnerRecord({ id: 'p1', name: 'Ada' })).toEqual({ id: 'p1', name: 'Ada' });
   });
 });

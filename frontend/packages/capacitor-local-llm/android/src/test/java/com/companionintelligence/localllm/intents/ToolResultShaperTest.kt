@@ -10,6 +10,7 @@ import org.json.JSONTokener
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,6 +50,46 @@ class ToolResultShaperTest {
         )
 
         return ToolResultShaper.shape(text, budget)
+    }
+
+    @Test
+    fun `an instant under a time key is written as its date and minute, which a small model can copy`() {
+        // Seen on a device: Gemma 4 E2B wrote "20202-1-128T06:5:59.00Z" for 2022-11-28T06:45:59.000Z.
+        val raw = pretty(
+            mapOf(
+                "summary" to "Showing the top 6 of 6 matches.",
+                "items" to (0 until 6).map {
+                    mapOf("type" to "communication", "link" to "/communications/c$it", "title" to "Subject $it", "time" to "2022-11-28T06:45:59.000Z", "content" to "x".repeat(400))
+                },
+            ),
+        )
+
+        val shaped = shape(raw, 700)
+
+        assertTrue(shaped, shaped.contains("\"time\":\"2022-11-28 06:45 UTC\""))
+        assertFalse(shaped, shaped.contains("2022-11-28T06:45"))
+    }
+
+    @Test
+    fun `time rendering keeps a date, an offset and a non-time string as they are`() {
+        val raw = pretty(
+            mapOf(
+                "summary" to "Showing the top 6 of 6 matches.",
+                "items" to (0 until 6).map {
+                    mapOf(
+                        "type" to "event", "link" to "/events/e$it", "title" to "Title $it", "content" to "y".repeat(400),
+                        "startTime" to "2025-10-09T21:30:00+02:00", "endTime" to "2025-10-09T22:30:00Z", "birthDate" to "1980-01-01", "date" to "next Tuesday",
+                    )
+                },
+            ),
+        )
+
+        val shaped = shape(raw, 900)
+
+        assertTrue(shaped, shaped.contains("\"startTime\":\"2025-10-09 21:30 +02:00\""))
+        assertTrue(shaped, shaped.contains("\"endTime\":\"2025-10-09 22:30 UTC\""))
+        assertTrue(shaped, shaped.contains("\"birthDate\":\"1980-01-01\""))
+        assertTrue(shaped, shaped.contains("\"date\":\"next Tuesday\""))
     }
 
     /** The keys of the top-level object in the order they are written: a `JSONObject` does not promise one. */
@@ -271,7 +312,7 @@ class ToolResultShaperTest {
         val shaped = shape(raw, 230)
 
         assertWithin(230, shaped)
-        assertTrue("the start time survives: $shaped", shaped.contains("\"startTime\":\"2025-10-09T21:30:00.000Z\""))
+        assertTrue("the start time survives: $shaped", shaped.contains("\"startTime\":\"2025-10-09 21:30 UTC\""))
         assertTrue("so does the title", shaped.contains("\"title\":\"Dentist: Dr. Nair\""))
         assertFalse("the bookkeeping is what was dropped", shaped.contains("sourceId"))
     }
@@ -335,7 +376,8 @@ class ToolResultShaperTest {
             val shaped = shape(dentist(), budget)
 
             assertWithin(budget, shaped)
-            assertTrue("the start time reaches the model at $budget", shaped.contains("2025-10-09T21:30:00.000Z"))
+            // Rendered for a small model: the date and the minute, not the 24-character instant it mangles.
+            assertTrue("the start time reaches the model at $budget", shaped.contains("2025-10-09 21:30 UTC"))
         }
     }
 
@@ -371,6 +413,39 @@ class ToolResultShaperTest {
 
         assertTrue("a relationship type is in what the model reads", roomy.contains("FRIEND_OF") || roomy.contains("WORKS_AT"))
         assertFalse("the list of seed UUIDs is gone: ids the model cannot use", roomy.contains("\"seedEntityIds\""))
+    }
+
+    @Test
+    fun json_in_is_json_out_at_every_budget_from_400_bytes_up_on_the_realistic_results() {
+        // The closing "N more omitted" element used to be reserved as a share of the budget, which for a small
+        // list was less than the element: one hit too many was kept and the final guard cut valid JSON in the
+        // middle. Across 300..2048 that made 152, 170 and 199 of the budgets below produce invalid JSON for the
+        // heron, dentist and graph fixtures respectively (measured against the pre-fix shaper). The element is
+        // held back exactly now ([ToolResultShaper] `bound`/`omissionNote`), and what is left is a budget too
+        // small for a header, one hit and the note at all — none of these fixtures needs more than ~340 bytes
+        // for that, so 400 is comfortably above it.
+        val results = listOf("heron" to heron(), "dentist" to dentist(), "graph" to graph())
+
+        for ((name, raw) in results) {
+            val notJson = mutableListOf<Int>()
+            val overBudget = mutableListOf<Int>()
+            val unmarked = mutableListOf<Int>()
+
+            for (budget in 128..2048) {
+                val shaped = ToolResultShaper.shape(raw, budget)
+
+                if (utf8(shaped) > budget) overBudget.add(budget)
+
+                if (parseOrNull(shaped) == null) {
+                    if (budget >= 400) notJson.add(budget)
+                    if (!shaped.endsWith(marker)) unmarked.add(budget)
+                }
+            }
+
+            assertTrue("$name: never over the budget: ${overBudget.take(3)}", overBudget.isEmpty())
+            assertTrue("$name: valid JSON from 400 bytes up: ${notJson.take(5)}", notJson.isEmpty())
+            assertTrue("$name: a cut that is not JSON says so: ${unmarked.take(3)}", unmarked.isEmpty())
+        }
     }
 
     @Test
@@ -580,6 +655,37 @@ class ToolResultShaperTest {
         assertEquals(setOf("type", "title", "content", "braced", "undashed", "toolong", "tooshort", "misplaced", "nothex"), shapedKeys(hit))
     }
 
+    /** How deep the containers of a parsed JSON value go (a scalar is 0). */
+    private fun depthOf(value: Any?): Int =
+        when (value) {
+            is JSONArray -> 1 + (0 until value.length()).maxOfOrNull { depthOf(value.get(it)) }.let { it ?: 0 }
+            is JSONObject -> 1 + value.keys().asSequence().maxOfOrNull { depthOf(value.get(it)) }.let { it ?: 0 }
+            else -> 0
+        }
+
+    @Test
+    fun a_container_nested_deeper_than_maximum_depth_is_dropped_and_the_shallow_part_is_untouched() {
+        assertTrue("real results (a hit with its metadata) are never cut short by the cap", ToolResultShaper.MAXIMUM_DEPTH >= 8)
+
+        // Written as text: building (and freeing) a map this deep is recursive itself.
+        fun nest(levels: Int): String {
+            val label = "y".repeat(40)
+            val leaf = "{\"leaf\":\"the deepest value ${"x".repeat(50)}\"}"
+
+            return "{\"type\":\"note\",\"link\":\"/notes/n\",\"title\":\"deep\",\"nest\":" +
+                "{\"label\":\"$label\",\"level\":".repeat(levels) + leaf + "}".repeat(levels) + "}"
+        }
+
+        // A document of moderate depth is parsed, and what lies below the cap is dropped.
+        val moderate = shape(nest(40), 1500)
+        val parsed = parseOrNull(moderate) as? JSONObject
+
+        assertNotNull("a 40-level document comes back as JSON", parsed)
+        assertTrue("the deep member survives, trimmed rather than dropped whole", parsed!!.has("nest"))
+        assertTrue("no deeper than the cap: ${depthOf(parsed)}", depthOf(parsed) <= ToolResultShaper.MAXIMUM_DEPTH + 1)
+        assertEquals("the shallow part is untouched", "deep", parsed.getString("title"))
+    }
+
     @Test
     fun an_id_is_the_address_only_when_nothing_else_is_so_it_goes_beside_a_link_and_stays_beside_anything_that_is_not_one() {
         val base = mapOf("type" to "note", "title" to "T", "content" to "c".repeat(1200))
@@ -590,7 +696,7 @@ class ToolResultShaperTest {
                 "no link" to (mapOf("id" to uuid) to setOf("type", "title", "content", "id")),
                 "a link" to (mapOf("id" to uuid, "link" to "/notes/x") to setOf("type", "title", "content", "link")),
                 "a link and an id that is not a UUID" to (mapOf("id" to "abc", "link" to "/notes/x") to setOf("type", "title", "content", "link")),
-                "an empty link, which goes itself, and takes the id with it" to (mapOf("id" to uuid, "link" to "") to setOf("type", "title", "content")),
+                "an empty link, which goes itself, while the id stays" to (mapOf("id" to uuid, "link" to "") to setOf("type", "title", "content", "id")),
                 "a null link" to (mapOf("id" to uuid, "link" to null) to setOf("type", "title", "content", "id")),
                 "a link that is a number" to (mapOf("id" to uuid, "link" to 5) to setOf("type", "title", "content", "id", "link")),
                 "a link that is itself a UUID" to (mapOf("id" to uuid, "link" to uuid) to setOf("type", "title", "content", "link")),
@@ -628,9 +734,10 @@ class ToolResultShaperTest {
         assertEquals(setOf("title", "content", "entityType"), shapedKeys(base + mapOf("entityType" to "note")))
         assertEquals(setOf("type", "title", "content"), shapedKeys(base + mapOf("type" to "photo", "entityType" to "content")))
 
-        // A type that is there but null is "a type" to this rule — and is itself pruned: both go.
-        assertEquals(setOf("title", "content"), shapedKeys(base + mapOf("type" to null, "entityType" to "note")))
-        assertEquals(setOf("title", "content"), shapedKeys(base + mapOf("type" to "", "entityType" to "note")))
+        // A type that is there but null does not survive pruning itself, so it no longer makes entityType
+        // redundant: only the null type goes, and the same for a type that is merely an empty string.
+        assertEquals(setOf("title", "content", "entityType"), shapedKeys(base + mapOf("type" to null, "entityType" to "note")))
+        assertEquals(setOf("title", "content", "entityType"), shapedKeys(base + mapOf("type" to "", "entityType" to "note")))
 
         val nested = parseObject(shape(pretty(base + mapOf("type" to "note", "content" to "c".repeat(1200), "owner" to mapOf("entityType" to "person", "name" to "P"))), 700))
 
@@ -726,6 +833,17 @@ class ToolResultShaperTest {
     }
 
     /** Compact JSON for [value], strings cut to [cap] characters and an ellipsis: written here, not by the shaper, to measure it by. */
+    /** The time keys the shaper renders an instant under; `updatedAt` is bookkeeping and is written as it came. */
+    private val renderedTimeKeys = setOf("startTime", "endTime", "time", "dueDate", "date", "createdAt", "takenAt", "birthDate")
+
+    /** The shaper's rendering of an ISO instant, for an expected value: `2025-10-09T21:30:00.000Z` → `2025-10-09 21:30 UTC`. */
+    private fun renderedInstant(value: String): String {
+        val match = Regex("^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2})(?::\\d{2}(?:\\.\\d+)?)?(Z|[+-]\\d{2}:?\\d{2})$").matchEntire(value) ?: return value
+        val (date, clock, zone) = match.destructured
+
+        return if (zone == "Z") "$date $clock UTC" else "$date $clock $zone"
+    }
+
     private fun compact(value: Any?, cap: Int = Int.MAX_VALUE): String =
         when (value) {
             null -> "null"
@@ -738,7 +856,8 @@ class ToolResultShaperTest {
     @Test
     fun a_hit_keeps_exactly_the_members_that_fit_and_one_byte_less_loses_the_last_of_them() {
         val raw = pretty(ranked)
-        val sent = ranked - "id" // an id beside a link is not sent
+        // An id beside a link is not sent, and an instant under a time key is sent rendered (date and minute).
+        val sent = (ranked - "id").mapValues { (key, value) -> if (key in renderedTimeKeys && value is String) renderedInstant(value) else value }
 
         // From four members up to all but one: the whole object was the last of the shortening steps, which cut strings to 24.
         for (count in 4 until rankedOrder.size) {
@@ -818,8 +937,9 @@ class ToolResultShaperTest {
 
     @Test
     fun lists_are_written_items_first_then_in_the_order_members_are_ranked_then_by_name() {
-        // Four strings of 150 characters each, so that six of these lists are over the budget below and each keeps a couple.
-        fun listOf4(prefix: String) = (0 until 4).map { "$prefix$it" + "x".repeat(148) }
+        // Four small objects each, so that each array qualifies as a list (one holding only scalars is a plain
+        // member instead, per isList) and so that six of these lists are over the budget below and each keeps a couple.
+        fun listOf4(prefix: String) = (0 until 4).map { mapOf("v" to "$prefix$it" + "x".repeat(148)) }
 
         // `items` first, whatever its name sorts as; the rest the way `members` ranks them: identity, when, what it says, the unknown, bookkeeping.
         val ranked = mapOf("metadata" to listOf4("m"), "description" to listOf4("d"), "title" to listOf4("t"), "zeta" to listOf4("z"), "startTime" to listOf4("s"), "items" to listOf4("i"))
@@ -853,46 +973,67 @@ class ToolResultShaperTest {
     }
 
     @Test
-    fun a_list_of_scalars_is_bounded_and_says_how_many_it_left_out() {
-        val obj = parseObject(shape(pretty(mapOf("tags" to (0 until 60).map { "tag number $it" }, "scores" to (0 until 60).map { it * 0.37 })), 1000))
+    fun an_array_of_plain_values_is_one_member_of_an_object_not_a_list_the_object_still_loses_members() {
+        // A single entity with tags: ["a","b"] used to count as a list carrier, so its other members were written
+        // whole and the result was cut mid-JSON at every budget from 100 to 700.
+        val entity = LinkedHashMap<String, Any?>()
 
-        for (key in listOf("tags", "scores")) {
-            val list = elementsOf(obj.getJSONArray(key))
+        entity["type"] = "person"
+        entity["link"] = "/people/maria"
+        entity["name"] = "Maria Alvarez"
+        entity["tags"] = listOf("friend", "baker")
 
-            assertTrue("$key keeps some of itself", list.size >= 3)
-            assertTrue("$key says it was cut", (list.last() as? String)?.contains("more results omitted") == true)
+        for (n in 0 until 28) entity["attribute$n"] = "value number $n " + "x".repeat(30)
+
+        val raw = pretty(entity)
+        val failures = mutableListOf<Int>()
+
+        for (budget in 200..700) {
+            val shaped = shape(raw, budget)
+
+            if (utf8(shaped) > budget || parseOrNull(shaped) !is JSONObject) failures.add(budget)
         }
+
+        assertTrue("valid JSON object within the budget at every budget from 200 to 700: ${failures.take(5)}", failures.isEmpty())
+
+        val tight = parseObject(shape(raw, 300))
+
+        assertEquals("what the entity is called survives", "Maria Alvarez", tight.getString("name"))
+        assertEquals("and where it lives", "/people/maria", tight.getString("link"))
     }
 
     @Test
-    fun the_room_held_back_for_the_closing_note_is_a_sixth_of_the_budget_and_never_more_than_96_bytes() {
+    fun a_list_that_loses_hits_closes_with_a_note_sized_exactly_for_what_it_ends_up_carrying() {
         fun tinyHit(i: Int) = mapOf("type" to "x", "title" to "T$i")
 
         val raw = pretty(List(40) { tinyHit(it) })
 
         for (budget in listOf(120, 180, 240, 300, 600, 1000, 1500)) {
-            // What is left once the two brackets and the reserve are taken off, spent on hits one after another with a comma between.
-            val room = budget - 2 - minOf(96, budget / 6)
-            var used = 0
-            var kept = 0
+            val shaped = shape(raw, budget)
 
-            while (kept < 40) {
-                val next = used + utf8(compact(tinyHit(kept))) + (if (kept > 0) 1 else 0)
+            assertWithin(budget, shaped)
 
-                if (next > room) break
+            val parsed = parseOrNull(shaped) as? JSONArray
 
-                used = next
-                kept++
+            if (parsed == null) {
+                // Only when not even a header-less single hit and a note fit together: still a cut that says so.
+                assertTrue("a cut that is not JSON says so at $budget: ${shaped.take(80)}", shaped.endsWith(marker))
+
+                continue
             }
 
-            val shaped = shape(raw, budget)
-            val hits = (0 until kept).joinToString(",") { compact(tinyHit(it)) }
+            val elements = elementsOf(parsed)
+            val hits = elements.filterIsInstance<JSONObject>()
+            val note = elements.lastOrNull() as? String
 
-            // Below ~414 bytes the note itself no longer fits in a sixth of the budget, so the answer is cut inside it and is no longer
-            // JSON; the hits written before it are the same whichever way it ends.
-            assertTrue("$kept hits at $budget: ${shaped.take(120)}", shaped.startsWith("[$hits"))
-            assertFalse("and not one more: ${shaped.take(120)}", kept < 40 && shaped.contains("\"T$kept\""))
-            assertEquals("every hit fits, so no note says any was left out ($budget)", kept < 40, shaped.contains("more results omitted") || shaped.endsWith(marker))
+            assertEquals("the hits are the leading ones, in order", (0 until hits.size).map { "T$it" }, hits.map { it.getString("title") })
+
+            if (hits.size == 40) {
+                assertNull("every hit fits, so there is no closing note to make room for ($budget)", note)
+            } else {
+                assertNotNull("some are left out, so the list says so ($budget)", note)
+                assertEquals("the note counts exactly the hits left out, not a number guessed ahead of time", 40 - hits.size, omittedBy(note))
+            }
         }
     }
 
@@ -1034,14 +1175,18 @@ class ToolResultShaperTest {
         assertWithin(256, endless)
         assertTrue(endless.endsWith(marker))
 
-        // 512 levels is the most that is followed (and what JSONSerialization allows); 513 is not.
-        val atLimit = "[".repeat(512) + quote("x".repeat(500)) + "]".repeat(512)
-        val pastLimit = "[".repeat(513) + quote("x".repeat(500)) + "]".repeat(513)
+        // MAXIMUM_PARSE_DEPTH levels is the most that nests() lets through to the reader; one more is refused
+        // before the reader (or anything after it) ever recurses once. (What comes back at the limit is pruned
+        // down hard by MAXIMUM_DEPTH, which is a much shallower cap — that is still valid JSON, just a small one;
+        // `a_container_nested_deeper_than_maximum_depth_is_dropped_and_the_shallow_part_is_untouched` is where
+        // content surviving a depth under that cap is checked.)
+        val limit = ToolResultShaper.MAXIMUM_PARSE_DEPTH
+        val atLimit = "[".repeat(limit) + quote("x".repeat(500)) + "]".repeat(limit)
+        val pastLimit = "[".repeat(limit + 1) + quote("x".repeat(500)) + "]".repeat(limit + 1)
 
-        assertTrue(utf8(atLimit) > 1_500 && utf8(pastLimit) > 1_500)
-        assertFalse("followed, and then bounded as JSON", shape(atLimit, 1_500).endsWith(marker))
-        parse(shape(atLimit, 1_500))
-        assertTrue("refused, and cut as text", shape(pastLimit, 1_500).endsWith(marker))
+        assertFalse("followed, and then bounded as JSON", shape(atLimit, 400).endsWith(marker))
+        parse(shape(atLimit, 400))
+        assertTrue("refused, and cut as text", shape(pastLimit, 400).endsWith(marker))
     }
 
     @Test
@@ -1141,6 +1286,26 @@ class ToolResultShaperTest {
         val decomposed = "{" + listOf("e\u0301", "z", "a").joinToString(",") { quote(it) + ":1" } + ",\"pad\":\"" + "x".repeat(400) + "\"}"
 
         assertEquals(listOf("a", "z", "e\u0301"), Regex("\"(.*?)\":1").findAll(shape(decomposed, 400)).map { it.groupValues[1] }.toList())
+    }
+
+    @Test
+    fun two_keys_that_are_canonically_equivalent_but_not_identical_are_ordered_by_raw_code_point_not_left_to_tie() {
+        // "\u00e9" (precomposed, U+00E9) and "e" plus a combining acute (decomposed) are the same character but
+        // different code points, and both normalise to the same NFC form, so the first tie-break (itself an
+        // approximation of Swift's canonical `<`) cannot tell them apart. Swift's own `<` treats them as equal
+        // too, so before this was fixed the order between them came from a Swift dictionary's random per-process
+        // order; a plain stable sort here would instead have silently kept whichever one the input happened to
+        // write first, which is a different wrong answer, not a right one. The raw, un-normalised code points
+        // must decide, the same way Swift's `unicodeScalars.lexicographicallyPrecedes` now does, so the order
+        // does not depend on which one the input wrote first.
+        val precomposed = "\u00e9"
+        val decomposed = "e" + 0x301.toChar()
+
+        // The precomposed form is written first; by raw code points 'e' (U+0065) sorts before '\u00e9' (U+00E9), so if
+        // the tie is broken correctly the decomposed form must come first regardless.
+        val raw = "{" + quote(precomposed) + ":1," + quote(decomposed) + ":1,\"pad\":\"" + "x".repeat(400) + "\"}"
+
+        assertEquals(listOf(decomposed, precomposed), Regex("\"(.*?)\":1").findAll(shape(raw, 400)).map { it.groupValues[1] }.toList())
     }
 
     // ---- the pieces ------------------------------------------------------------------------------------------------

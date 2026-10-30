@@ -23,11 +23,15 @@ import {
 
 import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
+import { AppLockGate } from '@/components/AppLock/AppLockGate';
+import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
+import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import { RequireOnboarded } from '@/components/RequireOnboarded';
 import { ThemeProvider, BackgroundProvider } from '@/components/ThemePicker';
+import { UnsentCapturesSignOutDialog } from '@/components/UnsentCapturesSignOutDialog';
 import {
   AuthProvider,
   CaptureModalProvider,
@@ -52,6 +56,7 @@ const LazyPowerSyncProvider = lazy(() =>
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
+const LocalRecordPage = lazy(() => import('@/pages/LocalRecordPage'));
 const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectionPage = lazy(() => import('@/pages/ConnectionPage'));
 const ContentPage = lazy(() => import('@/pages/ContentPage'));
@@ -145,10 +150,11 @@ function RedirectProfileToSelfSettings() {
  * PowerSync only matters once someone is signed in.
  *
  * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
- * every visitor downloads before first paint and opened a WASQLite IndexedDB
- * database for people sitting on the splash screen who may never sign in. Signed
- * out, the tree renders without it; signed in, it loads and mounts exactly as
- * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ * every visitor downloads before first paint (and, until 2026-10-26, opened a
+ * WASQLite IndexedDB database for people sitting on the splash screen who may
+ * never sign in). Signed out, the tree renders without it; signed in, it loads
+ * and mounts exactly as before — every consumer of PowerSyncContext lives behind
+ * ProtectedRoute.
  */
 function PowerSyncBoundary({ children }: { children: ReactNode }) {
   const [{ authenticated, authToken }] = useAuth();
@@ -185,8 +191,14 @@ function Providers({ children }: { children: ReactNode }) {
             <ConnectionModeProvider args={[]}>
               {/* Inside ConnectionModeProvider: the outbox flush loop is driven by the
                   resolved connection mode rather than a timer of its own. */}
+              {/* Inside ConnectionModeProvider: every write refused while the appliance is
+                  unreachable (fetchJson/apiFetch and the Apollo link) opens this one dialog. */}
+              <OfflineWriteDialog />
               <OutboxQueueProvider args={[]}>
                 <AuthProvider args={[]}>
+                  {/* The phone's sign-out asks here when captures have not uploaded, whichever
+                      Log out started it. */}
+                  <UnsentCapturesSignOutDialog />
                   <FeaturesProvider args={[]}>
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
@@ -194,7 +206,11 @@ function Providers({ children }: { children: ReactNode }) {
                           {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
                           <DateTimeFormatProvider>
-                            <PowerSyncBoundary>{children}</PowerSyncBoundary>
+                            {/* Inside PowerSync and the outbox: the lock covers the page, never the
+                                sync behind it (SECURITY_ARCHITECTURE § 4.4). */}
+                            <PowerSyncBoundary>
+                              <AppLockGate>{children}</AppLockGate>
+                            </PowerSyncBoundary>
                           </DateTimeFormatProvider>
                         </ApolloProvider>
                       </CaptureModalProvider>
@@ -286,7 +302,7 @@ function AppRoutes() {
         />
 
         {/* Full-bleed splash on sign-in; the picker centers itself. Do not wrap
-            this in CenteredLayout — that card column is what hid the Lottie. */}
+            this in CenteredLayout — that card column is what hid the hero mark. */}
         <Route path="/device-connect" element={<DeviceConnectPage />} />
 
         <Route element={<CenteredLayout />}>
@@ -433,55 +449,127 @@ function AppRoutes() {
               external link still points at /search. */}
           <Route path="/search" element={<Navigate to="/memory" replace />} />
 
-          {/* `/memory` is the unfiltered explorer (all kinds). `/memory/events`
-              is the same page with the Events submenu's type filter. */}
-          <Route
-            path="/memory"
-            element={
-              <ProtectedRoute>
-                <MemoryPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/memory/events"
-            element={
-              <ProtectedRoute>
-                <MemoryPage />
-              </ProtectedRoute>
-            }
-          />
+          {/* The Memory hub: every section the strip links to (MEMORY_HUB_SECTIONS)
+              is a child of this one layout route, so the strip is mounted once
+              and moving between sections only swaps the page under it. A
+              section added to the strip belongs in here too; one left outside
+              tears the strip down on the way in and out of it. The old
+              addresses and the detail pages stay outside: they show no strip.
+              The gated sections keep their flag in here, beside a redirect
+              outside that carries the same flag. */}
+          <Route element={<MemoryHubLayout />}>
+            {/* `/memory` is the unfiltered explorer (all kinds). `/memory/events`
+                is the same page with the Events submenu's type filter. */}
+            <Route
+              path="/memory"
+              element={
+                <MemoryHubRoute>
+                  <MemoryPage />
+                </MemoryHubRoute>
+              }
+            />
+            <Route
+              path="/memory/events"
+              element={
+                <MemoryHubRoute>
+                  <MemoryPage />
+                </MemoryHubRoute>
+              }
+            />
+            <Route
+              path="/memory/people"
+              element={
+                <MemoryHubRoute>
+                  <PeoplePage />
+                </MemoryHubRoute>
+              }
+            />
+            {/* The optional :placeId gives a place row a shareable URL and makes
+                Back close its drawer — same shape as /memory/content/:contentId. */}
+            <Route
+              path="/memory/places/:placeId?"
+              element={
+                <MemoryHubRoute>
+                  <PlacesPage />
+                </MemoryHubRoute>
+              }
+            />
+            {/* Ungated, like /memory/people and /memory/places. The old
+                `enable.inventory.page` flag shipped `true` in the API's own
+                default.json and nothing in the repo turned it off, so it never
+                gated anything in practice — but it DID make the route 404 for the
+                moment before the global flag fetch settles, and it could not cover
+                the sibling Receipts surface (which has no flag of its own). Half a
+                gate over one coherent surface is worse than none; the flag is gone.
 
-          {/* Ungated, like /memory/people and /memory/places. The old
-              `enable.inventory.page` flag shipped `true` in the API's own
-              default.json and nothing in the repo turned it off, so it never
-              gated anything in practice — but it DID make the route 404 for the
-              moment before the global flag fetch settles, and it could not cover
-              the sibling Receipts surface (which has no flag of its own). Half a
-              gate over one coherent surface is worse than none; the flag is gone.
+                `/inventory` stays as a redirect, not a route: it is the URL the
+                retired feature shipped under and may sit in a bookmark. */}
+            <Route
+              path="/memory/things"
+              element={
+                <MemoryHubRoute>
+                  <ThingsPage />
+                </MemoryHubRoute>
+              }
+            />
+            <Route
+              path="/memory/receipts"
+              element={
+                <MemoryHubRoute>
+                  <ReceiptsPage />
+                </MemoryHubRoute>
+              }
+            />
+            {isFeatureEnabled('files.page') && (
+              <>
+                {/*
+                  The optional :contentId gives an individual content row a shareable
+                  URL and makes Back close the drawer. It is one route rather than two
+                  so ContentLibraryPage stays mounted when the param changes — a second
+                  route would remount it and throw away every page the user scrolled in.
+                */}
+                <Route
+                  path="/memory/content/:contentId?"
+                  element={
+                    <MemoryHubRoute>
+                      <ContentLibraryPage />
+                    </MemoryHubRoute>
+                  }
+                />
+              </>
+            )}
+            {isFeatureEnabled('tags.page') && (
+              <Route
+                path="/memory/tags"
+                element={
+                  <MemoryHubRoute>
+                    <TagsPage />
+                  </MemoryHubRoute>
+                }
+              />
+            )}
+            <Route
+              path="/memory/notes"
+              element={
+                <MemoryHubRoute>
+                  <NotesPage />
+                </MemoryHubRoute>
+              }
+            />
+            {isFeatureEnabled('chat.page') && (
+              <Route
+                path="/memory/chat/:id?"
+                element={
+                  <MemoryHubRoute>
+                    <ChatPage />
+                  </MemoryHubRoute>
+                }
+              />
+            )}
+          </Route>
 
-              `/inventory` stays as a redirect, not a route: it is the URL the
-              retired feature shipped under and may sit in a bookmark. */}
           <Route path="/inventory" element={<Navigate to="/memory/things" replace />} />
-          <Route
-            path="/memory/things"
-            element={
-              <ProtectedRoute>
-                <ThingsPage />
-              </ProtectedRoute>
-            }
-          />
-
           <Route path="/receipts" element={<Navigate to="/memory/receipts" replace />} />
-          <Route
-            path="/memory/receipts"
-            element={
-              <ProtectedRoute>
-                <ReceiptsPage />
-              </ProtectedRoute>
-            }
-          />
-
           <Route
             path="/receipts/:id"
             element={
@@ -492,23 +580,7 @@ function AppRoutes() {
           />
 
           {isFeatureEnabled('files.page') && (
-            <>
-              <Route path="/files" element={<Navigate to="/memory/content" replace />} />
-              {/*
-                The optional :contentId gives an individual content row a shareable
-                URL and makes Back close the drawer. It is one route rather than two
-                so ContentLibraryPage stays mounted when the param changes — a second
-                route would remount it and throw away every page the user scrolled in.
-              */}
-              <Route
-                path="/memory/content/:contentId?"
-                element={
-                  <ProtectedRoute>
-                    <ContentLibraryPage />
-                  </ProtectedRoute>
-                }
-              />
-            </>
+            <Route path="/files" element={<Navigate to="/memory/content" replace />} />
           )}
 
           <Route path="/insights" element={<Navigate to="/plan/calendar" replace />} />
@@ -522,17 +594,7 @@ function AppRoutes() {
           />
 
           {isFeatureEnabled('tags.page') && (
-            <>
-              <Route path="/tags" element={<Navigate to="/memory/tags" replace />} />
-              <Route
-                path="/memory/tags"
-                element={
-                  <ProtectedRoute>
-                    <TagsPage />
-                  </ProtectedRoute>
-                }
-              />
-            </>
+            <Route path="/tags" element={<Navigate to="/memory/tags" replace />} />
           )}
 
           {isFeatureEnabled('self.page') && (
@@ -591,22 +653,11 @@ function AppRoutes() {
 
           {/* Chat moved under Memory — it's a bounded view over your own
               history the same way Events/People/Places are, not a peer
-              destination. The old /chat/:id? address is kept as a redirect,
-              declared here alongside the route it now points at, so a
-              bookmark or an external deep-link still lands. */}
-          {isFeatureEnabled('chat.page') && (
-            <>
-              <Route
-                path="/memory/chat/:id?"
-                element={
-                  <ProtectedRoute>
-                    <ChatPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route path="/chat/:id?" element={<RedirectToChat />} />
-            </>
-          )}
+              destination. The old /chat/:id? address is kept as a redirect
+              under the same flag as the route it now points at (in the Memory
+              hub layout above), so a bookmark or an external deep-link still
+              lands. */}
+          {isFeatureEnabled('chat.page') && <Route path="/chat/:id?" element={<RedirectToChat />} />}
 
           {/* Approvals — the owner's answer queue for anything the capability
               gate stopped. NOT feature-flagged: `tools.pendingActions` gates
@@ -733,19 +784,11 @@ function AppRoutes() {
           {/* Notes used to be write-only from the shell — reachable to create
               (Add ▸ Note) or open from search, but never browsed. Folded into
               the Memory hub the same way Things/Receipts/Content were: the
-              list moves under /memory/*, the old address stays as a redirect
-              for whatever already links here. The detail/edit page keeps its
-              own top-level path, same as /people/:id and /receipts/:id. */}
+              list moves under /memory/* (in the Memory hub layout above), the
+              old address stays as a redirect for whatever already links here.
+              The detail/edit page keeps its own top-level path, same as
+              /people/:id and /receipts/:id. */}
           <Route path="/notes" element={<Navigate to="/memory/notes" replace />} />
-          <Route
-            path="/memory/notes"
-            element={
-              <ProtectedRoute>
-                <NotesPage />
-              </ProtectedRoute>
-            }
-          />
-
           <Route
             path="/notes/:id?"
             element={
@@ -784,15 +827,6 @@ function AppRoutes() {
 
           <Route path="/people" element={<Navigate to="/memory/people" replace />} />
           <Route
-            path="/memory/people"
-            element={
-              <ProtectedRoute>
-                <PeoplePage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
             path="/people/:id"
             element={
               <ProtectedRoute>
@@ -802,17 +836,6 @@ function AppRoutes() {
           />
 
           <Route path="/places" element={<Navigate to="/memory/places" replace />} />
-          {/* The optional :placeId gives a place row a shareable URL and makes
-              Back close its drawer — same shape as /memory/content/:contentId. */}
-          <Route
-            path="/memory/places/:placeId?"
-            element={
-              <ProtectedRoute>
-                <PlacesPage />
-              </ProtectedRoute>
-            }
-          />
-
           <Route
             path="/places/:id"
             element={
@@ -836,6 +859,18 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <CommunicationPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* The record this phone holds for any entity, from its synced
+              search documents: where an offline search result or list row
+              opens, since the per-type pages above need the appliance. */}
+          <Route
+            path="/memory/saved/:type/:id"
+            element={
+              <ProtectedRoute>
+                <LocalRecordPage />
               </ProtectedRoute>
             }
           />
@@ -867,8 +902,25 @@ function AppRoutes() {
           404 there flashed a not-found page over a route that was about to
           exist; wait for the flags instead, exactly as ProtectedRoute waits for
           the session. A genuinely unknown URL still lands on 404, one tick later.
+
+          The 404 sits behind ProtectedRoute because signed out only the global
+          flags are known. The gated routes (/self, /memory/chat, /jobs) are then
+          never in the table, so they reach here. A signed-out visitor goes to
+          sign in with the path kept. A reload during an outage says Memory
+          cannot be reached, the same as every other signed-in page.
         */}
-        <Route path="*" element={featuresLoading ? <LoadingPage /> : <NotFoundPage />} />
+        <Route
+          path="*"
+          element={
+            featuresLoading ? (
+              <LoadingPage />
+            ) : (
+              <ProtectedRoute>
+                <NotFoundPage />
+              </ProtectedRoute>
+            )
+          }
+        />
       </Routes>
 
       {backgroundLocation && (

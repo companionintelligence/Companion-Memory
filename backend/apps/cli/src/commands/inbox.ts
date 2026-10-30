@@ -1,7 +1,7 @@
-import type { InboxUnit } from '../wire';
+import type { InboxUnit, RunDetail } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { bytes, csv, json, table } from '../output';
-import { waitForRuns } from '../wait';
+import { unsuccessfulRunsMessage, waitForRuns } from '../wait';
 
 import { parseTimeout } from './import';
 
@@ -30,6 +30,8 @@ export interface InboxOptions {
 
 /** What is waiting in the inbox folder — and, on request, importing it. */
 export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}): Promise<void> {
+  // Before anything is started, for the reason `importCommand` gives.
+  const timeoutMs = parseTimeout(options.timeout);
   const scan = await ctx.client.scanInbox();
 
   if (!scan.available) {
@@ -169,17 +171,21 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
     ctx.term.out(`\n${started.length} of ${batch.results.length} unit(s) started.`);
   }
 
-  if (options.wait && started.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      started.map((result) => result.runId as string),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
-    );
+  const followed = options.wait ? started.map((result) => result.runId as string) : [];
+  let waited: RunDetail[] = [];
+
+  if (followed.length > 0) {
+    waited = await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json });
   }
 
   if (started.length === 0) {
     throw new CliError('No unit could be started.', 1);
+  }
+
+  const unfinished = unsuccessfulRunsMessage(followed, waited);
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 

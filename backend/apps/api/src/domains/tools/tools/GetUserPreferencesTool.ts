@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphReadService, GraphNodeEntity } from '@ci/domains/memory';
@@ -83,6 +83,21 @@ const RELATIONSHIP_DESCRIPTOR_PATTERNS: Array<{
 export class GetUserPreferencesTool extends BaseTool<GetUserPreferencesInput, GetUserPreferencesOutput> {
   readonly schema: IntentDefinition = {
     name: 'knowledge.preferences',
+    local: {
+      description:
+        'What you, or a family member, like and dislike: food, entertainment, activities, music, drinks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: {
+            type: 'string',
+            enum: ['food', 'entertainment', 'activity', 'beverage', 'music', 'all'],
+          },
+          personName: { type: 'string', description: 'Whose, e.g. "my wife"; omit for you.' },
+        },
+        required: [],
+      },
+    },
     domain: 'knowledge',
     title: 'Get preferences',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },

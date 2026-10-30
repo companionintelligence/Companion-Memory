@@ -1,6 +1,3 @@
-import { useMemo } from 'react';
-
-import { useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
 
 import { Markdown } from '@/components/Markdown';
@@ -12,16 +9,13 @@ interface Props {
 }
 
 export function UserMessage({ content, createdAt }: Props) {
-  const { isMobile } = useDeviceLayout();
   const fmt = useDateTimeFormat();
-
-  const maxWidth = useMemo(() => (isMobile ? 'max-w-[60%]' : 'max-w-[40%]'), [isMobile]);
 
   return (
     <div
       className={cn(
-        'relative self-end rounded-lg rounded-br-none px-4 py-3 shadow-xs bg-primary text-primary-foreground prose-invert dark:prose max-w-none',
-        maxWidth,
+        'relative min-w-0 max-w-[94%] self-end rounded-xl rounded-br-sm bg-primary px-3 py-2.5 text-primary-foreground shadow-xs prose-invert dark:prose',
+        'device:max-w-[40%] device:rounded-lg device:rounded-br-none device:px-4 device:py-3',
       )}
     >
       <Markdown>{content}</Markdown>

@@ -172,7 +172,9 @@ function personEntityPredicate(): string {
 
 function placeEntityPredicate(): string {
   return `entity.entity_type = 'Location'
-       AND entity.owner_user_id = $1`;
+       AND entity.owner_user_id = $1
+       AND entity.is_active IS DISTINCT FROM FALSE
+       AND entity.merged_into_entity_id IS NULL`;
 }
 
 export function personAppearanceListSql(order: 'ASC' | 'DESC' = 'DESC'): string {

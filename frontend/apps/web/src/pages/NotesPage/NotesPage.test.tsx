@@ -58,6 +58,34 @@ describe('NotesPage', () => {
     expect(await screen.findByText('Grocery list')).toBeInTheDocument();
   });
 
+  it('uses compact phone rows while preserving the desktop card grid and trailing delete action', async () => {
+    renderWithProviders(<NotesPage />, {
+      mocks: [mockQuery(GET_NOTES, { first: PAGE_SIZE }, notesResult([makeNote(NOTE_A, 'Grocery list')]))],
+    });
+
+    expect(await screen.findByText('Grocery list')).toBeInTheDocument();
+    expect(screen.getByTestId('notes-content-inset')).toHaveClass('px-2', 'device:px-4');
+    expect(screen.getByTestId('notes-list')).toHaveClass(
+      'grid-cols-1',
+      'gap-1.5',
+      'device:auto-rows-[300px]',
+      'device:grid-cols-[repeat(auto-fill,300px)]',
+      'device:gap-4',
+    );
+    expect(screen.getByTestId('note-row')).toHaveClass(
+      'items-center',
+      'p-2',
+      'device:h-full',
+      'device:flex-col',
+    );
+
+    const deleteButton = screen.getByRole('button', { name: 'Delete note' });
+    expect(deleteButton).toHaveClass('size-8', 'device:size-9');
+
+    fireEvent.click(deleteButton);
+    expect(await screen.findByRole('heading', { name: 'Delete note' })).toBeInTheDocument();
+  });
+
   describe('error handling', () => {
     /**
      * `error` used to never be destructured, so a failed query fell through to

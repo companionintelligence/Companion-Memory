@@ -157,23 +157,42 @@ enum LocalLLMPolicy {
     /// `true` when a `gpu` request was answered with the CPU because the model does not list `gpu`.
     /// (A `gpu` init that fails at load time is a separate fallback, decided by the engine.)
     let downgradedFromGPU: Bool
+    /// `true` when the GPU was wanted (asked for, or the model's default) but withheld because the device
+    /// has less RAM than the model's `gpuMinDeviceMemoryBytes`. Android's `gpuWithheld`.
+    let withheldFromGPU: Bool
   }
 
   /// Omitted → the model's first listed accelerator. A request the model does not list is answered
   /// with the CPU rather than refused: the persisted preference outlives the model it was chosen for.
+  /// A GPU choice on a device under `gpuMinDeviceMemoryBytes` becomes the CPU (when the model lists it):
+  /// a GPU load there can succeed and then have the app killed for memory mid-conversation, so it is
+  /// not attempted at all.
   static func planAccelerator(
-    requested: LocalLLMAccelerator?, supported: [LocalLLMAccelerator]
+    requested: LocalLLMAccelerator?, supported: [LocalLLMAccelerator],
+    physicalMemory: UInt64, gpuMinDeviceMemoryBytes: UInt64
   ) -> AcceleratorPlan {
     let wanted = requested ?? supported.first ?? .cpu
 
-    if supported.contains(wanted) {
-      return AcceleratorPlan(preferred: wanted, downgradedFromGPU: false)
+    if !supported.contains(wanted) {
+      return AcceleratorPlan(preferred: .cpu, downgradedFromGPU: wanted == .gpu, withheldFromGPU: false)
     }
 
-    return AcceleratorPlan(preferred: .cpu, downgradedFromGPU: wanted == .gpu)
+    if wanted == .gpu && physicalMemory < gpuMinDeviceMemoryBytes && supported.contains(.cpu) {
+      return AcceleratorPlan(preferred: .cpu, downgradedFromGPU: false, withheldFromGPU: true)
+    }
+
+    return AcceleratorPlan(preferred: wanted, downgradedFromGPU: false, withheldFromGPU: false)
   }
 
   /// `enableThinking` only reaches the chat template for a model that has the capability.
+  /// The most tokens a thinking model may spend reasoning before it has to answer: a quarter of the window,
+  /// never under 64. Without a cap a small model reasons until the window is full and stops with no answer
+  /// and no error (measured on Android: Qwen3-0.6B, 1,024 tokens, two thirds of it prompt). The same figure as
+  /// Android's `LocalLlmPolicy.thinkingTokenBudget`; retune the two together.
+  static func thinkingTokenBudget(contextTokens: Int) -> Int {
+    max(contextTokens / 4, 64)
+  }
+
   static func effectiveThinking(requested: Bool, capabilities: Set<LocalLLMCapability>) -> Bool {
     requested && capabilities.contains(.thinking)
   }
@@ -465,6 +484,12 @@ enum ToolResultShaper {
         if key == "entityType", typed { continue }
         if key == "id", linked { continue }
         if let string = member as? String, key != "id", key != "link", isUUID(string) { continue }
+        if timeKeys.contains(key), let string = member as? String {
+          guard let rendered = renderedTime(string) else { continue }
+
+          kept[key] = rendered
+          continue
+        }
         guard let pruned = prune(member, depth: depth + 1) else { continue }
 
         kept[key] = pruned
@@ -691,6 +716,30 @@ enum ToolResultShaper {
   private static let timeKeys = [
     "startTime", "endTime", "time", "dueDate", "date", "createdAt", "takenAt", "birthDate",
   ]
+
+  /// An ISO 8601 instant as the appliance writes one (`2022-11-28T06:45:59.000Z`, with or without
+  /// fractional seconds, `Z` or an offset): the date, the hour-and-minute and the offset part.
+  private static let isoInstant = try! NSRegularExpression(
+    pattern: #"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$"#)
+
+  /// A time key's value as the model should read it: `2022-11-28 06:45 UTC` for an instant, a date
+  /// (`1980-01-01`) untouched, anything else as it came. A 2B model copying the 24-character instant
+  /// wrote `20202-1-128T06:5:59.00Z`; it copies a 16-character date-and-minute. Not converted to local
+  /// time: both platforms must shape identically wherever the phone is. Same rule as the Kotlin shaper.
+  private static func renderedTime(_ value: String) -> String? {
+    if value.isEmpty { return nil }
+
+    let whole = NSRange(value.startIndex..., in: value)
+
+    guard let match = isoInstant.firstMatch(in: value, range: whole), match.numberOfRanges == 4,
+      let date = Range(match.range(at: 1), in: value), let clock = Range(match.range(at: 2), in: value),
+      let zone = Range(match.range(at: 3), in: value)
+    else { return value }
+
+    let offset = value[zone] == "Z" ? "UTC" : String(value[zone])
+
+    return "\(value[date]) \(value[clock]) \(offset)"
+  }
   private static let bodyKeys = ["content", "text", "description", "notes"]
 
   /// What the appliance stores with every row and a question never asks about. Written last, so a hit

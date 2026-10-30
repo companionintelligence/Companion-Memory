@@ -152,6 +152,14 @@ export function TimelineView({
   if (timelineData.length === 0) {
     const isMapView = searchParams.get('view') === 'map';
 
+    // On the map this list is the side panel, and the map draws its own empty
+    // state in the centre (MapStatusOverlay: "No located memories match these
+    // filters" / "Nothing to map yet"). A second card here said the same thing
+    // in different words, with different advice. An empty list is just empty.
+    if (isMapView) {
+      return null;
+    }
+
     // Results exist but none are timeline-renderable types — distinguish this
     // from a truly empty result so the user knows to switch to the List view.
     if (data.length > 0) {
@@ -172,19 +180,8 @@ export function TimelineView({
       return (
         <Empty
           title="No memories match these filters"
-          description={
-            isMapView
-              ? 'Try removing a filter, or clear Located, to see more.'
-              : 'Try removing a filter (or the Located filter on the map) to see more.'
-          }
+          description="Try removing a filter (or the Located filter on the map) to see more."
           icon="🔍"
-          // Difference blend keeps the copy legible over any map tile tone
-          // (light satellite / dark streets) in the left panel.
-          className={
-            isMapView
-              ? 'mix-blend-difference [&_h3]:text-white [&_p]:text-white [&_div.bg-muted]:bg-white/25'
-              : undefined
-          }
         />
       );
     }

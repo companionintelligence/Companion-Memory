@@ -28,6 +28,18 @@ type Value = [
   {
     selectedModel: string | null;
     selectedVisionModel: string | null;
+    /**
+     * Bumped each time the server confirms a chat-model switch. Settings that
+     * belong to the model (Describe images) reload on it: reloading on
+     * `selectedModel` alone would race the save and read the old model's value.
+     */
+    chatModelRevision: number;
+    /**
+     * True while a chat-model switch is on its way to the server. Until it
+     * lands, a per-model setting on screen still belongs to the old model, and
+     * changing it would be saved for whichever model the server has by then.
+     */
+    chatModelSaving: boolean;
     thinkingSupported: boolean;
     thinkingEnabled: boolean;
     toolsSupported: boolean;
@@ -56,6 +68,8 @@ function useModel(): Value {
   const [error, setError] = useState<Error | null>(null);
   const [toolsPreferred, setToolsPreferred] = useState<boolean>(true);
   const [thinkingPreferred, setThinkingPreferred] = useState<boolean>(true);
+  const [chatModelRevision, setChatModelRevision] = useState<number>(0);
+  const [chatModelSaves, setChatModelSaves] = useState<number>(0);
 
   const initialRequestRef = useRef<boolean>(false);
 
@@ -81,14 +95,18 @@ function useModel(): Value {
       // model the server never actually recorded. And say so: the revert alone
       // looked like the tap had done nothing (six taps, six silent reverts, on
       // an iOS QA run whose account the server could not write for).
+      setChatModelSaves((saves) => saves + 1);
       void fetchJson('/api/personalization/chat-model', {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ chatModel: model }),
-      }).catch(() => {
-        setSelectedModel(previous);
-        toast.error("Couldn't switch models — your choice wasn't saved. Try again.");
-      });
+      })
+        .then(() => setChatModelRevision((revision) => revision + 1))
+        .catch(() => {
+          setSelectedModel(previous);
+          toast.error("Couldn't switch models — your choice wasn't saved. Try again.");
+        })
+        .finally(() => setChatModelSaves((saves) => saves - 1));
     },
     [activeModels, headers, selectedModel, toast],
   );
@@ -150,9 +168,10 @@ function useModel(): Value {
       // long-standing default rather than failing the whole model list.
       const [payload, chatModelPref, toolsPref, thinkingPref] = await Promise.all([
         fetchJson<Model[]>('/api/llm/models', { method: 'GET', headers: requestHeaders }),
-        fetchJson<{ chatModel: string | null }>('/api/personalization/chat-model', {
-          headers: requestHeaders,
-        }).catch(() => ({ chatModel: null })),
+        fetchJson<{ chatModel: string | null; defaultChatModel?: string | null }>(
+          '/api/personalization/chat-model',
+          { headers: requestHeaders },
+        ).catch(() => ({ chatModel: null, defaultChatModel: null })),
         fetchJson<{ enabled: boolean }>('/api/personalization/tools', { headers: requestHeaders }).catch(
           () => ({ enabled: true }),
         ),
@@ -175,7 +194,18 @@ function useModel(): Value {
 
       const persistedModel = chatModelPref?.chatModel ?? null;
       const persistedIsServed = persistedModel != null && data.some((m) => m.model === persistedModel);
-      const model = persistedIsServed ? persistedModel : (data[0]?.model ?? null);
+      // With no usable personal choice, the appliance default (the model the
+      // Hub configured) is what a turn should run on. Taking the first entry of
+      // the list instead sent whatever `ollama list` put first, which is often
+      // the most recently pulled model (gemma3:270m on a Hub defaulting to
+      // qwen3.5:9b), and the page sends its selection with every turn.
+      const defaultModel = chatModelPref?.defaultChatModel ?? null;
+      const defaultIsServed = defaultModel != null && data.some((m) => m.model === defaultModel);
+      const model = persistedIsServed
+        ? persistedModel
+        : defaultIsServed
+          ? defaultModel
+          : (data[0]?.model ?? null);
 
       setSelectedModel(model);
 
@@ -189,12 +219,17 @@ function useModel(): Value {
       // agree; the appliance default then applies. Only when the list is
       // non-empty — an empty list is the backend being unreachable, not the
       // model being gone, and must not erase a valid preference.
+      // Clearing it is a chat-model switch on the server like any other, so it
+      // bumps the revision: after an endpoint change the model-owned settings
+      // on screen were loaded for a model the new backend does not serve.
       if (persistedModel != null && !persistedIsServed && data.length > 0) {
         void fetchJson('/api/personalization/chat-model', {
           method: 'POST',
           headers: requestHeaders,
           body: JSON.stringify({ chatModel: null }),
-        }).catch(() => undefined);
+        })
+          .then(() => setChatModelRevision((revision) => revision + 1))
+          .catch(() => undefined);
       }
 
       const visionModels = data.filter((m) => m.vision === true);
@@ -248,6 +283,8 @@ function useModel(): Value {
     {
       selectedModel,
       selectedVisionModel,
+      chatModelRevision,
+      chatModelSaving: chatModelSaves > 0,
       thinkingSupported,
       thinkingEnabled,
       toolsSupported,

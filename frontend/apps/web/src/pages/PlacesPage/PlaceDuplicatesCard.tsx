@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
+import { useDeviceLayout } from '@ci/common';
 import { AlertDialog, Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
 
@@ -97,6 +98,7 @@ function PlaceDuplicateGroupRow({
   group: DuplicateGroup;
   onMerged: () => Promise<unknown>;
 }) {
+  const { isMobile } = useDeviceLayout();
   const [mergePlaces, { loading }] = useMutation(MERGE_PLACES);
   const [rejectDuplicates, { loading: rejecting }] = useMutation(REJECT_PLACE_DUPLICATES);
   const [pendingTargetId, setPendingTargetId] = useState<string | null>(null);
@@ -132,7 +134,7 @@ function PlaceDuplicateGroupRow({
   const others = group.places.length - 1;
 
   return (
-    <div className="rounded-md border p-3">
+    <div className="rounded-md border p-2.5 sm:p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <Merge className="h-4 w-4" />
         <span>
@@ -149,10 +151,7 @@ function PlaceDuplicateGroupRow({
 
       <div className="flex flex-col gap-2">
         {group.places.map((place) => (
-          <div
-            key={place.id}
-            className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3"
-          >
+          <div key={place.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:gap-3">
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{place.name || 'Unnamed place'}</div>
               <div className="truncate text-sm text-muted-foreground">{describePlace(place)}</div>
@@ -160,29 +159,36 @@ function PlaceDuplicateGroupRow({
 
             <Button
               size="sm"
-              variant="ghost"
-              className="self-start sm:self-auto shrink-0"
+              variant="outline"
+              className="shrink-0"
               disabled={loading}
               onClick={() => {
                 setMergeError(null);
                 setPendingTargetId(place.id);
               }}
             >
-              Use as the kept place
+              {isMobile ? 'Keep this place' : 'Use as the kept place'}
             </Button>
           </div>
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-end gap-3 border-t pt-2">
+      <div className="mt-3 grid grid-cols-2 items-center gap-2 border-t pt-2 sm:flex sm:flex-wrap sm:justify-end sm:gap-3">
         {mergeError && pendingTargetId == null && (
-          <span className="text-sm text-destructive">{mergeError}</span>
+          <span className="col-span-2 text-sm text-destructive">{mergeError}</span>
         )}
-        <Button size="sm" variant="ghost" disabled={loading || rejecting} onClick={() => void reject()}>
-          {rejecting ? 'Saving…' : 'Not the same place'}
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full sm:w-auto"
+          disabled={loading || rejecting}
+          onClick={() => void reject()}
+        >
+          {rejecting ? 'Saving…' : isMobile ? 'Different places' : 'Not the same place'}
         </Button>
         <Button
           size="sm"
+          className="w-full sm:w-auto"
           disabled={loading || rejecting || defaultTargetId == null}
           onClick={() => {
             if (defaultTargetId != null) {
@@ -191,7 +197,7 @@ function PlaceDuplicateGroupRow({
             }
           }}
         >
-          Merge into one place
+          {isMobile ? 'Merge places' : 'Merge into one place'}
         </Button>
       </div>
 
@@ -240,7 +246,9 @@ function PlaceDuplicateGroupRow({
  * exist get folded. Renders nothing when there is nothing to review.
  */
 export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unknown> }) {
+  const { isMobile } = useDeviceLayout();
   const [pages, setPages] = useState(1);
+  const [expandedMobile, setExpandedMobile] = useState(false);
   const { data, error, refetch, fetchMore } = useQuery(GET_PLACE_DUPLICATES, {
     variables: { limit: PLACE_DUPLICATE_PAGE_SIZE, offset: 0 },
     notifyOnNetworkStatusChange: true,
@@ -248,6 +256,7 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
 
   const duplicates = data?.placeDuplicates;
   const groups = duplicates?.groups ?? [];
+  const visibleGroups = isMobile && !expandedMobile ? groups.slice(0, 1) : groups;
 
   const loadMore = () => {
     setPages((current) => current + 1);
@@ -280,6 +289,7 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
 
   const handleMerged = async () => {
     setPages(1);
+    setExpandedMobile(false);
     await Promise.all([refetch({ limit: PLACE_DUPLICATE_PAGE_SIZE, offset: 0 }), onMerged()]);
   };
 
@@ -296,20 +306,20 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
   }
 
   return (
-    <Card>
-      <Card.Header>
+    <Card className="gap-0">
+      <Card.Header className="p-3 pb-2 sm:p-6 sm:pb-3">
         <Card.Title className="flex items-center gap-2 text-base">
           <Merge className="h-4 w-4" />
           Possible duplicate places
           <Badge variant="secondary">{duplicates?.totalCount ?? 0}</Badge>
         </Card.Title>
-        <Card.Description>
+        <Card.Description className="hidden sm:block">
           These places share a map identity, or the same name within 150 m of each other. Merge them to fold
           their events and links into one, or say they are different so they are not proposed again.
         </Card.Description>
       </Card.Header>
-      <Card.Content className="flex max-h-[40em] flex-col gap-3 overflow-y-auto">
-        {groups.map((group) => (
+      <Card.Content className="flex max-h-[40em] flex-col gap-2 overflow-y-auto p-3 pt-0 sm:gap-3 sm:p-6 sm:pt-0">
+        {visibleGroups.map((group) => (
           <PlaceDuplicateGroupRow
             key={`${group.reason}:${group.value}`}
             group={group}
@@ -317,7 +327,13 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
           />
         ))}
 
-        {duplicates?.hasMore && (
+        {isMobile && !expandedMobile && groups.length > 1 && (
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => setExpandedMobile(true)}>
+            Show {groups.length - 1} more suggestions
+          </Button>
+        )}
+
+        {duplicates?.hasMore && (!isMobile || expandedMobile) && (
           <div className="flex justify-center">
             <Button variant="outline" size="sm" onClick={loadMore}>
               Load more duplicate groups
@@ -326,7 +342,7 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
         )}
 
         <div className="text-center text-xs text-muted-foreground">
-          {groups.length} of {duplicates?.totalCount ?? 0} groups shown
+          {visibleGroups.length} of {duplicates?.totalCount ?? 0} groups shown
         </div>
       </Card.Content>
     </Card>

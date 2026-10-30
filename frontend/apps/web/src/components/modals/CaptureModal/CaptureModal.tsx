@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { Camera } from '@ci/capture';
-import { FetchJsonError, fetchJson, isNativePlatform, useDeviceLayout } from '@ci/common';
+import { FetchJsonError, fetchJson, useDeviceLayout } from '@ci/common';
 import { Button, Dialog, cn, IconButton, Popover, useToast } from '@ci/shadcn';
 import {
   Camera as CameraIcon,
@@ -24,9 +24,15 @@ import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { InlineModal } from '@/components/InlineModal';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useChatRequester, useModel, useSessionAuth } from '@/hooks';
-import { captureFromCamera, chooseFiles, chooseFromLibrary, type CameraMode } from '@/lib/captureMedia';
+import {
+  captureFromCamera,
+  chooseAudioFiles,
+  chooseFiles,
+  chooseFromLibrary,
+  type CameraMode,
+} from '@/lib/captureMedia';
 import { enqueueMemoryUpload } from '@/lib/memoryUploadQueue';
-import { pickFromUserDevice, pickPhotosFromLibrary } from '@/lib/pickPhotosFromLibrary';
+import { pickPhotosFromLibrary } from '@/lib/pickPhotosFromLibrary';
 import { canRecordAudio, startAudioRecording, type AudioRecordingSession } from '@/lib/recordAudio';
 import { getMediaType } from '@/lib/utils';
 
@@ -555,10 +561,13 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
   const { toast } = useToast();
   const [recording, setRecording] = useState(false);
   const [mode, setMode] = useState<CaptureSheetMode>('photo');
-  const cameraOpenedRef = useRef(false);
 
+  // `fresh`: the device just made these bytes (camera, recorder), so now is
+  // their taken-at and the server may date them by it. A library or file pick
+  // is NOT fresh — those bytes have their own date or none, and an upload
+  // moment must never stand in for it.
   const ingest = useCallback(
-    (files: File[], extra?: { inventoryCapture?: boolean }) => {
+    (files: File[], extra?: { inventoryCapture?: boolean; fresh?: boolean }) => {
       if (files.length === 0) {
         return;
       }
@@ -569,6 +578,9 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
         authToken,
         model: extra?.inventoryCapture ? (selectedModel ?? undefined) : undefined,
         inventoryCapture: extra?.inventoryCapture,
+        // Everything saved from this sheet is a memory, not a bare file.
+        memoryCapture: true,
+        ...(extra?.fresh ? { capturedAt: new Date().toISOString() } : {}),
       }).then(
         () => {
           toast.success(t('CAPTURE_SAVED'));
@@ -588,23 +600,38 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
       const file = await captureFromCamera(cameraMode);
 
       if (file) {
-        ingest([file]);
+        ingest([file], { fresh: true });
       }
     },
     [ingest],
   );
-
-  const handleLibrary = useCallback(async () => {
-    ingest(await chooseFromLibrary());
-  }, [ingest]);
 
   const handleFiles = useCallback(async () => {
     ingest(await chooseFiles());
   }, [ingest]);
 
   const handleAudioFiles = useCallback(async () => {
-    ingest(await pickFromUserDevice({ accept: 'audio/*', multiple: true }));
+    ingest(await chooseAudioFiles());
   }, [ingest]);
+
+  // "Choose from library" follows the selected kind. Photo and Video open the
+  // photo library narrowed to photos or to clips; Audio has no library of its
+  // own, so it picks audio files; Files already IS the file picker, so the
+  // button repeats it rather than opening the photo library for documents.
+  const handleLibrary = useCallback(async () => {
+    switch (mode) {
+      case 'audio':
+        await handleAudioFiles();
+
+        return;
+      case 'files':
+        await handleFiles();
+
+        return;
+      default:
+        ingest(await chooseFromLibrary(mode));
+    }
+  }, [handleAudioFiles, handleFiles, ingest, mode]);
 
   const handleStartAudio = useCallback(() => {
     if (canRecordAudio()) {
@@ -616,12 +643,12 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
     void handleAudioFiles();
   }, [handleAudioFiles]);
 
-  // The mode bar both selects and runs: a phone tap should not cost two taps to
-  // reach the same place the old tiles reached in one.
-  const handleMode = useCallback(
+  // The mode bar only selects. It used to run the mode as well, so switching
+  // to Audio or Files to reach "Choose from library" first opened the recorder
+  // or the file picker, which then had to be backed out of. The stage button
+  // is what runs the selected mode.
+  const handleRun = useCallback(
     (next: CaptureSheetMode) => {
-      setMode(next);
-
       switch (next) {
         case 'photo':
         case 'video':
@@ -639,27 +666,16 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
     [handleCamera, handleFiles, handleStartAudio],
   );
 
+  // Opening Capture lands on the picker and stays there. It used to open the
+  // system camera by itself on the phone, which flashed the picker and then
+  // dropped the user into a video recording they had not asked for; the mode
+  // bar is the one place a capture starts from.
   useEffect(() => {
     if (!open) {
       setRecording(false);
       setMode('photo');
-      cameraOpenedRef.current = false;
-
-      return;
     }
-
-    // Capture is a camera first: on the phone it opens the system camera itself
-    // (no mode, so that camera keeps its own Photo/Video toggle) and the mode bar
-    // is what you come back to. Browsers block unprompted file dialogs, so the
-    // web path waits for a tap instead.
-    if (cameraOpenedRef.current || !isNativePlatform()) {
-      return;
-    }
-
-    cameraOpenedRef.current = true;
-
-    void handleCamera();
-  }, [handleCamera, open]);
+  }, [open]);
 
   return (
     <InlineCaptureShell open={open} onClose={onClose} title={t('CAPTURE_TITLE')}>
@@ -667,12 +683,17 @@ function MobileMemoryCapture({ open = false, onClose }: Props) {
         <AudioRecorderPanel
           onComplete={(file) => {
             setRecording(false);
-            ingest([file]);
+            ingest([file], { fresh: true });
           }}
           onCancel={() => setRecording(false)}
         />
       ) : (
-        <CaptureActions mode={mode} onMode={handleMode} onLibrary={() => void handleLibrary()} />
+        <CaptureActions
+          mode={mode}
+          onSelect={setMode}
+          onRun={handleRun}
+          onLibrary={() => void handleLibrary()}
+        />
       )}
     </InlineCaptureShell>
   );
@@ -718,11 +739,15 @@ function InlineCaptureShell({
 
 function CaptureActions({
   mode,
-  onMode,
+  onSelect,
+  onRun,
   onLibrary,
 }: {
   mode: CaptureSheetMode;
-  onMode: (mode: CaptureSheetMode) => void;
+  /** A tap on the mode bar: switch the tab, nothing more. */
+  onSelect: (mode: CaptureSheetMode) => void;
+  /** A tap on the stage: open the camera / recorder / picker for the selected mode. */
+  onRun: (mode: CaptureSheetMode) => void;
   onLibrary: () => void;
 }) {
   const { t } = useTranslation();
@@ -745,7 +770,7 @@ function CaptureActions({
             key={value}
             type="button"
             aria-pressed={value === mode}
-            onClick={() => onMode(value)}
+            onClick={() => onSelect(value)}
             className={cn(
               'flex flex-1 flex-col items-center gap-1 rounded-xl py-2 text-xs font-medium transition-colors',
               value === mode ? 'bg-white text-zinc-900' : 'text-zinc-300 active:bg-white/10',
@@ -762,7 +787,7 @@ function CaptureActions({
       <button
         type="button"
         data-testid="capture-stage"
-        onClick={() => onMode(mode)}
+        onClick={() => onRun(mode)}
         className="mt-3 flex flex-1 min-h-32 flex-col items-center justify-center gap-3 rounded-3xl bg-white/10 hover:bg-white/15 active:scale-[0.99] transition-transform text-white"
       >
         <ActiveIcon className="h-12 w-12" strokeWidth={1.25} />
@@ -786,6 +811,12 @@ function CaptureActions({
   );
 }
 
+/**
+ * The audio recorder. Selecting Audio lands here idle: the microphone only
+ * opens on the Record tap, so switching to Audio never starts a recording the
+ * user did not ask for (and the permission prompt comes from a tap, not a
+ * transition). Stop hands the file up; Cancel discards and goes back.
+ */
 function AudioRecorderPanel({
   onComplete,
   onCancel,
@@ -795,45 +826,20 @@ function AudioRecorderPanel({
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const [status, setStatus] = useState<'idle' | 'starting' | 'recording'>('idle');
   const [elapsed, setElapsed] = useState(0);
   const sessionRef = useRef<AudioRecordingSession | null>(null);
-  const onCancelRef = useRef(onCancel);
-  const toastRef = useRef(toast);
-  const tRef = useRef(t);
-
-  onCancelRef.current = onCancel;
-  toastRef.current = toast;
-  tRef.current = t;
+  const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
-
-    (async () => {
-      try {
-        const session = await startAudioRecording();
-
-        if (cancelled) {
-          session.cancel();
-
-          return;
-        }
-
-        sessionRef.current = session;
-        timer = setInterval(() => setElapsed((value) => value + 1), 1000);
-      } catch {
-        if (!cancelled) {
-          toastRef.current.error(tRef.current('CAPTURE_SAVE_FAILED'));
-          onCancelRef.current();
-        }
-      }
-    })();
+    unmountedRef.current = false;
 
     return () => {
-      cancelled = true;
+      unmountedRef.current = true;
 
-      if (timer) {
-        clearInterval(timer);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
       }
 
       sessionRef.current?.cancel();
@@ -841,7 +847,36 @@ function AudioRecorderPanel({
     };
   }, []);
 
+  const handleRecord = useCallback(async () => {
+    setStatus('starting');
+
+    try {
+      const session = await startAudioRecording();
+
+      if (unmountedRef.current) {
+        session.cancel();
+
+        return;
+      }
+
+      sessionRef.current = session;
+      setElapsed(0);
+      setStatus('recording');
+      timerRef.current = setInterval(() => setElapsed((value) => value + 1), 1000);
+    } catch {
+      if (!unmountedRef.current) {
+        toast.error(t('CAPTURE_SAVE_FAILED'));
+        setStatus('idle');
+      }
+    }
+  }, [t, toast]);
+
   const handleStop = useCallback(async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = undefined;
+    }
+
     const session = sessionRef.current;
     sessionRef.current = null;
 
@@ -860,6 +895,11 @@ function AudioRecorderPanel({
   }, [onCancel, onComplete, t, toast]);
 
   const handleCancel = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = undefined;
+    }
+
     sessionRef.current?.cancel();
     sessionRef.current = null;
     onCancel();
@@ -869,13 +909,25 @@ function AudioRecorderPanel({
     .toString()
     .padStart(2, '0');
   const seconds = (elapsed % 60).toString().padStart(2, '0');
+  const isRecording = status === 'recording';
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-8 px-6">
-      <div className="flex items-center gap-3 text-red-400">
-        <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-        <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_RECORDING')}</span>
-      </div>
+    <div
+      data-testid="capture-audio-panel"
+      data-status={status}
+      className="flex flex-col items-center justify-center h-full gap-8 px-6"
+    >
+      {isRecording ? (
+        <div className="flex items-center gap-3 text-red-400">
+          <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_RECORDING')}</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 text-zinc-400">
+          <Mic className="h-5 w-5" strokeWidth={1.5} />
+          <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_READY_TO_RECORD')}</span>
+        </div>
+      )}
       <div className="text-5xl font-light tabular-nums tracking-tight">
         {minutes}:{seconds}
       </div>
@@ -883,10 +935,17 @@ function AudioRecorderPanel({
         <Button variant="secondary" onClick={handleCancel}>
           {t('CAPTURE_CANCEL')}
         </Button>
-        <Button onClick={() => void handleStop()}>
-          <Square className="h-3 w-3 fill-current" />
-          {t('CAPTURE_STOP')}
-        </Button>
+        {isRecording ? (
+          <Button onClick={() => void handleStop()}>
+            <Square className="h-3 w-3 fill-current" />
+            {t('CAPTURE_STOP')}
+          </Button>
+        ) : (
+          <Button onClick={() => void handleRecord()} disabled={status === 'starting'}>
+            <span className="h-3 w-3 rounded-full bg-red-500" aria-hidden />
+            {t('CAPTURE_RECORD')}
+          </Button>
+        )}
       </div>
     </div>
   );

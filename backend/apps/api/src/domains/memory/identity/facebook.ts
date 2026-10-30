@@ -30,3 +30,17 @@ export function facebookPostIdentity(postedAt: Date, text: string | null | undef
 
   return platformIdentity('facebook', 'post', String(epochSeconds), textHash);
 }
+
+/**
+ * Liked-Page identity — `like:<page id>`, an exact native key. The Graph API's
+ * `/me/likes` gives the Page id outright, and the Meta archive carries it as
+ * the path of the Page's link (`https://www.facebook.com/<page id>`), so the
+ * two pipelines converge on one row per liked Page.
+ */
+export function facebookPageLikeId(pageId: string): string {
+  return `like:${pageId}`;
+}
+
+export function facebookPageLikeIdentity(pageId: string): SourceIdentity {
+  return platformIdentity('facebook', facebookPageLikeId(pageId));
+}

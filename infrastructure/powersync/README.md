@@ -10,10 +10,10 @@ client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 > - Server-side replication works against `journeyapps/powersync-service:1.23.0`: the
 >   service boots, storage migrations run, the router listens on 8080, and the
 >   replicator snapshots the replicated tables and then streams changes from the WAL.
-> - **The `powersync` service is deliberately not in the `local` compose profile**, so
->   `make dev` does not start it. `GET /api/powersync/token` returns 503 until
->   `POWERSYNC_URL` is set and the app falls back to GraphQL, so nothing breaks — but
->   it also means the end-to-end path is not exercised in ordinary local development.
+> - **The `powersync` service is opt-in under `make dev`** (see "Running it under
+>   make dev" below). Without `POWERSYNC_URL` in `.env` it does not start,
+>   `GET /api/powersync/token` returns 503 and the app falls back to GraphQL, so
+>   nothing breaks — but the end-to-end path is then not exercised either.
 > - The client phase **has shipped** (see below); what remains unverified is the two
 >   sync-rule questions under "Verify before relying on it".
 
@@ -23,7 +23,7 @@ client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 |-------|-------|
 | Postgres logical replication | `infrastructure/database/Dockerfile` (`wal_level=logical`) |
 | Replication role + publication | `infrastructure/setup-database/entrypoint.sh` (`POWERSYNC_TABLES`) |
-| PowerSync service | `docker-compose.yml` → `powersync` service (**`staging`/`production` profiles only**) |
+| PowerSync service | `docker-compose.yml` → `powersync` service (`staging`/`production`, plus the opt-in `powersync` profile `make dev` adds) |
 | Service config | `powersync.yaml` (this dir) |
 | Sync rules (what syncs per user) | `sync-rules.yaml` (this dir) |
 | Client token endpoint | `GET /api/powersync/token` (`backend/.../domains/powersync`) |
@@ -49,19 +49,68 @@ The token's `sub` = the CI-Server user id; sync rules scope each bucket with
 (so auth + validation + business logic are preserved) — do **not** let the sync
 engine write Postgres directly. `connector.ts`'s `uploadData()` implements exactly
 that, and today only **notes** replay as full CRUD (`createNote`/`updateNote`/
-`deleteNote`); tags, threads, messages and files are **read-only on device** because
-no GraphQL mutation of the right shape exists to replay their local writes through.
+`deleteNote`); tags and the entity_tag join are **read-only on device** because no
+GraphQL mutation of the right shape exists to replay their local writes through, and
+the search documents are a raw table the sync client writes directly.
 
 ## What syncs
 
 Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
 `POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
-both list `ci.notes`, `ci.files` (metadata only — the binary stays in Minio),
-`ci_search.tags`, `ci.threads`, `ci.messages` and `ci_search.entity_tag`.
-Large/server-computed/PII data (events, communications, browser_activity, pgvector
-embeddings, the knowledge graph) stays online via GraphQL. See `sync-rules.yaml` for
+both list `ci.notes`, `ci.saved_searches` (both written on the device and replayed up by
+the connector), `ci_search.tags`, `ci_search.entity_tag` and
+`ci_search.mobile_search_documents` — the device record (one row per indexed entity of
+a device-shown type: title, snippet, own time, plus `related_id` and a small `detail`
+JSON of display fields), over which the device builds an FTS5 index and answers the
+header search when the appliance is unreachable. Until 2026-10-21 the list also carried
+`ci.files`, `ci.threads`, `ci.messages`, `ci.events` and its `ci.entities` name rows;
+they were replicated and never read, so they were dropped in favour of the one record
+(sync-rules.yaml explains; the setup container now removes a table that leaves the
+list from the publication). See
+[`docs/architecture/mobile-local-search-plan.md`](../../docs/architecture/mobile-local-search-plan.md).
+Full rows of large/server-computed data (events, communications, browser_activity,
+file_chunks, pgvector embeddings, the knowledge graph) stay online via GraphQL; what
+the phone has of each is its search document. See `sync-rules.yaml` for
 the rationale and the TODO list for tables that still need their exact names verified
 before being added.
+
+## Running it under `make dev`
+
+Put a loopback URL in the root `.env` and start the stack as usual:
+
+```bash
+POWERSYNC_URL=http://localhost:18080   # .env — the one switch
+make dev
+```
+
+`scripts/dev-stack` then:
+
+- adds `--profile powersync` to every compose `up` (the service otherwise stays off:
+  an idle replicator holds a replication slot, and a slot nobody reads keeps WAL
+  forever);
+- allocates the host port the way it does every other service — 18080 when free,
+  ephemeral when a sibling worktree holds it — publishes it on `127.0.0.1` through
+  `docker-compose.local.yml`, and hands the api a `POWERSYNC_URL` on **that** port, so
+  the credentials the api returns always name this stack's replicator;
+- adds that origin to the Caddy route's `connect-src`, so a desktop browser on
+  `https://<project>.localhost` can connect too.
+
+Host 8080 is taken by the shared dev Caddy, which is why the default is 18080. There is
+no `setup-secrets` in local, so `docker-compose.local.yml` passes the names the wrapper
+command normally sources from `/run/secrets` (`POWERSYNC_DATABASE_PASSWORD`,
+`POWERSYNC_JWT_SECRET`, the app role) straight from `.env`; `setup-database` creates the
+replication role and the publication on every `up`.
+
+**Phone:** the api returns `POWERSYNC_URL` verbatim, and `localhost` on the phone is the
+phone. `yarn android` (`frontend/apps/android`) reads `POWERSYNC_URL` from the root
+`.env` and applies `adb reverse tcp:<port> tcp:<port>` alongside the Vite port on every
+run — the rule dies with every phone reboot, which looks like "the working set never
+syncs" with nothing in the logs.
+
+**Window:** the device window is held by `SyncWindowSweepCron` (worker role, daily
+03:40). A dev stack that is rarely up overnight never runs it, so every imported event
+row keeps its `sync_period` and the first sync downloads all of them; that is expected,
+not a bug.
 
 ## Configuration
 

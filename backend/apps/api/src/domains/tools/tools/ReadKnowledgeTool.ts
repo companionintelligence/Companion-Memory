@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { GraphQueryService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
@@ -101,6 +101,36 @@ export interface ReadKnowledgeOutput {
 export class ReadKnowledgeTool extends BaseTool<ReadKnowledgeInput, ReadKnowledgeOutput> {
   readonly schema: IntentDefinition = {
     name: 'memory.recall',
+    local: {
+      description:
+        'Look up people, places and things in your personal knowledge graph and how they relate, ' +
+        'e.g. "my family", "what does Sarah like".',
+      parameters: {
+        type: 'object',
+        properties: {
+          personName: {
+            type: 'string',
+            description: 'A person to start from, by name or relationship ("my wife", "John").',
+          },
+          relationshipTypes: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Only these relationship types, e.g. KNOWS, PREFERS.',
+          },
+          filters: {
+            type: 'object',
+            properties: {
+              entityType: { type: 'string' },
+              nameContains: { type: 'string' },
+              limit: { type: 'integer', minimum: 1, maximum: 50 },
+            },
+            additionalProperties: false,
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
     domain: 'memory',
     title: 'Recall knowledge',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },

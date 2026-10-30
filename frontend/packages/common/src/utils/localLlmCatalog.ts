@@ -29,9 +29,16 @@ export interface LocalLlmModelSpec {
   commitHash: string;
   /**
    * Total device RAM below which the model is not offered — Gallery's `minDeviceMemoryInGb` for the
-   * Gemma and Qwen2.5 entries, and this repo's own 4 GiB floor for Qwen3-0.6B.
+   * Gemma entries (the only ones left: see the Android README's model table for what was dropped and why).
    */
   minDeviceMemoryBytes: number;
+  /**
+   * Total device RAM below which the GPU backend is withheld and the model runs on the CPU, whatever the
+   * preference says. Never under `minDeviceMemoryBytes`. The GPU expands int4 weights to fp16 in graphics
+   * memory: Gemma 4 E2B measured 2.4 GB of graphics memory and 3.3 GB in all on a Galaxy S23 Ultra's GPU
+   * against 0.2 GB and 2.3 GB on its CPU (2026-10-13). The native side enforces it; see `gpuAllowedOn`.
+   */
+  gpuMinDeviceMemoryBytes: number;
   capabilities: readonly LocalLlmCapability[];
   /** Backends the model runs on, best first. The first entry is the default. */
   accelerators: readonly LocalLlmAccelerator[];
@@ -55,50 +62,35 @@ const GIB = 1024 * 1024 * 1024;
  * account and licence click-through — the same `401 GatedRepo` that once left Android with no
  * downloadable model at all. They come back with an HF sign-in flow, not before.
  *
- * **Why pin — and why to this revision.** `litert-community/Qwen3-0.6B` `main` moved on 2026-09-20 to a
- * re-export (344,671,744 bytes) that needs LiteRT-LM 0.17.1 or newer. Against this repo's 0.14.0 it fails at
- * `Engine.initialize()` with "Only kv_cache tensors are supported as outputs to prefill", and it also failed every
- * download's size check, because the catalog recorded the older 344,437,808. So this entry pins the last
- * revision that loads on 0.14.0 (`154c5de0…`, exercised on an arm64 emulator). Moving to `main` means bumping
- * LiteRT-LM on both platforms first; repin the commit and the size together, never one alone.
+ * **Why pin.** `resolve/main` moves under a catalog: on 2026-09-20 `litert-community/Qwen3-0.6B` became a
+ * re-export (344,671,744 bytes) that needs LiteRT-LM 0.17.1 or newer, and every download failed its size
+ * check against the older revision recorded here until the catalog was repinned. Since the LiteRT-LM 0.18.0
+ * bump the pin IS that re-export (`a6e678a1…`); repin the commit and the size together, never one alone, and
+ * only to a revision that loads on the runtime both platforms link.
  */
 export const LOCAL_LLM_CATALOG = {
-  'qwen3-0.6b-int4': {
-    modelId: 'qwen3-0.6b-int4',
-    label: 'Qwen3 0.6B',
-    description: 'Smallest and fastest. Answers short questions and calls tools; runs on almost any phone.',
-    url: 'https://huggingface.co/litert-community/Qwen3-0.6B/resolve/154c5de0fc0fc5002a7da570ba8c67edffa32ca2/Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm?download=true',
-    sizeBytes: 344_437_808,
-    commitHash: '154c5de0fc0fc5002a7da570ba8c67edffa32ca2',
-    minDeviceMemoryBytes: 4 * GIB,
-    capabilities: ['thinking', 'tools'],
-    accelerators: ['cpu'],
-    platforms: ['android', 'ios'],
-    defaultConfig: { topK: 64, topP: 0.95, temperature: 1.0, maxTokens: 1024 },
-  },
-  'qwen2.5-1.5b-instruct': {
-    modelId: 'qwen2.5-1.5b-instruct',
-    label: 'Qwen2.5 1.5B Instruct',
-    description: 'A steadier general-purpose chat model, no tool calling. Needs a 6 GB phone.',
-    url: 'https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/19edb84c69a0212f29a6ef17ba0d6f278b6a1614/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true',
-    sizeBytes: 1_597_931_520,
-    commitHash: '19edb84c69a0212f29a6ef17ba0d6f278b6a1614',
-    minDeviceMemoryBytes: 6 * GIB,
-    capabilities: [],
-    accelerators: ['gpu', 'cpu'],
-    platforms: ['android', 'ios'],
-    defaultConfig: { topK: 20, topP: 0.8, temperature: 0.7, maxTokens: 4096 },
-  },
   'gemma-4-e2b-it': {
     modelId: 'gemma-4-e2b-it',
     label: 'Gemma 4 E2B',
-    description: 'Google’s multimodal Gemma 4. Reads photos, can reason step by step. Needs an 8 GB phone.',
-    url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/7fa1d78473894f7e736a21d920c3aa80f950c0db/gemma-4-E2B-it.litertlm?download=true',
-    sizeBytes: 2_583_085_056,
-    commitHash: '7fa1d78473894f7e736a21d920c3aa80f950c0db',
-    minDeviceMemoryBytes: 8 * GIB,
+    description:
+      'Google’s multimodal Gemma 4. Reads photos, can reason step by step. Needs a 6 GB phone; the GPU is optional from 8 GB.',
+    // Repinned 2026-10-13 to the 2026-06-05 re-export of the plain bundle (the card asks for a re-download of files
+    // from before 2026-05-05). Measured on an S23 Ultra against the 2026-04-01 bundle (2_583_085_056 bytes, 7fa1d784…):
+    // identical behaviour, including the GPU backend's corruption of numbers read from tool responses (dates come
+    // back as "206-1-03 00:25 UTC"; the CPU backend reads them exactly) — that is the runtime, not the bundle. The
+    // repository's `-gpu` bundle (2026-08-07) was tried and rejected: text-only, no speculative decoding, gibberish on
+    // this phone's GPU, and no CPU signature at all.
+    url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/361a4010ad6d88fc5c86e148e333c0342b99763d/gemma-4-E2B-it.litertlm?download=true',
+    sizeBytes: 2_588_147_712,
+    commitHash: '361a4010ad6d88fc5c86e148e333c0342b99763d',
+    // 6 GB on the CPU, the GPU from 8 GB — measured, see the field's doc.
+    minDeviceMemoryBytes: 6 * GIB,
+    gpuMinDeviceMemoryBytes: 8 * GIB,
     capabilities: ['thinking', 'vision', 'tools'],
-    accelerators: ['gpu', 'cpu'],
+    // CPU first (2026-10-13): on LiteRT-LM 0.18 the GPU backend corrupts digits read from tool responses with
+    // Gemma 4 ("206-1-03 00:25 UTC" for 2026-10-03), the CPU reads them exactly; LiteRT-LM #2202 is open with no
+    // fix. The GPU stays an explicit choice for speed (7–11 s a tool turn against 15–22 s).
+    accelerators: ['cpu', 'gpu'],
     platforms: ['android'],
     defaultConfig: { topK: 64, topP: 0.95, temperature: 1.0, maxTokens: 4000 },
   },
@@ -110,8 +102,12 @@ export const LOCAL_LLM_CATALOG = {
     sizeBytes: 3_654_467_584,
     commitHash: '9695417f248178c63a9f318c6e0c56cb917cb837',
     minDeviceMemoryBytes: 12 * GIB,
+    gpuMinDeviceMemoryBytes: 12 * GIB,
     capabilities: ['thinking', 'vision', 'tools'],
-    accelerators: ['gpu', 'cpu'],
+    // CPU first (2026-10-13): on LiteRT-LM 0.18 the GPU backend corrupts digits read from tool responses with
+    // Gemma 4 ("206-1-03 00:25 UTC" for 2026-10-03), the CPU reads them exactly; LiteRT-LM #2202 is open with no
+    // fix. The GPU stays an explicit choice for speed (7–11 s a tool turn against 15–22 s).
+    accelerators: ['cpu', 'gpu'],
     platforms: ['android'],
     defaultConfig: { topK: 64, topP: 0.95, temperature: 1.0, maxTokens: 4000 },
   },
@@ -125,6 +121,19 @@ export const LOCAL_LLM_MODEL_LIST: readonly LocalLlmModelSpec[] = Object.values(
 /** The catalog entries the given platform ships. */
 export function localLlmModelsFor(platform: LocalLlmPlatform): LocalLlmModelSpec[] {
   return LOCAL_LLM_MODEL_LIST.filter((model) => model.platforms.includes(platform));
+}
+
+/**
+ * Whether this device may run `model` on the GPU: it must list the GPU, and the device must report at least the
+ * model's `gpuMinDeviceMemoryBytes`. Unknown memory passes — the native side is the enforcer and reports
+ * `gpuWithheld` on the load result.
+ */
+export function gpuAllowedOn(model: LocalLlmModelSpec, totalMemoryBytes: number | undefined): boolean {
+  if (!model.accelerators.includes('gpu')) {
+    return false;
+  }
+
+  return totalMemoryBytes === undefined || totalMemoryBytes >= model.gpuMinDeviceMemoryBytes;
 }
 
 export function findLocalLlmModel(modelId: string): LocalLlmModelSpec | undefined {

@@ -72,9 +72,11 @@ interface Props {
   entityId?: string;
   limit?: number;
   skip?: boolean;
+  /** Bump to fetch again, e.g. after the page saved an edit that the history should now show. */
+  refreshKey?: number;
 }
 
-export function useEntityEvolutionService({ entityId, limit = 200, skip = false }: Props) {
+export function useEntityEvolutionService({ entityId, limit = 200, skip = false, refreshKey = 0 }: Props) {
   const [{ authToken }] = useAuth();
   const tokenRef = useRef(authToken);
 
@@ -127,7 +129,7 @@ export function useEntityEvolutionService({ entityId, limit = 200, skip = false 
     }
 
     fetchEvolution(entityId, limit);
-  }, [entityId, fetchEvolution, limit, skip]);
+  }, [entityId, fetchEvolution, limit, skip, refreshKey]);
 
   return {
     data,

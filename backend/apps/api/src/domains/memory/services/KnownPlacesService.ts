@@ -1,7 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -17,6 +17,8 @@ export type KnownPlaceKind = 'home' | 'work' | 'school' | 'social' | 'other';
 
 /** How a known-place assertion was established. */
 export type KnownPlaceSource = 'manual' | 'inferred' | 'geocoded';
+
+type QueryExecutor = Pick<DataSource | EntityManager, 'query'>;
 
 /**
  * A known place, projected entirely from existing graph shapes — NOT a bespoke
@@ -746,6 +748,8 @@ export class KnownPlacesService {
   async updateKnownPlace(
     context: UserServiceContext,
     input: {
+      /** Existing relationship being recategorized, when this is an edit. */
+      knownPlaceId?: string | null;
       label: string;
       kind: KnownPlaceKind;
       locationId?: string | null;
@@ -807,19 +811,53 @@ export class KnownPlacesService {
       ...(coordinates ? { coordinates: [coordinates.lng, coordinates.lat] } : {}),
     };
 
-    const relationshipId = await this.upsertSelfRelationship(context, locationId, relationshipType, {
-      strength,
-      startDate: input.activeFrom ?? null,
-      endDate: input.activeTo ?? null,
-      properties,
+    return this.dataSource.transaction(async (manager) => {
+      // Write the replacement first, then retire the exact relationship the
+      // client edited. Both happen in one transaction so a failed
+      // recategorization cannot leave either no role or two active roles.
+      const relationshipId = await this.upsertSelfRelationship(
+        context,
+        locationId,
+        relationshipType,
+        {
+          strength,
+          startDate: input.activeFrom ?? null,
+          endDate: input.activeTo ?? null,
+          properties,
+        },
+        manager,
+      );
+
+      if (input.knownPlaceId && input.knownPlaceId !== relationshipId) {
+        const retired: Array<{ relationship_id: string }> = await manager.query(
+          `UPDATE ci.relationships
+              SET is_active = false, updated_at = now()
+            WHERE relationship_id = $2
+              AND owner_user_id = $1
+              AND to_entity_id = $3
+              AND relationship_type = ANY($4)
+              AND is_active
+          RETURNING relationship_id`,
+          [
+            context.userId,
+            input.knownPlaceId,
+            locationId,
+            KNOWN_PLACE_RELATIONSHIP_TYPES as unknown as string[],
+          ],
+        );
+
+        if (retired.length === 0) {
+          throw new Error(`Known-place relationship ${input.knownPlaceId} is not active for this location`);
+        }
+      }
+
+      const place = await this.getKnownPlaceById(context, relationshipId, manager);
+      if (!place) {
+        throw new Error(`Known-place relationship ${relationshipId} vanished after upsert`);
+      }
+
+      return place;
     });
-
-    const place = await this.getKnownPlaceById(context, relationshipId);
-    if (!place) {
-      throw new Error(`Known-place relationship ${relationshipId} vanished after upsert`);
-    }
-
-    return place;
   }
 
   /**
@@ -992,8 +1030,9 @@ export class KnownPlacesService {
   private async getKnownPlaceById(
     context: UserServiceContext,
     relationshipId: string,
+    executor: QueryExecutor = this.dataSource,
   ): Promise<KnownPlace | null> {
-    const rows: KnownPlaceRow[] = await this.dataSource.query(
+    const rows: KnownPlaceRow[] = await executor.query(
       `SELECT
          r.relationship_id AS id, r.relationship_type AS relationship_type, r.strength AS strength,
          r.start_date AS start_date, r.end_date AS end_date, r.properties AS properties,
@@ -1022,9 +1061,10 @@ export class KnownPlacesService {
       endDate: string | null;
       properties: Record<string, unknown>;
     },
+    executor: QueryExecutor = this.dataSource,
   ): Promise<string> {
     const userId = context.userId;
-    const selfRows: Array<{ entity_id: string | null }> = await this.dataSource.query(
+    const selfRows: Array<{ entity_id: string | null }> = await executor.query(
       `SELECT entity_id FROM ci.users WHERE id = $1`,
       [userId],
     );
@@ -1045,7 +1085,7 @@ export class KnownPlacesService {
     //   relationship_type) WHERE is_active = TRUE
     // so the ON CONFLICT target names those columns AND repeats the partial
     // predicate to bind to that index.
-    const rows: Array<{ relationship_id: string }> = await this.dataSource.query(
+    const rows: Array<{ relationship_id: string }> = await executor.query(
       `INSERT INTO ci.relationships
          (relationship_id, from_entity_id, to_entity_id, relationship_type, strength,
           properties, is_active, start_date, end_date, owner_user_id,

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
 import Database from 'better-sqlite3';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { macosItem, readMacosRows } from './macosActivityRecords';
 import type { DirEntry, FileImporter, Recognition } from './registry';

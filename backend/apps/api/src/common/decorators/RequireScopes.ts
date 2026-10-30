@@ -17,9 +17,10 @@ export const REQUIRE_SCOPES_KEY = 'require_scopes';
  * - `capture` — the observation write plane: `/v1/*` bulk ingest,
  *   `POST /v1/ingest/finish`, `POST /files/upload`, and the agent's own device
  *   record (`POST /devices`, `GET /devices`, `PATCH /devices/:id/last-seen`).
- *   It is also what a capture client's Portal token gets, and an unaddressed
- *   token from a Portal that addresses tokens (one addressed to a different
- *   appliance is refused outright). For capture agents (Companion Capture / CI-Applet,
+ *   It is also what a capture client's Portal token gets, and another client's
+ *   unaddressed token from a Portal that addresses tokens (one addressed to a
+ *   different appliance, or a `ci-server` one addressed to none, is refused
+ *   outright). For capture agents (Companion Capture / CI-Applet,
  *   CI-Browser-Extension, Companion Scan) that stream observations in and read
  *   nothing back.
  *   Deliberately does NOT open GraphQL, `/memory/*` or `/maintenance`: a
@@ -51,9 +52,9 @@ export const AGENT_JOBS_SCOPE = 'agent-jobs';
  * - Callers authenticated by a session or JWT are unaffected — they carry full
  *   user authority. So is a Portal bearer addressed to this appliance, and an
  *   unaddressed one from a Portal that predates addressing. A capture client's
- *   bearer, or an unaddressed one from a Portal that addresses tokens, is confined
- *   like a `capture` key, and a service token like a key with the scopes its
- *   `scope` claim names (see `PortalTokenService.authorityFor`).
+ *   bearer, or another client's unaddressed one from a Portal that addresses
+ *   tokens, is confined like a `capture` key, and a service token like a key with
+ *   the scopes its `scope` claim names (see `PortalTokenService.authorityFor`).
  * - An api-key with an **empty** `scopes` array is grandfathered as full-access
  *   (legacy keys, and connect keys minted for broad-access apps, keep working).
  * - An api-key with a **non-empty** `scopes` array is confined: it may reach a

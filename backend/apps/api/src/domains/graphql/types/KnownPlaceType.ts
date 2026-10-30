@@ -54,7 +54,11 @@ export class KnownPlaceType {
   @Field(() => String)
   source!: string;
 
-  static toType(place: KnownPlace): KnownPlaceType {
+  /** Tags attached to the underlying Place entity. */
+  @Field(() => [String])
+  tags!: string[];
+
+  static toType(place: KnownPlace, tags: string[] = []): KnownPlaceType {
     return {
       id: place.id,
       locationId: place.locationId,
@@ -66,6 +70,7 @@ export class KnownPlaceType {
       activeTo: place.activeTo,
       aliases: place.aliases,
       source: place.source,
+      tags,
     };
   }
 }

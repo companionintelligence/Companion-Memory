@@ -12,6 +12,7 @@ import { FileChunkEntity } from '../entities/FileChunkEntity';
 import { DocumentParsedEvent } from '../events';
 import { DocumentChunkerService } from '../services/DocumentChunkerService';
 import { DocumentChunkService } from '../services/DocumentChunkService';
+import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../services/DocumentExtractor';
 import { DocumentParserService } from '../services/DocumentParserService';
 import { ParseStatus } from '../types';
 
@@ -73,6 +74,20 @@ export class FileDocumentParseListener {
       return;
     }
 
+    // `size` is a bigint column, so it can arrive as a string.
+    const size = file.size == null ? null : Number(file.size);
+
+    if (size !== null && size > MAX_PARSE_BYTES) {
+      // getFileContent holds the whole object in memory, and the parser would
+      // refuse it anyway: answer now, without downloading gigabytes to do it.
+      const parseError = `File is ${size} bytes; the parser reads at most ${MAX_PARSE_BYTES}`;
+
+      this.logger.log('File too large to parse, skipping', { fileId: file.id, bytes: size });
+      await this.updateParseStatus(file.id, ParseStatus.FAILED, { parseError });
+
+      return;
+    }
+
     await this.updateParseStatus(file.id, ParseStatus.PROCESSING);
 
     try {
@@ -123,6 +138,13 @@ export class FileDocumentParseListener {
       });
 
       await this.updateParseStatus(file.id, ParseStatus.FAILED, { parseError: message });
+
+      // The parser refused this file (too large, an archive bomb, out of time
+      // or memory). Retrying would send the same bytes back for the same
+      // answer, up to three more times; the failure is recorded on the file.
+      if (err instanceof UnparseableDocumentError) {
+        return;
+      }
 
       // Rethrow so the OnEvent wrapper's ack.fail() fires — swallowing here
       // would ack.done() the job and lose pg-boss retry/dead-letter for what

@@ -17,8 +17,8 @@
 import { useEffect } from 'react';
 
 import { type ApolloClient, useApolloClient } from '@apollo/client';
-import { waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GET_THINGS, PAGE_SIZE } from '@/pages/ThingsPage/ThingsPage';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -200,5 +200,64 @@ describe('AddMenu', () => {
     // pin, and the map would otherwise keep serving the pre-create set.
     expect(rootFields('search')).toEqual([]);
     expect(rootFields('mapPins')).toEqual([]);
+  });
+});
+
+// useDeviceLayout reads window.matchMedia; drive it to force the phone
+// branch, the same pattern as MobileMemoryPage.test.tsx.
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : query.includes('landscape') ? !mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+describe('the Add menu on a phone', () => {
+  afterEach(() => {
+    setViewport(false);
+    document.body.style.pointerEvents = '';
+  });
+
+  function openMenu() {
+    // Radix's DropdownMenuTrigger opens on pointerdown, not click.
+    fireEvent.pointerDown(screen.getByRole('button', { name: /NAV_ADD|add/i }), { button: 0 });
+
+    return screen.findByRole('menu');
+  }
+
+  it('opens modal, so a tap away only closes it and presses nothing underneath', async () => {
+    setViewport(true);
+    await renderAddMenu();
+    await openMenu();
+
+    // Radix's modal layer turns pointer events off for the rest of the page,
+    // and the shield catches what that misses (map pins and the like, which
+    // turn them back on for themselves): a tap on it is an outside press.
+    expect(document.body.style.pointerEvents).toBe('none');
+    const shield = screen.getByTestId('menu-shield');
+
+    expect(shield).toHaveClass('max-device:block', 'pointer-events-auto');
+
+    fireEvent.pointerDown(shield, { button: 0 });
+    fireEvent.click(shield);
+
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('menu-shield')).not.toBeInTheDocument();
+  });
+
+  it('stays non-modal on desktop, where the shield is only ever hidden', async () => {
+    await renderAddMenu();
+    await openMenu();
+
+    expect(document.body.style.pointerEvents).toBe('');
+    // Present but display:none above the phone breakpoint — a desktop click
+    // outside is meant to reach what it hits.
+    expect(screen.getByTestId('menu-shield')).toHaveClass('hidden');
   });
 });

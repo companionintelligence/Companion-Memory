@@ -51,6 +51,22 @@ export type { RedditMediaRef } from './redditMedia';
 export const SOURCE_TYPE = 'ci-import-tools';
 
 export interface CanonicalRecord {
+  /**
+   * The platform this record's run was fetched from by a connection ('dropbox',
+   * 'google_drive'), when that says more than the importer's own name does —
+   * i.e. for what the catch-all importer produced. Absent otherwise. Set by
+   * the push stage from the run (see {@link withOrigin}), never by
+   * `toCanonical`: a staged row does not know where its run came from.
+   */
+  originPlatform?: string;
+  /**
+   * The connection that fetched this record's run, when one did. Unlike
+   * `originPlatform` it applies to EVERY record of the run, whichever importer
+   * read it: a Facebook export that Dropbox delivered is Facebook data that
+   * Dropbox delivered, and goes when Dropbox does (unless something else also
+   * delivered it — see DataDeletionService).
+   */
+  originConnectionId?: string;
   /** Producing integration. Always SOURCE_TYPE. */
   sourceType: string;
   /** Importer data source, e.g. "apple_photos", "gpx". From items.data_source. */
@@ -174,6 +190,35 @@ function basename(p: string): string {
   const parts = p.split(/[\\/]/);
 
   return parts[parts.length - 1] || p;
+}
+
+/**
+ * Attribute a record to the connection and platform its run was fetched by,
+ * when a connection did the fetching.
+ *
+ * The connection applies to every record of the run. The platform touches
+ * only the catch-all importer's records. `generic` reads any loose
+ * file and says nothing about where it lived; a photo a Dropbox sync
+ * downloaded is a Dropbox photo. A record a specific importer claimed — a
+ * Facebook export that happened to be stored in Dropbox — already names its
+ * platform, and that one is the truth.
+ */
+export function withOrigin(
+  record: CanonicalRecord,
+  origin: { platform?: string | null; connectionId?: string | null } | null | undefined,
+): CanonicalRecord {
+  const platform = origin?.platform && record.sourceSystem === 'generic' ? origin.platform : undefined;
+  const connectionId = origin?.connectionId ?? undefined;
+
+  if (!platform && !connectionId) {
+    return record;
+  }
+
+  return {
+    ...record,
+    ...(platform ? { originPlatform: platform } : {}),
+    ...(connectionId ? { originConnectionId: connectionId } : {}),
+  };
 }
 
 /** sourceSystem for a row: the importer data source. */
@@ -866,6 +911,14 @@ export function isSocialAffiliation(rec: CanonicalRecord): boolean {
 
   if (rec.sourceSystem === 'reddit') {
     return kind === 'moderated_subreddit' || kind === 'subscribed_subreddit';
+  }
+
+  // A liked Facebook PAGE: a dated fact about the person and an organisation,
+  // whose title says all of it. The connection's TransformFacebookLikes writes
+  // it as an event alone for the same reason. (A like of a POST is not this —
+  // it carries a link to the thing liked and keeps its content row.)
+  if (rec.sourceSystem === 'facebook') {
+    return kind === 'page_like';
   }
 
   return false;

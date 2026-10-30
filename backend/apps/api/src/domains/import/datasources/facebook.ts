@@ -2,14 +2,22 @@
  * (every thread lane under messages/ — inbox, filtered_threads,
  * message_requests, archived_threads, e2ee_cutover; see threadLaneDirs) and
  * Posts (posts/), including their attached photos/videos,
- * plus the HTML-format equivalents nested under your_facebook_activity/. Does
- * NOT cover friends/connections, events, comments_and_reactions, groups,
- * marketplace, or logged_information/personal_information/preferences (location
+ * plus the HTML-format equivalents nested under your_facebook_activity/. From
+ * the JSON format only, also imports likes/reactions on individual posts
+ * (comments_and_reactions/) and Events (events/ — the ones the person joined,
+ * was interested in, or created; not invitations they declined or never
+ * answered), liked Pages (pages/), comments (comments_and_reactions/ and
+ * groups/), posts in groups (groups/) and Marketplace listings
+ * (facebook_marketplace/). Does NOT cover friends/connections, saved items
+ * (the export records only "saved a product from X's post" — nothing to link
+ * to), or logged_information/personal_information/preferences (location
  * history, search history, off-Facebook activity, ads). */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { facebookPageLikeId } from '@ci/domains/memory';
 
 import { htmlToText as sharedHtmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -66,6 +74,55 @@ interface FBPost {
   attachments?: FBAttachment[];
   label_values?: FBLabelValue[];
 }
+// One like/reaction. Meta ships TWO shapes side by side, describing the same
+// reactions: the older one (likes_and_reactions_<n>.json) has a sentence
+// `title` and the reaction under data[]; the newer one (likes_and_reactions.json)
+// has label_values (Reaction / URL / Name) and the liked object's `fbid`.
+interface FBReaction {
+  timestamp?: number;
+  title?: string;
+  data?: Array<{ reaction?: { reaction?: string; actor?: string } }>;
+  label_values?: FBLabelValue[];
+  fbid?: string;
+}
+interface FBEvent {
+  name?: string;
+  start_timestamp?: number;
+  end_timestamp?: number;
+  description?: string;
+  place?: {
+    name?: string;
+    address?: string;
+    coordinate?: { latitude?: number; longitude?: number };
+  };
+  response_time?: number;
+}
+// One comment, in comments_and_reactions/comments.json (`comments_v2`) and
+// groups/your_comments_in_groups.json (`group_comments_v2`, which adds `group`).
+interface FBComment {
+  timestamp?: number;
+  title?: string;
+  data?: Array<{ comment?: { timestamp?: number; comment?: string; author?: string; group?: string } }>;
+}
+// One Marketplace listing, in facebook_marketplace/items_sold.json
+// (`items_selling_v2` — Meta's name; the file lists what was put up for sale).
+interface FBListing {
+  title?: string;
+  price?: string;
+  seller?: string;
+  created_timestamp?: number;
+  category?: string;
+  marketplace?: string;
+  location?: { coordinate?: { latitude?: number; longitude?: number } };
+  description?: string;
+}
+
+/**
+ * How the person stands toward an event, strongest claim first. An answer they
+ * gave (including "declined") outranks the bare fact of having been invited.
+ */
+const EVENT_RSVPS = ['joined', 'hosted', 'interested', 'declined', 'invited'] as const;
+type EventRsvp = (typeof EVENT_RSVPS)[number];
 
 /* ---- JSON-format mojibake repair -------------------------------------------
  * Facebook DYI JSON files serialise all non-ASCII text as raw UTF-8 BYTES, each
@@ -411,7 +468,24 @@ function attachmentMetadata(root: string, uris: string[]): Metadata {
   };
 }
 
+/**
+ * Everything this importer reads — conversations, posts, comments, groups,
+ * events, pages, Marketplace — is a .json or .html file. Photos, videos and
+ * the rest only come in as attachments OF those records.
+ */
+const RECORD_FILE_RE = /\.(?:json|html)$/i;
+
 export class FacebookFileImporter implements FileImporter {
+  /**
+   * False for a tree that is media and nothing else. That is what a Meta
+   * transfer to a cloud drive looks like for its first hours: the attachments
+   * are written before the conversations they belong to, and importing it
+   * then reads nothing.
+   */
+  listingHasRecords(relativePaths: readonly string[]): boolean {
+    return relativePaths.some((relativePath) => RECORD_FILE_RE.test(relativePath));
+  }
+
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
     if (!root) {
@@ -553,6 +627,561 @@ export class FacebookFileImporter implements FileImporter {
         }
       }
     }
+
+    await this.processReactions(root, params);
+    await this.processPageLikes(root, params);
+    await this.processComments(root, params);
+    await this.processGroupPosts(root, params);
+    await this.processMarketplace(root, params);
+    await this.processEvents(root, params);
+  }
+
+  /** Parse one JSON file of the export, reporting an unreadable one to the drop ledger. */
+  private async readExportJson<T>(fpath: string, params: ImportParams): Promise<T | null> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(fpath, 'utf8');
+    } catch {
+      return null; // not in this export
+    }
+
+    const parsed = parseFacebookJson<T>(raw);
+    if (parsed === null) {
+      params.log?.('error', `Failed to parse ${path.basename(fpath)}`);
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
+    }
+
+    return parsed;
+  }
+
+  // Likes and reactions on individual posts/photos/comments → one 'like' item
+  // each. (Liked PAGES are a different file — see processPageLikes.)
+  //
+  // The two file shapes (see FBReaction) list the SAME reactions, so importing
+  // both would double every like. They are joined on the reaction's timestamp,
+  // the one field both carry: the newer shape supplies the link and the liked
+  // object's id, the older one supplies Meta's own sentence ("Jane liked John's
+  // photo.") which is the only place the kind of thing liked is stated. An
+  // older-shape entry with no newer twin is still imported, just without a link.
+  // The id keys on that same timestamp, so it is stable whichever shape — or
+  // both — a given export happens to contain.
+  private async processReactions(root: string, params: ImportParams): Promise<void> {
+    const dir = [
+      path.join(root, 'your_facebook_activity', 'comments_and_reactions'),
+      path.join(root, 'comments_and_reactions'),
+      path.join(root, 'likes_and_reactions'),
+    ].find((d) => isDirectory(d));
+    if (!dir) {
+      return;
+    }
+
+    let files: string[];
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    const reactions: FBReaction[] = [];
+    for (const f of files
+      .filter((n) => /^(?:likes_and_reactions(?:_\d+)?|posts_and_comments)\.json$/i.test(n))
+      .sort()) {
+      const parsed = await this.readExportJson<unknown>(path.join(dir, f), params);
+      // A bare array today; older exports wrapped it ({ "reactions_v2": [...] }).
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === 'object'
+          ? Object.values(parsed).find(Array.isArray)
+          : undefined;
+      if (list) {
+        reactions.push(...(list as FBReaction[]));
+      }
+    }
+
+    const sentenceAt = new Map<number, string>();
+    const linked = new Set<number>();
+    for (const r of reactions) {
+      if (r.timestamp == null) {
+        continue;
+      }
+
+      if (r.label_values) {
+        linked.add(r.timestamp);
+      } else if (r.title) {
+        sentenceAt.set(r.timestamp, r.title);
+      }
+    }
+
+    const seen = new Map<string, number>();
+    for (const r of reactions) {
+      const label = (name: string) => r.label_values?.find((l) => l.label === name)?.value || undefined;
+      if (!r.label_values && r.timestamp != null && linked.has(r.timestamp)) {
+        continue; // the newer-shape twin carries this reaction
+      }
+
+      const base =
+        r.timestamp != null
+          ? `facebook:reaction:${r.timestamp}`
+          : r.fbid
+            ? `facebook:reaction:fbid:${r.fbid}`
+            : undefined;
+      if (!base) {
+        params.pipeline.drop?.('malformed_entry', 'reaction without timestamp or id');
+        continue;
+      }
+
+      const ts = r.timestamp != null ? new Date(r.timestamp * 1000) : undefined;
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      // Two reactions in the same second are not something a person can do by
+      // hand, but the suffix keeps them apart if an export ever says so.
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+
+      const rawReaction = label('Reaction') ?? r.data?.find((d) => d.reaction?.reaction)?.reaction?.reaction;
+      const reaction = rawReaction
+        ? rawReaction.charAt(0).toUpperCase() + rawReaction.slice(1).toLowerCase()
+        : undefined;
+      const author = label('Name');
+      const url = label('URL');
+      const sentence = (r.title ?? (r.timestamp != null ? sentenceAt.get(r.timestamp) : undefined))
+        ?.trim()
+        .replace(/\.$/, '');
+      const whose = author ? `${author}'s post` : 'a post';
+      const title =
+        sentence || (!reaction || reaction === 'Like' ? `Liked ${whose}` : `Reacted ${reaction} to ${whose}`);
+
+      params.pipeline.push({
+        item: {
+          id: n === 0 ? base : `${base}#${n}`,
+          classification: 'like',
+          timestamp: ts,
+          content: {
+            filename: 'reaction.txt',
+            mediaType: 'text/plain',
+            data: async () => Buffer.from(url ? `${title}\n${url}` : title),
+          },
+          metadata: {
+            Title: title,
+            Type: 'Facebook reaction',
+            Source: 'Facebook',
+            Reaction: reaction,
+            URL: url,
+            Author: author,
+            FacebookId: r.fbid,
+          },
+        },
+      });
+    }
+  }
+
+  // Liked Pages → one 'like' item per Page, at the moment of the like.
+  //
+  // The id is the one the Facebook CONNECTION mints for the same Page from the
+  // Graph API (facebookPageLikeId), so a Page that arrives both ways lands on
+  // one row. The export has no id field, but the Page's link is
+  // https://www.facebook.com/<page id>; a Page whose link is not of that form
+  // (or is missing, as in pre-2022 exports) falls back to a hash of its name,
+  // which is stable across re-imports but cannot converge with the connection.
+  //
+  // `Kind: 'page_like'` routes it to the timeline alone (canonical.ts
+  // isSocialAffiliation). The connection also writes an Organization node and a
+  // SUBSCRIBES_TO edge for the Page; this importer does not.
+  private async processPageLikes(root: string, params: ImportParams): Promise<void> {
+    const file = [
+      path.join(root, 'your_facebook_activity', 'pages', "pages_you've_liked.json"),
+      path.join(root, 'pages', "pages_you've_liked.json"),
+      path.join(root, 'likes_and_reactions', 'pages.json'),
+    ].find((f) => fs.existsSync(f));
+    if (!file) {
+      return;
+    }
+
+    const parsed = await this.readExportJson<Record<string, unknown>>(file, params);
+    const pages = parsed?.page_likes_v2 ?? parsed?.page_likes;
+    if (!Array.isArray(pages)) {
+      return;
+    }
+
+    for (const page of pages as Array<{ name?: string; timestamp?: number; url?: string }>) {
+      const name = page?.name?.trim();
+      const pageId = /^https?:\/\/(?:www\.)?facebook\.com\/(\d+)\/?$/i.exec(page?.url ?? '')?.[1];
+      if (!name && !pageId) {
+        params.pipeline.drop?.('malformed_entry', 'liked page without name or link');
+        continue;
+      }
+
+      const ts = page.timestamp ? new Date(page.timestamp * 1000) : undefined;
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      const title = `Liked Facebook page ${name ?? pageId}`;
+      params.pipeline.push({
+        item: {
+          id: pageId
+            ? facebookPageLikeId(pageId)
+            : `facebook:pagelike:${crypto
+                .createHash('sha1')
+                .update(name as string)
+                .digest('hex')}`,
+          classification: 'like',
+          timestamp: ts,
+          content: {
+            filename: 'page_like.txt',
+            mediaType: 'text/plain',
+            data: async () => Buffer.from(title),
+          },
+          metadata: {
+            Title: title,
+            Kind: 'page_like',
+            Source: 'Facebook',
+            URL: page.url || undefined,
+            // The connection's spelling of the same three facts, so a consumer
+            // reads one shape whichever pipeline delivered the row.
+            facebook_page_id: pageId,
+            page_name: name,
+            page_url: page.url || undefined,
+          },
+        },
+      });
+    }
+  }
+
+  /** The first of these directories that exists under the export root. */
+  private findDir(root: string, candidates: string[][]): string | undefined {
+    return candidates.map((parts) => path.join(root, ...parts)).find((d) => isDirectory(d));
+  }
+
+  // Comments the person wrote, on posts anywhere and in groups → one 'comment'
+  // item each. The export gives the comment's own text and time, and Meta's
+  // sentence about where it went ("… commented on Jane's post."), but no link
+  // to the post, so the id is the comment's time and text.
+  private async processComments(root: string, params: ImportParams): Promise<void> {
+    const commentsDir = this.findDir(root, [
+      ['your_facebook_activity', 'comments_and_reactions'],
+      ['comments_and_reactions'],
+      ['comments'],
+    ]);
+    const groupsDir = this.findDir(root, [['your_facebook_activity', 'groups'], ['groups']]);
+    const sources = [
+      { file: commentsDir && path.join(commentsDir, 'comments.json'), key: 'comments_v2' },
+      { file: groupsDir && path.join(groupsDir, 'your_comments_in_groups.json'), key: 'group_comments_v2' },
+    ];
+
+    for (const { file, key } of sources) {
+      if (!file || !fs.existsSync(file)) {
+        continue;
+      }
+
+      const parsed = await this.readExportJson<Record<string, unknown>>(file, params);
+      const comments = parsed?.[key];
+      if (!Array.isArray(comments)) {
+        continue;
+      }
+
+      for (const entry of comments as FBComment[]) {
+        const comment = entry.data?.find((d) => d.comment?.comment)?.comment;
+        const text = comment?.comment?.trim();
+        const seconds = comment?.timestamp ?? entry.timestamp;
+        if (!comment || !text || !seconds) {
+          params.pipeline.drop?.('malformed_entry', 'comment without text or time');
+          continue;
+        }
+
+        const ts = new Date(seconds * 1000);
+        if (!timeframeContains(params.timeframe, ts)) {
+          continue;
+        }
+
+        const title =
+          entry.title?.trim().replace(/\.$/, '') || `Commented${comment.group ? ` in ${comment.group}` : ''}`;
+        const textHash = crypto.createHash('sha1').update(text).digest('hex').slice(0, 16);
+
+        params.pipeline.push({
+          item: {
+            id: `facebook:comment:${seconds}:${textHash}`,
+            classification: 'comment',
+            timestamp: ts,
+            content: {
+              filename: 'comment.txt',
+              mediaType: 'text/plain',
+              data: async () => Buffer.from(text),
+            },
+            metadata: {
+              Title: title,
+              Text: text,
+              Author: comment.author || undefined,
+              Group: comment.group || undefined,
+              Source: 'Facebook',
+            },
+          },
+        });
+      }
+    }
+  }
+
+  // Posts the person made in groups → 'social' items like timeline posts, with
+  // the group's name alongside. Meta writes group housekeeping into the same
+  // list ("… created the group X.") with no text and no media; those are not
+  // posts and are left out.
+  private async processGroupPosts(root: string, params: ImportParams): Promise<void> {
+    const dir = this.findDir(root, [['your_facebook_activity', 'groups'], ['groups']]);
+    const file = dir && path.join(dir, 'group_posts_and_comments.json');
+    if (!file || !fs.existsSync(file)) {
+      return;
+    }
+
+    const parsed = await this.readExportJson<{ group_posts_v2?: unknown }>(file, params);
+    if (!Array.isArray(parsed?.group_posts_v2)) {
+      return;
+    }
+
+    const rel = exportRelPath(root, file);
+    const seen = new Map<string, number>();
+    for (const [i, post] of (parsed.group_posts_v2 as FBPost[]).entries()) {
+      const ts = post.timestamp ? new Date(post.timestamp * 1000) : undefined;
+      const text = post.data?.find((d) => d.post)?.post?.trim() ?? '';
+      const group = /\bposted in (.+?)\.?$/.exec(post.title ?? '')?.[1];
+      const media = (post.attachments ?? [])
+        .flatMap((att) => (att.data ?? []).map((d) => d.media))
+        .filter((ref): ref is FBMediaRef => ref != null);
+
+      if (!text && media.length === 0) {
+        params.pipeline.drop?.('empty_after_parse', post.title ?? 'group activity without a post');
+        continue;
+      }
+
+      const context: Metadata = { Text: text || undefined, Group: group };
+      for (const ref of media) {
+        this.pushMedia(root, ref, ts, context, params);
+      }
+
+      if (!text) {
+        continue; // a media-only post is its media
+      }
+
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      params.pipeline.push({
+        item: {
+          id: contentId('post', 'groups', [ts?.getTime(), text], seen) ?? `facebook:grouppost:${rel}#${i}`,
+          classification: 'social',
+          timestamp: ts,
+          content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          // Attached to the post as well as imported as media — see processPosts.
+          metadata: {
+            Text: text,
+            Group: group,
+            Source: 'Facebook',
+            ...attachmentMetadata(root, this.presentUris(root, media, params)),
+          },
+        },
+      });
+    }
+  }
+
+  // Marketplace listings the person put up → one 'sale' item each, dated at the
+  // listing's creation, with the price, category and the listing's location.
+  //
+  // Two files describe the same listings: items_sold.json has the clean fields
+  // but no id; your_marketplace_items.json has Meta's label/value form with the
+  // listing's `fbid`. They are joined on creation time so the id can be the
+  // real one; a listing with no twin keys on its creation time and title.
+  private async processMarketplace(root: string, params: ImportParams): Promise<void> {
+    const dir = this.findDir(root, [
+      ['your_facebook_activity', 'facebook_marketplace'],
+      ['facebook_marketplace'],
+      ['marketplace'],
+    ]);
+    const file = dir && path.join(dir, 'items_sold.json');
+    if (!dir || !file || !fs.existsSync(file)) {
+      return;
+    }
+
+    const parsed = await this.readExportJson<{ items_selling_v2?: unknown }>(file, params);
+    if (!Array.isArray(parsed?.items_selling_v2)) {
+      return;
+    }
+
+    // fbid by creation time, from the label/value file (one object when there
+    // is one listing, an array when there are several).
+    const idsByCreation = new Map<number, string>();
+    const detailsFile = path.join(dir, 'your_marketplace_items.json');
+    if (fs.existsSync(detailsFile)) {
+      const details = await this.readExportJson<unknown>(detailsFile, params);
+      const list = Array.isArray(details) ? details : details ? [details] : [];
+      for (const item of list as Array<{ fbid?: string; label_values?: FBLabelValue[] }>) {
+        const created = item.label_values?.find((l) => l.label === 'Creation time')?.timestamp_value;
+        if (item.fbid && created) {
+          idsByCreation.set(created, item.fbid);
+        }
+      }
+    }
+
+    for (const listing of parsed.items_selling_v2 as FBListing[]) {
+      const title = listing.title?.trim();
+      if (!title || !listing.created_timestamp) {
+        params.pipeline.drop?.('malformed_entry', 'listing without title or creation time');
+        continue;
+      }
+
+      const ts = new Date(listing.created_timestamp * 1000);
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      const fbid = idsByCreation.get(listing.created_timestamp);
+      const { latitude, longitude } = listing.location?.coordinate ?? {};
+      const price = listing.price?.trim();
+      const text = [title, price, listing.description].filter(Boolean).join('\n');
+      const titleHash = crypto.createHash('sha1').update(title).digest('hex').slice(0, 16);
+
+      params.pipeline.push({
+        item: {
+          id: fbid
+            ? `facebook:listing:${fbid}`
+            : `facebook:listing:${listing.created_timestamp}:${titleHash}`,
+          classification: 'sale',
+          timestamp: ts,
+          location: latitude != null && longitude != null ? { latitude, longitude } : undefined,
+          content: { filename: 'listing.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          metadata: {
+            Title: price ? `Listed on Marketplace: ${title} — ${price}` : `Listed on Marketplace: ${title}`,
+            Product: title,
+            Price: price,
+            Description: listing.description || undefined,
+            Category: listing.category || undefined,
+            Marketplace: listing.marketplace || undefined,
+            FacebookId: fbid,
+            Source: 'Facebook',
+          },
+        },
+      });
+    }
+  }
+
+  // Events → one 'event' item per event, at the event's own start time.
+  //
+  // The same event appears in several files (one the person created is in
+  // your_events.json AND under events_joined; an invitation they accepted is in
+  // event_invitations.json too), and none of them carries an event id. So they
+  // are merged on name + start time, keeping the strongest RSVP (EVENT_RSVPS
+  // order) and filling place/description from whichever copy has them.
+  //
+  // Only events the person said yes or maybe to are imported. An invitation
+  // they declined, or never answered, is not an occurrence in their life —
+  // nothing says they went — so both are left out and counted
+  // (`declined_event`, `unanswered_invitation`). The invitations file is still
+  // read: it can hold the richer copy of an event they did answer.
+  private async processEvents(root: string, params: ImportParams): Promise<void> {
+    const dir = [path.join(root, 'your_facebook_activity', 'events'), path.join(root, 'events')].find((d) =>
+      isDirectory(d),
+    );
+    if (!dir) {
+      return;
+    }
+
+    const merged = new Map<string, { event: FBEvent; rsvp: EventRsvp }>();
+    const collect = (events: unknown, rsvp: EventRsvp): void => {
+      if (!Array.isArray(events)) {
+        return;
+      }
+
+      for (const event of events as FBEvent[]) {
+        if (!event?.name || !event.start_timestamp) {
+          params.pipeline.drop?.('malformed_entry', 'event without name or start time');
+          continue;
+        }
+
+        const nameHash = crypto.createHash('sha1').update(event.name).digest('hex').slice(0, 16);
+        const key = `facebook:event:${event.start_timestamp}:${nameHash}`;
+        const prior = merged.get(key);
+        if (!prior) {
+          merged.set(key, { event: { ...event }, rsvp });
+          continue;
+        }
+
+        prior.event.description ||= event.description;
+        prior.event.place ??= event.place;
+        prior.event.end_timestamp ||= event.end_timestamp;
+        prior.event.response_time ??= event.response_time;
+        if (EVENT_RSVPS.indexOf(rsvp) < EVENT_RSVPS.indexOf(prior.rsvp)) {
+          prior.rsvp = rsvp;
+        }
+      }
+    };
+
+    const responses = await this.readExportJson<{ event_responses_v2?: Record<string, unknown> }>(
+      path.join(dir, 'your_event_responses.json'),
+      params,
+    );
+    for (const [bucket, events] of Object.entries(responses?.event_responses_v2 ?? {})) {
+      // events_joined / events_interested / events_declined. A bucket this
+      // build has not seen is still an answer the person gave, so it is kept,
+      // as the weakest yes.
+      const rsvp = bucket.replace(/^events_/, '');
+      collect(events, rsvp === 'joined' || rsvp === 'declined' ? rsvp : 'interested');
+    }
+
+    const own = await this.readExportJson<{ your_events_v2?: unknown }>(
+      path.join(dir, 'your_events.json'),
+      params,
+    );
+    collect(own?.your_events_v2, 'hosted');
+
+    const invitations = await this.readExportJson<{ events_invited_v2?: unknown }>(
+      path.join(dir, 'event_invitations.json'),
+      params,
+    );
+    collect(invitations?.events_invited_v2, 'invited');
+
+    for (const [id, { event, rsvp }] of merged) {
+      if (rsvp === 'declined' || rsvp === 'invited') {
+        params.pipeline.drop?.(rsvp === 'declined' ? 'declined_event' : 'unanswered_invitation', id);
+        continue;
+      }
+
+      const start = new Date((event.start_timestamp as number) * 1000);
+      if (!timeframeContains(params.timeframe, start)) {
+        continue;
+      }
+
+      // Meta writes 0 for "no end time".
+      const end =
+        event.end_timestamp && event.end_timestamp > (event.start_timestamp as number)
+          ? new Date(event.end_timestamp * 1000)
+          : undefined;
+      const { latitude, longitude } = event.place?.coordinate ?? {};
+      const name = event.name as string;
+      const text = [name, event.description].filter(Boolean).join('\n');
+
+      params.pipeline.push({
+        item: {
+          id,
+          classification: 'event',
+          timestamp: start,
+          timespanEnd: end,
+          location: latitude != null && longitude != null ? { latitude, longitude } : undefined,
+          content: { filename: 'event.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          metadata: {
+            Title: name,
+            Description: event.description || undefined,
+            Location: event.place?.name || event.place?.address || undefined,
+            Address: event.place?.address || undefined,
+            Source: 'Facebook',
+            Rsvp: rsvp,
+            RespondedAt: event.response_time ? new Date(event.response_time * 1000) : undefined,
+            // Lifted to ci.events.status by the push.
+            eventStatus: rsvp === 'joined' || rsvp === 'hosted' ? 'confirmed' : 'tentative',
+          },
+        },
+      });
+    }
   }
 
   // Emit a 'media' item for one photo/video on disk. `relKey` is the file's path
@@ -647,6 +1276,18 @@ export class FacebookFileImporter implements FileImporter {
     }
 
     return out;
+  }
+
+  /**
+   * The export-root-relative uris of these post media that are on disk, in
+   * order. Meta splits an export's media across several zips, so a reference
+   * can point at bytes that are genuinely not here; those are logged (by
+   * pushMedia, which sees the same refs) and left off the post.
+   */
+  private presentUris(root: string, refs: FBMediaRef[], _params: ImportParams): string[] {
+    return refs
+      .map((ref) => ref.uri?.split('\\').join('/'))
+      .filter((rel): rel is string => !!rel && fs.existsSync(path.join(root, rel)));
   }
 
   // JSON attachment: the `uri` is already relative to the export root.
@@ -822,7 +1463,12 @@ export class FacebookFileImporter implements FileImporter {
         const context: Metadata = { Text: text || undefined };
         // Photos/videos on this post → media items (before the empty-text skip,
         // so a photo-only post still contributes its media).
-        for (const uri of this.htmlMediaUris(section, fpath, root)) {
+        const mediaUris = this.htmlMediaUris(section, fpath, root).filter((uri) => {
+          const mt = mimeForFile(path.basename(uri));
+
+          return mt?.startsWith('image/') || mt?.startsWith('video/');
+        });
+        for (const uri of mediaUris) {
           this.pushMediaFile(path.join(root, uri), uri, ts, undefined, context, params);
         }
 
@@ -842,7 +1488,8 @@ export class FacebookFileImporter implements FileImporter {
             classification: 'social',
             timestamp: ts,
             content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
-            metadata: { Text: text || undefined, Source: 'Facebook' },
+            // Attached to the post as well as imported as media — see processPosts.
+            metadata: { Text: text || undefined, Source: 'Facebook', ...attachmentMetadata(root, mediaUris) },
           },
         });
       } catch (e) {
@@ -976,12 +1623,11 @@ export class FacebookFileImporter implements FileImporter {
       // Photos/videos attached to the post → 'media' items. Posts don't tag the
       // media type, so pushMedia infers photo vs video from the file extension.
       const context: Metadata = { Text: text || undefined };
-      for (const att of post.attachments ?? []) {
-        for (const datum of att.data ?? []) {
-          if (datum.media) {
-            this.pushMedia(root, datum.media, ts, context, params);
-          }
-        }
+      const mediaRefs = (post.attachments ?? [])
+        .flatMap((att) => (att.data ?? []).map((d) => d.media))
+        .filter((ref): ref is FBMediaRef => ref != null);
+      for (const ref of mediaRefs) {
+        this.pushMedia(root, ref, ts, context, params);
       }
 
       if (!timeframeContains(params.timeframe, ts)) {
@@ -996,7 +1642,15 @@ export class FacebookFileImporter implements FileImporter {
           classification: 'social',
           timestamp: ts,
           content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
-          metadata: { Text: text || undefined, Source: 'Facebook' },
+          // The photos/videos also ride on the post as attachments (same lane
+          // as a Messenger message's), so the post itself shows them — the
+          // standalone media items above are how each photo is a photo of its
+          // own, with its EXIF date; this is how the post has its photos.
+          metadata: {
+            Text: text || undefined,
+            Source: 'Facebook',
+            ...attachmentMetadata(root, this.presentUris(root, mediaRefs, params)),
+          },
         },
       });
     }
@@ -1008,6 +1662,6 @@ registerDataSource({
   title: 'Facebook',
   icon: '',
   description:
-    'Messenger threads and Posts (with attached photos/videos) from a Facebook "Download Your Information" export.',
+    'Messenger threads, Posts (with attached photos/videos), comments, group posts, likes/reactions, liked Pages, Events and Marketplace listings from a Facebook "Download Your Information" export.',
   newFileImporter: () => new FacebookFileImporter(),
 });

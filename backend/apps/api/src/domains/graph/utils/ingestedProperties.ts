@@ -24,7 +24,10 @@
  *  - a SET key (below) is unioned — what is stored, then what arrives that is
  *    new, blanks dropped, first-seen order kept;
  *  - any other key it sends takes the new value: the source's latest word on a
- *    fact it owns.
+ *    fact it owns;
+ *  - except a key a person set by hand ({@link USER_EDITED_KEYS}): their word
+ *    outranks any source's, so the arriving value is dropped. The set keys are
+ *    not affected; they only ever grow.
  *
  * The cost is deliberate: an import can no longer REMOVE a set member. A number
  * dropped from a card stays on the Person, as it already did in
@@ -40,6 +43,16 @@
  * integration spec (`GraphIngestService.propertyMerge.integration.spec.ts`)
  * checks the two against each other on real Postgres.
  */
+import { stableJson } from '@ci/common/stableJson';
+import { USER_EDITED_KEYS, userEditedKeys, userEditedSql } from '@ci/common/userEditedProperties';
+
+export { stableJson } from '@ci/common/stableJson';
+export {
+  USER_EDITED_KEYS,
+  userEditedKeys,
+  userEditedListSql,
+  userEditedSql,
+} from '@ci/common/userEditedProperties';
 
 /**
  * The plural identity keys a Person carries, unioned on every re-ingest
@@ -74,28 +87,6 @@ export function unionKeysFor(accumulate?: readonly string[] | null): string[] {
   }
 
   return keys;
-}
-
-/**
- * JSON with object keys in sorted order, so two payloads that differ only in key
- * order compare equal — the equality jsonb itself uses. A stored `properties`
- * value comes back from jsonb in Postgres' own key order, not the order the
- * source sent it.
- */
-export function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-
-      return sorted;
-    }
-
-    return v;
-  });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -154,13 +145,18 @@ export function mergeIngestedProperties(
   }
 
   const sets = new Set(unionKeys);
+  const handSet = new Set(userEditedKeys(held));
 
   for (const [key, value] of Object.entries(incoming)) {
-    if (value === null || value === undefined) {
+    if (value === null || value === undefined || key === USER_EDITED_KEYS) {
       continue;
     }
 
-    out[key] = sets.has(key) ? unionList(held[key], value) : value;
+    if (sets.has(key)) {
+      out[key] = unionList(held[key], value);
+    } else if (!handSet.has(key)) {
+      out[key] = value;
+    }
   }
 
   return out;
@@ -180,8 +176,9 @@ export function mergeIngestedProperties(
  * value is JSON null are skipped; a set key's two sides are each read as a list
  * (a lone scalar is a list of one), members are de-duplicated by jsonb equality
  * keeping the earliest — stored before arriving, then by position — and nulls
- * and empty strings dropped; any other key takes the incoming value. Pure and
- * exported so the emitted SQL can be read without a driver.
+ * and empty strings dropped; any other key takes the incoming value unless the
+ * stored bag lists it in {@link USER_EDITED_KEYS}, and that list itself is never
+ * taken. Pure and exported so the emitted SQL can be read without a driver.
  */
 export function mergedPropertiesSql(existing: string, excluded: string, unionKeys: string): string {
   const held = `(CASE WHEN jsonb_typeof(${existing}) = 'object' THEN ${existing} ELSE '{}'::jsonb END)`;
@@ -205,7 +202,9 @@ export function mergedPropertiesSql(existing: string, excluded: string, unionKey
     `${held} || COALESCE((` +
     `SELECT jsonb_object_agg(said.key, CASE WHEN said.key = ANY(${unionKeys}) THEN ${union} ELSE said.value END) ` +
     `FROM jsonb_each(${arriving}) AS said(key, value) ` +
-    `WHERE jsonb_typeof(said.value) <> 'null'` +
+    `WHERE jsonb_typeof(said.value) <> 'null' ` +
+    `AND said.key <> '${USER_EDITED_KEYS}' ` +
+    `AND (said.key = ANY(${unionKeys}) OR NOT ${userEditedSql(held, 'said.key')})` +
     `), '{}'::jsonb)`
   );
 }

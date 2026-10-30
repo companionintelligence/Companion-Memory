@@ -9,6 +9,7 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { FileChunkModal } from '@/components/modals/FileChunkModal/FileChunkModal';
+import { useBackClosesSheet } from '@/hooks/useBackClosesSheet';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
@@ -150,6 +151,9 @@ export default function DesktopMemoryPage() {
       }, CLOSE_ANIMATION_MS);
     }
   };
+
+  // Back (browser button) closes the open drawer instead of leaving the page.
+  useBackClosesSheet(detailsOpen && activeSheetEntity != null, () => toggleactiveEntity(false));
 
   return (
     <>

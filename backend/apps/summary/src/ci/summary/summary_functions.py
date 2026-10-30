@@ -619,11 +619,14 @@ def _build_insights_prompt(context: dict[str, Any]) -> str:
             changed_fields = delta.get("changed_fields", {})
 
             if node_type == "entity":
-                name_field = changed_fields.get("name", {})
+                # A rename records changed_fields.name; any other edit has no
+                # name pair, so fall back to the joined entity's current name.
+                name_field = (changed_fields or {}).get("name")
                 if isinstance(name_field, dict):
-                    name = name_field.get("new") or name_field.get("old", "Unknown")
+                    name = name_field.get("new") or name_field.get("old")
                 else:
-                    name = str(name_field) if name_field else "Unknown"
+                    name = str(name_field) if name_field else None
+                name = name or delta.get("entity_name") or "Unknown"
                 parts.append(f"- {change_type.upper()} {entity_type}: {name}")
             else:
                 parts.append(f"- {change_type.upper()} relationship: {entity_type}")

@@ -4,6 +4,7 @@ import {
   browserVisitIdentity,
   emailIdentity,
   emailThreadKey,
+  facebookPageLikeIdentity,
   facebookPostIdentity,
   fileIdentity,
   gmailThreadKeyFromApi,
@@ -17,7 +18,7 @@ import {
 
 import { headersFromGmailApi } from '../../datasources/human_correspondence';
 import type { StagedItem } from '../../entities/StagedItemEntity';
-import { toCanonical, type CanonicalRecord } from '../canonical';
+import { toCanonical, withOrigin, type CanonicalRecord } from '../canonical';
 import { destinationsFor } from '../canonical';
 import { toBrowserActivityInput, toCommunicationInput, toContentInput, toEventInput } from '../inputs';
 
@@ -205,6 +206,28 @@ describe('facebook posts: Meta archive import vs Graph connection', () => {
     expect(input.source_id).toBe(etl.id);
   });
 
+  it('carries the photos and videos the media stage stored on the post', () => {
+    const withMedia = recordFor({
+      dataSource: 'facebook',
+      classification: 'social',
+      occurredAt: new Date('2026-10-05T17:52:54Z'),
+      metadata: {
+        Text: 'Post with photo and video',
+        Source: 'Facebook',
+        AttachmentContent: true,
+        AttachmentFileIds: ['file-1', 'file-2'],
+        AttachmentContentIds: ['content-1', 'content-2'],
+      },
+    });
+
+    expect(toCommunicationInput(withMedia).attachments).toEqual([
+      { type: 'file', id: 'file-1' },
+      { type: 'file', id: 'file-2' },
+      { type: 'content', id: 'content-1' },
+      { type: 'content', id: 'content-2' },
+    ]);
+  });
+
   it('an undated post stays content-only (communications.time is NOT NULL)', () => {
     const undated = recordFor({
       dataSource: 'facebook',
@@ -214,6 +237,32 @@ describe('facebook posts: Meta archive import vs Graph connection', () => {
     });
 
     expect(destinationsFor(undated)).toEqual(['content']);
+  });
+});
+
+describe('facebook liked Pages: Meta archive import vs Graph connection', () => {
+  // datasources/facebook.ts reads the Page id off the Page's link in
+  // pages_you've_liked.json and stamps facebookPageLikeId as the item id;
+  // TransformFacebookLikes mints facebookPageLikeIdentity from /me/likes `id`.
+  const likeRecord = () =>
+    recordFor({
+      dataSource: 'facebook',
+      classification: 'like',
+      contentHash: 'like:170342537143457',
+      occurredAt: new Date('2022-08-29T15:37:56Z'),
+      metadata: { Title: 'Liked Facebook page LifeScope', Kind: 'page_like', Source: 'Facebook' },
+    });
+
+  it('routes a liked Page to the timeline alone, as the connection does', () => {
+    expect(destinationsFor(likeRecord())).toEqual(['events']);
+  });
+
+  it('CONVERGES on (facebook, like:<page id>)', () => {
+    const input = toEventInput(likeRecord());
+    const etl = facebookPageLikeIdentity('170342537143457');
+
+    expect(input.source_system).toBe(etl.system);
+    expect(input.source_id).toBe(etl.id);
   });
 });
 
@@ -457,5 +506,54 @@ describe('files: archive upload vs OneDrive Graph listing', () => {
   it('a malformed hash is ignored rather than becoming a file identity', () => {
     const input = toContentInput(recordFor({ metadata: { FileId: 'f', FileSha256: 'not-a-hash' } }));
     expect(input.source_system).toBe('gmail');
+  });
+});
+
+describe('a file a cloud-drive connection fetched is attributed to that drive and that connection', () => {
+  // The catch-all importer reads any loose file; its name says nothing about
+  // where the file lived. The run knows (import_runs.origin_*).
+  const photo = () =>
+    recordFor({
+      dataSource: 'generic',
+      classification: 'media',
+      mediaType: 'image/jpeg',
+      contentHash: 'hash-photo',
+      metadata: { filename: '2012-07-15 14.50.57.jpg' },
+    });
+  const CONNECTION = '01a10e04-069d-728e-a41f-0f606d95dea6';
+
+  it('stamps the drive as platform, and the connection as owner, of what the catch-all importer produced', () => {
+    const fromDropbox = withOrigin(photo(), { platform: 'dropbox', connectionId: CONNECTION });
+
+    expect(toContentInput(fromDropbox).source_platform).toBe('dropbox');
+    expect(toContentInput(fromDropbox).connection_id).toBe(CONNECTION);
+    expect(toEventInput(fromDropbox).source_platform).toBe('dropbox');
+    expect(toEventInput(fromDropbox).connection_id).toBe(CONNECTION);
+    // The identity is untouched: the same bytes from an upload still converge.
+    expect(toContentInput(fromDropbox).source_id).toBe(toContentInput(photo()).source_id);
+    expect(toContentInput(fromDropbox).source_system).toBe(toContentInput(photo()).source_system);
+  });
+
+  it('leaves a run with no origin exactly as it was', () => {
+    const untouched = photo();
+
+    expect(withOrigin(untouched, null)).toBe(untouched);
+    expect(withOrigin(untouched, { platform: null, connectionId: null })).toBe(untouched);
+    expect(toContentInput(photo()).source_platform).toBe('generic');
+    expect(toContentInput(photo()).connection_id).toBeUndefined();
+  });
+
+  it("does not relabel the platform of a record a specific importer claimed, but it is still the connection's", () => {
+    // A Facebook export stored in Dropbox is Facebook data that Dropbox delivered.
+    const like = recordFor({
+      dataSource: 'facebook',
+      classification: 'like',
+      contentHash: 'facebook:reaction:1518135105',
+      metadata: { Title: "Liked Alice's post", URL: 'https://www.facebook.com/x/posts/1' },
+    });
+    const viaDropbox = withOrigin(like, { platform: 'dropbox', connectionId: CONNECTION });
+
+    expect(toEventInput(viaDropbox).source_platform).toBe('facebook');
+    expect(toEventInput(viaDropbox).connection_id).toBe(CONNECTION);
   });
 });

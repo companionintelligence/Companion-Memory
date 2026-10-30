@@ -35,6 +35,12 @@ export class SearchInput {
   @Field(() => Boolean, { nullable: true })
   includeFiles?: boolean;
 
+  // "Which kind of file" — narrows file results to these kinds (`image`,
+  // `video`, `audio`, `document`), read off the file's content type. Only
+  // affects entities of type `file`; a kind nobody recognises is ignored.
+  @Field(() => [String], { nullable: true })
+  fileKinds?: string[];
+
   @Field(() => [String], { nullable: true })
   tags?: string[];
 
@@ -105,6 +111,13 @@ export class SearchInput {
    */
   @Field(() => [Float], { nullable: true })
   bbox?: number[];
+
+  /**
+   * "Where" (drawn areas) — several bounding boxes, each [minLon, minLat, maxLon, maxLat],
+   * ORed: an event matches inside any of them. `bbox` is read as one more area.
+   */
+  @Field(() => [[Float]], { nullable: true })
+  areas?: number[][];
 
   /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
   @Field(() => Boolean, { nullable: true })

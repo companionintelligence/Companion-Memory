@@ -44,10 +44,11 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
-import { GraphQLModule } from '@ci/domains/graphql';
+import { GraphQLModule, GraphqlRequestLimitsMiddleware } from '@ci/domains/graphql';
 import { ImportModule } from '@ci/domains/import';
 import { IngestModule } from '@ci/domains/ingest';
 import { IntelligenceModule } from '@ci/domains/intelligence';
+import { LiveChangesModule } from '@ci/domains/live-changes';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
@@ -105,6 +106,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     FeatureModule,
     LoggingModule,
     HbpeNotifyModule,
+    LiveChangesModule,
     EventEmitterModule.forRoot(),
     NestCronModule.forRoot(),
     ActivityModule,
@@ -181,6 +183,9 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
     consumer.apply(RequestContextMiddleware).forRoutes('*');
     consumer.apply(BodyParserMiddleware).forRoutes('*');
     consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+    // After the body parser, which is what puts a POST's document on req.body,
+    // and after the request logger, so a refused document is still logged.
+    consumer.apply(GraphqlRequestLimitsMiddleware).forRoutes('*');
   }
 
   onApplicationBootstrap() {

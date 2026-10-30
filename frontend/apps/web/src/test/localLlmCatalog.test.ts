@@ -2,6 +2,7 @@ import {
   evaluateModelFit,
   findLocalLlmModel,
   formatBytes,
+  gpuAllowedOn,
   LOCAL_LLM_CATALOG,
   LOCAL_LLM_DISK_HEADROOM_BYTES,
   LOCAL_LLM_MODEL_LIST,
@@ -67,16 +68,9 @@ describe('the on-device model catalog', () => {
   });
 
   it('ships Gemma 4 on Android only — iOS has no increased-memory-limit entitlement', () => {
-    expect(localLlmModelsFor('ios').map((m) => m.modelId)).toEqual([
-      'qwen3-0.6b-int4',
-      'qwen2.5-1.5b-instruct',
-    ]);
-    expect(localLlmModelsFor('android').map((m) => m.modelId)).toEqual([
-      'qwen3-0.6b-int4',
-      'qwen2.5-1.5b-instruct',
-      'gemma-4-e2b-it',
-      'gemma-4-e4b-it',
-    ]);
+    // Nothing on iOS since 2026-10-13: its on-device chat is to come from Apple Intelligence.
+    expect(localLlmModelsFor('ios').map((m) => m.modelId)).toEqual([]);
+    expect(localLlmModelsFor('android').map((m) => m.modelId)).toEqual(['gemma-4-e2b-it', 'gemma-4-e4b-it']);
   });
 
   it('only advertises vision on models that can see', () => {
@@ -85,13 +79,38 @@ describe('the on-device model catalog', () => {
     ).toEqual(['gemma-4-e2b-it', 'gemma-4-e4b-it']);
   });
 
-  it('pins Qwen3 to the revision that loads on LiteRT-LM 0.14.0, not to whatever main is now', () => {
-    // `main` was re-exported on 2026-09-20 for LiteRT-LM 0.17.1+: on the 0.14.0 both platforms link it fails at
-    // Engine.initialize(), and its size (344,671,744) no longer matches this entry. Bump the runtime first.
-    const qwen3 = LOCAL_LLM_CATALOG['qwen3-0.6b-int4'];
+  it('pins Gemma 4 E2B to a revision that loads on LiteRT-LM 0.18.0, not to whatever main is now', () => {
+    // Qwen3-0.6B's `main` was re-exported under the catalog on 2026-09-20 and every download failed its size
+    // check; every entry is pinned the same way, commit and size together. This is the 2026-06-05 re-export.
+    const e2b = LOCAL_LLM_CATALOG['gemma-4-e2b-it'];
 
-    expect(qwen3.commitHash).toBe('154c5de0fc0fc5002a7da570ba8c67edffa32ca2');
-    expect(qwen3.sizeBytes).toBe(344_437_808);
+    expect(e2b.commitHash).toBe('361a4010ad6d88fc5c86e148e333c0342b99763d');
+    expect(e2b.sizeBytes).toBe(2_588_147_712);
+  });
+
+  it('offers nothing below 6 GB: such a phone has no offline chat rather than a model that cannot do the job', () => {
+    // 6 GB is Gemma 4 E2B on the CPU (its GPU needs 8 GB). Dropped on 2026-10-13: Qwen3-0.6B (4 GB) could emit a
+    // tool call but never act on the result; Qwen3-1.7B (6 GB on paper) needs ~3.3 GB of graphics memory on the
+    // GPU and was killed on an 8 GB phone.
+    expect(Math.min(...LOCAL_LLM_MODEL_LIST.map((m) => m.minDeviceMemoryBytes))).toBe(6 * GIB);
+    expect(LOCAL_LLM_MODEL_LIST.every((m) => m.capabilities.includes('tools'))).toBe(true);
+  });
+
+  it('withholds the GPU under a model’s GPU floor, and never sets that floor under the model’s own', () => {
+    const e2b = LOCAL_LLM_CATALOG['gemma-4-e2b-it'];
+
+    expect(e2b.gpuMinDeviceMemoryBytes).toBe(8 * GIB);
+    expect(gpuAllowedOn(e2b, 6 * GIB)).toBe(false);
+    expect(gpuAllowedOn(e2b, 8 * GIB)).toBe(true);
+    expect(gpuAllowedOn(e2b, 12 * GIB)).toBe(true);
+    // Unknown memory passes: the native side is the enforcer and reports `gpuWithheld`.
+    expect(gpuAllowedOn(e2b, undefined)).toBe(true);
+    // A model without a GPU backend is never allowed one, whatever the memory.
+    expect(gpuAllowedOn({ ...e2b, accelerators: ['cpu'] }, 16 * GIB)).toBe(false);
+
+    for (const model of LOCAL_LLM_MODEL_LIST) {
+      expect(model.gpuMinDeviceMemoryBytes, model.modelId).toBeGreaterThanOrEqual(model.minDeviceMemoryBytes);
+    }
   });
 
   it('finds a model by id', () => {
@@ -101,7 +120,7 @@ describe('the on-device model catalog', () => {
 });
 
 describe('evaluateModelFit', () => {
-  const qwen25 = LOCAL_LLM_CATALOG['qwen2.5-1.5b-instruct'];
+  const qwen25 = LOCAL_LLM_CATALOG['gemma-4-e2b-it'];
 
   it('passes when nothing is known — the native side is the enforcer', () => {
     expect(evaluateModelFit(qwen25, {})).toEqual({ ok: true });
@@ -196,6 +215,16 @@ describe('on-device preferences', () => {
     });
   });
 
+  it('forgets a stored model the catalog no longer ships, keeping the rest of the preference', () => {
+    // Seen on a device the day Qwen3-0.6B was dropped: the saved id reached requireModel() from the
+    // settings section and the whole On-device card showed "Unknown on-device model: qwen3-0.6b-int4".
+    const parsed = parseLocalLlmPrefs(
+      JSON.stringify({ mode: 'device', modelId: 'qwen3-0.6b-int4', thinking: true }),
+    );
+
+    expect(parsed).toEqual({ ...DEFAULT_LOCAL_LLM_PREFS, mode: 'device', modelId: null, thinking: true });
+  });
+
   it('falls back to the defaults for garbage, an array, or nothing', () => {
     expect(parseLocalLlmPrefs('{not json')).toEqual(DEFAULT_LOCAL_LLM_PREFS);
     expect(parseLocalLlmPrefs('42')).toEqual(DEFAULT_LOCAL_LLM_PREFS);
@@ -207,14 +236,14 @@ describe('on-device preferences', () => {
     const listener = vi.fn();
     const unsubscribe = subscribeLocalLlmPrefs(listener);
 
-    setLocalLlmPrefs({ mode: 'auto', modelId: 'qwen3-0.6b-int4' });
+    setLocalLlmPrefs({ mode: 'auto', modelId: 'gemma-4-e2b-it' });
 
     expect(listener).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'auto', modelId: 'qwen3-0.6b-int4' }),
+      expect.objectContaining({ mode: 'auto', modelId: 'gemma-4-e2b-it' }),
     );
 
     resetLocalLlmPrefsCache();
-    expect(getLocalLlmPrefs()).toMatchObject({ mode: 'auto', modelId: 'qwen3-0.6b-int4' });
+    expect(getLocalLlmPrefs()).toMatchObject({ mode: 'auto', modelId: 'gemma-4-e2b-it' });
 
     unsubscribe();
     setLocalLlmPrefs({ thinking: true });

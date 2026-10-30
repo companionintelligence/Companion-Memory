@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';

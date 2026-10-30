@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /** Body of `POST /connections/complete`; `CompleteConnectionDto` is inferred from it, so the two cannot drift. */
 export const completeConnectionSchema = z.discriminatedUnion('flow', [

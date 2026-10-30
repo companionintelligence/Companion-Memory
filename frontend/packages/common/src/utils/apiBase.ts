@@ -171,6 +171,21 @@ export function isIosPlatform(): boolean {
 }
 
 /**
+ * True only inside the Android Capacitor shell. Web, iOS, and tests without a
+ * `getPlatform` stub stay false. Pair with {@link isIosPlatform} when copy or a
+ * flow differs per OS; "not iOS" alone would also match a desktop browser.
+ */
+export function isAndroidPlatform(): boolean {
+  if (!isNativePlatform()) {
+    return false;
+  }
+
+  const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+
+  return cap?.getPlatform?.() === 'android';
+}
+
+/**
  * Whether the app is running inside the desktop Tauri shell (`frontend/apps/desktop`).
  * A DIFFERENT native shell from Capacitor's — Tauri injects `window.__TAURI_INTERNALS__`,
  * never `window.Capacitor` — so `isNativePlatform()` is always false here and callers
@@ -249,6 +264,23 @@ export function initApiBaseUrl(): void {
     setApiBaseUrl(stored || readBuildDefault());
   } catch {
     setApiBaseUrl(readBuildDefault());
+  }
+}
+
+/**
+ * The origin the app saved when it was paired, or null when none is saved.
+ *
+ * Unlike {@link getApiBaseUrl} this never answers with the build default. Only the app's
+ * own pages can write it (the WebView's localStorage), which is what makes it the copy to
+ * trust over the keystore mirror `syncNativeIntentConfig` keeps for App Intents.
+ */
+export function getPersistedApiBaseUrl(): string | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+
+    return stored ? normalize(stored) : null;
+  } catch {
+    return null;
   }
 }
 

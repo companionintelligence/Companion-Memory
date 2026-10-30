@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -31,6 +31,7 @@ import {
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileRemovedEvent } from '@ci/domains/files/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
 import {
   ContentRemovedEvent,
   EventCreatedEvent,
@@ -45,11 +46,12 @@ import { EventEntity, Event, type RecurrenceDefinition } from '../entities/Event
 import { PlaceEntity } from '../entities/PlaceEntity';
 import { ledgerPlatform } from '../identity';
 import { expandAll } from '../recurrence/expandAll';
+import { recurrenceRuleRejection } from '../recurrence/parseRecurrence';
 import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
 import type { OccurrenceSpec } from '../recurrence/types';
 import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
 
-import { CtiAggregate } from './CtiAggregate';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
 import { resolveEventLocationReopener } from './eventLocationReopener';
 import { type PurgedEventAggregates, purgeEventAggregates } from './eventPurge';
 import { resolveEventStatusReopener } from './eventStatusReopener';
@@ -102,12 +104,19 @@ interface Options {
   connectors?: string[];
   /** "Who": person name patterns matched (ILIKE) against linked Person entities. */
   people?: string[];
-  /** "Where": place name patterns matched (ILIKE) against the linked Location entity / location_name. */
+  /**
+   * "Where" (by name): place name patterns matched (ILIKE) against the linked
+   * Location entity / location_name. ORed with `areas`: an event matches by
+   * name OR by falling inside a rectangle, never both at once.
+   */
   places?: string[];
   /** "Where": when true, only events with geographic coordinates are returned. */
   hasLocation?: boolean;
-  /** "Where" (viewport): bounding box [minLon, minLat, maxLon, maxLat] (EPSG:4326). */
-  bbox?: number[];
+  /**
+   * "Where" (map areas): bounding boxes, each [minLon, minLat, maxLon, maxLat]
+   * (EPSG:4326), ORed — an event matches inside any of them, or by `places`.
+   */
+  areas?: number[][];
   /**
    * Restrict to this explicit set of event ids, ANDed with every other filter.
    * The map's pin read uses it to intersect a text-query / tag candidate set
@@ -313,6 +322,47 @@ function isSourceOwned(sourceId: string | null | undefined, sourceType: string |
  * the event happens, so a re-delivery carrying one moves nothing.
  */
 const INGEST_TIME_SOURCE = 'ingest';
+
+const recurrenceLogger = new Logger('CalendarEventService');
+
+/**
+ * `item` without a recurrence rule this appliance refuses to expand.
+ *
+ * Every create funnels through here: GraphQL `createEvent(s)`, Google Calendar
+ * sync (which stores `recurrence` verbatim in `metadata.recurrenceRule`), the
+ * .ics import lane, bulk ingest. A rule rrule would walk forever, or one outside
+ * RFC 5545's ranges, is dropped and the event kept: it then shows once, as its
+ * master row, which is what read-time expansion would have fallen back to
+ * anyway. Dropping rather than refusing keeps one bad rule from failing a whole
+ * sync or import batch. See recurrence/ruleChecks.ts.
+ */
+function withoutRefusedRecurrence(item: CreateEventDto): CreateEventDto {
+  const ruleReason = recurrenceRuleRejection(item.metadata?.recurrenceRule);
+  const patternReason = recurrenceRuleRejection(item.recurrence_pattern?.rrule);
+
+  if (!ruleReason && !patternReason) {
+    return item;
+  }
+
+  recurrenceLogger.warn(
+    `Stored an event from ${item.source_system ?? 'an unnamed source'} without its recurrence rule ` +
+      `(${ruleReason ?? patternReason}); it will show once instead of repeating`,
+  );
+
+  const next: CreateEventDto = { ...item };
+
+  if (ruleReason && item.metadata) {
+    const { recurrenceRule: _refused, ...metadata } = item.metadata;
+    next.metadata = metadata;
+  }
+
+  if (patternReason && item.recurrence_pattern) {
+    const { rrule: _refused, ...pattern } = item.recurrence_pattern;
+    next.recurrence_pattern = pattern;
+  }
+
+  return next;
+}
 
 /** The metadata keys a series' recurrence is read from (parseRecurrence.ts), and the only ones the refresh rewrites. */
 const RECURRENCE_METADATA_KEYS = ['recurrenceRule', 'recurrenceTimeZone'] as const;
@@ -547,6 +597,14 @@ interface LockedEventRow {
  * transaction; reads compose the egress {@link Event} from the pair with one
  * batched base-row fetch.
  */
+/** The entries of `areas` that are usable map areas: exactly four finite numbers each. */
+function validAreas(areas: number[][] | undefined): [number, number, number, number][] {
+  return (areas ?? []).filter(
+    (area): area is [number, number, number, number] =>
+      Array.isArray(area) && area.length === 4 && area.every((value) => Number.isFinite(value)),
+  );
+}
+
 @Injectable()
 export class CalendarEventService {
   private readonly aggregate: CtiAggregate<EventEntity, EventBaseEntity>;
@@ -575,6 +633,11 @@ export class CalendarEventService {
      * bytes and has no store is refused before it changes anything.
      */
     @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
+    /**
+     * Tells the user's other open calendars to re-read. Optional for hand-built
+     * suites, and LAST so the suites that construct this positionally keep working.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -944,6 +1007,7 @@ export class CalendarEventService {
       eventId: eventResult.id,
     });
     await this.hbpeNotify?.notifyEvents(eventResult.userId, eventResult.startTime);
+    await this.liveChanges?.publish(eventResult.userId, 'calendar');
 
     return EventEntity.toEgressType(eventResult, {
       name: item.title,
@@ -1364,6 +1428,7 @@ export class CalendarEventService {
           reloaded.userId,
           outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
         );
+        await this.liveChanges?.publish(reloaded.userId, 'calendar');
       }
     }
 
@@ -1506,10 +1571,10 @@ export class CalendarEventService {
 
   async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
     if (!Array.isArray(data)) {
-      return [await this.createOne(context, data)];
+      return [await this.createOne(context, withoutRefusedRecurrence(data))];
     }
 
-    return this.createManyBatched(context, data);
+    return this.createManyBatched(context, data.map(withoutRefusedRecurrence));
   }
 
   /**
@@ -1523,7 +1588,7 @@ export class CalendarEventService {
     context: UserServiceContext,
     data: CreateEventDto[],
   ): Promise<Array<BulkInsertResult<Event>>> {
-    return this.createManyBatchedDetailed(context, data);
+    return this.createManyBatchedDetailed(context, data.map(withoutRefusedRecurrence));
   }
 
   /**
@@ -1800,6 +1865,8 @@ export class CalendarEventService {
       context.userId,
       results.map(({ entity }) => entity.startTime),
     );
+    // One hint per bulk call, not per row, for the same reason as above.
+    await this.liveChanges?.publish(context.userId, 'calendar');
 
     return results.map(({ entity, inserted }) => ({
       entity: EventEntity.toEgressType(entity, bases.get(entity.id)),
@@ -2094,6 +2161,7 @@ export class CalendarEventService {
     // Both days, as in update(): the move empties a slot on the old day and
     // fills one on the new, and HBPE re-serializes only the days it is told.
     await this.hbpeNotify?.notifyEvents(event.userId, [previousStart, event.startTime]);
+    await this.liveChanges?.publish(event.userId, 'calendar');
 
     return this.findById(context, id);
   }
@@ -2222,6 +2290,50 @@ export class CalendarEventService {
   }
 
   /**
+   * Why `data` must not be stored as an edit of event `id`, or null.
+   *
+   * A rule this appliance refuses is still accepted when the patch only hands
+   * back the rule the row already stores. `metadata` is replaced whole, so a
+   * caller changing one key sends the rest back as it read it
+   * (GeocodeBatchListener's `location_source`), and a row stored before the
+   * write check could otherwise never be patched again. Read time refuses that
+   * stored rule on its own (parseRecurrence), so passing it through adds nothing
+   * to expand. The row is read only when a refused rule is present, and only
+   * the caller's own, as {@link findById} scopes it.
+   */
+  private async refusedRecurrenceEdit(
+    context: ServiceContext,
+    id: string,
+    data: UpdateEventDto,
+  ): Promise<string | null> {
+    const metadataRule = data.metadata?.recurrenceRule;
+    const patternRule = data.recurrence_pattern?.rrule;
+    const metadataReason = recurrenceRuleRejection(metadataRule);
+    const patternReason = recurrenceRuleRejection(patternRule);
+
+    if (!metadataReason && !patternReason) {
+      return null;
+    }
+
+    const stored = await this.eventRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { user: { id: context.userId } }) },
+      select: { id: true, metadata: true, recurrencePattern: true },
+    });
+    const unchanged = (sent: unknown, kept: unknown): boolean =>
+      stored != null && JSON.stringify(sent) === JSON.stringify(kept);
+
+    if (metadataReason && !unchanged(metadataRule, stored?.metadata?.recurrenceRule)) {
+      return metadataReason;
+    }
+
+    if (patternReason && !unchanged(patternRule, stored?.recurrencePattern?.rrule)) {
+      return patternReason;
+    }
+
+    return null;
+  }
+
+  /**
    * Patch an event. A patch that moves its start or end, or calls it off or
    * reinstates it, also takes back what the pipeline decided about the old time
    * or about whether it happened, in the same transaction
@@ -2229,6 +2341,29 @@ export class CalendarEventService {
    * event it returns is the row as it stands after that.
    */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
+    // Below, a title is only written when it has text in it, so an emptied one
+    // was skipped while the save still answered with the event: the page said
+    // it saved and the old title stayed. An event that never had a title is
+    // still saved: the drawer sends its empty title next to a description edit.
+    if (typeof data.title === 'string' && data.title.trim() === '') {
+      const stored = await this.eventBaseRepository.findOne({
+        where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+        select: { id: true, name: true },
+      });
+
+      if (stored?.name?.trim()) {
+        throw new BadRequestException('An event needs a title.');
+      }
+    }
+
+    // An edit is one person's request, not a batch, so a rule that would hang
+    // the calendar is refused outright rather than dropped as on create.
+    const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
+
+    if (recurrenceReason) {
+      throw new BadRequestException(`Unsupported recurrence rule: ${recurrenceReason}`);
+    }
+
     const updateData: Partial<EventEntity> = {};
 
     // title/description are base-row data (ci.entities); patched separately
@@ -2238,8 +2373,11 @@ export class CalendarEventService {
       basePatch.name = data.title;
     }
 
-    if (data.description) {
-      basePatch.description = data.description;
+    // An empty string is how the event page clears the description, so it (or
+    // one that is only whitespace) is stored as no description. A missing or
+    // null field still leaves it alone.
+    if (data.description != null) {
+      basePatch.description = data.description.trim() ? data.description : null;
     }
 
     if (data.event_type) {
@@ -2405,6 +2543,32 @@ export class CalendarEventService {
       updateData.isLocked = data.is_locked;
     }
 
+    // A save that hands back the title or description already stored is not an
+    // edit of it: the event page sends the unchanged title with every save.
+    // Dropped here, it neither rewrites the base row nor reaches Change History
+    // as a rename; what is left is recorded with the value it replaced.
+    const storedBase =
+      basePatch.name !== undefined || basePatch.description !== undefined
+        ? await this.eventBaseRepository.findOne({
+            where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+            select: { id: true, name: true, description: true },
+          })
+        : null;
+
+    if (storedBase && basePatch.name === storedBase.name) {
+      delete basePatch.name;
+    }
+
+    // Compared as the patch stores it: a row imported with '' and a save that
+    // sends '' back (now null) are both "no description".
+    if (
+      storedBase &&
+      basePatch.description !== undefined &&
+      basePatch.description === (storedBase.description || null)
+    ) {
+      delete basePatch.description;
+    }
+
     // A person's place takes the pipeline's marks on the value it replaces with
     // it (see metadataWithoutSupersededMarks).
     const supersededMarks = metadataWithoutSupersededMarks(data);
@@ -2427,21 +2591,39 @@ export class CalendarEventService {
       {
         withinTx: async ({ manager, before, after }) => {
           previousStart = before.startTime;
-          const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
-          await this.graphDeltaWriter.entityUpdated({
-            entityId: id,
-            entityType: 'Event',
-            name: base?.name ?? null,
-            changedFields: {
-              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
-              ...(basePatch.description !== undefined ? { description: { new: basePatch.description } } : {}),
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
-            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
-            changeSource: 'CalendarEventService.update',
-            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-            manager,
-          });
+          // Judged against the row as this transaction found it, as `moved` is
+          // below: the Plan page's edit sends both times with every save, and a
+          // field handed back as stored is not an edit. `lastMovedAt` is the
+          // stamp such a save leaves, not a change anyone made.
+          const detailEdited = detailChanged(
+            before,
+            after,
+            Object.keys(detail).filter((key) => key !== 'lastMovedAt'),
+          );
+          const changedFields = {
+            ...(basePatch.name !== undefined
+              ? { name: { old: storedBase?.name ?? null, new: basePatch.name } }
+              : {}),
+            ...(basePatch.description !== undefined
+              ? { description: { old: storedBase?.description ?? null, new: basePatch.description } }
+              : {}),
+            ...(detailEdited ? { detail_updated: { new: true } } : {}),
+          };
+
+          // A patch that changed nothing leaves no Change History row.
+          if (Object.keys(changedFields).length > 0) {
+            const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
+            await this.graphDeltaWriter.entityUpdated({
+              entityId: id,
+              entityType: 'Event',
+              name: base?.name ?? null,
+              changedFields,
+              ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+              changeSource: 'CalendarEventService.update',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              manager,
+            });
+          }
 
           // What the pipeline decided about the old time, and about whether the
           // event happened, taken back in this transaction. Judged against the
@@ -2480,6 +2662,7 @@ export class CalendarEventService {
     // is the only way HBPE learns which day it was. The service sends one
     // notification per distinct UTC day, so an unmoved event costs one.
     await this.hbpeNotify?.notifyEvents(updated.userId, [previousStart, updated.startTime]);
+    await this.liveChanges?.publish(updated.userId, 'calendar');
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.
@@ -2532,6 +2715,7 @@ export class CalendarEventService {
     });
     if (removedAt) {
       await this.hbpeNotify?.notifyEvents(removedAt.userId, [removedAt.time]);
+      await this.liveChanges?.publish(removedAt.userId, 'calendar');
     }
 
     return true;
@@ -2575,6 +2759,7 @@ export class CalendarEventService {
       eventId: id,
     });
     await this.hbpeNotify?.notifyEvents(restored.userId, restored.startTime);
+    await this.liveChanges?.publish(restored.userId, 'calendar');
 
     return this.composeOne(restored);
   }
@@ -2654,6 +2839,7 @@ export class CalendarEventService {
         context.userId,
         purged.events.map((event) => event.startTime),
       );
+      await this.liveChanges?.publish(context.userId, 'calendar');
     }
 
     return {
@@ -2779,11 +2965,8 @@ export class CalendarEventService {
     // itself being genuinely located and appearing correctly in the explorer
     // (which resolves the same fallback client-side — see
     // MapView.getEntityCoordinates).
-    const needsLocationCoordinate =
-      options.hasLocation === true ||
-      (options.bbox != null &&
-        options.bbox.length === 4 &&
-        options.bbox.every((value) => Number.isFinite(value)));
+    const areas = validAreas(options.areas);
+    const needsLocationCoordinate = options.hasLocation === true || areas.length > 0;
 
     if (needsLocationCoordinate) {
       query = query.leftJoin(
@@ -2800,20 +2983,36 @@ export class CalendarEventService {
       );
     }
 
-    // "Where" (viewport): the event's coordinates fall inside the bounding box
-    // [minLon, minLat, maxLon, maxLat] (EPSG:4326). The geography column is cast
-    // to geometry so the planar ST_MakeEnvelope / ST_Within pair applies (and the
-    // functional GIST index on the cast can serve it). NULL coordinates are
-    // excluded by ST_Within, so this also implies located-only. Ignored unless
-    // exactly four finite numbers are supplied.
-    if (options.bbox && options.bbox.length === 4 && options.bbox.every((value) => Number.isFinite(value))) {
-      const [minLon, minLat, maxLon, maxLat] = options.bbox;
+    // "Where" (map areas): the event's coordinates fall inside ANY of the
+    // bounding boxes, each [minLon, minLat, maxLon, maxLat] (EPSG:4326) — a trip
+    // to London and Paris is two rectangles ORed, not one box over the Channel.
+    // The geography column is cast to geometry so the planar ST_MakeEnvelope /
+    // ST_Within pair applies (and the functional GIST index on the cast can
+    // serve it). NULL coordinates are excluded by ST_Within. An entry that is
+    // not four finite numbers is dropped. Applied below, ORed with the place
+    // names: the Where popover offers both, and "100 Duranzo Aisle + Map
+    // Areas (2)" means at that address OR inside a rectangle, so an event with
+    // only a named place still matches.
+    const whereClauses: string[] = [];
+    const whereParams: Record<string, unknown> = {};
 
-      query = query.andWhere(
-        'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
-          'ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
-        { minLon, minLat, maxLon, maxLat },
-      );
+    if (areas.length > 0) {
+      const clauses: string[] = [];
+
+      areas.forEach(([minLon, minLat, maxLon, maxLat], index) => {
+        clauses.push(
+          'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
+            `ST_MakeEnvelope(:minLon${index}, :minLat${index}, :maxLon${index}, :maxLat${index}, 4326))`,
+        );
+        Object.assign(whereParams, {
+          [`minLon${index}`]: minLon,
+          [`minLat${index}`]: minLat,
+          [`maxLon${index}`]: maxLon,
+          [`maxLat${index}`]: maxLat,
+        });
+      });
+
+      whereClauses.push(`(${clauses.join(' OR ')})`);
     }
 
     // "Who": the event's participants/organizer resolve to a Person entity whose
@@ -2837,15 +3036,24 @@ export class CalendarEventService {
     // "Where" (by place): the event's Location entity (or denormalised
     // location_name) matches any of the given place patterns.
     if (options.places && options.places.length > 0) {
-      query = query.andWhere(
-        `(
+      whereClauses.push(`(
           event.location_entity_id IN (
             SELECT entity_id FROM ci.entities
             WHERE owner_user_id = :userId AND entity_type = 'Location' AND name ILIKE ANY(:placePatterns)
           )
           OR event.location_name ILIKE ANY(:placePatterns)
-        )`,
-        { userId: context.userId, placePatterns: options.places.map((name) => `%${name}%`) },
+        )`);
+      Object.assign(whereParams, {
+        userId: context.userId,
+        placePatterns: options.places.map((name) => `%${name}%`),
+      });
+    }
+
+    // One Where predicate: by name OR inside an area. Alone, each reads as before.
+    if (whereClauses.length > 0) {
+      query = query.andWhere(
+        whereClauses.length === 1 ? whereClauses[0] : `(${whereClauses.join(' OR ')})`,
+        whereParams,
       );
     }
 

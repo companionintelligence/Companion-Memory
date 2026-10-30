@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -71,8 +71,36 @@ const DatabaseSearchInputSchema = z
     includeRelationships: booleanish().optional(),
     maxResults: z.number().int().min(1).max(100).optional(),
     countOnly: booleanish().optional(),
+    since: unwrapped(isoDate()).optional(),
+    until: unwrapped(isoDate()).optional(),
+    sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
   })
   .superRefine(requireQueryUnlessCounting);
+
+/**
+ * A scalar the model wrapped in a one-element array (`sort: ["recent"]`): accepted as the element.
+ * Seen on a device from Gemma 4 E2B, which generalised the array shape of `entityTypes` beside it
+ * and then, told the argument was invalid, gave up on the question. A phone's model gets one
+ * attempt at a call; the spelling is not worth it.
+ */
+function unwrapped<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (Array.isArray(value) && value.length === 1 ? value[0] : value), schema);
+}
+
+/**
+ * A date (`2025-10-01`) or instant (`2025-10-01T08:00:00Z`) the model wrote. Anything `Date` can
+ * parse is accepted, so a small model's `2025-10-1` still works; what it cannot parse is refused
+ * with the reason, not silently ignored (a dropped `since` would quietly answer the wrong question).
+ */
+function isoDate() {
+  return z
+    .string()
+    .min(4)
+    .max(40)
+    .refine((value) => !Number.isNaN(Date.parse(value)), {
+      message: 'not a date: use YYYY-MM-DD or an ISO 8601 instant',
+    });
+}
 
 export type DatabaseSearchInput = z.infer<typeof DatabaseSearchInputSchema>;
 
@@ -106,10 +134,13 @@ export type SearchResult =
  * host the appliance is served from. The prompt tells the model to copy it
  * verbatim and never to build one from an id.
  */
-export type SearchResultItem = SearchResult & {
+export type SearchResultItem = WithoutOwner<SearchResult> & {
   type: IndexableEntity;
   link?: string;
 };
+
+/** `T` minus its `user` relation, member by member when `T` is a union (plain `Omit` keeps only the shared keys). */
+type WithoutOwner<T> = T extends unknown ? Omit<T, 'user'> : never;
 
 /**
  * A file hit as the model may see it: {@link SignedFile} minus its object-store
@@ -130,6 +161,21 @@ export function stripStorageAddress(file: SignedFile): ModelFile {
   const { url: _url, bucket: _bucket, key: _key, hash: _hash, ...rest } = file;
 
   return rest;
+}
+
+/**
+ * Drop the account record a hit carries. Threads, answers and places are loaded
+ * with their `user` relation, which is the whole account row: email, role,
+ * onboarding state, `passwordSetAt`, `emailProvenAt`. A browser visit is worse:
+ * `BrowserActivityEntity.toEgressType` passes the raw `UserEntity` through, so
+ * its `user` also holds the password hash. Every hit is the caller's own, so the
+ * record tells the model nothing and only spends the tool-result budget. None
+ * of it belongs in a prompt.
+ */
+export function stripOwnerRecord<T extends object>(entity: T): WithoutOwner<T> {
+  const { user: _user, ...rest } = entity as T & { user?: unknown };
+
+  return rest as WithoutOwner<T>;
 }
 
 /**
@@ -199,10 +245,76 @@ export interface SearchToolResult {
   coverage?: { images: number; described: number };
 }
 
+/** The entity-type filter's allowed values in the full schema. */
+const ENTITY_TYPES_ITEMS = {
+  type: 'string',
+  enum: [...INDEXABLE_ENTITIES],
+};
+
+/**
+ * What the lean local-tier form lets a phone's model pick from: the kinds a question names. Left
+ * out on purpose: `message` (chat fragments for the recall RAG channel, excluded from entity search
+ * by default and not what "a message from X" means), `file-chunk`, `thread`, `position`, `answer`,
+ * `browser-activity`, `concept`, `item`, `product` — none of which a small model has picked
+ * correctly, and each of which costs declaration tokens the window does not have.
+ */
+const LEAN_ENTITY_TYPES = [
+  'communication',
+  'content',
+  'file',
+  'event',
+  'note',
+  'person',
+  'place',
+  'receipt',
+  'task',
+] as const;
+
 @Injectable()
 export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchToolResult> {
   readonly schema: IntentDefinition = {
     name: 'knowledge.search',
+    local: {
+      description:
+        'Search everything you have: people, places, notes, messages, files, events. ' +
+        'For "most recent" or "latest" set sort to recent. ' +
+        'For "how many" questions set countOnly and use one specific word.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Keywords to search for.', maxLength: 500 },
+          entityTypes: {
+            type: 'array',
+            // The kinds a question names, with the ones a small model confuses spelled out: on a device
+            // "did Brianne message me" searched `message`, the chat-fragment index that is excluded by
+            // default, found nothing and said so. `message` is not offered here; a message is a
+            // `communication`.
+            items: { type: 'string', enum: [...LEAN_ENTITY_TYPES] },
+            description:
+              'Only these kinds: communication = a message, email or call; content = a photo or video; ' +
+              'file = a document; event = a calendar entry; note; person; place; receipt; task.',
+          },
+          since: {
+            type: 'string',
+            description: 'Only entries on or after this date, YYYY-MM-DD.',
+            maxLength: 40,
+          },
+          until: {
+            type: 'string',
+            description: 'Only entries on or before this date, YYYY-MM-DD.',
+            maxLength: 40,
+          },
+          sort: {
+            type: 'string',
+            enum: ['recent'],
+            description: 'recent = newest first. Use for "most recent", "latest", "last".',
+          },
+          countOnly: { type: 'boolean', description: 'Return only the exact count, no items.' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
     domain: 'knowledge',
     title: 'Search everything',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
@@ -248,10 +360,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         },
         entityTypes: {
           type: 'array',
-          items: {
-            type: 'string',
-            enum: [...INDEXABLE_ENTITIES],
-          },
+          items: ENTITY_TYPES_ITEMS,
           description:
             'When searching entities, filter to specific types: Person, Concept, Location, Object, etc.',
         },
@@ -266,6 +375,26 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
           description:
             'Return only the exact number of entries matching the query (keyword match, no cap) ' +
             'and no items. Use for "how many" questions. Omit query to count all entries of the given types.',
+        },
+        since: {
+          type: 'string',
+          maxLength: 40,
+          description:
+            'Only entries whose own time (when a message was sent, an event starts, a note was written) is on or ' +
+            'after this date or instant (YYYY-MM-DD or ISO 8601). Forces keyword matching.',
+        },
+        until: {
+          type: 'string',
+          maxLength: 40,
+          description:
+            'Only entries whose own time is on or before this date or instant. Forces keyword matching.',
+        },
+        sort: {
+          type: 'string',
+          enum: ['relevance', 'recent'],
+          description:
+            'recent = newest first by each entry\'s own time, for "most recent" / "latest" / "last" questions. ' +
+            'Forces keyword matching. Default: relevance.',
         },
       },
       required: [],
@@ -328,7 +457,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       // description, so a count over files is only as complete as that pass.
       // Say how complete, or the model presents a floor as a total.
       const [totalMatches, coverage] = await Promise.all([
-        this.searchService.count(serviceContext, { query, includeTypes }),
+        this.searchService.count(serviceContext, {
+          query,
+          includeTypes,
+          ...(input.since != null ? { since: new Date(input.since) } : {}),
+          ...(input.until != null ? { until: new Date(input.until) } : {}),
+        }),
         includeTypes?.includes('file') ? this.fileService.describedImageCoverage(serviceContext) : undefined,
       ]);
 
@@ -343,24 +477,43 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       };
     }
 
+    // A time window or a newest-first order is a predicate on each entry's own time, which only the
+    // lexical modes can apply and count: a nearest-neighbour list has no "all matches since Tuesday".
+    const timed = input.since != null || input.until != null || input.sort === 'recent';
+
     // The refinement guarantees a term here; a page cannot rank without one.
     const page = await this.searchService.searchPage(serviceContext, {
       query: input.query ?? '',
-      mode: input.searchMode,
+      mode: timed ? 'keyword' : input.searchMode,
       includeTypes,
       maxResults: input.maxResults,
+      ...(input.since != null ? { since: new Date(input.since) } : {}),
+      ...(input.until != null ? { until: new Date(input.until) } : {}),
+      ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
     });
 
     const items = await this.resolveEntities(serviceContext, page.items);
 
     return {
-      summary: describePage(page, items.length),
+      summary: describePage(page, items.length, input.sort === 'recent'),
       totalMatches: page.totalMatches,
       truncated: page.truncated,
       limit: page.limit,
       mode: page.modeTaken,
       items,
     };
+  }
+
+  /**
+   * Files by id as search hits (type, link, no object-store address), in the
+   * order given, for a caller that found them some other way than the index:
+   * media.findPhotos' photos taken at a named place.
+   */
+  async resolveFileHits(context: ToolExecutionContext, fileIds: string[]): Promise<SearchResultItem[]> {
+    return this.resolveEntities(
+      toServiceContext(context),
+      fileIds.map((id) => ({ type: 'file' as const, id })),
+    );
   }
 
   private async resolveEntities(
@@ -444,7 +597,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       .filter((d) => d != null)
       .forEach((d) => resultMap.set(makeCompositeKey('communication', d.id), d));
 
-    concepts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('concept', d.id), d));
+    // A forgotten (archived) person, place or concept can still have an index row
+    // written before the forget or by an update that raced it; it must not answer
+    // here either (EntityResolutionService drops them the same way).
+    concepts
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('concept', d.id), d));
     content.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('content', d.id), d));
     events.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('event', d.id), d));
     fileChunks
@@ -453,8 +611,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     files.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('file', d.id), d));
     items.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('item', d.id), d));
     notes.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('note', d.id), d));
-    people.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('person', d.id), d));
-    places.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
+    people
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('person', d.id), d));
+    places
+      .filter((d): d is NonNullable<typeof d> => d != null && d.isActive !== false)
+      .forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
     products.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('product', d.id), d));
     receipts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('receipt', d.id), d));
     tasks.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('task', d.id), d));
@@ -477,7 +639,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
 
       const link = itemLink(result.type, result.id, contentIdsByFile);
 
-      return [{ ...entity, type: result.type, ...(link && { link }) }];
+      return [{ ...stripOwnerRecord(entity), type: result.type, ...(link && { link }) }];
     });
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
@@ -541,14 +703,18 @@ export function describeCount(
  * the right one. `shown` is the HYDRATED count — a hit the resolvers could not
  * load is not on the page — while `page.totalMatches` is the index's count.
  */
-export function describePage(page: SearchPage, shown: number): string {
+export function describePage(page: SearchPage, shown: number, newestFirst = false): string {
+  // Newest first is what "most recent" needs, so the sentence says the order the items are in:
+  // a small model otherwise reads the first item as the most relevant and the last as the newest.
+  const order = newestFirst ? ', newest first' : '';
+
   if (page.totalMatches != null) {
     if (page.totalMatches <= shown) {
-      return `${page.totalMatches} matches; all shown.`;
+      return `${page.totalMatches} matches; all shown${order}.`;
     }
 
     return (
-      `Showing the top ${shown} of ${page.totalMatches} matches (exact count). ` +
+      `Showing the ${newestFirst ? 'newest' : 'top'} ${shown} of ${page.totalMatches} matches (exact count)${order}. ` +
       'Report the total, not the number shown.'
     );
   }

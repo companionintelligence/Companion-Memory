@@ -1,20 +1,24 @@
 import { type ReactNode, useCallback, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { EmptyState, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { NoteIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { LoadingRegion, NoteCardsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
+import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
 import { DeleteNoteModal } from './DeleteNoteModal';
+import { LocalNotesList } from './LocalNotesList';
 import { Note } from './Note';
 
 /** The rest now arrives by scrolling instead of being silently withheld past this many. */
@@ -39,7 +43,16 @@ export const GET_NOTES = gql(`
   }
 `);
 
+/**
+ * The notes list. On a phone with a synced replica it is the phone's local
+ * `notes` table ({@link LocalNotesList}); everywhere else the appliance's,
+ * through GraphQL ({@link RemoteNotesPage}).
+ */
 export function NotesPage() {
+  return useReplicaDatabase() ? <LocalNotesList /> : <RemoteNotesPage />;
+}
+
+export function RemoteNotesPage() {
   usePageTitle('Notes - Companion Memory');
 
   const { isMobile } = useDeviceLayout();
@@ -94,7 +107,11 @@ export function NotesPage() {
   let content: ReactNode;
 
   if (loading) {
-    content = <LoadingPage />;
+    content = (
+      <LoadingRegion label="Loading notes">
+        <NoteCardsSkeleton />
+      </LoadingRegion>
+    );
   } else if (error && notes.length === 0) {
     // `error` was never destructured, so a failed query fell through to the
     // empty state below — telling the owner they have zero notes over a
@@ -123,8 +140,11 @@ export function NotesPage() {
     );
   } else {
     content = (
-      <div className="flex flex-col gap-4">
-        <div className="grid w-full gap-4 justify-center grid-cols-[repeat(auto-fill,300px)] auto-rows-[300px]">
+      <div className="flex flex-col gap-2 device:gap-4">
+        <div
+          data-testid="notes-list"
+          className="grid w-full grid-cols-1 gap-1.5 device:auto-rows-[300px] device:grid-cols-[repeat(auto-fill,300px)] device:justify-center device:gap-4"
+        >
           {notes.map((note) => (
             <Note key={note.id} note={note} onDelete={(e) => handleDelete(e, note.id)} />
           ))}
@@ -137,22 +157,26 @@ export function NotesPage() {
 
   return (
     <>
-      <PageContent ref={pagination.scrollRef} className="p-2 gap-2 device:p-3 device:gap-3">
-        <MemoryHubShell
-          actions={
-            isMobile ? undefined : (
-              <Link to="/notes/new">
-                <Button size="sm">
-                  <Plus className="h-4 w-4" />
-                  New note
-                </Button>
-              </Link>
-            )
-          }
-        >
-          {content}
-        </MemoryHubShell>
-      </PageContent>
+      <PullToRefresh onRefresh={refetch}>
+        <PageContent ref={pagination.scrollRef} className="gap-2 p-0 device:gap-4">
+          <MemoryHubShell
+            actions={
+              isMobile ? undefined : (
+                <Link to="/notes/new">
+                  <Button size="sm">
+                    <Plus className="h-4 w-4" />
+                    New note
+                  </Button>
+                </Link>
+              )
+            }
+          >
+            <div data-testid="notes-content-inset" className="px-2 pb-3 device:px-4 device:pb-4">
+              {content}
+            </div>
+          </MemoryHubShell>
+        </PageContent>
+      </PullToRefresh>
 
       {focusedNote && <DeleteNoteModal noteId={focusedNote} onClose={() => setFocusedNote(null)} />}
     </>

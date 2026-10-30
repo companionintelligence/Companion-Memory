@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import type { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ContextService, SYSTEM_USER } from '@ci/common/context';
 import config from '@ci/configuration';

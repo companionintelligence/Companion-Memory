@@ -57,6 +57,12 @@ function makeService() {
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const dataSource = { transaction: jest.fn(), getRepository: jest.fn() };
 
+  const graphDeltaWriter = {
+    entityCreated: jest.fn(async () => undefined),
+    entityUpdated: jest.fn(async () => undefined),
+    entityDeleted: jest.fn(async () => undefined),
+    recordMany: jest.fn(async () => undefined),
+  };
   const service = new CommunicationService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     repository as any,
@@ -66,15 +72,10 @@ function makeService() {
     logger as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     dataSource as any,
-    {
-      entityCreated: jest.fn(async () => undefined),
-      entityUpdated: jest.fn(async () => undefined),
-      entityDeleted: jest.fn(async () => undefined),
-      recordMany: jest.fn(async () => undefined),
-    } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    graphDeltaWriter as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
-  return { service, send, repository, baseRepo, baseInsert };
+  return { service, send, repository, baseRepo, baseInsert, graphDeltaWriter };
 }
 
 const makeInput = (n: number) =>
@@ -240,5 +241,101 @@ describe('CommunicationService update: falsy-but-legitimate values', () => {
 
   it('still sets a non-zero value', async () => {
     await expect(patchFor({ duration_seconds: 42 })).resolves.toMatchObject({ durationSeconds: 42 });
+  });
+
+  it('clears the subject when the page saves it empty', async () => {
+    await expect(patchFor({ subject: '' })).resolves.toMatchObject({ subject: null });
+  });
+
+  it('treats a subject of only whitespace as cleared', async () => {
+    await expect(patchFor({ subject: '   ' })).resolves.toMatchObject({ subject: null });
+  });
+
+  it('leaves the subject alone when a re-sync sends none', async () => {
+    await expect(patchFor({ subject: null })).resolves.not.toHaveProperty('subject');
+    await expect(patchFor({ content: 'body' })).resolves.not.toHaveProperty('subject');
+  });
+
+  it('names a message whose subject was cleared from its preview, then its content', async () => {
+    const { service } = makeService();
+
+    let base: ((after: Partial<CommunicationEntity>) => Record<string, unknown>) | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).aggregate = {
+      applyUpdate: jest.fn(async (_ctx: unknown, _id: string, patch: { base?: typeof base }) => {
+        base = patch.base;
+
+        return null;
+      }),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (service as any).update(CONTEXT, 'c-1', { subject: '' });
+
+    const content = 'Are you free for lunch on Friday? The new noodle place opened.';
+    expect(base?.({ subject: null, preview: 'Lunch?', content, summary: null })).toMatchObject({
+      name: 'Lunch?',
+    });
+    expect(base?.({ subject: null, preview: null, content, summary: null })).toMatchObject({
+      name: content,
+    });
+  });
+});
+
+describe('CommunicationService update: Change History', () => {
+  function updateWith(
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ) {
+    const { service, graphDeltaWriter } = makeService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).aggregate = {
+      applyUpdate: jest.fn(
+        async (
+          _ctx: unknown,
+          _id: string,
+          _patch: unknown,
+          hooks: { withinTx: (args: Record<string, unknown>) => Promise<void> },
+        ) => {
+          await hooks.withinTx({ manager: {}, before, after, baseBefore: null });
+
+          return null;
+        },
+      ),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (service as any).update(CONTEXT, 'c-1', data).then(() => graphDeltaWriter.entityUpdated);
+  }
+
+  const stored = { subject: 'Lunch on Friday', preview: null, content: 'Are you free?', summary: null };
+
+  it('records nothing when a re-sync or a save hands back what is stored', async () => {
+    const entityUpdated = await updateWith(
+      stored,
+      { ...stored },
+      { subject: 'Lunch on Friday', content: 'Are you free?' },
+    );
+
+    expect(entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records a subject change with the label it replaced', async () => {
+    const entityUpdated = await updateWith(
+      stored,
+      { ...stored, subject: 'Lunch on Saturday' },
+      { subject: 'Lunch on Saturday' },
+    );
+
+    expect(entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedFields: {
+          name: { old: 'Lunch on Friday', new: 'Lunch on Saturday' },
+          detail_updated: { new: true },
+        },
+      }),
+    );
   });
 });

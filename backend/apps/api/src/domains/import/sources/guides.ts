@@ -619,6 +619,8 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'A Facebook "Download your information" export in JSON — a `your_facebook_activity/` tree with `messages/inbox/<thread>/message_*.json`, `posts/`, etc. HTML exports are also parsed, but JSON is richer.',
     whatImported: [
       'Posts, photos, and events',
+      'Likes and reactions on individual posts, and liked Pages',
+      'Comments, posts in groups, and Marketplace listings',
       'Messenger threads (included in the same export)',
       'Friends, and ad/interest data',
     ],

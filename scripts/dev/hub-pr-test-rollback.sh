@@ -1,44 +1,41 @@
 #!/usr/bin/env bash
 # Roll back hub-pr-test-deploy.sh to Hub-pinned production images.
+# See docs/runbooks/one-off-prod-data-testing.md
 set -euo pipefail
 
-HUB_CONTAINER="${HUB_CONTAINER:-ci-os-hub}"
-APP_STORE_ID="${APP_STORE_ID:-ci-marketplace}"
-APP_NAME="${APP_NAME:-ci-memory}"
-COMPOSE_PROJECT="${COMPOSE_PROJECT:-ci-memory_ci-marketplace}"
+# shellcheck source=hub-pr-test-common.sh
+source "$(dirname "$0")/hub-pr-test-common.sh"
 
-ROOT_FOLDER_HOST="${ROOT_FOLDER_HOST:-${HOME}/.local/share/companion-hub}"
-APP_DIR_HOST="${ROOT_FOLDER_HOST}/apps/${APP_STORE_ID}/${APP_NAME}"
-APP_ENV_HOST="${ROOT_FOLDER_HOST}/app-data/${APP_STORE_ID}/${APP_NAME}/app.env"
-USER_ENV_HOST="${ROOT_FOLDER_HOST}/user-config/${APP_STORE_ID}/${APP_NAME}/app.env"
-OVERRIDE_FILE="${APP_DIR_HOST}/docker-compose.pr-test.yml"
+require_app_env
 
-HUB_APP_ENV="/app-data/${APP_STORE_ID}/${APP_NAME}/app.env"
-HUB_USER_ENV="/data/user-config/${APP_STORE_ID}/${APP_NAME}/app.env"
-HUB_APP_DIR="/data/apps/${APP_STORE_ID}/${APP_NAME}"
-
-if [[ ! -f "$APP_ENV_HOST" ]]; then
-  echo "Missing app.env: $APP_ENV_HOST" >&2
-  exit 1
+if is_pr_test_override "$USER_COMPOSE_HOST"; then
+  rm -f "$USER_COMPOSE_HOST"
+  echo "==> Removed override: $USER_COMPOSE_HOST"
+elif [[ -f "$USER_COMPOSE_HOST" ]]; then
+  echo "==> Left $USER_COMPOSE_HOST in place: hub-pr-test-deploy.sh did not write it."
+  echo "    The Hub keeps applying it. If it pins test images, delete it and rerun this script."
 fi
 
-ENV_FILE_ARGS="--env-file ${HUB_APP_ENV}"
-if [[ -f "$USER_ENV_HOST" ]]; then
-  ENV_FILE_ARGS="${ENV_FILE_ARGS} --env-file ${HUB_USER_ENV}"
+# Also when the override is already gone, deleted by hand or never written by a
+# deploy that stopped part way.
+if [[ -f "$USER_COMPOSE_BACKUP_HOST" ]]; then
+  if [[ -e "$USER_COMPOSE_HOST" ]]; then
+    echo "==> Left $USER_COMPOSE_BACKUP_HOST aside: $USER_COMPOSE_HOST is in its place."
+  else
+    mv "$USER_COMPOSE_BACKUP_HOST" "$USER_COMPOSE_HOST"
+    echo "==> Put back the user compose override the swap replaced: $USER_COMPOSE_HOST"
+    echo "    The Hub applies it again from now on."
+  fi
 fi
 
-if [[ -f "$OVERRIDE_FILE" ]]; then
-  rm -f "$OVERRIDE_FILE"
-  echo "==> Removed override: $OVERRIDE_FILE"
+if [[ -f "$LEGACY_OVERRIDE_HOST" ]]; then
+  rm -f "$LEGACY_OVERRIDE_HOST"
+  echo "==> Removed override: $LEGACY_OVERRIDE_HOST"
 fi
 
 echo "==> Recreating api + gateway + hbpe-service + summary-service from Hub-pinned compose..."
-docker exec "$HUB_CONTAINER" sh -c "
-  set -eu
-  cd '${HUB_APP_DIR}'
-  docker compose ${ENV_FILE_ARGS} --project-name '${COMPOSE_PROJECT}' \
-    -f docker-compose.yml \
-    up -d --force-recreate --no-deps api gateway hbpe-service summary-service
-"
+hub_compose "up -d --force-recreate --no-deps api gateway hbpe-service summary-service"
+
+refresh_traefik_upstream
 
 echo "==> Rollback complete."

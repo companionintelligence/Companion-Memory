@@ -15,8 +15,8 @@ export interface AsksHistoryOptions {
 export async function asksHistoryCommand(ctx: CliContext, options: AsksHistoryOptions = {}): Promise<void> {
   const limit = options.limit == null ? undefined : Number(options.limit);
 
-  if (limit != null && !Number.isFinite(limit)) {
-    throw new CliError(`--limit takes a number, got "${options.limit}".`);
+  if (limit != null && (options.limit?.trim() === '' || !Number.isInteger(limit) || limit < 1)) {
+    throw new CliError(`--limit takes a whole number, at least 1, got "${options.limit}".`);
   }
 
   const { rows, truncated } = await ctx.graphql.askDisclosureHistory({

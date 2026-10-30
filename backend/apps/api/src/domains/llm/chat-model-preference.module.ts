@@ -20,4 +20,8 @@ import { ChatModelPreferenceService } from './services/ChatModelPreferenceServic
 })
 export class ChatModelPreferenceModule {}
 
-export { ChatModelPreferenceService } from './services/ChatModelPreferenceService';
+export {
+  ChatModelPreferenceService,
+  type DecisionEnginePreferences,
+  type MemoryGovernancePreferences,
+} from './services/ChatModelPreferenceService';

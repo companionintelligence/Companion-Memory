@@ -1,6 +1,12 @@
 import { type ReactNode } from 'react';
 
-import { beginNativeOidcSignIn, getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
+import {
+  beginNativeOidcSignIn,
+  getApiBaseUrl,
+  getApiKey,
+  needsNativeCloudConnect,
+  setApiBaseUrl,
+} from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -8,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bindPowerSyncDatabase } from '@/api/powersync/session';
 
+import { MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 import { AuthProvider, useAuth } from './useAuth';
 
 vi.mock('jwt-decode', () => ({ jwtDecode: vi.fn() }));
@@ -38,6 +45,15 @@ function setFetch(handler: Handler) {
   vi.stubGlobal('fetch', mock);
 
   return mock;
+}
+
+/** A request that is accepted and never answered: it ends only when its signal aborts, as a real fetch does. */
+function hang(init?: RequestInit): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () =>
+      reject(new DOMException('The operation was aborted.', 'AbortError')),
+    );
+  });
 }
 
 const wrapper = ({ children }: { children: ReactNode }) => (
@@ -111,6 +127,220 @@ describe('useAuth', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
     expect(result.current[0].authToken).toBeNull();
     expect(result.current[0].expired).toBe(true); // no token decodes as expired
+    expect(result.current[0].unreachable).toBe(false);
+  });
+
+  describe('when Memory does not answer the session check', () => {
+    it('reports Memory unreachable instead of signed out, and signs in once it answers', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      try {
+        let memoryUp = false;
+
+        setFetch((url) => {
+          if (url.endsWith('/api/authenticate/refresh')) {
+            // The database is down: Memory (or the gateway) answers 500 / 502.
+            return memoryUp ? jsonResponse({ accessToken: 'back' }) : emptyResponse(false, 502);
+          }
+
+          return emptyResponse();
+        });
+
+        const { result } = renderHook(() => useAuth(), { wrapper });
+
+        await waitFor(() => expect(result.current[0].initializing).toBe(false));
+        expect(result.current[0].unreachable).toBe(true);
+        expect(result.current[0].authenticated).toBe(false);
+
+        memoryUp = true;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+
+        await waitFor(() => expect(result.current[0].authToken).toBe('back'));
+        expect(result.current[0].unreachable).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats a network failure the same way', async () => {
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          throw new TypeError('Failed to fetch');
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].unreachable).toBe(true);
+    });
+
+    it('keeps the token when a later refresh goes unanswered', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      let refreshCalls = 0;
+
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          refreshCalls += 1;
+
+          return refreshCalls === 1
+            ? jsonResponse({ accessToken: 'initial-token' })
+            : emptyResponse(false, 500);
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
+
+      await act(async () => {
+        await result.current[1].refresh();
+      });
+
+      expect(result.current[0].authToken).toBe('initial-token');
+      expect(result.current[0].unreachable).toBe(true);
+      expect(result.current[0].error).toBeNull();
+    });
+  });
+
+  describe('when Memory takes the session check and never answers', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('gives up at the deadline and reports Memory unreachable, not signed out', async () => {
+      const fetchMock = setFetch((_url, init) => hang(init));
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS - 1000);
+      });
+      expect(result.current[0].initializing).toBe(true);
+      expect(result.current[0].unreachable).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(result.current[0].initializing).toBe(false);
+      expect(result.current[0].unreachable).toBe(true);
+      // A timeout is not an "expired session": no error for the login page to show.
+      expect(result.current[0].error).toBeNull();
+      // One deadline in all: the csrf prime timing out ends the check, so neither the Hub
+      // bridge nor the refresh waits out a deadline of its own behind it.
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(['/api/authenticate/csrf']);
+    });
+
+    it('waits out a slow Memory that answers within the deadline', async () => {
+      let answer: (res: Response) => void = () => undefined;
+
+      setFetch((url, init) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          return new Promise<Response>((resolve) => {
+            answer = resolve;
+            init?.signal?.addEventListener('abort', () => undefined);
+          });
+        }
+
+        return emptyResponse();
+      });
+      document.cookie = 'csrfToken=csrf-abc';
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS - 7000);
+      });
+      expect(result.current[0].unreachable).toBe(false);
+
+      await act(async () => {
+        answer(jsonResponse({ accessToken: 'slow' }));
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
+      });
+
+      expect(result.current[0].authToken).toBe('slow');
+      expect(result.current[0].unreachable).toBe(false);
+      expect(result.current[0].error).toBeNull();
+    });
+
+    it('signs in by itself once Memory answers again, asking once at a time meanwhile', async () => {
+      let memoryUp = false;
+      let refreshCalls = 0;
+
+      const fetchMock = setFetch((url, init) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          refreshCalls += 1;
+
+          return memoryUp ? jsonResponse({ accessToken: 'back' }) : hang(init);
+        }
+
+        return url.endsWith('/api/authenticate/hub-bridge') && !memoryUp ? hang(init) : emptyResponse();
+      });
+      document.cookie = 'csrfToken=csrf-abc';
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
+      });
+      expect(result.current[0].unreachable).toBe(true);
+      expect(refreshCalls).toBe(0);
+
+      // The first retry hangs for a full deadline; the ticks during it send nothing more.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
+      });
+      expect(refreshCalls).toBe(1);
+      expect(result.current[0].unreachable).toBe(true);
+      expect(result.current[0].authToken).toBeNull();
+
+      memoryUp = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current[0].authToken).toBe('back');
+      expect(result.current[0].unreachable).toBe(false);
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it('keeps the token when a later refresh is never answered', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      let refreshCalls = 0;
+
+      setFetch((url, init) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          refreshCalls += 1;
+
+          return refreshCalls === 1 ? jsonResponse({ accessToken: 'initial-token' }) : hang(init);
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
+
+      await act(async () => {
+        const refreshing = result.current[1].refresh();
+        await vi.advanceTimersByTimeAsync(MEMORY_ANSWER_DEADLINE_MS);
+        await refreshing;
+      });
+
+      expect(result.current[0].authToken).toBe('initial-token');
+      expect(result.current[0].unreachable).toBe(true);
+      expect(result.current[0].error).toBeNull();
+    });
   });
 
   it('logs in, sending the CSRF token from the cookie', async () => {
@@ -471,6 +701,9 @@ describe('useAuth', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
       true,
     );
+    // A browser has no capture queue, so web sign-out never stops to ask about one.
+    expect(result.current[0].signOutPrompt.open).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/outbox'))).toBe(false);
   });
 
   it('native logout forgets the paired Memory origin so the next account can pick a device', async () => {
@@ -505,6 +738,8 @@ describe('useAuth', () => {
     };
 
     setFetch(() => emptyResponse());
+    // Only the keystore has the origin, so restoring it asks first.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current[0].authenticated).toBe(true));
@@ -520,6 +755,360 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
     expect(secureStore.has('ci.apiKey')).toBe(false);
     expect(needsNativeCloudConnect()).toBe(true);
+  });
+
+  describe('native: the Memory origin the app paired with', () => {
+    /** A phone whose credential store (the LocalHub plugin) starts with `entries`. */
+    function nativeWithStore(entries: [string, string][]) {
+      const secureStore = new Map(entries);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      return secureStore;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('keeps the paired origin when the keystore copy disagrees, and repairs the copy', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://paired.example.com');
+      setApiBaseUrl('https://paired.example.com');
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        // Written through the plugin by something other than the pairing flow.
+        ['ci.apiBaseUrl', 'https://elsewhere.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      expect(getApiBaseUrl()).toBe('https://paired.example.com');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBe('https://paired.example.com');
+      await waitFor(() => expect(secureStore.get('ci.apiBaseUrl')).toBe('https://paired.example.com'));
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('asks before taking an origin only the keystore has, and drops the credential when declined', async () => {
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiKeyId', 'key-id'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('https://unknown.example.net'));
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiBaseUrl()).toBe('');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(secureStore.has('ci.apiKeyId')).toBe(false);
+    });
+
+    it('does not offer an origin the keystore holds without a key, and drops it', async () => {
+      // What a sign-out leaves when it is cut short after the key went but before the origin.
+      const secureStore = nativeWithStore([['ci.apiBaseUrl', 'https://previous.example.net']]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+    });
+
+    it('drops a keystore origin that is not an http(s) address without showing it', async () => {
+      // Pairing never stores this; text written to read as part of the question did.
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net\n\nThis is your usual Memory. Tap OK.'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+    });
+  });
+
+  describe('native logout and the Local Hub outbox', () => {
+    const HUB = 'http://127.0.0.1:4100';
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('uploads what this account queued while its key is still active, then deletes the rest', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      // One note queued offline, stamped for nobody in particular (an older build).
+      let queued = true;
+      const seen: { url: string; method: string; apiKey: string | null; keyAfterwards: string | null }[] = [];
+      setFetch((url, init) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        seen.push({
+          url,
+          method: (init?.method ?? 'GET').toUpperCase(),
+          apiKey: headers['x-api-key'] ?? null,
+          keyAfterwards: 'not checked',
+        });
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if ((path === '/api/outbox?status=pending' || path === '/api/outbox') && init?.method !== 'DELETE') {
+          return jsonResponse({
+            items: queued
+              ? [
+                  {
+                    id: 'n1',
+                    kind: 'note',
+                    capturedAt: '2026-10-01T00:00:00Z',
+                    seq: 1,
+                    status: 'pending',
+                    attempts: 0,
+                    lastError: null,
+                    owner: null,
+                  },
+                ]
+              : [],
+            counts: { pending: queued ? 1 : 0, needsAttention: 0, total: queued ? 1 : 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({
+            id: 'n1',
+            kind: 'note',
+            capturedAt: '2026-10-01T00:00:00Z',
+            seq: 1,
+            status: 'pending',
+            attempts: 0,
+            lastError: null,
+            owner: null,
+            payload: { records: [] },
+          });
+        }
+
+        if (path === '/api/outbox/n1/attempt') {
+          queued = false;
+
+          return emptyResponse(true, 204);
+        }
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          seen[seen.length - 1].keyAfterwards = getApiKey();
+
+          return jsonResponse({ deleted: 0 });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout();
+      });
+
+      const upload = seen.find((call) => call.url === 'https://core7.example.com/api/v1/notes');
+      const clear = seen.find((call) => call.url === `${HUB}/api/outbox` && call.method === 'DELETE');
+
+      expect(upload?.apiKey).toBe('outgoing-key');
+      expect(clear).toBeDefined();
+      // The clear runs once the key is gone, so nothing queued afterwards survives either.
+      expect(clear?.keyAfterwards).toBeNull();
+      expect(seen.indexOf(upload!)).toBeLessThan(seen.indexOf(clear!));
+      expect(result.current[0].authenticated).toBe(false);
+      // The upload emptied the queue, so there was nothing to ask about.
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+    });
+
+    it('signs out without asking when the caller already covered the unsent captures', async () => {
+      // Account deletion: the key stops working, so the captures can never upload.
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const pendingRow = {
+        id: 'n1',
+        kind: 'note',
+        capturedAt: '2026-10-01T00:00:00Z',
+        seq: 1,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        owner: null,
+      };
+      let cleared = false;
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          if (init?.method === 'DELETE') {
+            cleared = true;
+
+            return jsonResponse({ deleted: 1 });
+          }
+
+          return jsonResponse({
+            items: [pendingRow],
+            counts: { pending: 1, needsAttention: 0, total: 1 },
+            capacity: { max: 5000, used: 1, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({ ...pendingRow, payload: { records: [] } });
+        }
+
+        // The account is gone: the appliance refuses this key.
+        return emptyResponse(false, 401);
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout({ discardUnsentCaptures: true });
+      });
+
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+      expect(cleared).toBe(true);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(true);
+      // No last upload either: every request would carry a key the deleted account no longer has.
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v1/notes'))).toBe(false);
+    });
+
+    it('runs one sign-out when Log out is tapped again while the first is still going', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          return jsonResponse({ deleted: 0 });
+        }
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          return jsonResponse({
+            items: [],
+            counts: { pending: 0, needsAttention: 0, total: 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        const first = result.current[1].logout();
+        const second = result.current[1].logout();
+
+        expect(second).toBe(first);
+        await Promise.all([first, second]);
+      });
+
+      const revokes = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revokes).toHaveLength(1);
+      expect(result.current[0].authenticated).toBe(false);
+    });
   });
 
   it('still logs out when dropping the local PowerSync replica fails', async () => {
@@ -713,7 +1302,49 @@ describe('useAuth', () => {
     expect(result.current[0].authToken).toBeNull();
   });
 
-  it('does not retry a 401 refresh (invalid session must fall through to login)', async () => {
+  it('repairs a 401 refresh through Hub identity without repeating the rejected refresh', async () => {
+    document.cookie = 'csrfToken=csrf-abc';
+    let refreshCalls = 0;
+    let bridgeCalls = 0;
+    const disconnect = vi.fn().mockResolvedValue(undefined);
+    bindPowerSyncDatabase({ disconnectAndClear: disconnect } as never);
+
+    setFetch((url) => {
+      if (url.endsWith('/api/authenticate/refresh')) {
+        refreshCalls += 1;
+
+        return refreshCalls === 1
+          ? jsonResponse({ accessToken: 'initial-token' })
+          : emptyResponse(false, 401);
+      }
+
+      if (url.endsWith('/api/authenticate/hub-bridge')) {
+        bridgeCalls += 1;
+
+        return bridgeCalls === 1
+          ? emptyResponse()
+          : jsonResponse({ accessToken: 'recovered-token', replaced: true });
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
+
+    await act(async () => {
+      await result.current[1].refresh();
+    });
+
+    expect(result.current[0].authToken).toBe('recovered-token');
+    expect(result.current[0].error).toBeNull();
+    expect(refreshCalls).toBe(2);
+    expect(bridgeCalls).toBe(2);
+    // Both JWTs decode to the same subject in this test, so its replica stays intact.
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('logs out after a 401 when Hub identity cannot repair the session', async () => {
     document.cookie = 'csrfToken=csrf-abc';
     let refreshCalls = 0;
 
@@ -721,17 +1352,24 @@ describe('useAuth', () => {
       if (url.endsWith('/api/authenticate/refresh')) {
         refreshCalls += 1;
 
-        return emptyResponse(false, 401);
+        return refreshCalls === 1
+          ? jsonResponse({ accessToken: 'initial-token' })
+          : emptyResponse(false, 401);
       }
 
       return emptyResponse();
     });
 
     const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authToken).toBe('initial-token'));
 
-    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    await act(async () => {
+      await result.current[1].refresh();
+    });
+
     expect(result.current[0].authToken).toBeNull();
-    expect(refreshCalls).toBe(1);
+    expect(result.current[0].error).toBeTruthy();
+    expect(refreshCalls).toBe(2);
   });
 
   it('iOS: finishes Memory OIDC from getLaunchUrl after a Safari cold start', async () => {
@@ -1030,6 +1668,10 @@ describe('useAuth', () => {
   });
 
   it('native logout revokes the device key on the server, while it still knows which server', async () => {
+    // The origin this phone paired with, as the app's own pages saved it and `initApiBaseUrl`
+    // applied it at launch.
+    localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+    setApiBaseUrl('https://core7.example.com');
     const secureStore = new Map<string, string>([
       ['ci.apiKey', 'stored-api-key'],
       ['ci.apiBaseUrl', 'https://core7.example.com'],

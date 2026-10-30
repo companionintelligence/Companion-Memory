@@ -45,9 +45,10 @@ export type EntitySourceKind = 'self' | 'imported' | 'derived' | 'unknown';
 export interface EntitySourceCount {
   /**
    * Resolved provenance key. Either a source name supplied by an importer
-   * ("linkedin", "LinkedIn") or an internal key ({@link DERIVED_IMPORT_KEYS},
-   * a bare linked_table); callers are expected to map it for display rather
-   * than show it raw.
+   * ("linkedin", "LinkedIn"), a ledger platform spelled as an import route
+   * ("import:gmail", "import:file"), or an internal key
+   * ({@link DERIVED_IMPORT_KEYS}, a bare linked_table); callers are expected
+   * to map it for display rather than show it raw.
    */
   source: string;
   kind: EntitySourceKind;
@@ -77,6 +78,20 @@ const DERIVED_IMPORT_KEYS = ['import:communications:participant', 'import:graph_
  * answer instead of showing the user a tautology.
  */
 const GENERIC_SOURCE_KEYS = ['import:importer', 'importer', 'import:'];
+
+/**
+ * `ci.record_sources.source_type` values for records the owner makes on this
+ * device that still get a ledger row. A planned block is a calendar event with
+ * the source triple `planning`, so `CalendarEventService` ledgers it like any
+ * import, and without this list it counted as "imported from Planning".
+ * Skipping its ledger rows lets the bare linked_table answer, which classifies
+ * it as derived.
+ *
+ * Objects promoted from a purchase (`promote.object`) or minted from a receipt
+ * line (`receipt-line`) also ledger under the purchase's platform. They are
+ * left out on purpose: #3149 files them under the import they came from.
+ */
+const DERIVED_LEDGER_SOURCE_TYPES = ['planning'];
 
 /**
  * Safety ceiling on one lexical node-search page. Callers pick the real limit (the graph view
@@ -594,6 +609,8 @@ export class GraphUtilityService {
       entityType?: string;
       excludeEntityTypes?: string[];
       nameContains?: string;
+      /** The whole name, ignoring case and surrounding space. */
+      nameEquals?: string;
       propertyEquals?: Record<string, string | number | boolean>;
     } = {},
     options: { limit?: number; offset?: number } = {},
@@ -624,6 +641,12 @@ export class GraphUtilityService {
 
     if (filters.nameContains) {
       query = query.andWhere('entity.name ILIKE :name', { name: `%${filters.nameContains}%` });
+    }
+
+    if (filters.nameEquals) {
+      query = query.andWhere('lower(btrim(entity.name)) = lower(btrim(:nameEquals))', {
+        nameEquals: filters.nameEquals,
+      });
     }
 
     if (filters.propertyEquals) {
@@ -1572,9 +1595,24 @@ export class GraphUtilityService {
    *                                 in record metadata ("LinkedIn", "vCard").
    *                                 Convention, not contract — it covers rows
    *                                 from importer versions predating the stamp.
-   *  4. `linked_table`            — the origin table / import route, minus the
+   *  4. `ci.record_sources`       — the provenance ledger. Imported events,
+   *                                 content and messages carry neither
+   *                                 property, only a bare `linked_table`, so
+   *                                 without this they all read as derived ("Worked
+   *                                 out on this device"). The record's earliest
+   *                                 arrival that names a platform wins, and only
+   *                                 when no arrival names one does the earliest
+   *                                 arrival's source system answer: the rule
+   *                                 contentFacetsSql's How filter uses, so a
+   *                                 photo is "Google Photos" on both pages and
+   *                                 not "file" here. A File entity reads it
+   *                                 through the content row or the message that
+   *                                 names the file. Arrivals CI-Server made
+   *                                 itself ({@link DERIVED_LEDGER_SOURCE_TYPES})
+   *                                 are skipped.
+   *  5. `linked_table`            — the origin table / import route, minus the
    *                                 content-free values in {@link GENERIC_SOURCE_KEYS}.
-   *  5. `properties.importerType` — the *record shape* ("contact"), not an
+   *  6. `properties.importerType` — the *record shape* ("contact"), not an
    *                                 origin. Last resort: better than nothing,
    *                                 but it answers a different question.
    *
@@ -1591,6 +1629,7 @@ export class GraphUtilityService {
    * bare table name is a first-party record and therefore derived; an
    * `import:`-prefixed route is an external import unless it is one of the
    * {@link DERIVED_IMPORT_KEYS} CI-Server itself writes under that prefix.
+   * The ledger branch reads the same list, since its keys share the prefix.
    *
    * Grouping is on `(source, kind)`, so one name reached through two different
    * branches — an importer literally called `files` alongside the `files`
@@ -1604,26 +1643,84 @@ export class GraphUtilityService {
     const rows: Array<{ source: string; kind: EntitySourceKind; count: number }> =
       await this.entityRepo.manager.query(
         `
-        WITH candidates AS (
-          SELECT CASE WHEN properties ->> 'is_self' = 'true' THEN $2 END AS self_src,
+        WITH file_arrivals AS (
+          -- A stored photo or document is a ci.files row. Two records can name
+          -- it: the content row an import made for it (external_id), and the
+          -- message that carries it (communications.attachments). A tweet's or
+          -- DM's media gets no content row when X no longer serves its URL (and
+          -- an MMS part is stored as a file alone), so the message is the only
+          -- record that says where the file came from.
+          SELECT c.external_id AS file_id, rs.platform, rs.source_system, rs.first_seen
+          FROM ci.content c
+          JOIN ci.record_sources rs
+            ON rs.user_id = c.user_id AND rs.record_table = 'content' AND rs.record_id = c.id
+          WHERE c.user_id = $1
+            AND c.external_id_kind = 'file'
+            AND rs.source_type <> ALL($6::text[])
+          UNION ALL
+          SELECT a ->> 'id', rs.platform, rs.source_system, rs.first_seen
+          FROM ci.communications m
+          CROSS JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.attachments) = 'array' THEN m.attachments ELSE '[]'::jsonb END
+          ) a
+          JOIN ci.record_sources rs
+            ON rs.user_id = m.user_id AND rs.record_table = 'communications' AND rs.record_id = m.id
+          WHERE m.user_id = $1
+            AND a ->> 'type' = 'file'
+            AND rs.source_type <> ALL($6::text[])
+        ),
+        file_sources AS (
+          -- One source per file: the earliest arrival naming a platform, else
+          -- the earliest arrival. platform and source_system break first_seen
+          -- ties (DEFAULT now() is one value per transaction).
+          SELECT DISTINCT ON (file_id)
+                 file_id,
+                 COALESCE(NULLIF(platform, ''), NULLIF(source_system, '')) AS src
+          FROM file_arrivals
+          ORDER BY file_id, NULLIF(platform, '') IS NULL, first_seen ASC, platform, source_system
+        ),
+        candidates AS (
+          SELECT CASE WHEN e.properties ->> 'is_self' = 'true' THEN $2 END AS self_src,
                  COALESCE(
-                   NULLIF(properties ->> 'data_source', ''),
-                   NULLIF(properties ->> 'Source', '')
+                   NULLIF(e.properties ->> 'data_source', ''),
+                   NULLIF(e.properties ->> 'Source', '')
                  ) AS prop_src,
+                 -- Spelled as the import route the people from the same import
+                 -- are filed under (linked_table 'import:venmo'), so a Venmo
+                 -- payment and the Venmo contact it names count as one source.
+                 'import:' || COALESCE(ledger.src, fs.src) AS ledger_src,
                  CASE
-                   WHEN linked_table = ANY($4::text[]) THEN NULL
-                   ELSE NULLIF(linked_table, '')
+                   WHEN e.linked_table = ANY($4::text[]) THEN NULL
+                   ELSE NULLIF(e.linked_table, '')
                  END AS linked_src,
-                 NULLIF(properties ->> 'importerType', '') AS shape_src
-          FROM ci.entities
-          WHERE is_active = true
-            AND owner_user_id = $1
+                 NULLIF(e.properties ->> 'importerType', '') AS shape_src
+          FROM ci.entities e
+          LEFT JOIN LATERAL (
+            -- The provenance ledger every import and sync writes. An entity
+            -- that mirrors a record (linked_table = the record's table, same
+            -- id) arrived the way that record did. Same pick as file_sources.
+            SELECT COALESCE(NULLIF(rs.platform, ''), NULLIF(rs.source_system, '')) AS src
+            FROM ci.record_sources rs
+            WHERE rs.user_id = e.owner_user_id
+              AND rs.record_table = e.linked_table
+              AND rs.record_id = e.entity_id
+              AND rs.source_type <> ALL($6::text[])
+            ORDER BY NULLIF(rs.platform, '') IS NULL, rs.first_seen ASC,
+                     rs.platform, rs.source_system
+            LIMIT 1
+          ) ledger ON true
+          LEFT JOIN file_sources fs
+            ON e.linked_table = 'files' AND fs.file_id = e.linked_id::text
+          WHERE e.is_active = true
+            AND e.owner_user_id = $1
         ),
         resolved AS (
-          SELECT COALESCE(self_src, prop_src, linked_src, shape_src, $3) AS source,
+          SELECT COALESCE(self_src, prop_src, ledger_src, linked_src, shape_src, $3) AS source,
                  CASE
                    WHEN self_src IS NOT NULL THEN 'self'
                    WHEN prop_src IS NOT NULL THEN 'imported'
+                   WHEN ledger_src IS NOT NULL THEN
+                     CASE WHEN ledger_src = ANY($5::text[]) THEN 'derived' ELSE 'imported' END
                    WHEN linked_src IS NOT NULL THEN
                      CASE
                        WHEN linked_src = ANY($5::text[]) THEN 'derived'
@@ -1640,7 +1737,14 @@ export class GraphUtilityService {
         GROUP BY source, kind
         ORDER BY count DESC, source ASC, kind ASC
         `,
-        [ownerUserId, SELF_SOURCE_KEY, UNKNOWN_SOURCE_KEY, GENERIC_SOURCE_KEYS, DERIVED_IMPORT_KEYS],
+        [
+          ownerUserId,
+          SELF_SOURCE_KEY,
+          UNKNOWN_SOURCE_KEY,
+          GENERIC_SOURCE_KEYS,
+          DERIVED_IMPORT_KEYS,
+          DERIVED_LEDGER_SOURCE_TYPES,
+        ],
       );
 
     return rows;

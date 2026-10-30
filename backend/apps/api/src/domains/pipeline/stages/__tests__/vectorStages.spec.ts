@@ -11,13 +11,18 @@ import {
 const USER = '00000000-0000-0000-0000-0000000000aa';
 
 function makeStage(rows: Array<Record<string, unknown>>, failOnInsert = false) {
+  // The upsert is checked first: its device-record lookup also reads `FROM ci.content`.
   const query = jest.fn(async (sql: string) => {
-    if (/FROM ci\.content/i.test(sql)) {
-      return rows;
+    if (/INSERT INTO ci_search\.vectors/i.test(sql)) {
+      if (failOnInsert) {
+        throw new Error('vector column rejected');
+      }
+
+      return [];
     }
 
-    if (failOnInsert && /INSERT INTO ci_search\.vectors/i.test(sql)) {
-      throw new Error('vector column rejected');
+    if (/FROM ci\.content/i.test(sql)) {
+      return rows;
     }
 
     return [];
@@ -45,7 +50,7 @@ describe('VectorStageBase (via ContentVectorStage)', () => {
     expect(sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT (entity_type, entity_id)');
     expect(params).toContain('content');
     expect(params).toContain('c1');
-    expect(params[params.length - 1]).toBe(USER);
+    expect(params).toContain(USER);
   });
 
   it('records skipped: empty for a row with no weighted texts, and writes nothing for it', async () => {

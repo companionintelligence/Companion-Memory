@@ -13,17 +13,16 @@ ext {
 }
 
 buildscript {
-    // litertlm-android 0.11.0's own Kotlin metadata requires a newer compiler than the
-    // 2.0.x line (verified by compiling this module: 2.0.21 fails with "Module was
-    // compiled with an incompatible version of Kotlin. The binary version of its
-    // metadata is 2.3.0, expected version is 2.0.0"). Uses a plain local `def` — not
+    // litertlm-android's own Kotlin metadata requires a matching compiler line: 0.11.0 needed
+    // 2.2 ("metadata is 2.3.0, expected version is 2.0.0" on 2.0.21), and 0.18.0 needs 2.4
+    // ("metadata is 2.4.0, expected version is 2.2.0" on 2.2.21). Uses a plain local `def` — not
     // `ext.kotlin_version` — because unqualified `ext` writes inside a nested
     // `buildscript {}` block resolve against the shared project-ext scope in this
     // Gradle/Groovy setup, so an `ext.` write here was observed leaking across
     // sibling subprojects (verified: it silently pinned this module to whatever
     // `kotlin_version` another plugin's buildscript block last set, ignoring this
     // literal). A local `def` is scoped strictly to this closure.
-    def localLlmKotlinVersion = '2.2.21'
+    def localLlmKotlinVersion = '2.4.21'
     repositories {
         google()
         mavenCentral()
@@ -41,12 +40,12 @@ android {
     namespace "com.companionintelligence.localllm"
     compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
     defaultConfig {
-        // Must not exceed the app's own minSdk (23) — the manifest merger rejects a
+        // Must not exceed the app's own minSdk (24) — the manifest merger rejects a
         // library requiring a higher floor than its consumer. isAvailable() gates the
         // real API-26+ requirement (Build.VERSION_CODES.O) at runtime instead; every
         // API genuinely introduced in 26 (NotificationChannel) is itself guarded by an
         // explicit SDK_INT check at the call site (see ModelDownloadWorker).
-        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
         versionCode 1
         versionName "1.0"
@@ -105,13 +104,20 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
 
     // On-device inference (LiteRT-LM). Group com.google.ai.edge.* resolves via google().
-    // Pinned to 0.14.0 to match iOS's vendored CLiteRTLM.xcframework (ios/App/Frameworks/
-    // fetch-clitertlm-xcframework.sh) — the two had drifted (this was 0.11.0) with no
-    // record of why. Verified source- and binary-compatible with this module's usage
-    // (EngineConfig/ConversationConfig/Conversation/ToolProvider surfaces are unchanged,
-    // Kotlin metadata is still mv=[2,3,0], same as 0.11.0) by diffing `javap` output
-    // against both AARs before bumping.
-    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.14.0'
+    // Pinned to 0.18.0 to match iOS's vendored CLiteRTLM.xcframework (ios/App/Frameworks/
+    // fetch-clitertlm-xcframework.sh); the two are bumped together. 0.18.0's AAR carries
+    // Kotlin 2.4 metadata (hence localLlmKotlinVersion above) and declares minSdk 24 (hence
+    // the app's minSdkVersion). Against 0.14.0 the only source change this module needed was
+    // the removed `Capabilities` probe, now `ModelInfo.from(path)` / `LlmCapability`.
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.18.0'
+
+    // The phone's own search over its PowerSync replica (intents/LocalSearchStore): the replica is
+    // SQLCipher-encrypted by @capacitor-community/sqlite, whose key sits in an AndroidX
+    // EncryptedSharedPreferences file. Both pins match that plugin's android/build.gradle exactly,
+    // so the two modules share one copy of each library in the app.
+    implementation 'net.zetetic:sqlcipher-android:4.10.0@aar'
+    implementation 'androidx.sqlite:sqlite:2.4.0'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     // Resumable foreground download of the (~530 MiB) model file.
     implementation 'androidx.work:work-runtime-ktx:2.10.0'

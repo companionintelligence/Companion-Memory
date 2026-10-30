@@ -14,6 +14,7 @@ import { ContentDetails } from './ContentDetails';
 import { EventDetails } from './EventDetails';
 import { FallbackDetails } from './FallbackDetails';
 import { FileDetails } from './FileDetails';
+import { ignoreHistoryMouseButtons } from './historyMouseButtons';
 import { ItemDetails } from './ItemDetails';
 import { NoteDetails } from './NoteDetails';
 import { PersonDetails } from './PersonDetails';
@@ -75,6 +76,7 @@ export function EntityDetails({ entity, readOnly = false }: Props) {
         fallback={(retry) => (
           <Sheet.Content
             data-testid="entity-detail-sheet"
+            onPointerDownOutside={ignoreHistoryMouseButtons}
             className="z-[1000] w-full sm:max-w-xl pt-[var(--safe-area-top)] pb-[var(--safe-area-bottom)]"
           >
             <ErrorState

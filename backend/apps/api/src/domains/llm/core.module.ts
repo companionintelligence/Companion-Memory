@@ -20,6 +20,6 @@ import { ResidencyPlannerService } from './services/ResidencyPlannerService';
 @Module({
   imports: [ToolsModule, ModelRoutingModule, ChatModelPreferenceModule, LlmEndpointModule],
   providers: [ResidencyPlannerService, OllamaService],
-  exports: [OllamaService, LlmEndpointModule, ResidencyPlannerService],
+  exports: [OllamaService, LlmEndpointModule, ResidencyPlannerService, ChatModelPreferenceModule],
 })
 export class LlmCoreModule {}

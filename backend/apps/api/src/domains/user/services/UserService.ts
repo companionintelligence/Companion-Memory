@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
-import { EntityManager, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
+import { EntityManager, IsNull, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
@@ -409,6 +409,46 @@ export class UserService {
   }
 
   /**
+   * Point the account at its self Person, but only while the pointer still
+   * holds `expected` (the value the caller read, `null` for none). Two writers
+   * can each decide the account has no self Person yet (onboarding and an import
+   * that provisions one); a plain {@link update} lets the later one overwrite the
+   * earlier and leaves two `is_self` Persons. Returns the pointer the account
+   * ends up with: `entityId` when this call set it, otherwise whatever the
+   * account holds now, for the caller to adopt.
+   *
+   * `null` is a possible return and does NOT mean this call set anything: the
+   * pointer was cleared after the caller read it, or the account row is gone.
+   * A caller that needs the pointer set tries again with the value returned as
+   * its new `expected`.
+   */
+  async setEntityIdIfUnchanged(
+    context: ServiceContext,
+    id: string,
+    entityId: string,
+    expected: string | null,
+  ): Promise<string | null> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const result = await this.userRepository.update(
+      { id, entityId: expected == null ? IsNull() : expected },
+      { entityId },
+    );
+
+    if ((result.affected ?? 0) > 0) {
+      await this.eventService.send(UserUpdatedEvent, {
+        userId: id,
+      });
+
+      return entityId;
+    }
+
+    return (await this.findById(context, id))?.entityId ?? null;
+  }
+
+  /**
    * Request account deletion — the in-app path App Store Guideline 5.1.1(v) and
    * Google Play's Data Deletion policy require of any app that offers in-app signup.
    *
@@ -451,6 +491,83 @@ export class UserService {
 
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
+    return (await this.endAccount(id, options, purgeAfter)) != null;
+  }
+
+  /**
+   * The last-administrator rule of {@link requestDeletion}, asked without the lock and without
+   * writing anything: throws {@link LastAdminDeletionRefused} when ending account `id` now would be
+   * refused. For a caller that does something irreversible before it ends the account (the immediate
+   * delete revokes the OAuth grants first, so the provider side stops even if what follows fails)
+   * and should not do it for a request that will be refused anyway.
+   *
+   * Only a forecast: {@link endAccountNow} asks again under the lock, and that answer is the one that
+   * counts. An account that disappears in between makes this answer nothing.
+   */
+  async assertMayEndAccount(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<void> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const manager = this.userRepository.manager;
+    const [target] = await manager.query<Array<{ role: string }>>(
+      `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      [id],
+    );
+
+    if (target?.role === 'admin') {
+      await this.successorFor(manager, id, options);
+    }
+  }
+
+  /**
+   * End account `id` now and leave its data to the purge, due at once: the first half of the privacy
+   * route's immediate delete (`POST /users/me/delete`). Everything {@link requestDeletion} does, in
+   * the same short transaction under the same lock (the last-administrator rule, the successor's
+   * promotion, the account hidden from every read, its unused invitations deleted), with
+   * `purge_after` set to now instead of after the grace period.
+   *
+   * The caller runs the purge right after (`AccountPurgeService.purgeAccount`): batched, resumable,
+   * and outside this lock. If the process dies before it finishes, the hourly purge finds the account
+   * due and finishes it. This used to delete every row inside this transaction instead, which held the
+   * lock every sign-up waits on for as long as the delete took (49 minutes and counting for a large
+   * graph, in review) and lost all of it to any interruption.
+   *
+   * @param alongside the caller's writes that must commit with the account's end and only with it
+   *   (the audit row, the sessions and keys revoked), run last in the transaction. If it throws, the
+   *   account is not ended.
+   * @returns null when there is no live account `id` (already ended), and nothing was written.
+   */
+  async endAccountNow<T>(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions,
+    alongside: (manager: EntityManager) => Promise<T>,
+  ): Promise<{ requestedAt: Date; purgeAfter: Date; result: T } | null> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const now = new Date();
+    const ended = await this.endAccount(id, options, now, alongside);
+
+    return ended && { requestedAt: now, purgeAfter: now, result: ended.result as T };
+  }
+
+  /**
+   * End account `id`: the shared half of {@link requestDeletion} and {@link endAccountNow}. Events go
+   * out after the commit.
+   */
+  private async endAccount(
+    id: string,
+    options: DeletionOptions,
+    purgeAfter: Date,
+    alongside?: (manager: EntityManager) => Promise<unknown>,
+  ): Promise<{ result: unknown } | null> {
     const outcome = await this.userRepository.manager.transaction(async (manager) => {
       const handedOver = await this.lockAndHandOver(manager, id, options);
 
@@ -464,11 +581,13 @@ export class UserService {
 
       await manager.query(`DELETE FROM ci.signup_code WHERE issued_by = $1 AND used = false`, [id]);
 
-      return handedOver;
+      await this.closeSharedAccess(manager, id);
+
+      return { successorId: handedOver.successorId, result: await alongside?.(manager) };
     });
 
     if (outcome == null) {
-      return false;
+      return null;
     }
 
     if (outcome.successorId) {
@@ -479,37 +598,43 @@ export class UserService {
       userId: id,
     });
 
-    return true;
+    return { result: outcome.result };
   }
 
   /**
-   * The last-administrator rule of {@link requestDeletion}, for a deletion that does not go through
-   * it: the privacy route's immediate hard delete (`POST /users/me/delete`). When `id` is the last
-   * live administrator and other live accounts remain, `options.successorEmail` must name one of
-   * them, and that account becomes administrator now. Otherwise this throws
-   * {@link LastAdminDeletionRefused} and writes nothing.
+   * Close every way another person reads account `id`'s memory without signing in as it, in the
+   * transaction that ends the account. Hiding the user row stops the account's own sign-ins, but
+   * these paths never resolve the owner through it: a shared saved search runs as its owner from the
+   * token alone (`SavedSearchService.findByShareToken`), and an inbound peer ask is answered as the
+   * owner of whichever live `ci.peer_links` row matches the peer (`PeerAskService.resolveLink`).
+   * Left alone they kept answering until the purge reached those tables, which is hours into an
+   * immediate delete of a large account and the whole 30-day grace period of `DELETE /account`.
    *
-   * The hard delete that follows runs outside this lock, so an administrator leaving this way at
-   * the same moment as the only other one leaves can still empty the role. The cost is the
-   * admin-less appliance {@link ApplianceAdminGuard} keeps closed until an operator names an
-   * administrator, never a promotion.
+   * Each write is the one the owner's own control makes: unsharing (`setSharing(false)`), revoking a
+   * peer link, revoking a grant. They are not undone by an operator restoring the account inside
+   * the grace period; its owner shares and links again, which also rotates the share tokens.
+   * Raw SQL for the reason the invitations above are: those tables belong to domains that depend on
+   * this one.
    */
-  async handOverAdministration(
-    context: ServiceContext,
-    id: string,
-    options: DeletionOptions = {},
-  ): Promise<void> {
-    if (context.userId !== SYSTEM_USER && context.userId !== id) {
-      throw new UnauthorizedException();
-    }
-
-    const handedOver = await this.userRepository.manager.transaction((manager) =>
-      this.lockAndHandOver(manager, id, options),
+  private async closeSharedAccess(manager: EntityManager, id: string): Promise<void> {
+    await manager.query(
+      `UPDATE ci.saved_searches
+          SET is_public = false, share_token = NULL, share_max_disclosure = NULL, share_expires_at = NULL
+        WHERE user_id = $1 AND (is_public OR share_token IS NOT NULL)`,
+      [id],
     );
-
-    if (handedOver?.successorId) {
-      await this.eventService.send(UserUpdatedEvent, { userId: handedOver.successorId });
-    }
+    await manager.query(
+      `UPDATE ci.peer_links
+          SET status = 'revoked', revoked_at = now(), updated_at = now()
+        WHERE owner_user_id = $1 AND revoked_at IS NULL`,
+      [id],
+    );
+    await manager.query(
+      `UPDATE ci.ask_grants
+          SET revoked_at = now(), revocation_reason = 'revoked', updated_at = now()
+        WHERE owner_user_id = $1 AND revoked_at IS NULL`,
+      [id],
+    );
   }
 
   /**
@@ -524,8 +649,13 @@ export class UserService {
   ): Promise<{ successorId: string | null } | null> {
     await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
 
+    // FOR UPDATE: a row written for this account from here on (a foreign key takes KEY SHARE on
+    // this row) waits for this transaction to commit. It then succeeds: the foreign key checks
+    // only that the row exists, not `deleted_at`. Such a row is left to the purge, which runs a
+    // second pass when one blocks the account row's delete (`DataDeletionService.purgeEndedAccount`)
+    // and otherwise is retried by the hourly purge.
     const [target] = await manager.query<Array<{ id: string; role: string }>>(
-      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
       [id],
     );
 

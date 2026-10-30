@@ -14,7 +14,6 @@ import {
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
-import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import { SearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar';
 import {
   FILTER_PARAMS,
@@ -23,6 +22,7 @@ import {
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 import { MobileSearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters';
 
+import { routeForEntity, savedRecordRoute } from './entityRoute';
 import type { FilterDragPayload } from './filterDrag';
 import { CommunicationResult } from './results/CommunicationResult';
 import { ConceptResult } from './results/ConceptResult';
@@ -118,7 +118,7 @@ export function GlobalSearchBox() {
   const excludeTypes =
     userExcludedTypes.length > 0 ? [...userExcludedTypes, 'answer', 'browser-activity'] : undefined;
 
-  const { data, tags, loading, error } = useSearchService({
+  const { data, tags, loading, error, source } = useSearchService({
     searchQuery: query ?? '',
     semantic,
     includeTypes,
@@ -271,57 +271,64 @@ export function GlobalSearchBox() {
     );
   }, [setSearchParams]);
 
-  const suggestions = useMemo<SearchResultItem[]>(
-    () =>
-      data.map((item) => {
-        switch (item.__typename) {
-          case 'CommunicationType':
-            return { id: item.id, content: <CommunicationResult communication={item} /> };
+  const suggestions = useMemo<SearchResultItem[]>(() => {
+    const rows = data.map((item): SearchResultItem => {
+      switch (item.__typename) {
+        case 'CommunicationType':
+          return { id: item.id, content: <CommunicationResult communication={item} /> };
 
-          case 'ConceptType':
-            return { id: item.id, content: <ConceptResult concept={item} /> };
+        case 'ConceptType':
+          return { id: item.id, content: <ConceptResult concept={item} /> };
 
-          case 'ContentType':
-            return { id: item.id, content: <ContentResult content={item} /> };
+        case 'ContentType':
+          return { id: item.id, content: <ContentResult content={item} /> };
 
-          case 'EventType':
-            return { id: item.id, content: <EventResult event={item} /> };
+        case 'EventType':
+          return { id: item.id, content: <EventResult event={item} /> };
 
-          case 'FileType':
-            return { id: item.id, content: <FileResult file={item} /> };
+        case 'FileType':
+          return { id: item.id, content: <FileResult file={item} /> };
 
-          case 'ItemType':
-            return { id: item.id, content: <ItemResult item={item} /> };
+        case 'ItemType':
+          return { id: item.id, content: <ItemResult item={item} /> };
 
-          case 'NoteType':
-            return { id: item.id, content: <NoteResult note={item} /> };
+        case 'NoteType':
+          return { id: item.id, content: <NoteResult note={item} /> };
 
-          // Person/place rows carry their drag payload (`filterName` is the
-          // query-level unmasked name) so the right arrow can add them as
-          // who/where filters without a drag.
-          case 'PersonType':
-            return {
-              id: item.id,
-              content: <PersonResult person={item} />,
-              filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
-            };
+        // Person/place rows carry their drag payload (`filterName` is the
+        // query-level unmasked name) so the right arrow can add them as
+        // who/where filters without a drag.
+        case 'PersonType':
+          return {
+            id: item.id,
+            content: <PersonResult person={item} />,
+            filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
+          };
 
-          case 'PlaceType':
-            return {
-              id: item.id,
-              content: <PlaceResult place={item} />,
-              filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
-            };
+        case 'PlaceType':
+          return {
+            id: item.id,
+            content: <PlaceResult place={item} />,
+            filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
+          };
 
-          case 'ThreadType':
-            return { id: item.id, content: <ThreadResult thread={item} /> };
+        case 'ThreadType':
+          return { id: item.id, content: <ThreadResult thread={item} /> };
 
-          default:
-            return { id: item.id, content: null };
-        }
-      }),
-    [data],
-  );
+        default:
+          return { id: item.id, content: null };
+      }
+    });
+
+    // Answered from this phone's synced index because the Memory server did
+    // not answer. Said once, over the first row: a stale local answer must
+    // never pass for the server's.
+    if (source === 'device' && rows.length > 0) {
+      rows[0] = { ...rows[0], heading: t('SEARCH_FROM_THIS_PHONE_HEADING') };
+    }
+
+    return rows;
+  }, [data, source, t]);
 
   const results = useMemo<SearchResultItem[]>(() => {
     const trimmed = (query ?? '').trim();
@@ -531,6 +538,16 @@ export function GlobalSearchBox() {
       if (id === SEARCH_ACTION_ID) {
         commitSearch(query ?? '');
 
+        // On a list page the query was already mirrored into the page as it was
+        // typed, so the commit itself changes nothing on screen; tapping the row
+        // has to be seen to do something. Let go of the input: the panel closes
+        // (and a phone's keyboard with it), the way Enter dismisses the panel,
+        // and the input keeps showing the query it committed. Off a list page
+        // the commit navigates and remounts the box, which closes it anyway.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
+
         return;
       }
 
@@ -566,48 +583,36 @@ export function GlobalSearchBox() {
 
       const { type, id: decodedId } = GlobalUID.decode(id);
 
-      switch (type) {
-        case 'communication':
-          navigate(`/communications/${decodedId}`);
-          break;
+      // An answer from this phone opens the record this phone holds: the
+      // per-type pages need the appliance, which did not answer.
+      if (source === 'device') {
+        navigate(savedRecordRoute(type, decodedId));
 
-        case 'concept':
-          navigate(`/concepts/${decodedId}`);
-          break;
+        return;
+      }
 
-        case 'content':
-          navigate(`/content/${decodedId}`);
-          break;
+      // A file has no page of its own; its route is the gallery searched for
+      // its name (see routeForEntity). The name is on the node when the
+      // fragment is not masked, and the typed query is the next best search.
+      const node = data.find((item) => item.id === id) as { filename?: string | null } | undefined;
+      const route = routeForEntity(type, decodedId, { title: node?.filename ?? query ?? undefined });
 
-        case 'event':
-          navigate(`/events/${decodedId}`);
-          break;
-
-        case 'item':
-          navigate(`/items/${decodedId}`);
-          break;
-
-        case 'note':
-          navigate(`/notes/${decodedId}`);
-          break;
-
-        case 'person':
-          navigate(`/people/${decodedId}`);
-          break;
-
-        case 'place':
-          navigate(`/places/${decodedId}`);
-          break;
-
-        case 'thread':
-          navigate(chatThreadPath(decodedId));
-          break;
-
-        default:
-          break;
+      if (route) {
+        navigate(route);
       }
     },
-    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, onLiveSearchPage, query],
+    [
+      addRecentSearch,
+      clearFilters,
+      clearInput,
+      clearQuery,
+      commitSearch,
+      data,
+      navigate,
+      onLiveSearchPage,
+      query,
+      source,
+    ],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden

@@ -244,6 +244,21 @@ describe('ImportRunsController.get', () => {
     expect(listed.dataSources).toEqual(['audible', 'amazon']);
   });
 
+  it.each(['-1', '0', '2.5', 'lots'])(
+    'lists the default page for limit=%j instead of passing it on',
+    async (limit) => {
+      // `-1` used to reach the query as a negative LIMIT and answer 500.
+      const { controller, runs } = makeController();
+
+      await controller.list(ctx, limit);
+
+      expect(runs.listRuns).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ limit: undefined }),
+      );
+    },
+  );
+
   it('404s a run this user does not have', async () => {
     const { controller } = makeController({ detail: null });
 

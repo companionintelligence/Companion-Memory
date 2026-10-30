@@ -87,6 +87,7 @@ function countUserFetches(mock: ReturnType<typeof setFetch>) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   h.auth = { authToken: 'test-token', subject: 'user-a', initializing: false, authenticated: undefined };
   delete (window as unknown as { Capacitor?: unknown }).Capacitor;
   setApiKey(null);
@@ -130,6 +131,59 @@ describe('useFeatures', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
+  });
+
+  it('falls back to the flags the appliance last gave this person when the fetch fails', async () => {
+    // A session that reached the appliance remembers its answer…
+    setFetch();
+    const first = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(first.result.current.isFeatureEnabled('insights.page')).toBe(true));
+    await waitFor(() => expect(first.result.current.isFeatureEnabled('files.page')).toBe(true));
+    first.unmount();
+
+    // …so a later launch with the appliance away still has the routes behind them.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('offline'))),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
+    expect(result.current.isFeatureEnabled('files.page')).toBe(true);
+    expect(result.current.isFeatureEnabled('stats.page')).toBe(false);
+  });
+
+  it("does not hand one person's remembered flags to another, nor one box's to another", async () => {
+    setFetch();
+    const first = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(first.result.current.isFeatureEnabled('insights.page')).toBe(true));
+    first.unmount();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('offline'))),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    h.auth.subject = 'user-b';
+    const other = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(other.result.current.loading).toBe(false));
+    expect(other.result.current.isFeatureEnabled('insights.page')).toBe(false);
+    other.unmount();
+
+    h.auth.subject = 'user-a';
+    setApiBaseUrl('https://another.example');
+    const elsewhere = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(elsewhere.result.current.loading).toBe(false));
+    expect(elsewhere.result.current.isFeatureEnabled('insights.page')).toBe(false);
+    expect(elsewhere.result.current.isFeatureEnabled('files.page')).toBe(false);
   });
 
   it('stops loading once a failed fetch has answered', async () => {
@@ -277,6 +331,37 @@ describe('useFeatures', () => {
 
     expect(headers['x-api-key']).toBe('native-key');
     expect(headers.Authorization ?? headers.authorization).toBeUndefined();
+  });
+
+  it("remembers a phone's flags under its API key, which has no session subject, and recalls them offline", async () => {
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    setApiBaseUrl('https://memory.example.com');
+    setApiKey('native-key');
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: true };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(ok(isGlobal(input) ? { 'files.page': true } : { 'self.page': true })),
+      ),
+    );
+    const online = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(online.result.current.isFeatureEnabled('self.page')).toBe(true));
+    online.unmount();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('Fetch failed: 500'))),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const offline = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(offline.result.current.loading).toBe(false));
+    expect(offline.result.current.isFeatureEnabled('self.page')).toBe(true);
+    expect(offline.result.current.isFeatureEnabled('files.page')).toBe(true);
   });
 
   it('refresh forces a refetch', async () => {

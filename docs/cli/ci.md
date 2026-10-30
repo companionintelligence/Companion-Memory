@@ -75,6 +75,10 @@ unreachable server, unknown stage), **1** a failure the appliance owns (5xx, an
 unexpected exception — which also prints a stack). `doctor` overloads **1** with
 one more meaning: its gate tripped — see its section below.
 
+With `--wait`, `import`, `inbox --start` and `push` also exit **1** when a run they
+followed ended `failed` or `cancelled`. The message names each such run with its error. A
+`partial` run still exits 0, because it imported what it could.
+
 ---
 
 ## It is an HTTP client, not an embedded server
@@ -134,6 +138,10 @@ percentage moves, the run closes — rather than redrawing on a timer. A redrawn
 progress bar becomes thousands of lines of escape codes in a CI log, and this
 reads the same piped as it does in a terminal.
 
+When the wait ends, its exit code says how the runs ended. A run that failed or
+was cancelled exits **1**, so `ci import export.zip --wait && next-step` stops
+there instead of going on as if the import had happened.
+
 ---
 
 ## Commands
@@ -168,6 +176,23 @@ ci memory configure --backend openai-compatible --port 8000 --backend-api-key '�
 Run `memory check` before selecting a model. A reachable server with no exposed
 models is not ready for chat. Full setup paths and troubleshooting are in
 [Companion Memory setup](../setup/companion-memory.md).
+
+### `mcp serve --stdio`
+
+Bridges newline-delimited JSON-RPC 2.0 on stdin/stdout to the appliance's
+Streamable HTTP `/mcp` endpoint (with automatic fallback to `/api/mcp` when
+behind a gateway prefix). Used by MCP hosts that spawn a local subprocess
+rather than speaking Streamable HTTP directly (Claude Desktop stdio connectors,
+Cursor, Goose, MCP Inspector).
+
+```bash
+CI_SERVER_URL=https://ci-memory.example.com CI_API_KEY=… ci mcp serve --stdio
+```
+
+Preserves the `Mcp-Session-Id` header across requests, unpacks both
+`application/json` and `text/event-stream` responses onto stdout, and sends a
+`DELETE` to close the remote MCP session when stdin closes. See
+[`docs/mcp/clients.md`](../mcp/clients.md).
 
 ### `datasources [--catalog] [--json]`
 

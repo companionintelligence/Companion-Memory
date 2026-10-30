@@ -8,6 +8,13 @@ interface Props {
    * attribution so the quote can never be read as the app talking.
    */
   attribution: string;
+  /**
+   * The server already stripped characters that render as nothing from this
+   * text before storing it (`AskQueryType.promptHiddenCharactersRemoved`), so
+   * `prompt` no longer holds any for {@link sanitizeAskerText} to find. The
+   * note below still has to show in that case.
+   */
+  hiddenCharactersRemoved?: boolean;
 }
 
 /**
@@ -39,8 +46,10 @@ interface Props {
  * disclose needs to know when they are not seeing the whole request, and when
  * the request contained characters that render as nothing.
  */
-export function AskerQuote({ prompt, attribution }: Props) {
-  const { text, truncated, removedHiddenCharacters } = sanitizeAskerText(prompt);
+export function AskerQuote({ prompt, attribution, hiddenCharactersRemoved = false }: Props) {
+  const sanitized = sanitizeAskerText(prompt);
+  const { text, truncated } = sanitized;
+  const removedHiddenCharacters = sanitized.removedHiddenCharacters || hiddenCharactersRemoved;
 
   return (
     <figure className="border-muted-foreground/30 m-0 flex flex-col gap-1 border-l-2 pl-3">

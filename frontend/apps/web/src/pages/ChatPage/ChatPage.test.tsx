@@ -437,7 +437,7 @@ describe('ChatPage', () => {
 
     it('marks a token rate that was estimated from chunks rather than counted', () => {
       h.local = {
-        modelId: 'qwen3-0.6b-int4',
+        modelId: 'gemma-4-e2b-it',
         stats: {
           timeToFirstTokenMs: 300,
           totalMs: 1000,
@@ -452,12 +452,12 @@ describe('ChatPage', () => {
     });
 
     it('shows the badge without numbers while the turn is still streaming', () => {
-      h.local = { modelId: 'qwen3-0.6b-int4', stats: null };
+      h.local = { modelId: 'gemma-4-e2b-it', stats: null };
       renderNew();
 
       const badge = screen.getByTestId('on-device-badge');
 
-      expect(badge).toHaveTextContent('Answered on this phone · Qwen3 0.6B');
+      expect(badge).toHaveTextContent('Answered on this phone · Gemma 4 E2B');
       expect(badge).not.toHaveTextContent('tok/s');
     });
 
@@ -470,7 +470,7 @@ describe('ChatPage', () => {
 
       localStorage.setItem(
         'ci.localLlm.prefs',
-        JSON.stringify({ mode: 'device', modelId: 'qwen3-0.6b-int4' }),
+        JSON.stringify({ mode: 'device', modelId: 'gemma-4-e2b-it' }),
       );
       resetLocalLlmPrefsCache();
       renderNew();
@@ -482,7 +482,7 @@ describe('ChatPage', () => {
       h.selectedModel = null;
       localStorage.setItem(
         'ci.localLlm.prefs',
-        JSON.stringify({ mode: 'appliance', modelId: 'qwen3-0.6b-int4' }),
+        JSON.stringify({ mode: 'appliance', modelId: 'gemma-4-e2b-it' }),
       );
       resetLocalLlmPrefsCache();
       renderNew();
@@ -492,7 +492,7 @@ describe('ChatPage', () => {
 
     it('lets a starter prompt send with no appliance model when the phone can answer', () => {
       h.selectedModel = null;
-      localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'auto', modelId: 'qwen3-0.6b-int4' }));
+      localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'auto', modelId: 'gemma-4-e2b-it' }));
       resetLocalLlmPrefsCache();
       renderNew();
 
@@ -504,7 +504,6 @@ describe('ChatPage', () => {
     it('reads photos on the phone only when the phone alone answers and its model can see', () => {
       const cases: Array<[string, string, string]> = [
         ['device', 'gemma-4-e2b-it', 'true'],
-        ['device', 'qwen3-0.6b-int4', 'false'], // no vision
         ['auto', 'gemma-4-e2b-it', 'false'], // the appliance may answer, so attach uploads there
         ['appliance', 'gemma-4-e2b-it', 'false'],
       ];
@@ -614,7 +613,7 @@ describe('ChatPage', () => {
     // "Always answer on this phone" never creates a server thread, so there is no thread id to go on — the
     // on-device badge is what says a turn has happened in this chat.
     it('starts a new chat when the Chat link is followed after an on-device turn, which has no thread', () => {
-      h.local = { modelId: 'qwen3-0.6b-int4', stats: null };
+      h.local = { modelId: 'gemma-4-e2b-it', stats: null };
       renderWithProviders(
         <>
           <Link to="/memory/chat">drawer: Chat</Link>
@@ -694,10 +693,9 @@ describe('ChatPage', () => {
      */
     it('blocks uploads only when the phone alone answers and its model cannot read photos', () => {
       const cases: Array<[string, string, string]> = [
-        ['device', 'qwen3-0.6b-int4', 'true'], // nothing local can read a file: attach would only upload
         ['device', 'gemma-4-e2b-it', 'false'], // photos are read on the phone, never uploaded
-        ['auto', 'qwen3-0.6b-int4', 'false'], // the appliance may answer, so attach uploads there on purpose
-        ['appliance', 'qwen3-0.6b-int4', 'false'],
+        ['auto', 'gemma-4-e2b-it', 'false'], // the appliance may answer, so attach uploads there on purpose
+        ['appliance', 'gemma-4-e2b-it', 'false'],
       ];
 
       for (const [mode, modelId, expected] of cases) {
@@ -717,7 +715,7 @@ describe('ChatPage', () => {
      */
     it('lets the speed readout wrap rather than cutting it off with an ellipsis', () => {
       h.local = {
-        modelId: 'qwen3-0.6b-int4',
+        modelId: 'gemma-4-e2b-it',
         stats: {
           timeToFirstTokenMs: 1200,
           totalMs: 4000,
@@ -989,7 +987,7 @@ describe('ChatPage', () => {
         noTools();
         localStorage.setItem(
           'ci.localLlm.prefs',
-          JSON.stringify({ mode: 'device', modelId: 'qwen3-0.6b-int4' }),
+          JSON.stringify({ mode: 'device', modelId: 'gemma-4-e2b-it' }),
         );
         resetLocalLlmPrefsCache();
         renderEmpty();

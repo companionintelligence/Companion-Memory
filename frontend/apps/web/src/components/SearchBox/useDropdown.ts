@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { createHookContext } from '@ci/common';
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { useSearchParams } from 'react-router-dom';
 
 import {
@@ -68,6 +69,22 @@ export function excludedEntityTypesFor(selected: string[]): string[] {
   const excluded = AVAILABLE_ENTITY_TYPES.filter((type) => !selected.includes(type));
 
   return excluded.length === 0 ? [] : [...excluded, ...HIDDEN_ENTITY_TYPES];
+}
+
+/**
+ * The entity types a saved search STORES for a selection: the raw names of
+ * the chosen types when the selection is narrower than the full pickable set,
+ * and nothing at all when it is not. "Every type" is the picker's resting
+ * state, not a choice, and writing all eleven names into the row made a
+ * search saved with no What filter look narrowed on its card (eleven type
+ * dots against a seed's none) and, run as a shared search, drop the hidden
+ * kinds the picker never offers. Restore already reads an empty list as "no
+ * narrowing", so this changes only what is written.
+ */
+export function savedEntityTypesFor(selected: string[]): string[] {
+  const narrowed = AVAILABLE_ENTITY_TYPES.some((type) => !selected.includes(type));
+
+  return narrowed ? selected.map((type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP]) : [];
 }
 
 function sameEntityTypes(a: string[], b: string[]) {
@@ -209,7 +226,11 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
 
   // Date range, tags, and sort are read straight from the URL (no inversion logic like entity
   // types), so derive them per-render and write through setters that update the search params.
-  const tags = searchParams.get('tags')?.split(',').filter(Boolean) || [];
+  // One `tags` occurrence per label (`?tags=a&tags=b`), like `people` / `places`.
+  const tags = searchParams
+    .getAll('tags')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
   const whenPreset = searchParams.get('when') || '';
   const dateFrom = searchParams.get('from') || '';
   const dateTo = searchParams.get('to') || '';
@@ -223,10 +244,10 @@ function useDropdown({ changeSearchParams = true }: { changeSearchParams: boolea
       }
 
       setSearchParams((params) => {
-        if (next.length === 0) {
-          params.delete('tags');
-        } else {
-          params.set('tags', next.join(','));
+        params.delete('tags');
+
+        for (const tag of next) {
+          params.append('tags', tag);
         }
 
         return params;

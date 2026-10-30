@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import logo from '@/assets/logo.png';
+import { AppToaster } from '@/components/AppToaster';
 import { ErrorState } from '@/components/ErrorState';
 import { InlineModal } from '@/components/InlineModal';
 import { ThemeToggle } from '@/components/ThemePicker';
@@ -193,6 +194,14 @@ export function ProviderPage() {
 
   return (
     <>
+      {/* This page is routed outside MainLayout (App.tsx), which holds the
+          app's only other toaster, so without its own every toast here went
+          nowhere: a refused or failed Connect looked like a button that did
+          nothing. AppToaster, not a bare Toaster, so on a phone the toast
+          sits under the header like everywhere else instead of over the Back
+          control and the home indicator. */}
+      <AppToaster />
+
       <InlineModal open={connectLoading || !!authorizationUrl}>
         <LoadingPage />
       </InlineModal>

@@ -562,4 +562,9 @@ export const FILE_REFERENCE_COLUMNS: Record<
     reason:
       'the file’s id in the source system (a Drive file id), which a connector reads and writes. It is not the id of a `ci.files` row, and the name only looks like one.',
   },
+  'ci_etl.cloud_folder_exports.file_count': {
+    effect: 'unrelated',
+    reason:
+      'how many files a sync has seen under an export folder in a cloud drive. It is a number, not the id of a `ci.files` row; only the name looks like a file reference.',
+  },
 };

@@ -71,7 +71,7 @@ Severity + owner tags follow `DELIVERY.md`:
 | 7 | **Location — foreground / precise** | ⚠️ / ✅ | `ACCESS_FINE_LOCATION` (+`COARSE`) → **Permissions Declaration Form (location)**; from Android 17 the **location button** becomes the recommended minimum scope | `CLLocationManager` → `NSLocationWhenInUseUsageDescription` | Precise location | 🟠 implies who you were with | **2** |
 | 8 | **Health & fitness** | ⚠️ / ⚠️ | Health Connect `android.permission.health.READ_*` → **Health apps declaration form** (+`READ_HEALTH_DATA_HISTORY` for >30 days) | HealthKit → `com.apple.developer.healthkit` entitlement + `NSHealthShareUsageDescription` (+`NSHealthUpdateUsageDescription` if writing) | Health info · Health | ✅ none | **3** |
 | 9 | **Contacts** | ⚠️ / ⚠️ | `READ_CONTACTS` → **contacts declaration form from Sept 2026, mandatory 2027-01-27** for targetSdk 37+; **Contact Picker** is the minimum-scope alternative | `CNContactPickerViewController` (**no string**) vs `CNContactStore` (`NSContactsUsageDescription`) | Contacts · Contacts | 🔴🔴 **entire address book of non-consenting people** | **3 (picker only)** |
-| 10 | **Location — background** | ⚠️ / ⚠️ | `ACCESS_BACKGROUND_LOCATION` + FGS `location` → **background-location declaration + video demo** + FGS-type declaration | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **shipped 2026-08-21, ahead of plan — §3.4** |
+| 10 | **Location — background** | ⚠️ / ⚠️ | `ACCESS_BACKGROUND_LOCATION` (declared again since 2026-10-26, §3.4) + FGS `location` → **background-location declaration + video demo** + FGS-type declaration | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **shipped 2026-08-21, ahead of plan — §3.4** |
 | 11 | **Photos & videos — full library read** | ⚠️ / ⚠️ | `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` → **Photo & Video Permissions declaration**; broad access is for *"gallery apps"* | `PHPhotoLibrary` full auth → `NSPhotoLibraryUsageDescription`; Apple 5.1.1(iii) says *use the picker* | Photos and videos | 🟠 | **4 (only if 1+2 provably insufficient)** |
 | 12 | **App usage / screen time** | ⚠️ / ⛔ | `PACKAGE_USAGE_STATS` (Settings special access, **no runtime prompt, no Play form found**) but *"inventory of other apps on the device"* is named personal & sensitive data | **No path.** `FamilyControls` entitlement is special-request; `DeviceActivityReport` data is sandboxed in-extension and cannot reach your app | App interactions · Installed apps | ✅ none | **4 — Android only** |
 | 13 | **Installed-apps list** | ⛔ / ⛔ | `QUERY_ALL_PACKAGES` → form; permitted uses are *"device search, antivirus apps, file managers, and browsers"* only | No public API; 5.1.2(iv) bans it outright | Installed apps | ✅ | **never** |
@@ -255,16 +255,32 @@ Background is a different animal:
 > Phase 4 release. Budget the "two rejection cycles" above into the critical path for the
 > *next* Play upload, whatever it is.
 
-**Always mode (both platforms).** Settings → Location is Off / While using / Always.
-Always requests `NSLocationAlwaysAndWhenInUseUsageDescription` (iOS) /
-`ACCESS_BACKGROUND_LOCATION` (Android) after When-In-Use/foreground is already granted, and
-starts a continuous watcher that keeps sampling once the app is backgrounded — filtered by
-`distanceFilter` rather than by significant-change. Android shows a persistent "Recording
-location" notification while this is on (the OS's price of admission for a background
-location session); iOS shows the blue status-bar indicator. In-app copy frames this as
-remembering *places for your memory* and writes `ci.position` only — Places still come from
-existing server enrichment. There is no home geofence in this design; the old tracker's
-burst-on-geofence-exit behavior has no equivalent in the community plugin.
+> 🟢 **[code] Update 2026-10-14: Android no longer declares `ACCESS_BACKGROUND_LOCATION`.**
+> Nothing ever requested it at runtime. On Android the plugin asks only for FINE/COARSE and
+> keeps sampling through its foreground service of type `location`, behind the "Recording
+> location" notification, which Android counts as while-in-use access. Play now needs only
+> the foreground-service `location` declaration and its video for Android. See
+> [`../android/DEVICE_DATA_COMPLIANCE.md`](../android/DEVICE_DATA_COMPLIANCE.md) §3.4. iOS is
+> unchanged.
+
+> 🔵 **[code] Update 2026-10-26: Android declares `ACCESS_BACKGROUND_LOCATION` again** for
+> `@ci/capacitor-local-hub`'s motion-gated tracker (GPS only while moving; an exit geofence,
+> which needs the grant, restarts it), and `@capacitor-community/background-geolocation` is
+> gone from both shells — there is no on-screen trail on either platform, and "While using"
+> means a current location on request only. iOS Always is unchanged: the plugin's
+> significant-change monitoring. See the Android file's §3.4 for the Play declarations this
+> brings back.
+
+**Always mode (both platforms).** Settings > Location is Off / While using / Always.
+On iOS, Always requests `NSLocationAlwaysAndWhenInUseUsageDescription` after When-In-Use is
+already granted and starts significant-change monitoring. On Android it requests
+`ACCESS_BACKGROUND_LOCATION` ("Allow all the time") and arms the motion-gated tracker. Either
+way sampling continues once the app is backgrounded, gated at 150 m / 5 min. Android shows
+the "Recording location" notification only while the phone is moving (the OS's price of
+admission for a location foreground service); iOS shows the blue status-bar indicator. In-app
+copy frames this as remembering *places for your memory* and writes `ci.position` only — Places
+still come from existing server enrichment. There is no home geofence in this design; Android's
+exit geofence is set wherever the phone came to rest, not at a place.
 
 Apple: `NSLocationWhenInUseUsageDescription` → `NSLocationAlwaysAndWhenInUseUsageDescription`
 + `UIBackgroundModes: location`. No declaration form, but 5.1.5 requires location be

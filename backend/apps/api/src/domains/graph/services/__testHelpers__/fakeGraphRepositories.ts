@@ -22,7 +22,7 @@
  * shape. The property merge the SQL performs is proven against real Postgres in
  * GraphIngestService.propertyMerge.integration.spec.ts; here it is the TS twin.
  */
-import { mergeIngestedProperties } from '../../utils/ingestedProperties';
+import { mergeIngestedProperties, userEditedKeys } from '../../utils/ingestedProperties';
 
 interface StoredNode {
   entityId: string;
@@ -178,11 +178,16 @@ export function makeFakeNodeRepository(
           // reference to it), takes the incoming name/description unless null,
           // and merges the incoming properties. RETURNING yields the row that
           // actually exists, which is what the service maps keys to.
+          // A name or description a person set by hand stays, as the conflict
+          // action's CASE keeps it.
+          const handSet = current ? userEditedKeys(current.properties) : [];
           const landed = current
             ? {
                 ...current,
-                name: row.name ?? current.name,
-                description: row.description ?? current.description,
+                name: handSet.includes('name') ? current.name : (row.name ?? current.name),
+                description: handSet.includes('description')
+                  ? current.description
+                  : (row.description ?? current.description),
                 properties: mergeIngestedProperties(
                   current.properties,
                   row.properties,

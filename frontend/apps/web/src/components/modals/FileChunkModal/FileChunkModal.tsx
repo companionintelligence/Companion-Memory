@@ -58,7 +58,11 @@ export function FileChunkModal({ entity, onClose }: Props) {
 
         {sourceUrl && (
           <Dialog.Footer className="border-t px-6 py-4">
-            <Button type="button" variant="outline" onClick={() => window.open(sourceUrl, '_blank')}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => window.open(sourceUrl, '_blank', 'noopener,noreferrer')}
+            >
               Open File
             </Button>
           </Dialog.Footer>

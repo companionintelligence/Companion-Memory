@@ -14,6 +14,9 @@ export const TIMELINE_INITIAL_ZOOM_INDEX = 5;
 export const TIMELINE_MAX_ZOOM_INDEX = TIMELINE_ZOOM_SEQUENCE.length - 1;
 export const TIMELINE_MAX_SCALE_FACTOR = TIMELINE_ZOOM_SEQUENCE[TIMELINE_MAX_ZOOM_INDEX];
 export const TIMELINE_INITIAL_SCALE_FACTOR = TIMELINE_ZOOM_SEQUENCE[TIMELINE_INITIAL_ZOOM_INDEX];
+export const MOBILE_TIMELINE_INITIAL_ZOOM_INDEX = 4;
+export const MOBILE_TIMELINE_INITIAL_SCALE_FACTOR =
+  TIMELINE_ZOOM_SEQUENCE[MOBILE_TIMELINE_INITIAL_ZOOM_INDEX];
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -150,6 +153,11 @@ export function syncTimeaxisLabelCollision(root: ParentNode): void {
  */
 /** Target px between labeled ticks; densified ticks stay as short ruler marks. */
 export const TIMELINE_OPTIMAL_TICK_WIDTH = 48;
+/** Phones need fewer labels and a larger tap target between adjacent moments. */
+export const MOBILE_TIMELINE_OPTIMAL_TICK_WIDTH = 64;
+export const MOBILE_TIMELINE_NAV_PERCENT = 48;
+/** Keep runtime layout on the same side of the app-wide 896px device breakpoint. */
+const MOBILE_TIMELINE_MAX_WIDTH = 895;
 
 export function timelineJsOptions({
   width,
@@ -164,26 +172,31 @@ export function timelineJsOptions({
   bg: Rgb;
   languageUrl: string;
 }): Record<string, unknown> {
+  const mobile = width != null && width <= MOBILE_TIMELINE_MAX_WIDTH;
+  const resolvedHeight = height ?? TIMELINE_HEIGHT_PX;
+  const initialZoom = mobile ? MOBILE_TIMELINE_INITIAL_ZOOM_INDEX : TIMELINE_INITIAL_ZOOM_INDEX;
+
   return {
-    height: height ?? TIMELINE_HEIGHT_PX,
+    height: resolvedHeight,
     width,
-    timenav_height: 72,
-    timenav_height_percentage: 22,
-    marker_height_min: 24,
-    marker_padding: 3,
+    timenav_height: mobile ? Math.round(resolvedHeight * (MOBILE_TIMELINE_NAV_PERCENT / 100)) : 72,
+    timenav_height_percentage: mobile ? MOBILE_TIMELINE_NAV_PERCENT : 22,
+    timenav_mobile_height_percentage: mobile ? MOBILE_TIMELINE_NAV_PERCENT : 40,
+    marker_height_min: mobile ? 32 : 24,
+    marker_padding: mobile ? 6 : 3,
     start_at_slide: startAtSlide + 1,
     hash_bookmark: false,
     default_bg_color: bg,
     duration: 0,
-    dragging: false,
+    dragging: mobile,
     trackResize: false,
     soundcite: false,
     font: false,
     theme: false,
     language: languageUrl,
-    optimal_tick_width: TIMELINE_OPTIMAL_TICK_WIDTH,
-    scale_factor: TIMELINE_INITIAL_SCALE_FACTOR,
-    initial_zoom: TIMELINE_INITIAL_ZOOM_INDEX,
+    optimal_tick_width: mobile ? MOBILE_TIMELINE_OPTIMAL_TICK_WIDTH : TIMELINE_OPTIMAL_TICK_WIDTH,
+    scale_factor: mobile ? MOBILE_TIMELINE_INITIAL_SCALE_FACTOR : TIMELINE_INITIAL_SCALE_FACTOR,
+    initial_zoom: initialZoom,
     zoom_sequence: [...TIMELINE_ZOOM_SEQUENCE],
   };
 }

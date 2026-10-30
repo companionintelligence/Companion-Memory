@@ -21,7 +21,7 @@ jest.mock('exifr', () => ({ __esModule: true, default: { parse: jest.fn() } }));
 import exifr from 'exifr';
 
 // Stub execFile so the ffprobe call is deterministic without the binary (the
-// callback must deliver one {stdout, stderr} object — see _exif.test.ts).
+// callback must deliver one {stdout, stderr} object — see common/media/__tests__/exif.test.ts).
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<typeof import('node:child_process')>('node:child_process'),
   execFile: jest.fn(),
@@ -33,7 +33,7 @@ import { execFile } from 'node:child_process';
 // execFile) before any `const` in this file initializes. Grab the handle after.
 const mockExecFile = execFile as unknown as jest.Mock;
 
-import { _resetFfprobeAvailability } from '../_exif';
+import { _resetFfprobeAvailability } from '@ci/common/media/exif';
 import { allDataSources } from '../registry';
 import type { ImportParams } from '../timeline';
 import '../generic';

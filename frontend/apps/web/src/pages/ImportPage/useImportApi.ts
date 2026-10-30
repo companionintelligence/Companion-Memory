@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { apiFetch, apiKeyHeaders, buildApiUrl, fetchJson } from '@ci/common';
+import {
+  apiFetch,
+  apiKeyHeaders,
+  assertApplianceWritable,
+  buildApiUrl,
+  fetchJson,
+  isOfflineWriteError,
+} from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
@@ -72,6 +79,27 @@ export interface CatalogSource {
   /** Effective importer name — what a run's detected `dataSources` records. */
   readonly importer: string;
   readonly importerReady: boolean;
+}
+
+/**
+ * One export bundle from `GET /import/sources/bundles`: a platform whose ONE
+ * download covers several catalog sources (Google Takeout, Meta Accounts
+ * Center, Amazon Privacy Central). The wizard shows it as a single picker
+ * button and export card in place of its members' own; the parse finds every
+ * member inside the archive. Authored in the backend beside the guides.
+ */
+export interface ImportBundle {
+  readonly id: string;
+  readonly ecosystem: string;
+  readonly title: string;
+  readonly blurb: string;
+  readonly url?: string;
+  readonly stepsTitle?: string;
+  readonly steps: readonly string[];
+  readonly altPath?: { readonly title: string; readonly url?: string; readonly steps: readonly string[] };
+  /** Catalog source ids this single download covers. */
+  readonly members: readonly string[];
+  readonly notes?: readonly string[];
 }
 
 /**
@@ -386,6 +414,12 @@ export function useImportApi() {
     [authHeaders],
   );
 
+  const listBundles = useCallback(
+    async (): Promise<ImportBundle[]> =>
+      (await fetchJson<ImportBundle[]>('/api/import/sources/bundles', { headers: authHeaders() })) ?? [],
+    [authHeaders],
+  );
+
   const getObjectCounts = useCallback(
     async (): Promise<ObjectCount[]> =>
       (await fetchJson<ObjectCount[]>('/api/import/sources/object-counts', { headers: authHeaders() })) ?? [],
@@ -461,6 +495,16 @@ export function useImportApi() {
   const uploadFile = useCallback(
     (file: File, onProgress?: (loadedBytes: number, totalBytes: number) => void): Promise<StagedDrop> =>
       new Promise<StagedDrop>((resolve, reject) => {
+        // The write guard runs inside `apiFetch`; an XHR never passes through it, so it is
+        // asked here, before any bytes are read — a refused upload costs nothing.
+        try {
+          assertApplianceWritable({ url: '/api/import/uploads' });
+        } catch (err) {
+          reject(err);
+
+          return;
+        }
+
         const form = new FormData();
 
         form.append('files', file);
@@ -663,6 +707,7 @@ export function useImportApi() {
       ready: Boolean(authenticated),
       listSources,
       listCatalog,
+      listBundles,
       getObjectCounts,
       listRuns,
       listUnpushed,
@@ -686,6 +731,7 @@ export function useImportApi() {
       authenticated,
       listSources,
       listCatalog,
+      listBundles,
       getObjectCounts,
       listRuns,
       listUnpushed,
@@ -1024,7 +1070,12 @@ async function postUpload(form: FormData, headers: Record<string, string>): Prom
       headers,
       body: form,
     });
-  } catch {
+  } catch (err) {
+    // The guard's refusal already says what to do; only a real network failure gets the hint.
+    if (isOfflineWriteError(err)) {
+      throw err;
+    }
+
     throw new Error(
       'Could not reach the appliance. If you dropped a folder, use Choose folder — or upload the .zip.',
     );

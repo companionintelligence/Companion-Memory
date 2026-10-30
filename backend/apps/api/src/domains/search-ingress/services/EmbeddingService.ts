@@ -53,6 +53,29 @@ export class EmbeddingService {
       : null;
   }
 
+  /**
+   * Which of `entityIds` already have an embedding of `entityType` for this user.
+   * Lets a re-index (the maintenance sweep re-driving a listener for rows that
+   * lack a device document) skip the model call for rows whose vector exists.
+   */
+  async existingEntityIds(
+    context: UserServiceContext,
+    entityType: string,
+    entityIds: readonly string[],
+  ): Promise<Set<string>> {
+    if (entityIds.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ entity_id: string }> = await this.embeddingRepo.query(
+      `SELECT entity_id FROM ci_search.embeddings
+        WHERE entity_type = $1 AND user_id = $2 AND entity_id = ANY($3::uuid[])`,
+      [entityType, context.userId, [...entityIds]],
+    );
+
+    return new Set(rows.map((row) => row.entity_id));
+  }
+
   async remove(context: ServiceContext, data: RemoveEmbeddingDto): Promise<boolean> {
     const result = await this.embeddingRepo.delete({
       entityType: data.entityType,

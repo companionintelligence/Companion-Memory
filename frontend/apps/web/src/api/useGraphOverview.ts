@@ -182,13 +182,16 @@ export interface GraphOverviewOptions {
    * the filter is active; an empty array excludes every mappable type (keeping connective nodes).
    */
   includeTypes?: string[];
-  // Comma-separated tag labels from the explorer's `tags` URL param. `undefined`
-  // leaves the filter inactive; any string (including '') activates it, honoring
-  // the "filter active = present, even if empty" contract.
-  tags?: string;
+  // Tag labels from the explorer's `tags` URL param (one per occurrence).
+  // `undefined` leaves the filter inactive; any list (even an empty one)
+  // activates it, honoring the "filter active = present, even if empty" contract.
+  tags?: string[];
   // Event-scoped LifeScope dimensions, mirroring the explorer's Search filters.
   // Each is forwarded to `/api/graph/data` only when it carries a value, so an
-  // absent/empty dimension leaves the graph unrestricted by it.
+  // absent/empty dimension leaves the graph unrestricted by it. `people` and
+  // `places` are free text (a place can be a street address, commas and all),
+  // so they travel as repeated params; the rest are the backend's own names
+  // and travel as CSV.
   connectors?: string[];
   people?: string[];
   places?: string[];
@@ -212,14 +215,14 @@ export function useGraphOverview(
   const refreshKey = options.refreshKey ?? 0;
   const includeTypesActive = options.includeTypes !== undefined;
   const includeTypesKey = (options.includeTypes ?? []).join(',');
-  const tags = options.tags;
-
-  // Stable CSV keys for the event-scoped dimensions: arrays change identity each
-  // render, so the effect depends on these joined keys (a change ⇔ a content
-  // change), and the request reads the keys directly. Mirrors `includeTypesKey`.
+  // Stable keys for the list dimensions: arrays change identity each render,
+  // so the effect depends on these keys (a change ⇔ a content change) and the
+  // request decodes them. The CSV ones double as the request value; the free
+  // text ones are JSON, since a comma inside a name must not alias two lists.
+  const tagsKey = options.tags === undefined ? undefined : JSON.stringify(options.tags);
   const connectorsKey = (options.connectors ?? []).join(',');
-  const peopleKey = (options.people ?? []).join(',');
-  const placesKey = (options.places ?? []).join(',');
+  const peopleKey = JSON.stringify(options.people ?? []);
+  const placesKey = JSON.stringify(options.places ?? []);
   const eventTypesKey = (options.eventTypes ?? []).join(',');
   const hasLocation = options.hasLocation ?? false;
   const dateFrom = options.dateFrom;
@@ -275,8 +278,17 @@ export function useGraphOverview(
           dataParams.set('includeTypes', includeTypesKey);
         }
 
-        if (tags !== undefined) {
-          dataParams.set('tags', tags);
+        if (tagsKey !== undefined) {
+          const tags = JSON.parse(tagsKey) as string[];
+
+          if (tags.length === 0) {
+            // Present but empty: the filter is active and matches nothing.
+            dataParams.set('tags', '');
+          }
+
+          for (const tag of tags) {
+            dataParams.append('tags', tag);
+          }
         }
 
         // Event-scoped dimensions: forward only when set, so an unused dimension
@@ -285,12 +297,12 @@ export function useGraphOverview(
           dataParams.set('connectors', connectorsKey);
         }
 
-        if (peopleKey) {
-          dataParams.set('people', peopleKey);
+        for (const person of JSON.parse(peopleKey) as string[]) {
+          dataParams.append('people', person);
         }
 
-        if (placesKey) {
-          dataParams.set('places', placesKey);
+        for (const place of JSON.parse(placesKey) as string[]) {
+          dataParams.append('places', place);
         }
 
         if (eventTypesKey) {
@@ -399,7 +411,7 @@ export function useGraphOverview(
     refreshKey,
     includeTypesActive,
     includeTypesKey,
-    tags,
+    tagsKey,
     connectorsKey,
     peopleKey,
     placesKey,

@@ -31,11 +31,15 @@ import { UserModule } from '@ci/domains/user';
 
 import { SyncNowController } from './controllers/SyncNowController';
 import { CloudFileIngestEntity } from './entities/CloudFileIngestEntity';
+import { CloudFolderExportEntity } from './entities/CloudFolderExportEntity';
 import { ConnectionSyncJobEntity } from './entities/ConnectionSyncJobEntity';
 import { SyncOrchestrator } from './listeners/SyncOrchestrator';
 import { CloudFileIngestLedgerService } from './services/CloudFileIngestLedgerService';
 import { CloudFileIngestService } from './services/CloudFileIngestService';
+import { CloudFolderExportLedgerService } from './services/CloudFolderExportLedgerService';
+import { CloudFolderIngestService } from './services/CloudFolderIngestService';
 import { ConnectionSyncJobService } from './services/ConnectionSyncJobService';
+import { DropboxFilesTransformService } from './services/Dropbox/transform/TransformDropboxFiles';
 import { EndpointServiceMap } from './services/EndpointServiceMap';
 import { FacebookMediaService } from './services/Facebook/FacebookMediaService';
 import { FacebookFriendsTransformService } from './services/Facebook/transform/TransformFacebookFriends';
@@ -82,7 +86,12 @@ import { SyncNowService } from './services/SyncNowService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ConnectionEntity, ConnectionSyncJobEntity, CloudFileIngestEntity]),
+    TypeOrmModule.forFeature([
+      ConnectionEntity,
+      ConnectionSyncJobEntity,
+      CloudFileIngestEntity,
+      CloudFolderExportEntity,
+    ]),
     ConnectionsModule,
     EventsModule,
     FilesModule,
@@ -104,6 +113,8 @@ import { SyncNowService } from './services/SyncNowService';
     SyncOrchestrator,
     CloudFileIngestLedgerService,
     CloudFileIngestService,
+    CloudFolderExportLedgerService,
+    CloudFolderIngestService,
     FacebookMediaService,
     FacebookFriendsTransformService,
     FacebookLikesTransformService,
@@ -130,6 +141,7 @@ import { SyncNowService } from './services/SyncNowService';
     SpotifySavedTracksTransformService,
     SpotifyTopArtistsTransformService,
     GitHubEventsTransformService,
+    DropboxFilesTransformService,
     RedditRecordWriter,
     RedditPostsTransformService,
     RedditCommentsTransformService,

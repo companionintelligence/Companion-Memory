@@ -20,6 +20,14 @@ import {
 const SERVER_PROPS_TTL_MS = 5 * 60_000;
 
 /**
+ * A `chatStream` chunk. The last one of a `discardToolMarkup` round also names the calls that
+ * round dropped, structured or written as markup, so the tool loop can tell a preamble ("let me
+ * check one more place") from an answer the same way it does on the native path, where the engine
+ * hands the calls over and the loop drops them itself.
+ */
+export type DriverChatResponse = ChatResponse & { discardedToolCalls?: ToolCall[] };
+
+/**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
  * OpenAI-compatible server). It speaks `/v1/chat/completions` (+ `/v1/models`)
@@ -37,7 +45,9 @@ const SERVER_PROPS_TTL_MS = 5 * 60_000;
  *   parts with data URLs.
  * - Reasoning: Ollama uses `think: true`. vLLM/Qwen uses
  *   `chat_template_kwargs.enable_thinking` plus `reasoning_content` deltas,
- *   which we map onto Ollama's `message.thinking`.
+ *   which we map onto Ollama's `message.thinking`. Ollama's own `/v1` reads
+ *   neither and takes `reasoning_effort: "none"` for thinking off; see
+ *   {@link thinkingBody}.
  * - Tools: Ollama returns structured `message.tool_calls`. vLLM only does that
  *   when `--tool-call-parser` matches the model's markup; Qwen3.6 often dumps
  *   `<toolcall><function=…>` into `content` instead (same finding as
@@ -52,6 +62,53 @@ export function vllmThinkingExtraBody(enableThinking?: boolean): {
   return {
     chat_template_kwargs: { enable_thinking: enableThinking === true },
   };
+}
+
+/**
+ * The thinking switch for every OpenAI-compatible backend: vLLM's
+ * `chat_template_kwargs`, plus `reasoning_effort: "none"` whenever thinking is
+ * off. Ollama's `/v1` ignores `chat_template_kwargs` (and a top-level `think`),
+ * so on Ollama or a Hub pool in front of it a thinking model reasoned
+ * anyway: background jobs that ask for thinking off and cap the reply spent
+ * the whole cap on reasoning and got empty content back (answer inference on
+ * qwen3.5:9b, 800 of 800 tokens; image descriptions on gemma4:e2b, 256 of
+ * 256). Ollama maps `reasoning_effort: "none"` to `think: false`. Sent on
+ * every call with thinking off. It is left out only on the retry of a call the
+ * backend refused it on (vLLM accepts only low, medium or high); see
+ * {@link isReasoningEffortRejection}. A refusal is not remembered: a Hub pool
+ * can put peers on different engines behind one URL, so the next call may
+ * reach an Ollama peer that needs the field. Remembering a vLLM refusal left
+ * that peer thinking for minutes.
+ */
+export function thinkingBody(
+  enableThinking: boolean | undefined,
+  reasoningEffortRejected = false,
+): ReturnType<typeof vllmThinkingExtraBody> & { reasoning_effort?: 'none' } {
+  return {
+    ...vllmThinkingExtraBody(enableThinking),
+    ...(enableThinking !== true && !reasoningEffortRejected && { reasoning_effort: 'none' as const }),
+  };
+}
+
+/**
+ * A 4xx that blames `reasoning_effort`: how a backend that validates the field
+ * refuses "none" (vLLM's request model allows only low, medium and high).
+ */
+export function isReasoningEffortRejection(err: unknown): boolean {
+  return isClientErrorNaming(err, ['reasoning_effort', 'reasoning effort', 'invalid reasoning value']);
+}
+
+/** A 4xx whose message names any of `markers` (lower case), which is how a backend says which field it refused. */
+function isClientErrorNaming(err: unknown, markers: readonly string[]): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+
+  if (typeof status !== 'number' || status < 400 || status >= 500) {
+    return false;
+  }
+
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+  return markers.some((marker) => message.includes(marker));
 }
 
 type ResponseFormat =
@@ -88,17 +145,13 @@ export function toResponseFormat(
  * (overflow, unknown model, auth) is not retried here.
  */
 export function isResponseFormatRejection(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null)?.status;
-
-  if (typeof status !== 'number' || status < 400 || status >= 500) {
-    return false;
-  }
-
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-
-  return ['response_format', 'json_schema', 'structured output', 'guided decoding', 'grammar'].some(
-    (marker) => message.includes(marker),
-  );
+  return isClientErrorNaming(err, [
+    'response_format',
+    'json_schema',
+    'structured output',
+    'guided decoding',
+    'grammar',
+  ]);
 }
 
 export class OpenAiCompatChatDriver {
@@ -201,16 +254,18 @@ export class OpenAiCompatChatDriver {
     /** Deadline for the response, in ms; absent uses `llm.firstResponseTimeoutMs`. */
     timeoutMs?: number;
   }): Promise<ChatResponse> {
-    const extraBody = vllmThinkingExtraBody(request.enableThinking);
-    const create = (format: ResponseFormat | undefined) =>
+    // Converted once, since a refused attempt is sent again and the conversion base64-encodes images.
+    const messages = toOpenAiMessages(request.messages);
+    const tools = request.tools && request.tools.length > 0 ? toOpenAiTools(request.tools) : undefined;
+    const create = (format: ResponseFormat | undefined, thinking: ReturnType<typeof thinkingBody>) =>
       this.client.chat.completions.create(
         {
           model: request.model,
-          messages: toOpenAiMessages(request.messages),
-          ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
+          messages,
+          ...(tools && { tools }),
           ...(format && { response_format: format }),
           ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-          ...extraBody,
+          ...thinking,
         },
         {
           signal: request.signal,
@@ -219,20 +274,31 @@ export class OpenAiCompatChatDriver {
         },
       );
 
-    const format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    let format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    // Dropped for this call's retry only; see thinkingBody.
+    let reasoningEffortRejected = false;
     let response: Awaited<ReturnType<typeof create>>;
 
-    try {
-      response = await create(format);
-    } catch (err) {
-      if (format?.type !== 'json_schema' || !isResponseFormatRejection(err)) {
-        throw err;
-      }
+    // At most one retry per kind of refusal: each retry drops the field that was refused, so the
+    // loop cannot run more than three times.
+    for (;;) {
+      const thinking = thinkingBody(request.enableThinking, reasoningEffortRejected);
 
-      // Remembered for this driver's life (one per configured endpoint), so a backend without
-      // schema support costs one rejected request, not one per structured call.
-      this.jsonSchemaRejected = true;
-      response = await create({ type: 'json_object' });
+      try {
+        response = await create(format, thinking);
+        break;
+      } catch (err) {
+        if (format?.type === 'json_schema' && isResponseFormatRejection(err)) {
+          // Remembered for this driver's life (one per configured endpoint), so a backend without
+          // schema support costs one rejected request, not one per structured call.
+          this.jsonSchemaRejected = true;
+          format = { type: 'json_object' };
+        } else if (thinking.reasoning_effort !== undefined && isReasoningEffortRejection(err)) {
+          reasoningEffortRejected = true;
+        } else {
+          throw err;
+        }
+      }
     }
 
     const choice = response.choices[0];
@@ -287,6 +353,7 @@ export class OpenAiCompatChatDriver {
      * text. Measured 2026-09-30 on Lemonade: the model was told tool use was
      * over, apologised for a bad argument, and streamed a fresh
      * `<tool_call>…</tool_call>` block which the chat showed verbatim.
+     * The last chunk names the dropped calls in `discardedToolCalls`.
      */
     discardToolMarkup?: boolean;
     /**
@@ -295,19 +362,34 @@ export class OpenAiCompatChatDriver {
      * admission pass. Absent leaves the server's default alone.
      */
     maxTokens?: number;
-  }): AsyncGenerator<ChatResponse> {
-    const extraBody = vllmThinkingExtraBody(request.enableThinking);
-    const stream = await this.client.chat.completions.create(
-      {
-        model: request.model,
-        messages: toOpenAiMessages(request.messages),
-        stream: true,
-        ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
-        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-        ...extraBody,
-      },
-      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
-    );
+  }): AsyncGenerator<DriverChatResponse> {
+    const messages = toOpenAiMessages(request.messages);
+    const tools = request.tools && request.tools.length > 0 ? toOpenAiTools(request.tools) : undefined;
+    const open = (thinking: ReturnType<typeof thinkingBody>) =>
+      this.client.chat.completions.create(
+        {
+          model: request.model,
+          messages,
+          stream: true,
+          ...(tools && { tools }),
+          ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
+          ...thinking,
+        },
+        { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
+      );
+    const firstThinking = thinkingBody(request.enableThinking);
+    let stream: Awaited<ReturnType<typeof open>>;
+
+    try {
+      stream = await open(firstThinking);
+    } catch (err) {
+      if (firstThinking.reasoning_effort === undefined || !isReasoningEffortRejection(err)) {
+        throw err;
+      }
+
+      // See chat(): this call is asked again without `reasoning_effort`, the next one sends it again.
+      stream = await open(thinkingBody(request.enableThinking, true));
+    }
 
     // Streamed tool calls arrive fragmented: an entry with id+name at some
     // index, then argument string fragments for that index. Accumulate by index.
@@ -391,6 +473,9 @@ export class OpenAiCompatChatDriver {
     const emitted =
       structured.length > 0 ? structured : request.salvageTools === true ? salvaged.toolCalls : [];
     const toolCalls = request.discardToolMarkup ? [] : emitted;
+    // What a discarding round wanted to call: the engine's own calls, or else the markup it wrote,
+    // which this round never salvages.
+    const discarded = request.discardToolMarkup ? (emitted.length > 0 ? emitted : salvaged.toolCalls) : [];
     const prose = emitted.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     if (bufferContent && prose.trim() !== '') {
@@ -401,7 +486,10 @@ export class OpenAiCompatChatDriver {
       yield toChatResponse(request.model, { toolCalls, done: false });
     }
 
-    yield toChatResponse(request.model, { done: true, usage });
+    yield {
+      ...toChatResponse(request.model, { done: true, usage }),
+      ...(discarded.length > 0 && { discardedToolCalls: discarded }),
+    };
   }
 }
 

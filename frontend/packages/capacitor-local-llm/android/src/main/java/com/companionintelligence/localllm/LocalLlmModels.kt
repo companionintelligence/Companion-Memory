@@ -43,6 +43,14 @@ data class LocalLlmModelInfo(
     val commitHash: String,
     /** Advertised device RAM below which the model is refused (see [LocalLlmPolicy.advertisedMemoryBytes]). */
     val minDeviceMemoryBytes: Long,
+    /**
+     * Advertised device RAM below which the GPU backend is withheld and the model runs on the CPU, whatever
+     * was asked for. Never under [minDeviceMemoryBytes]. The GPU backend expands int4 weights to fp16 in
+     * graphics memory — measured on a Galaxy S23 Ultra (2026-10-13): Gemma 4 E2B takes 2.4 GB of graphics
+     * memory and 3.3 GB in all on the GPU, against 0.2 GB and 2.3 GB on the CPU — so a phone that can hold
+     * the model on the CPU cannot necessarily hold it on the GPU. See [LocalLlmPolicy.resolveAccelerator].
+     */
+    val gpuMinDeviceMemoryBytes: Long,
     val defaultMaxTokens: Int,
     val defaultTopK: Int,
     val defaultTopP: Double,
@@ -66,6 +74,9 @@ data class LocalLlmModelInfo(
         require(accelerators.isNotEmpty() && accelerators.all { LocalLlmAccelerator.fromWire(it) != null }) {
             "$modelId declares an unknown accelerator: $accelerators"
         }
+        require(gpuMinDeviceMemoryBytes >= minDeviceMemoryBytes) {
+            "$modelId: the GPU floor ($gpuMinDeviceMemoryBytes) is under the model's floor ($minDeviceMemoryBytes)"
+        }
     }
 
     val supportsThinking: Boolean get() = CAPABILITY_THINKING in capabilities
@@ -87,63 +98,24 @@ data class LocalLlmModelInfo(
 }
 
 object LocalLlmModels {
-    /**
-     * litert-community/Qwen3-0.6B. The smallest model, and the same file iOS ships. Replaced the
-     * `gemma3-1b-it-int4` entry, whose repo Hugging Face now serves `gated: "auto"` (an anonymous
-     * download got `401 GatedRepo`).
-     *
-     * **Why the url is pinned, and to this commit.** `resolve/main` moved on 2026-09-20 to a re-export
-     * (344_671_744 bytes) that needs LiteRT-LM 0.17.1 or newer. On this plugin's 0.14.0 it fails at
-     * `Engine.initialize()` ("Only kv_cache tensors are supported as outputs to prefill"), and it also failed
-     * [ModelDownloadWorker]'s final `length != expected` check against the 344_437_808 recorded here. This is
-     * the last revision that loads on 0.14.0 (exercised on an arm64 emulator). Bumping LiteRT-LM is what
-     * unlocks `main`; change the commit and the size together, never one alone.
-     */
-    val QWEN3_0_6B_INT4 = LocalLlmModelInfo(
-        modelId = "qwen3-0.6b-int4",
-        hfRepo = "litert-community/Qwen3-0.6B",
-        fileName = "Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm",
-        sizeBytes = 344_437_808L,
-        commitHash = "154c5de0fc0fc5002a7da570ba8c67edffa32ca2",
-        minDeviceMemoryBytes = 4_294_967_296L,
-        defaultMaxTokens = 1024,
-        defaultTopK = 64,
-        defaultTopP = 0.95,
-        defaultTemperature = 1.0,
-        capabilities = setOf("thinking", "tools"),
-        accelerators = listOf("cpu"),
-    )
-
-    /** litert-community/Qwen2.5-1.5B-Instruct — a steadier chat model with no tool-call template. */
-    val QWEN2_5_1_5B_INSTRUCT = LocalLlmModelInfo(
-        modelId = "qwen2.5-1.5b-instruct",
-        hfRepo = "litert-community/Qwen2.5-1.5B-Instruct",
-        fileName = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm",
-        sizeBytes = 1_597_931_520L,
-        commitHash = "19edb84c69a0212f29a6ef17ba0d6f278b6a1614",
-        minDeviceMemoryBytes = 6_442_450_944L,
-        defaultMaxTokens = 4096,
-        defaultTopK = 20,
-        defaultTopP = 0.8,
-        defaultTemperature = 0.7,
-        capabilities = setOf(),
-        accelerators = listOf("gpu", "cpu"),
-    )
-
     /** litert-community/gemma-4-E2B-it-litert-lm — multimodal Gemma 4, Android only. */
     val GEMMA_4_E2B_IT = LocalLlmModelInfo(
         modelId = "gemma-4-e2b-it",
         hfRepo = "litert-community/gemma-4-E2B-it-litert-lm",
         fileName = "gemma-4-E2B-it.litertlm",
-        sizeBytes = 2_583_085_056L,
-        commitHash = "7fa1d78473894f7e736a21d920c3aa80f950c0db",
-        minDeviceMemoryBytes = 8_589_934_592L,
+        sizeBytes = 2_588_147_712L,
+        commitHash = "361a4010ad6d88fc5c86e148e333c0342b99763d",
+        // 6 GB on the CPU (2.3 GB resident), the GPU from 8 GB (3.3 GB resident) — measured, see the field's doc.
+        minDeviceMemoryBytes = 6_442_450_944L,
+        gpuMinDeviceMemoryBytes = 8_589_934_592L,
         defaultMaxTokens = 4000,
         defaultTopK = 64,
         defaultTopP = 0.95,
         defaultTemperature = 1.0,
         capabilities = setOf("thinking", "vision", "tools"),
-        accelerators = listOf("gpu", "cpu"),
+        // CPU first (2026-10-13): the GPU backend corrupts digits read from tool responses with Gemma 4 on
+        // LiteRT-LM 0.18 (#2202, open, no fix); the CPU reads them exactly. The GPU stays an explicit choice.
+        accelerators = listOf("cpu", "gpu"),
         thinkingFixedPerConversation = true,
     )
 
@@ -155,17 +127,20 @@ object LocalLlmModels {
         sizeBytes = 3_654_467_584L,
         commitHash = "9695417f248178c63a9f318c6e0c56cb917cb837",
         minDeviceMemoryBytes = 12_884_901_888L,
+        gpuMinDeviceMemoryBytes = 12_884_901_888L,
         defaultMaxTokens = 4000,
         defaultTopK = 64,
         defaultTopP = 0.95,
         defaultTemperature = 1.0,
         capabilities = setOf("thinking", "vision", "tools"),
-        accelerators = listOf("gpu", "cpu"),
+        // CPU first (2026-10-13): the GPU backend corrupts digits read from tool responses with Gemma 4 on
+        // LiteRT-LM 0.18 (#2202, open, no fix); the CPU reads them exactly. The GPU stays an explicit choice.
+        accelerators = listOf("cpu", "gpu"),
         thinkingFixedPerConversation = true,
     )
 
     /** Every model this build can download and load, smallest first. */
-    val ALL: List<LocalLlmModelInfo> = listOf(QWEN3_0_6B_INT4, QWEN2_5_1_5B_INSTRUCT, GEMMA_4_E2B_IT, GEMMA_4_E4B_IT)
+    val ALL: List<LocalLlmModelInfo> = listOf(GEMMA_4_E2B_IT, GEMMA_4_E4B_IT)
 
     private val byId = ALL.associateBy { it.modelId }
 

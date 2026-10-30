@@ -12,6 +12,8 @@ export type {
   SourceTriple,
 } from './bulkUpsert';
 export { countAffected } from './countAffected';
+export { summarizeDatabaseError } from './databaseErrorSummary';
+export type { DatabaseErrorSummary } from './databaseErrorSummary';
 export { appendRecordSources } from './recordSources';
 export type { RecordSourceRow } from './recordSources';
 export {

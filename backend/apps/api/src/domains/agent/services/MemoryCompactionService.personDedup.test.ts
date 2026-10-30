@@ -156,7 +156,12 @@ describe('MemoryCompactionService — person merge/dedupe', () => {
     await service.compactForUser(CONTEXT, [makeFragment('Priya Sharma said hi')]);
 
     expect(personCreate).not.toHaveBeenCalled();
-    expect(personUpdate).toHaveBeenCalledWith(CONTEXT, 'existing-priya', { name: 'Priya Sharma' });
+    expect(personUpdate).toHaveBeenCalledWith(
+      CONTEXT,
+      'existing-priya',
+      { name: 'Priya Sharma' },
+      { source: 'MemoryCompactionService.promotePersonName' },
+    );
   });
 
   it('an AMBIGUOUS bare name (matches two different full names) creates a new node instead of guessing', async () => {

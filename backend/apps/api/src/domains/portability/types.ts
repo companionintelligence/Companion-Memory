@@ -56,6 +56,34 @@ export interface UserScopedTable {
    * closed (no row for that table can be imported).
    */
   columns: readonly string[];
+  /**
+   * Columns the database computes (`GENERATED ALWAYS AS (…) STORED`). An export
+   * carries their values, but an INSERT naming one is refused, so the import
+   * leaves them out and lets the database compute them again.
+   */
+  generatedColumns?: readonly string[];
+  /**
+   * Nullable columns that point at another row of the same table (a reply's
+   * `parent_message_id`, a merged person's `merged_into_entity_id`), with the
+   * column they point at. An export lists rows in storage order, which is not
+   * creation order once a row is updated: an edited message moves after the
+   * reply to it. So the import holds a row back until the row it names is in,
+   * and links what never arrives once every row is in.
+   */
+  selfReferences?: ReadonlyArray<{ column: string; key: string }>;
+  /**
+   * Nullable references into a table the import fills AFTER this one, which
+   * only a foreign-key cycle produces (`ci.objects.acquisition_line_item_id`
+   * while `ci.receipt_line_items.minted_object_id` points back). The import
+   * leaves them empty on insert and sets them once every row is in, by
+   * {@link primaryKey}.
+   */
+  laterReferences?: ReadonlyArray<{
+    column: string;
+    parent: { schema: string; table: string; key: string; userColumn: UserColumn };
+  }>;
+  /** The table's primary key when it is one column, else null. */
+  primaryKey?: string | null;
 }
 
 export interface ImportResult {

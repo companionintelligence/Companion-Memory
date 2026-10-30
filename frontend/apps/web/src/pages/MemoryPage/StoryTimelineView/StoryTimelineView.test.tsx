@@ -39,12 +39,14 @@ vi.mock('@/components/TimelineJs', () => ({
     data,
     onSlideChange,
     onSlideOpen,
+    className,
   }: {
     data: { events: Array<{ unique_id: string; text: { headline: string } }> };
     onSlideChange?: (uniqueId: string) => void;
     onSlideOpen?: (uniqueId: string) => void;
+    className?: string;
   }) => (
-    <div>
+    <div data-testid="timeline-host" className={className}>
       <button type="button" onClick={() => onSlideChange?.(data.events[0]?.unique_id ?? '')}>
         land
       </button>
@@ -97,6 +99,20 @@ function renderTimeline(url = '/memory/events?view=timeline') {
 describe('StoryTimelineView', () => {
   beforeEach(() => {
     setActiveEntityMock.mockReset();
+  });
+
+  it('uses a compact mobile timeline shell and keeps its status below the canvas', () => {
+    const drill = eventAt('drill', new Date(2026, 6, 1, 10), 'Drill run');
+    useEntityServiceMock.mockReturnValue(baseService({ data: [drill], totalCount: 2 }));
+
+    renderTimeline();
+
+    expect(screen.getByTestId('timeline-host')).toHaveClass('memory-story-timeline', 'min-h-[29rem]');
+    expect(screen.getByTestId('memory-timeline')).toHaveClass('min-h-[32rem]', 'rounded-xl');
+    const mobileGuidance = screen.getByText('Swipe or use arrows · tap an event to open');
+    expect(mobileGuidance).toHaveClass('device:hidden');
+    expect(mobileGuidance.parentElement).toHaveClass('border-t', 'device:absolute');
+    expect(screen.getByText('1 of 1 loaded · end')).toBeInTheDocument();
   });
 
   it('does not open the detail drawer on TimelineJS landing change', () => {

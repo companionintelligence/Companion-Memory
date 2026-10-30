@@ -1,4 +1,7 @@
+import path from 'node:path';
+
 import type { DataSourceRecognition } from '../../datasources/registry';
+import { MEDIA_STORE_DIRNAME } from '../../datasources/timeline';
 import { SUMMARY_KEY, type StageSummary } from '../../telemetry/stageSummary';
 import type { StageRunContext } from '../../types';
 import { ParseStage } from '../ParseStage';
@@ -347,5 +350,44 @@ describe('progress during one long source', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('the media store handed to importers', () => {
+  it('is a dot directory under the scratch tree, never the scratch root', async () => {
+    // The catch-all `generic` importer walks the scratch tree after the
+    // specialised importers have run. Given the root as its store, an MMS
+    // importer's extracted parts were re-staged as standalone photos — each
+    // with the SENDER's EXIF GPS as a position fix on the user. The walker
+    // skips dot entries, so a dot directory keeps the store out of its reach.
+    const seen: Array<{ mediaStoreDir?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([
+      {
+        data_source: {
+          name: 'sms_backup_restore',
+          title: 'sms_backup_restore',
+          icon: '',
+          description: '',
+          newFileImporter: () => ({
+            recognize: async () => ({ confidence: 1 }),
+            fileImport: async (_ctx: unknown, _entry: unknown, params: { mediaStoreDir?: string }) => {
+              seen.push(params);
+            },
+          }),
+        },
+        recognition: { confidence: 1 },
+      } as unknown as DataSourceRecognition,
+    ]);
+
+    const { stage } = buildStage();
+    const context = contextFor();
+
+    await stage.run(context);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].mediaStoreDir).toBe(path.join(context.scratchDir, MEDIA_STORE_DIRNAME));
+    expect(path.basename(seen[0].mediaStoreDir as string).startsWith('.')).toBe(true);
+    expect(seen[0].mediaStoreDir).not.toBe(context.scratchDir);
   });
 });

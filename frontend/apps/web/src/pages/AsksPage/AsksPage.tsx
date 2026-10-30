@@ -33,8 +33,10 @@ import { AskReviewCard } from './AskReviewCard';
 import {
   APPROVE_ASK,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
   ASK_INBOX,
+  ASK_INBOX_HIDDEN_CHARACTERS,
   ASK_OUTBOX,
   CREATE_ASK,
   CREATE_ASK_GRANT,
@@ -58,6 +60,7 @@ import { GrantManager, type GranteeGroup } from './GrantManager';
 import { NewGrantForm } from './NewGrantForm';
 import { PeerManager } from './PeerManager';
 import type { RelationshipSummary } from './relationshipPresentation';
+import { type HiddenCharacterRow, useHiddenCharacterFlags } from './useHiddenCharacterFlags';
 
 /**
  * The recency window the relationship fold reports against, and the cap the
@@ -81,6 +84,11 @@ const LAPSE_HORIZON_DAYS = 30;
 const MAX_COUNTED_DISCLOSURES = 5_000;
 
 type Tab = 'inbox' | 'compose' | 'outbox' | 'grants' | 'peers' | 'history';
+
+/** Rows of the two `*_HIDDEN_CHARACTERS` answers, for {@link useHiddenCharacterFlags}. */
+const inboxHiddenRows = (data: { askInbox: readonly HiddenCharacterRow[] }) => data.askInbox;
+const historyHiddenRows = (data: { askDisclosureHistory: { rows: readonly HiddenCharacterRow[] } }) =>
+  data.askDisclosureHistory.rows;
 
 /**
  * The asks surface.
@@ -144,6 +152,17 @@ export function AsksPage() {
     variables: { input: { counterpartyKey: openRelationship?.key } },
     skip: openRelationship == null,
   });
+  // Read apart from the inbox and the history, so an older Memory without the
+  // field still shows both: see ASK_INBOX_HIDDEN_CHARACTERS.
+  const inboxHiddenCharacters = useHiddenCharacterFlags(ASK_INBOX_HIDDEN_CHARACTERS, {
+    ids: (inbox.data?.askInbox ?? []).map((ask) => ask.id),
+    rowsOf: inboxHiddenRows,
+  });
+  const historyHiddenCharacters = useHiddenCharacterFlags(ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS, {
+    ids: (history.data?.askDisclosureHistory?.rows ?? []).map((row) => row.id),
+    rowsOf: historyHiddenRows,
+    variables: { input: { counterpartyKey: openRelationship?.key } },
+  });
 
   const refetchAll = () => {
     void inbox.refetch();
@@ -183,7 +202,11 @@ export function AsksPage() {
     onCompleted: () => void outbox.refetch(),
   });
   const [createPeerLink, linking] = useMutation(CREATE_PEER_LINK, {
-    onCompleted: () => void peers.refetch(),
+    onCompleted: () => {
+      void peers.refetch();
+      // Adding back a peer whose link was ended revokes that link's grants.
+      void grants.refetch();
+    },
   });
   const [updatePeerLink, retiering] = useMutation(UPDATE_PEER_LINK, {
     onCompleted: () => void peers.refetch(),
@@ -312,6 +335,7 @@ export function AsksPage() {
                 tier={knownAskerLabel(ask.consentBasis)}
                 decision={decision}
                 prompt={ask.query.prompt}
+                promptHiddenCharactersRemoved={inboxHiddenCharacters.has(ask.id)}
                 scopeSummary={scopeSummary(ask.query)}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
@@ -533,7 +557,7 @@ export function AsksPage() {
                 disclosedCount: row.disclosedCount,
                 consentBasis: row.consentBasis,
                 createdAt: row.createdAt as string,
-                query: row.query,
+                query: { ...row.query, promptHiddenCharactersRemoved: historyHiddenCharacters.has(row.id) },
               };
             })}
           />

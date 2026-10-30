@@ -17,7 +17,12 @@ type ReturnType = [
   },
 ];
 
-function useMap(): ReturnType {
+interface MapOptions {
+  /** Let the generic map choose a marker centroid before a specialized view applies its own camera. */
+  autoCenterMarkers?: boolean;
+}
+
+function useMap({ autoCenterMarkers = true }: MapOptions = {}): ReturnType {
   const map = useLeafletMap();
 
   const [markers, setMarkers] = useState<L.Marker[]>([]);
@@ -140,7 +145,7 @@ function useMap(): ReturnType {
 
   // Center map on marker centroid when map is ready and markers are available
   useEffect(() => {
-    if (!map || !weightedMarkerCentroid || hasInitialCentered) {
+    if (!autoCenterMarkers || !map || !weightedMarkerCentroid || hasInitialCentered) {
       return;
     }
 
@@ -150,7 +155,7 @@ function useMap(): ReturnType {
         setHasInitialCentered(true);
       }
     });
-  }, [map, weightedMarkerCentroid, hasInitialCentered]);
+  }, [autoCenterMarkers, map, weightedMarkerCentroid, hasInitialCentered]);
 
   return [
     {

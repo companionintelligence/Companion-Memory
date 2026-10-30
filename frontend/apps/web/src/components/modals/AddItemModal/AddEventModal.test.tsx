@@ -101,8 +101,8 @@ describe('AddEventModal — validation', () => {
     renderModal([createMock(sent)]);
 
     fill(/^title$/i, 'Dinner with Sam');
-    fill(/^starts$/i, '2026-08-19');
-    fill(/^ends$/i, '2026-08-18');
+    fill(/^starts at$/i, '2026-08-19');
+    fill(/^ends at$/i, '2026-08-18');
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
@@ -149,10 +149,12 @@ describe('AddEventModal — creating the event', () => {
     renderModal([createMock((input) => inputs.push(input))]);
 
     fill(/^title$/i, 'Move house');
-    expect(screen.getAllByLabelText(/^at$/i)).toHaveLength(2);
+    expect(screen.getByLabelText(/^start time$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^end time$/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(/all day/i));
-    expect(screen.queryAllByLabelText(/^at$/i)).toHaveLength(0);
+    expect(screen.queryByLabelText(/^start time$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^end time$/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 

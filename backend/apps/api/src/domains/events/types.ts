@@ -23,6 +23,17 @@ export type Acknowledgement = {
    */
   jobId: string;
 
+  /**
+   * When this job was ENQUEUED (`pgboss.job.created_on`) — so a listener can
+   * tell how long the work waited before reaching it, and drop work that is no
+   * longer worth doing (AnswerInferenceListener). A retry keeps the original
+   * time; a dead-letter replay is a new job and gets a new one.
+   *
+   * Optional, unlike `jobId`: LocalEventService runs listeners inline, so
+   * nothing ever waited and there is no queue row to read it from.
+   */
+  enqueuedAt?: Date;
+
   done: () => void;
   fail: (reason: unknown) => void;
 
@@ -184,4 +195,18 @@ export type EventSendOptions = {
    * it too, via a plain setTimeout before running listeners inline.
    */
   startAfter?: Date | string | number;
+
+  /**
+   * How long THIS job may wait unstarted (`created` or `retry`) before pg-boss
+   * archives it instead of running it, in minutes. Overrides the queue's own
+   * `retentionMinutes` for one send, which is the point: a queue shared by work
+   * that must survive a long backlog and work that is worthless after an hour
+   * can only express the second per job. Only the pg-boss implementation honours
+   * it — `LocalEventService` runs listeners inline, so nothing ever waits.
+   *
+   * The drop is pg-boss's `archive()` sweep, so it is silent by design: no
+   * failure, no retry, no dead letter. Reach for it only for work whose next
+   * scheduled run would redo it anyway.
+   */
+  retentionMinutes?: number;
 };

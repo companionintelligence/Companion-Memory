@@ -10,6 +10,26 @@ export interface PowerSyncCredentials {
   powersync_url: string;
 }
 
+/**
+ * Stable reason the token endpoint gives when this deployment runs no PowerSync
+ * service. Clients stop asking this server for credentials when they see it.
+ */
+export const POWERSYNC_NOT_CONFIGURED = 'POWERSYNC_NOT_CONFIGURED';
+
+/**
+ * The 503 body for an unconfigured deployment: the shape Nest gave the
+ * `ServiceUnavailableException` this endpoint used to throw, plus `code`, so
+ * clients that only look at the status keep working.
+ */
+export const POWERSYNC_NOT_CONFIGURED_BODY = {
+  statusCode: 503,
+  error: 'Service Unavailable',
+  message: 'PowerSync is not configured',
+  code: POWERSYNC_NOT_CONFIGURED,
+} as const;
+
+export type PowerSyncNotConfigured = typeof POWERSYNC_NOT_CONFIGURED_BODY;
+
 const DEFAULT_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 
 function resolveCutoffIso(cutoff?: string): string {
@@ -42,10 +62,17 @@ function resolveCutoffIso(cutoff?: string): string {
 export class PowerSyncTokenService {
   constructor(private readonly jwtService: JwtService) {}
 
+  /** Whether this deployment has a PowerSync service to issue tokens for. */
+  isConfigured(): boolean {
+    return Boolean(config.powersync.jwtSecret && config.powersync.url);
+  }
+
   issueToken(userId: string, cutoff?: string): PowerSyncCredentials {
-    if (!config.powersync.jwtSecret || !config.powersync.url) {
-      // The feature is scaffolded but not configured for this deployment.
-      throw new ServiceUnavailableException('PowerSync is not configured');
+    if (!this.isConfigured()) {
+      // The feature is scaffolded but not configured for this deployment. The
+      // controller answers this case before calling here; a caller that does
+      // not still gets the same body, `code` included.
+      throw new ServiceUnavailableException(POWERSYNC_NOT_CONFIGURED_BODY);
     }
 
     const token = this.jwtService.sign(

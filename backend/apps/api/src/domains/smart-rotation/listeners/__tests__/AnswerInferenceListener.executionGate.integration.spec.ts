@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource, type QueryRunner } from 'typeorm';
 
 import { type ServiceContext, SYSTEM_USER } from '@ci/common/context';
+import config from '@ci/configuration';
 import { Events } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
 import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
@@ -54,6 +55,7 @@ const ATTEMPT_HISTORY = {
   queue: LLM_BACKGROUND_QUEUE,
   eventName: Events.INFER_QUESTION_ANSWER,
   cooldownHours: INFERENCE_ATTEMPT_COOLDOWN_HOURS,
+  intervalMinutes: config.llm.answerInferenceIntervalMinutes,
 } as const;
 
 type Standing = Awaited<ReturnType<QuestionService['findInferenceStanding']>>;
@@ -228,8 +230,11 @@ describeWithDatabase(`AnswerInferenceListener execution-time gate (${availabilit
       logger,
     );
 
+    // The real QuestionService, for its dispatch gate. `send` above records
+    // instead of enqueueing, so no job row is ever written and the gate stays
+    // open for every step of the drain.
     selectorListener = new SmartRotationListener(
-      {} as never,
+      questionService,
       {} as never,
       { send: async (_event: string, payload: { questionId: string }) => sent.push(payload) } as never,
       {} as never,

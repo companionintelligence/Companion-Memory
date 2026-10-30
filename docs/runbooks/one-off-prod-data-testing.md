@@ -22,7 +22,7 @@ This is **not** the normal release process. It is a deliberate, one-off shortcut
 | **Images swapped** | `api` + `gateway` + `hbpe-service` + `summary-service` | All `companion/*` services from GHCR |
 | **Migrations** | `migrate-database` runs pending SQL | Same |
 | **Hub catalog version** | Still shows old pin (e.g. `2026.7.27.1`) | Updates to new catalog version |
-| **Compose digest pins** | Bypassed via local override file | Honored from marketplace manifest |
+| **Compose digest pins** | Bypassed via the Hub's user compose override | Honored from marketplace manifest |
 
 The deploy script rebuilds and swaps **`api`**, **`gateway`**, **`hbpe-service`**,
 and **`summary-service`**. Database and object-store keep the Hub-pinned images.
@@ -35,9 +35,9 @@ does not pass GPU devices.
 ## Prerequisites
 
 - CI-Memory installed via CI-Hub (`ci-memory:ci-marketplace`)
-- Docker socket access on the host (Hub manages compose via `ci-os-hub`)
+- Docker socket access on the host (Hub manages compose from its own container)
 - CI-Server checkout with your PR branch
-- Hub container running (default name: `ci-os-hub`)
+- Hub container running: `ci-hub`, or `ci-os-hub` on Hubs from before Companion-Hub#1226. The scripts use whichever is running.
 
 ## Environment variables (critical)
 
@@ -99,9 +99,10 @@ cd CI-Server
 ./scripts/dev/hub-pr-test-deploy.sh --frontend
 ```
 
-Environment overrides — `PR_TAG` (default `pr-onboarding-test`), `GPU` (default
-`cpu`), `ROOT_FOLDER_HOST` (default `~/.local/share/companion-hub`) and
-`HUB_CONTAINER` (default `ci-os-hub`):
+Environment overrides: `PR_TAG` (default `pr-onboarding-test`), `GPU` (default
+`cpu`), `HUB_CONTAINER` (default: `ci-hub` or `ci-os-hub`, whichever is running) and
+`ROOT_FOLDER_HOST` (default: the folder the Hub container mounts its data from, else
+`~/.local/share/companion-hub`):
 
 ```bash
 PR_TAG=my-feature-test ROOT_FOLDER_HOST=~/.local/share/companion-hub ./scripts/dev/hub-pr-test-deploy.sh --skip-build
@@ -110,9 +111,25 @@ PR_TAG=my-feature-test ROOT_FOLDER_HOST=~/.local/share/companion-hub ./scripts/d
 The deploy script:
 
 1. Tags `ci/{api,gateway,hbpe-service,summary-service}:latest` as `ghcr.io/companionintelligence/companion/*:pr-onboarding-test` (or `PR_TAG`)
-2. Writes `docker-compose.pr-test.yml` next to Hub's installed compose (image override only)
-3. Runs `migrate-database` via `docker exec ci-os-hub sh -c 'docker compose …'`
+2. Writes the image override to a temporary file beside the Hub's user compose override,
+   `{ROOT_FOLDER_HOST}/user-config/ci-marketplace/ci-memory/docker-compose.yml`. The
+   override pins only what runs after the swap, so `--frontend` pins the gateway alone
+   unless an earlier full swap is still running. It pins `migrate-database` only on a run
+   that applies migrations. The Hub runs `migrate-database` every time it starts Memory, so
+   a pin left by `--skip-migrate` or `--frontend` would apply the checkout's SQL on the
+   next Hub restart.
+3. Runs `migrate-database` via `docker exec <hub container> sh -c 'docker compose …'`, with
+   the Hub's env files and installed compose plus that override
 4. Recreates **`api`**, **`gateway`**, **`hbpe-service`**, and **`summary-service`** (`--no-deps`)
+5. Installs the override as the Hub's user compose override. The Hub layers it over the
+   installed compose every time it starts Memory, so the swap survives a Hub restart or a
+   reboot. An override already there is moved to `docker-compose.yml.before-pr-test` until
+   rollback puts it back. A run that fails before this step leaves the Hub's override as it was.
+6. Points Traefik's `apps.yml` at the recreated gateway's address, since the Hub only
+   rewrites it when it starts or stops the app itself
+
+The Hub ignores the user compose override while custom configuration is turned off for
+Memory. With it off, a Hub restart brings back the pinned images.
 
 ### Rollback
 
@@ -120,8 +137,9 @@ The deploy script:
 ./scripts/dev/hub-pr-test-rollback.sh
 ```
 
-Removes `docker-compose.pr-test.yml` and recreates `api` + `gateway` + `hbpe-service`
-+ `summary-service` from the digest-pinned images in Hub's canonical `docker-compose.yml`.
+Removes the override (putting back any override it replaced) and recreates `api`,
+`gateway`, `hbpe-service` and `summary-service` from the digest-pinned images in Hub's
+canonical `docker-compose.yml`.
 
 ### Verify
 
@@ -212,10 +230,12 @@ Cross-repo references:
 
 ## Considerations and trepidations
 
-### Do not click "Update" in Hub during a PR test
+### Roll back before clicking "Update" in Hub
 
-Hub Update pulls from GHCR and refreshes the installed compose from the marketplace.
-That will **overwrite your local image override** and return to pinned production digests.
+Hub Update refreshes the installed compose from the marketplace and pulls every image the
+compose names, including the user compose override. The override names test tags that
+exist only on this machine, so that pull fails and the update stops. Run
+`hub-pr-test-rollback.sh` first.
 
 ### Hub state vs reality
 

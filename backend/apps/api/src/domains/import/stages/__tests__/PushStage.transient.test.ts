@@ -2,9 +2,10 @@ import { DatabaseUnavailableError, type TransientRetryPolicy } from '@ci/common/
 import type { CreateCommunicationDto } from '@ci/domains/memory';
 
 import type { StagedItem } from '../../entities/StagedItemEntity';
+import type { CanonicalRecord } from '../../push/canonical';
 import type { StageRunContext } from '../../types';
 import { DatabaseCrashedDuringPushError } from '../DatabaseCrashedDuringPushError';
-import { PushStage, relationshipErrorMessage } from '../PushStage';
+import { directionAfterSender, PushStage, relationshipErrorMessage } from '../PushStage';
 
 /**
  * A database that stops answering is not a poisoned row — and a database that
@@ -201,6 +202,12 @@ interface Options {
   ) => { entities: Array<{ key: string; entityId: string }>; errors: string[] };
   /** readSelfIdentity's lookup, by call. */
   owner?: (call: number) => Array<{ name: string | null; email: string | null; phones_json: unknown }>;
+  /** `ci.users.entity_id`: the owner's self Person, or null for an account that has none yet. */
+  selfEntityId?: string | null;
+  /** graph.ensureSelfEntityForOwner; default provisions nothing (no ci.users row). */
+  ensureSelf?: () => Promise<{ id: string; type: string } | null>;
+  /** The staged from/to/cc edges every row carries, as `participantsFor` joins them. */
+  participants?: Array<{ relation: string; server_entity_id: string }>;
 }
 
 function makeStage(rows: StagedItem[], options: Options = {}) {
@@ -211,6 +218,9 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
   const callSizes: number[] = [];
   const updates: Array<{ sql: string; params: unknown[] }> = [];
   const ingested: string[][] = [];
+  /** The order the owner was provisioned and read in, and the mappings written. */
+  const ownerSteps: string[] = [];
+  const mappings: Array<{ stagedEntityId: string; serverEntityId: string }> = [];
   const clock = fakeClock();
   const db = fakeDatabase(clock);
 
@@ -239,15 +249,21 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
       }
 
       if (sql.includes('INSERT INTO ci_import.entity_mappings')) {
+        mappings.push({ stagedEntityId: String(params[0]), serverEntityId: String(params[2]) });
+
         return [];
       }
 
       if (sql.includes('staged_relationships')) {
-        return [];
+        const ids = (params[0] as string[] | undefined) ?? [];
+
+        return ids.flatMap((itemId) =>
+          (options.participants ?? []).map((edge) => ({ ...edge, item_id: itemId })),
+        );
       }
 
       if (sql.includes('SELECT entity_id FROM ci.users')) {
-        return [{ entity_id: null }];
+        return [{ entity_id: options.selfEntityId ?? null }];
       }
 
       if (sql.includes('trust_mode')) {
@@ -256,6 +272,7 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
 
       if (sql.includes('FROM ci.users u')) {
         ownerCalls += 1;
+        ownerSteps.push('read the owner identity');
 
         return options.owner?.(ownerCalls) ?? [];
       }
@@ -311,6 +328,11 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
   };
 
   const graph = {
+    ensureSelfEntityForOwner: jest.fn(async (_ctx: unknown) => {
+      ownerSteps.push('provision the owner');
+
+      return (await options.ensureSelf?.()) ?? null;
+    }),
     ingest: jest.fn(async (_ctx: unknown, input: { entities: Array<{ key: string }> }) => {
       ingestCalls += 1;
       const keys = input.entities.map((entity) => entity.key);
@@ -371,6 +393,7 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
     stage,
     db,
     graph,
+    communications,
     receipts,
     callSizes,
     updates,
@@ -378,6 +401,8 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
     stagedItemUpdates,
     entityMarks,
     ingested,
+    ownerSteps,
+    mappings,
     clock,
     logger,
     /** Serve the batch again — a second stage attempt over rows still `pending`. */
@@ -1158,5 +1183,142 @@ describe('the owner lookup', () => {
       DatabaseCrashedDuringPushError,
     );
     expect(clock.slept).toEqual([]);
+  });
+});
+
+describe('the owner’s self Person', () => {
+  /**
+   * `ci.users.entity_id` stays NULL until onboarding finishes, and an import can
+   * run before then. With no self Person the run treated the owner as nobody:
+   * mail they sent from their account address was filed under a Person of its
+   * own, and `directionAfterSender` (which needs a non-null self id) never turned
+   * a header-less mail to them inbound.
+   */
+  type SelfResolver = { resolveSelfEntityId(context: StageRunContext): Promise<string | null> };
+
+  const SELF = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  const ownerContact = () => ({
+    ...stagedEntity(0),
+    name: 'qa-admin@example.com',
+    identityKey: 'qa-admin@example.com',
+    dataSource: 'gmail',
+  });
+
+  const OWNER_ROWS = [{ name: 'QA Admin', email: 'qa-admin@example.com', phones_json: null }];
+
+  it('provisions it before the run reads who the owner is, and files the owner’s address under it', async () => {
+    const { stage, ownerSteps, mappings, ingested, graph } = makeStage([], {
+      entities: [ownerContact()],
+      owner: () => OWNER_ROWS,
+      ensureSelf: async () => ({ id: SELF, type: 'Person' }),
+    });
+
+    await stage.run(context);
+
+    expect(graph.ensureSelfEntityForOwner).toHaveBeenCalledTimes(1);
+    expect(graph.ensureSelfEntityForOwner).toHaveBeenCalledWith({ userId: USER_ID });
+    // The Person has to exist before its names and addresses are read.
+    expect(ownerSteps[0]).toBe('provision the owner');
+    expect(ownerSteps.slice(1)).toContain('read the owner identity');
+    // Mail from the account address lands on the owner, not on a new Person.
+    expect(mappings).toEqual([{ stagedEntityId: ownerContact().id, serverEntityId: SELF }]);
+    expect(ingested.flat()).toEqual([]);
+  });
+
+  it('keeps the account’s existing self Person and provisions nothing', async () => {
+    const { stage, mappings, graph } = makeStage([], {
+      entities: [ownerContact()],
+      owner: () => OWNER_ROWS,
+      selfEntityId: SELF,
+    });
+
+    await stage.run(context);
+
+    expect(graph.ensureSelfEntityForOwner).not.toHaveBeenCalled();
+    expect(mappings).toEqual([{ stagedEntityId: ownerContact().id, serverEntityId: SELF }]);
+  });
+
+  it('hands the provisioned id to the direction rule, so header-less mail to the owner is inbound', async () => {
+    const { stage } = makeStage([], { ensureSelf: async () => ({ id: SELF, type: 'Person' }) });
+    const selfId = await (stage as unknown as SelfResolver).resolveSelfEntityId(context);
+
+    expect(selfId).toBe(SELF);
+
+    const record = {
+      metadata: { From: '"He Tester" <stranger@example.net>', DirectionBasis: 'no_delivery_trace' },
+    } as unknown as CanonicalRecord;
+    const participants = new Map([
+      ['from', ['stranger-person']],
+      ['to', [SELF]],
+    ]);
+
+    expect(directionAfterSender('outbound', record, participants, 'stranger-person', selfId)).toBe('inbound');
+    // And without it, as before the fix, it stays outbound.
+    expect(directionAfterSender('outbound', record, participants, 'stranger-person', null)).toBe('outbound');
+  });
+
+  it('turns a header-less mail from a stranger to the owner inbound through run(), with no Person before the import', async () => {
+    const mail = {
+      ...messageRow('Are we still on for lunch?'),
+      dataSource: 'gmail',
+      classification: 'email',
+      metadata: {
+        Subject: 'Lunch',
+        From: '"He Tester" <stranger@example.net>',
+        To: 'qa-admin@example.com',
+        Direction: 'outbound',
+        DirectionBasis: 'no_delivery_trace',
+      },
+    } as unknown as StagedItem;
+    const { stage, communications } = makeStage([mail], {
+      owner: () => OWNER_ROWS,
+      // The account has no self Person: the push provisions it, and the mail's
+      // To edge resolves to it through the owner's address.
+      ensureSelf: async () => ({ id: SELF, type: 'Person' }),
+      participants: [
+        { relation: 'from', server_entity_id: 'stranger-person' },
+        { relation: 'to', server_entity_id: SELF },
+      ],
+    });
+
+    await stage.run(context);
+
+    const sent = communications.createManyDetailed.mock.calls.flatMap(([, input]) => input);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ direction: 'inbound', from_entity_id: 'stranger-person' });
+  });
+
+  it('runs on with no owner when there is no account row to provision from', async () => {
+    const { stage } = makeStage([], { ensureSelf: async () => null });
+
+    await expect((stage as unknown as SelfResolver).resolveSelfEntityId(context)).resolves.toBeNull();
+  });
+
+  it('runs on with no owner, and says so, when provisioning fails for a reason of its own', async () => {
+    const { stage, logger } = makeStage([], {
+      ensureSelf: async () => {
+        throw notNull();
+      },
+    });
+
+    await expect((stage as unknown as SelfResolver).resolveSelfEntityId(context)).resolves.toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Could not provision the owner'),
+      expect.objectContaining({ runId: RUN_ID, userId: USER_ID }),
+    );
+  });
+
+  it('does not read a database that is not ready as “no owner”: the step is rethrown for `run` to wait out', async () => {
+    const { stage } = makeStage([], {
+      ensureSelf: async () => {
+        throw inRecovery();
+      },
+    });
+
+    await expect((stage as unknown as SelfResolver).resolveSelfEntityId(context)).rejects.toMatchObject({
+      code: '57P03',
+    });
   });
 });

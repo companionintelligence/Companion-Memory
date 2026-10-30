@@ -14,6 +14,7 @@ import {
   occupancySignalInRange,
   packLanes,
   rhythmCells,
+  scrollTopForSelectedHour,
   slotForecastLine,
   spanForDay,
 } from './scheduleGeometry';
@@ -796,6 +797,71 @@ describe('slotForecastLine — what the drawer is allowed to claim', () => {
 
       expect(slotForecastLine({ instant, allDay: false }, () => undefined)).toBeNull();
     });
+  });
+
+  it('says nothing when the only name is the labeler placeholder', () => {
+    withTimeZone('UTC', () => {
+      const instant = new Date(Date.UTC(2026, 7, 4, 20, 0));
+      const day: RhythmDay = {
+        date: '2026-08-04',
+        dow: 'Tue',
+        clusters: [
+          {
+            clusterId: 'c-label',
+            name: 'Label',
+            l0Class: 'UNKNOWN',
+            pOccur: 0.95,
+            scheduled: false,
+            daypartProbs: [{ label: 'evening', probability: 1 }],
+          },
+        ],
+      };
+
+      expect(
+        slotForecastLine({ instant, allDay: false }, (key) => (key === '2026-08-04' ? day : undefined)),
+      ).toBeNull();
+    });
+  });
+});
+
+describe('scrollTopForSelectedHour', () => {
+  const grid = 1248;
+
+  it('leaves an hour that is already above the sheet', () => {
+    expect(
+      scrollTopForSelectedHour({
+        hourY: 200,
+        scrollTop: 40,
+        clientHeight: 800,
+        scrollHeight: grid,
+        occlusionPx: 320,
+      }),
+    ).toBe(40);
+  });
+
+  it('lifts a covered hour to just above the sheet', () => {
+    // safe bottom = 800 - 320 - 12 = 468, so hour 624 lands at scroll 156.
+    expect(
+      scrollTopForSelectedHour({
+        hourY: 624,
+        scrollTop: 0,
+        clientHeight: 800,
+        scrollHeight: grid,
+        occlusionPx: 320,
+      }),
+    ).toBe(156);
+  });
+
+  it('stops at midnight instead of opening empty space past the day', () => {
+    expect(
+      scrollTopForSelectedHour({
+        hourY: 1100,
+        scrollTop: 0,
+        clientHeight: 800,
+        scrollHeight: grid,
+        occlusionPx: 320,
+      }),
+    ).toBe(grid - 800);
   });
 });
 

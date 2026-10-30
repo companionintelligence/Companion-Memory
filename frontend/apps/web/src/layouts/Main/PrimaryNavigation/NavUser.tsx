@@ -61,7 +61,7 @@ export function NavUserMenu() {
               // AlertDialog.Action renders the default button variant, so the
               // destructive styling has to come from here.
               className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
-              onClick={logout}
+              onClick={() => void logout()}
             >
               Log out
             </AlertDialog.Action>

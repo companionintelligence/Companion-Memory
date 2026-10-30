@@ -27,11 +27,23 @@ test('logs in with the seeded user and lands in the app', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Password' }).fill(process.env.AUTH_DEFAULT_USER_PASSWORD || '');
   await page.getByRole('button', { name: 'Log in' }).click();
 
-  // Onboarded user → the app home, which `appHomePath` defines as /plan when
-  // `planning.page` is on and /calendar when it is off. (/feed was the old home
-  // before the nav refactor; asserting it here made a working login look broken.)
+  // Onboarded user → the app home, which `appHomePath` (lib/appHome.ts) defines
+  // as /memory. (It was /plan or /calendar before #2955, and /feed before the
+  // nav refactor; asserting a stale home made a working login look broken.)
   // Un-onboarded would go to /onboarding instead.
-  await expect(page).toHaveURL(/\/(plan|calendar|onboarding)/);
+  await expect(page).toHaveURL(/\/(memory|onboarding)/);
+});
+
+test('the splash theme button takes a mouse click', async ({ page }) => {
+  await page.goto('/');
+
+  // jsdom has no layout, so only a real browser sees what is under the pointer.
+  // Playwright's click waits until the button itself is the hit target: while the
+  // splash content layer covered it (#3133), this timed out with that layer
+  // reported as intercepting pointer events. A fresh context starts on `system`.
+  await page.getByRole('button', { name: 'Switch to light mode' }).click();
+
+  await expect(page.getByRole('button', { name: 'Switch to dark mode' })).toBeVisible();
 });
 
 test('redirects to /login when visiting a protected route logged-out', async ({ page }) => {

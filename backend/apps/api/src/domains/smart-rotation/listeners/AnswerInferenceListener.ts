@@ -4,7 +4,7 @@ import { type ServiceContext, type UserServiceContext } from '@ci/common/context
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { type RecallLine, RecallService } from '@ci/domains/agent';
-import { Events, type EventPayloads, OnEvent } from '@ci/domains/events';
+import { type Acknowledgement, Events, type EventPayloads, OnEvent } from '@ci/domains/events';
 import {
   Answer,
   type AnswerEvidence,
@@ -35,6 +35,8 @@ import {
 } from '@ci/domains/llm';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
+
+import { INFERENCE_QUEUE_RETENTION_MINUTES } from './SmartRotationListener';
 
 const RELATED_ANSWER_LIMIT = 10;
 const RECENT_ANSWER_FALLBACK = 5;
@@ -201,10 +203,65 @@ export class AnswerInferenceListener {
     this.logger.setContext(AnswerInferenceListener.name);
   }
 
+  /**
+   * The queue's entry point: drop a job that waited too long, run the rest.
+   *
+   * ═══ WHY A JOB CAN BE TOO OLD TO RUN ═══
+   *
+   * An inference is a guess at one unanswered question, and the selectors make
+   * a fresh guess every interval, so a job is only worth its GPU time while it
+   * is current. Measured on core-1, 2026-10-17: four owners at one job a minute
+   * each against one `ollama-background` slot. The queue fell ~4 h behind — a
+   * job created at 23:01 UTC started at 02:56 — with 941 waiting, and every one
+   * of them would have been run, oldest first, long after anyone wanted it.
+   *
+   * The dispatch gate (`inferenceDispatchGate.ts`) stops a backlog forming, and
+   * new sends carry {@link INFERENCE_QUEUE_RETENTION_MINUTES} so pg-boss drops
+   * them unstarted. This is the third leg, for whatever reaches a worker anyway:
+   * a backlog queued before either existed (90-day retention, so it would
+   * otherwise replay in full on the next start), or a job fetched just before
+   * its retention ran out. Same number, same meaning: past it the job is
+   * completed without work — one log line, no retrieval, no model call — and
+   * the selector, which reads the completed row as an attempt, moves on.
+   *
+   * Measured from `enqueuedAt` (the row's `created_on`), so a retry keeps its
+   * place in the clock and a dead-letter replay, which is a NEW job, is not
+   * stale on arrival. No `enqueuedAt` (LocalEventService) means nothing waited.
+   *
+   * {@link inferQuestionAnswer} stays the unacknowledged work itself, which is
+   * what tests and probes call directly.
+   */
   @OnEvent(Events.INFER_QUESTION_ANSWER, {
     queue: LLM_BACKGROUND_QUEUE,
     queueOptions: LLM_BACKGROUND_QUEUE_OPTIONS,
+    autoAcknowledge: false,
   })
+  async handleInferQuestionAnswer(
+    payload: EventPayloads[Events.INFER_QUESTION_ANSWER],
+    ack: Acknowledgement,
+  ): Promise<void> {
+    const waitedMs = ack.enqueuedAt ? Date.now() - ack.enqueuedAt.getTime() : 0;
+
+    if (waitedMs > INFERENCE_QUEUE_RETENTION_MINUTES * 60_000) {
+      this.logger.log('Answer inference dropped — the job waited longer than it is worth', {
+        userId: payload.ownerId,
+        questionId: payload.questionId,
+        waitedMinutes: Math.round(waitedMs / 60_000),
+        limitMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
+      });
+      ack.done();
+
+      return;
+    }
+
+    try {
+      await this.inferQuestionAnswer(payload);
+      ack.done();
+    } catch (error) {
+      ack.fail(error);
+    }
+  }
+
   async inferQuestionAnswer(payload: EventPayloads[Events.INFER_QUESTION_ANSWER]) {
     const ownerId = payload.ownerId;
     if (!ownerId) {

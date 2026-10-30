@@ -9,10 +9,9 @@ import type { AccountDeletionResult } from '../../services/DataDeletionService';
 import { PrivacyController } from '../PrivacyController';
 
 function makeController(result: AccountDeletionResult, email = 'owner@example.com') {
-  const deleteAccount = jest.fn(async () => result);
+  const deleteAccount = jest.fn(async (_context: unknown, _options?: unknown) => result);
   const dataDeletionService = { deleteAccount };
-  const handOverAdministration = jest.fn(async () => undefined);
-  const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })), handOverAdministration };
+  const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const controller = new PrivacyController(
@@ -21,17 +20,20 @@ function makeController(result: AccountDeletionResult, email = 'owner@example.co
     logger as never,
   );
 
-  return { controller, deleteAccount, handOverAdministration };
+  return { controller, deleteAccount };
 }
 
 const RESULT: AccountDeletionResult = {
   userId: 'user-1',
+  status: 'deleted',
   revocations: [
     { connectionId: 'c1', providerId: 'google', tokenRevoked: true },
     { connectionId: 'c2', providerId: 'google', tokenRevoked: false },
   ],
   deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
+  detachedCounts: { 'ci.ask_audit': 1 },
   totalDeleted: 4,
+  deletedObjects: 2,
   userDeleted: true,
   auditId: 'audit-1',
 };
@@ -49,43 +51,74 @@ describe('PrivacyController.deleteMyAccount', () => {
     });
 
     // Delegated with the caller's own context — owner-scoped by construction.
-    expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' });
+    expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' }, expect.anything());
 
     expect(response).toEqual({
       status: 'deleted',
       userDeleted: true,
       totalDeleted: 4,
       deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
+      detachedCounts: { 'ci.ask_audit': 1 },
+      deletedObjects: 2,
       connectionsRevoked: 1, // only c1 was actually revoked
       connectionsProcessed: 2,
       auditId: 'audit-1',
     });
   });
 
-  it('hands administration over before it deletes anything, with the successor the caller named', async () => {
-    const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
+  it('passes the successor the caller named to the delete', async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
 
     await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
       confirmEmail: 'owner@example.com',
       successorEmail: 'member@example.com',
     });
 
-    expect(handOverAdministration).toHaveBeenCalledWith({ userId: 'user-1' }, 'user-1', {
-      successorEmail: 'member@example.com',
-    });
-    expect(handOverAdministration.mock.invocationCallOrder[0]).toBeLessThan(
-      deleteAccount.mock.invocationCallOrder[0],
+    expect(deleteAccount).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      { successorEmail: 'member@example.com' },
     );
+  });
+
+  it('says deleting, not deleted, while the purge of an ended account is still running', async () => {
+    const { controller } = makeController({
+      ...RESULT,
+      status: 'deleting',
+      deletedCounts: {},
+      detachedCounts: {},
+      totalDeleted: 0,
+      deletedObjects: 0,
+      userDeleted: false,
+    });
+
+    const response = await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+      confirmEmail: 'owner@example.com',
+    });
+
+    expect(response).toMatchObject({ status: 'deleting', userDeleted: false, auditId: 'audit-1' });
+  });
+
+  it('passes a failed delete through untouched', async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
+    const failure = new Error('could not end the account');
+    deleteAccount.mockRejectedValue(failure);
+
+    await expect(
+      controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+        confirmEmail: 'owner@example.com',
+        successorEmail: 'member@example.com',
+      }),
+    ).rejects.toBe(failure);
   });
 
   it.each([
     ['successor_required', SUCCESSOR_REQUIRED],
     ['successor_not_found', SUCCESSOR_NOT_FOUND],
   ] as const)(
-    'answers 409 %s and deletes nothing when the last administrator names nobody who can take over',
+    'answers 409 %s when the last administrator names nobody who can take over',
     async (reason, message) => {
-      const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
-      handOverAdministration.mockRejectedValue(new LastAdminDeletionRefused(reason));
+      const { controller, deleteAccount } = makeController(RESULT);
+      deleteAccount.mockRejectedValue(new LastAdminDeletionRefused(reason));
 
       const failure = await controller
         .deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, { confirmEmail: 'owner@example.com' })
@@ -93,7 +126,6 @@ describe('PrivacyController.deleteMyAccount', () => {
 
       expect(failure).toBeInstanceOf(ConflictException);
       expect((failure as ConflictException).getResponse()).toMatchObject({ message });
-      expect(deleteAccount).not.toHaveBeenCalled();
     },
   );
 

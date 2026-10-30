@@ -551,7 +551,11 @@ own. The refresh is now a merge, run inside the upsert against the locked row
 - keys the source does not send are left alone, and a JSON null says nothing;
 - the plural identity keys this fold unions (`IDENTITY_LIST_KEYS`) and the parser's own
   `accumulate[]` keys (carried on `ci_import.staged_entities.accumulate`) are unioned;
-- any other key the source sends takes its new value, and `name`/`description` do too unless null.
+- any other key the source sends takes its new value, and `name`/`description` do too unless null;
+- except a key a person changed or cleared in Edit Person, listed in `properties.user_edited_keys`
+  (`PersonService.patch` with `handEdit`): the arriving value is dropped, for `name` and
+  `description` too. `PersonService.update`, which the Google/Facebook contact syncs and memory
+  compaction write through, keeps them the same way.
 
 The re-key that moves a row onto a new import key (`rekeyImportedEntities`, `resetProperties`) rests
 on the same rule: it empties what the SOURCE put in the row and keeps the identity values its
@@ -560,9 +564,9 @@ card's values into them. Before this refresh was a merge, that following ingest 
 the kept values too. The repair migration `restore_merged_person_identity_lists` (#2796) puts back
 what earlier re-imports erased; it only stays put with this refresh in place.
 
-Two limits follow from there being no per-key provenance yet: an import cannot *remove* a member of
-a unioned list, and a key the source itself sends (`avatar_url` on a vCard) still overrides a user
-edit of it. The precedence scheme above is what resolves the second.
+One limit follows from there being no per-key provenance yet: an import cannot *remove* a member of
+a unioned list. `user_edited_keys` is the first rung of the precedence scheme above (a user edit
+outranks every source); the rest of the ranking is still unbuilt.
 
 ### 5.2 Relationship folding
 

@@ -113,6 +113,19 @@ function fakeRel(relationshipId: string): RelationshipEntity {
   return { relationship_id: relationshipId } as RelationshipEntity;
 }
 
+/** A forget that archive refused: not retryable, naming what it refused and pointing at delete. */
+function expectArchiveRefused(
+  result: { success: boolean; error?: { code: string; message: string; retryable?: boolean } },
+  named: string,
+): void {
+  expect(result.success).toBe(false);
+  expect(result.error).toMatchObject({ code: 'ARCHIVE_REFUSED', retryable: false });
+  expect(result.error?.message).toContain('Nothing was changed');
+  expect(result.error?.message).toContain(named);
+  expect(result.error?.message).toContain('mode "archive_and_delete"');
+  expect(result.error?.message).toContain('ask the owner first');
+}
+
 /** Builds a jest-mock GraphUtilityService double with a controllable node/relationship table. */
 function makeGraphUtility(
   options: {
@@ -147,8 +160,17 @@ function makeGraphUtility(
 
   const deactivateEntities = jest.fn().mockResolvedValue(0);
   const deactivateRelationships = jest.fn().mockResolvedValue(0);
+  const getNodesByIds = jest.fn(async (entityIds: string[]) =>
+    entityIds.filter((id) => nodes[id]).map((id) => fakeNode(id, nodes[id].entityType)),
+  );
 
-  return { collectEntitySnapshot, getRelationships, deactivateEntities, deactivateRelationships };
+  return {
+    collectEntitySnapshot,
+    getRelationships,
+    deactivateEntities,
+    deactivateRelationships,
+    getNodesByIds,
+  };
 }
 
 /**
@@ -549,23 +571,22 @@ describe('ForgetKnowledgeTool search index removal', () => {
     ['Item', 'item'],
     ['Communication', 'communication'],
     ['Content', 'content'],
-  ])(
-    'announces no deletion for an archived %s, whose record this tool did not remove',
-    async (entityType, searchType) => {
-      // These graph nodes are the `ci.entities` half of a pair whose detail row
-      // (`ci.objects`, `ci.communications`, `ci.content`) archive never touches.
-      // Emitting a deletion for a record that still exists would be false to every
-      // consumer of it, so the tool must stay quiet rather than unindex a live record.
-      const search = makeSearchIndex([`${searchType}:${E1}`]);
-      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType } } });
-      const tool = makeTool(graphUtility, search);
+  ])('announces no deletion for a %s whose archive it refuses', async (entityType, searchType) => {
+    // These graph nodes are the `ci.entities` half of a pair whose detail row
+    // (`ci.objects`, `ci.communications`, `ci.content`) archive never touches, so
+    // archive refuses them. Emitting a deletion for a record that still exists would
+    // be false to every consumer of it, so the tool must stay quiet rather than
+    // unindex a live record.
+    const search = makeSearchIndex([`${searchType}:${E1}`]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType } } });
+    const tool = makeTool(graphUtility, search);
 
-      await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
-      expect(search.send).not.toHaveBeenCalled();
-      expect(search.lookup(searchType, E1)).toBe(true);
-    },
-  );
+    expect(result.error?.code).toBe('ARCHIVE_REFUSED');
+    expect(search.send).not.toHaveBeenCalled();
+    expect(search.lookup(searchType, E1)).toBe(true);
+  });
 
   it.each([
     ['Item', 'item'],
@@ -957,7 +978,7 @@ describe('ForgetKnowledgeTool content, archive_and_delete', () => {
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
   });
 
-  it('never purges content in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive content, which archive cannot hide, and changes nothing', async () => {
     const contents = makeContents([E1]);
     const graphUtility = makeGraphUtility({
       nodes: { [E1]: { entityType: 'Content', relationships: [fakeRel(R1)] } },
@@ -966,9 +987,10 @@ describe('ForgetKnowledgeTool content, archive_and_delete', () => {
 
     const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
+    expectArchiveRefused(result, `content ${E1}`);
     expect(contents.purge).not.toHaveBeenCalled();
-    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
-    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
   });
 
   it('still removes the relationships it was asked to remove by id', async () => {
@@ -1074,7 +1096,7 @@ describe('ForgetKnowledgeTool communications, archive_and_delete', () => {
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
   });
 
-  it('never purges a communication in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive a message, which archive cannot hide, and changes nothing', async () => {
     const communications = makeCommunications([E1]);
     const graphUtility = makeGraphUtility({
       nodes: { [E1]: { entityType: 'Communication', relationships: [fakeRel(R1)] } },
@@ -1089,9 +1111,10 @@ describe('ForgetKnowledgeTool communications, archive_and_delete', () => {
 
     const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
+    expectArchiveRefused(result, `message ${E1}`);
     expect(communications.purge).not.toHaveBeenCalled();
-    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
-    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
   });
 
   it('purges each kind in its own call, events and content before communications', async () => {
@@ -1284,7 +1307,7 @@ describe('ForgetKnowledgeTool items, archive_and_delete', () => {
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
   });
 
-  it('never purges an item in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive a thing, which archive cannot hide, and changes nothing', async () => {
     const items = makeItems([E1]);
     const graphUtility = makeGraphUtility({
       nodes: { [E1]: { entityType: 'Item', relationships: [fakeRel(R1)] } },
@@ -1300,9 +1323,10 @@ describe('ForgetKnowledgeTool items, archive_and_delete', () => {
 
     const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
+    expectArchiveRefused(result, `thing ${E1}`);
     expect(items.purge).not.toHaveBeenCalled();
-    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
-    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
   });
 
   it('purges items after events, content and communications, each in its own call', async () => {
@@ -1548,7 +1572,7 @@ describe('ForgetKnowledgeTool files, archive_and_delete', () => {
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
   });
 
-  it('never purges a file in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive a file, which archive cannot hide, and changes nothing', async () => {
     const files = makeFiles([E1]);
     const graphUtility = makeGraphUtility({
       nodes: { [E1]: { entityType: 'File', relationships: [fakeRel(R1)] } },
@@ -1559,9 +1583,10 @@ describe('ForgetKnowledgeTool files, archive_and_delete', () => {
       mode: 'archive',
     });
 
+    expectArchiveRefused(result, `file ${E1}`);
     expect(files.purge).not.toHaveBeenCalled();
-    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
-    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
   });
 
   it('purges files after events, content, communications and items, each in its own call', async () => {
@@ -3324,5 +3349,159 @@ describe('ForgetKnowledgeTool failures', () => {
       });
       expect(result.error?.message).toContain(`Already deleted: ${E1}, ${E2}.`);
     });
+  });
+});
+
+describe('ForgetKnowledgeTool.checkInput, asked before a forget is queued for confirmation', () => {
+  const tool = () => makeTool(makeGraphUtility({ nodes: {} }));
+
+  it('accepts a call naming entity ids', () => {
+    expect(tool().checkInput({ entityIds: [E1], mode: 'archive' })).toBeUndefined();
+  });
+
+  it('names the field when an id is not a uuid (a name in place of the id)', () => {
+    expect(tool().checkInput({ entityIds: ['RC-llm bogus name'], mode: 'archive' })).toBe(
+      'entityIds.0: Invalid uuid',
+    );
+  });
+
+  it('refuses the singular `entityId` a model sends, saying which field it needs', () => {
+    expect(tool().checkInput({ entityId: E1 })).toBe(
+      'input: Provide entityIds and/or relationshipIds to forget',
+    );
+  });
+});
+
+describe('ForgetKnowledgeTool archive, which cannot hide messages, files, content or things', () => {
+  it('refuses the whole call when one of its nodes is a message, and trashes nothing', async () => {
+    const calendarEvents = makeCalendarEvents([E2]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'Event' } },
+      relationshipsById: { [R_EXPLICIT]: fakeRel(R_EXPLICIT) },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, {
+      entityIds: [E2, E1],
+      relationshipIds: [R_EXPLICIT],
+      mode: 'archive',
+    });
+
+    expectArchiveRefused(result, `message ${E1}`);
+    expect(result.error?.message).not.toContain(E2);
+    expect(calendarEvents.remove).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Object', 'thing'],
+    ['Thing', 'thing'],
+    ['Product', 'thing'],
+  ])('refuses a %s node as a thing', async (entityType, kind) => {
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType } } });
+
+    const result = await makeTool(graphUtility).execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expectArchiveRefused(result, `${kind} ${E1}`);
+  });
+
+  it('groups the refused ids by kind', async () => {
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'Communication' },
+        [E2]: { entityType: 'Communication' },
+        [E3]: { entityType: 'File' },
+      },
+    });
+
+    const result = await makeTool(graphUtility).execute(CONTEXT, {
+      entityIds: [E1, E2, E3],
+      mode: 'archive',
+    });
+
+    expect(result.error?.message).toContain(`Refused: message ${E1}, ${E2}; file ${E3}.`);
+  });
+
+  it('still archives people, places, concepts and events', async () => {
+    const calendarEvents = makeCalendarEvents([E3]);
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'Person' },
+        [E2]: { entityType: 'Concept' },
+        [E3]: { entityType: 'Event' },
+      },
+    });
+
+    const result = await makeTool(graphUtility, makeSearchIndex(), calendarEvents).execute(CONTEXT, {
+      entityIds: [E1, E2, E3],
+      mode: 'archive',
+    });
+
+    expect(result.success).toBe(true);
+    expect(calendarEvents.remove).toHaveBeenCalledWith({ userId: CONTEXT.userId }, E3);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1, E2], CONTEXT.userId, false);
+  });
+
+  it('still deletes a message when the call asks for archive_and_delete', async () => {
+    const communications = makeCommunications([E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+    const tool = makeTool(
+      graphUtility,
+      makeSearchIndex(),
+      makeCalendarEvents(),
+      makeContents(),
+      communications,
+    );
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(result.success).toBe(true);
+    expect(communications.purge).toHaveBeenCalled();
+  });
+});
+
+describe('ForgetKnowledgeTool.checkCall, asked before a forget is queued for confirmation', () => {
+  const graphUtility = () =>
+    makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Item' }, [E2]: { entityType: 'Person' } },
+    });
+
+  it('refuses an archive of a thing before it becomes an Approvals card', async () => {
+    const refusal = await makeTool(graphUtility()).checkCall(CONTEXT, {
+      entityIds: [E1, E2],
+      mode: 'archive',
+    });
+
+    expect(refusal).toContain(`Refused: thing ${E1}.`);
+    expect(refusal).toContain('Nothing was changed');
+  });
+
+  it('reads a call that names no mode as archive, its default', async () => {
+    expect(await makeTool(graphUtility()).checkCall(CONTEXT, { entityIds: [E1] })).toContain(`thing ${E1}`);
+  });
+
+  it('lets an archive of a person through, and any delete', async () => {
+    const tool = makeTool(graphUtility());
+
+    expect(await tool.checkCall(CONTEXT, { entityIds: [E2], mode: 'archive' })).toBeUndefined();
+    expect(await tool.checkCall(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' })).toBeUndefined();
+  });
+
+  it("looks up only the caller's own nodes, and leaves ids it cannot find to execute", async () => {
+    const graph = graphUtility();
+    const tool = makeTool(graph);
+
+    expect(await tool.checkCall(CONTEXT, { entityIds: [E_MISSING], mode: 'archive' })).toBeUndefined();
+    expect(graph.getNodesByIds).toHaveBeenCalledWith([E_MISSING], CONTEXT.userId);
+  });
+
+  it('answers nothing for a call with no owner, or only relationships, without a lookup', async () => {
+    const graph = graphUtility();
+    const tool = makeTool(graph);
+
+    expect(await tool.checkCall({} as RequestContext, { entityIds: [E1], mode: 'archive' })).toBeUndefined();
+    expect(await tool.checkCall(CONTEXT, { relationshipIds: [R1], mode: 'archive' })).toBeUndefined();
+    expect(graph.getNodesByIds).not.toHaveBeenCalled();
   });
 });

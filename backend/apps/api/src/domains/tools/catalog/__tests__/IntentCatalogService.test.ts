@@ -36,7 +36,7 @@ describe('IntentCatalogService', () => {
   it('builds a manifest (domains + entities + flattened, sorted intents) from the registry', () => {
     const manifest = service.getManifest();
 
-    expect(manifest.version).toBe('1.2.0');
+    expect(manifest.version).toBe('1.3.0');
     expect(typeof manifest.generatedAt).toBe('string');
     expect(Number.isNaN(Date.parse(manifest.generatedAt))).toBe(false);
     expect(manifest.domains).toHaveLength(INTENT_DOMAINS.length);
@@ -63,6 +63,56 @@ describe('IntentCatalogService', () => {
   it('exposes the domain and entity vocabularies directly', () => {
     expect(service.getDomains().map((d) => d.key)).toEqual(INTENT_DOMAINS.map((d) => d.key));
     expect(service.getEntities()).toHaveLength(CI_ENTITIES.length);
+  });
+
+  describe('the lean local-tier form', () => {
+    const lean = {
+      description: 'Search your things.',
+      parameters: { type: 'object', properties: { query: { type: 'string' } } },
+    };
+    const withLean = new IntentCatalogService(
+      fakeRegistry([
+        schema('knowledge.search', 'knowledge', {
+          description: 'Search across all your personal data using natural language or keywords…',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string' }, searchMode: { type: 'string' } },
+          },
+          local: lean,
+        }),
+        schema('people.find', 'people'),
+      ]),
+    );
+
+    it('replaces description and parameters only for the local tier', () => {
+      const local = withLean
+        .getManifest({ tier: 'local' })
+        .intents.find((i) => i.name === 'knowledge.search');
+
+      expect(local?.description).toBe(lean.description);
+      expect(local?.parameters).toEqual(lean.parameters);
+      // Everything else about the intent is unchanged: it is the same intent, said shorter.
+      expect(local?.tool).toBe('knowledge_search');
+      expect(local?.localCapable).toBe(true);
+    });
+
+    it('leaves the appliance tier and tierless callers on the full schema', () => {
+      for (const manifest of [withLean.getManifest(), withLean.getManifest({ tier: 'appliance' })]) {
+        const full = manifest.intents.find((i) => i.name === 'knowledge.search');
+
+        expect(full?.description).toMatch(/^Search across all your personal data/);
+        expect(Object.keys(full?.parameters.properties ?? {})).toEqual(['query', 'searchMode']);
+      }
+    });
+
+    it('publishes an intent without a lean form in full to the local tier too', () => {
+      const peopleFind = withLean
+        .getManifest({ tier: 'local' })
+        .intents.find((i) => i.name === 'people.find');
+
+      expect(peopleFind?.description).toBe('people.find');
+      expect(peopleFind?.parameters).toEqual({ type: 'object' });
+    });
   });
 
   describe('per-tier dispatch rulings', () => {

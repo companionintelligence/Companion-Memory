@@ -3,6 +3,8 @@ import { useState, type ReactElement } from 'react';
 import { Button, DropdownMenu } from '@ci/shadcn';
 import { ChevronDown, Shapes } from '@ci/shadcn/icons';
 
+import { MenuShield } from '@/components/MenuShield';
+
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from './useDropdown';
 
 interface Props {
@@ -77,6 +79,7 @@ export function EntityTypeFilter({ modal = true, label, renderTrigger, open, onO
         )}
       </Trigger>
 
+      <MenuShield open={isOpen} />
       <Content id="entity-type-filters" align="start" sideOffset={4} className="z-[9999] w-72 p-2">
         <div className="flex items-center justify-between gap-3 px-1 pb-2">
           <Label className="text-sm font-medium">{menuLabel}</Label>

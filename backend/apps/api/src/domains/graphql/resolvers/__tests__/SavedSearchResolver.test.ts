@@ -34,6 +34,8 @@ function makeResolver() {
   const savedSearchService = {
     findByShareToken: jest.fn(),
     setSharing: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
     ensureDefaults: jest.fn().mockResolvedValue(false),
     findAll: jest.fn().mockResolvedValue([]),
   };
@@ -188,5 +190,53 @@ describe('SavedSearchResolver.savedSearches', () => {
       { userId: 'owner-1' },
       { query: 'yoga', isSeed: false },
     );
+  });
+});
+
+describe('SavedSearchResolver map area (filters.bbox)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('stores a four-number map area with the rest of the filters', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+    savedSearchService.create.mockResolvedValue(sampleEntity);
+
+    await resolver.createSavedSearch(ownerCtx, {
+      name: 'NZ',
+      filters: { areas: [[165.5, -47.5, 179.5, -33.5]], view: 'map' },
+    });
+
+    expect(savedSearchService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ filters: { areas: [[165.5, -47.5, 179.5, -33.5]], view: 'map' } }),
+    );
+  });
+
+  it('refuses a map area that is not [minLon, minLat, maxLon, maxLat]', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+
+    await expect(
+      resolver.createSavedSearch(ownerCtx, { name: 'bad', filters: { bbox: [1, 2, 3] } }),
+    ).rejects.toThrow('bbox');
+    await expect(
+      resolver.updateSavedSearch(ownerCtx, {
+        id: GlobalUID.encode('saved-search', RAW_ID),
+        name: 'bad',
+        filters: { bbox: [1, 2, 3, Number.NaN] },
+      }),
+    ).rejects.toThrow('bbox');
+    await expect(
+      resolver.createSavedSearch(ownerCtx, {
+        name: 'bad',
+        filters: {
+          areas: [
+            [1, 2, 3, 4],
+            [5, 6],
+          ],
+        },
+      }),
+    ).rejects.toThrow('area');
+
+    expect(savedSearchService.create).not.toHaveBeenCalled();
+    expect(savedSearchService.update).not.toHaveBeenCalled();
   });
 });

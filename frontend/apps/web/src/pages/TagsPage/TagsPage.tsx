@@ -2,18 +2,21 @@ import { useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { EmptyState, usePageTitle } from '@ci/common';
-import { IconButton } from '@ci/shadcn';
-import { Pencil, Trash } from '@ci/shadcn/icons';
+import { DropdownMenu, IconButton } from '@ci/shadcn';
+import { Ellipsis, Pencil, Trash } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { LoadingRegion, TagRowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
 
 import { DeleteTagModal } from './DeleteTagModal';
+import { LocalTagsList } from './LocalTagsList';
 import { RenameTagModal } from './RenameTagModal';
 import { type TagListItem } from './tagList';
 
@@ -36,7 +39,18 @@ const GET_TAGS_WITH_USAGE = gql(`
 
 export { GET_TAGS_WITH_USAGE };
 
+/**
+ * The tags page. While the Memory server does not answer and this phone holds a synced
+ * replica, the list comes from the phone (LocalTagsList: the synced tags and their
+ * counts, no editing); otherwise from the appliance. See api/powersync/deviceFallback.ts.
+ */
 export function TagsPage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? <LocalTagsList /> : <RemoteTagsPage />;
+}
+
+function RemoteTagsPage() {
   usePageTitle('Tags - Companion Memory');
 
   // Search text is the header search box's `?search=` — it edits this page's
@@ -64,11 +78,13 @@ export function TagsPage() {
   return (
     <>
       <PullToRefresh onRefresh={refetch}>
-        <PageContent className="gap-4 p-0">
+        <PageContent className="gap-2 p-0 device:gap-4">
           <MemoryHubShell>
-            <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+            <div className="flex flex-col gap-2 px-2 pb-3 device:gap-4 device:px-4 device:pb-4">
               {loading ? (
-                <p className="text-sm text-muted-foreground">Loading tags…</p>
+                <LoadingRegion label="Loading tags">
+                  <TagRowsSkeleton />
+                </LoadingRegion>
               ) : error ? (
                 <ErrorState
                   title="Could not load tags"
@@ -82,24 +98,56 @@ export function TagsPage() {
               ) : (
                 <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
                   {filteredTags.map((tag) => (
-                    <li key={tag.id} className="flex items-center gap-3 px-3 py-2">
+                    <li
+                      key={tag.id}
+                      data-testid="tag-row"
+                      className="flex items-center gap-2 px-2 py-1.5 device:gap-3 device:px-3 device:py-2"
+                    >
                       <Link
                         to={`/memory?tags=${encodeURIComponent(tag.label)}`}
-                        className="flex min-w-0 flex-1 items-center gap-3"
+                        className="flex min-w-0 flex-1 items-center gap-2 device:gap-3"
                       >
-                        <Tag text={tag.label} className="cursor-pointer" />
+                        <Tag
+                          text={tag.label}
+                          className="min-w-0 max-w-full cursor-pointer [&>span]:truncate"
+                        />
                         {tag.description ? (
-                          <span className="truncate text-sm text-muted-foreground">{tag.description}</span>
+                          <span className="hidden min-w-0 truncate text-sm text-muted-foreground device:block">
+                            {tag.description}
+                          </span>
                         ) : null}
                       </Link>
 
-                      <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground device:text-sm">
                         {tag.entityCount === 1 ? '1 item' : `${tag.entityCount} items`}
                       </span>
+
+                      <DropdownMenu modal>
+                        <DropdownMenu.Trigger asChild>
+                          <IconButton
+                            variant="ghost"
+                            label={`Actions for ${tag.label}`}
+                            className="size-8 device:hidden"
+                          >
+                            <Ellipsis className="h-4 w-4" />
+                          </IconButton>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Content align="end">
+                          <DropdownMenu.Item onSelect={() => setTagToEdit(tag)}>
+                            <Pencil />
+                            Edit
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item variant="destructive" onSelect={() => setTagToDelete(tag)}>
+                            <Trash />
+                            Delete
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu>
 
                       <IconButton
                         variant="ghost"
                         label={`Edit ${tag.label}`}
+                        className="hidden device:inline-flex"
                         onClick={() => setTagToEdit(tag)}
                       >
                         <Pencil className="h-4 w-4" />
@@ -108,6 +156,7 @@ export function TagsPage() {
                       <IconButton
                         variant="ghost"
                         label={`Delete ${tag.label}`}
+                        className="hidden device:inline-flex"
                         onClick={() => setTagToDelete(tag)}
                       >
                         <Trash className="h-4 w-4" />

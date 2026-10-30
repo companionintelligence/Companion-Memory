@@ -1,9 +1,15 @@
 import { NotFoundException } from '@nestjs/common';
 
+import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections';
+import { LastAdminDeletionRefused } from '@ci/domains/user';
 
-import { USER_OWNED_TABLES } from '../../dataDeletionPlan';
-import { DataDeletionService } from '../DataDeletionService';
+import {
+  DataDeletionService,
+  FAILED_AUDIT_DEADLINE_MS,
+  IMMEDIATE_PURGE_WAIT_MS,
+  REVOCATION_DEADLINE_MS,
+} from '../DataDeletionService';
 
 /**
  * A tiny in-memory Postgres stand-in for the DataSource used by the service.
@@ -16,7 +22,6 @@ interface Row {
   user?: string;
   connection?: string;
   graphConnection?: string;
-  tagUser?: string; // for ci_search.entity_tag join-delete
   /** Primary key, for rows the ci.record_sources ledger references. */
   id?: string;
   /** Ledger rows only: which record this arrival evidences. */
@@ -30,7 +35,7 @@ function makeDataSource(initial: Record<string, Row[]>) {
     store[key] = rows.map((r) => ({ ...r }));
   }
 
-  const query = jest.fn(async (sql: string, params: unknown[] = []) => {
+  const run = async (sql: string, params: unknown[] = []): Promise<unknown> => {
     const value = params[0] as string;
 
     // Ledger arrival removal: DELETE FROM ci.record_sources WHERE user_id = $1 AND connection_id = $2
@@ -79,15 +84,6 @@ function makeDataSource(initial: Record<string, Row[]>) {
       return [[], count];
     }
 
-    // ci_search.entity_tag join-delete: remove rows whose tagUser matches.
-    if (sql.includes('"ci_search"."entity_tag"')) {
-      const key = 'ci_search.entity_tag';
-      const before = store[key]?.length ?? 0;
-      store[key] = (store[key] ?? []).filter((r) => r.tagUser !== value);
-
-      return [[], before - (store[key]?.length ?? 0)];
-    }
-
     // Graph connection-scoped delete (properties->>'connection_id').
     if (sql.includes("properties->>'connection_id'")) {
       const owner = params[0] as string;
@@ -125,9 +121,20 @@ function makeDataSource(initial: Record<string, Row[]>) {
     }
 
     return [[], 0];
-  });
+  };
 
-  return { dataSource: { query } as never, store, query };
+  const query = jest.fn(run);
+
+  // Audit rows, whichever way they were written.
+  const audits: Array<Record<string, unknown>> = [];
+
+  return {
+    dataSource: { query } as never,
+    store,
+    run,
+    query,
+    audits,
+  };
 }
 
 /** A fake OAuth2 client whose revoke() we can assert on. */
@@ -180,8 +187,10 @@ function makeService(opts: {
     providerName?: string | null;
     revoke?: jest.Mock;
   };
+  /** What `AccountPurgeService.purgeAccount` answers, call by call (the last one repeats). */
+  purgeOutcomes?: Array<Record<string, unknown> | Promise<Record<string, unknown>>>;
 }) {
-  const { dataSource, store, query } = makeDataSource(opts.store);
+  const { dataSource, store, run, query, audits } = makeDataSource(opts.store);
 
   const connectionRepository = {
     findOne: jest.fn(async ({ where }: { where: { id: string; userId: string } }) => {
@@ -207,7 +216,7 @@ function makeService(opts: {
     ),
   };
 
-  const savedAudits: Array<Record<string, unknown>> = [];
+  const savedAudits = audits;
   const auditRepository = {
     create: jest.fn((data: Record<string, unknown>) => data),
     save: jest.fn(async (data: Record<string, unknown>) => {
@@ -247,6 +256,70 @@ function makeService(opts: {
 
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
+  // The order things happened in, across the user service, the purge and the audit.
+  const journal: string[] = [];
+  const purgeAt = new Date('2026-10-27T12:00:00Z');
+  const txManager = {
+    query: jest.fn(async (sql: string, params: unknown[]) => {
+      journal.push(`tx:${sql.replace(/\s+/g, ' ').trim().slice(0, 40)}`);
+
+      return query(sql, params);
+    }),
+    save: jest.fn(async (record: Record<string, unknown>) => {
+      journal.push(`tx:audit:${String(record.status)}`);
+      savedAudits.push(record);
+
+      return record;
+    }),
+  };
+  const userService = {
+    assertMayEndAccount: jest.fn(async () => {
+      journal.push('assert-may-end');
+    }),
+    endAccountNow: jest.fn(
+      async (
+        _context: unknown,
+        _id: string,
+        _options: unknown,
+        alongside: (m: unknown) => Promise<unknown>,
+      ) => {
+        journal.push('end:begin');
+        const result = await alongside(txManager);
+        journal.push('end:commit');
+
+        return { requestedAt: purgeAt, purgeAfter: purgeAt, result };
+      },
+    ),
+  };
+  const outcomes = [...(opts.purgeOutcomes ?? [{}])];
+  const purgeAccount = jest.fn(async (userId: string) => {
+    journal.push('purge');
+    const next = outcomes.length > 1 ? outcomes.shift()! : outcomes[0];
+
+    return {
+      userId,
+      status: 'purged',
+      deletedRows: { 'ci.notes': 1, 'ci.users': 1 },
+      detachedRows: {},
+      deletedObjects: 0,
+      ...(await next),
+    };
+  });
+  const accountPurgeService = { purgeAccount };
+
+  // Journalled: what ran in which order is the point of several tests.
+  const originalSave = auditRepository.save.getMockImplementation()!;
+  auditRepository.save.mockImplementation(async (data: Record<string, unknown>) => {
+    journal.push(`audit:${String(data.status)}`);
+
+    return originalSave(data);
+  });
+  cleanOrphans.mockImplementation(async () => {
+    journal.push('sweep');
+
+    return { results: [], totalDeleted: 0, dryRun: false };
+  });
+
   const service = new DataDeletionService(
     dataSource,
     connectionRepository as never,
@@ -256,11 +329,20 @@ function makeService(opts: {
     providerKeyService as never,
     cloudOAuthProxyService as never,
     logger as never,
+    userService as never,
+    accountPurgeService as never,
   );
 
   return {
     service,
+    journal,
+    txManager,
+    userService,
+    purgeAccount,
+    auditRepository,
+    logger,
     store,
+    run,
     query,
     savedAudits,
     connectionRepository,
@@ -402,73 +484,284 @@ describe('DataDeletionService.disconnectConnection', () => {
 });
 
 describe('DataDeletionService.deleteAccount', () => {
-  it('revokes every connection, purges every user-owned table for that user ONLY, deletes the user, audits', async () => {
-    const { service, store, savedAudits, cleanOrphans, client } = makeService({
+  const OWN = { userId: 'user-1' };
+
+  it('revokes the grants, ends the account in one transaction, then purges it outside that transaction', async () => {
+    const { service, journal, client, txManager, userService, purgeAccount, savedAudits } = makeService({
       connections: [
         { id: 'conn-1', userId: 'user-1', providerId: 'google' },
         { id: 'conn-2', userId: 'user-1', providerId: 'google' },
       ],
-      store: {
-        'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.communications': [{ user: 'user-1' }, { user: 'user-1' }, { user: 'user-2' }],
-        'ci.events': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.entities': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.notes': [{ user: 'user-1' }],
-        'ci.sessions': [{ user: 'user-1' }, { user: 'user-2' }],
-        'ci.api_keys': [{ user: 'user-1' }],
-        'ci_search.embeddings': [{ user: 'user-1' }, { user: 'user-2' }],
-      },
+      store: {},
     });
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
+    const result = await service.deleteAccount(OWN, { successorEmail: 'member@example.com' });
 
-    // Both connections had revocation attempted.
     expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(2);
+    expect(userService.assertMayEndAccount).toHaveBeenCalledWith(OWN, 'user-1', {
+      successorEmail: 'member@example.com',
+    });
+    expect(userService.endAccountNow).toHaveBeenCalledWith(
+      OWN,
+      'user-1',
+      { successorEmail: 'member@example.com' },
+      expect.any(Function),
+    );
 
-    // Every user-1 row gone; every user-2 row survives.
-    expect(store['ci.communications']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.events']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.entities']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.notes']).toEqual([]);
-    expect(store['ci.sessions']).toEqual([{ user: 'user-2' }]);
-    expect(store['ci.api_keys']).toEqual([]);
-    expect(store['ci_search.embeddings']).toEqual([{ user: 'user-2' }]);
-    // The user row itself deleted; the other user remains.
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
+    // Access ends inside the transaction that ends the account, with the `started` audit row.
+    const statements = txManager.query.mock.calls.map(([sql]) => sql.replace(/\s+/g, ' ').trim());
+    expect(statements).toEqual([
+      'DELETE FROM ci.sessions WHERE user_id = $1',
+      'DELETE FROM ci.api_keys WHERE user_id = $1',
+      'UPDATE ci.connections SET active = false, access_token = NULL, refresh_token = NULL WHERE user_id = $1',
+    ]);
+    expect(txManager.query.mock.calls.every(([, params]) => (params as unknown[])[0] === 'user-1')).toBe(
+      true,
+    );
+    expect(savedAudits).toEqual([
+      expect.objectContaining({
+        status: 'started',
+        scope: 'account',
+        subjectUserId: 'user-1',
+        tokenRevoked: true,
+      }),
+    ]);
 
-    expect(result.userDeleted).toBe(true);
-    expect(result.totalDeleted).toBeGreaterThan(0);
-    expect(cleanOrphans).toHaveBeenCalledTimes(1);
-    expect(savedAudits[0]).toMatchObject({ scope: 'account', subjectUserId: 'user-1' });
+    // The purge (and the sweep) only after that transaction has committed.
+    expect(journal.slice(journal.indexOf('end:commit'))).toEqual(['end:commit', 'purge', 'sweep']);
+    expect(purgeAccount).toHaveBeenCalledWith('user-1', expect.any(Date), expect.any(Date));
+
+    expect(result).toEqual({
+      userId: 'user-1',
+      status: 'deleted',
+      revocations: [
+        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: true },
+        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
+      ],
+      deletedCounts: { 'ci.notes': 1, 'ci.users': 1 },
+      detachedCounts: {},
+      totalDeleted: 2,
+      deletedObjects: 0,
+      userDeleted: true,
+      auditId: savedAudits[0].id,
+    });
   });
 
-  it('is idempotent: re-deleting an already-deleted account purges nothing and audits zero', async () => {
-    const { service, store, savedAudits } = makeService({
+  it('revokes nothing and records nothing when the last administrator names no successor', async () => {
+    const { service, client, userService, purgeAccount, savedAudits } = makeService({
+      connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
+      store: {},
+    });
+    userService.assertMayEndAccount.mockRejectedValue(new LastAdminDeletionRefused('successor_required'));
+
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+
+    expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
+    expect(userService.endAccountNow).not.toHaveBeenCalled();
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
+  });
+
+  it('records no failure when the locked rule refuses after the forecast let it through', async () => {
+    const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+    userService.endAccountNow.mockRejectedValue(new LastAdminDeletionRefused('successor_not_found'));
+
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
+  });
+
+  it('writes the failed audit only once the transaction that tried has rolled back, purges nothing, and rethrows', async () => {
+    const { service, journal, userService, purgeAccount, savedAudits } = makeService({
       connections: [],
-      store: { 'ci.users': [{ user: 'user-2' }] },
+      store: {},
+    });
+    const failure = new Error('could not obtain lock on row in relation "users"');
+    userService.endAccountNow.mockImplementation(async () => {
+      journal.push('end:rolled-back');
+      throw failure;
     });
 
-    const result = await service.deleteAccount({ userId: 'user-1' });
+    await expect(service.deleteAccount(OWN)).rejects.toBe(failure);
 
-    expect(result.userDeleted).toBe(false);
-    expect(result.totalDeleted).toBe(0);
-    expect(store['ci.users']).toEqual([{ user: 'user-2' }]);
-    expect(savedAudits[0]).toMatchObject({ scope: 'account', totalDeleted: 0 });
+    expect(journal).toEqual(['assert-may-end', 'end:rolled-back', 'audit:failed']);
+    expect(savedAudits).toEqual([
+      expect.objectContaining({ status: 'failed', error: failure.message, totalDeleted: 0 }),
+    ]);
+    expect(purgeAccount).not.toHaveBeenCalled();
   });
 
-  it('deletes children before parents (content before events, graph before nulling)', () => {
-    // Guard the FK-safe ordering the account purge depends on.
-    const order = USER_OWNED_TABLES.map((t) => `${t.schema}.${t.table}`);
-    expect(order.indexOf('ci.content')).toBeLessThan(order.indexOf('ci.events'));
-    expect(order.indexOf('hbpe.l1_event_cluster')).toBeLessThan(order.indexOf('ci.events'));
-    expect(order.indexOf('hbpe.l2_content_cluster')).toBeLessThan(order.indexOf('ci.content'));
-    expect(order.indexOf('ci.graph_deltas')).toBeLessThan(order.indexOf('ci.entities'));
-    expect(order.indexOf('ci.relationships')).toBeLessThan(order.indexOf('ci.entities'));
-    // Connections (holding OAuth tokens) are purged as part of the account sweep.
-    expect(order).toContain('ci.connections');
-    expect(order).toContain('ci.provider_keys');
-    // The digests memory.forget keeps so a forgotten person is not minted again are the user's data too.
-    expect(order).toContain('ci.forgotten_identifiers');
+  it('does not wait for good on a failed audit that cannot get a connection', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, userService, auditRepository, logger } = makeService({ connections: [], store: {} });
+      const failure = new Error('ending the account failed');
+      userService.endAccountNow.mockRejectedValue(failure);
+      // A pool that never hands out a connection.
+      auditRepository.save.mockImplementation(() => new Promise(() => undefined));
+
+      const deletion = service.deleteAccount(OWN).catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(FAILED_AUDIT_DEADLINE_MS + 1);
+
+      expect(await deletion).toBe(failure);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not record the failed account deletion',
+        expect.objectContaining({ error: expect.stringContaining('did not answer') }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('answers 404 for an account already ended, recording nothing', async () => {
+    const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+    userService.endAccountNow.mockResolvedValue(null as never);
+
+    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(NotFoundException);
+    expect(purgeAccount).not.toHaveBeenCalled();
+    expect(savedAudits).toEqual([]);
+  });
+
+  it('ends the account but runs no purge while the purge is switched off', async () => {
+    // `accountDeletion.purge.enabled` is the operator's stop for an irreversible
+    // job; it held for the hourly purge and was bypassed by this inline one.
+    const enabled = config.accountDeletion.purge.enabled;
+    config.accountDeletion.purge.enabled = false;
+
+    try {
+      const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
+
+      const result = await service.deleteAccount(OWN);
+
+      expect(userService.endAccountNow).toHaveBeenCalledTimes(1);
+      expect(purgeAccount).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'deleting', totalDeleted: 0, userDeleted: false });
+      expect(savedAudits).toEqual([expect.objectContaining({ status: 'started' })]);
+    } finally {
+      config.accountDeletion.purge.enabled = enabled;
+    }
+  });
+
+  it('answers deleting when the purge outlasts the wait, and lets it finish (and sweep) on its own', async () => {
+    jest.useFakeTimers();
+    try {
+      let finish: (outcome: Record<string, unknown>) => void = () => undefined;
+      const slow = new Promise<Record<string, unknown>>((resolve) => {
+        finish = resolve;
+      });
+      const { service, journal, cleanOrphans } = makeService({
+        connections: [],
+        store: {},
+        purgeOutcomes: [slow],
+      });
+
+      const deletion = service.deleteAccount(OWN);
+      await jest.advanceTimersByTimeAsync(IMMEDIATE_PURGE_WAIT_MS + 1);
+      const result = await deletion;
+
+      expect(result).toMatchObject({
+        status: 'deleting',
+        userDeleted: false,
+        deletedCounts: {},
+        totalDeleted: 0,
+      });
+      expect(cleanOrphans).not.toHaveBeenCalled();
+
+      finish({});
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(journal.slice(-2)).toEqual(['purge', 'sweep']);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('tries the purge a second time when the first fails, and counts both', async () => {
+    const { service, purgeAccount } = makeService({
+      connections: [],
+      store: {},
+      purgeOutcomes: [
+        {
+          status: 'failed',
+          deletedRows: { 'ci.notes': 5 },
+          deletedObjects: 2,
+          error: 'update or delete on table "users" violates foreign key constraint "notes_user_id_fkey"',
+        },
+        { deletedRows: { 'ci.notes': 1, 'ci.users': 1 } },
+      ],
+    });
+
+    const result = await service.deleteAccount(OWN);
+
+    expect(purgeAccount).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: 'deleted',
+      deletedCounts: { 'ci.notes': 6, 'ci.users': 1 },
+      totalDeleted: 7,
+      deletedObjects: 2,
+      userDeleted: true,
+    });
+  });
+
+  it('leaves an account whose purge fails twice to the hourly purge, and says deleting', async () => {
+    const { service, purgeAccount, cleanOrphans, logger } = makeService({
+      connections: [],
+      store: {},
+      purgeOutcomes: [{ status: 'failed', deletedRows: {}, error: 'boom' }],
+    });
+
+    const result = await service.deleteAccount(OWN);
+
+    expect(purgeAccount).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('deleting');
+    expect(cleanOrphans).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Purge of an ended account did not finish; the hourly purge will retry it',
+      expect.objectContaining({ userId: 'user-1', status: 'failed' }),
+    );
+  });
+
+  it('says deleting while another worker holds the purge', async () => {
+    const { service, purgeAccount } = makeService({
+      connections: [],
+      store: {},
+      purgeOutcomes: [{ status: 'locked', deletedRows: {} }],
+    });
+
+    const result = await service.deleteAccount(OWN);
+
+    expect(purgeAccount).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('deleting');
+  });
+
+  it('stops waiting on a provider that never answers a revocation and goes on with the delete', async () => {
+    jest.useFakeTimers();
+    try {
+      const hung = new FakeGoogleClient();
+      hung.revoke = jest.fn(() => new Promise<{ revoked: boolean }>(() => undefined));
+      const { service, userService } = makeService({
+        connections: [
+          { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
+          { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
+        ],
+        client: hung,
+        store: {},
+      });
+
+      const deletion = service.deleteAccount(OWN);
+      await jest.advanceTimersByTimeAsync(2 * REVOCATION_DEADLINE_MS);
+      const result = await deletion;
+
+      expect(hung.revoke).toHaveBeenCalledTimes(2);
+      expect(result.revocations).toEqual([
+        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
+        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: false },
+      ]);
+      expect(userService.endAccountNow).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('deleted');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -503,6 +796,31 @@ describe('DataDeletionService.revokeConnectionGrant via CI Portal', () => {
     expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
     expect(result.tokenRevoked).toBe(true);
     expect(savedAudits[0]).toMatchObject({ tokenRevoked: true });
+  });
+
+  it('ends the grant from here first when only an access token can revoke it (Dropbox), then has Portal delete its copy', async () => {
+    const client = new FakeGoogleClient();
+    (client as { revokesWithAccessToken: boolean }).revokesWithAccessToken = true;
+    // Portal holds only the refresh token and cannot revoke this provider upstream.
+    const revoke = jest.fn(async () => ({ success: true, tokens_deleted: 1, revocation_ok: false }));
+
+    const { service, portalRevoke } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: { configured: true, providerName: 'dropbox', revoke },
+      providerKey: null,
+      client,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    // The provider's own access token is used; the Portal proxy refresh token
+    // is never handed to the provider client.
+    expect(client.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: 'google-access-token', refreshToken: null }),
+    );
+    expect(portalRevoke).toHaveBeenCalledTimes(1);
+    expect(result.tokenRevoked).toBe(true);
   });
 
   it('uses the direct provider path when the user brought their own app keys', async () => {

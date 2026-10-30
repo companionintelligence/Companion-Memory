@@ -6,7 +6,7 @@
  * one stays collapsed so the desktop hover animation still has somewhere to go.
  */
 import { fireEvent, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DropdownProvider, excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -213,7 +213,9 @@ describe('the What strip shares its line with the filter controls without being 
   it('floors the strip at its buttons at rest from xl up and never lets it grow past its content', () => {
     const { container } = renderNav();
 
-    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
+    // The strip's place on the line is the box around the scroller that also
+    // holds its "more this way" arrows (ScrollMoreArrows), so the sizing is there.
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
 
     expect(strip).not.toBeNull();
     expect(strip).toHaveClass('flex-1', 'basis-0', 'min-w-0');
@@ -226,7 +228,7 @@ describe('the What strip shares its line with the filter controls without being 
   it("floors the events explorer's strip at its own four buttons", () => {
     const { container } = renderNav('/memory/events');
 
-    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
 
     // Messages, Events (caret), Browser, Tags (caret): 193 px, not /memory's 392.
     expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(10.875rem + 8px)');
@@ -241,5 +243,50 @@ describe('the What strip shares its line with the filter controls without being 
     expect(controls).toHaveClass('basis-full', 'min-w-0', 'xl:flex-1', 'xl:basis-[24rem]');
     expect(controls).not.toHaveClass('md:basis-auto', 'md:flex-1');
     expect(container.querySelector('.w-max')).not.toBeNull();
+  });
+});
+
+// useDeviceLayout reads window.matchMedia; drive it to force the phone
+// branch, the same pattern as MobileMemoryPage.test.tsx.
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : query.includes('landscape') ? !mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+describe('the What menus on a phone', () => {
+  afterEach(() => {
+    setViewport(false);
+    document.body.style.pointerEvents = '';
+  });
+
+  it('open modal, so a tap away only closes the menu and reaches nothing underneath', () => {
+    setViewport(true);
+    renderNav();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Things' }), { button: 0 });
+    screen.getByRole('button', { name: 'Only Products' });
+
+    // Radix's modal layer is what swallows the outside tap: it turns pointer
+    // events off for the rest of the page while the menu is open — and the
+    // shield catches what that misses (map pins turn them back on).
+    expect(document.body.style.pointerEvents).toBe('none');
+    expect(screen.getByTestId('menu-shield')).toBeInTheDocument();
+  });
+
+  it('stay non-modal on desktop', () => {
+    renderNav();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Things' }), { button: 0 });
+    screen.getByRole('button', { name: 'Only Products' });
+
+    expect(document.body.style.pointerEvents).toBe('');
   });
 });

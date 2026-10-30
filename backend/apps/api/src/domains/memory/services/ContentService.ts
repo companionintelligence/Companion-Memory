@@ -43,11 +43,12 @@ import {
   contentTypeFilterSql,
   contentTypeOptions,
   distinctColumnSql,
+  effectiveSourceSystemPredicate,
 } from './contentFacetsSql';
 import { type PurgedContentAggregates, purgeContentAggregates } from './contentPurge';
-import { CtiAggregate } from './CtiAggregate';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
 import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { clearHbpeLinks } from './purgeTeardown';
 import { nothingWrapped } from './wrappedFilePurge';
 
@@ -106,24 +107,11 @@ export interface HourlyContentCount {
  * base-row fetch.
  */
 /**
- * `WHERE` fragment matching rows whose EFFECTIVE source system is in the named
- * `IN` parameter — the same value {@link ContentService.getFacets} offers.
- *
- * A row's effective systems are the platforms the `ci.record_sources` ledger
- * recorded for it, and only when the ledger recorded none, its own
- * `source_system`. The two arms are exclusive on purpose: a Google Photos
- * photo is `file` in the column and `google_photos` in the ledger, and picking
- * "file" must not sweep it in — "file" is the honest bucket only for a row no
- * platform claims. Both EXISTS probes hit `record_sources_record_idx`
- * `(user_id, record_table, record_id)`.
+ * {@link effectiveSourceSystemPredicate} for the query builder: rows whose
+ * effective source system is in the named `IN` parameter.
  */
 function effectiveSourceSystemSql(alias: string, param: string): string {
-  const ledger = `SELECT 1 FROM ci.record_sources rs WHERE rs.user_id = ${alias}.user_id AND rs.record_table = 'content' AND rs.record_id = ${alias}.id`;
-
-  return (
-    `(EXISTS (${ledger} AND rs.platform IN (:...${param}))` +
-    ` OR (${alias}.source_system IN (:...${param}) AND NOT EXISTS (${ledger} AND rs.platform IS NOT NULL)))`
-  );
+  return effectiveSourceSystemPredicate(alias, (expression) => `${expression} IN (:...${param})`);
 }
 
 /**
@@ -726,15 +714,57 @@ export class ContentService {
       return rows.map((row) => row.v);
     };
 
-    const unledgered = await this.unledgeredSourceSystems(context.userId);
     const [rawTypes, mediaKinds, mimetypes, sourceSystems] = await Promise.all([
       values(distinctColumnSql('type')),
       values(MEDIA_KINDS_SQL),
       values(distinctColumnSql('mimetype')),
-      values(PLATFORMS_SQL, [unledgered]),
+      this.getSourceSystems(context),
     ]);
 
     return { types: contentTypeOptions(rawTypes, mediaKinds), mimetypes, sourceSystems };
+  }
+
+  /**
+   * Every platform that delivered one of the user's content rows, sorted —
+   * the How picker's content options (SourceSystemService) and the facet of
+   * the same name. The ledger's platform where it recorded one, else the
+   * row's own `source_system`: a document a Dropbox sync fetched is `file` in
+   * the column and `dropbox` only in the ledger, so a list read from the
+   * column alone never offers Dropbox, however much arrived from it.
+   */
+  async getSourceSystems(context: UserServiceContext): Promise<string[]> {
+    const unledgered = await this.unledgeredSourceSystems(context.userId);
+    const rows: Array<{ v: string }> = await this.contentRepository.manager.query(PLATFORMS_SQL, [
+      context.userId,
+      unledgered,
+    ]);
+
+    return rows.map((row) => row.v);
+  }
+
+  /**
+   * Which of these content rows a How selection keeps, by the same rule the
+   * SQL paths filter with ({@link effectiveSourceSystemSql}). For the search
+   * paths that pick their candidates first and narrow afterwards, where the
+   * resolved row's own `source_system` cannot answer for a federated row.
+   */
+  async idsMatchingSourceSystems(
+    context: ServiceContext,
+    ids: string[],
+    sourceSystems: string[],
+  ): Promise<Set<string>> {
+    if (ids.length === 0 || sourceSystems.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ id: string }> = await this.contentRepository.manager.query(
+      `SELECT c.id FROM ci.content c
+        WHERE c.user_id = $1 AND c.id = ANY($2::uuid[])
+          AND ${effectiveSourceSystemPredicate('c', (expression) => `${expression} = ANY($3::text[])`)}`,
+      [context.userId, ids, sourceSystems],
+    );
+
+    return new Set(rows.map((row) => row.id));
   }
 
   /**
@@ -1057,11 +1087,15 @@ export class ContentService {
     }
 
     // The How filter: keep rows from the named sources. Every browsed table
-    // with a source_system column applies this same clause (see
+    // with a source_system column applies a clause like this (see
     // SearchResolver.searchByTimedEntities), so a source selected on /memory
-    // narrows every kind it can, not just events.
+    // narrows every kind it can, not just events. Content matches on the
+    // platform that DELIVERED the row, as the library does — its column says
+    // only `file` for a photo from Google Photos or a document from Dropbox.
     if (options.connectors && options.connectors.length > 0) {
-      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+      query = query.andWhere(effectiveSourceSystemSql('content', 'connectors'), {
+        connectors: options.connectors,
+      });
     }
 
     if (options.startTime) {
@@ -1116,11 +1150,15 @@ export class ContentService {
     }
 
     // The How filter: keep rows from the named sources. Every browsed table
-    // with a source_system column applies this same clause (see
+    // with a source_system column applies a clause like this (see
     // SearchResolver.searchByTimedEntities), so a source selected on /memory
-    // narrows every kind it can, not just events.
+    // narrows every kind it can, not just events. Content matches on the
+    // platform that DELIVERED the row, as the library does — its column says
+    // only `file` for a photo from Google Photos or a document from Dropbox.
     if (options.connectors && options.connectors.length > 0) {
-      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+      query = query.andWhere(effectiveSourceSystemSql('content', 'connectors'), {
+        connectors: options.connectors,
+      });
     }
 
     if (options.startTime) {
@@ -1336,14 +1374,14 @@ export class ContentService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before, after: reloaded, baseBefore }) => {
           const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
-          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {};
-          if (data.title !== undefined) {
-            changedFields.name = { new: data.title };
-          }
+          // Only what moved: the drawer sends the title with every save.
+          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {
+            ...changedFieldsBetween({ name: baseBefore?.name }, basePatch, Object.keys(basePatch)),
+          };
 
-          if (Object.keys(updateData).length > 0) {
+          if (detailChanged(before, reloaded, Object.keys(updateData))) {
             changedFields.detail_updated = { new: true };
           }
 

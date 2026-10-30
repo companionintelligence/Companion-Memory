@@ -87,6 +87,7 @@ function makeTool() {
     getRelationships: jest.fn(async (_owner: string, options: { relationshipIds?: string[] }) =>
       (options.relationshipIds ?? []).map((id) => edges.get(id)).filter(Boolean),
     ),
+    getNodes: jest.fn(async () => []),
     getNodesByIds: jest.fn(async () => []),
     findLinkedKeyHolder: jest.fn(async () => null),
     findActiveRelationship: jest.fn(async () => null),

@@ -7,14 +7,17 @@ function makeAck(): Acknowledgement {
   return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
-function makeListener(chunks: Record<string, unknown>[]) {
+function makeListener(chunks: Record<string, unknown>[], alreadyEmbeddedIds: string[] = []) {
   const chunkService = { findByIds: jest.fn().mockResolvedValue(chunks) };
   const embeddingGenerationService = {
     generateEmbeddings: jest
       .fn()
       .mockImplementation(async (inputs: string[]) => inputs.map(() => [0.1, 0.2])),
   };
-  const embeddingService = { upsert: jest.fn().mockResolvedValue(null) };
+  const embeddingService = {
+    upsert: jest.fn().mockResolvedValue(null),
+    existingEntityIds: jest.fn().mockResolvedValue(new Set(alreadyEmbeddedIds)),
+  };
   const vectorService = { upsert: jest.fn().mockResolvedValue(null) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
@@ -183,6 +186,59 @@ describe('FileChunkSearchIndexListener.indexChunks', () => {
     expect(ack.fail).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('c2') }),
     );
+  });
+
+  /**
+   * The maintenance sweep re-drives this listener for chunks that already have
+   * an embedding but no device document, so the listener must not pay for the
+   * model again — it only has to write the index statement.
+   */
+  it('re-embeds nothing when every chunk already has an embedding, but still indexes and acks', async () => {
+    const { call, embeddingGenerationService, embeddingService, vectorService } = makeListener(
+      [chunk({ id: 'c1', content: 'First chunk.' }), chunk({ id: 'c2', content: 'Second chunk.' })],
+      ['c1', 'c2'],
+    );
+    const ack = makeAck();
+
+    await call({ fileId: 'file-1', userId: 'user-1', chunkIds: ['c1', 'c2'] } as never, ack);
+
+    expect(embeddingService.existingEntityIds).toHaveBeenCalledWith({ userId: 'user-1' }, 'file-chunk', [
+      'c1',
+      'c2',
+    ]);
+    expect(embeddingGenerationService.generateEmbeddings).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).toHaveBeenCalledTimes(2);
+    expect(ack.done).toHaveBeenCalledTimes(1);
+    expect(ack.fail).not.toHaveBeenCalled();
+  });
+
+  it('embeds only the chunks that have no embedding yet, and indexes all of them', async () => {
+    const { call, embeddingGenerationService, embeddingService, vectorService } = makeListener(
+      [
+        chunk({ id: 'c1', content: 'Already embedded.' }),
+        chunk({ id: 'c2', content: 'Missing embedding.' }),
+        chunk({ id: 'c3', content: 'Also missing.' }),
+      ],
+      ['c1'],
+    );
+    const ack = makeAck();
+
+    await call({ fileId: 'file-1', userId: 'user-1', chunkIds: ['c1', 'c2', 'c3'] } as never, ack);
+
+    expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledTimes(1);
+    expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledWith([
+      'Missing embedding.',
+      'Also missing.',
+    ]);
+    expect(embeddingService.upsert).toHaveBeenCalledTimes(2);
+    expect(embeddingService.upsert).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ entityId: 'c1' }),
+    );
+    expect(vectorService.upsert).toHaveBeenCalledTimes(3);
+    expect(ack.done).toHaveBeenCalledTimes(1);
+    expect(ack.fail).not.toHaveBeenCalled();
   });
 
   it('is a no-op with no chunks found for the payload ids', async () => {

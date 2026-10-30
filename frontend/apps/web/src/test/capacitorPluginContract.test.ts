@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { localHubPlugin } from '@ci/common/src/utils/localHub';
+import { SECURE_STORE_KEYS } from '@ci/common/src/utils/nativeBridge';
 import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -99,10 +100,9 @@ const PLUGINS: PluginUnderTest[] = [
     androidPlugin: 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt',
     iosPlugin: 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift',
     anchorMethod: 'secureGet',
-    // Significant-change monitoring. `startSignificantLocationUpdates` in
-    // @ci/common's nativeBridge returns before touching the plugin off iOS; Android
-    // keeps its background watcher instead.
-    iosOnly: ['startSignificantLocationUpdates', 'stopSignificantLocationUpdates'],
+    // `startSignificantLocationUpdates` / `stopSignificantLocationUpdates` are on both
+    // halves: significant-change monitoring on iOS, the plugin's motion-gated tracker on
+    // Android (location/).
   },
   {
     pkg: 'capacitor-local-llm',
@@ -121,6 +121,13 @@ const PLUGINS: PluginUnderTest[] = [
     androidPlugin: 'android/src/main/java/com/companionintelligence/speech/SpeechPlugin.kt',
     iosPlugin: 'ios/Sources/SpeechPlugin/SpeechPlugin.swift',
     anchorMethod: 'startListening',
+  },
+  {
+    pkg: 'capacitor-app-lock',
+    interfaceName: 'AppLockPlugin',
+    androidPlugin: 'android/src/main/java/com/companionintelligence/applock/AppLockPlugin.kt',
+    iosPlugin: 'ios/Sources/AppLockPlugin/AppLockPlugin.swift',
+    anchorMethod: 'unlock',
   },
 ];
 
@@ -352,7 +359,11 @@ describe('LocalLLM — the in-app iOS half and the native catalogs', () => {
       const blocks = modelBlocks(read(file));
 
       // Vacuity guard: a regex that matched nothing would make every comparison below pass on empty sets.
-      expect(blocks.length).toBeGreaterThan(0);
+      // (iOS legitimately ships nothing since 2026-10-13, so the guard applies where something is expected.)
+      if (expectedFor(platform).length > 0) {
+        expect(blocks.length).toBeGreaterThan(0);
+      }
+
       expect(blocks.map((b) => b.modelId).sort()).toEqual(expectedFor(platform).sort());
 
       for (const { modelId, block } of blocks) {
@@ -362,6 +373,9 @@ describe('LocalLLM — the in-app iOS half and the native catalogs', () => {
         expect(stringField(block, 'commitHash'), `${modelId} commitHash`).toBe(spec.commitHash);
         expect(numberField(block, 'minDeviceMemoryBytes'), `${modelId} minDeviceMemoryBytes`).toBe(
           spec.minDeviceMemoryBytes,
+        );
+        expect(numberField(block, 'gpuMinDeviceMemoryBytes'), `${modelId} gpuMinDeviceMemoryBytes`).toBe(
+          spec.gpuMinDeviceMemoryBytes,
         );
 
         // The file name is the last path segment of the pinned URL — the one the download is written to.
@@ -602,6 +616,108 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
   });
 });
 
+/**
+ * The LocalHub credential store takes writes from anything that reaches the bridge. On
+ * Android's legacy bridge (which the app ran for background location until 2026-10-26) that
+ * was every frame in the WebView, so `secureSet` accepts only the app's own keys, on both
+ * platforms -- and keeps doing so, whichever bridge a shell runs.
+ */
+describe('LocalHub secureSet — only the keys the app itself writes', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const kotlin = read(
+    join(hubDir, 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt'),
+  );
+  const swift = read(join(hubDir, 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift'));
+  const quoted = (block: string | undefined) =>
+    [...(block ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const between = (source: string, from: string, to: string) =>
+    source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
+
+  it('Android, iOS and @ci/common list the same keys', () => {
+    const android = quoted(/WRITABLE_SECURE_KEYS = setOf\(([^)]*)\)/.exec(kotlin)?.[1]);
+    const ios = quoted(/writableSecureKeys: Set<String> = \[([^\]]*)\]/.exec(swift)?.[1]);
+
+    expect(android).toEqual([...SECURE_STORE_KEYS].sort());
+    expect(ios).toEqual([...SECURE_STORE_KEYS].sort());
+  });
+
+  it('every credential useAuth stores is on the list, and so is the mirrored origin', () => {
+    const useAuth = read(join(ROOT, 'frontend/apps/web/src/hooks/useAuth.ts'));
+    const stored = [...useAuth.matchAll(/const API_KEY\w*_STORAGE = '([^']+)'/g)].map((m) => m[1]);
+
+    expect(stored.length).toBeGreaterThanOrEqual(3);
+    expect(SECURE_STORE_KEYS).toEqual(expect.arrayContaining([...stored, 'ci.apiBaseUrl']));
+  });
+
+  it('both plugins refuse a key off the list before anything is written', () => {
+    const android = between(kotlin, 'fun secureSet(', 'fun secureRemove(');
+    const ios = between(swift, 'func secureSet(', 'func secureRemove(');
+
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.set('));
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
+  });
+});
+
+/**
+ * The outbox `owner` stamp and the sign-out clear exist on both platforms: the web flusher
+ * depends on the sidecar storing and returning `owner`, and sign-out on `DELETE /api/outbox`.
+ * Neither native half can be built or run here, so the source is what is checked.
+ */
+describe('LocalHub outbox — owner stamp and sign-out clear on both platforms', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const androidDir = join(hubDir, 'android/src/main/java/com/companionintelligence/localhub');
+  const iosDir = join(hubDir, 'ios/Sources/LocalHubPlugin');
+
+  it('Android adds the column for new and upgraded databases, and keeps the plaintext import on v1 columns', () => {
+    const store = read(join(androidDir, 'OutboxStore.kt'));
+
+    expect(store).toMatch(/\$COLUMN_LAST_ERROR TEXT,\s*\$COLUMN_OWNER TEXT/);
+    expect(store).toContain('ALTER TABLE $TABLE_NAME ADD COLUMN $COLUMN_OWNER TEXT');
+    expect(store).toContain('DATABASE_VERSION = 2');
+    expect(between(store, 'MIGRATION_COLUMNS = arrayOf(', ')')).not.toContain('COLUMN_OWNER');
+  });
+
+  it('iOS adds the column for new tables and for ones created before it', () => {
+    const store = read(join(iosDir, 'OutboxStore.swift'));
+
+    expect(store).toMatch(/last_error TEXT,\s*owner TEXT/);
+    expect(store).toContain('ALTER TABLE outbox ADD COLUMN owner TEXT;');
+  });
+
+  it('both servers take owner on enqueue, return it on items, and clear the collection on DELETE', () => {
+    const android = read(join(androidDir, 'LocalHubServer.kt'));
+    const ios = read(join(iosDir, 'LocalHubServer.swift'));
+
+    expect(android).toContain('outbox.enqueue(kind, payload.toString(), capturedAt, idempotencyKey, owner)');
+    expect(android).toContain('.put("owner", item.owner ?: JSONObject.NULL)');
+    expect(android).toContain('segments.isEmpty() && method == Method.DELETE -> handleClear()');
+    expect(ios).toMatch(/idempotencyKey: idempotencyKey,\s*owner: owner/);
+    expect(ios).toContain('"owner": item.owner ?? NSNull()');
+    expect(ios).toMatch(/case \("DELETE", 0\):[\s\S]{0,120}store\.deleteAll\(\)/);
+  });
+
+  it('Android opens a link marked external without the sign-in Auth Tab', () => {
+    // Provider pages from the gallery are not a sign-in. In the Auth Tab, any `companion://`
+    // they navigated to would come back to the app as a sign-in result.
+    const plugin = between(
+      read(join(androidDir, 'LocalHubPlugin.kt')),
+      'fun openUrl(',
+      'fun startAuthSession(',
+    );
+
+    expect(plugin).toContain('val external = call.getBoolean("external", false) == true');
+    expect(plugin).toContain('if (external || !AuthTabSession.launch(uri)) {');
+  });
+
+  function between(source: string, from: string, to: string): string {
+    const start = source.indexOf(from);
+
+    return source.slice(start, source.indexOf(to, start + from.length));
+  }
+});
+
 describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri window', () => {
   const hub = new LocalHubWeb();
 
@@ -642,6 +758,13 @@ describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri 
     await expect(hub.openUrl()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
     await expect(hub.startAuthSession()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
     await expect(hub.openAppSettings()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  });
+
+  it('discoverLanAppliances() resolves unsupported on web rather than throwing', async () => {
+    await expect(hub.discoverLanAppliances()).resolves.toEqual({
+      appliances: [],
+      supported: false,
+    });
   });
 });
 
@@ -774,5 +897,141 @@ describe('SpeechWeb — the fallback must never reach the browser speech APIs', 
     expect(capability.available).toBe(false);
     expect(capability.offlineVoiceAvailable).toBe(false);
     expect(capability.reason).toBeTruthy();
+  });
+});
+
+/**
+ * The committed iOS project must name what `cap sync` and Xcode will build. Two files drift from the sources next to
+ * them without any compiler noticing until a Mac builds the app: the Xcode project (a Swift file added, renamed or
+ * deleted on disk but not in `project.pbxproj` compiles nowhere, or points at nothing) and `Podfile.lock` (`cap sync`
+ * rewrites it from the plugins, so a stale one leaves every sync with a dirty tree, and an Xcode run that skips the sync
+ * stops at "The sandbox is not in sync with the Podfile.lock"). Both went stale in the 0.18.0 LiteRT-LM bump and the
+ * app-lock plugin, and the iOS app did not build from `main` for days.
+ */
+describe('the committed iOS project matches its sources', () => {
+  const IOS = join(ROOT, 'frontend/apps/ios/ios/App');
+  const APP_SOURCES = join(IOS, 'App');
+
+  /** Every `.swift` under `dir`, relative to `base`, sorted. */
+  function swiftFiles(dir: string, base = dir): string[] {
+    return readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) =>
+        entry.isDirectory()
+          ? swiftFiles(join(dir, entry.name), base)
+          : entry.name.endsWith('.swift')
+            ? [join(dir, entry.name).slice(base.length + 1)]
+            : [],
+      )
+      .sort();
+  }
+
+  /**
+   * The files the `App` target's Sources phase compiles — the phase that lists `AppDelegate.swift` — as paths relative to
+   * `App/`'s parent, each resolved the way Xcode does: the build file's `fileRef`, then the `path` of that reference
+   * under the `path` of every group above it. `null` stands for an entry that does not resolve to a file reference.
+   */
+  function compiledByApp(): { path: string | null; name: string }[] {
+    const project = read(join(IOS, 'App.xcodeproj/project.pbxproj'));
+    const phase = [...project.matchAll(/isa = PBXSourcesBuildPhase;[\s\S]*?files = \(([\s\S]*?)\);/g)]
+      .map((match) => match[1])
+      .find((files) => files.includes('AppDelegate.swift in Sources'));
+
+    expect(phase, 'the App target has a Sources build phase').toBeDefined();
+
+    const unquote = (value: string) => value.replace(/^"|"$/g, '');
+    const fileRefOf = new Map(
+      [
+        ...project.matchAll(
+          /([0-9A-F]{24}) \/\* [^*]* \*\/ = \{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})/g,
+        ),
+      ].map((match) => [match[1], match[2]] as const),
+    );
+    const fileRefPath = new Map(
+      [
+        ...project.matchAll(
+          /([0-9A-F]{24}) \/\* [^*]* \*\/ = \{isa = PBXFileReference;[^}]*?\bpath = ("[^"]*"|[^;]+);/g,
+        ),
+      ].map((match) => [match[1], unquote(match[2])] as const),
+    );
+    const parentOf = new Map<string, string>();
+    const groupPath = new Map<string, string>();
+
+    for (const group of project.matchAll(
+      /([0-9A-F]{24})(?: \/\*[^*]*\*\/)? = \{\s*isa = PBXGroup;([\s\S]*?)\n\t\t\};/g,
+    )) {
+      const [, id, body] = group;
+      const path = body.match(/\n\t\t\tpath = ("[^"]*"|[^;]+);/);
+
+      if (path) {
+        groupPath.set(id, unquote(path[1]));
+      }
+
+      for (const child of body.match(/children = \(([\s\S]*?)\);/)?.[1].matchAll(/([0-9A-F]{24})/g) ?? []) {
+        parentOf.set(child[1], id);
+      }
+    }
+
+    return [...phase!.matchAll(/([0-9A-F]{24}) \/\* (\S+\.swift) in Sources \*\//g)].map(
+      ([, buildFile, name]) => {
+        const reference = fileRefOf.get(buildFile);
+        const own = reference ? fileRefPath.get(reference) : undefined;
+
+        if (!reference || own === undefined) {
+          return { path: null, name };
+        }
+
+        const segments = [own];
+
+        for (let id = parentOf.get(reference); id; id = parentOf.get(id)) {
+          const path = groupPath.get(id);
+
+          if (path) {
+            segments.unshift(path);
+          }
+        }
+
+        return { path: segments.join('/'), name };
+      },
+    );
+  }
+
+  it('compiles every Swift file under App/App, and nothing that is not there', () => {
+    const onDisk = swiftFiles(APP_SOURCES, IOS);
+    const compiled = compiledByApp();
+
+    expect(
+      compiled.filter((entry) => entry.path === null).map((entry) => entry.name),
+      'Sources entries whose file reference cannot be resolved',
+    ).toEqual([]);
+
+    const paths = compiled.map((entry) => entry.path!);
+
+    expect(new Set(paths).size, 'no file is compiled twice').toBe(paths.length);
+    expect(
+      onDisk.filter((file) => !paths.includes(file)),
+      'Swift files on disk that no Sources phase compiles',
+    ).toEqual([]);
+    expect(
+      paths.filter((path) => !existsSync(join(IOS, path))),
+      'Sources entries for files that no longer exist',
+    ).toEqual([]);
+  });
+
+  it('Podfile.lock covers every pod the Podfile declares', () => {
+    const podfile = read(join(IOS, 'Podfile'));
+    const lock = read(join(IOS, 'Podfile.lock'));
+    const declared = [...podfile.matchAll(/^\s*pod '([^']+)'/gm)].map((match) => match[1]);
+
+    expect(declared.length).toBeGreaterThan(0);
+
+    for (const pod of declared) {
+      expect(
+        lock,
+        `${pod} is in Podfile.lock's DEPENDENCIES — run \`yarn cap sync ios\` and commit the lock`,
+      ).toMatch(new RegExp(`^ {2}- "?${pod} \\(from `, 'm'));
+      expect(lock, `${pod} is in Podfile.lock's EXTERNAL SOURCES`).toMatch(
+        new RegExp(`^ {2}${pod}:\\n {4}:path:`, 'm'),
+      );
+    }
   });
 });

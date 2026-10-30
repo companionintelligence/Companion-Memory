@@ -374,7 +374,7 @@ export class CaptureContextService {
    * method so tests hand in a parsed bag instead of a crafted JPEG.
    *
    * exifr revives the zone-less EXIF wall-clock as a Date in this process's
-   * local zone (the same quirk `domains/import`'s `_exif.ts` documents), so the
+   * local zone (the same quirk `common/media/exif.ts` documents), so the
    * calendar day is read back through the local getters, and the instant is
    * rebuilt from those components against the OffsetTime* tag when the camera
    * recorded one — otherwise UTC is assumed, which the ±6 h position window

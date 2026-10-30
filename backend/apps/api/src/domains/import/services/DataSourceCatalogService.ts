@@ -7,6 +7,7 @@ import { Injectable } from '@nestjs/common';
 // re-export it for the same reason.
 import '../datasources';
 import { allDataSources, type DataSource } from '../datasources/registry';
+import { WIZARD_BUNDLES, type WizardBundle } from '../sources/bundles';
 import { WIZARD_SOURCES, type WizardSource } from '../sources/guides';
 
 /** One importer, as the catalog describes it. */
@@ -100,6 +101,25 @@ export interface SourceCatalogEntry {
 }
 
 /**
+ * One export bundle, as the wizard shows it: a single picker button and export
+ * card standing for several catalog sources (`members`) that arrive in the one
+ * archive. See `sources/bundles.ts`.
+ */
+export interface BundleCatalogEntry {
+  id: string;
+  ecosystem: string;
+  title: string;
+  blurb: string;
+  url?: string;
+  stepsTitle?: string;
+  steps: string[];
+  /** A second way to get the data, when the platform offers one with different tradeoffs. */
+  altPath?: { title: string; url?: string; steps: string[] };
+  members: string[];
+  notes?: string[];
+}
+
+/**
  * What this appliance can import.
  *
  * Read from the in-memory registry rather than a table: the registry IS the
@@ -131,6 +151,26 @@ export class DataSourceCatalogService {
   catalog(): SourceCatalogEntry[] {
     return WIZARD_SOURCES.map(toCatalogEntry);
   }
+
+  /** The export bundles, in authored order. */
+  bundles(): BundleCatalogEntry[] {
+    return WIZARD_BUNDLES.map(toBundleEntry);
+  }
+}
+
+function toBundleEntry(bundle: WizardBundle): BundleCatalogEntry {
+  return {
+    id: bundle.id,
+    ecosystem: bundle.ecosystem,
+    title: bundle.title,
+    blurb: bundle.blurb,
+    url: bundle.url,
+    stepsTitle: bundle.stepsTitle,
+    steps: bundle.steps,
+    altPath: bundle.altPath,
+    members: bundle.members,
+    notes: bundle.notes,
+  };
 }
 
 /**

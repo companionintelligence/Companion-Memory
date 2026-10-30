@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ModelSelector } from './ModelSelector';
@@ -15,6 +16,12 @@ const h = vi.hoisted(() => ({
   thinkingEnabled: true,
   toolsSupported: true,
   toolsEnabled: true,
+  localMode: 'appliance' as 'appliance' | 'auto' | 'device',
+  localModelId: null as string | null,
+}));
+
+vi.mock('@/hooks/useOnDeviceModel', () => ({
+  useLocalLlmPrefs: () => [{ mode: h.localMode, modelId: h.localModelId }, vi.fn()],
 }));
 
 vi.mock('@/hooks', () => ({
@@ -51,6 +58,8 @@ beforeEach(() => {
   h.thinkingEnabled = true;
   h.toolsSupported = true;
   h.toolsEnabled = true;
+  h.localMode = 'appliance';
+  h.localModelId = null;
 });
 
 describe('ModelSelector', () => {
@@ -82,5 +91,60 @@ describe('ModelSelector', () => {
     render(<ModelSelector />);
 
     expect(screen.getByRole('combobox', { name: 'Active model' })).toHaveTextContent('No model set up');
+  });
+
+  describe('with the phone answering', () => {
+    it('names the on-device model in the composer instead of an appliance model that will not answer', () => {
+      h.localMode = 'device';
+      h.localModelId = 'gemma-4-e2b-it';
+
+      render(
+        <MemoryRouter>
+          <ModelSelector withToggles variant="composer" />
+        </MemoryRouter>,
+      );
+
+      const control = screen.getByRole('link', { name: 'Active model' });
+      expect(control).toHaveTextContent('Gemma 4 E2B · on this phone');
+      expect(control).toHaveAttribute('href', '/settings/on-device');
+      expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+      // The wrench and brain switch the appliance's tools and thinking; neither applies here.
+      expect(screen.queryByRole('button', { pressed: true })).not.toBeInTheDocument();
+    });
+
+    it('says when on-device mode is set but no model has been chosen yet', () => {
+      h.localMode = 'device';
+      h.localModelId = null;
+
+      render(
+        <MemoryRouter>
+          <ModelSelector withToggles variant="composer" />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByRole('link', { name: 'Active model' })).toHaveTextContent(
+        'Choose an on-device model',
+      );
+    });
+
+    it('keeps the appliance picker in auto mode and marks the phone as the fallback', () => {
+      h.localMode = 'auto';
+      h.localModelId = 'gemma-4-e2b-it';
+
+      render(<ModelSelector withToggles variant="composer" />);
+
+      expect(screen.getByRole('combobox', { name: 'Active model' })).toHaveTextContent('qwen3:14b');
+      expect(screen.getByTestId('on-device-fallback')).toBeInTheDocument();
+    });
+
+    it('leaves the Settings and Capture pickers on the appliance even in device mode', () => {
+      h.localMode = 'device';
+      h.localModelId = 'gemma-4-e2b-it';
+
+      render(<ModelSelector triggerClassName="w-full" />);
+
+      expect(screen.getByRole('combobox', { name: 'Active model' })).toHaveTextContent('qwen3:14b');
+      expect(screen.queryByTestId('on-device-model')).not.toBeInTheDocument();
+    });
   });
 });

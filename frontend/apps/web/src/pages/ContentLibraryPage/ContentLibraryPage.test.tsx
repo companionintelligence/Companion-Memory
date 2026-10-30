@@ -258,12 +258,58 @@ describe('ContentLibraryPage', () => {
     expect(await screen.findByText('Holiday photo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Content type: image/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^File type: all/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^How: reddit/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^How: Reddit/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     await screen.findByRole('button', { name: /^Content type: all/ });
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
+  it('collapses mobile filters while keeping active choices visible', async () => {
+    const originalMatchMedia = window.matchMedia;
+
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      const filteredPage = {
+        ...firstPage(),
+        request: {
+          query: GET_CONTENTS,
+          variables: { first: PAGE_SIZE, types: ['image'], connectors: ['reddit'] },
+        },
+      };
+
+      renderWithProviders(<ContentLibraryPage />, {
+        route: '/memory/content?types=image&connectors=reddit',
+        mocks: [filteredPage, facets()],
+      });
+
+      expect(await screen.findByLabelText('Holiday photo')).toBeInTheDocument();
+      expect(screen.queryByTestId('content-filters')).not.toBeInTheDocument();
+      expect(screen.getByText('Type: image')).toBeInTheDocument();
+      expect(screen.getByText('How: reddit')).toBeInTheDocument();
+
+      const toggle = screen.getByRole('button', { name: /Filters/ });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(toggle);
+
+      expect(screen.getByTestId('content-filters')).toBeInTheDocument();
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: /^Content type: image/ })).toBeInTheDocument();
+      expect(document.querySelector('.grid.grid-cols-2')).toHaveClass('gap-2', 'device:gap-4');
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it('lists every value the account carries when a facet picker opens', async () => {

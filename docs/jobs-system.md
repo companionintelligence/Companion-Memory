@@ -453,7 +453,7 @@ their grace period — an authority `write` ("mutating, but nothing that deletes
 does not describe. It previously carried no auth guard at all, gated instead on
 `request.socket.remoteAddress` being loopback; that is the immediate peer rather
 than the client, and both proxies this repo ships (the `make dev` Caddy route,
-and the Vite dev server's `/api` proxy, which binds `0.0.0.0`) dial the API on
+and the Vite dev server's `/api` proxy, which then bound `0.0.0.0`) dial the API on
 localhost, so any caller on the network satisfied it. An operator inside the
 container now needs a session or a full-capability API key like anyone else.
 
@@ -781,7 +781,7 @@ reaper ending the delivery with `defer`.
 |---|---|---|---|
 | `chat.generate` | `llm` | One chat turn. Flips `generation_status` to running, builds the turn, streams from Ollama, persists. **Survives leaving the page; Stop cancels it.** `INTERACTIVE_JOB_PRIORITY`, `singletonKey chat-generate:<threadId>` | `POST /llm/generate` |
 | `chat.summarization` | `llm-background` | Sidebar title for an unnamed thread. `INTERACTIVE_JOB_PRIORITY`, so it is not served behind the answer-inference backlog on this queue; `singletonKey chat-summarize:<threadId>`. A failure — including a model reply with nothing usable in it (empty, punctuation only, a bare thinking trace) — fails the job: retried 3× with backoff (~10–20 s, 20–40 s, 40–80 s). On the last attempt the listener does not dead-letter: it names the thread from the person's first message (cut at a word boundary, ≤60 characters) with one conditional `UPDATE` that only matches while the title is still empty, so a real title is never overwritten | Chained from a successful `chat.generate`, only when the thread has no name |
-| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
+| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, bounded by `llm.answerInferenceTimeoutMs` (270 s). **At most one outstanding per owner, and at most one per `llm.answerInferenceIntervalMinutes` (20) per owner** — both selectors apply `inferenceDispatchOpenSql` (`domains/intelligence/inferenceDispatchGate.ts`). Sent with `retentionMinutes: 60`, so a job that waits unstarted for an hour is dropped by pg-boss rather than replayed | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
 | `python.function.run` | `py-fn-summary` | POST to the Summary sidecar (`/functions/run`, 30 s *accept* timeout only), then `ack.defer()`. Completed by the callback webhook | The `PythonFunctionCrons` fan-outs, `SmartRotationListener` |
 | `python.function.run` | `py-fn-hbpe` | Same, aimed at HBPE. 4 h expiry because bootstrap trains models for hours | `hbpeNightly`, `hbpeBootstrapSweep`, `ForecastResolver.triggerHbpe` |
 
@@ -859,7 +859,10 @@ the 6-field schedules were deliberately staggered off.
 
 Each takes **10 users per tick** from an **in-process** round-robin cursor.
 `answer_infer` and `question_feed` are additionally skipped when the pg-boss
-backlog exceeds 500.
+backlog exceeds 500 — counted on `default` and `smart-rotation` only, so it
+never sees `llm-background`. What actually bounds `answer_infer` is the
+per-owner dispatch gate it shares with `AnswerInferenceCron` (see
+`infer.question.answer` above).
 
 | Schedule | Work type | Priority |
 |---|---|---|
@@ -907,7 +910,7 @@ backlog exceeds 500.
 | `25 */15 * * * *` | `ActivityRollupCron.refreshRollup` | none | **Eight unbounded full-table aggregates**, every 15 min, no time or user predicate |
 | `0 10 * * * *` | `DailyMetricsCron.refreshRecent` | none | Four phases; `findAllOnboarded()` called **four times** per tick. Only `refreshPlaces` is capped (25 users) |
 | `28 */20 * * * *` | `FeedQueueCron.topUpFeedQueue` | **inverted** — runs only while `smart.rotation` is OFF | Top up `ci.feed_queue` for every onboarded user |
-| `55 * * * * *` | `AnswerInferenceCron.cronInferAnswers` | off when `smart.rotation` on | **Every minute.** A `ci.questions × ci.users` CROSS JOIN with a window function and a correlated anti-join, 1440×/day |
+| `55 * * * * *` | `AnswerInferenceCron.cronInferAnswers` | off when `smart.rotation` on | **Ticks every minute; dispatches per owner at most once per `llm.answerInferenceIntervalMinutes` (20), and never while that owner's last inference is still waiting or running.** Before that gate it sent one job a minute per owner whatever the queue held — 240/h on a four-person appliance, more than one GPU slot can finish, so core-1's queue fell ~4 h behind with 941 waiting (2026-10-17). The query is a `ci.questions × ci.users` CROSS JOIN with a window function and a correlated anti-join, 1440×/day, but gated owners are filtered out of the user set before any per-question work |
 | `45 */5 * * * *` | `MemoryCompactionCron.cronCompactMemories` | `agent.memory.compaction` — **default false** | Up to 25 sequential LLM generations **in-process on the web role**, not over pg-boss |
 | `3 */10 * * * *` | `TurnFragmentCron.cronWriteTurnFragments` | `agent.memory.turnFragments` — **default false** | Fan out one turn-fragment job per user with completed turns. Interval config-driven, bounded 5–15 min |
 | `0 20 * * * *` | `AccountPurgeCron.purgeDueAccounts` | `accountDeletion.purge.enabled` (true) | Hard-delete accounts past the 30-day grace, ≤5 per run. **The only cron with a real distributed mutex** (`pg_try_advisory_lock` per account) |

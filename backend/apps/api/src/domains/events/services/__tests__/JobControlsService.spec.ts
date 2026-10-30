@@ -222,6 +222,23 @@ describe('JobControlsService.update validation', () => {
     await expect(service.update({ global: { concurrency: 0 } }, 'user-1')).rejects.toThrow(/between 1 and/);
   });
 
+  it('refuses more than a queue declares in code and says nothing here raises it', async () => {
+    const { service, upserts } = makeHarness();
+
+    await configureStore([]);
+
+    // `llm` declares 1. Storing 2 used to succeed and then read back as
+    // "Running at 1", a number the operator could never get.
+    await expect(service.update({ queues: [{ name: 'llm', concurrency: 2 }] }, 'user-1')).rejects.toThrow(
+      'The "llm" queue can be at most 1 (the limit its code declares). It was given 2. ' +
+        'Nothing on this page raises it.',
+    );
+    expect(upserts).toEqual([]);
+
+    await service.update({ queues: [{ name: 'llm', concurrency: 1 }] }, 'user-1');
+    expect(upserts).toEqual([expect.objectContaining({ kind: 'queue', key: 'llm', concurrency: 1 })]);
+  });
+
   it('rejects an unknown schedule', async () => {
     const { service } = makeHarness({ crons: ['PlanningJobsCron.todoScan'] });
 

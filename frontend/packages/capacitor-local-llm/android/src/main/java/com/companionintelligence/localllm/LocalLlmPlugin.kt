@@ -12,6 +12,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.companionintelligence.localllm.intents.CompanionIntentClient
 import com.companionintelligence.localllm.intents.IntentToolProvider
+import com.companionintelligence.localllm.intents.LocalSearchStore
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -74,6 +75,20 @@ class LocalLlmPlugin : Plugin() {
     /** The `(baseUrl, apiKey)` [intentClient] was built from, to tell a real reconfiguration from a repeat. */
     @Volatile
     private var intentConfig: Pair<String, String>? = null
+
+    /**
+     * The phone's own search over its synced replica, when the web layer says one is there (`localSearch.databaseFile`
+     * on `configureIntentTools`), and whether it should answer ahead of the appliance (`connectionMode` is anything but
+     * `connected`). Both are part of the tool-set key: a change rebinds the tools on the next load.
+     */
+    @Volatile
+    private var localSearch: LocalSearchStore? = null
+
+    @Volatile
+    private var preferLocalSearch: Boolean = false
+
+    @Volatile
+    private var localSearchConfig: Pair<String?, Boolean>? = null
 
     /**
      * Bumped each time the intent-tool configuration actually changes. Part of the engine's reuse
@@ -336,7 +351,8 @@ class LocalLlmPlugin : Plugin() {
             call.reject("Model is not downloaded: $modelId")
             return
         }
-        LocalLlmPolicy.ramShortfallMessage(info, deviceMemoryBytes())?.let {
+        val deviceMemory = deviceMemoryBytes()
+        LocalLlmPolicy.ramShortfallMessage(info, deviceMemory)?.let {
             call.reject(it)
             return
         }
@@ -347,6 +363,10 @@ class LocalLlmPlugin : Plugin() {
             call.reject("accelerator must be 'cpu' or 'gpu', not '$requestedWire'")
             return
         }
+        // Decided here, where the device's RAM is known, so the engine never attempts a GPU load on a phone
+        // that can hold the model on the CPU only. `gpuWithheld` goes back on the result for the UI to explain.
+        val choice = LocalLlmPolicy.resolveAccelerator(info, requestedAccelerator, deviceMemory)
+        if (choice.gpuWithheld) Log.i(TAG, LocalLlmPolicy.gpuWithheldMessage(info, deviceMemory))
 
         // PluginCall's two-arg getInt/getDouble still return a nullable boxed type even
         // with a default supplied — fall back to the same default again to satisfy that.
@@ -364,7 +384,7 @@ class LocalLlmPlugin : Plugin() {
                 topK = topK,
                 topP = topP,
                 temperature = temperature,
-                accelerator = requestedAccelerator ?: info.defaultAccelerator,
+                accelerator = choice.accelerator,
                 enableSpeculativeDecoding = enableSpeculativeDecoding,
                 toolsGeneration = toolsGeneration.get(),
             )
@@ -385,13 +405,14 @@ class LocalLlmPlugin : Plugin() {
                         // budget is derived from `spec.maxTokens` — the effective value, not the model's default
                         // (see `providersForLoad`). `maxTokens` is part of the reuse key (`LoadSpec`), so a load
                         // with another window gets tools with its own budget rather than being short-circuited above.
-                        engine.load(spec, IntentToolProvider.providersForLoad(spec, intentClient))
+                        engine.load(spec, IntentToolProvider.providersForLoad(spec, intentClient, localSearch, preferLocalSearch))
                     }
 
                 val result = JSObject()
                 result.put("toolCount", outcome.toolCount)
                 result.put("accelerator", outcome.accelerator.wire)
                 result.put("fellBackToCpu", outcome.fellBackToCpu)
+                result.put("gpuWithheld", choice.gpuWithheld)
                 result.put("speculativeDecoding", outcome.speculativeDecoding)
                 call.resolve(result)
             } catch (e: Exception) {
@@ -419,19 +440,37 @@ class LocalLlmPlugin : Plugin() {
         val enabled = call.getBoolean("enabled", true) ?: true
 
         if (!enabled) {
-            if (intentConfig != null) toolsGeneration.incrementAndGet()
+            if (intentConfig != null || localSearchConfig != null) toolsGeneration.incrementAndGet()
             intentClient = null
             intentConfig = null
+            localSearch = null
+            preferLocalSearch = false
+            localSearchConfig = null
             call.resolve()
 
             return
+        }
+
+        // The phone's replica, when the web layer has one, and whether it should answer ahead of the appliance.
+        val databaseFile = call.getObject("localSearch")?.getString("databaseFile")?.takeIf { it.isNotBlank() }
+        val preferLocal = (call.getString("connectionMode") ?: "connected") != "connected"
+        val replicaConfig = databaseFile to preferLocal
+        if (replicaConfig != localSearchConfig) {
+            toolsGeneration.incrementAndGet()
+            localSearch = databaseFile?.let { LocalSearchStore(context, it) }
+            preferLocalSearch = preferLocal
+            localSearchConfig = replicaConfig
         }
 
         val baseUrl = call.getString("baseUrl")
         val apiKey = call.getString("apiKey")
 
         if (baseUrl.isNullOrBlank() || apiKey.isNullOrBlank()) {
-            call.reject("baseUrl and apiKey are required to enable intent tools")
+            // No appliance, but the phone's own search may still be bound (above).
+            if (intentConfig != null) toolsGeneration.incrementAndGet()
+            intentClient = null
+            intentConfig = null
+            call.resolve()
 
             return
         }
@@ -570,7 +609,13 @@ class LocalLlmPlugin : Plugin() {
     }
 
     /** The parts of a `generate`/`generateStream` call that can be checked without decoding anything. */
-    private class ParsedGenerate(val prompt: String, val enableThinking: Boolean, val rawImages: List<String>)
+    private class ParsedGenerate(
+        val prompt: String,
+        val enableThinking: Boolean,
+        val rawImages: List<String>,
+        val thinkingTokenBudget: Int?,
+        val maxOutputTokens: Int?,
+    )
 
     /**
      * Validates a generate call synchronously and rejects it (returning null) on the first problem,
@@ -621,7 +666,18 @@ class LocalLlmPlugin : Plugin() {
             return null
         }
 
-        return ParsedGenerate(prompt, enableThinking, images)
+        // Both optional and both validated: a non-positive budget is a mistake, not "unlimited".
+        val thinkingTokenBudget = call.getInt("thinkingTokenBudget")
+        val maxOutputTokens = call.getInt("maxOutputTokens")
+        if (thinkingTokenBudget != null && thinkingTokenBudget <= 0) {
+            call.reject("thinkingTokenBudget must be positive")
+            return null
+        }
+        if (maxOutputTokens != null && maxOutputTokens <= 0) {
+            call.reject("maxOutputTokens must be positive")
+            return null
+        }
+        return ParsedGenerate(prompt, enableThinking, images, thinkingTokenBudget, maxOutputTokens)
     }
 
     /**
@@ -640,7 +696,7 @@ class LocalLlmPlugin : Plugin() {
                 call.reject("The image is too large to process on this device.")
                 return null
             }
-        return LocalLlmEngine.GenerateRequest(parsed.prompt, parsed.enableThinking, images)
+        return LocalLlmEngine.GenerateRequest(parsed.prompt, parsed.enableThinking, images, parsed.thinkingTokenBudget, parsed.maxOutputTokens)
     }
 
     private fun statsToJs(stats: GenerationStats): JSObject {

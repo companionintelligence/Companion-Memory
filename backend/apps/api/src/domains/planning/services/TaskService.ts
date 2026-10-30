@@ -1,14 +1,15 @@
 import { createHash } from 'crypto';
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { UserServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { withoutUndefined } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
 import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
 import { type Task, TaskEntity } from '../entities/TaskEntity';
@@ -18,7 +19,7 @@ import {
   TaskPendingChangeEntity,
 } from '../entities/TaskPendingChangeEntity';
 import { TaskCreatedEvent, TaskUpdatedEvent, TaskRemovedEvent } from '../events';
-import { TITLE_MATCH_TASK_STATUSES } from '../taskStatus';
+import { CLOSED_TASK_STATUSES, TITLE_MATCH_TASK_STATUSES } from '../taskStatus';
 import type { CreateTaskDto, CreateTaskPendingChangeDto, FindTasksOptions, UpdateTaskDto } from '../types';
 
 const PLANNED_BLOCK = 'planned_block';
@@ -46,8 +47,23 @@ export class TaskService {
     private readonly eventService: EventService,
     private readonly calendarEventService: CalendarEventService,
     private readonly logger: LoggerService,
+    /**
+     * Tells the user's other open sessions to re-read. Optional only so suites
+     * can build the service by hand; the module is global in the app.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(TaskService.name);
+  }
+
+  /**
+   * Every write to a task or to its review queue ends here. The signalling
+   * bus call beside each one feeds the indexers; this feeds the calendar and
+   * plan pages another device has open, which otherwise learn of the change
+   * on their next poll.
+   */
+  private async announceChanged(userId: string | typeof SYSTEM_USER): Promise<void> {
+    await this.liveChanges?.publish(userId, 'tasks');
   }
 
   /**
@@ -140,6 +156,8 @@ export class TaskService {
     const entity = await this.taskRepository.save(record);
 
     await this.eventService.send(TaskCreatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -266,7 +284,13 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
+    if (data.status != null && CLOSED_TASK_STATUSES.includes(data.status)) {
+      await this.resolvePendingChangesOfClosedTask(context, entity.id);
+    }
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -298,6 +322,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -324,7 +350,11 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
+    await this.resolvePendingChangesOfClosedTask(context, entity.id);
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -345,6 +375,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -364,6 +396,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -381,9 +415,46 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
+    await this.resolvePendingChangesOfClosedTask(context, entity.id);
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
+  }
+
+  /**
+   * Closing a task settles every question automation still had open about it.
+   *
+   * ═══ WHY ═══
+   *
+   * A `schedule` suggestion is filed while a task is open; the task is later
+   * finished — by the user, or by `TodoProcessService` / `VerifyDoneService`
+   * noticing it got done — and the suggestion row stayed `pending`. Nothing
+   * read it against the task's status: the board filed the task under
+   * Proposed because `hasPendingChange` was checked before "is it closed", the
+   * calendar drawer offered it, and placing it was refused with `skipped`
+   * because `PlannedBlockService` will not schedule a done task. Eleven such
+   * ghosts on one dev database by the time it was noticed.
+   *
+   * `declined` rather than a new status: the question was answered — by the
+   * task closing, not by the user — and `declined` is the one status whose
+   * reader (`hasDeclinedChangeSince`) does the right thing with it, which is
+   * to stop re-asking. `acceptPendingChange` of a `complete` change passes
+   * through here on its way to marking its own row `accepted`; its later
+   * `save` of the loaded row is the final write, so that row ends `accepted`.
+   *
+   * Only `pending` rows: an already-resolved row keeps the verdict it has.
+   */
+  private async resolvePendingChangesOfClosedTask(
+    context: UserServiceContext,
+    taskId: string,
+  ): Promise<void> {
+    await this.pendingChangeRepository.update(
+      { taskId, userId: context.userId, status: 'pending' },
+      { status: 'declined', resolvedAt: new Date() },
+    );
   }
 
   /**
@@ -405,6 +476,8 @@ export class TaskService {
     const entity = await this.taskRepository.save(record);
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -433,6 +506,7 @@ export class TaskService {
 
     if (result.affected != null && result.affected > 0) {
       await this.eventService.send(TaskRemovedEvent, { taskId: id, userId: context.userId });
+      await this.announceChanged(context.userId);
 
       return true;
     }
@@ -485,6 +559,7 @@ export class TaskService {
       existing.confidence = data.confidence ?? existing.confidence;
 
       const updated = await this.pendingChangeRepository.save(existing);
+      await this.announceChanged(context.userId);
 
       return TaskPendingChangeEntity.toEgressType(updated);
     }
@@ -501,6 +576,7 @@ export class TaskService {
     });
 
     const entity = await this.pendingChangeRepository.save(record);
+    await this.announceChanged(context.userId);
 
     return TaskPendingChangeEntity.toEgressType(entity);
   }
@@ -610,6 +686,7 @@ export class TaskService {
     change.status = 'accepted';
     change.resolvedAt = new Date();
     const saved = await this.pendingChangeRepository.save(change);
+    await this.announceChanged(context.userId);
 
     return { task, change: TaskPendingChangeEntity.toEgressType(saved) };
   }
@@ -630,6 +707,7 @@ export class TaskService {
     change.resolvedAt = new Date();
 
     const saved = await this.pendingChangeRepository.save(change);
+    await this.announceChanged(context.userId);
 
     return TaskPendingChangeEntity.toEgressType(saved);
   }

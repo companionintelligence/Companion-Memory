@@ -46,7 +46,7 @@ name: Mobile Release
 #   IOS_PROVISIONING_PROFILE_BASE64
 #                               base64 of the App Store .mobileprovision for
 #                               com.companionintelligence.app
-# iOS (OPTIONAL, but required for a build that actually ships):
+# iOS:
 #   IOS_EXTENSION_PROVISIONING_PROFILE_BASE64
 #                               base64 of the App Store .mobileprovision for
 #                               com.companionintelligence.app.SafariWebExtension.
@@ -55,8 +55,7 @@ name: Mobile Release
 #                               frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj),
 #                               and under manual signing an appex needs its OWN
 #                               profile — the container app's profile does not cover
-#                               it. Without this secret the archive step warns and
-#                               signing of the appex will fail.
+#                               it.
 # Android:
 #   ANDROID_KEYSTORE_BASE64     base64 of the upload .jks
 #   ANDROID_KEYSTORE_PASSWORD
@@ -70,8 +69,7 @@ name: Mobile Release
 # but not all of a lane's secrets are set the lane FAILS immediately and names the
 # missing ones: a half-configured lane is a configuration mistake, and letting it run
 # means dying an hour later, after an archive that has already burned a build number.
-# (IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is deliberately outside that count — it
-# is optional, and its absence downgrades to a ::warning:: at the profile-install step.)
+# The Safari extension profile is included in the iOS lane's required-secret gate.
 
 # >>> ci-local:gated original triggers below, restore with `ci-local restore`
 # on:
@@ -225,17 +223,20 @@ jobs:
     name: iOS → TestFlight
     needs: version
     if: needs.version.outputs.run_ios == 'true'
-    runs-on: macos-15
+    # App Store Connect requires the iOS 26 SDK. macos-15 selected Xcode 16.4
+    # and produced an iOS 18.5 build that ASC rejected during validation.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       # Gate on EVERY secret this lane consumes, not a sample of them. The old gate
-      # checked three of the seven, so a run missing APPLE_TEAM_ID or APPSTORE_PRIVATE_KEY
-      # sailed through, spent ~40 minutes on install + archive, and only then died at the
-      # signing or upload step — with the build number already spent.
-      # All seven present → run. None present → skip green (wiring one store first).
+      # checked only three of the seven secrets then required, so a run missing
+      # APPLE_TEAM_ID or APPSTORE_PRIVATE_KEY sailed through, spent ~40 minutes on install
+      # + archive, and only then died at the signing or upload step — with the build number
+      # already spent. The Safari extension profile brings the required total to eight.
+      # All eight present → run. None present → skip green (wiring one store first).
       # Some but not all → hard fail, naming exactly what is missing.
       - name: Check for iOS signing secrets
         id: secrets
@@ -247,12 +248,12 @@ jobs:
           IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
           IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -uo pipefail
-          # IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is intentionally NOT in this list:
-          # it is optional and is handled with a warning at "Install provisioning profiles".
           REQUIRED="APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY APPLE_TEAM_ID
-                    IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64"
+                    IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64
+                    IOS_EXTENSION_PROVISIONING_PROFILE_BASE64"
           MISSING=""
           FOUND=0
           TOTAL=0
@@ -371,18 +372,36 @@ jobs:
           echo "PROVISIONING_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Installed app profile '$NAME' ($UUID)"
 
-          if [ -n "${EXTENSION_PROFILE_B64:-}" ]; then
-            install_profile "$EXTENSION_PROFILE_B64" companion-extension.mobileprovision
-            EXT_UUID=$(profile_field companion-extension.mobileprovision UUID)
-            EXT_NAME=$(profile_field companion-extension.mobileprovision Name)
-            echo "EXTENSION_PROVISIONING_PROFILE_UUID=$EXT_UUID" >> "$GITHUB_ENV"
-            echo "EXTENSION_PROVISIONING_PROFILE_NAME=$EXT_NAME" >> "$GITHUB_ENV"
-            echo "Installed extension profile '$EXT_NAME' ($EXT_UUID)"
-          else
-            # Say this out loud here rather than letting the archive fail with an opaque
-            # "No profile for team ... matching com.companionintelligence.app.SafariWebExtension".
-            echo "::warning::IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is not set. Falling back to the pre-appex single-profile behaviour: every target gets the app profile, so codesign of the SafariWebExtension appex (com.companionintelligence.app.SafariWebExtension) will fail. Add that secret to ship."
+          install_profile "$EXTENSION_PROFILE_B64" companion-extension.mobileprovision
+          EXT_UUID=$(profile_field companion-extension.mobileprovision UUID)
+          EXT_NAME=$(profile_field companion-extension.mobileprovision Name)
+          echo "EXTENSION_PROVISIONING_PROFILE_UUID=$EXT_UUID" >> "$GITHUB_ENV"
+          echo "EXTENSION_PROVISIONING_PROFILE_NAME=$EXT_NAME" >> "$GITHUB_ENV"
+          echo "Installed extension profile '$EXT_NAME' ($EXT_UUID)"
+
+      - name: Verify signing certificate matches provisioning profiles
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          SIGNING_KEYCHAIN: ${{ runner.temp }}/signing.keychain-db
+        run: |
+          set -euo pipefail
+          IDENTITY_SHA1="$(security find-identity -v -p codesigning "$SIGNING_KEYCHAIN" \
+            | awk '/Apple Distribution/ { print toupper($2); exit }')"
+          if [ -z "$IDENTITY_SHA1" ]; then
+            echo "::error::IOS_DIST_CERT_P12_BASE64 contains no usable Apple Distribution identity."
+            exit 1
           fi
+          for PROFILE in \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/companion-extension.mobileprovision"; do
+            PROFILE_SHA1="$(security cms -D -i "$PROFILE" | python3 -c \
+              'import hashlib, plistlib, sys; d = plistlib.loads(sys.stdin.buffer.read()); print(hashlib.sha1(d["DeveloperCertificates"][0]).hexdigest().upper())')"
+            if [ "$IDENTITY_SHA1" != "$PROFILE_SHA1" ]; then
+              echo "::error::IOS_DIST_CERT_P12_BASE64 does not match certificate in $(basename "$PROFILE")."
+              exit 1
+            fi
+          done
+          echo "Apple Distribution identity matches both App Store provisioning profiles."
 
       # The project is checked in with CODE_SIGN_STYLE = Automatic and no DEVELOPMENT_TEAM,
       # which cannot work on a runner that has no Apple ID session. Override to manual
@@ -402,29 +421,22 @@ jobs:
           # it exists to let Xcode mint profiles from a logged-in Apple ID, which a
           # runner does not have; omitting it is exactly the "NO" that was intended.
           SIGNING_ARGS=()
-          if [ -n "${EXTENSION_PROVISIONING_PROFILE_UUID:-}" ]; then
-            # A command-line build setting is GLOBAL — it cannot say "this profile for the
-            # app, that one for the appex", and a single global specifier is precisely why
-            # signing the SafariWebExtension target used to fail. An xcconfig can, because
-            # build settings expand recursively and $(TARGET_NAME) is per target: each
-            # target resolves PROFILE_<its own name>. Tradeoff: targets whose names are not
-            # valid setting-name characters (the CocoaPods targets, e.g. `Pods-App`) resolve
-            # to empty, which is correct — libraries and frameworks are signed with the
-            # identity and embed no profile. Passed via -xcconfig instead of on the command
-            # line because command-line settings outrank an xcconfig, so a global
-            # PROVISIONING_PROFILE_SPECIFIER here would silently win over the per-target one.
-            cat > "$RUNNER_TEMP/signing.xcconfig" <<XCCONFIG
+          # A command-line build setting is GLOBAL — it cannot say "this profile for the
+          # app, that one for the appex", and a single global specifier is precisely why
+          # signing the SafariWebExtension target used to fail. An xcconfig can, because
+          # build settings expand recursively and $(TARGET_NAME) is per target: each
+          # target resolves PROFILE_<its own name>. Targets whose names are not valid
+          # setting-name characters (the CocoaPods targets, e.g. `Pods-App`) resolve to
+          # empty, which is correct — libraries and frameworks are signed with the identity
+          # and embed no profile. Passed via -xcconfig instead of on the command line
+          # because command-line settings outrank an xcconfig, so a global
+          # PROVISIONING_PROFILE_SPECIFIER here would silently win over the per-target one.
+          cat > "$RUNNER_TEMP/signing.xcconfig" <<XCCONFIG
           PROFILE_App = ${PROVISIONING_PROFILE_UUID}
           PROFILE_SafariWebExtension = ${EXTENSION_PROVISIONING_PROFILE_UUID}
           PROVISIONING_PROFILE_SPECIFIER = \$(PROFILE_\$(TARGET_NAME))
           XCCONFIG
-            SIGNING_ARGS+=(-xcconfig "$RUNNER_TEMP/signing.xcconfig")
-          else
-            # No extension profile supplied: keep the historical single-profile behaviour
-            # (the appex will fail to sign — the warning at "Install provisioning profiles"
-            # explains why) rather than changing the failure mode for the app target too.
-            SIGNING_ARGS+=(PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID")
-          fi
+          SIGNING_ARGS+=(-xcconfig "$RUNNER_TEMP/signing.xcconfig")
           xcodebuild archive \
             -workspace App.xcworkspace \
             -scheme App \
@@ -446,15 +458,9 @@ jobs:
         run: |
           set -euo pipefail
           # Under signingStyle=manual the export step maps EVERY embedded bundle id to a
-          # profile itself; one missing entry fails the export ("provisioning profile not
-          # found for com.companionintelligence.app.SafariWebExtension"). So the appex gets
-          # its own line whenever its profile was installed. When it was not, the dict keeps
-          # only the container app — same as before — and the export fails at the appex,
-          # with the ::warning:: from "Install provisioning profiles" explaining why.
-          EXTENSION_PROFILE_ENTRY=""
-          if [ -n "${EXTENSION_PROVISIONING_PROFILE_UUID:-}" ]; then
-            EXTENSION_PROFILE_ENTRY="  <key>com.companionintelligence.app.SafariWebExtension</key><string>${EXTENSION_PROVISIONING_PROFILE_UUID}</string>"
-          fi
+          # profile itself; both the container app and Safari extension have required
+          # profiles, checked before the build starts.
+          EXTENSION_PROFILE_ENTRY="  <key>com.companionintelligence.app.SafariWebExtension</key><string>${EXTENSION_PROVISIONING_PROFILE_UUID}</string>"
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -655,12 +661,10 @@ jobs:
 
       # The dry-run counterpart of the iOS `altool --validate-app`. Without it a dry run
       # never talks to Google at all, so the FIRST contact with Play is a real release
-      # (`dry_run=false`) — and frontend/apps/android/DELIVERY.md (§1c, the "Play
-      # background-location declaration + demo video" item — cited by name, not line
-      # number, because that file grows) says that release is a hard rejection until
-      # the background-location declaration and the foreground-service `location` type
-      # declaration are both filed and approved, "before this build goes to any Play track,
-      # including internal testing". Better to learn that on a rehearsal.
+      # (`dry_run=false`). frontend/apps/android/DELIVERY.md (§1c, the "Play
+      # foreground-service `location` declaration" item, cited by name and not by line
+      # number because that file grows) says to file that declaration "before a build goes
+      # to any Play track, including internal testing". Better to learn that on a rehearsal.
       # r0adkll/upload-google-play@v1 has no dry-run input. Its real inputs are
       # serviceAccountJson, serviceAccountJsonPlainText, packageName, releaseFile,
       # releaseFiles, releaseName, track, tracks, inAppUpdatePriority, userFraction,

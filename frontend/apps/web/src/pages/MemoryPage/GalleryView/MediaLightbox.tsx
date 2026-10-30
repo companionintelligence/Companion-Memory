@@ -227,7 +227,7 @@ export function MediaLightbox({ entries, index, onClose, onIndexChange }: Props)
             // clicked a tile to get here. Width is bounded by the viewport in
             // both axes via the aspect box so a square Spotify card and a 16:9
             // video both fit without scrolling.
-            <EmbedPlayer player={current.player} title={current.title} fitViewport />
+            <EmbedPlayer player={current.player} title={current.title} pageUrl={openUrl} fitViewport />
           ) : current.kind === 'video' ? (
             // The playable rendition when the server made one (HEVC originals
             // and the like); the download link above still hands over the

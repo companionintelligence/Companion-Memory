@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -41,6 +41,22 @@ export type PlanningFindTasksInput = z.infer<typeof PlanningFindTasksInputSchema
 export class PlanningFindTasksTool extends BaseTool<PlanningFindTasksInput, Task[]> {
   readonly schema: IntentDefinition = {
     name: 'planning.findTasks',
+    local: {
+      description:
+        'Find tasks in the to-do list. Open work by default; pass status to see done or skipped tasks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Words in the title.', minLength: 1, maxLength: 200 },
+          status: { type: 'array', items: { type: 'string', enum: [...TASK_STATUSES] }, minItems: 1 },
+          dueBefore: { type: 'string', description: 'ISO 8601; due at or before.' },
+          dueAfter: { type: 'string', description: 'ISO 8601; due at or after.' },
+          limit: { type: 'integer', minimum: 1, maximum: 100 },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
     domain: 'planning',
     title: 'Find tasks',
     description:

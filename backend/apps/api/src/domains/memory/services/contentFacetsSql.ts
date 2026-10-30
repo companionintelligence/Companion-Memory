@@ -26,6 +26,35 @@
  * `$1` is always the owning user's id.
  */
 
+/**
+ * Predicate matching content rows whose EFFECTIVE source system passes
+ * `membership` — the same value {@link PLATFORMS_SQL} offers, so every place
+ * the How filter narrows content agrees with the picker that fed it.
+ *
+ * A row's effective systems are the platforms the `ci.record_sources` ledger
+ * recorded for it, and only when the ledger recorded none, its own
+ * `source_system`. The two arms are exclusive on purpose: a Google Photos
+ * photo is `file` in the column and `google_photos` in the ledger, and picking
+ * "file" must not sweep it in — "file" is the honest bucket only for a row no
+ * platform claims. Both EXISTS probes hit `record_sources_record_idx`
+ * `(user_id, record_table, record_id)`.
+ *
+ * `membership` turns a column expression into the caller's own "is one of the
+ * selected sources" test, so the query builder (named parameters) and raw SQL
+ * (positional ones) share the one rule.
+ */
+export function effectiveSourceSystemPredicate(
+  alias: string,
+  membership: (expression: string) => string,
+): string {
+  const ledger = `SELECT 1 FROM ci.record_sources rs WHERE rs.user_id = ${alias}.user_id AND rs.record_table = 'content' AND rs.record_id = ${alias}.id`;
+
+  return (
+    `(EXISTS (${ledger} AND ${membership('rs.platform')})` +
+    ` OR (${membership(`${alias}.source_system`)} AND NOT EXISTS (${ledger} AND rs.platform IS NOT NULL)))`
+  );
+}
+
 /** The two columns a picker can walk; anything else is a caller bug, not a query. */
 export type ContentFacetColumn = 'type' | 'mimetype';
 

@@ -19,7 +19,7 @@ import { dropGenericWhenSpecialised } from '../../stages/ParseStage';
 import { FacebookFileImporter } from '../facebook';
 import { allDataSources } from '../registry';
 import type { DataSourceRecognition, DirEntry } from '../registry';
-import type { ImportParams } from '../timeline';
+import { MEDIA_STORE_DIRNAME, type ImportParams } from '../timeline';
 import '../generic';
 
 import type { EmittedGraph } from './support/emitted';
@@ -237,5 +237,28 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
     expect(openedDirs).toEqual([root]);
 
     readdirSpy.mockRestore();
+  });
+});
+
+describe('GenericFileImporter — the run media store', () => {
+  /**
+   * The bytes an importer materialises during a run (MMS parts, retained DM
+   * media, iMessage downloads) live in `MEDIA_STORE_DIRNAME` under the scratch
+   * tree generic walks last. They are attachments of messages that importer
+   * already staged, and the attachment lane carries them; staged again here
+   * they became standalone photos whose EXIF GPS put the USER wherever the
+   * sender was. No exclusion is passed: the dot name alone must keep them out.
+   */
+  it('never stages what the specialised importers wrote into the media store', async () => {
+    const root = await mkdtemp('generic-media-store-');
+    await writeFiles(root, [
+      path.join(MEDIA_STORE_DIRNAME, 'mms-media-1763026415000-0-964bd285245f.jpeg'),
+      path.join(MEDIA_STORE_DIRNAME, 'bluebubbles-attachments', 'guid', 'IMG_0001.heic'),
+      'backup.xml',
+    ]);
+
+    const staged = await runGeneric(root);
+
+    expect(staged).toEqual(['backup.xml']);
   });
 });

@@ -38,6 +38,47 @@ import { AgentMemoryService } from '../services/AgentMemoryService';
 // ---------------------------------------------------------------------------
 
 /**
+ * The prompt's few-shot answer. Kept as data so {@link isPromptExampleEcho} can recognise a model
+ * that answers with it instead of the notes: gemma3:270m did, so compaction stored "Anita" as the
+ * user's sister. Spliced into the prompt below exactly as JSON.stringify writes it.
+ */
+const PROMPT_EXAMPLE_OUTPUT = {
+  entities: [
+    {
+      type: 'person',
+      name: 'Anita',
+      description: "the user's sister; an architect who works at Foster + Partners",
+    },
+    {
+      type: 'place',
+      name: 'Foster + Partners',
+      description: 'an architecture firm in London where Anita works',
+    },
+    {
+      type: 'place',
+      name: 'London',
+      description: 'city where Foster + Partners is located',
+    },
+  ],
+  relationships: [
+    {
+      fromName: 'the user',
+      fromType: 'person',
+      toName: 'Anita',
+      toType: 'person',
+      relationshipType: 'SIBLING_OF',
+    },
+    {
+      fromName: 'Anita',
+      fromType: 'person',
+      toName: 'Foster + Partners',
+      toType: 'place',
+      relationshipType: 'WORKS_AT',
+    },
+  ],
+};
+
+/**
  * Exported for tests: pins the trust-boundary and inference-hygiene clauses
  * that the extractor must carry, since a prompt regression is otherwise
  * invisible until a model acts on injected text or invents a job title.
@@ -56,9 +97,8 @@ Entity types (use ONLY these exact strings):
   content  — a book, film, show, article, or piece of media
 
 Relationship types — pick the MOST SPECIFIC that applies; do NOT default to KNOWS/RELATED_TO when a specific one fits:
-  Family/social: SIBLING_OF, PARENT_OF, CHILD_OF, SPOUSE, FRIENDS_WITH, WORKS_WITH, KNOWS
-  Other:         LIVES_IN, WORKS_AT, INTERESTED_IN, OWNS, ATTENDED, LIKES, DISLIKES, HAS_SKILL, RELATED_TO
-Relationship types: KNOWS, FRIENDS_WITH, FAMILY_MEMBER, LIVES_IN, WORKS_AT, STUDIES_AT, VISITED, OWNS, INTERESTED_IN, PREFERS, DISLIKES, PARTICIPATED_IN, ASSOCIATED_WITH
+  Family/social: SIBLING_OF, PARENT_OF, CHILD_OF, SPOUSE, FAMILY_MEMBER, FRIENDS_WITH, WORKS_WITH, KNOWS
+  Other:         LIVES_IN, WORKS_AT, STUDIES_AT, VISITED, INTERESTED_IN, OWNS, ATTENDED, PARTICIPATED_IN, PREFERS, LIKES, DISLIKES, HAS_SKILL, ASSOCIATED_WITH, RELATED_TO
 
 How to extract:
 1. Create an entity for every person, place/organization, item, event, content, and notable concept mentioned — including third parties, not just the user.
@@ -81,7 +121,7 @@ Inference hygiene — ONE hop from explicit evidence, never a chain:
 14. A BLANK description is correct when the text gives no attributes. A plausible-sounding wrong title is a corrupted record — leave it out.
 
 Example fragment: "My sister Anita is an architect; she works at Foster + Partners in London."
-Example output: {"entities":[{"type":"person","name":"Anita","description":"the user's sister; an architect who works at Foster + Partners"},{"type":"place","name":"Foster + Partners","description":"an architecture firm in London where Anita works"},{"type":"place","name":"London","description":"city where Foster + Partners is located"}],"relationships":[{"fromName":"the user","fromType":"person","toName":"Anita","toType":"person","relationshipType":"SIBLING_OF"},{"fromName":"Anita","fromType":"person","toName":"Foster + Partners","toType":"place","relationshipType":"WORKS_AT"}]}
+Example output: ${JSON.stringify(PROMPT_EXAMPLE_OUTPUT)}
 
 If there is nothing to extract, return exactly: {"entities":[],"relationships":[]}`;
 
@@ -152,8 +192,9 @@ const EXTRACTION_JSON_SCHEMA = {
 } as const;
 
 /** Lowercased input → PascalCased storage form expected by the DB constraint. */
-function normalizeEntityType(raw: string | undefined): string | null {
-  if (!raw) {
+function normalizeEntityType(raw: unknown): string | null {
+  // The model's JSON is not schema-checked on the Ollama path, so `type` can be a number or null.
+  if (typeof raw !== 'string' || !raw) {
     return null;
   }
 
@@ -163,6 +204,155 @@ function normalizeEntityType(raw: string | undefined): string | null {
   }
 
   return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/**
+ * Words of `text` for {@link isNameGrounded}: lowercased, accents dropped,
+ * anything that is not a letter or digit treated as a space.
+ * "Foster + Partners" -> ["foster", "partners"]; "user's" -> ["user", "s"].
+ */
+function groundingWords(text: string): string[] {
+  return text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+/**
+ * Words a name may carry that the fragment need not ("The Beatles" from "saw the beatles" or "saw Beatles").
+ * "user" and the possessive "s" are here because the prompt tells the model to call the user "the user",
+ * so a first-person note ("my sister is a nurse") comes back as "the user's sister".
+ */
+const GROUNDING_FILLER_WORDS = new Set([
+  'the',
+  'a',
+  'an',
+  'of',
+  'and',
+  'at',
+  'in',
+  'on',
+  'for',
+  'to',
+  'my',
+  'user',
+  's',
+]);
+
+/**
+ * Scripts written without spaces between words (Chinese, Japanese, Thai and
+ * their neighbours), plus Hangul, where particles attach to the noun. A name
+ * in these is part of a longer run of letters, never a word of its own.
+ */
+const UNSPACED_SCRIPT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/** A batch's fragments split into words once, so every name is checked against the same set. */
+interface GroundingText {
+  words: Set<string>;
+  joined: string;
+}
+
+function groundingText(text: string): GroundingText {
+  const words = groundingWords(text);
+
+  return { words: new Set(words), joined: words.join(' ') };
+}
+
+/** Whether one word of a name is in the text, as written or with a regular plural either way. */
+function wordGrounded(word: string, text: GroundingText): boolean {
+  const forms = [word, `${word}s`, `${word}es`];
+  if (word.endsWith('s')) {
+    forms.push(word.slice(0, -1));
+  }
+
+  if (word.endsWith('es')) {
+    forms.push(word.slice(0, -2));
+  }
+
+  if (word.endsWith('ies')) {
+    forms.push(`${word.slice(0, -3)}y`);
+  }
+
+  if (word.endsWith('y')) {
+    forms.push(`${word.slice(0, -1)}ies`);
+  }
+
+  return (
+    forms.some((form) => text.words.has(form)) ||
+    (UNSPACED_SCRIPT.test(word) && text.joined.includes(word)) ||
+    sharesStem(word, text)
+  );
+}
+
+/** Words this long or longer may differ by an ending: "vegetarian" grounds "Vegetarianism". */
+const MIN_STEM_LENGTH = 5;
+
+/**
+ * Whether the word and a word of the text are one the other's start, the shorter at least
+ * {@link MIN_STEM_LENGTH} long: "climbing" and "climb", "photography" and "photograph". A model
+ * names a concept by its noun more often than by the note's own word for it.
+ */
+function sharesStem(word: string, text: GroundingText): boolean {
+  if (word.length < MIN_STEM_LENGTH) {
+    return false;
+  }
+
+  for (const candidate of text.words) {
+    const [shorter, longer] = candidate.length < word.length ? [candidate, word] : [word, candidate];
+
+    if (shorter.length >= MIN_STEM_LENGTH && longer.startsWith(shorter)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Whether an answer repeats the prompt's own example: an entity carrying one of the example's
+ * descriptions word for word. A name check alone lets the echo through when a note happens to
+ * name "Anita" or "London". Then "the user SIBLING_OF Anita" comes back with it.
+ */
+export function isPromptExampleEcho(result: {
+  entities: ReadonlyArray<{ name?: unknown; description?: unknown }>;
+}): boolean {
+  const exampleDescriptions = new Set(
+    PROMPT_EXAMPLE_OUTPUT.entities.map((entity) => entity.description.trim().toLowerCase()),
+  );
+
+  return result.entities.some(
+    (entity) =>
+      typeof entity.description === 'string' &&
+      exampleDescriptions.has(entity.description.trim().toLowerCase()),
+  );
+}
+
+function nameGroundedIn(name: string, text: GroundingText): boolean {
+  const nameWords = groundingWords(name);
+  const significant = nameWords.filter((word) => !GROUNDING_FILLER_WORDS.has(word));
+  const required = significant.length > 0 ? significant : nameWords;
+
+  return required.length > 0 && required.every((word) => wordGrounded(word, text));
+}
+
+/**
+ * Whether an extracted entity name is written in the fragments the model was
+ * shown. Every word of the name has to occur there, in any order and with a
+ * regular plural either way ("flat white with oat milk" grounds "oat milk flat
+ * white"; "flowerpots" grounds "flowerpot"), ignoring filler words. In a
+ * script without spaces the word only has to appear inside the text.
+ *
+ * Exported for tests. Nothing checked this before: a small utility model
+ * (gemma3:270m, which the Hub hands out) answered four notes about a coffee
+ * order, two towns and a spare key with the prompt's own few-shot example,
+ * and compaction stored "Anita" as the user's sister, working at
+ * "Foster + Partners" in "London". None of those words is in the notes.
+ */
+export function isNameGrounded(name: string, fragmentsText: string): boolean {
+  return nameGroundedIn(name, groundingText(fragmentsText));
 }
 
 /** Maximum characters per fragment sent to the LLM. */
@@ -228,6 +418,7 @@ type PersonVariantCandidate = { id: string; name?: string | null };
 
 type CompactionCache = {
   personCandidatesByUserId: Map<string, PersonVariantCandidate[]>;
+  itemsByUserId?: Map<string, Array<{ id: string; name?: string | null }>>;
 };
 
 // ---------------------------------------------------------------------------
@@ -323,16 +514,21 @@ export class MemoryCompactionService {
     const exhaustedIds: string[] = [];
 
     for (const batch of batches) {
-      const outcome = await this.extractBatch(batch, userId);
+      const fragmentsText = this.batchText(batch);
+      const outcome = await this.extractBatch(batch, fragmentsText, userId);
+      const grounded =
+        outcome.status === 'completed'
+          ? this.keepGroundedExtraction(outcome.result, fragmentsText, selfAliases, userId)
+          : null;
 
-      if (outcome.status === 'completed') {
+      if (grounded) {
         for (const fragment of batch) {
           this.extractionAttempts.delete(fragment.id);
           processedIds.push(fragment.id);
         }
 
         await this.upsertEntities(
-          outcome.result.entities,
+          grounded.entities,
           userId,
           context,
           entityMap,
@@ -340,15 +536,17 @@ export class MemoryCompactionService {
           self?.entityId ?? null,
           selfAliases,
         );
-        await this.upsertRelationships(outcome.result.relationships, userId, entityMap, context);
+        await this.upsertRelationships(grounded.relationships, userId, entityMap, context);
 
         continue;
       }
 
       // ----------------------------------------------------------------
-      // The batch produced NO extraction result — either the call threw
-      // (Ollama down, UTILITY_MODEL missing) or the model's output was
-      // truncated / not JSON. Neither is an empty extraction, so leave
+      // The batch produced NO usable extraction result. The call threw
+      // (Ollama down, UTILITY_MODEL missing), the model's output was
+      // truncated / not JSON, or every name it gave is absent from the
+      // fragments (it answered with something else, such as the prompt's
+      // own example). None of these is an empty extraction, so leave
       // processed_at unset and let the next run retry, bounded by
       // MAX_EXTRACTION_ATTEMPTS so a permanently-unparseable fragment
       // cannot be re-fed to the LLM forever.
@@ -403,8 +601,9 @@ export class MemoryCompactionService {
   // Extraction helpers (split out of compactForUser for readability)
   // ---------------------------------------------------------------------------
 
-  private async extractBatch(batch: AgentMemory[], userId: string): Promise<BatchOutcome> {
-    const fragmentsText = batch
+  /** The fragments exactly as the model is shown them, labels and truncation included. */
+  private batchText(batch: AgentMemory[]): string {
+    return batch
       .map((f, index) => {
         const label = f.title ?? (f.source ? `[${f.source}]` : `[Fragment ${index + 1}]`);
         const body = f.content;
@@ -413,7 +612,97 @@ export class MemoryCompactionService {
         return `${label}\n${truncated}`;
       })
       .join('\n\n---\n\n');
+  }
 
+  /**
+   * Drop every entity whose name is not written in the fragments
+   * ({@link isNameGrounded}) and every relationship with such an endpoint.
+   * References to the user ("the user", their name) are kept: the prompt asks
+   * for them by that name whether or not a fragment uses it.
+   *
+   * Entries without a usable name are left out silently: upsertEntities and
+   * upsertRelationships skip them anyway. A non-string name would throw
+   * there.
+   *
+   * An entity that repeats the prompt's example ({@link isPromptExampleEcho})
+   * is dropped as if its name were not there.
+   *
+   * Returns null when names were dropped and nothing but the user is left:
+   * the model answered something other than these notes, and the caller
+   * retries the batch instead of marking the notes processed with nothing
+   * kept.
+   */
+  private keepGroundedExtraction(
+    result: ExtractionResult,
+    fragmentsText: string,
+    selfAliases: Set<string>,
+    userId: string,
+  ): ExtractionResult | null {
+    const text = groundingText(fragmentsText);
+    const refersToUser = (name: string) => {
+      const lower = name.trim().toLowerCase();
+
+      return lower === 'the user' || selfAliases.has(lower);
+    };
+
+    const named = (name: unknown): name is string => typeof name === 'string' && name.trim() !== '';
+    // An entity copied from the prompt's example is dropped even when a note happens to carry its
+    // name ("Anita called", "a week in London"). So is every relationship that names it.
+    const echoedNames = new Set(
+      result.entities
+        .filter((entity) => named(entity.name) && isPromptExampleEcho({ entities: [entity] }))
+        .map((entity) => entity.name.trim().toLowerCase()),
+    );
+    const grounded = (name: string) =>
+      !echoedNames.has(name.trim().toLowerCase()) && (refersToUser(name) || nameGroundedIn(name, text));
+
+    const entities: ExtractedEntity[] = [];
+    const droppedNames: string[] = [];
+    for (const entity of result.entities) {
+      if (!named(entity.name)) {
+        continue;
+      }
+
+      if (grounded(entity.name)) {
+        entities.push(entity);
+      } else {
+        droppedNames.push(entity.name);
+      }
+    }
+
+    const namedRelationships = result.relationships.filter(
+      (relationship) => named(relationship.fromName) && named(relationship.toName),
+    );
+    const relationships = namedRelationships.filter(
+      (relationship) => grounded(relationship.fromName) && grounded(relationship.toName),
+    );
+    const droppedRelationships = namedRelationships.length - relationships.length;
+
+    if (droppedNames.length === 0 && droppedRelationships === 0) {
+      return { entities, relationships };
+    }
+
+    this.logger.warn('Dropped extracted names that are not in the memory fragments', {
+      userId,
+      droppedEntities: droppedNames,
+      droppedRelationships,
+    });
+
+    // An answer made only of relationships counts too: one that named someone
+    // who is not in the notes and leaves nothing to store was not about them.
+    const keptEntity = entities.some((entity) => !refersToUser(entity.name));
+    if (!keptEntity && (droppedNames.length > 0 || relationships.length === 0)) {
+      return null;
+    }
+
+    return { entities, relationships };
+  }
+
+  private async extractBatch(
+    batch: AgentMemory[],
+    fragmentsText: string,
+    userId: string,
+  ): Promise<BatchOutcome> {
     const messages: OllamaMessage[] = [
       { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
       {
@@ -546,7 +835,7 @@ export class MemoryCompactionService {
     selfAliases: Set<string>,
   ): Promise<void> {
     for (const entity of entities) {
-      const name = entity.name?.trim();
+      const name = typeof entity.name === 'string' ? entity.name.trim() : '';
       const type = normalizeEntityType(entity.type);
 
       if (!name || !type) {
@@ -566,17 +855,22 @@ export class MemoryCompactionService {
         continue;
       }
 
+      const key = this.entityKey(type, name);
+      if (entityMap.has(key)) {
+        continue;
+      }
+
       try {
         const entityId = await this.upsertEntity(
           context,
-          entity.type,
+          type.toLowerCase(),
           name,
           entity.description ?? null,
           cache,
         );
 
         if (entityId != null) {
-          entityMap.set(this.entityKey(entity.type, name), entityId);
+          entityMap.set(key, entityId);
         }
       } catch (err) {
         this.logger.warn('Failed to upsert entity', {
@@ -595,13 +889,15 @@ export class MemoryCompactionService {
     entityMap: Map<string, string>,
     context: UserServiceContext,
   ): Promise<void> {
+    const filled = (value: unknown) => typeof value === 'string' && value.trim() !== '';
+
     for (const rel of relationships) {
       if (
-        !rel.fromName?.trim() ||
-        !rel.fromType?.trim() ||
-        !rel.toName?.trim() ||
-        !rel.toType?.trim() ||
-        !rel.relationshipType?.trim()
+        !filled(rel.fromName) ||
+        !filled(rel.fromType) ||
+        !filled(rel.toName) ||
+        !filled(rel.toType) ||
+        !filled(rel.relationshipType)
       ) {
         this.logger.debug('Skipping relationship with missing required fields', { rel });
         continue;
@@ -730,6 +1026,14 @@ export class MemoryCompactionService {
       }
 
       case 'place': {
+        if (typeof this.placeService.findAll === 'function') {
+          const matches = await this.placeService.findAll(context, { query: name });
+          const existing = (matches ?? []).find((p) => p.name?.trim().toLowerCase() === name.toLowerCase());
+          if (existing) {
+            return existing.id;
+          }
+        }
+
         const [created] = await this.placeService.create(context, {
           name,
           description: description ?? undefined,
@@ -739,10 +1043,27 @@ export class MemoryCompactionService {
       }
 
       case 'item': {
+        if (typeof this.itemService.findAll === 'function') {
+          const itemMap = (cache.itemsByUserId ??= new Map());
+          let items: Array<{ id: string; name?: string | null }> | undefined = itemMap.get(context.userId);
+          if (!items) {
+            items = (await this.itemService.findAll(context)) ?? [];
+            itemMap.set(context.userId, items);
+          }
+
+          const existing = items.find(
+            (i: { id: string; name?: string | null }) => i.name?.trim().toLowerCase() === name.toLowerCase(),
+          );
+          if (existing) {
+            return existing.id;
+          }
+        }
+
         const created = await this.itemService.create(context, {
           name,
           description: description ?? undefined,
         });
+        cache.itemsByUserId?.get(context.userId)?.push({ id: created.id, name });
 
         return created.id;
       }
@@ -856,8 +1177,15 @@ export class MemoryCompactionService {
     }
 
     try {
-      await this.personService.update(context, node.id, { name: incomingName });
-      node.name = incomingName;
+      const updated = await this.personService.update(
+        context,
+        node.id,
+        { name: incomingName },
+        { source: 'MemoryCompactionService.promotePersonName' },
+      );
+      // What was stored, not what was asked for: a name the person set by hand
+      // is kept (PersonService.update), and the cached candidate must say so.
+      node.name = updated?.name ?? node.name;
     } catch {
       // Promotion is cosmetic; the merge (shared id) is the real win.
     }
@@ -948,12 +1276,15 @@ export class MemoryCompactionService {
       }
 
       const obj = parsed as Record<string, unknown>;
+      // A null entry would throw on its first field read downstream.
+      const objectsIn = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is object => typeof entry === 'object' && entry !== null)
+          : [];
 
       return {
-        entities: Array.isArray(obj['entities']) ? (obj['entities'] as ExtractedEntity[]) : [],
-        relationships: Array.isArray(obj['relationships'])
-          ? (obj['relationships'] as ExtractedRelationship[])
-          : [],
+        entities: objectsIn(obj['entities']) as ExtractedEntity[],
+        relationships: objectsIn(obj['relationships']) as ExtractedRelationship[],
       };
     } catch {
       this.logger.warn('Failed to parse LLM extraction result as JSON; will retry', {

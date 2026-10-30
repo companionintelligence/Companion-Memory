@@ -157,6 +157,24 @@ describe('Main: the unsynced-imports notice', () => {
   });
 });
 
+describe('Main: toasts on the desktop', () => {
+  // The shell is `relative z-10`: a stacking context. A toaster inside it can
+  // never paint above anything portaled to <body>, however large its own
+  // z-index — and the calendar's slot drawer is one of those (Radix Sheet,
+  // fixed, z-50). The "Could not put that on the calendar" toast sat behind
+  // that panel, bottom-right, so a refused placement looked like nothing.
+  it('keeps the toaster outside the z-indexed shell', () => {
+    layout.isMobile = false;
+    renderMain();
+
+    const toaster = screen.getByRole('region', { name: /^Notifications/ });
+    const shell = screen.getByRole('main').closest('.z-10') as HTMLElement;
+
+    expect(shell).not.toBeNull();
+    expect(shell.contains(toaster)).toBe(false);
+  });
+});
+
 describe('Main: toasts with the phone drawer open', () => {
   // The same fall-through as the notice's, for every other toast: sonner paints
   // them at z-index 999999999, over the drawer, so one raised just before the

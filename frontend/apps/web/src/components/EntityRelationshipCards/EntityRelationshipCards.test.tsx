@@ -1,6 +1,6 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Subgraph } from '@/api/useNodeGraphService';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -341,5 +341,100 @@ describe('EntityRelationshipCards', () => {
     expect(tag.closest('[data-slot="badge"], .flex.items-center')).toBeTruthy();
     expect(tag.parentElement).toHaveClass('max-w-full');
     expect(tag.parentElement).toHaveClass('truncate');
+  });
+});
+
+describe('EntityRelationshipCards row width', () => {
+  // Records what is observed, so a test can resize it.
+  const observed: Array<{ element: Element; callback: ResizeObserverCallback }> = [];
+  const original = globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    observed.length = 0;
+    useNodeGraphServiceMock.mockReset();
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+
+      observe(element: Element) {
+        observed.push({ element, callback: this.callback });
+      }
+
+      unobserve() {}
+
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = original;
+  });
+
+  /** The focus person with `count` people they know. */
+  function graphWith(count: number): Subgraph {
+    const people = Array.from({ length: count }, (_, i) => ({
+      id: `p-${i}`,
+      entity_id: `p-${i}`,
+      entity_type: 'person',
+      name: `Person ${i + 1}`,
+      description: null,
+      properties: {},
+    }));
+
+    return {
+      nodes: [SUBGRAPH.nodes[0], ...people],
+      links: people.map((person, i) => ({
+        id: `r-${i}`,
+        relationship_id: `r-${i}`,
+        source: FOCUS_ID,
+        target: person.id,
+        relationship_type: 'KNOWS',
+        strength: 0.9,
+        properties: {},
+      })),
+    };
+  }
+
+  it('shows as many cards as fit once the graph arrives after the first render', () => {
+    // First render: nothing fetched yet, so the card renders nothing at all.
+    useNodeGraphServiceMock.mockReturnValue({ data: null, loading: false, error: null });
+    const ui = <EntityRelationshipCards entityId={FOCUS_ID} />;
+    const { rerender } = renderWithProviders(ui);
+
+    useNodeGraphServiceMock.mockReturnValue({ data: graphWith(8), loading: false, error: null });
+    rerender(ui);
+
+    expect(observed).toHaveLength(1);
+
+    // A 2400px row fits ten 180px cards; there are eight.
+    act(() => {
+      const [{ element, callback }] = observed;
+      callback(
+        [{ target: element, contentRect: { width: 2400 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+
+    expect(screen.getByText('Showing 8 of 8')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  // 180px cards with 12px gaps: a 343px phone column fits one across, a 400px
+  // drawer two, a 700px page three. Collapsed, the row never shows fewer than three.
+  it.each([
+    [343, 'Showing 3 of 8'],
+    [400, 'Showing 4 of 8'],
+    [700, 'Showing 3 of 8'],
+    [1100, 'Showing 5 of 8'],
+  ])('shows whole rows of at least three cards at %ipx', (width, shown) => {
+    useNodeGraphServiceMock.mockReturnValue({ data: graphWith(8), loading: false, error: null });
+    renderWithProviders(<EntityRelationshipCards entityId={FOCUS_ID} />);
+
+    act(() => {
+      const [{ element, callback }] = observed;
+      callback([{ target: element, contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+
+    expect(screen.getByText(shown)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show more' })).toBeInTheDocument();
   });
 });

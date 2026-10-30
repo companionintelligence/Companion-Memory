@@ -10,7 +10,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { extractMediaMetadata } from './_exif';
+import { extractMediaMetadata } from '@ci/common/media/exif';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { isPathWithinOrEqual, registerDataSource } from './registry';
 import type { ImportParams } from './timeline';

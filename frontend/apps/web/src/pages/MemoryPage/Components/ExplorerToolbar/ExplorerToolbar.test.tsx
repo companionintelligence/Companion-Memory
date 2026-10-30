@@ -1,17 +1,25 @@
 import { Children, isValidElement, type ReactNode } from 'react';
 
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useSearchParams } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SearchBox } from '@/components/SearchBox/SearchBox';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
+import { PERSON_NAME_SUGGESTIONS_QUERY } from '@/components/SearchBox/useNameSuggestions';
 import { gql } from '@/graphql';
 import { GetSavedSearchDocument, GetSavedSearchesForPickerDocument } from '@/graphql/graphql';
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders, type RenderWithProvidersOptions } from '@/test/renderWithProviders';
 
-import { ExplorerToolbar, MemoryExplorerFilterControls, SearchPanelFilters } from './ExplorerToolbar';
+import { UPDATE_SAVED_SEARCH } from '../../../SavedSearchesPage/EditSavedSearchModal';
+
+import {
+  AdvancedFilters,
+  ExplorerToolbar,
+  MemoryExplorerFilterControls,
+  SearchPanelFilters,
+} from './ExplorerToolbar';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -92,19 +100,6 @@ const EVENT_TYPES_QUERY = gql(`
   }
 `);
 
-const PERSON_NAME_SUGGESTIONS_QUERY = gql(`
-  query PersonNameSuggestions($query: String, $first: Int) {
-    people(query: $query, first: $first) {
-      edges {
-        node {
-          id
-          name
-        }
-      }
-    }
-  }
-`);
-
 // Surfaces the live URL search params in the DOM so assertions can read the
 // filter state the toolbar writes without reaching into router internals.
 function ParamsProbe() {
@@ -131,14 +126,17 @@ function renderToolbar(ui: ReactNode, { mocks = [], ...options }: RenderWithProv
             people: {
               edges: [
                 {
+                  cursor: 'c1',
                   node: { id: 'p1', name: 'Ada Lovelace', __typename: 'PersonType' },
                   __typename: 'PersonEdge',
                 },
                 {
+                  cursor: 'c2',
                   node: { id: 'p2', name: 'Alan Turing', __typename: 'PersonType' },
                   __typename: 'PersonEdge',
                 },
               ],
+              pageInfo: { hasNextPage: false, endCursor: 'c2', __typename: 'PageInfo' },
               __typename: 'PersonConnection',
             },
           },
@@ -193,6 +191,188 @@ describe('ExplorerToolbar', () => {
 
       expect(screen.getByTestId('params').textContent).not.toMatch(/from=|to=|when=/);
       expect(screen.getByRole('button', { name: 'When' })).toBeInTheDocument();
+    });
+
+    describe('typing a custom range', () => {
+      const from = new Date(2026, 0, 1, 0, 0, 0, 0).toISOString();
+      const to = new Date(2026, 0, 31, 23, 59, 59, 999).toISOString();
+      const route = `/?when=custom&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const label = `${new Date(from).toLocaleDateString()} – ${new Date(to).toLocaleDateString()}`;
+      const param = (name: string) =>
+        new URLSearchParams(screen.getByTestId('params').textContent ?? '').get(name);
+      const routeFor = (start: Date, end: Date) => {
+        const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
+
+        return `/?when=custom&from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(endOfDay.toISOString())}`;
+      };
+
+      const labelFor = (start: Date, end: Date) =>
+        `${start.toLocaleDateString()} – ${end.toLocaleDateString()}`;
+
+      it('shows the range in the Start / End date fields and applies a typed date as a whole local day', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        const start = screen.getByLabelText('Start date');
+        const end = screen.getByLabelText('End date');
+
+        expect(start).toHaveValue('2026-01-01');
+        expect(end).toHaveValue('2026-01-31');
+
+        fireEvent.change(end, { target: { value: '2026-03-15' } });
+
+        expect(param('from')).toBe(from);
+        expect(param('to')).toBe(new Date(2026, 2, 15, 23, 59, 59, 999).toISOString());
+        expect(param('when')).toBe('custom');
+      });
+
+      it('waits for a four-digit year, and goes back to the applied date if the field is left before one', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        const start = screen.getByLabelText('Start date');
+
+        // What a date field reports part-way through typing the year 2019.
+        fireEvent.change(start, { target: { value: '0020-06-01' } });
+        expect(param('from')).toBe(from);
+
+        fireEvent.blur(start);
+        expect(start).toHaveValue('2026-01-01');
+        expect(param('from')).toBe(from);
+
+        fireEvent.change(start, { target: { value: '2019-06-01' } });
+        expect(param('from')).toBe(new Date(2019, 5, 1, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(to);
+      });
+
+      it('brings the other end along when a start is typed past it, and opens an end that is emptied', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        const start = screen.getByLabelText('Start date');
+
+        fireEvent.change(start, { target: { value: '2026-05-10' } });
+        // Past the end, it waits for the field to be left rather than moving the end per keystroke.
+        expect(param('from')).toBe(from);
+        expect(param('to')).toBe(to);
+        fireEvent.blur(start);
+
+        expect(param('from')).toBe(new Date(2026, 4, 10, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(new Date(2026, 4, 10, 23, 59, 59, 999).toISOString());
+
+        const end = screen.getByLabelText('End date');
+
+        fireEvent.change(end, { target: { value: '' } });
+        fireEvent.blur(end);
+
+        expect(param('from')).toBe(new Date(2026, 4, 10, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBeNull();
+      });
+
+      it('leaves the start alone while an earlier end is typed digit by digit, then starts the range there', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, {
+          route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)),
+        });
+        fireEvent.click(
+          screen.getByRole('button', { name: labelFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) }),
+        );
+
+        const end = screen.getByLabelText('End date');
+        const fromBefore = param('from');
+        const toBefore = param('to');
+
+        // What the field reports while 02152025 is typed over 03/08/2025 from its month part.
+        // The day digits give complete dates, all before the start; the year digits pass
+        // through years under 1000 on the way back to 2025.
+        for (const value of [
+          '2025-02-08',
+          '2025-02-01',
+          '2025-02-15',
+          '0002-02-15',
+          '0020-02-15',
+          '0202-02-15',
+          '2025-02-15',
+        ]) {
+          fireEvent.change(end, { target: { value } });
+          expect(param('from')).toBe(fromBefore);
+          expect(param('to')).toBe(toBefore);
+        }
+
+        fireEvent.blur(end);
+
+        // Committed before the start, the end begins a new one-day range on the day typed.
+        expect(param('from')).toBe(new Date(2025, 1, 15, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(new Date(2025, 1, 15, 23, 59, 59, 999).toISOString());
+      });
+
+      it('applies a held end on Enter', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, {
+          route: routeFor(new Date(2025, 2, 1), new Date(2025, 2, 8)),
+        });
+        fireEvent.click(
+          screen.getByRole('button', { name: labelFor(new Date(2025, 2, 1), new Date(2025, 2, 8)) }),
+        );
+
+        const end = screen.getByLabelText('End date');
+
+        fireEvent.change(end, { target: { value: '2025-02-15' } });
+        fireEvent.keyDown(end, { key: 'Enter' });
+
+        expect(param('from')).toBe(new Date(2025, 1, 15, 0, 0, 0, 0).toISOString());
+        expect(param('to')).toBe(new Date(2025, 1, 15, 23, 59, 59, 999).toISOString());
+      });
+
+      it('turns the calendar to a held date, and drops it when the popover is closed without committing', async () => {
+        const range = [new Date(2025, 2, 1), new Date(2025, 2, 8)] as const;
+
+        renderToolbar(<MemoryExplorerFilterControls />, { route: routeFor(...range) });
+        fireEvent.click(screen.getByRole('button', { name: labelFor(...range) }));
+        await screen.findByRole('combobox', { name: /year/i });
+
+        const end = screen.getByLabelText('End date');
+
+        fireEvent.change(end, { target: { value: '2024-11-20' } });
+        expect(screen.getByRole('combobox', { name: /year/i })).toHaveValue('2024');
+        expect(screen.getByRole('combobox', { name: /month/i })).toHaveValue('10');
+
+        // Escape closes the popover without a blur, so the held end is never applied.
+        fireEvent.keyDown(end, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByLabelText('End date')).not.toBeInTheDocument());
+
+        const trigger = screen.getByRole('button', { name: labelFor(...range) });
+
+        fireEvent.click(trigger);
+
+        // Reopened, the fields show the range in force, not the date that was dropped,
+        // and leaving the field does not bring that date back.
+        const reopenedEnd = screen.getByLabelText('End date');
+
+        expect(reopenedEnd).toHaveValue('2025-03-08');
+        fireEvent.blur(reopenedEnd);
+        expect(param('to')).toBe(new Date(2025, 2, 8, 23, 59, 59, 999).toISOString());
+      });
+
+      it('offers month and year dropdowns on the calendar and turns it to a typed date', async () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        // The grid is lazy-loaded; it opens on the range's own month.
+        const year = await screen.findByRole('combobox', { name: /year/i });
+
+        expect(year).toHaveValue('2026');
+        expect(screen.getByRole('combobox', { name: /month/i })).toHaveValue('0');
+
+        fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2019-06-01' } });
+
+        expect(screen.getByRole('combobox', { name: /year/i })).toHaveValue('2019');
+        expect(screen.getByRole('combobox', { name: /month/i })).toHaveValue('5');
+
+        // Picking a year pages the grid without touching the applied range.
+        fireEvent.change(screen.getByRole('combobox', { name: /year/i }), { target: { value: '2012' } });
+
+        expect(screen.getByRole('combobox', { name: /year/i })).toHaveValue('2012');
+        expect(param('from')).toBe(new Date(2019, 5, 1, 0, 0, 0, 0).toISOString());
+      });
     });
 
     /**
@@ -255,7 +435,7 @@ describe('ExplorerToolbar', () => {
     it('labels the trigger with the selected event type', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?eventTypes=visited' });
 
-      expect(screen.getByRole('button', { name: /^Activity: visited/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Activity: Visited/ })).toBeInTheDocument();
     });
 
     it('is withheld once the What bar leaves events out, since eventTypes only narrows events', () => {
@@ -277,23 +457,23 @@ describe('ExplorerToolbar', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
 
       fireEvent.click(screen.getByRole('button', { name: /^Activity: all/ }));
-      fireEvent.click(await screen.findByRole('option', { name: 'visited' }));
+      fireEvent.click(await screen.findByRole('option', { name: 'Visited' }));
 
       expect(screen.getByTestId('params').textContent).toContain('eventTypes=visited');
-      expect(screen.getByRole('button', { name: /^Activity: visited/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Activity: Visited/ })).toBeInTheDocument();
     });
 
     it('narrows the list by the typed text and refuses text that is not an event type', async () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
 
       fireEvent.click(screen.getByRole('button', { name: /^Activity: all/ }));
-      await screen.findByRole('option', { name: 'visited' });
+      await screen.findByRole('option', { name: 'Visited' });
 
       const search = screen.getByRole('textbox', { name: 'Search activities…' });
 
       fireEvent.change(search, { target: { value: 'vis' } });
-      expect(screen.getByRole('option', { name: 'visited' })).toBeInTheDocument();
-      expect(screen.queryByRole('option', { name: 'messaged' })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Visited' })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Messaged' })).not.toBeInTheDocument();
 
       fireEvent.change(search, { target: { value: 'skydived' } });
       fireEvent.keyDown(search, { key: 'Enter' });
@@ -309,25 +489,25 @@ describe('ExplorerToolbar', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
 
       fireEvent.click(screen.getByRole('button', { name: /^How: all/ }));
-      fireEvent.click(await screen.findByRole('option', { name: 'gmail' }));
+      fireEvent.click(await screen.findByRole('option', { name: 'Gmail' }));
 
       expect(screen.getByTestId('params').textContent).toContain('connectors=gmail');
-      expect(screen.getByRole('button', { name: /^How: gmail/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^How: Gmail/ })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('option', { name: 'gmail' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Gmail' }));
       expect(screen.getByTestId('params').textContent).not.toContain('connectors=');
     });
 
     it('keeps a URL-carried source the list no longer holds, flagged, so it can be removed', async () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?connectors=myspace' });
 
-      fireEvent.click(screen.getByRole('button', { name: /^How: myspace/ }));
-      await screen.findByRole('option', { name: 'gmail' });
+      fireEvent.click(screen.getByRole('button', { name: /^How: Myspace/ }));
+      await screen.findByRole('option', { name: 'Gmail' });
 
-      const stale = screen.getByRole('option', { name: 'myspace' });
+      const stale = screen.getByRole('option', { name: 'Myspace' });
 
       expect(stale).toHaveAttribute('aria-selected', 'true');
-      expect(stale.querySelector('svg.text-warning-foreground')).not.toBeNull();
+      expect(stale.querySelector('svg.text-warning')).not.toBeNull();
 
       fireEvent.click(stale);
       expect(screen.getByTestId('params').textContent).not.toContain('connectors=');
@@ -355,6 +535,54 @@ describe('ExplorerToolbar', () => {
       expect(screen.queryByRole('button', { name: /^Activity/ })).not.toBeInTheDocument();
     });
 
+    it('counts the map areas in the Where trigger beside the place names', () => {
+      const area = '165.500000,-47.500000,179.500000,-33.500000';
+      const { unmount } = renderToolbar(<MemoryExplorerFilterControls />, { route: `/memory?areas=${area}` });
+
+      expect(screen.getByRole('button', { name: /^Where: Map Areas \(1\)/ })).toBeInTheDocument();
+      unmount();
+
+      const two = renderToolbar(<MemoryExplorerFilterControls />, {
+        route: `/memory?areas=${area};1,2,3,4&places=100+Duranzo+Aisle`,
+      });
+
+      expect(
+        screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(2\)/ }),
+      ).toBeInTheDocument();
+      two.unmount();
+
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: `/memory?areas=${area}&places=Paris&places=London`,
+      });
+      expect(
+        screen.getByRole('button', { name: /^Where: 2 selected \+ Map Areas \(1\)/ }),
+      ).toBeInTheDocument();
+    });
+
+    it('lists the map areas in the Where popover, removes one, and clears names and areas together', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: '/memory?areas=165.5,-47.5,179.5,-33.5;-161,18.5,-154.5,22.5&places=Paris',
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(2\)/ }));
+      expect(screen.getByText('Map area: 47.5°S–33.5°S, 165.5°E–179.5°E')).toBeInTheDocument();
+      expect(screen.getByText('Map area: 18.5°N–22.5°N, 161.0°W–154.5°W')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove map area 1' }));
+      expect(screen.getByTestId('params').textContent).toContain(
+        'areas=-161.000000%2C18.500000%2C-154.500000%2C22.500000',
+      );
+      expect(screen.getByTestId('params').textContent).not.toContain('165.5');
+      expect(
+        screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(1\)/ }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(screen.getByTestId('params').textContent).not.toContain('areas=');
+      expect(screen.getByTestId('params').textContent).not.toContain('places=');
+      expect(screen.getByRole('button', { name: /^Where: all/ })).toBeInTheDocument();
+    });
+
     it('lists people suggestions once opened and writes the pick to the URL', async () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
 
@@ -363,6 +591,79 @@ describe('ExplorerToolbar', () => {
 
       expect(screen.getByTestId('params').textContent).toContain('people=Ada+Lovelace');
       expect(screen.getByRole('button', { name: /^Who: Ada Lovelace/ })).toBeInTheDocument();
+    });
+
+    it('lists the people a page at a time, fetching the next page as the end of the list comes into view', async () => {
+      // The suite-wide IntersectionObserver stub never fires; capture the
+      // picker's so the end of its list can be brought "into view".
+      const original = globalThis.IntersectionObserver;
+      const callbacks: IntersectionObserverCallback[] = [];
+
+      class CapturingObserver {
+        constructor(callback: IntersectionObserverCallback) {
+          callbacks.push(callback);
+        }
+
+        observe() {}
+
+        disconnect() {}
+      }
+
+      globalThis.IntersectionObserver = CapturingObserver as unknown as typeof IntersectionObserver;
+
+      const edge = (cursor: string, id: string, name: string) => ({
+        cursor,
+        node: { id, name, __typename: 'PersonType' as const },
+        __typename: 'PersonEdge' as const,
+      });
+
+      try {
+        renderToolbar(<MemoryExplorerFilterControls />, {
+          route: '/memory',
+          mocks: [
+            mockQuery(
+              PERSON_NAME_SUGGESTIONS_QUERY,
+              { query: '', first: 8 },
+              {
+                people: {
+                  edges: [edge('c1', 'p1', 'Ada Lovelace'), edge('c2', 'p2', 'Alan Turing')],
+                  pageInfo: { hasNextPage: true, endCursor: 'c2', __typename: 'PageInfo' },
+                  __typename: 'PersonConnection',
+                },
+              },
+            ),
+            mockQuery(
+              PERSON_NAME_SUGGESTIONS_QUERY,
+              { query: '', first: 8, after: 'c2' },
+              {
+                people: {
+                  edges: [edge('c3', 'p3', 'Grace Hopper')],
+                  pageInfo: { hasNextPage: false, endCursor: 'c3', __typename: 'PageInfo' },
+                  __typename: 'PersonConnection',
+                },
+              },
+            ),
+          ],
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /^Who: all/ }));
+        await screen.findByRole('option', { name: 'Alan Turing' });
+        expect(screen.queryByRole('option', { name: 'Grace Hopper' })).not.toBeInTheDocument();
+        expect(screen.getByText('More…')).toBeInTheDocument();
+
+        await act(async () => {
+          for (const callback of callbacks) {
+            callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+          }
+        });
+
+        // The second page joins the first; nothing follows it, so the list stops asking.
+        expect(await screen.findByRole('option', { name: 'Grace Hopper' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Ada Lovelace' })).toBeInTheDocument();
+        expect(screen.queryByText('More…')).not.toBeInTheDocument();
+      } finally {
+        globalThis.IntersectionObserver = original;
+      }
     });
 
     it('offers the From / To toggle inside Who, chips it, and clears it from the chip', () => {
@@ -578,7 +879,7 @@ describe('ExplorerToolbar', () => {
   describe('filters a view cannot apply', () => {
     it('marks the graph-incompatible chips and counts them, leaving the rest alone', () => {
       renderToolbar(<ExplorerToolbar open />, {
-        route: '/?view=graph&semantic=1&bbox=1,2,3,4&tags=space',
+        route: '/?view=graph&semantic=1&areas=1,2,3,4&tags=space',
       });
 
       expect(screen.getByLabelText(/^Semantic — not applied in this view\./)).toBeInTheDocument();
@@ -590,7 +891,7 @@ describe('ExplorerToolbar', () => {
 
     it('leaves every chip active in the search-backed views', () => {
       renderToolbar(<ExplorerToolbar open />, {
-        route: '/?view=list&semantic=1&bbox=1,2,3,4&tags=space',
+        route: '/?view=list&semantic=1&areas=1,2,3,4&tags=space',
       });
 
       expect(screen.queryByLabelText(/not applied in this view/)).not.toBeInTheDocument();
@@ -656,6 +957,114 @@ const TRIP = mockQuery(
   },
 );
 
+describe('Save this search with a loaded saved search', () => {
+  // The explorer carries `?loaded_search=<raw id>` after a saved search is
+  // applied (see applySavedSearchToParams). Save then offers to write the
+  // current filters back over THAT search, next to saving a new one. Without
+  // the marker there is only the create path — the state every search used to
+  // be in, which is why editing a saved search always made another.
+  function updateMock(onSave: (variables: Record<string, unknown>) => void) {
+    return {
+      request: { query: UPDATE_SAVED_SEARCH },
+      variableMatcher: () => true,
+      result: (variables: Record<string, unknown>) => {
+        onSave(variables);
+
+        return {
+          data: {
+            updateSavedSearch: {
+              __typename: 'UpdateSavedSearchPayload',
+              success: true,
+              savedSearch: {
+                __typename: 'SavedSearchType',
+                id: TRIP_ID,
+                name: 'My trip',
+                description: null,
+                query: 'paris',
+                entityTypes: [],
+                tags: ['vacation'],
+                filters: null,
+              },
+            },
+          },
+        };
+      },
+    };
+  }
+
+  it('offers only a new save when nothing was loaded', async () => {
+    renderToolbar(<AdvancedFilters />, { route: '/memory?search=paris&people=Ada' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+
+    expect(within(dialog).queryByRole('button', { name: /^Update/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
+  it('writes the current filters back over the loaded search, keeping its name', async () => {
+    const onSave = vi.fn();
+
+    renderToolbar(<AdvancedFilters />, {
+      route: '/memory?loaded_search=trip-1&search=paris&people=Ada&tags=vacation',
+      mocks: [TRIP, updateMock(onSave)],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+
+    // Both ways out are offered: the loaded search by name, or a fresh one.
+    const update = await within(dialog).findByRole('button', { name: 'Update “My trip”' });
+    expect(within(dialog).getByRole('button', { name: 'Save as new' })).toBeDisabled();
+
+    fireEvent.click(update);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]).toEqual({
+      input: {
+        id: TRIP_ID,
+        name: 'My trip',
+        query: 'paris',
+        // No What narrowing stores no types, the same as a seed.
+        entityTypes: [],
+        tags: ['vacation'],
+        filters: { people: ['Ada'] },
+      },
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Save this search' })).not.toBeInTheDocument(),
+    );
+    // Still the search the explorer is showing.
+    expect(screen.getByTestId('params')).toHaveTextContent('loaded_search=trip-1');
+  });
+
+  it('sends null for a cleared query and filter set rather than leaving the old ones in place', async () => {
+    const onSave = vi.fn();
+
+    // Only a tag left: the query and every secondary filter were removed.
+    renderToolbar(<AdvancedFilters />, {
+      route: '/memory?loaded_search=trip-1&tags=vacation',
+      mocks: [TRIP, updateMock(onSave)],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Update “My trip”' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]).toEqual({
+      input: {
+        id: TRIP_ID,
+        name: 'My trip',
+        query: null,
+        entityTypes: [],
+        tags: ['vacation'],
+        filters: null,
+      },
+    });
+  });
+});
+
 describe('SearchPanelFilters in the header search panel', () => {
   // The header box on a page outside Memory's lists, with its panel open.
   function openHeaderPanel(
@@ -713,5 +1122,89 @@ describe('SearchPanelFilters in the header search panel', () => {
     // Nothing of this page rides along, and this page's URL is untouched.
     expect(opened.has('view')).toBe(false);
     expect(screen.getByTestId('params')).toHaveTextContent(/^view=board$/);
+  });
+});
+
+// useDeviceLayout reads window.matchMedia; drive it to force the phone
+// branch, the same pattern as MobileMemoryPage.test.tsx.
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : query.includes('landscape') ? !mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+describe('on a phone', () => {
+  afterEach(() => {
+    setViewport(false);
+    document.body.style.pointerEvents = '';
+  });
+
+  it('leads the scrolling chip row with Save and ends it with Clear all instead of wrapping them', () => {
+    setViewport(true);
+    renderToolbar(<ExplorerToolbar open />, {
+      route: '/?people=Ada%20Lovelace&tags=space',
+    });
+
+    const drop = screen.getByLabelText('Filter drop area');
+    const scroller = drop.querySelector<HTMLElement>('.overflow-x-auto');
+    const clear = screen.getByRole('button', { name: 'Clear all' });
+    const save = screen.getByRole('button', { name: 'Save' });
+
+    expect(scroller).not.toBeNull();
+    expect(scroller).toContainElement(clear);
+    expect(scroller).toContainElement(save);
+    // Save first, so it is in view before anyone discovers the line scrolls;
+    // then the chips; Clear all follows the last chip.
+    const chip = screen.getByRole('button', { name: 'Remove Ada Lovelace' });
+
+    expect(save.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chip.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(clear);
+
+    const params = screen.getByTestId('params').textContent ?? '';
+
+    expect(params).not.toContain('people=');
+    expect(params).not.toContain('tags=');
+  });
+
+  it('lays the When / How / toggles / sort controls out as one sideways-scrolling line', () => {
+    renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+    const row = screen.getByRole('button', { name: /^How: all/ }).parentElement;
+
+    // Scrolls below `device:`, wraps from it — never wraps on a phone.
+    expect(row).toHaveClass('max-device:overflow-x-auto', 'device:flex-wrap', 'scrollbar-none');
+    expect(row).not.toHaveClass('flex-wrap');
+  });
+
+  it('opens the How picker modal, so a tap away only closes it and reaches nothing underneath', async () => {
+    setViewport(true);
+    renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+    fireEvent.click(screen.getByRole('button', { name: /^How: all/ }));
+    await screen.findByRole('option', { name: /^gmail$/i });
+
+    // Radix's modal layer is what swallows the outside tap: it turns pointer
+    // events off for the rest of the page while the picker is open — and the
+    // shield catches what that misses (map pins turn them back on).
+    expect(document.body.style.pointerEvents).toBe('none');
+    expect(screen.getByTestId('menu-shield')).toBeInTheDocument();
+  });
+
+  it('keeps the How picker non-modal on desktop', async () => {
+    renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+    fireEvent.click(screen.getByRole('button', { name: /^How: all/ }));
+    await screen.findByRole('option', { name: /^gmail$/i });
+
+    expect(document.body.style.pointerEvents).toBe('');
   });
 });

@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+
+import { useLocation } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
@@ -31,6 +33,14 @@ import { ReceiptRow } from './rows/ReceiptRow';
 import { ThreadRow } from './rows/ThreadRow';
 
 /**
+ * Where the list was scrolled to, per history entry (`location.key`), until the
+ * page reloads. The list scrolls inside its own box rather than the window, so
+ * the browser's own scroll restoration never sees it. Opening a full page also
+ * unmounts it. Back to the same entry puts the list where it was.
+ */
+const scrollTopByHistoryEntry = new Map<string, number>();
+
+/**
  * The scrolling result list every list-shaped explorer view is built on: the
  * per-type rows, cursor paging on scroll, and the skeleton / error / empty
  * states. `grouped` puts date headings between runs of same-day rows and
@@ -48,6 +58,66 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Remember the scroll position under the history entry it belongs to. Give it
+  // back when that entry is shown again (Back from a full page). The position
+  // is saved as the entry is left, from the last scroll seen, because the
+  // scroll box is already gone by the time an unmount's cleanup runs. A restore
+  // still under way when the entry is left keeps its target.
+  const { key: historyKey } = useLocation();
+  const lastScrollTopRef = useRef(0);
+  const pendingRestoreRef = useRef<number | null>(scrollTopByHistoryEntry.get(historyKey) ?? null);
+
+  useEffect(() => {
+    return () => {
+      scrollTopByHistoryEntry.set(historyKey, pendingRestoreRef.current ?? lastScrollTopRef.current);
+    };
+  }, [historyKey]);
+
+  // Re-applied as pages arrive, until the list is tall enough to reach the
+  // saved position or there is nothing more to load. Not settled while a
+  // request is in flight: on Back the cache answers first with every page
+  // loaded before, then the network's first page replaces them all.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const target = pendingRestoreRef.current;
+
+    if (!el || target == null || data.length === 0) {
+      return;
+    }
+
+    el.scrollTop = target;
+    lastScrollTopRef.current = el.scrollTop;
+
+    if (!loading && (el.scrollTop >= target - 1 || !hasNextPage)) {
+      pendingRestoreRef.current = null;
+    }
+  }, [data.length, hasNextPage, loading]);
+
+  // The reader's own wheel, touch or key ends a restore. A page landing later
+  // must not pull the list back from where they took it.
+  const stopRestoring = () => {
+    pendingRestoreRef.current = null;
+  };
+
+  // Every state below renders this one box. React keeps the same element
+  // across them, so the scroll handler is on all of them: a skeleton that
+  // shortens the box moves its scrollTop too.
+  const scrollBox = (children: ReactNode) => (
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      data-list-scroll=""
+      onScroll={(event) => {
+        lastScrollTopRef.current = event.currentTarget.scrollTop;
+      }}
+      onWheel={stopRestoring}
+      onPointerDown={stopRestoring}
+      onKeyDown={stopRestoring}
+    >
+      {children}
+    </div>
+  );
 
   // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
   useEffect(() => {
@@ -154,32 +224,20 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        <ListSkeleton count={10} />
-      </div>
-    );
+    return scrollBox(<ListSkeleton count={10} />);
   }
 
   // Hard error with nothing to show.
   if (error && data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        <ErrorState onRetry={refetch} />
-      </div>
-    );
+    return scrollBox(<ErrorState onRetry={refetch} />);
   }
 
   if (data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        {emptyState}
-      </div>
-    );
+    return scrollBox(emptyState);
   }
 
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
+  return scrollBox(
+    <>
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (
@@ -198,6 +256,6 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
       <div className="py-3 text-center text-xs text-muted-foreground">
         {formatLoadedCount({ loaded: data.length, totalCount, loadingMore, hasNextPage })}
       </div>
-    </div>
+    </>,
   );
 }

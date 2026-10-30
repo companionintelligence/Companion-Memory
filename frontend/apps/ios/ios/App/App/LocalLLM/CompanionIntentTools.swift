@@ -28,7 +28,7 @@ enum CompanionToolContext {
 
   /// The most bytes of one tool result handed back to the model when the window's room cannot be read
   /// (``windowTokensLeft``). `loadModel` sets it from the context window it just configured; until then it
-  /// assumes the smallest window shipped (Qwen3-0.6B's 1024 tokens), so a result is bounded even if
+  /// assumes a 1024-token window (the smallest ever shipped, Qwen3-0.6B's), so a result is bounded even if
   /// nothing did. See ``ToolResultShaper`` for why.
   static var resultBudgetBytes = LocalLLMPolicy.toolResultByteBudget(contextTokens: 1024)
 
@@ -43,6 +43,10 @@ enum CompanionToolContext {
   /// `String` response into the chat template as an escaped JSON string — every quote becomes `\"` —
   /// which costs tokens and is harder for a small model to read than the JSON itself.
   static var structuredResults = false
+  /// Set by `LocalLLMPlugin.configureIntentTools` from the web layer's `connectionMode`: anything but
+  /// `connected`. The phone's own search (`LocalSearchTool`) then answers `knowledge_search` ahead of
+  /// the appliance's, whose call would fail anyway.
+  static var localSearchPreferred = false
 
   /// Runs an intent after re-checking the server's ruling.
   ///
@@ -84,7 +88,7 @@ enum CompanionToolContext {
 
   /// The parsed JSON object or array, or `text` itself when it is neither (an error message, a cut-off
   /// string): only a container is worth handing over as a value.
-  private static func asJSONValue(_ text: String) -> Any {
+  static func asJSONValue(_ text: String) -> Any {
     guard
       let value = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]),
       value is [String: Any] || value is [Any]
@@ -100,6 +104,25 @@ enum CompanionToolContext {
   /// because the appliance is unreachable would make the offline tier depend on being online — the
   /// exact failure the on-device path exists to avoid.
   static func refreshRulings() async -> [any Tool] {
+    let appliance = await refreshApplianceRulings()
+    return withLocalSearch(appliance)
+  }
+
+  /// The phone's search joins the set when a replica is on this phone: in place of the appliance's
+  /// `knowledge_search` while not connected, and as the whole set when the catalog gave none —
+  /// which until 2026-10-22 left the model with no tools at all. Mirrors Android's
+  /// `IntentToolProvider.toolsForLoad`.
+  static func withLocalSearch(_ appliance: [any Tool]) -> [any Tool] {
+    guard let store = LocalSearchStore.shared, store.isAvailable else { return appliance }
+    let applianceSearch = appliance.contains { type(of: $0).name == LocalSearchTool.name && !($0 is LocalSearchTool) }
+    if applianceSearch && !localSearchPreferred { return appliance }
+    NSLog(localSearchPreferred
+          ? "[LocalLLM] Not connected: knowledge_search answers from this phone's replica"
+          : "[LocalLLM] The appliance offered no knowledge_search; this phone's replica answers it")
+    return appliance.filter { !(type(of: $0).name == LocalSearchTool.name) } + [LocalSearchTool()]
+  }
+
+  private static func refreshApplianceRulings() async -> [any Tool] {
     guard let client else { return [] }
 
     do {
@@ -195,8 +218,21 @@ struct SearchMemoryTool: Tool {
   @ToolParam(description: "The key words to look for: a name, a place or a thing. Not the whole question")
   var query: String
 
+  /// Newest first. The appliance orders by each entry's own time; without it the page is by relevance and a
+  /// "most recent" question gets whatever ranked first (on a device: a message from 2022 ahead of 2025).
+  @ToolParam(description: "Set to \"recent\" for newest first: most recent, latest, last")
+  var sort: String?
+
+  @ToolParam(description: "Only entries on or after this date, YYYY-MM-DD")
+  var since: String?
+
   func run() async throws -> Any {
-    await CompanionToolContext.execute(Self.name, arguments: ["query": query])
+    var arguments: [String: Any] = ["query": query]
+    // Omitted rather than sent as null: the appliance validates against the intent's JSON Schema.
+    if let sort, !sort.isEmpty { arguments["sort"] = sort }
+    if let since, !since.isEmpty { arguments["since"] = since }
+
+    return await CompanionToolContext.execute(Self.name, arguments: arguments)
   }
 }
 

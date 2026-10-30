@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { fetchJson, FetchJsonError } from '@ci/common';
-import { Button, Card, Dialog, Input, Label, PasswordInput } from '@ci/shadcn';
+import { Button, Card, Dialog, EmailInput, Input, Label, PasswordInput } from '@ci/shadcn';
 import { TriangleAlert } from '@ci/shadcn/icons';
 
 import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
@@ -45,6 +45,19 @@ function messageFrom(error: unknown, fallback: string, signInAgain: string): str
 }
 
 /**
+ * An `onChange` that stores the field's value and drops its form's error, which was about the
+ * values it was shown for. The browser's own checks (an address it won't accept, a too-short
+ * password) stop the next submit before the form's handler runs. Without this, "New passwords do
+ * not match." stayed beside a message about something else.
+ */
+function editAndClearError(set: (value: string) => void, setError: (error: null) => void) {
+  return (e: ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value);
+    setError(null);
+  };
+}
+
+/**
  * Account settings — currently just deletion, which exists because both stores
  * require it: an app offering in-app signup must offer in-app account deletion
  * (Apple Guideline 5.1.1(v), Google Play Data Deletion). Self-hosting is not an
@@ -74,6 +87,17 @@ export function AccountSection() {
   // Set once the server says this is the last administrator: the dialog then asks who takes over.
   const [needsSuccessor, setNeedsSuccessor] = useState(false);
   const [successorEmail, setSuccessorEmail] = useState('');
+
+  // Every way out of the dialog (Cancel, Escape, the close button, a click outside) clears what was
+  // typed. Cancel used to only hide it, so reopening showed the email still filled in and the
+  // destructive button already live.
+  const closeDeleteDialog = () => {
+    setOpen(false);
+    setConfirmEmail('');
+    setError(null);
+    setNeedsSuccessor(false);
+    setSuccessorEmail('');
+  };
 
   const email = user?.email ?? '';
   // Mirrors the server's comparison so the button is only live when the request would
@@ -157,6 +181,8 @@ export function AccountSection() {
 
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
+    // Before the mismatch check, so "Password updated." from the last change does not sit beside it.
+    setPasswordSavedNote(null);
 
     if (newPassword !== confirmNewPassword) {
       setPasswordError('New passwords do not match.');
@@ -166,7 +192,6 @@ export function AccountSection() {
 
     setPasswordSaving(true);
     setPasswordError(null);
-    setPasswordSavedNote(null);
 
     try {
       await fetchJson('/api/account/password', {
@@ -217,7 +242,9 @@ export function AccountSection() {
 
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
-      await logout();
+      // Without asking about captures still queued on a phone: they can no longer
+      // upload, and the deletion just confirmed covers them.
+      await logout({ discardUnsentCaptures: true });
     } catch (err) {
       if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_REQUIRED) {
         // The server deleted nothing. Ask who takes over, then the same button tries again.
@@ -307,7 +334,7 @@ export function AccountSection() {
                         id="emailCurrentPassword"
                         autoComplete="current-password"
                         value={emailCurrentPassword}
-                        onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                        onChange={editAndClearError(setEmailCurrentPassword, setEmailError)}
                         disabled={emailSaving}
                         required
                       />
@@ -316,12 +343,11 @@ export function AccountSection() {
 
                   <div className="grid gap-2">
                     <Label htmlFor="newEmail">New email</Label>
-                    <Input
+                    <EmailInput
                       id="newEmail"
-                      type="email"
                       autoComplete="email"
                       value={newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
+                      onChange={editAndClearError(setNewEmail, setEmailError)}
                       disabled={emailSaving}
                       required
                     />
@@ -359,7 +385,7 @@ export function AccountSection() {
                       id="passwordCurrentPassword"
                       autoComplete="current-password"
                       value={passwordCurrentPassword}
-                      onChange={(e) => setPasswordCurrentPassword(e.target.value)}
+                      onChange={editAndClearError(setPasswordCurrentPassword, setPasswordError)}
                       disabled={passwordSaving}
                       required
                     />
@@ -373,7 +399,7 @@ export function AccountSection() {
                     autoComplete="new-password"
                     minLength={MIN_PASSWORD_LENGTH}
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    onChange={editAndClearError(setNewPassword, setPasswordError)}
                     disabled={passwordSaving}
                     required
                   />
@@ -385,7 +411,7 @@ export function AccountSection() {
                     id="confirmNewPassword"
                     autoComplete="new-password"
                     value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    onChange={editAndClearError(setConfirmNewPassword, setPasswordError)}
                     disabled={passwordSaving}
                     required
                   />
@@ -472,13 +498,12 @@ export function AccountSection() {
       <Dialog
         open={open}
         onOpenChange={(next: boolean) => {
-          setOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setError(null);
-            setNeedsSuccessor(false);
-            setSuccessorEmail('');
+          if (next) {
+            setOpen(true);
+          } else if (!loading) {
+            // Refused mid-request, like Cancel: the answer (a 409 asking who takes over) would land
+            // in a closed dialog and show up stale on the next open.
+            closeDeleteDialog();
           }
         }}
       >
@@ -499,6 +524,10 @@ export function AccountSection() {
               <Input
                 id="confirmEmail"
                 autoComplete="off"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={email}
                 value={confirmEmail}
                 onChange={(e) => setConfirmEmail(e.target.value)}
@@ -509,9 +538,8 @@ export function AccountSection() {
             {needsSuccessor && (
               <div className="grid gap-2">
                 <Label htmlFor="successorEmail">Email of the person who takes over</Label>
-                <Input
+                <EmailInput
                   id="successorEmail"
-                  type="email"
                   autoComplete="off"
                   value={successorEmail}
                   onChange={(e) => setSuccessorEmail(e.target.value)}
@@ -524,7 +552,7 @@ export function AccountSection() {
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={loading}>
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={!matches || loading}>

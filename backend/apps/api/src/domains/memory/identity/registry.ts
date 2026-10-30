@@ -33,6 +33,7 @@ export const FEDERATED_SYSTEMS = {
  */
 export const PLATFORM_SYSTEMS: readonly string[] = [
   // Connections (domains/etl/services/*)
+  'dropbox',
   'facebook',
   'facebook_messenger',
   'github',

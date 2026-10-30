@@ -12,6 +12,15 @@
  * needs an Android foreground service, and resumable large-media upload needs its own
  * slice. Both are deliberate follow-ups (see the plugin package README).
  *
+ * Foreground-only still has to mean "keeps trying while in the foreground". It did not,
+ * once: a drain that was cut short (the connection mode flickered, or an attempt failed)
+ * had no second chance until the mode changed again or the app was resumed — twenty-three
+ * minutes in the foreground with a working tunnel moved five fixes out of seventy-one
+ * (2026-10-16). Two rules now cover that: a trigger that lands while a drain is being
+ * ABORTED starts its own drain once the aborted one is out of the way instead of joining
+ * it and dying with it ({@link flushOutbox}), and while the mode is `"connected"` and rows
+ * are pending, the queue provider re-drains on a timer ({@link OUTBOX_REDRAIN_INTERVAL_MS}).
+ *
  * Three properties this file exists to guarantee:
  *
  * 1. **FIFO.** Items drain in ascending `seq`, the sidecar's monotonic counter — never by
@@ -19,7 +28,12 @@
  * 2. **Serialized.** Exactly one drain runs at a time, process-wide. Two concurrent drains
  *    would flush the same rows twice.
  * 3. **Nothing is lost.** A failed flush reports the failure and stops there; only the
- *    sidecar removes rows, and only on a reported success or an explicit user discard.
+ *    sidecar removes rows, and only on a reported success, an explicit user discard, or a
+ *    sign-out the person agreed to (see {@link countUnsentBeforeSignOut} and
+ *    {@link clearOutboxAfterSignOut}).
+ * 4. **Nothing changes hands.** A row goes out only under the session it was queued for
+ *    (`owner`, see `outboxOwnerStamp`). One stamped for another account or server is left
+ *    where it is, untouched, rather than sent with the key that happens to be active.
  *
  * Delivery is therefore **at-least-once**, deliberately. If the appliance accepts a payload
  * but the follow-up `/attempt` report never lands (the sidecar died in that window), the row
@@ -35,8 +49,10 @@ import { createHookContext } from './createHookContext';
 import { FetchJsonError, fetchJson } from './fetchJson';
 import { addAppStateListener } from './nativeBridge';
 import {
+  clearOutbox,
   getOutboxItem,
   listOutbox,
+  outboxOwnerStamp,
   recordOutboxAttempt,
   type OutboxCapacity,
   type OutboxItem,
@@ -265,6 +281,9 @@ export async function settleIngestFinish(options: { force?: boolean } = {}): Pro
   try {
     await fetchJson(INGEST_FINISH_PATH, {
       method: 'POST',
+      // The drain already runs only while "connected"; opting out keeps a probe that
+      // flipped mid-drain from raising the write dialog over a background upload.
+      allowOffline: true,
       timeout: FLUSH_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stages }),
@@ -282,9 +301,10 @@ export async function settleIngestFinish(options: { force?: boolean } = {}): Pro
 /**
  * Drop the owed stages and the debounce clock.
  *
- * Called on sign-out — enrichment debt belongs to the account that incurred it, and firing
- * it against the next session would run a maintenance sweep for the wrong user. Tests use
- * it to isolate, for the same reason.
+ * Called on sign-out (`useAuth`'s logout, through {@link clearOutboxAfterSignOut} on the
+ * phone apps) — enrichment debt belongs to the account that incurred it, and firing it
+ * against the next session would run a maintenance sweep for the wrong user. Tests use it
+ * to isolate, for the same reason.
  */
 export function resetIngestFinishState(): void {
   owedFinishStages.clear();
@@ -321,11 +341,21 @@ export function isPermanentFlushFailure(err: unknown): boolean {
 export interface FlushOutboxOptions {
   /** Aborts the drain between items — e.g. when the connection mode drops. */
   signal?: AbortSignal;
+  /**
+   * Report a failure that can pass on its own (offline, a timeout, a 5xx) to the sidecar,
+   * which spends one of the row's five attempts on it. Default true. Sign-out's
+   * last drain passes false: it runs whatever the connection, and a sign-out the person then
+   * cancels must leave each row as it was, not one step nearer `needs_attention`. A permanent
+   * failure is reported either way.
+   */
+  recordTransientFailures?: boolean;
 }
 
 export interface FlushOutboxSummary {
   /** Items the drain actually tried to POST onward. */
   attempted: number;
+  /** Items left alone because they were queued for another account or server, or nobody is signed in. */
+  skipped: number;
   /** Flushed and removed from the queue. */
   succeeded: number;
   /** Reported as failed (still queued, possibly now `needs_attention`). */
@@ -338,6 +368,7 @@ export interface FlushOutboxSummary {
 
 const EMPTY_SUMMARY: FlushOutboxSummary = {
   attempted: 0,
+  skipped: 0,
   succeeded: 0,
   failed: 0,
   unavailable: false,
@@ -345,30 +376,57 @@ const EMPTY_SUMMARY: FlushOutboxSummary = {
 };
 
 let inFlightFlush: Promise<FlushOutboxSummary> | null = null;
+/** The `signal` the drain in flight was started with, so a later call can tell whether it is being aborted. */
+let inFlightSignal: AbortSignal | undefined;
+/** The one drain queued to run after an aborted drain finishes; every call in that window shares it. */
+let followUpFlush: Promise<FlushOutboxSummary> | null = null;
 
 /**
  * Drain every `pending` item, oldest-first, one at a time.
  *
- * Calls that arrive while a drain is running join that drain rather than starting a second
- * one (property 2 above) — so the caller-supplied `signal` of a joining call is not honored
- * by the already-running drain, which is the intended trade: one queue, one drainer.
+ * Calls that arrive while a healthy drain is running join that drain rather than starting
+ * a second one (property 2 above) — so the caller-supplied `signal` of a joining call is
+ * not honored by the already-running drain, which is the intended trade: one queue, one
+ * drainer.
+ *
+ * Calls that arrive while the drain in flight is being ABORTED do not join it. That drain
+ * is finishing early and will not read the queue again, so joining it answered nothing: the
+ * trigger was swallowed, and with the mode steady afterwards nothing else restarted the
+ * loop. Such a call starts its own drain the moment the aborted one is out of the way;
+ * further calls in that window share the follow-up, so there is still one drainer.
  */
 export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutboxSummary> {
   if (inFlightFlush) {
-    return inFlightFlush;
+    if (!inFlightSignal?.aborted) {
+      return inFlightFlush;
+    }
+
+    if (!followUpFlush) {
+      followUpFlush = inFlightFlush
+        .catch(() => EMPTY_SUMMARY)
+        .then(() => {
+          followUpFlush = null;
+
+          return flushOutbox(options);
+        });
+    }
+
+    return followUpFlush;
   }
 
   const run = drain(options).finally(() => {
     inFlightFlush = null;
+    inFlightSignal = undefined;
   });
 
   inFlightFlush = run;
+  inFlightSignal = options.signal;
 
   return run;
 }
 
 async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
-  const { signal } = options;
+  const { signal, recordTransientFailures = true } = options;
   const listing = await listOutbox('pending');
 
   if (!listing.ok) {
@@ -386,9 +444,22 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
       break;
     }
 
+    // Checked on the list row first, so a row that is not ours never has its payload read.
+    if (!sendableNow(entry.owner)) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    const outcome = await flushOne(entry, recordTransientFailures);
+
+    if (outcome === 'skipped') {
+      summary.skipped += 1;
+      continue;
+    }
+
     summary.attempted += 1;
 
-    if (await flushOne(entry)) {
+    if (outcome === 'sent') {
       summary.succeeded += 1;
     } else {
       summary.failed += 1;
@@ -404,8 +475,34 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
   return summary;
 }
 
-/** Flush a single item and report the outcome. Resolves true only on a reported success. */
-async function flushOne(entry: OutboxItem): Promise<boolean> {
+/**
+ * Whether a row stamped `owner` may go out under the session that is signed in right now.
+ *
+ * Nothing goes out with nobody signed in. A row with no stamp was queued by a build that
+ * predates stamping; it drains under the current session, as every row did before.
+ */
+function sendableNow(owner: string | null | undefined): boolean {
+  return sendableUnder(owner, outboxOwnerStamp());
+}
+
+/** {@link sendableNow} against a stamp the caller already has. */
+function sendableUnder(owner: string | null | undefined, current: string | null): boolean {
+  if (!current) {
+    return false;
+  }
+
+  return owner == null || owner === current;
+}
+
+/**
+ * Flush a single item. `sent` only on a reported success; `skipped` when the row turned out
+ * not to belong to the current session, in which case nothing was sent or recorded.
+ * `recordTransientFailures` is {@link FlushOutboxOptions.recordTransientFailures}.
+ */
+async function flushOne(
+  entry: OutboxItem,
+  recordTransientFailures: boolean,
+): Promise<'sent' | 'failed' | 'skipped'> {
   // List responses omit payloads (they can be large), so fetch the full row now.
   const full = await getOutboxItem(entry.id);
 
@@ -414,10 +511,17 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
     // five attempts on a read we never got to use would push it toward `needs_attention`
     // for a reason that has nothing to do with the appliance. `not_found` in particular is
     // benign — the row was flushed or discarded between the list and here.
-    return false;
+    return 'failed';
   }
 
   const path = outboxEndpointFor(full.value.kind);
+
+  // Again here, with nothing awaited between this check and the request: the session can
+  // change while the row is read (sign-out, a re-pair), and fetchJson takes the key and the
+  // origin at the moment it is called.
+  if (!sendableNow(full.value.owner)) {
+    return 'skipped';
+  }
 
   if (!path) {
     await recordOutboxAttempt(entry.id, {
@@ -426,34 +530,139 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
       permanent: true,
     });
 
-    return false;
+    return 'failed';
   }
+
+  const sentUnder = outboxOwnerStamp();
 
   try {
     await fetchJson(path, {
       method: 'POST',
+      // A queued capture replays on its own; it is not a change the person is making now.
+      allowOffline: true,
       timeout: FLUSH_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(full.value.payload ?? {}),
     });
   } catch (err) {
-    await recordOutboxAttempt(entry.id, {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-      permanent: isPermanentFlushFailure(err),
-    });
+    const permanent = isPermanentFlushFailure(err);
 
-    return false;
+    if (permanent || recordTransientFailures) {
+      await recordOutboxAttempt(entry.id, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        permanent,
+      });
+    }
+
+    return 'failed';
   }
 
   // The rows exist on the appliance now, un-enriched and un-indexed. Record the debt
   // before reporting success, so it survives even if the `/attempt` report below fails.
-  oweIngestFinish(finishStagesFor(full.value.kind));
+  // Only while the session that sent them is still the one signed in: sign-out can land
+  // while this request is in flight, and debt recorded after its reset would be settled
+  // under the next account's key.
+  if (outboxOwnerStamp() === sentUnder) {
+    oweIngestFinish(finishStagesFor(full.value.kind));
+  }
 
   // Only now, with the appliance having accepted it, is the row allowed to disappear.
   const acked = await recordOutboxAttempt(entry.id, { ok: true });
 
-  return acked.ok;
+  return acked.ok ? 'sent' : 'failed';
+}
+
+/** How long sign-out waits on its last drain before it signs out anyway. */
+export const SIGN_OUT_DRAIN_TIMEOUT_MS = 5_000;
+
+/**
+ * Sign-out, step one, while the outgoing account's key is still the active one: one last
+ * bounded drain of what that account queued, then the enrichment it owes.
+ *
+ * Bounded because sign-out must not hang on an unreachable appliance. Whatever has not gone
+ * by the deadline is counted by {@link countUnsentBeforeSignOut}, so the person can choose
+ * to stay signed in, and deleted by {@link clearOutboxAfterSignOut} only if they sign out.
+ * The drain itself is aborted between items, and any item still in flight was already sent
+ * with this account's key, to this account's server.
+ *
+ * It runs whether or not the appliance is reachable, so a failure that can pass on its own
+ * is not reported (see {@link FlushOutboxOptions.recordTransientFailures}): someone who
+ * tries to sign out offline and then cancels keeps every row with the attempts it had.
+ */
+export async function drainOutboxBeforeSignOut(timeoutMs = SIGN_OUT_DRAIN_TIMEOUT_MS): Promise<void> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve();
+    }, timeoutMs);
+  });
+
+  const work = (async () => {
+    const summary = await flushOutbox({ signal: controller.signal, recordTransientFailures: false });
+
+    if (!summary.unavailable && !controller.signal.aborted) {
+      await settleIngestFinish({ force: true });
+    }
+  })().catch(() => {
+    // Best effort: sign-out goes ahead either way.
+  });
+
+  try {
+    await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Sign-out, step two, after the last drain and while the key is still active: how many
+ * captures signing out now would delete before they ever reached this account. That is
+ * every row this session is the one to send, waiting or needing attention: stamped for it,
+ * or unstamped from a build that predates stamping. Rows queued for another account or
+ * server are left out, since nothing this session does can send them.
+ *
+ * Zero when nobody is signed in, and when there is no queue to read (web, or a sidecar
+ * that does not answer): sign-out then goes ahead as it would with an empty queue.
+ */
+export async function countUnsentBeforeSignOut(): Promise<number> {
+  const listing = await listOutbox('all');
+
+  if (!listing.ok) {
+    return 0;
+  }
+
+  const current = outboxOwnerStamp();
+
+  return listing.value.items.filter((entry) => sendableUnder(entry.owner, current)).length;
+}
+
+/**
+ * Called when rows leave the queue other than through a drain, so a mounted
+ * {@link OutboxQueueProvider} re-reads its counts instead of showing the old ones.
+ */
+const queueClearedListeners = new Set<() => void>();
+
+/**
+ * Sign-out, step three, after the key is dropped: delete every queued row and forget the
+ * enrichment debt. Rows still here belong to the account that just left (the person has
+ * agreed to lose this account's unsent ones), and the next person to sign in on this
+ * phone must not inherit them.
+ *
+ * The queue provider sits above the auth provider and refreshes only on a mode change, a
+ * drain or a resume. Without the notice below, the next account's screen kept showing the
+ * departed account's pending count until one of those happened.
+ */
+export async function clearOutboxAfterSignOut(): Promise<void> {
+  resetIngestFinishState();
+  await clearOutbox();
+
+  for (const listener of queueClearedListeners) {
+    listener();
+  }
 }
 
 /** Queue depth as the UI sees it. All zeros with `available: false` when there is no sidecar. */
@@ -461,6 +670,8 @@ export interface OutboxQueueState {
   /** False on web / without a sidecar: there is no queue to show at all. */
   available: boolean;
   pending: number;
+  /** The pending rows by `kind` (`positions`, `note`, …), for a note that names what waits. */
+  pendingByKind: Record<string, number>;
   needsAttention: number;
   total: number;
   capacity: OutboxCapacity | null;
@@ -471,20 +682,35 @@ export interface OutboxQueueState {
 const EMPTY_QUEUE = {
   available: false,
   pending: 0,
+  pendingByKind: {},
   needsAttention: 0,
   total: 0,
   capacity: null,
 } satisfies Omit<OutboxQueueState, 'refresh'>;
 
 /**
- * Tracks queue depth and drives the flush loop off two signals — no timer of its own.
+ * How often the queue provider re-drains while the mode is `"connected"`, the app is
+ * visible and rows are still pending. Matches the connection reprobe, which is the other
+ * thing keeping the chip honest on the same cadence.
+ */
+export const OUTBOX_REDRAIN_INTERVAL_MS = 30_000;
+
+/**
+ * Tracks queue depth and drives the flush loop off three signals.
  *
  * 1. **Entering `"connected"`.** Leaving it aborts the drain in progress, so a mode that
- *    flickers does not leave a doomed flush running against an unreachable server.
+ *    flickers does not leave a doomed flush running against an unreachable server. The
+ *    abort belongs to the MODE, not to this effect's lifetime: the provider is mounted once
+ *    for the app, so the only thing that runs the cleanup is the mode moving on.
  * 2. **Returning to the foreground.** A mode transition alone is not enough: the app is not
  *    probing while backgrounded, so it can leave and return on the same mode with a queue
  *    that grew in between (a background location fix, or a capture taken during an outage
  *    the app slept through). Resume therefore re-probes *and* drains on its own.
+ * 3. **A tick, while connected with rows pending.** The two above fire on TRANSITIONS, and
+ *    a drain that was aborted or whose sends failed left the queue sitting on a steady
+ *    mode with no transition due. The tick retries without spending the rows' attempt
+ *    budget (`recordTransientFailures: false`): a flapping tunnel must not park every row
+ *    in `needs_attention` within a few minutes.
  */
 function useOutboxQueueState(): OutboxQueueState {
   const { mode, refresh: refreshConnectionMode } = useConnectionMode();
@@ -504,11 +730,19 @@ function useOutboxQueueState(): OutboxQueueState {
       }
 
       if (result.ok) {
-        const { counts, capacity } = result.value;
+        const { counts, capacity, items } = result.value;
+        const pendingByKind: Record<string, number> = {};
+
+        for (const item of items) {
+          if (item.status === 'pending') {
+            pendingByKind[item.kind] = (pendingByKind[item.kind] ?? 0) + 1;
+          }
+        }
 
         setSnapshot({
           available: true,
           pending: counts.pending,
+          pendingByKind,
           needsAttention: counts.needsAttention,
           total: counts.total,
           capacity,
@@ -531,11 +765,24 @@ function useOutboxQueueState(): OutboxQueueState {
   }, [refresh, mode]);
 
   useEffect(() => {
+    queueClearedListeners.add(refresh);
+
+    return () => {
+      queueClearedListeners.delete(refresh);
+    };
+  }, [refresh]);
+
+  // Lives for as long as the mode stays "connected"; the tick below drains under it too,
+  // so a tick's drain is cut short by the same mode change that cuts the first one.
+  const connectedControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
     if (mode !== 'connected') {
       return;
     }
 
     const controller = new AbortController();
+    connectedControllerRef.current = controller;
 
     void flushOutbox({ signal: controller.signal }).then(() => {
       if (!controller.signal.aborted) {
@@ -543,8 +790,35 @@ function useOutboxQueueState(): OutboxQueueState {
       }
     });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+
+      if (connectedControllerRef.current === controller) {
+        connectedControllerRef.current = null;
+      }
+    };
   }, [mode, refresh]);
+
+  useEffect(() => {
+    if (mode !== 'connected' || snapshot.pending === 0) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      // Not while hidden: the app is not probing then either, and a drain against a
+      // server the phone may have lost would only spend attempts.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
+      void flushOutbox({
+        signal: connectedControllerRef.current?.signal,
+        recordTransientFailures: false,
+      }).then(() => refresh());
+    }, OUTBOX_REDRAIN_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [mode, snapshot.pending, refresh]);
 
   // Read through a ref so resuming does not need to re-subscribe on every mode change —
   // the listener is registered once and always sees the current mode.

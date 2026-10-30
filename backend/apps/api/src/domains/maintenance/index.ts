@@ -23,6 +23,7 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import { MaintenanceController } from './controllers/MaintenanceController';
 import { DerivationCron } from './cron/DerivationCron';
 import { EntityTypeAuditCron } from './cron/EntityTypeAuditCron';
+import { MobileSearchDocumentDetailCron } from './cron/MobileSearchDocumentDetailCron';
 import { OrphanCleanupCron } from './cron/OrphanCleanupCron';
 import { RecallProbeCron } from './cron/RecallProbeCron';
 import { RetrievalHealthCron } from './cron/RetrievalHealthCron';
@@ -132,6 +133,9 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     // import domain's PushStage after it bulk-writes communications).
     PersonStubBackfillRequestListener,
     OrphanCleanupCron,
+    // Brings device records (ci_search.mobile_search_documents related_id /
+    // detail) up to the current DEVICE_RECORD_VERSION.
+    MobileSearchDocumentDetailCron,
     DerivationRunListener,
     DerivationCron,
   ],

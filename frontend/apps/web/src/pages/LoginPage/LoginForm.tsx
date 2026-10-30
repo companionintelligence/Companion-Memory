@@ -2,8 +2,8 @@ import type { BaseSyntheticEvent } from 'react';
 
 import {
   Alert,
+  EmailInput,
   Form,
-  Input,
   LoadingButton,
   PasswordInput,
   useForm,
@@ -41,7 +41,7 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSubmit)} className="w-full space-y-6">
+      <form noValidate onSubmit={form.handleSubmit(handleSubmit)} className="w-full space-y-6">
         <Form.Field
           control={form.control}
           name="email"
@@ -49,7 +49,7 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
             <Form.Item>
               <Form.Label>Email</Form.Label>
               <Form.Control>
-                <Input {...field} autoComplete="username" />
+                <EmailInput {...field} autoComplete="username" />
               </Form.Control>
               <Form.Message />
             </Form.Item>

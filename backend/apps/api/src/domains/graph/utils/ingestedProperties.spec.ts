@@ -3,6 +3,8 @@ import {
   mergedPropertiesSql,
   mergeIngestedProperties,
   unionKeysFor,
+  USER_EDITED_KEYS,
+  userEditedKeys,
 } from './ingestedProperties';
 
 /**
@@ -179,6 +181,48 @@ describe('mergeIngestedProperties', () => {
   });
 });
 
+describe('a key a person set by hand', () => {
+  const stored = {
+    nickname: 'Olly',
+    website: null,
+    job_title: 'Pilot',
+    phones: ['2125550177'],
+    [USER_EDITED_KEYS]: ['nickname', 'website', 'phones'],
+  };
+
+  it('keeps the hand-set value, and the hand clear, whatever the card sends', () => {
+    expect(
+      mergeIngestedProperties(
+        stored,
+        { nickname: 'Oli', website: 'https://ola.example', job_title: 'Captain' },
+        IDENTITY,
+      ),
+    ).toMatchObject({ nickname: 'Olly', website: null, job_title: 'Captain' });
+  });
+
+  it('still unions a set key, which only grows', () => {
+    expect(mergeIngestedProperties(stored, { phones: ['2125550178'] }, IDENTITY).phones).toEqual([
+      '2125550177',
+      '2125550178',
+    ]);
+  });
+
+  it('never takes the list itself from a source', () => {
+    expect(mergeIngestedProperties(stored, { [USER_EDITED_KEYS]: [] }, IDENTITY)[USER_EDITED_KEYS]).toEqual([
+      'nickname',
+      'website',
+      'phones',
+    ]);
+    expect(mergeIngestedProperties({}, { [USER_EDITED_KEYS]: ['nickname'] }, IDENTITY)).toEqual({});
+  });
+
+  it('reads only the string members of a well-formed list', () => {
+    expect(userEditedKeys({ [USER_EDITED_KEYS]: ['nickname', 3, null] })).toEqual(['nickname']);
+    expect(userEditedKeys({ [USER_EDITED_KEYS]: 'nickname' })).toEqual([]);
+    expect(userEditedKeys(null)).toEqual([]);
+  });
+});
+
 describe('mergedPropertiesSql', () => {
   const sql = mergedPropertiesSql('"entities"."properties"', 'EXCLUDED."properties"', ':unionKeys::text[]');
 
@@ -195,5 +239,10 @@ describe('mergedPropertiesSql', () => {
   it('skips JSON null values and blank set members, as the TS merge does', () => {
     expect(sql).toContain(`WHERE jsonb_typeof(said.value) <> 'null'`);
     expect(sql).toContain(`member.value NOT IN ('null'::jsonb, '""'::jsonb)`);
+  });
+
+  it('skips the hand-set keys and the list itself, as the TS merge does', () => {
+    expect(sql).toContain(`AND said.key <> '${USER_EDITED_KEYS}'`);
+    expect(sql).toContain(`-> '${USER_EDITED_KEYS}'`);
   });
 });

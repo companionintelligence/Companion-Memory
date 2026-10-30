@@ -128,9 +128,14 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
       quietLogger() as never,
     );
 
-    // Sessions are not under test: a token names the account it was issued for.
+    // Sessions are not under test: a token names the account it was issued for, and it is live.
+    // The dead-session case is covered by the bridge unit tests.
     const authService = {
       validateSessionToken: (token: string) => ({ sub: sessionUser(token) }),
+      resolveLiveSession: async (token: string) => ({
+        userId: sessionUser(token),
+        sessionId: `sid:${sessionUser(token)}`,
+      }),
       invalidateSession: async () => undefined,
       issueSessionToken: async (userId: string) => ({
         sessionToken: `session:${userId}`,

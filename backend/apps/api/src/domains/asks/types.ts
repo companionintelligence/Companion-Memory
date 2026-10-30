@@ -117,6 +117,16 @@ export interface AskQuery {
   /** The natural-language question as composed by the asker (shown back to both sides). */
   prompt: string;
   /**
+   * True when characters that render as nothing (zero-width spaces, bidi
+   * controls, soft hyphens) were stripped from the asker's prompt before it was
+   * stored. The stored prompt no longer holds them, so this is the only record
+   * the owner's review card has of that removal. Absent means none were
+   * removed. It does NOT cover the other rewrites `normalizeText` makes: the
+   * NFKC fold (fullwidth letters, ligatures, superscripts) and the whitespace
+   * collapse also change the stored text and leave this unset.
+   */
+  promptHiddenCharactersRemoved?: boolean;
+  /**
    * What is making this ask, when the asker declares it.
    *
    * A FIRST-CLASS FIELD rather than one more key in `filters`: it is matched by

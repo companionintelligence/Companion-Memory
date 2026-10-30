@@ -6,9 +6,9 @@ import {
   buildPositionRecord,
   captureLocationFix,
   createLocationSampler,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
-  type BackgroundGeolocationLocation,
+  type NativeLocationEvent,
   haversineMeters,
   positionSourceId,
   type DeviceLocationFix,
@@ -55,8 +55,9 @@ function urlOf(input: RequestInfo): string {
   return typeof input === 'string' ? input : (input as Request).url;
 }
 
-/** Native shell with the LocalHub sidecar present. */
+/** Native shell with the LocalHub sidecar present, signed in (the outbox queues only under an account). */
 function setNativeWindow(): void {
+  setApiKey('device-key');
   setWindow({
     Capacitor: {
       isNativePlatform: () => true,
@@ -369,6 +370,70 @@ describe('buildPositionRecord — the wire contract with createPositionSchemaRoo
   });
 });
 
+describe('buildPositionRecord — parity fixture shared with the Android native builder', () => {
+  // The SAME inputs and expected record live in
+  // frontend/packages/capacitor-local-hub/android/src/test/.../PositionRecordJsonTest.kt.
+  // Android's motion-gated tracker builds this record natively, from a process that may
+  // have no JavaScript, and the two must stay byte-for-byte equivalent: a drift here means
+  // a background fix and its web-side re-enqueue stop collapsing on `source_id`, or one of
+  // them starts failing the server's schema. Change both or neither.
+  const deviceKey = 'cd12ea3d-b4d5-4ba6-a1e1-b02d18653e93';
+
+  it('builds the fixture record', () => {
+    const record = buildPositionRecord(
+      {
+        latitude: 33.6767,
+        longitude: -117.7972,
+        accuracyMeters: 4,
+        altitudeMeters: 61.5,
+        headingDegrees: 275.25,
+        speedMetersPerSecond: 14.5,
+        capturedAtMs: 1791520516942,
+      },
+      { deviceKey, provider: 'companion-mobile' },
+    );
+
+    expect(record).toEqual({
+      time: '2026-10-09T04:35:16.942Z',
+      location: { x: -117.7972, y: 33.6767 },
+      accuracy_meters: 4,
+      altitude_meters: 61.5,
+      heading_degrees: 275.25,
+      speed_meters_per_second: 14.5,
+      source: 'gps',
+      provider: 'companion-mobile',
+      source_type: 'device',
+      source_system: 'companion-device',
+      source_id: `${deviceKey}:1791520516942`,
+    });
+  });
+
+  it('omits the optional fields the server would reject or discard', () => {
+    const record = buildPositionRecord(
+      {
+        latitude: 33.6767,
+        longitude: -117.7972,
+        accuracyMeters: 0,
+        altitudeMeters: null,
+        headingDegrees: 361,
+        speedMetersPerSecond: -1,
+        capturedAtMs: 1791520516000,
+      },
+      { deviceKey, provider: 'companion-mobile' },
+    );
+
+    expect(record).toEqual({
+      time: '2026-10-09T04:35:16.000Z',
+      location: { x: -117.7972, y: 33.6767 },
+      source: 'gps',
+      provider: 'companion-mobile',
+      source_type: 'device',
+      source_system: 'companion-device',
+      source_id: `${deviceKey}:1791520516000`,
+    });
+  });
+});
+
 describe('positionSourceId — determinism is what makes a replay free', () => {
   it('is a pure function of the device and the capture instant', () => {
     expect(positionSourceId(DEVICE_KEY, CAPTURED_AT)).toBe(positionSourceId(DEVICE_KEY, CAPTURED_AT));
@@ -393,7 +458,7 @@ describe('positionSourceId — determinism is what makes a replay free', () => {
   });
 });
 
-describe('the sampling gate — 50 m or 5 minutes, whichever comes first', () => {
+describe('the sampling gate — 150 m or 5 minutes, whichever comes first', () => {
   it('always records the first fix', () => {
     expect(createLocationSampler().shouldCapture(fix())).toBe(true);
   });
@@ -413,12 +478,13 @@ describe('the sampling gate — 50 m or 5 minutes, whichever comes first', () =>
     ).toBe(false);
   });
 
-  it('records once we have moved at least 50 m, however soon', () => {
+  it('records once we have moved at least 150 m, however soon', () => {
     const sampler = createLocationSampler();
 
     sampler.accept(fix());
 
-    const moved = { latitude: SF_LAT + 0.001, longitude: SF_LNG, capturedAtMs: CAPTURED_AT + 1_000 };
+    // ~222 m north.
+    const moved = { latitude: SF_LAT + 0.002, longitude: SF_LNG, capturedAtMs: CAPTURED_AT + 1_000 };
 
     expect(haversineMeters(SF_LAT, SF_LNG, moved.latitude, moved.longitude)).toBeGreaterThan(
       MIN_DISTANCE_METERS,
@@ -779,14 +845,12 @@ describe('fixFromGeolocationPosition', () => {
 });
 
 /**
- * The `@capacitor-community/background-geolocation` counterpart to
- * `fixFromGeolocationPosition` — same adapter contract, different field names
- * (`bearing`/`time` rather than `heading`/`timestamp`).
+ * The native `significantLocation` event counterpart to `fixFromGeolocationPosition` — same
+ * adapter contract, different field names (`bearing`/`time` rather than
+ * `heading`/`timestamp`).
  */
-describe('fixFromBackgroundGeolocationLocation', () => {
-  function backgroundLocation(
-    overrides: Partial<BackgroundGeolocationLocation> = {},
-  ): BackgroundGeolocationLocation {
+describe('fixFromNativeLocationEvent', () => {
+  function backgroundLocation(overrides: Partial<NativeLocationEvent> = {}): NativeLocationEvent {
     return {
       latitude: SF_LAT,
       longitude: SF_LNG,
@@ -801,7 +865,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
   }
 
   it('carries every field across, renamed to the DeviceLocationFix contract', () => {
-    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation());
+    const fix = fixFromNativeLocationEvent(backgroundLocation());
 
     expect(fix).toEqual({
       latitude: SF_LAT,
@@ -816,7 +880,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
 
   it('falls back to the current time only when the plugin reports no timestamp at all', () => {
     const before = Date.now();
-    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation({ time: 0 }));
+    const fix = fixFromNativeLocationEvent(backgroundLocation({ time: 0 }));
     const after = Date.now();
 
     expect(fix.capturedAtMs).toBeGreaterThanOrEqual(before);
@@ -824,7 +888,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
   });
 
   it('passes through null optional fields rather than coercing them to 0', () => {
-    const fix = fixFromBackgroundGeolocationLocation(
+    const fix = fixFromNativeLocationEvent(
       backgroundLocation({ altitude: null, bearing: null, speed: null }),
     );
 

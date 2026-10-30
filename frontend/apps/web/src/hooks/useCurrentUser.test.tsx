@@ -3,6 +3,7 @@ import { setApiBaseUrl } from '@ci/common';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MEMORY_ANSWER_DEADLINE_MS, forgetUser, rememberUser } from './rememberedUser';
 import { useCurrentUser } from './useCurrentUser';
 
 const h = vi.hoisted(() => ({ authToken: 'tok' as string | null }));
@@ -65,6 +66,111 @@ describe('useCurrentUser', () => {
     expect(result.current.user).toBeNull();
   });
 
+  it('gives the profile query a deadline, so a Memory that never answers still ends in an error', () => {
+    mockedUseQuery.mockReturnValue({
+      data: undefined,
+      loading: true,
+      error: undefined,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    renderHook(() => useCurrentUser());
+
+    const options = mockedUseQuery.mock.calls.at(-1)?.[1] as { context: { timeoutMs: number } };
+    expect(options.context.timeoutMs).toBe(MEMORY_ANSWER_DEADLINE_MS);
+  });
+
+  describe('when Memory does not answer for the profile', () => {
+    it('reports unreachable after the deadline error', () => {
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: {
+          networkError: Object.assign(new Error(`No answer within ${MEMORY_ANSWER_DEADLINE_MS} ms`), {
+            name: 'TimeoutError',
+          }),
+          graphQLErrors: [],
+        },
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.unreachable).toBe(true);
+      expect(result.current.loading).toBe(false);
+    });
+
+    it.each([
+      [
+        'a network failure',
+        { networkError: Object.assign(new Error('Failed to fetch'), {}), graphQLErrors: [] },
+      ],
+      [
+        'a gateway 502',
+        { networkError: Object.assign(new Error('502'), { statusCode: 502 }), graphQLErrors: [] },
+      ],
+      [
+        'a server error with the database down',
+        {
+          graphQLErrors: [
+            { message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+          ],
+        },
+      ],
+    ])('reports unreachable rather than signed out after %s', (_label, error) => {
+      mockedUseQuery.mockReturnValue({
+        data: { me: null },
+        loading: false,
+        error,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.unreachable).toBe(true);
+    });
+
+    it.each([
+      [
+        'an UNAUTHENTICATED answer',
+        { graphQLErrors: [{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }] },
+      ],
+      ['a 401', { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] }],
+    ])('is not unreachable after %s, which is the server saying no', (_label, error) => {
+      mockedUseQuery.mockReturnValue({
+        data: { me: null },
+        loading: false,
+        error,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.unreachable).toBe(false);
+    });
+
+    it('asks again every few seconds until Memory answers', () => {
+      vi.useFakeTimers();
+
+      try {
+        const refetch = vi.fn().mockResolvedValue(undefined);
+        mockedUseQuery.mockReturnValue({
+          data: undefined,
+          loading: false,
+          error: { networkError: new Error('Failed to fetch'), graphQLErrors: [] },
+          refetch,
+        } as unknown as ReturnType<typeof useQuery>);
+
+        renderHook(() => useCurrentUser());
+        vi.advanceTimersByTime(10_000);
+
+        expect(refetch).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('reports loading while authed with no data yet', () => {
     mockedUseQuery.mockReturnValue({
       data: undefined,
@@ -76,6 +182,72 @@ describe('useCurrentUser', () => {
 
     // loading || (authenticated && !skip && !data && !error) → true even though query loading is false.
     expect(result.current.loading).toBe(true);
+  });
+
+  describe('on a phone while the appliance cannot be reached', () => {
+    const native = () => {
+      (window as unknown as { Capacitor?: unknown }).Capacitor = { isNativePlatform: () => true };
+      setApiBaseUrl('https://box.local');
+    };
+
+    afterEach(() => {
+      delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+      setApiBaseUrl('');
+      forgetUser();
+    });
+
+    it('keeps the profile the appliance gave, and answers with it when a later query is an outage', () => {
+      native();
+      const me = { id: 'u1', name: 'John', email: 'j@example.com', onboarded: true };
+      mockedUseQuery.mockReturnValue({
+        data: { me },
+        loading: false,
+        error: undefined,
+      } as unknown as ReturnType<typeof useQuery>);
+      const first = renderHook(() => useCurrentUser());
+      expect(first.result.current.remembered).toBe(false);
+      first.unmount();
+
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toEqual(me);
+      expect(result.current.remembered).toBe(true);
+      expect(result.current.loading).toBe(false);
+    });
+
+    it('signs out when the appliance answers that the key is no good', () => {
+      native();
+      rememberUser('https://box.local', { id: 'u1' });
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.remembered).toBe(false);
+    });
+
+    it('never answers a browser with a kept profile', () => {
+      setApiBaseUrl('https://box.local');
+      rememberUser('https://box.local', { id: 'u1' });
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+    });
   });
 
   it('skips GraphQL on native until a Memory origin is set', () => {

@@ -224,6 +224,43 @@ export class ActionService {
   }
 
   /**
+   * Point an action at the chat thread opened about it, when it has none.
+   *
+   * The Today window chats about an action by continuing `action.threadId`.
+   * Actions the engines derive (Confirm home, metric suggestions) are created
+   * without a thread, so the first turn about one starts a new thread; linking
+   * it here is what makes the next visit continue that conversation.
+   *
+   * `replacing` is the thread the caller saw on the action: none, or one that
+   * has since been archived and so can no longer be continued. The update only
+   * lands while the action still points there, so an action whose thread
+   * another turn has just linked keeps that one.
+   */
+  async attachThread(
+    context: UserServiceContext,
+    id: string,
+    threadId: string,
+    replacing: string | null = null,
+  ): Promise<boolean> {
+    const query = this.actionRepository
+      .createQueryBuilder()
+      .update(ActionEntity)
+      .set({ threadId })
+      .where('id = :id', { id })
+      .andWhere('user_id = :userId', { userId: context.userId });
+
+    if (replacing == null) {
+      query.andWhere('thread_id IS NULL');
+    } else {
+      query.andWhere('thread_id = :replacing', { replacing });
+    }
+
+    const result = await query.execute();
+
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
    * Mark an action as dismissed.
    */
   async markAsDismissed(context: ServiceContext, id: string): Promise<Action | null> {

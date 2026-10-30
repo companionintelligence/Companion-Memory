@@ -18,7 +18,11 @@ import { ImportWizard } from './ImportWizard';
  */
 
 const h = vi.hoisted(() => ({
-  api: { ready: true, listCatalog: vi.fn() } as { ready: boolean; listCatalog: () => Promise<unknown> },
+  api: { ready: true, listCatalog: vi.fn(), listBundles: vi.fn() } as {
+    ready: boolean;
+    listCatalog: () => Promise<unknown>;
+    listBundles: () => Promise<unknown>;
+  },
 }));
 
 vi.mock('../useImportApi', () => ({
@@ -105,12 +109,20 @@ function catalogSource(overrides: Partial<CatalogSource> & { id: string }): Cata
 const CATALOG = [catalogSource({ id: 'spotify' }), catalogSource({ id: 'deezer' })];
 
 beforeEach(() => {
-  h.api = { ready: true, listCatalog: vi.fn().mockResolvedValue(CATALOG) };
+  h.api = {
+    ready: true,
+    listCatalog: vi.fn().mockResolvedValue(CATALOG),
+    listBundles: vi.fn().mockResolvedValue([]),
+  };
 });
 
 describe('ImportWizard catalog loading', () => {
   it('does not fetch the catalog before the api is ready', () => {
-    h.api = { ready: false, listCatalog: vi.fn().mockResolvedValue(CATALOG) };
+    h.api = {
+      ready: false,
+      listCatalog: vi.fn().mockResolvedValue(CATALOG),
+      listBundles: vi.fn().mockResolvedValue([]),
+    };
 
     render(<ImportWizard />);
 
@@ -126,7 +138,11 @@ describe('ImportWizard catalog loading', () => {
   });
 
   it('shows a catalog error instead of a silently empty picker', async () => {
-    h.api = { ready: true, listCatalog: vi.fn().mockRejectedValue(new Error('offline')) };
+    h.api = {
+      ready: true,
+      listCatalog: vi.fn().mockRejectedValue(new Error('offline')),
+      listBundles: vi.fn().mockResolvedValue([]),
+    };
 
     render(<ImportWizard />);
 
@@ -136,7 +152,11 @@ describe('ImportWizard catalog loading', () => {
   });
 
   it('falls back to the raw thrown value when it is not an Error', async () => {
-    h.api = { ready: true, listCatalog: vi.fn().mockRejectedValue('server said no') };
+    h.api = {
+      ready: true,
+      listCatalog: vi.fn().mockRejectedValue('server said no'),
+      listBundles: vi.fn().mockResolvedValue([]),
+    };
 
     render(<ImportWizard />);
 

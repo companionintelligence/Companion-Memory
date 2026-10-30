@@ -54,7 +54,13 @@ export PGPASSWORD="$ADMIN_PASSWORD"
 # infrastructure/powersync/sync-rules.yaml: the role is granted SELECT on exactly
 # these, and the `powersync` publication carries exactly these. A table added to
 # the sync rules but not here fails at replication time with "permission denied".
-: "${POWERSYNC_TABLES:=ci.notes ci.files ci_search.tags ci.threads ci.messages ci_search.entity_tag ci.events ci.entities}"
+#
+# 2026-10-21: ci.files, ci.threads, ci.messages, ci.events and ci.entities left
+# the sync rules (one device record per entity — see sync-rules.yaml), so they
+# left this list too. create_publication drops a table that is no longer listed,
+# so an existing install stops decoding their WAL for the replicator; the stale
+# SELECT grants are harmless and left alone.
+: "${POWERSYNC_TABLES:=ci.notes ci.saved_searches ci_search.tags ci_search.entity_tag ci_search.mobile_search_documents}"
 : "${POWERSYNC_PUBLICATION:=powersync}"
 
 # ── Validation ───────────────────────────────────
@@ -172,6 +178,19 @@ create_publication() {
           AND tablename = '${qualified#*.}'" | grep -q 1 \
       || psql -d "$dbname" -c "ALTER PUBLICATION \"${publication}\" ADD TABLE ${qualified};"
   done
+  # The publication carries exactly the listed tables: drop any member that left
+  # the list, or the replicator keeps decoding WAL for a table nothing syncs.
+  local listed=" $* " member
+  for member in $(psql -d "$dbname" -Atc \
+      "SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '${publication}'"); do
+    case "$listed" in
+      *" ${member} "*) ;;
+      *)
+        echo "[ci/setup-database]   dropping ${member} from '${publication}' — no longer in the table list."
+        psql -d "$dbname" -c "ALTER PUBLICATION \"${publication}\" DROP TABLE ${member};"
+        ;;
+    esac
+  done
 }
 
 # ── Main ─────────────────────────────────────────
@@ -182,7 +201,7 @@ echo "[ci/setup-database] Bootstrapping database roles and databases..."
 create_role     "$COMPANION_USERNAME"  "$COMPANION_PASSWORD"
 create_database "$COMPANION_DATABASE"  "$COMPANION_USERNAME"
 enable_extensions "$COMPANION_DATABASE" \
-  timescaledb postgis vector pg_stat_statements btree_gist
+  timescaledb postgis vector pg_stat_statements btree_gist uuid-ossp
 
 # PowerSync (logical replication)
 #

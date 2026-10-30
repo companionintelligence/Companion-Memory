@@ -8,7 +8,7 @@ export const MIN_WEEK_OCCUR = 0.3;
 
 const NEWS_LIKE = new Set(['ransom', 'activist', 'riot', 'hostage', 'protest', 'shooting', 'war', 'attack']);
 
-const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted']);
+const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted', 'label']);
 
 export function isUnknownClass(label: string): boolean {
   return label.trim().toUpperCase() === 'UNKNOWN';

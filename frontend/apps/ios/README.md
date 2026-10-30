@@ -52,15 +52,13 @@ It depends on the web app only as a build artifact (`webDir`), never as an npm i
   `capacitor://localhost`, `http(s)://localhost`, plus the `X-API-Key` header);
   operators can extend it with `CORS_ALLOWED_ORIGINS`.
 
-## Supported devices — iPhone only
+## Supported devices — Universal (iPhone + iPad)
 
-`TARGETED_DEVICE_FAMILY = 1` in **both** the Debug and Release configs of the App
-target, and the `~ipad` orientation variants were removed from `Info.plist` so the
-plist and the build setting cannot disagree. On iPad this ships as an
-iPhone-compatibility app (Apple's scaled phone window), which the `@ci/fe-web` mobile
-layout is designed for. Reversing it means editing **both** configs to `"1,2"`,
-restoring the `~ipad` orientation key, and adding a tablet tier to the layout hooks —
-the plist alone will not do it. See `DELIVERY.md` §1a.
+`TARGETED_DEVICE_FAMILY = "1,2"` in **both** the Debug and Release configs of the App
+and SafariWebExtension targets, paired with `UISupportedInterfaceOrientations~ipad` in
+`Info.plist` (all four orientations) and the 3-tier `compact`/`medium`/`expanded`
+adaptive layout classification in `@ci/common` (`useDeviceLayout`) and `@ci/fe-web`
+(`useDeviceBreakpoint`).
 
 ## First-time setup
 
@@ -75,6 +73,13 @@ VITE_DISABLE_PWA=true yarn workspace @ci/fe-web build
 #   npx cap add ios   # ⚠️ then re-apply the iOS 26 fixes — see "iOS 26 SDK" below
 yarn sync          # copies web assets + installs native plugin code
 ```
+
+`cap sync` runs `pod install`, which rewrites `ios/App/Podfile.lock` whenever the plugin set changes (a new
+`@ci/capacitor-*` package, a version bump). **Commit the lock when it changes**: Xcode refuses to build if the
+`Pods/` it finds was installed from a different lock than the committed one ("The sandbox is not in sync with the
+Podfile.lock"), and a lock that lags leaves every sync with a dirty tree. Likewise a Swift file added under
+`ios/App/App` has to be added to the `App` target in `App.xcodeproj` (the Xcode app does it; by hand, use the
+`xcodeproj` gem that ships with CocoaPods). `capacitorPluginContract.test.ts` fails when either drifts.
 
 `yarn build` (= `build:web` + `cap sync`) rebuilds + syncs from this directory.
 Android is a separate package — build it from [`frontend/apps/android`](../android).
@@ -221,14 +226,32 @@ Android's local release-build rules live in the Android package —
 
 ## On-device live reload
 
-Run the web dev server (`yarn workspace @ci/fe-web dev`, bound to `0.0.0.0`), then:
+The script is `yarn ios` (= `cap run ios`). It used to be called `run`, but Yarn's
+own `run` command shadows a script of that name: a bare `yarn run` only prints the
+script list and exits 0, so nothing was ever built or deployed.
+
+Run the web dev server on every interface
+(`DEV_LISTEN_HOST=0.0.0.0 yarn workspace @ci/fe-web dev`; without the variable it
+listens on `127.0.0.1` only and the device cannot reach it), then:
 
 ```bash
-CAP_SERVER_URL=http://<lan-or-tailscale-ip>:5173 yarn run   # = cap run ios
+CAP_SERVER_URL=http://<lan-or-tailscale-ip>:5173 yarn ios
 ```
 
-Point the in-app `/server` setting at your API origin so data calls resolve. Unset
-`CAP_SERVER_URL` for a bundled build.
+`CAP_SERVER_URL` is baked into the app: the WebView loads the whole web app from
+that URL. Unset it for a bundled build.
+
+**Signing in.** Vite proxies `/api`, so the dev-server URL is a complete API origin.
+On first launch the app routes to `/device-connect` (Portal). There is no in-app
+field for a local server origin yet (`/device-connect/advanced` only stores the
+Portal URL). To sign in with an email/password account, set the origin from Safari
+Web Inspector (Develop → device → the app's WebView), then open `/login` and choose
+"Sign in with email instead". Use the LAN or Tailscale IP, not `localhost`: on iOS a
+`localhost`, `*.localhost` or `*.local` origin always routes back to `/device-connect`.
+
+```js
+localStorage.setItem('ci.apiBaseUrl', 'http://<lan-or-tailscale-ip>:5173'); location.href = '/login';
+```
 
 ## App icons & splash
 
@@ -238,20 +261,25 @@ into `ios/` with
 
 ```bash
 cd frontend/apps/ios
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
-# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
-# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
+# assets/ holds: icon-only.png, icon-foreground.png (identical), icon-background.png (1024²)
 #                splash.png, splash-dark.png (2732²)
+# icon-only/-foreground ARE the Companion Memory store icon (opaque 1024², the artwork the App
+# Store listing shows). They are NOT mirrors of @companionintelligence/assets (whose
+# logos/app-icon-source.png is the company aperture mark), so `brand:sync` does not touch them.
 npx @capacitor/assets generate \
-  --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' \
+  --iconBackgroundColor '#041620' --iconBackgroundColorDark '#041620' \
   --splashBackgroundColor '#ffffff' --splashBackgroundColorDark '#0b1f28'
 ```
 
-The home-screen icon is the Companion Memory mark from CI-Marketplace
-(`apps/ci-memory/metadata/logo.png` — neural-map brain on black). The splash
-keeps the CI globe, slightly larger than the original 201px mark. Re-run after
-changing the artwork, then rebuild. (Note: `icon-only.png` is required for the
-flat iOS/legacy icon; without it the iOS icon falls back to the tool's placeholder.)
+The home-screen icon is the Companion Memory store icon: a solid teal brain with a white
+node network and a dark M on `#041620`. iOS needs it opaque with no alpha, so
+`ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png` is the same bytes as
+`assets/icon-only.png` (re-running the generator above reproduces it pixel for pixel; the
+iOS generator reads only `icon-only.png`, and `--iconBackgroundColor` is a no-op on an
+opaque source). `icon-background.png` is flat `#041620` to match. The splash keeps the CI
+globe, slightly larger than the original 201px mark. Re-run after changing the artwork, then
+rebuild. (Note: `icon-only.png` is required for the flat iOS/legacy icon; without it the
+iOS icon falls back to the tool's placeholder.)
 
 ## iOS 26 SDK compatibility (re-apply if you regenerate `ios/`)
 
@@ -356,10 +384,8 @@ download is verified against that size, and a pinned URL cannot drift under it.
 
 | Model | Size | Min RAM | Backends | Reasoning | Photos | Memory tools | Platforms |
 |---|---|---|---|---|---|---|---|
-| Qwen3 0.6B | 328 MB | 4 GB | CPU | ✓ | | ✓ | iOS, Android |
-| Qwen2.5 1.5B Instruct | 1.5 GB | 6 GB | GPU, CPU | | | | iOS, Android |
-| Gemma 4 E2B | 2.4 GB | 8 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
-| Gemma 4 E4B | 3.4 GB | 12 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E2B | 2.4 GB | 6 GB (GPU from 8 GB) | CPU, GPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E4B | 3.4 GB | 12 GB | CPU, GPU | ✓ | ✓ | ✓ | Android |
 
 Left out on purpose: Gemma 3n, Gemma3-1B-IT and the FunctionGemma fine-tunes. Hugging Face serves them
 `gated` (an account plus a licence click-through), so an anonymous download answers `401 GatedRepo` — the
@@ -393,7 +419,7 @@ bytes + 512 MiB) instead of a global 1 GiB, and `downloadModel` refuses any URL 
 `capacitorPluginContract.test.ts` parses `definitions.ts`, the Kotlin and the Swift catalogs and both
 method lists, so the halves cannot drift.
 
-**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator).**
+**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator; the app links 0.18.0 since the bump, re-measure on a device).**
 
 - A cancelled conversation cannot be reused, so after **Stop** — or a failed turn — the next message starts a
   fresh conversation and the model forgets earlier turns, even though the chat still shows them. Replaying
@@ -404,7 +430,7 @@ method lists, so the halves cannot drift.
   GPU load probes one token and falls back to the CPU itself (`fellBackToCpu`). The plugin manifest declares
   `libOpenCL.so` / `libvndksupport.so` (`required=false`), which Android 12+ needs before an app targeting API 31+
   may open the vendor OpenCL library; that effect needs a real GPU device to confirm.
-- The catalog is pinned to revisions that load on 0.14.0. Qwen3's `main` needs 0.17.1+, so bump LiteRT-LM on both
+- The catalog is pinned to revisions that load on the runtime both platforms link (0.18.0). Qwen3's pin is the 0.17.1+ re-export; any further repin goes on both
   platforms *before* repinning it.
 - **Play Console:** the Android plugin manifest again declares `FOREGROUND_SERVICE_DATA_SYNC` and
   `foregroundServiceType="dataSync"` on both `LocalLlmGenerationService` and WorkManager's
@@ -437,6 +463,14 @@ the vendored `LiteRTLMError.swift`, together with `tests/local-llm-pure/main.swi
 (including the stripping of leaked chat-template markers such as `<|endoftext|>`), how a failed generation is worded
 for the log and for JS, and the shaping of tool results. The project has no XCTest target, so these are plain
 assertions that exit non-zero; anything that needs the engine, Capacitor or the xcframework is out of reach there.
+
+**Checking the phone's own search on a Mac.** `bash scripts/test-local-search.sh` (needs `swiftc`, `clang` and a
+prior `yarn cap sync ios`, which leaves the SQLCipher pod's sources in `ios/App/Pods`) builds that pod for the Mac,
+compiles the app's own `LocalSearchStore.swift` with `tests/local-search/main.swift`, and runs `knowledge_search`'s
+store against a real encrypted SQLite file with the replica's table and FTS index: text and count queries, type and
+date filters, ordering, a wrong key, and the keychain lookup (it adds and removes one test item in the login
+keychain). What it does not cover is the phone: the file's real location (`iosDatabaseLocation`) and the plugin's
+real keychain item, which exist only after the web layer has opened the replica on a device that is signed in.
 
 - **Android:** minSdk stays 23; the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
   (LiteRT-LM's AAR requires Android 12), so older devices keep the rest of the app.
@@ -542,7 +576,7 @@ then read "On-device models run in the iOS and Android apps." on a phone.
 > `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves `gated: "auto"`, so the `.task`
 > URL in `LocalLlmModels.kt` / `definitions.ts` answered `401 GatedRepo` to an anonymous download —
 > meaning no new Android user could fetch the only model offered. Android now ships the same
-> ungated Qwen3-0.6B iOS already used (`litert-community/Qwen3-0.6B`); both platforms ship the
+> ungated Qwen3 iOS already used (`litert-community/Qwen3-*`); both platforms ship the
 > identical model file. See `LocalLLMModels.swift` and `LocalLlmModels.kt` for the measurements.
 
 **Also fixed 2026-08-26, same pass:**
@@ -563,6 +597,10 @@ then read "On-device models run in the iOS and Android apps." on a phone.
   (iOS 26+) is the fuller answer and a separate, UX-affecting change.
 - **The Android AAR and iOS xcframework had drifted** (0.11.0 vs 0.14.0 of the same upstream
   LiteRT-LM release) with no record of why. Reconciled to 0.14.0 on both.
+- **Bumped to 0.18.0 on both (2026-10-12).** Android: Kotlin plugin 2.4.21 (the AAR carries 2.4 metadata),
+  minSdk 24 (the AAR declares it), `Capabilities` → `ModelInfo`. iOS: re-vendored `swift/` with the
+  patches in `Vendor/LiteRTLM/PATCHES.md` re-applied, two of them now upstream. Qwen3 repinned to the
+  0.17.1+ re-export (`a6e678a1…`, 344,671,744 bytes).
 - **The RAM floor was unreconciled 2x between platforms** (Android 3 GB total RAM vs iOS 6 GB
   physical memory) for models with the same ~2 GB estimated peak RSS. Both now gate at 4 GB.
 - **LiteRT-LM's own constrained-decoding flag** (`enableConversationConstrainedDecoding`) is now

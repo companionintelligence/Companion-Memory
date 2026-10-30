@@ -202,3 +202,33 @@ describe('SignupForm signup code requirement', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('You must accept the terms');
   });
 });
+
+describe('SignupForm email field', () => {
+  it('configures the email field for an address on a touch keyboard', () => {
+    h.error = null;
+    render(<SignupForm />);
+
+    const email = screen.getByLabelText('Email');
+
+    expect(email).toHaveAttribute('type', 'email');
+    expect(email).toHaveAttribute('inputmode', 'email');
+    expect(email).toHaveAttribute('autocapitalize', 'none');
+    expect(email).toHaveAttribute('autocorrect', 'off');
+    expect(email).toHaveAttribute('spellcheck', 'false');
+    expect(email).toHaveAttribute('autocomplete', 'username');
+  });
+
+  it('still shows the schema message, not the browser bubble, for an invalid address', async () => {
+    // type="email" alone would make the browser block the submit with its own tooltip.
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'not-an-email' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findByText('Invalid email.')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});

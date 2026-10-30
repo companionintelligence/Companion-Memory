@@ -38,6 +38,8 @@ interface Props {
   entityId: string;
   /** Names the subject in the panel's description, so it reads as a sentence rather than a label. */
   entityName?: string | null;
+  /** Bump to load the history again, so an edit made on the page shows without a reload. */
+  refreshKey?: number;
 }
 
 function toTitleCase(value: string): string {
@@ -210,11 +212,12 @@ function meaningfulFieldChanges(delta: EvolutionDelta) {
   return delta.fieldChanges.filter((change) => !isSameValue(change.oldValue, change.newValue));
 }
 
-export function EntityEvolutionPanel({ entityId, entityName }: Props) {
+export function EntityEvolutionPanel({ entityId, entityName, refreshKey }: Props) {
   const { data, loading, error } = useEntityEvolutionService({
     entityId,
     limit: EVOLUTION_PAGE_LIMIT,
     skip: !entityId,
+    refreshKey,
   });
   const fmt = useDateTimeFormat();
 

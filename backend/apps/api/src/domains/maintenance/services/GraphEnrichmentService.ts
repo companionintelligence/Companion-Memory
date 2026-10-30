@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';

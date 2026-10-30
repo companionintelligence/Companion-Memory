@@ -19,6 +19,9 @@ const OnDeviceModelSection = lazy(() =>
 const LocationSection = lazy(() =>
   import('./sections/LocationSection').then((m) => ({ default: m.LocationSection })),
 );
+const AppLockSection = lazy(() =>
+  import('./sections/AppLockSection').then((m) => ({ default: m.AppLockSection })),
+);
 const SafariExtensionSection = lazy(() =>
   import('./sections/SafariExtensionSection').then((m) => ({ default: m.SafariExtensionSection })),
 );
@@ -54,6 +57,8 @@ function sectionElement(section: string): ReactNode {
       return <OnDeviceModelSection />;
     case 'location':
       return <LocationSection />;
+    case 'app-lock':
+      return <AppLockSection />;
     case 'safari':
       return <SafariExtensionSection />;
     case 'bluebubbles':

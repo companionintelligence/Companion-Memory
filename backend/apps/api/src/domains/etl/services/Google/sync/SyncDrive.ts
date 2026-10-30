@@ -34,7 +34,7 @@ export async function syncDrive({
       });
 
       const fieldsList =
-        'nextPageToken,files(id,name,mimeType,modifiedTime,owners,iconLink,webViewLink,size)';
+        'nextPageToken,files(id,name,mimeType,modifiedTime,owners,iconLink,webViewLink,size,parents)';
 
       const params = new URLSearchParams({
         pageSize: '200',
@@ -85,7 +85,7 @@ export async function syncDrive({
       }
 
       const fieldsChanges =
-        'nextPageToken,newStartPageToken,changes(file(id,name,mimeType,modifiedTime,owners,iconLink,webViewLink,size),fileId,removed)';
+        'nextPageToken,newStartPageToken,changes(file(id,name,mimeType,modifiedTime,owners,iconLink,webViewLink,size,parents),fileId,removed)';
 
       const params = new URLSearchParams({
         pageSize: '200',

@@ -1,7 +1,8 @@
-import { NotFoundException, UseGuards } from '@nestjs/common';
+import { ConflictException, NotFoundException, Optional, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { PersonService } from '@ci/domains/memory';
 import { PeerLinkService } from '@ci/domains/peers';
@@ -73,7 +74,12 @@ export class PeerLinkResolver {
   constructor(
     private readonly peerLinkService: PeerLinkService,
     private readonly personService: PersonService,
+    @Optional() private readonly featureService?: FeatureService,
   ) {}
+
+  private async enabled(): Promise<boolean> {
+    return this.featureService ? this.featureService.isFeatureEnabled('ask') : true;
+  }
 
   /**
    * Every peer this box knows, revoked ones included.
@@ -85,6 +91,10 @@ export class PeerLinkResolver {
    */
   @Query(() => [PeerLinkType])
   async myPeerLinks(@Context() context: RequestContext): Promise<PeerLinkType[]> {
+    if (!(await this.enabled())) {
+      return [];
+    }
+
     const links = await this.peerLinkService.findAll(toServiceContext(context));
 
     return links.map(PeerLinkType.toType);
@@ -95,6 +105,10 @@ export class PeerLinkResolver {
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
   ): Promise<PeerLinkType | null> {
+    if (!(await this.enabled())) {
+      return null;
+    }
+
     const link = await this.peerLinkService.findById(
       toServiceContext(context),
       GlobalUID.parse('peer-link', gid),
@@ -110,6 +124,10 @@ export class PeerLinkResolver {
     @Context() context: RequestContext,
     @Args('input') input: CreatePeerLinkInput,
   ): Promise<PeerLinkPayload> {
+    if (!(await this.enabled())) {
+      return { success: false };
+    }
+
     const link = await this.peerLinkService.upsert(toServiceContext(context), {
       peerHandle: input.peerHandle,
       memoryEndpoint: input.memoryEndpoint,
@@ -122,9 +140,14 @@ export class PeerLinkResolver {
       // The identity inbound asks are matched on. `undefined` is passed through
       // as `undefined`, NOT coerced to null: `upsert` distinguishes the two, and
       // only `undefined` means "leave whatever is there alone" — which is what
-      // keeps re-adding an already-federated peer from silently unbinding it.
+      // keeps re-adding a peer whose link is LIVE from silently unbinding it. A
+      // peer whose link was ended starts unbound, like any new link.
       peerIssuer: input.peerIssuer,
       peerSubject: input.peerSubject,
+      // Adding a peer means "this link is live". For a handle whose link the
+      // owner ended, `upsert` reads `active` as a new link beside the ended one,
+      // which stays as it was. `updatePeerLink` never sends it.
+      status: 'active',
     });
 
     return { success: true, peerLink: PeerLinkType.toType(link) };
@@ -147,12 +170,26 @@ export class PeerLinkResolver {
     @Context() context: RequestContext,
     @Args('input') input: UpdatePeerLinkInput,
   ): Promise<PeerLinkPayload> {
+    if (!(await this.enabled())) {
+      return { success: false };
+    }
+
     const serviceContext = toServiceContext(context);
     const id = GlobalUID.parse('peer-link', input.id);
     const existing = await this.peerLinkService.findById(serviceContext, id);
 
     if (existing == null) {
       throw new NotFoundException(`Peer link ${input.id} not found`);
+    }
+
+    // `upsert` writes the handle's CURRENT row. An ended link whose peer was
+    // added back since is not that row, and writing its stored tier and
+    // identity onto the new link would hand the peer back what ending it took
+    // away.
+    if ((await this.peerLinkService.findByHandle(serviceContext, existing.peerHandle))?.id !== existing.id) {
+      throw new ConflictException(
+        `This link to ${existing.peerHandle} was ended and they were added again since. Change the current link instead.`,
+      );
     }
 
     const link = await this.peerLinkService.upsert(serviceContext, {
@@ -191,11 +228,21 @@ export class PeerLinkResolver {
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
   ): Promise<PeerLinkPayload> {
+    if (!(await this.enabled())) {
+      return { success: false };
+    }
+
     const serviceContext = toServiceContext(context);
     const existing = await this.peerLinkService.findById(serviceContext, GlobalUID.parse('peer-link', gid));
 
     if (existing == null) {
       throw new NotFoundException(`Peer link ${gid} not found`);
+    }
+
+    // Already ended. `revoke` ends the handle's current link, which for a peer
+    // added back since is the NEW one, not the link this id names.
+    if (existing.revokedAt != null) {
+      return { success: true, peerLink: PeerLinkType.toType(existing) };
     }
 
     const link = await this.peerLinkService.revoke(serviceContext, existing.peerHandle);

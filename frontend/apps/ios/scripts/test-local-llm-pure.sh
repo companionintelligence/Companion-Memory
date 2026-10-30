@@ -25,7 +25,7 @@ fi
 build_dir="$(mktemp -d)"
 trap 'rm -rf "$build_dir"' EXIT
 
-swiftc -swift-version 5 -o "$build_dir/local-llm-pure-tests" \
+swiftc -swift-version 5 -D LOCAL_LLM_PURE_TESTS -o "$build_dir/local-llm-pure-tests" \
   "$sources/LocalLLM/LocalLLMStreaming.swift" \
   "$sources/LocalLLM/LocalLLMPolicy.swift" \
   "$sources/LocalLLM/LocalLLMModels.swift" \

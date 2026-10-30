@@ -12,6 +12,7 @@ import {
   tsRankWeightsLiteral,
 } from '@ci/domains/retrieval-policy';
 
+import { entityTimeSql } from '../entityTime';
 import { queryTokenCount, RetrievalQueryEvent, type RetrievalQueryPayload } from '../events';
 import { buildPromptQuery, type BuildPromptQueryOptions } from '../promptQuery';
 import type { EntityIdentifier, IndexableEntity, PromptSearchResult } from '../types';
@@ -217,7 +218,92 @@ type BaseSearchOptions = {
   maxResults?: number;
   /** Semantic modes only. See {@link SemanticSearchScope.distanceThreshold}. */
   distanceThreshold?: number;
+  /**
+   * Keep only rows whose own time ({@link entityTimeSql}) is on or after `since` / on or before
+   * `until`. Lexical modes only (`keyword`, `boosted`): a nearest-neighbour list has no "every
+   * match since Tuesday", so the semantic modes ignore both.
+   */
+  since?: Date;
+  until?: Date;
+  /**
+   * `recent` orders the page by each row's own time, newest first, nulls last, rank as the
+   * tie-break; the default is rank. Lexical modes only, like `since` / `until`.
+   */
+  sort?: 'relevance' | 'recent';
+  /**
+   * Hybrid fusion strategy:
+   * - `'weighted'` (default): 50/50 normalized score average.
+   * - `'rrf'`: Reciprocal Rank Fusion ($\sum_i \frac{1}{k + \text{rank}_i}$, $k=60$),
+   *   which is invariant to outlier `ts_rank` spikes.
+   */
+  fusionMode?: 'weighted' | 'rrf';
 };
+
+export const RRF_DEFAULT_K = 60;
+
+/**
+ * Reciprocal Rank Fusion (`knowl` / Cormack et al. pattern): combines ranked
+ * lists from heterogeneous retrieval channels (e.g. pgvector cosine similarity
+ * and Postgres `ts_rank`) using rank positions rather than raw score magnitudes:
+ *
+ * $$\text{RRF}(d) = \sum_{L \in \text{lists}} \frac{1}{k + \text{rank}_L(d)}$$
+ *
+ * where $\text{rank}_L(d) \ge 1$ is the 1-based rank of document $d$ in list $L$.
+ */
+export function reciprocalRankFusion<T extends { id: string; type: IndexableEntity }>(
+  rankedLists: ReadonlyArray<ReadonlyArray<T>>,
+  k: number = RRF_DEFAULT_K,
+): Array<T & { score: number }> {
+  const fusedScores = new Map<string, number>();
+  const itemsByKey = new Map<string, T>();
+
+  for (const list of rankedLists) {
+    list.forEach((item, index) => {
+      const key = `${item.type}:${item.id}`;
+      const rank = index + 1;
+      fusedScores.set(key, (fusedScores.get(key) ?? 0) + 1 / (k + rank));
+      if (!itemsByKey.has(key)) {
+        itemsByKey.set(key, item);
+      }
+    });
+  }
+
+  const results: Array<T & { score: number }> = [];
+  fusedScores.forEach((score, key) => {
+    const item = itemsByKey.get(key)!;
+    results.push({ ...item, score });
+  });
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
+/** The `since` / `until` predicate over {@link entityTimeSql}, bound after `paramOffset - 1` params. */
+function buildTimeFilter(
+  options: { since?: Date; until?: Date },
+  paramOffset: number,
+  alias?: string,
+): { clause: string; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  const time = entityTimeSql(alias);
+
+  if (options.since) {
+    clauses.push(`AND ${time} >= $${paramOffset + params.length}::timestamptz`);
+    params.push(options.since.toISOString());
+  }
+
+  if (options.until) {
+    clauses.push(`AND ${time} <= $${paramOffset + params.length}::timestamptz`);
+    params.push(options.until.toISOString());
+  }
+
+  return { clause: clauses.join('\n        '), params };
+}
+
+/** The ORDER BY a lexical page runs: rank, or each row's own time newest first with rank as the tie-break. */
+function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias?: string): string {
+  return sort === 'recent' ? `${entityTimeSql(alias)} DESC NULLS LAST, score DESC` : 'score DESC';
+}
 
 type SearchOptions =
   | (BaseSearchOptions & { includeTypes: IndexableEntity[]; excludeTypes?: never })
@@ -234,7 +320,44 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   maxResults?: number;
   includeTypes?: IndexableEntity[];
   excludeTypes?: IndexableEntity[];
+  /**
+   * Also admit the owner's photo events ('photos'), or photo and video events
+   * ('media'), beside `includeTypes`. A photo's place and capture date are on
+   * its event, not its file, so "photos from Lisbon" filtered to files alone
+   * could only ever answer "none". Never other events: a calendar entry in
+   * Lisbon is not a photo of it.
+   */
+  mediaEvents?: 'photos' | 'media';
 };
+
+/** Image file extensions, as `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts lists them. */
+const IMAGE_FILENAME_SQL = String.raw`\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef)$`;
+/** The video ones, from the same list. */
+const VIDEO_FILENAME_SQL = String.raw`\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$`;
+
+/**
+ * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
+ * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
+ * `Media Type`, or a title that is such a file name. Constant SQL, no asker text.
+ */
+function mediaEventSql(kind: 'photos' | 'media'): string {
+  const mediaTypes =
+    kind === 'media'
+      ? `(e.metadata ->> 'Media Type' LIKE 'image/%' OR e.metadata ->> 'Media Type' LIKE 'video/%')`
+      : `e.metadata ->> 'Media Type' LIKE 'image/%'`;
+  const fileNames =
+    kind === 'media'
+      ? `(n.name ~* '${IMAGE_FILENAME_SQL}' OR n.name ~* '${VIDEO_FILENAME_SQL}')`
+      : `n.name ~* '${IMAGE_FILENAME_SQL}'`;
+
+  return `EXISTS (
+          SELECT 1
+            FROM ci.events e
+            LEFT JOIN ci.entities n ON n.entity_id = e.event_id
+           WHERE e.event_id = v.entity_id
+             AND (${mediaTypes} OR ${fileNames})
+        )`;
+}
 
 /** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
 export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
@@ -282,7 +405,7 @@ export interface SearchPage {
  * term, which a tool that demanded one turned into a validation error
  * (measured live 2026-09-16: the model sent `query: ""` and the turn died).
  */
-type CountOptions = { query?: string } & (
+type CountOptions = { query?: string; since?: Date; until?: Date } & (
   | { includeTypes: IndexableEntity[]; excludeTypes?: never }
   | { excludeTypes: IndexableEntity[]; includeTypes?: never }
   | { includeTypes?: never; excludeTypes?: never }
@@ -460,8 +583,8 @@ export class SearchService {
     // so it binds as $2 rather than after the query text.
     const { sql, params } =
       query.length > 0
-        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions)
-        : this.buildScopeCountPlan(context.userId, resolvedOptions);
+        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions, options)
+        : this.buildScopeCountPlan(context.userId, resolvedOptions, options);
 
     const rows: { total_matches: string | number }[] = await this.dataSource.query(sql, params);
     const totalMatches = Number(rows[0]?.total_matches ?? 0);
@@ -490,8 +613,10 @@ export class SearchService {
     userId: string,
     query: string,
     scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 3);
+    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0));
 
     const sql = `
       WITH q AS (
@@ -505,6 +630,7 @@ export class SearchService {
         AND q.tq <> ''::tsquery
         AND vector @@ q.tq
         ${typeFilter.clause}
+        ${timeFilter.clause}
     `;
 
     const params: (string | string[])[] = [userId, query];
@@ -513,6 +639,8 @@ export class SearchService {
       params.push(typeFilter.param);
     }
 
+    params.push(...timeFilter.params);
+
     return { sql, params };
   }
 
@@ -520,14 +648,17 @@ export class SearchService {
   private buildScopeCountPlan(
     userId: string,
     scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 2);
+    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0));
 
     const sql = `
       SELECT count(*) AS total_matches
       FROM ci_search.vectors
       WHERE user_id = $1
         ${typeFilter.clause}
+        ${timeFilter.clause}
     `;
 
     const params: (string | string[])[] = [userId];
@@ -535,6 +666,8 @@ export class SearchService {
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
+
+    params.push(...timeFilter.params);
 
     return { sql, params };
   }
@@ -615,6 +748,11 @@ export class SearchService {
     } as SearchOptions);
 
     const typeFilter = this.buildTypeFilter(resolvedOptions, 4, 'v');
+    // The same `$4` list, widened by the media events of `mediaEvents`.
+    const typeClause =
+      options.mediaEvents && resolvedOptions.includeTypes?.length
+        ? `AND (v.entity_type = ANY($4) OR (v.entity_type = 'event' AND ${mediaEventSql(options.mediaEvents)}))`
+        : typeFilter.clause;
     const { weights } = await this.rankingLiterals();
 
     // Each group's text crosses as a PARAMETER and is turned into a tsquery by
@@ -665,7 +803,7 @@ export class SearchService {
       WHERE v.user_id = $1
         AND q.tq IS NOT NULL
         AND v.vector @@ q.tq
-        ${typeFilter.clause}
+        ${typeClause}
       ORDER BY score DESC
       LIMIT ${limit}
     `;
@@ -1020,6 +1158,16 @@ export class SearchService {
     const semanticResults = semanticLeg.results;
     const keywordResults = keywordLeg.results;
 
+    if (options.fusionMode === 'rrf') {
+      const rrfFused = reciprocalRankFusion([semanticResults, keywordResults]);
+
+      return {
+        results: rrfFused.slice(0, maxResults),
+        totalMatches: null,
+        limit: maxResults,
+      };
+    }
+
     // Normalize keyword scores (ts_rank scores vary widely, normalize to 0-1)
     const maxKeywordScore = Math.max(...keywordResults.map((r) => r.score), 0.001);
 
@@ -1237,6 +1385,7 @@ export class SearchService {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
     const typeFilter = this.buildTypeFilter(options, 3);
+    const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0));
     const { weights } = await this.rankingLiterals();
 
     // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
@@ -1259,7 +1408,8 @@ export class SearchService {
         AND q.tq <> ''::tsquery
         AND vector @@ q.tq
         ${typeFilter.clause}
-      ORDER BY score DESC
+        ${timeFilter.clause}
+      ORDER BY ${lexicalOrderSql(options.sort)}
       LIMIT ${maxResults}
     `;
 
@@ -1268,6 +1418,8 @@ export class SearchService {
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
+
+    params.push(...timeFilter.params);
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 
@@ -1301,6 +1453,7 @@ export class SearchService {
 
     // Use 'v' table alias since we're joining vectors and embeddings
     const typeFilter = this.buildTypeFilter(options, 4, 'v');
+    const timeFilter = buildTimeFilter(options, 4 + (typeFilter.param ? 1 : 0), 'v');
     const { weights, boost } = await this.rankingLiterals();
 
     // The natural-language questions we get from clients ("Where does Jordan
@@ -1333,7 +1486,8 @@ export class SearchService {
         AND q.tq <> ''::tsquery
         AND v.vector @@ q.tq
         ${typeFilter.clause}
-      ORDER BY score DESC
+        ${timeFilter.clause}
+      ORDER BY ${lexicalOrderSql(options.sort, 'v')}
       LIMIT ${maxResults}
     `;
 
@@ -1342,6 +1496,8 @@ export class SearchService {
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
+
+    params.push(...timeFilter.params);
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 

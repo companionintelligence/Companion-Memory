@@ -7,6 +7,7 @@ import { TurnFragmentCron } from '@ci/domains/agent/cron/TurnFragmentCron';
 import { SyncOrchestrator } from '@ci/domains/etl/listeners/SyncOrchestrator';
 import { JobMetricsCollector } from '@ci/domains/events/services/JobMetricsCollector';
 import { FeedQueueCron } from '@ci/domains/intelligence/cron/FeedQueueCron';
+import { MobileSearchDocumentDetailCron } from '@ci/domains/maintenance/cron/MobileSearchDocumentDetailCron';
 import { InitialActionsCron } from '@ci/domains/onboarding/cron/InitialActionsCron';
 import { AnswerInferenceCron } from '@ci/domains/smart-rotation/cron/AnswerInferenceCron';
 
@@ -36,7 +37,10 @@ import { AnswerInferenceCron } from '@ci/domains/smart-rotation/cron/AnswerInfer
  * `TurnFragmentCron`, 33 is claimed by `AgentMemoryRetentionCron`
  * (02:20:33, `role: 'worker'`), 43 is claimed by `AgentDispatchStaleCron`,
  * and 53 by `DeterministicPersonMergeCron.drain` (hourly at xx:17:53,
- * `role: 'worker'`), leaving 58 as the next tidy one free.
+ * `role: 'worker'`), and 58 by `MobileSearchDocumentDetailCron` (every 10
+ * minutes at xx:x7:58, `role: 'worker'` — a subject below, not a pre-existing
+ * entry). The next cron to want a second takes an unclaimed odd one (e.g. 2,
+ * 7, 12).
  *
  * Not listed, deliberately: `DerivationCron.deriveNightly` (`25 40 4 * * *`)
  * and `OrphanCleanupCron.sweepOnSchedule` (`35 50 2 * * *`) reuse seconds 25
@@ -143,6 +147,11 @@ const SUBJECTS = [
     name: 'FeedQueueCron.topUpFeedQueue',
     method: FeedQueueCron.prototype.topUpFeedQueue,
     cadence: '*/20 * * * *',
+  },
+  {
+    name: 'MobileSearchDocumentDetailCron.refreshOnSchedule',
+    method: MobileSearchDocumentDetailCron.prototype.refreshOnSchedule,
+    cadence: '7/10 * * * *',
   },
 ] as const;
 

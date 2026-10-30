@@ -216,7 +216,28 @@ describe('evaluateGrant', () => {
       grant({ id: 'auto-content', mode: 'auto', queryType: 'content', dataClass: null }),
     ];
 
-    for (const variant of ['photos', 'Photos', 'PHOTOS', '  photos  ']) {
+    // The invisible ones (RC2 QA D2): every default-ignorable code point that
+    // renders as nothing inside the word, not only the zero-width and bidi ones.
+    const invisible = [
+      '\u200b',
+      '\u202e',
+      '\u034f',
+      '\u180e',
+      '\ufe0f',
+      '\u{e0070}',
+      '\u3164',
+      '\u115f',
+      '\u{1d173}',
+      '\uffa0',
+    ];
+
+    for (const variant of [
+      'photos',
+      'Photos',
+      'PHOTOS',
+      '  photos  ',
+      ...invisible.map((c) => `pho${c}tos`),
+    ]) {
       expect(evaluateGrant(ask({ queryType: 'content', dataClass: variant }), grants, NOW)).toEqual({
         decision: 'deny',
         grantId: 'block-photos',

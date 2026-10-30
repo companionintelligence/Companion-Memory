@@ -4,8 +4,10 @@ import config from '@ci/configuration';
 
 import {
   extractEmbeddedToolCalls,
+  isReasoningEffortRejection,
   isResponseFormatRejection,
   OpenAiCompatChatDriver,
+  thinkingBody,
   toOpenAiMessages,
   toOpenAiTools,
   toResponseFormat,
@@ -233,6 +235,17 @@ place
 
 const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 
+const apiError = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+function driverWith(create: jest.Mock) {
+  const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+  (
+    driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
+  ).client.chat.completions.create = create;
+
+  return driver;
+}
+
 describe('toResponseFormat', () => {
   it("maps Ollama's format onto the OpenAI response_format", () => {
     expect(toResponseFormat(undefined)).toBeUndefined();
@@ -249,8 +262,6 @@ describe('toResponseFormat', () => {
 });
 
 describe('isResponseFormatRejection', () => {
-  const apiError = (status: number, message: string) => Object.assign(new Error(message), { status });
-
   it('recognises a 4xx that blames the response format', () => {
     expect(isResponseFormatRejection(apiError(400, '400 response_format json_schema is not supported'))).toBe(
       true,
@@ -268,15 +279,6 @@ describe('isResponseFormatRejection', () => {
 });
 
 describe('OpenAiCompatChatDriver.chat with a JSON Schema format', () => {
-  function driverWith(create: jest.Mock) {
-    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
-    (
-      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
-    ).client.chat.completions.create = create;
-
-    return driver;
-  }
-
   const reply = { choices: [{ message: { role: 'assistant', content: '{"ok":true}' } }] };
   const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }], format: SCHEMA };
 
@@ -398,6 +400,46 @@ describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
     expect(toolCalls).toEqual([]);
   });
 
+  it('names the calls a discarding round dropped on its last chunk, written as markup or not', async () => {
+    const lastOf = async (iterator: AsyncGenerator<{ discardedToolCalls?: unknown[] }>) => {
+      let last: { discardedToolCalls?: unknown[] } | undefined;
+
+      for await (const chunk of iterator) {
+        last = chunk;
+      }
+
+      return last;
+    };
+
+    const markup = streamingDriver(apologyThenMarkup).driver;
+    const structured = streamingDriver([
+      { content: 'One moment.' },
+      {
+        tool_calls: [{ index: 0, function: { name: 'media_findPhotos', arguments: '{"query":"rabbits"}' } }],
+      },
+    ]).driver;
+    const plain = streamingDriver([{ content: 'Rabbits are in three of your photos.' }]).driver;
+
+    await expect(lastOf(markup.chatStream({ ...request, discardToolMarkup: true }))).resolves.toMatchObject({
+      discardedToolCalls: [
+        { function: { name: 'media_findPhotos', arguments: { maxResults: '15', query: 'rabbits' } } },
+      ],
+    });
+    await expect(
+      lastOf(structured.chatStream({ ...request, discardToolMarkup: true })),
+    ).resolves.toMatchObject({
+      discardedToolCalls: [{ function: { name: 'media_findPhotos', arguments: { query: 'rabbits' } } }],
+    });
+    expect(
+      (await lastOf(plain.chatStream({ ...request, discardToolMarkup: true })))?.discardedToolCalls,
+    ).toBeUndefined();
+    // A salvage round hands its calls over as calls, so nothing counts as dropped there.
+    expect(
+      (await lastOf(streamingDriver(apologyThenMarkup).driver.chatStream({ ...request, salvageTools: true })))
+        ?.discardedToolCalls,
+    ).toBeUndefined();
+  });
+
   it('still streams plain text as it arrives when nothing about the round involves tools', async () => {
     const { driver } = streamingDriver([{ content: 'Hello' }, { content: ' there' }]);
 
@@ -408,15 +450,6 @@ describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
 });
 
 describe('OpenAiCompatChatDriver.chat usage and deadline', () => {
-  function driverWith(create: jest.Mock) {
-    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
-    (
-      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
-    ).client.chat.completions.create = create;
-
-    return driver;
-  }
-
   const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
 
   it('reports the token counts the backend returned', async () => {
@@ -586,5 +619,188 @@ describe('tool markup salvage is limited to markup that opens or closes the repl
     }
 
     expect(toolCalls).toEqual([]);
+  });
+});
+
+/**
+ * Ollama's `/v1` ignores `chat_template_kwargs`, so with only that switch a
+ * thinking model reasoned through every background call that asked for
+ * thinking off: answer inference on qwen3.5:9b spent 800 of 800 tokens and came
+ * back empty, image descriptions on gemma4:e2b 256 of 256.
+ */
+describe('turning thinking off on every OpenAI-compatible backend', () => {
+  const vllmRefusal = () =>
+    apiError(
+      400,
+      "400 1 validation error for ChatCompletionRequest\nreasoning_effort\n  Input should be 'low', 'medium' or 'high'",
+    );
+
+  const reply = { choices: [{ message: { role: 'assistant', content: '{"ok":true}' } }] };
+  const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
+  const okStream = () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { choices: [{ delta: { content: 'ok' } }] };
+    },
+  });
+
+  it('adds reasoning_effort "none" beside the vLLM switch whenever thinking is off', () => {
+    expect(thinkingBody(undefined)).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+      reasoning_effort: 'none',
+    });
+    expect(thinkingBody(false)).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+      reasoning_effort: 'none',
+    });
+    expect(thinkingBody(true)).toEqual({ chat_template_kwargs: { enable_thinking: true } });
+    expect(thinkingBody(false, true)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+  });
+
+  it('recognises a backend refusing the field and nothing else', () => {
+    expect(isReasoningEffortRejection(vllmRefusal())).toBe(true);
+    expect(isReasoningEffortRejection(apiError(400, "400 invalid reasoning value: 'none'"))).toBe(true);
+    expect(isReasoningEffortRejection(apiError(400, '400 json_schema not supported'))).toBe(false);
+    expect(isReasoningEffortRejection(apiError(500, '500 reasoning_effort crashed'))).toBe(false);
+    expect(isReasoningEffortRejection(new Error('fetch failed'))).toBe(false);
+  });
+
+  it('chat() sends it when thinking is off and leaves it out when thinking is on', async () => {
+    const create = jest.fn(async (_body: Record<string, unknown>) => reply);
+    const driver = driverWith(create);
+
+    await driver.chat({ ...request, enableThinking: false });
+    await driver.chat({ ...request, enableThinking: true });
+
+    expect(create.mock.calls[0][0]).toMatchObject({
+      reasoning_effort: 'none',
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('chat() retries once without it on a refusal and sends it again on the next call', async () => {
+    const create = jest.fn().mockRejectedValueOnce(vllmRefusal()).mockResolvedValue(reply);
+    const driver = driverWith(create);
+
+    await expect(driver.chat(request)).resolves.toMatchObject({ message: { content: '{"ok":true}' } });
+    await driver.chat(request);
+
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, true]);
+    expect(create.mock.calls[1][0]).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
+  });
+
+  it('chat() still falls back from json_schema on a backend that refuses both', async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(vllmRefusal())
+      .mockRejectedValueOnce(apiError(400, '400 json_schema not supported'))
+      .mockResolvedValue(reply);
+
+    await driverWith(create).chat({ ...request, format: SCHEMA });
+
+    expect(
+      create.mock.calls.map(([body]) => [body.response_format.type, 'reasoning_effort' in body]),
+    ).toEqual([
+      ['json_schema', true],
+      ['json_schema', false],
+      ['json_object', false],
+    ]);
+  });
+
+  it('chat() does not retry a refusal when thinking was asked for', async () => {
+    const create = jest.fn().mockRejectedValue(vllmRefusal());
+
+    await expect(driverWith(create).chat({ ...request, enableThinking: true })).rejects.toThrow(
+      'reasoning_effort',
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('chatStream() sends it and retries once without it on a refusal', async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(vllmRefusal())
+      .mockImplementation(async () => okStream());
+    const driver = driverWith(create);
+
+    const drain = async () => {
+      const chunks: unknown[] = [];
+
+      for await (const chunk of driver.chatStream(request)) {
+        chunks.push(chunk);
+      }
+
+      return chunks;
+    };
+
+    await expect(drain()).resolves.not.toHaveLength(0);
+    await drain();
+
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([true, false, true]);
+  });
+
+  it('retries every call that was in flight when the backend first refused it', async () => {
+    // Both requests leave before either refusal comes back, as two background jobs do on a
+    // two-slot queue right after the driver is created.
+    const create = jest.fn(async (body: Record<string, unknown>) => {
+      await new Promise((resolve) => setImmediate(resolve));
+
+      if ('reasoning_effort' in body) {
+        throw vllmRefusal();
+      }
+
+      return body.stream === true ? okStream() : reply;
+    });
+    const driver = driverWith(create);
+    const drain = async () => {
+      const chunks: unknown[] = [];
+
+      for await (const chunk of driver.chatStream(request)) {
+        chunks.push(chunk);
+      }
+
+      return chunks;
+    };
+
+    await expect(Promise.all([driver.chat(request), driver.chat(request), drain()])).resolves.toHaveLength(3);
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('sends the field on every call, so a pool peer on Ollama gets it right after a vLLM peer refused it', async () => {
+    // One URL, two engines: the pool sends the first and third calls to vLLM, which refuses "none",
+    // and the second to Ollama, which needs it to stop thinking.
+    const peers = ['vllm', 'ollama', 'vllm'];
+    let call = 0;
+    const create = jest.fn(async (body: Record<string, unknown>) => {
+      const peer = peers[call];
+
+      if (peer === 'vllm' && 'reasoning_effort' in body) {
+        throw vllmRefusal();
+      }
+
+      call += 1;
+
+      return { choices: [{ message: { content: peer }, finish_reason: 'stop' }] };
+    });
+    const driver = driverWith(create);
+
+    await driver.chat(request);
+    await driver.chat(request);
+    await driver.chat(request);
+
+    expect(create.mock.calls.map(([body]) => 'reasoning_effort' in body)).toEqual([
+      true,
+      false,
+      true,
+      true,
+      false,
+    ]);
   });
 });

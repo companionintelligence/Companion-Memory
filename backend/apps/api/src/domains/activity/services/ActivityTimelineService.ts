@@ -6,6 +6,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { EntityResolutionService } from '@ci/domains/entity-resolution';
 import {
   ContentService,
+  effectiveSourceSystemPredicate,
   eventsForMatchingMedia,
   mergeIdentifiers,
   searchReachesEvents,
@@ -246,11 +247,32 @@ export class ActivityTimelineService {
       parts.push(await this.getFilteredEventDailyCounts(context, start, end, timezone, filters));
     }
 
-    const sourced: Array<[IndexableEntity, { table: string; timeColumn: string; extraWhere?: string }]> = [
+    const sourced: Array<
+      [
+        IndexableEntity,
+        {
+          table: string;
+          timeColumn: string;
+          extraWhere?: string;
+          sourcePredicate?: (placeholder: string) => string;
+        },
+      ]
+    > = [
       ['browser-activity', { table: 'ci.browser_activity', timeColumn: 'time' }],
       ['communication', { table: 'ci.communications', timeColumn: 'time' }],
       // Event-linked content is a facet of its event, which is counted above.
-      ['content', { table: 'ci.content', timeColumn: 'updated_at', extraWhere: 'event_id IS NULL' }],
+      [
+        'content',
+        {
+          table: 'ci.content',
+          timeColumn: 'updated_at',
+          extraWhere: 'event_id IS NULL',
+          // By the platform that delivered the row, as the list filters it
+          // (ContentService.getEntitiesForContents) — its column says `file`.
+          sourcePredicate: (placeholder) =>
+            effectiveSourceSystemPredicate('content', (expression) => `${expression} = ANY(${placeholder})`),
+        },
+      ],
       [
         'item',
         { table: 'ci.objects', timeColumn: 'updated_at', extraWhere: 'merged_into_object_id IS NULL' },
@@ -432,6 +454,8 @@ export class ActivityTimelineService {
       timeColumn: string;
       /** Keep rows whose `source_system` is one of these (the How filter). */
       sourceSystems?: string[];
+      /** The How test for a table whose column alone cannot answer it; given the list's placeholder. */
+      sourcePredicate?: (placeholder: string) => string;
       /** Extra SQL predicate, already scoped to the table's own columns. */
       extraWhere?: string;
     },
@@ -441,7 +465,11 @@ export class ActivityTimelineService {
 
     if (spec.sourceSystems && spec.sourceSystems.length > 0) {
       params.push(spec.sourceSystems);
-      clauses.push(`AND source_system = ANY($${params.length})`);
+      clauses.push(
+        spec.sourcePredicate
+          ? `AND ${spec.sourcePredicate(`$${params.length}`)}`
+          : `AND source_system = ANY($${params.length})`,
+      );
     }
 
     if (spec.extraWhere) {

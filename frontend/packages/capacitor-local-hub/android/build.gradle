@@ -5,6 +5,7 @@
 // This module has no dependency with local-llm's Kotlin-metadata-version constraint, so
 // it just tracks a current stable Kotlin release rather than pinning to match it.
 ext {
+    playServicesLocationVersion = project.hasProperty('playServicesLocationVersion') ? rootProject.ext.playServicesLocationVersion : '21.0.1'
     junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
     androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
     androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
@@ -31,7 +32,7 @@ android {
     namespace "com.companionintelligence.localhub"
     compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
     defaultConfig {
-        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
         versionCode 1
         versionName "1.0"
@@ -85,6 +86,16 @@ dependencies {
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    // Motion-gated Always-mode location recording (location/): the exit geofence, the last
+    // known fix and the fused location request behind LocationService (the motion sensor is
+    // a framework API). `playServicesLocationVersion` is the app's if variables.gradle sets
+    // it, else this module's own default above.
+    implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"
+
+    // TrackingRestoreWorker: the retry when putting the geofence back after boot fails because
+    // Play Services is not up yet. Same version capacitor-local-llm pins, so one resolves.
+    implementation 'androidx.work:work-runtime-ktx:2.10.0'
 
     // Encryption at rest for the capture outbox (OutboxStore.kt). This is the CURRENT Zetetic
     // artifact (package net.zetetic.database.sqlcipher), NOT the legacy

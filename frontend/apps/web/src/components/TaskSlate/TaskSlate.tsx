@@ -2,9 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 're
 
 import { useMutation } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
-import { Button, cn, Sheet, Tabs, Tooltip } from '@ci/shadcn';
-import { X } from '@ci/shadcn/icons';
+import { Button, cn, IconButton, Sheet, Tabs, Tooltip } from '@ci/shadcn';
+import { Plus, X } from '@ci/shadcn/icons';
 
+import { usePlaceLookup } from '@/api/usePlaceLookup';
 import {
   EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
@@ -368,6 +369,7 @@ export function TaskSlateDrawer({
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
+  const lookupPlace = usePlaceLookup();
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -449,15 +451,30 @@ export function TaskSlateDrawer({
         className={cn(
           'pointer-events-auto gap-0 p-0',
           isMobile
-            ? 'max-h-[70vh] w-full overscroll-contain pb-[var(--safe-area-bottom)] sm:max-w-none'
+            ? 'max-h-[40vh] w-full overscroll-contain pb-[var(--safe-area-bottom)] sm:max-w-none'
             : 'w-[24rem] sm:max-w-md',
         )}
       >
         <Sheet.Header className="gap-1 pb-1">
-          <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
-          <Sheet.Description className="text-[11px] tabular-nums">
-            {slot ? formatSlotHeading(slot, fmt) : 'Pick an empty time'}
-          </Sheet.Description>
+          <div className="flex items-start justify-between gap-2 pr-6">
+            <div className="min-w-0">
+              <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
+              <Sheet.Description className="text-[11px] tabular-nums">
+                {slot ? formatSlotHeading(slot, fmt) : 'Pick an empty time'}
+              </Sheet.Description>
+            </div>
+            {!composing && (
+              <IconButton
+                type="button"
+                variant="outline"
+                label="New event"
+                onClick={openComposer}
+                className="h-8 w-8 shrink-0"
+              >
+                <Plus className="h-4 w-4" strokeWidth={1.75} />
+              </IconButton>
+            )}
+          </div>
         </Sheet.Header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
@@ -483,7 +500,13 @@ export function TaskSlateDrawer({
 
           {composing ? (
             <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
-              <EventForm value={draft} onChange={setDraft} problem={problem} disabled={creating} />
+              <EventForm
+                value={draft}
+                onChange={setDraft}
+                problem={problem}
+                disabled={creating}
+                lookupPlace={lookupPlace}
+              />
               {/* The form scrolls and Add is its last line, so the line EventForm
                   writes beside the offending field is screens above the finger
                   that just pressed Add — which then looked dead. Say it here too,
@@ -509,10 +532,6 @@ export function TaskSlateDrawer({
             </form>
           ) : (
             <>
-              <Button type="button" variant="outline" size="sm" className="self-start" onClick={openComposer}>
-                New event
-              </Button>
-
               <div>
                 <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Possibilities

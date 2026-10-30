@@ -782,6 +782,64 @@ describe('PersonMergeService', () => {
     expect(folded.phones).toEqual(['2025550142', '2125550118']);
   });
 
+  it("keeps what the target's person set or cleared by hand, and takes only the hand-set keys whose value came across", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Ola Brandt',
+        properties: { nickname: 'Oli', website: null, user_edited_keys: ['website'] },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Ola B',
+        properties: {
+          nickname: 'Olly',
+          website: 'https://ola.example',
+          job_title: 'Pilot',
+          user_edited_keys: ['nickname', 'job_title'],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    // The target's hand clear stays cleared; its own nickname is not claimed
+    // because the source's hand-set one did not come across; the job title did.
+    expect(folded).toMatchObject({ nickname: 'Oli', website: null, job_title: 'Pilot' });
+    expect(folded.user_edited_keys).toEqual(['website', 'job_title']);
+  });
+
+  it("does not hand a target with no hand edits the source's list", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Ola Brandt', properties: { nickname: 'Oli' } }),
+      personRow(SOURCE_A, {
+        name: 'Ola B',
+        properties: { nickname: 'Olly', user_edited_keys: ['nickname'] },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.nickname).toBe('Oli');
+    expect(folded).not.toHaveProperty('user_edited_keys');
+  });
+
+  it('claims a name the target took from a source whose person set it by hand', async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: null }),
+      personRow(SOURCE_A, { name: 'Dana Q', properties: { user_edited_keys: ['name'] } }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(propertiesUpdate[0].params?.[3]).toBe('Dana Q');
+    expect(folded.user_edited_keys).toEqual(['name']);
+  });
+
   it("never lets a source's is_self flag leak onto a non-self target", async () => {
     // SOURCE_A is a floating self-flagged stub (NOT the row users.entity_id
     // points at, so the self-source guard does not reject it).

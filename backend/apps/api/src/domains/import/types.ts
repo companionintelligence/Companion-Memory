@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { IMPORT_STAGE_KINDS } from './constants';
 

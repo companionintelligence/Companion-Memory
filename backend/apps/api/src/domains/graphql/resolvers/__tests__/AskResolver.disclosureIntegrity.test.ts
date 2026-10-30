@@ -273,7 +273,7 @@ describe('runAsk — the owner decides how much leaves, not the asker', () => {
       fakeAsk({ status: 'delivered', consentBasis: 'grant-abc', peerLinkId: 'link-1' }),
       {
         evaluation: { decision: 'auto', grantId: 'grant-abc', maxDisclosure: 'count' },
-        peerLink: { trustTier: 'family' },
+        peerLink: { trustTier: 'family', status: 'active', revokedAt: null },
         matches: RETRIEVAL_MATCHES,
       },
     );
@@ -302,7 +302,7 @@ describe('runAsk — the owner decides how much leaves, not the asker', () => {
       }),
       {
         evaluation: { decision: 'auto', grantId: 'grant-abc', maxDisclosure: 'full' },
-        peerLink: { trustTier: 'stranger' },
+        peerLink: { trustTier: 'stranger', status: 'active', revokedAt: null },
         matches: RETRIEVAL_MATCHES,
       },
     );

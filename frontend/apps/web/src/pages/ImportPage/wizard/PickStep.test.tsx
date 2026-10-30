@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CatalogSource } from '../useImportApi';
 
+import { BUNDLES } from './bundles.fixture';
 import { PickStep } from './PickStep';
 
 // The usage rollup reaches the import API through auth context, which the bare
@@ -61,7 +62,15 @@ function renderStep(picked: ReadonlySet<string> = new Set()) {
   const onToggle = vi.fn();
   const onContinue = vi.fn();
 
-  render(<PickStep catalog={CATALOG} picked={picked} onToggle={onToggle} onContinue={onContinue} />);
+  render(
+    <PickStep
+      catalog={CATALOG}
+      bundles={BUNDLES}
+      picked={picked}
+      onToggle={onToggle}
+      onContinue={onContinue}
+    />,
+  );
 
   return { onToggle, onContinue };
 }
@@ -107,6 +116,7 @@ describe('PickStep', () => {
   it('finds a bundle by its member names', () => {
     render(
       <PickStep
+        bundles={BUNDLES}
         catalog={[
           catalogSource({
             id: 'gmail',
@@ -178,6 +188,7 @@ describe('PickStep', () => {
 
     render(
       <PickStep
+        bundles={BUNDLES}
         catalog={[
           catalogSource({ id: 'gmail', title: 'Gmail', ecosystem: 'google', category: 'mail' }),
           catalogSource({
@@ -207,6 +218,7 @@ describe('PickStep', () => {
     // all, which the tile lays out in two columns rather than truncating.
     render(
       <PickStep
+        bundles={BUNDLES}
         catalog={[
           catalogSource({ id: 'amazon', title: 'Amazon orders', ecosystem: 'amazon', category: 'finance' }),
           catalogSource({ id: 'prime_video', title: 'Prime Video', ecosystem: 'amazon', category: 'video' }),
@@ -264,6 +276,7 @@ describe('PickStep', () => {
 
     render(
       <PickStep
+        bundles={BUNDLES}
         catalog={[
           catalogSource({ id: 'google_calendar', title: 'Google Calendar', importer: 'calendar' }),
           catalogSource({ id: 'apple_calendar', title: 'Apple Calendar', importer: 'calendar' }),
@@ -308,6 +321,7 @@ describe('PickStep', () => {
   it('lets Continue sit after the catalog when the page is the scroller', () => {
     render(
       <PickStep
+        bundles={BUNDLES}
         catalog={CATALOG}
         picked={new Set(['spotify'])}
         onToggle={vi.fn()}
@@ -329,7 +343,15 @@ describe('PickStep', () => {
   });
 
   it('does not make the pinned-variant row sticky (the flex split already pins it)', () => {
-    render(<PickStep catalog={CATALOG} picked={new Set()} onToggle={vi.fn()} onContinue={vi.fn()} />);
+    render(
+      <PickStep
+        catalog={CATALOG}
+        bundles={BUNDLES}
+        picked={new Set()}
+        onToggle={vi.fn()}
+        onContinue={vi.fn()}
+      />,
+    );
 
     const continueButton = screen.getByRole('button', { name: /continue/i });
     expect(continueButton.parentElement?.className).not.toMatch(/sticky/);

@@ -1,10 +1,11 @@
-import { Body, ConflictException, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, ConflictException, Controller, Logger, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { DataSource } from 'typeorm';
 
 import { Context, type RequestContext, toServiceContext, type UserServiceContext } from '@ci/common/context';
 import { CAPTURE_SCOPE, RequireCapability, RequireScopes, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { summarizeDatabaseError } from '@ci/common/persistence';
 import { ValidationPipe } from '@ci/common/pipes';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
 import {
@@ -140,6 +141,58 @@ class BulkMaterializeError extends Error {
     super(message);
     this.name = 'BulkMaterializeError';
   }
+}
+
+/**
+ * What a client hears about a database constraint it can fix, by constraint
+ * name. Anything not listed gets the generic answer in {@link rejectionReason}.
+ *
+ * Worded for the batch, because the whole batch is rejected and every record
+ * in it carries this reason, not only the one that broke the constraint.
+ */
+const CONSTRAINT_REASONS: ReadonlyMap<string, string> = new Map([
+  [
+    'valid_positioning',
+    'A position in this batch has neither a location nor a reference_entity_id with relative_coordinates that include x.',
+  ],
+]);
+
+/**
+ * The reason a batch is reported as rejected, from what its write threw.
+ *
+ * A database error is not passed through. The driver's text names internal
+ * relations: a position with no location came back as `new row for relation
+ * "_hyper_13_2_chunk" violates check constraint "valid_positioning"`, a
+ * TimescaleDB chunk name that means nothing to the caller and describes the
+ * schema to whoever sent the record. A connection failure names the server's
+ * address (`connect ECONNREFUSED 172.18.0.2:5432`). The client gets what it can
+ * act on (the constraint's own explanation, that the database was away, or the
+ * SQLSTATE) and the driver's message goes to the log. An error with no code,
+ * such as a service's own validation message, is passed through as it always
+ * was.
+ */
+function rejectionReason(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const summary = summarizeDatabaseError(err);
+
+  if (summary == null) {
+    return message;
+  }
+
+  if (summary.kind === 'unavailable') {
+    Logger.warn(
+      `A bulk ingest batch failed while the database was unavailable: ${message}`,
+      'BulkIngestController',
+    );
+
+    return `The database was unavailable while this batch was written (${summary.code}).`;
+  }
+
+  Logger.warn(`A bulk ingest batch was refused by the database: ${message}`, 'BulkIngestController');
+
+  const known = summary.constraint != null ? CONSTRAINT_REASONS.get(summary.constraint) : undefined;
+
+  return known ?? `The database refused this batch (SQLSTATE ${summary.code}).`;
 }
 
 /**
@@ -430,7 +483,7 @@ export class BulkIngestController {
       // A failed chunk captured nothing, but earlier chunks may have; undo them
       // so every record is safely re-sendable.
       await this.compensateCaptures(captureIdByKey);
-      throw new BulkMaterializeError((err as Error).message, duplicate, allIndexes);
+      throw new BulkMaterializeError(rejectionReason(err), duplicate, allIndexes);
     }
 
     const fresh = candidates.filter(({ triple }) => captureIdByKey.has(tripleKey(triple)));
@@ -447,7 +500,7 @@ export class BulkIngestController {
     } catch (err) {
       await this.compensateCaptures(captureIdByKey);
       throw new BulkMaterializeError(
-        (err as Error).message,
+        rejectionReason(err),
         duplicate,
         toMaterialize.map(({ index }) => index).sort((a, b) => a - b),
       );
@@ -472,13 +525,21 @@ export class BulkIngestController {
     }
 
     if (linkValues.length) {
-      await this.dataSource.query(
-        `UPDATE ci.capture_events AS c
-           SET materialized_id = v.materialized_id
-          FROM (VALUES ${linkValues.join(', ')}) AS v(capture_event_id, materialized_id)
-         WHERE c.capture_event_id = v.capture_event_id`,
-        linkParams,
-      );
+      try {
+        await this.dataSource.query(
+          `UPDATE ci.capture_events AS c
+             SET materialized_id = v.materialized_id
+            FROM (VALUES ${linkValues.join(', ')}) AS v(capture_event_id, materialized_id)
+           WHERE c.capture_event_id = v.capture_event_id`,
+          linkParams,
+        );
+      } catch (err) {
+        // Still a failure of the request (the envelope path answers 500), but
+        // the NDJSON path reports a failed batch's message to the client, so
+        // the driver's text is swapped for the same reason the other two
+        // layers give.
+        throw new Error(rejectionReason(err), { cause: err });
+      }
     }
 
     if (toMaterialize.length > 0) {

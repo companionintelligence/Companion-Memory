@@ -12,7 +12,7 @@ const { confirm } = require('@inquirer/prompts');
 const { Command } = require('commander');
 const config = require('config');
 const { Client } = require('pg');
-const { z } = require('zod');
+const { z } = require('zod/v3');
 
 const UNSAFE_OPERATIONS = new Set(['drop_all_pg_data.sql']);
 

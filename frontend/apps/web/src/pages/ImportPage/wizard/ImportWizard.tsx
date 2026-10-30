@@ -4,7 +4,7 @@ import { cn } from '@ci/shadcn';
 
 import { useWizardNav } from '@/components/WizardNav';
 
-import { useImportApi, type CatalogSource } from '../useImportApi';
+import { useImportApi, type CatalogSource, type ImportBundle } from '../useImportApi';
 
 import { ExportStep } from './ExportStep';
 import { PickStep } from './PickStep';
@@ -87,6 +87,7 @@ export function ImportWizard({
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [exportIdx, setExportIdx] = useState(0);
   const [catalog, setCatalog] = useState<readonly CatalogSource[]>([]);
+  const [bundles, setBundles] = useState<readonly ImportBundle[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [runsByEntry, setRunsByEntry] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
 
@@ -97,10 +98,13 @@ export function ImportWizard({
 
     let cancelled = false;
 
-    api
-      .listCatalog()
-      .then((sources) => {
+    // Both halves of the authored catalog, shown together: a picker drawn
+    // from the sources alone would list every Takeout product as its own
+    // button for a moment, then collapse them into the bundle.
+    Promise.all([api.listCatalog(), api.listBundles()])
+      .then(([sources, bundleList]) => {
         if (!cancelled) {
+          setBundles(bundleList);
           setCatalog(sources);
         }
       })
@@ -115,7 +119,7 @@ export function ImportWizard({
     };
   }, [api]);
 
-  const entries = useMemo(() => exportEntries(catalog, picked), [catalog, picked]);
+  const entries = useMemo(() => exportEntries(catalog, bundles, picked), [catalog, bundles, picked]);
 
   useEffect(() => {
     onCanExportChange?.(picked.size > 0);
@@ -220,6 +224,7 @@ export function ImportWizard({
         {step === 'pick' && (
           <PickStep
             catalog={catalog}
+            bundles={bundles}
             picked={picked}
             onToggle={togglePicked}
             pinContinue={!pageScroll}

@@ -219,6 +219,40 @@ describe('ImportStageListener claiming', () => {
   });
 });
 
+describe('ImportStageListener throttling progress', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // A frozen clock, so every tick below falls inside one throttle window.
+    jest.useFakeTimers({ now: 60_000 });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('throttles repeated ticks but always writes a change of phase', async () => {
+    // An unpack's acquire is a rename, so `extracting` follows `acquiring` by
+    // milliseconds. Dropping it left the row reading "acquiring" for the whole
+    // extraction, which reports no ticks of its own.
+    const run = jest.fn(async (context: StageRunContext) => {
+      await context.progress({ processed: 0, total: 1, phase: 'acquiring' });
+      await context.progress({ processed: 0, total: 1, phase: 'extracting' });
+      await context.progress({ processed: 0, total: 1, phase: 'extracting' });
+      await context.progress({ processed: 1, total: 1 });
+
+      return { processed: 1, total: 1, detail: {} };
+    });
+    const { listener, runs } = makeListener({ run });
+
+    await expect(listener.runStage(payload)).resolves.toBe('ran');
+
+    expect(runs.recordProgress.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      { processed: 0, total: 1, phase: 'acquiring' },
+      { processed: 0, total: 1, phase: 'extracting' },
+    ]);
+  });
+});
+
 describe('ImportStageListener advancing', () => {
   beforeEach(() => jest.clearAllMocks());
 

@@ -560,12 +560,14 @@ curl -sS -X POST $API/api/maintenance/backfill-media-dimensions \
 > back" therefore says nothing about whether the files are done — read the
 > ledger.
 
-> **This endpoint has a stale precondition.** It counts candidates with the OLD
-> `width IS NULL` predicate and returns `{"status":"noop"}` **without emitting
-> anything** when that count is 0. So once every file has a width, it will
-> refuse to start a sweep — including the re-probe sweep a version bump exists
-> to create. `body.limit` is accepted and ignored (a sweep runs to completion).
-> When it no-ops, hand-enqueue the sweep instead: [§9c](#9c-hand-enqueue-a-job).
+> **This endpoint only counts files with no width.** It counts the ones the
+> stage still has work for (no ledger row, a row below the current version, or a
+> failed probe whose retry is due) and returns `{"status":"noop"}` **without
+> emitting anything** when that count is 0. A file already measured never
+> counts, so after a bump that re-probes measured files it will refuse to start
+> the sweep once every unmeasured file has a current answer. `body.limit` is
+> accepted and ignored (a sweep runs to completion). When it no-ops, hand-enqueue
+> the sweep instead: [§9c](#9c-hand-enqueue-a-job).
 
 ### 5e. Watch it
 

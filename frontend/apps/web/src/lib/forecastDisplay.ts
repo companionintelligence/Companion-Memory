@@ -8,7 +8,7 @@ export const MIN_PLACE_PROB = 0.3;
 
 const NEWS_LIKE = new Set(['ransom', 'activist', 'riot', 'hostage', 'protest', 'shooting', 'war', 'attack']);
 
-const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted']);
+const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted', 'label']);
 
 /** Static ambient L1s may occupy the 24h strip but never the week tooltip. */
 const AMBIENT_WEEK_LABELS = new Set(['listening', 'watching', 'browsing']);

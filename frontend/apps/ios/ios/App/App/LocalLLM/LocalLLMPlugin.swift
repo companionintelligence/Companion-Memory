@@ -172,7 +172,7 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
   /// Idempotent: a load identical to the resident one is a no-op that returns the same result (see
   /// `LocalLLMEngine.load`), so the JS layer can ask every turn without paying for a reload.
   ///
-  /// Resolves `{toolCount, accelerator, fellBackToCpu, speculativeDecoding}`: the backend the model
+  /// Resolves `{toolCount, accelerator, fellBackToCpu, gpuWithheld, speculativeDecoding}`: the backend the model
   /// actually loaded on (a `gpu` request that will not initialise retries on the CPU), and whether
   /// multi-token prediction is in force (only when asked for *and* the file carries it).
   @objc func loadModel(_ call: CAPPluginCall) {
@@ -236,6 +236,7 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
           "toolCount": outcome.toolCount,
           "accelerator": outcome.accelerator.rawValue,
           "fellBackToCpu": outcome.fellBackToCpu,
+          "gpuWithheld": outcome.gpuWithheld,
           "speculativeDecoding": outcome.speculativeDecoding,
         ])
       } catch {
@@ -502,9 +503,24 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
 
     guard enabled else {
       CompanionToolContext.disable()
+      CompanionToolContext.localSearchPreferred = false
+      LocalSearchStore.shared = nil
       call.resolve(["toolCount": 0])
 
       return
+    }
+
+    // The phone's replica, when the web layer has one, and whether it answers ahead of the appliance.
+    // The SQLite plugin's own config says where it keeps the file and which keychain prefix holds its key.
+    CompanionToolContext.localSearchPreferred = (call.getString("connectionMode") ?? "connected") != "connected"
+    if let databaseFile = call.getObject("localSearch")?["databaseFile"] as? String, !databaseFile.isEmpty {
+      let sqlite = bridge?.config.getPluginConfig("CapacitorSQLite")
+      LocalSearchStore.shared = LocalSearchStore(
+        databaseFile: databaseFile,
+        databaseLocation: sqlite?.getString("iosDatabaseLocation") ?? "Documents",
+        keychainPrefix: sqlite?.getString("iosKeychainPrefix") ?? "")
+    } else {
+      LocalSearchStore.shared = nil
     }
 
     guard
@@ -513,7 +529,9 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       let apiKey = call.getString("apiKey"),
       !apiKey.isEmpty
     else {
-      call.reject("baseUrl and apiKey are required to enable intent tools")
+      // No appliance; the phone's own search may still be the whole tool set.
+      CompanionToolContext.disable()
+      call.resolve(["toolCount": CompanionToolContext.withLocalSearch([]).count])
 
       return
     }

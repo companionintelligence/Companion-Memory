@@ -1,6 +1,8 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ResolvedEntity } from '@ci/domains/entity-resolution';
+
+import { AGENT_MEMORY_CATEGORIES } from './entities/AgentMemoryEntity';
 
 // ---------------------------------------------------------------------------
 // Request DTOs
@@ -37,11 +39,21 @@ export const agentMemorySchema = z.object({
   source: z.string().max(50).optional(),
   /** Hermes session ID — passed through from the agent's active conversation. */
   sessionId: z.string().max(255).optional(),
+  /** Optional governed atom category (`knowl` pattern). */
+  category: z.enum(AGENT_MEMORY_CATEGORIES).optional(),
+  /** Optional ID of a prior memory fragment that this write supersedes. */
+  supersedesId: z.string().uuid().optional(),
+});
+
+export const memoryDriftSchema = z.object({
+  changedPaths: z.array(z.string().min(1).max(1000)).min(1).max(500),
+  markConflicted: z.boolean().optional(),
 });
 
 export type RecallDto = z.infer<typeof recallSchema>;
 export type TurnDto = z.infer<typeof turnSchema>;
 export type AgentMemoryDto = z.infer<typeof agentMemorySchema>;
+export type MemoryDriftDto = z.infer<typeof memoryDriftSchema>;
 
 // ---------------------------------------------------------------------------
 // Response shapes

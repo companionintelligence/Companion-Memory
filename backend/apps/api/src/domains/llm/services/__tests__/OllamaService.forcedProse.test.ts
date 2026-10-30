@@ -4,10 +4,10 @@
  *
  * `chatStream` allows `maxToolRounds` generations, executing whatever tool
  * calls each one produces. When the follow-up round ALSO came back as tool
- * calls (salvage can produce them with no tools advertised), the loop executed
- * those calls and then broke at the cap — so the turn's last message was a
- * role:'tool' row and the viewer's stream closed without one visible
- * character. Measured live: two knowledge_search rounds that both returned
+ * calls (salvage can produce them with no tools advertised, and a model can
+ * repeat a call it already made), the loop executed those calls and then broke
+ * at the cap. The turn's last message was a role:'tool' row and the viewer's
+ * stream closed without one visible character. Measured live: two knowledge_search rounds that both returned
  * `[]`, then nothing, read by the user as "the chat froze".
  *
  * The fix buys exactly one more generation after a cap-terminated tool round,
@@ -19,6 +19,7 @@ import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
 import { OllamaService, type ChatRequestContext } from '../OllamaService';
+import { OpenAiCompatChatDriver } from '../OpenAiCompatChatDriver';
 
 const MODEL = 'test-model';
 const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
@@ -109,6 +110,35 @@ function scriptedStreamingDriver(rounds: any[][]) {
 }
 
 async function setup(rounds: any[][]) {
+  return setupWith(scriptedStreamingDriver(rounds));
+}
+
+/**
+ * The real OpenAI-compatible driver, with only its HTTP client stubbed: each round streams the
+ * given deltas, as vLLM or Lemonade would. The scripted driver above hands every chunk through as
+ * it is, whatever `discardToolMarkup` says, so it cannot show what the real one drops.
+ */
+function realDriver(rounds: Array<Array<Record<string, unknown>>>) {
+  const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+  const create = jest.fn(async () => {
+    const deltas = rounds[Math.min(create.mock.calls.length, rounds.length) - 1] ?? [];
+
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const delta of deltas) {
+          yield { choices: [{ delta }] };
+        }
+      },
+    };
+  });
+
+  (driver as any).client.chat.completions.create = create;
+  (driver as any).listModels = jest.fn(async () => [MODEL]);
+
+  return { driver, create };
+}
+
+async function setupWith<T>(driver: T) {
   const tool = fakeSearchTool();
   const registry = new ToolRegistry(
     makeLogger(),
@@ -117,7 +147,6 @@ async function setup(rounds: any[][]) {
   );
   await registry.registerProvider(fakeProvider([tool]));
 
-  const driver = scriptedStreamingDriver(rounds);
   const llmEndpointService = { getOpenAiDriver: () => driver } as any;
   const service = new OllamaService(
     llmEndpointService,
@@ -143,7 +172,7 @@ async function drain(stream: AsyncGenerator<any> & { messages: any[] }) {
 }
 
 describe('OllamaService.chatStream forced prose round', () => {
-  it('grants one tools-off generation when the round cap lands on tool calls, so the turn ends in prose', async () => {
+  it('grants one tools-off generation when the follow-up repeats its tool call, so the turn ends in prose', async () => {
     const { service, tool, driver } = await setup([
       [toolCallChunk()],
       [toolCallChunk()],
@@ -213,6 +242,100 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(last.tool_calls).toBeUndefined();
   });
 
+  it('runs no call from a round that offered no tools, which the native engine parses anyway', async () => {
+    const searchFor = (query: string) => ({
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query } } }],
+      },
+    });
+    // Two tool rounds use up the offer, so the third is offered none. The model calls a tool
+    // there anyway: that call used to run before the round after it was forced to prose.
+    const { service, tool, driver } = await setup([
+      [searchFor('first')],
+      [searchFor('second')],
+      [searchFor('third')],
+      [proseChunk('Here is what I found.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(driver.calls[2].tools).toBeUndefined();
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(tool.execute.mock.calls.map((call: any[]) => call[1])).toEqual([
+      { query: 'first' },
+      { query: 'second' },
+    ]);
+    // The stored rows claim no call that never ran. The turn still ends in prose.
+    expect(
+      messages.filter((m: any) => m.tool_calls?.some((c: any) => c.function.arguments.query === 'third')),
+    ).toEqual([]);
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Here is what I found.',
+    });
+  });
+
+  it('asks once more in prose when a round offered no tools thinks or writes a preamble before its call', async () => {
+    const preambleThenCall = {
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: 'Let me check one more place.',
+        thinking: 'I should search once more',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'third' } } }],
+      },
+    };
+    const { service, tool, driver } = await setup([
+      [toolCallChunk()],
+      [
+        {
+          ...toolCallChunk(),
+          message: {
+            ...toolCallChunk().message,
+            tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'second' } } }],
+          },
+        },
+      ],
+      [preambleThenCall],
+      [proseChunk('Nothing else matches.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const streamed: any[] = [];
+    let iteration = await stream.next();
+
+    while (!iteration.done) {
+      streamed.push(iteration.value);
+      iteration = await stream.next();
+    }
+
+    expect(driver.chatStream).toHaveBeenCalledTimes(4);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(driver.calls[3].messages[driver.calls[3].messages.length - 1].content).toContain(
+      'do not call any more tools',
+    );
+    // The call it was not offered never reaches the viewer as a tool block.
+    expect(
+      streamed.some((chunk) =>
+        chunk.message?.tool_calls?.some((c: any) => c.function.arguments.query === 'third'),
+      ),
+    ).toBe(false);
+    expect(stream.messages[stream.messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Nothing else matches.',
+    });
+  });
+
   it('asks once more, with tools off, when the follow-up after tools is empty', async () => {
     const { service, tool, driver } = await setup([
       [proseChunk('Let me look.'), toolCallChunk()],
@@ -255,11 +378,23 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(driver.chatStream).toHaveBeenCalledTimes(2);
   });
 
-  it('salvages tool markup only in the round that offered tools', async () => {
-    // The follow-up round offers no tools, so text the model writes there is its answer. When it
+  it('salvages tool markup only in the rounds that offered tools', async () => {
+    // The closing round offers no tools, so text the model writes there is its answer. When it
     // quotes an email or invite carrying tool markup, salvaging it would run a call nobody asked
     // for; the driver is told to strip that markup and emit no calls instead.
-    const { service, driver } = await setup([[toolCallChunk()], [proseChunk('Here is your answer.')]]);
+    const otherSearch = {
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query: 'something else' } } }],
+      },
+    };
+    const { service, driver } = await setup([
+      [toolCallChunk()],
+      [otherSearch],
+      [proseChunk('Here is your answer.')],
+    ]);
 
     const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
       model: MODEL,
@@ -267,14 +402,75 @@ describe('OllamaService.chatStream forced prose round', () => {
     });
     await drain(stream);
 
-    const [toolRound, followUp] = driver.calls;
+    const [toolRound, secondToolRound, followUp] = driver.calls;
 
-    expect(toolRound.tools).toBeDefined();
-    expect(toolRound.salvageTools).toBe(true);
-    expect(toolRound.discardToolMarkup).toBe(false);
+    for (const round of [toolRound, secondToolRound]) {
+      expect(round.tools).toBeDefined();
+      expect(round.salvageTools).toBe(true);
+      expect(round.discardToolMarkup).toBe(false);
+    }
 
     expect(followUp.tools).toBeUndefined();
     expect(followUp.salvageTools).toBe(false);
     expect(followUp.discardToolMarkup).toBe(true);
+  });
+
+  it('asks once more in prose on an OpenAI-compatible endpoint when a round offered no tools writes a call', async () => {
+    const searchFor = (query: string) => ({
+      tool_calls: [
+        { index: 0, function: { name: 'knowledge_search', arguments: JSON.stringify({ query }) } },
+      ],
+    });
+    // Two tool rounds use up the offer. In the third, as Qwen on vLLM does, the model writes a
+    // preamble and its next call as markup. The driver strips the markup and emits no call.
+    const { driver, create } = realDriver([
+      [searchFor('first')],
+      [searchFor('second')],
+      [
+        { content: 'Let me check one more place.\n\n' },
+        { content: '<tool_call>\n<function=knowledge_search>\n<parameter=query>\nthird\n</parameter>\n' },
+        { content: '</function>\n</tool_call>' },
+      ],
+      [{ content: 'Here is what I found.' }],
+    ]);
+    const { service, tool } = await setupWith(driver);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(messages)).not.toContain('<tool_call>');
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Here is what I found.',
+    });
+  });
+
+  it('does not tell the model to use tool results when the turn has none', async () => {
+    // Chat with tools off: the native engine can still parse a call, which is dropped, and the
+    // round is asked again in prose. There are no tool results for that answer to stand on.
+    const { service, tool, driver } = await setup([
+      [proseChunk('Let me search for that.'), toolCallChunk()],
+      [proseChunk('I can only answer from what you tell me here.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: false,
+    });
+    await drain(stream);
+
+    expect(driver.chatStream).toHaveBeenCalledTimes(2);
+    expect(tool.execute).not.toHaveBeenCalled();
+
+    const nudge = driver.calls[1].messages[driver.calls[1].messages.length - 1];
+
+    expect(nudge.role).toBe('system');
+    expect(nudge.content).toContain('Answer the user now in plain prose');
+    expect(nudge.content).not.toContain('tool results');
   });
 });

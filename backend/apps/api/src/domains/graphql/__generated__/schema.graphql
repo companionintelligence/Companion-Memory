@@ -311,6 +311,7 @@ type AskQueryType {
   actor: AskActorType
   dataClass: String
   prompt: String!
+  promptHiddenCharactersRemoved: Boolean!
   purpose: String
   queryType: String!
 }
@@ -857,6 +858,7 @@ type CreateItemPayload {
 
 input CreateNoteInput {
   content: String
+  id: String
   title: String
 }
 
@@ -975,6 +977,7 @@ input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
   filters: SavedSearchFiltersInput
+  id: String
   name: String
   query: String
   tags: [String!]
@@ -1493,6 +1496,15 @@ type ForecastType {
   systemStatus: String!
 }
 
+type GeocodeResultType {
+  cached: Boolean!
+  confidence: Float
+  latitude: Float
+  longitude: Float
+  normalizedAddress: String
+  status: String!
+}
+
 enum GrantMode {
   auto
   block
@@ -1792,6 +1804,7 @@ type KnownPlaceType {
   label: String!
   locationId: String
   source: String!
+  tags: [String!]!
 }
 
 input LinkItemToProductInput {
@@ -2207,6 +2220,11 @@ type Mutation {
 
   """Manually trigger the HBPE pipeline for the current user"""
   triggerHbpe: String!
+
+  """
+  A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing at all", which takes it out of that queue.
+  """
+  unlinkObservation(id: ID!): ObjectObservationType
 
   """Remove the planned block for this task and clear scheduledFor."""
   unscheduleTask(id: ID!): TaskType
@@ -2946,6 +2964,7 @@ type Query {
 
   """Past forecast-vs-actual buckets from hbpe.prediction_log"""
   forecastHistory(days: Int = 5): [ForecastHistoryDayType!]!
+  geocode(query: String!): GeocodeResultType!
   geocodingConfigured: Boolean!
 
   """
@@ -3353,11 +3372,14 @@ type SavedSearchEdge implements Edge {
 }
 
 input SavedSearchFiltersInput {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3365,14 +3387,18 @@ input SavedSearchFiltersInput {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchFiltersType {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3380,6 +3406,7 @@ type SavedSearchFiltersType {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchType implements Node {
@@ -3440,12 +3467,14 @@ type ScheduleTaskPayload {
 
 input SearchInput {
   after: String
+  areas: [[Float!]!]
   bbox: [Float!]
   connectors: [String!]
   direction: String
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]
+  fileKinds: [String!]
   first: Int
   hasLocation: Boolean
   includeFiles: Boolean
@@ -3988,13 +4017,16 @@ input UpdateKnownPlaceInput {
   confidence: Float
   coordinates: KnownPlaceCoordinatesInput
   kind: String!
+  knownPlaceId: String
   label: String!
   locationId: String
   source: String
+  tags: [String!]
 }
 
 input UpdateNoteInput {
   content: String
+  expectedUpdatedAt: DateTime
   id: String!
   title: String
 }

@@ -140,17 +140,31 @@ SELECT
        AND b.url IS NOT NULL)
      AS br_distinct_domains,
 
+  -- A thing's acquired date is a day when it sits exactly on a UTC midnight (a
+  -- picked day, or an importer that only knew the day) and counts on the day it
+  -- names, in every zone. Read as a moment, it would land on the day before
+  -- everywhere west of UTC. Any other value is a real moment (an order time) and
+  -- counts on the user's local day. Same split as the web app's lib/thingDate.ts.
   (SELECT count(*) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_rows,
   (SELECT count(i.purchase_price) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_rows_with_price,
   (SELECT sum(i.purchase_price) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_price_sum,
 
   (SELECT count(*) FROM ci.events e
@@ -241,7 +255,12 @@ WITH days AS (
        WHERE pos.user_id = $1::uuid
          AND pos.location IS NOT NULL
   UNION
-      SELECT DISTINCT (i.acquired_at AT TIME ZONE $2::text)::date AS day
+      -- A UTC-midnight acquired date is the day it names (see DAILY_AGGREGATE_SQL).
+      SELECT DISTINCT CASE
+               WHEN (i.acquired_at AT TIME ZONE 'UTC')::time = time '00:00'
+                 THEN (i.acquired_at AT TIME ZONE 'UTC')::date
+               ELSE (i.acquired_at AT TIME ZONE $2::text)::date
+             END AS day
         FROM ci.objects i
        WHERE i.user_id::uuid = $1::uuid
          AND i.purchase_price IS NOT NULL

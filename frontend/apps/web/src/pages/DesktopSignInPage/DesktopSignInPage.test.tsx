@@ -47,8 +47,9 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  // The mark lazily imports a 1.9 MB Lottie animation unless reduced motion is
-  // on; under test the static SVG is both faster and deterministic.
+  // jsdom has no `matchMedia`, and `Reveal` reads it to decide whether to
+  // stagger the copy. Reduced motion is the deterministic path: no entrance
+  // animation classes, nothing timing-dependent.
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion'),
     media: query,

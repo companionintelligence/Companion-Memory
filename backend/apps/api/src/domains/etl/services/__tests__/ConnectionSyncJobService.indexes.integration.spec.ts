@@ -4,11 +4,10 @@ import { DataSource, type Logger as TypeOrmLogger } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import { ConnectionEntity, ProviderEntity } from '@ci/domains/connections';
+import { UserEntity } from '@ci/domains/user';
 
 import { ScratchDatabase, scratchDatabaseAvailability } from '../../../__tests__/support/scratchDatabase';
-import { ConnectionEntity } from '../../../connections/entities/ConnectionEntity';
-import { ProviderEntity } from '../../../connections/entities/ProviderEntity';
-import { UserEntity } from '../../../user/entities/UserEntity';
 import { ConnectionSyncJobEntity } from '../../entities/ConnectionSyncJobEntity';
 import { ConnectionSyncJobService } from '../ConnectionSyncJobService';
 

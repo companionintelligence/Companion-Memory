@@ -1,4 +1,5 @@
 import type { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import type { EventService } from '@ci/domains/events';
 import { Events } from '@ci/domains/events';
 import {
@@ -11,7 +12,10 @@ import type { ContextPromptGenerateService, CrossTableHydrationService } from '@
 import type { PythonFunctionService } from '@ci/domains/python-functions';
 import type { SuggestionSyncService } from '@ci/domains/schedule';
 
-import { SmartRotationListener } from '../../listeners/SmartRotationListener';
+import {
+  INFERENCE_QUEUE_RETENTION_MINUTES,
+  SmartRotationListener,
+} from '../../listeners/SmartRotationListener';
 
 function buildListener(overrides: {
   questionService?: QuestionService;
@@ -26,7 +30,11 @@ function buildListener(overrides: {
   lifeContextService?: { buildForUser: jest.Mock };
   dataSource?: { query: jest.Mock };
 }) {
-  const questionService = (overrides.questionService ?? {}) as QuestionService;
+  // The dispatch gate defaults OPEN, so the answer_infer tests below reach the
+  // selection they assert on; the gate's own behaviour is tested explicitly.
+  const questionService = (overrides.questionService ?? {
+    isInferenceDispatchOpen: jest.fn().mockResolvedValue(true),
+  }) as QuestionService;
   const contextGapQuestionService = (overrides.contextGapQuestionService ??
     {}) as import('../../services/ContextGapQuestionService').ContextGapQuestionService;
   const eventService = (overrides.eventService ?? { send: jest.fn() }) as unknown as EventService;
@@ -90,6 +98,9 @@ describe('SmartRotationListener', () => {
       },
       {
         singletonKey: 'infer:user-1:q-1',
+        // A job that waits unstarted past this is dropped by pg-boss rather
+        // than replayed — see INFERENCE_QUEUE_RETENTION_MINUTES.
+        retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
       },
     );
   });
@@ -161,6 +172,43 @@ describe('SmartRotationListener', () => {
   });
 
   describe('answer_infer', () => {
+    // ═══ THE DISPATCH GATE ═══
+    //
+    // The backlog cap and the per-owner cadence. Asked BEFORE the selection:
+    // a gated owner costs one cheap query, not the full rotation scan, and the
+    // skip is logged as what it is rather than as "nothing left to ask". The
+    // SQL itself is QuestionService's, shared with the cron path.
+    it('neither selects nor dispatches while the owner is gated', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+      const questionService = {
+        isInferenceDispatchOpen: jest.fn().mockResolvedValue(false),
+      } as unknown as QuestionService;
+
+      const listener = buildListener({ eventService, dataSource, questionService });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('asks the gate about the queue and event it dispatches on, at the configured interval', async () => {
+      const questionService = {
+        isInferenceDispatchOpen: jest.fn().mockResolvedValue(false),
+      } as unknown as QuestionService;
+
+      const listener = buildListener({ questionService });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      expect(questionService.isInferenceDispatchOpen).toHaveBeenCalledWith('user-1', {
+        queue: 'llm-background',
+        eventName: Events.INFER_QUESTION_ANSWER,
+        intervalMinutes: config.llm.answerInferenceIntervalMinutes,
+      });
+    });
+
     it('skips dispatch when there are no unanswered questions', async () => {
       const eventService = { send: jest.fn() } as unknown as EventService;
       const dataSource = { query: jest.fn().mockResolvedValue([]) };

@@ -1,14 +1,28 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
 
+import { MemoryUnreachable } from '@/components/MemoryUnreachable';
 import { useAuth, useCurrentUser } from '@/hooks';
 
-export function ProtectedRoute({ children }: { children: React.ReactNode }) {
+export function ProtectedRoute({
+  children,
+  fallback = <LoadingPage />,
+}: {
+  children: ReactNode;
+  /**
+   * What shows while the page's own code downloads. Routes are lazy and the
+   * router runs without transitions (see App.tsx), so a first visit always
+   * shows this. The Memory hub passes the section's skeleton, so a tab does
+   * not flash a spinner under its strip first (MemoryHubRoute).
+   */
+  fallback?: ReactNode;
+}) {
   const location = useLocation();
-  const [{ expired, loading: authLoading, authToken }, { refresh }] = useAuth();
-  const { user, loading: userLoading } = useCurrentUser();
+  const [{ expired, loading: authLoading, authToken, unreachable: sessionUnreachable }, { refresh }] =
+    useAuth();
+  const { user, loading: userLoading, unreachable: profileUnreachable, refetch } = useCurrentUser();
   const [triedRecover, setTriedRecover] = useState(false);
   // Once the signed-in app has been shown, a later `me` refetch must not swap
   // this route for the loader or the login redirect. That unmounts onboarding
@@ -61,6 +75,30 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // A phone session stays valid when `me` blips to empty (no JWT to expire).
   // Sending that through the signed-out redirect reloads onboarding.
   if ((expired || !user) && !(shown.current && !expired)) {
+    // Memory did not answer for the session or the profile. That is an outage, not a
+    // sign-out: say so, and let the retries in useAuth and useCurrentUser bring the page
+    // back, instead of sending a signed-in person to Log In. Checked here, after the
+    // `shown` guard, so a page already on screen stays mounted through a `me` blip. It
+    // includes a token that ran out while the session check went unanswered: Log In
+    // would send a known user straight back here, and round again.
+    if (sessionUnreachable || (profileUnreachable && !user)) {
+      return (
+        <MemoryUnreachable
+          signedIn={hadSession || user != null}
+          onRetry={() => {
+            // The session first: a profile asked for with an expired token fails again.
+            if (sessionUnreachable) {
+              if (canRecover) {
+                void refresh();
+              }
+            } else {
+              void refetch?.();
+            }
+          }}
+        />
+      );
+    }
+
     return (
       <Navigate
         to={isNativePlatform() ? '/device-connect' : '/login'}
@@ -70,5 +108,5 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <Suspense fallback={<LoadingPage />}>{children}</Suspense>;
+  return <Suspense fallback={fallback}>{children}</Suspense>;
 }

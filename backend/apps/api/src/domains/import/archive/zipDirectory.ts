@@ -110,25 +110,30 @@ function readFully(fd: number, buf: Buffer, position: number): void {
   }
 }
 
-interface CentralDirectoryLocation {
+export interface CentralDirectoryLocation {
   offset: number;
   size: number;
 }
 
+/** How much of an archive's tail can hold the end-of-central-directory record. */
+export function zipTailWindow(fileSize: number): number {
+  return Math.min(fileSize, 22 + 0xffff);
+}
+
 /**
- * Locate the central directory from the end-of-central-directory record, which
- * sits in the last 22 bytes plus up to 64 KiB of archive comment. When any of
- * its fields is saturated the real values live in the ZIP64 record the locator
- * immediately before it points at.
+ * Read the end-of-central-directory record out of an archive's tail (see
+ * {@link zipTailWindow}). Answers with the central directory's location, or —
+ * when a field is saturated — where the ZIP64 record holding the real values
+ * sits, for the caller to fetch and hand to {@link parseZip64EndOfCentralDirectory}.
+ * Pure, so a local file descriptor and a ranged HTTP download share it.
  */
-function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryLocation | null {
-  const window = Math.min(fileSize, 22 + 0xffff);
-  if (window < 22) {
+export function parseEndOfCentralDirectory(
+  tail: Buffer,
+  fileSize: number,
+): CentralDirectoryLocation | { zip64At: number } | null {
+  if (tail.length < 22) {
     return null;
   }
-
-  const tail = Buffer.alloc(window);
-  readFully(fd, tail, fileSize - window);
 
   let at = -1;
   for (let i = tail.length - 22; i >= 0; i -= 1) {
@@ -142,8 +147,8 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
     return null;
   }
 
-  let size = tail.readUInt32LE(at + 12);
-  let offset = tail.readUInt32LE(at + 16);
+  const size = tail.readUInt32LE(at + 12);
+  const offset = tail.readUInt32LE(at + 16);
 
   if (size === 0xffffffff || offset === 0xffffffff || tail.readUInt16LE(at + 10) === 0xffff) {
     const locatorAt = at - 20;
@@ -152,20 +157,37 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
     }
 
     const zip64At = Number(tail.readBigUInt64LE(locatorAt + 8));
-    if (!Number.isSafeInteger(zip64At) || zip64At < 0 || zip64At + 56 > fileSize) {
+    if (!Number.isSafeInteger(zip64At) || zip64At < 0 || zip64At + ZIP64_EOCD_BYTES > fileSize) {
       return null;
     }
 
-    const zip64 = Buffer.alloc(56);
-    readFully(fd, zip64, zip64At);
-    if (zip64.readUInt32LE(0) !== ZIP64_EOCD_SIGNATURE) {
-      return null;
-    }
-
-    size = Number(zip64.readBigUInt64LE(40));
-    offset = Number(zip64.readBigUInt64LE(48));
+    return { zip64At };
   }
 
+  return validCentralDirectoryLocation({ offset, size }, fileSize);
+}
+
+/** The fixed part of a ZIP64 end-of-central-directory record. */
+export const ZIP64_EOCD_BYTES = 56;
+
+export function parseZip64EndOfCentralDirectory(
+  zip64: Buffer,
+  fileSize: number,
+): CentralDirectoryLocation | null {
+  if (zip64.length < ZIP64_EOCD_BYTES || zip64.readUInt32LE(0) !== ZIP64_EOCD_SIGNATURE) {
+    return null;
+  }
+
+  return validCentralDirectoryLocation(
+    { size: Number(zip64.readBigUInt64LE(40)), offset: Number(zip64.readBigUInt64LE(48)) },
+    fileSize,
+  );
+}
+
+function validCentralDirectoryLocation(
+  { offset, size }: CentralDirectoryLocation,
+  fileSize: number,
+): CentralDirectoryLocation | null {
   if (!Number.isSafeInteger(size) || !Number.isSafeInteger(offset) || offset < 0 || size < 0) {
     return null;
   }
@@ -175,6 +197,32 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
   }
 
   return { offset, size };
+}
+
+/**
+ * Locate the central directory from the end-of-central-directory record, which
+ * sits in the last 22 bytes plus up to 64 KiB of archive comment. When any of
+ * its fields is saturated the real values live in the ZIP64 record the locator
+ * immediately before it points at.
+ */
+function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryLocation | null {
+  const window = zipTailWindow(fileSize);
+  if (window < 22) {
+    return null;
+  }
+
+  const tail = Buffer.alloc(window);
+  readFully(fd, tail, fileSize - window);
+
+  const located = parseEndOfCentralDirectory(tail, fileSize);
+  if (located == null || !('zip64At' in located)) {
+    return located;
+  }
+
+  const zip64 = Buffer.alloc(ZIP64_EOCD_BYTES);
+  readFully(fd, zip64, located.zip64At);
+
+  return parseZip64EndOfCentralDirectory(zip64, fileSize);
 }
 
 /** Find one extra-field record by id within an entry's extra block. */
@@ -197,7 +245,7 @@ function findExtraField(extra: Buffer, id: number): Buffer | null {
   return null;
 }
 
-function parseCentralDirectory(buf: Buffer): ZipEntry[] {
+export function parseCentralDirectory(buf: Buffer): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let p = 0;
 

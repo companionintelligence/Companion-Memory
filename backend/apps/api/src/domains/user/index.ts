@@ -58,6 +58,8 @@ import { UserService } from './services/UserService';
       }),
     },
   ],
+  // AccountPurgeService also serves the immediate account delete (privacy domain),
+  // which hands an ended account's rows and file objects to the same purge.
   exports: [UserService, AccountPurgeService],
 })
 export class UserModule {}
@@ -74,7 +76,15 @@ export { UserService, AccountPurgeService };
 export { CLIENT_TIMEZONE_HEADER, ClientTimezoneInterceptor };
 
 // Account purge
-export { PURGE_OBJECT_STORE, type PurgeObjectStore } from './purge/objectStore';
+export { removeFromAskAudit, type AskAuditRemoval } from './purge/askAudit';
+export {
+  deleteSoleOwnedObjects,
+  OBJECT_DELETE_DEADLINE_MS,
+  PURGE_OBJECT_STORE,
+  type PurgeObjectStore,
+  type StoredObject,
+} from './purge/objectStore';
+export { type AccountPurgeOutcome } from './services/AccountPurgeService';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';
 

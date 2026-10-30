@@ -115,7 +115,24 @@ function sourceTriple(
  * Thunderbird export of a Yahoo mailbox must not look like a second producer
  * for the Gmail connection. See docs/design/cross-pipeline-identity.md §5.
  */
+/**
+ * The connection a cloud-drive sync fetched this record's file through, as the
+ * record's `connection_id` — the same column a connection's own sync writes —
+ * so that disconnecting it removes the record, unless the ledger shows another
+ * arrival (the same photo from Drive, or from an upload), in which case the
+ * record stays and only this link is cleared. Absent for every other import.
+ */
+function originConnection(rec: CanonicalRecord): { connection_id?: string } {
+  return rec.originConnectionId ? { connection_id: rec.originConnectionId } : {};
+}
+
 function importPlatform(rec: CanonicalRecord): SourceSystem | undefined {
+  // A connection fetched this record's file from a cloud drive: that drive is
+  // where it arrived from, not the catch-all importer that read it.
+  if (rec.originPlatform) {
+    return canonicalSystem(rec.originPlatform);
+  }
+
   return ledgerPlatform(canonicalSystem(rec.sourceSystem)) ?? undefined;
 }
 
@@ -298,6 +315,7 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
     source_data: m,
     ...sourceTriple(rec),
     source_platform: importPlatform(rec),
+    ...originConnection(rec),
   };
   const title = rec.title || str(m.Product) || str(m.Title);
   if (title) {
@@ -1410,6 +1428,7 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
     metadata: { ...m },
     ...sourceTriple(rec),
     source_platform: importPlatform(rec),
+    ...originConnection(rec),
   };
 
   // Cross-pipeline identity: an email keys on its RFC Message-ID under the
@@ -1452,6 +1471,14 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
 
     input.source_system = identity.system;
     input.source_id = identity.id;
+
+    // A post's photos and videos ride on it the same way a message's do; this
+    // early return used to skip the attachment mapping below, so every post
+    // reached the server with its media catalogued but unattached.
+    const postAttachments = attachmentsFor(m);
+    if (postAttachments) {
+      input.attachments = postAttachments;
+    }
 
     return input;
   }
@@ -2298,6 +2325,7 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
     metadata,
     ...sourceTriple(rec),
     source_platform: importPlatform(rec),
+    ...originConnection(rec),
   };
 
   if (rec.endTime) {

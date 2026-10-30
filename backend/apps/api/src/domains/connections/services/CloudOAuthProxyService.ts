@@ -49,6 +49,9 @@ export interface PortalUserApplication {
   deviceSlug: string;
 }
 
+/** Bound on the device-applications read, which sits on the agent-harness status request. */
+const DEVICE_APPLICATIONS_TIMEOUT_MS = 5_000;
+
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google',
   microsoft: 'Microsoft',
@@ -57,6 +60,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   github: 'GitHub',
   reddit: 'Reddit',
   slack: 'Slack',
+  dropbox: 'Dropbox',
 };
 
 /**
@@ -87,6 +91,7 @@ export function portalOAuthOffMessage(provider: string): string {
  *    which CI Portal rotates on every use (store the one it returns)
  *  - token/revoke:  the device's Basic credentials plus the proxy refresh token
  *    and/or provider + user_provider_id
+ *  - devices/applications: the device key alone, in `x-device-key`
  */
 @Injectable()
 export class CloudOAuthProxyService {
@@ -108,6 +113,7 @@ export class CloudOAuthProxyService {
       [providers.github.id]: 'github',
       [providers.reddit.id]: 'reddit',
       [providers.slack.id]: 'slack',
+      [providers.dropbox.id]: 'dropbox',
     };
 
     return map[providerId];
@@ -329,10 +335,14 @@ export class CloudOAuthProxyService {
     }
 
     try {
+      // Companion Portal reads a device on this route from `x-device-key` alone (its
+      // `deviceOrUserAuthMiddleware`). It ignores the Basic header the OAuth routes take and
+      // answers 401. The timeout keeps a slow Portal from stalling the agent-harness status call.
       const response = await fetch(`${this.baseUrl}/api/devices/applications`, {
         headers: {
-          Authorization: this.authorizationHeader,
+          'x-device-key': this.apiKey,
         },
+        signal: AbortSignal.timeout(DEVICE_APPLICATIONS_TIMEOUT_MS),
       });
 
       if (!response.ok) {

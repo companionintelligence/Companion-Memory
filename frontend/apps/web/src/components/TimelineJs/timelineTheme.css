@@ -622,7 +622,7 @@
  * mobile, which leaves no way to step to the previous or next event. Keep a
  * pair of icon buttons at the bottom corners of the story, clear of the text.
  */
-@media (max-width: 896px) {
+@media (max-width: 895px) {
   .ci-timeline-js .tl-slidenav-previous,
   .ci-timeline-js .tl-slidenav-next,
   .ci-timeline-js .tl-mobile .tl-slidenav-previous,
@@ -691,6 +691,191 @@
   .ci-timeline-js .tl-slide-content {
     padding-bottom: 3.25rem !important;
     box-sizing: border-box !important;
+  }
+
+  /*
+   * Memory's phone timeline is a focused event card above a usable time rail.
+   * TimelineJS defaults to a roughly two-thirds-height, vertically-centred
+   * story, which left hundreds of empty pixels while squeezing the actual
+   * timeline into the bottom edge.
+   */
+  .memory-story-timeline .tl-storyslider {
+    height: 52% !important;
+    box-shadow: none !important;
+  }
+
+  .memory-story-timeline .tl-timenav {
+    height: 48% !important;
+    border-top-color: var(--tl-border) !important;
+  }
+
+  .memory-story-timeline .tl-slide {
+    padding-top: 0 !important;
+  }
+
+  .memory-story-timeline .tl-slide .tl-slide-content-container {
+    align-items: flex-start !important;
+    overflow-y: auto !important;
+    box-sizing: border-box !important;
+    padding-top: 0.75rem !important;
+  }
+
+  .memory-story-timeline .tl-slide .tl-slide-content-container .tl-slide-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    justify-content: flex-start !important;
+    box-sizing: border-box !important;
+    padding: 0.5rem 3.75rem 1rem !important;
+  }
+
+  .memory-story-timeline .tl-slide .tl-slide-content-container .tl-slide-content .tl-text {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .memory-story-timeline .tl-text-content-container {
+    width: 100% !important;
+    max-width: 28rem !important;
+    box-sizing: border-box !important;
+    margin: 0 auto !important;
+    padding: 0.875rem 1rem !important;
+    border: 1px solid var(--tl-border) !important;
+    border-radius: 0.75rem !important;
+    background: color-mix(in oklab, var(--tl-bg) 94%, var(--tl-fg)) !important;
+    box-shadow: 0 1px 3px color-mix(in oklab, var(--tl-fg) 12%, transparent) !important;
+    text-align: left !important;
+  }
+
+  .memory-story-timeline .tl-text .tl-headline-date,
+  .memory-story-timeline .tl-text h3.tl-headline-date,
+  .memory-story-timeline .tl-text .tl-headline-date small {
+    margin: 0 0 0.35rem !important;
+    color: var(--tl-muted) !important;
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    line-height: 1.3 !important;
+  }
+
+  .memory-story-timeline .tl-text h2.tl-headline,
+  .memory-story-timeline .tl-text h2.tl-headline-title {
+    margin: 0 !important;
+    color: var(--tl-fg) !important;
+    font-size: clamp(1.5rem, 7vw, 2rem) !important;
+    line-height: 1.1 !important;
+    overflow-wrap: anywhere;
+  }
+
+  .memory-story-timeline .tl-text p {
+    margin: 0.65rem 0 0 !important;
+    font-size: 0.875rem !important;
+    line-height: 1.45 !important;
+  }
+
+  .memory-story-timeline
+    .tl-slide
+    .tl-slide-content-container
+    .tl-slide-content
+    .tl-media {
+    max-height: 9rem !important;
+    margin-top: 0.75rem !important;
+    padding-top: 0.75rem !important;
+    overflow: hidden !important;
+  }
+
+  .memory-story-timeline .tl-media img,
+  .memory-story-timeline .tl-media video,
+  .memory-story-timeline .tl-media iframe {
+    max-height: 8rem !important;
+    object-fit: contain;
+  }
+
+  /* Large, centred arrow chips replace clipped previous/next preview cards. */
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-previous,
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-next {
+    top: 50% !important;
+    bottom: auto !important;
+    transform: translateY(-50%) !important;
+  }
+
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-previous {
+    left: 0.75rem !important;
+  }
+
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-next {
+    right: 0.75rem !important;
+  }
+
+  .ci-timeline-js.memory-story-timeline
+    .tl-timeline
+    .tl-slidenav-next
+    .tl-slidenav-content-container,
+  .ci-timeline-js.memory-story-timeline
+    .tl-timeline
+    .tl-slidenav-previous
+    .tl-slidenav-content-container,
+  .ci-timeline-js.memory-story-timeline
+    .tl-timeline
+    .tl-slidenav-next
+    .tl-slidenav-content-container.tl-slidenav-inverted,
+  .ci-timeline-js.memory-story-timeline
+    .tl-timeline
+    .tl-slidenav-previous
+    .tl-slidenav-content-container.tl-slidenav-inverted {
+    width: 2.75rem !important;
+    max-width: 2.75rem !important;
+    height: 2.75rem !important;
+    border-radius: 999px !important;
+  }
+
+  .ci-timeline-js.memory-story-timeline
+    .tl-timeline
+    .tl-slidenav-content-container
+    > :not(.tl-slidenav-icon) {
+    display: none !important;
+  }
+
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-next .tl-slidenav-icon,
+  .ci-timeline-js.memory-story-timeline .tl-timeline .tl-slidenav-previous .tl-slidenav-icon {
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+  }
+
+  /* Put zoom controls in one compact row instead of a tall rail over the axis. */
+  .memory-story-timeline .tl-menubar {
+    top: calc(52% + 0.5rem) !important;
+    left: 0.5rem !important;
+    display: flex !important;
+    overflow: hidden !important;
+    border: 1px solid var(--tl-border) !important;
+    border-radius: 0.625rem !important;
+    background: var(--tl-bg) !important;
+    box-shadow: 0 1px 4px color-mix(in oklab, var(--tl-fg) 14%, transparent) !important;
+  }
+
+  .memory-story-timeline .tl-menubar-button {
+    display: flex !important;
+    width: 2.5rem !important;
+    height: 2.5rem !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-right: 1px solid var(--tl-border) !important;
+  }
+
+  .memory-story-timeline .tl-menubar-button:last-child {
+    border-right: 0 !important;
+  }
+
+  .memory-story-timeline .tl-timemarker .tl-timemarker-content-container,
+  .memory-story-timeline .tl-timemarker .tl-timemarker-content-container-small,
+  .memory-story-timeline .tl-timemarker .tl-timemarker-content-container-long {
+    min-height: 2rem !important;
+    border-radius: 0.5rem !important;
   }
 }
 

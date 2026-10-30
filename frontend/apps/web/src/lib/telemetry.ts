@@ -30,7 +30,22 @@ const CHUNK_LOAD_PATTERNS = [
   /Failed to fetch dynamically imported module/i,
   /Importing a module script failed/i,
   /error loading dynamically imported module/i,
+  // Vite's preload helper rejects with this when a lazy chunk's stylesheet
+  // fails, before it even starts the import(). The Map and Timeline views both
+  // carry CSS, so for them this is what a failed chunk download looks like.
+  /Unable to preload CSS for/i,
 ];
+
+/**
+ * Whether an error is a failed download of one of the app's own code chunks.
+ * The views use it to choose a reload over an in-place retry, which cannot
+ * recover one (see LazyView).
+ */
+export function isChunkLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+
+  return CHUNK_LOAD_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 /** Extension/browser noise the app can neither cause nor fix. */
 const IGNORED_PATTERNS = [

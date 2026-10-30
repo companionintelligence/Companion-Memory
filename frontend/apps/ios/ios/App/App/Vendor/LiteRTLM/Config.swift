@@ -17,7 +17,7 @@ import Foundation
 /// The backend to use for the LiteRT-LM engine.
 ///
 /// Swift version of the C++'s `litert::lm::Backend`.
-public enum Backend: Equatable {
+public enum Backend: Equatable, Hashable, Sendable {
   /// CPU LiteRT backend.
   case cpu(threadCount: Int? = nil)
   /// GPU LiteRT backend.
@@ -39,8 +39,27 @@ public enum Backend: Equatable {
   }
 }
 
+/// Activation data type for inference.
+///
+/// Note: Support depends on the specific model architecture and target backend. Most models
+/// support `.float16` and `.float32` (when not overriding, GPU backends typically default to
+/// `.float16` to optimize throughput, while CPU backends typically default to `.float32`).
+/// Setting an activation data type not supported by the model or backend (e.g., `.int8` on a
+/// standard float model) will cause `Engine.initialize()` to fail with an error (e.g. tensor
+/// type mismatch or unsupported sampler).
+public enum ActivationDataType: Int32, Equatable, Hashable, Sendable {
+  /// 32-bit floating point activation data type.
+  case float32 = 0
+  /// 16-bit floating point activation data type.
+  case float16 = 1
+  /// 16-bit integer activation data type.
+  case int16 = 2
+  /// 8-bit integer activation data type.
+  case int8 = 3
+}
+
 /// Configuration for the LiteRT-LM engine.
-public struct EngineConfig {
+public struct EngineConfig: Hashable, Sendable {
   /// The file path to the LiteRT-LM model.
   public let modelPath: String
   /// The backend to use for the engine.
@@ -61,6 +80,12 @@ public struct EngineConfig {
   public let loraRank: Int?
   /// The rank of the audio LoRA weights. If 0 or nil, audio LoRA is disabled.
   public let audioLoraRank: Int?
+  /// Optional activation data type override for inference (e.g., `.float32`, `.float16`).
+  /// When `nil`, use the default value from the model or the engine (typically `.float16` for
+  /// GPU backends to optimize throughput and memory bandwidth, and `.float32` for CPU backends).
+  /// Note: If the specified activation data type is not supported by the model or backend,
+  /// `Engine.initialize()` will fail with an error at initialization time.
+  public let activationDataType: ActivationDataType?
   /// CI PATCH (engine-tuning). The most tokens the CPU backend prefills in one go for a dynamically
   /// exported model; longer inputs are fed in chunks of this size. `nil` leaves the runtime's default
   /// (no chunking).
@@ -82,6 +107,10 @@ public struct EngineConfig {
   ///     application has write access. If `nil`, it uses the directory of the `modelPath`.
   ///   - loraRank: The rank of the text LoRA weights.
   ///   - audioLoraRank: The rank of the audio LoRA weights.
+  ///   - activationDataType: Optional activation data type override for inference. When `nil`,
+  ///     defaults to the model/engine default (typically `.float16` for GPU and `.float32` for
+  ///     CPU). Note: If the specified type is not supported by the model or backend,
+  ///     `Engine.initialize()` will fail.
   /// - Throws: `LiteRTLMError` if `maxNumTokens` is less than or equal to 0.
   public init(
     modelPath: String, backend: Backend = .cpu(), visionBackend: Backend? = nil,
@@ -90,6 +119,7 @@ public struct EngineConfig {
     cacheDir: String? = nil,
     loraRank: Int? = nil,
     audioLoraRank: Int? = nil,
+    activationDataType: ActivationDataType? = nil,
     prefillChunkSize: Int? = nil,
     numThreads: Int? = nil
   ) throws {
@@ -104,6 +134,7 @@ public struct EngineConfig {
     self.cacheDir = cacheDir
     self.loraRank = loraRank
     self.audioLoraRank = audioLoraRank
+    self.activationDataType = activationDataType
     self.prefillChunkSize = prefillChunkSize
     self.numThreads = numThreads
   }
@@ -154,6 +185,23 @@ public struct SamplerConfig {
   }
 }
 
+/// Configuration for thinking/reasoning generation.
+public struct ThinkingConfig: Equatable {
+  /// Whether thinking/reasoning generation is enabled.
+  public let enableThinking: Bool
+  /// The token budget for thinking/reasoning generation. Defaults to -1 (infinite budget).
+  public let thinkingTokenBudget: Int
+
+  /// - Parameters:
+  ///   - enableThinking: Whether thinking/reasoning generation is enabled.
+  ///   - thinkingTokenBudget: The token budget for thinking/reasoning generation. Defaults to -1
+  ///     (infinite budget).
+  public init(enableThinking: Bool = true, thinkingTokenBudget: Int = -1) {
+    self.enableThinking = enableThinking
+    self.thinkingTokenBudget = thinkingTokenBudget
+  }
+}
+
 /// Configuration fo the LiteRT-LM `Conversation`.
 public struct ConversationConfig {
   // The system message to be used in the conversation.
@@ -175,6 +223,16 @@ public struct ConversationConfig {
   // The file path to the Audio LoRA weights file.
   public let audioLoraPath: String?
   public let enableToolCallStreaming: Bool
+  public let thinkingConfig: ThinkingConfig?
+  public let automaticToolCalling: Bool
+  public let enableResponseFormat: Bool
+  public let visualTokenBudget: Int32?
+  public let enableSpeculativeDecoding: Bool?
+
+  /// An optional Jinja chat template string to override the default template defined in the model
+  /// metadata for this conversation. If nil, the conversation uses the template defined in the
+  /// model metadata.
+  public let chatTemplate: String?
 
   /// - Parameters:
   ///   - systemMessage: The system message to be used in the conversation.
@@ -185,6 +243,21 @@ public struct ConversationConfig {
   ///   - loraPath: The file path to the Text LoRA weights file.
   ///   - audioLoraPath: The file path to the Audio LoRA weights file.
   ///   - enableToolCallStreaming: Whether to enable conversation tool call streaming.
+  ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
+  ///   - automaticToolCalling: Whether to enable automatic tool calling. Default is true.
+  ///   - enableResponseFormat: Whether to enable response format (constrained decoding). Default
+  ///     is false.
+  ///   - visualTokenBudget: Visual token budget.
+  ///   - enableSpeculativeDecoding: Whether to enable speculative decoding for this conversation.
+  ///     - If `nil` (default): Inherits the engine's speculative decoding setting.
+  ///     - If `true`: Explicitly enables speculative decoding for this conversation. If the engine was
+  ///       initialized without speculative decoding enabled, requesting `true` triggers lazy
+  ///       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+  ///     - If `false`: Explicitly disables speculative decoding for this conversation even if the engine
+  ///       was initialized with speculative decoding enabled.
+  ///   - chatTemplate: An optional Jinja chat template string to override the default template defined
+  ///     in the model metadata for this conversation. If nil, the conversation uses the template
+  ///     defined in the model metadata.
   public init(
     systemMessage: Message? = nil,
     initialMessages: [Message] = [],
@@ -192,7 +265,13 @@ public struct ConversationConfig {
     samplerConfig: SamplerConfig? = nil,
     loraPath: String? = nil,
     audioLoraPath: String? = nil,
-    enableToolCallStreaming: Bool = false
+    enableToolCallStreaming: Bool = false,
+    thinkingConfig: ThinkingConfig? = nil,
+    automaticToolCalling: Bool = true,
+    enableResponseFormat: Bool = false,
+    visualTokenBudget: Int32? = nil,
+    enableSpeculativeDecoding: Bool? = nil,
+    chatTemplate: String? = nil
   ) {
     self.systemMessage = systemMessage.flatMap { msg in
       if msg.toString.isEmpty {
@@ -207,5 +286,104 @@ public struct ConversationConfig {
     self.loraPath = loraPath
     self.audioLoraPath = audioLoraPath
     self.enableToolCallStreaming = enableToolCallStreaming
+    self.thinkingConfig = thinkingConfig
+    self.automaticToolCalling = automaticToolCalling
+    self.enableResponseFormat = enableResponseFormat
+    self.visualTokenBudget = visualTokenBudget
+    self.enableSpeculativeDecoding = enableSpeculativeDecoding
+    self.chatTemplate = chatTemplate
+  }
+}
+
+/// Configuration for penalizing repetitive tokens during generation.
+public struct RepetitionPenaltyConfig {
+
+  /// A multiplicative penalty applied to a token's logit if that token has appeared at least once
+  /// inside the generated window history (e.g., 1.0 = no penalty, 1.2 = moderate penalty).
+  ///
+  /// Positive logits are divided by this parameter, and negative logits are multiplied
+  /// (HuggingFace style). The parameter must be >= 1.0. Values less than 1.0 are automatically
+  /// clamped to 1.0 during execution.
+  public let repetitionPenalty: Float?
+
+  /// A scalar subtracted from a logit if that token has appeared at least once inside the
+  /// generated window history.
+  ///
+  /// Positive values discourage repetition, while negative values reward repeating tokens
+  /// (OpenAI style). Defaults to 0.0.
+  public let presencePenalty: Float?
+
+  /// A scalar subtracted from a logit, scaled linearly by the number of times that token has
+  /// previously appeared inside the generated window history.
+  ///
+  /// Positive values discourage repetition, while negative values reward repeating tokens
+  /// (OpenAI style). Defaults to 0.0.
+  public let frequencyPenalty: Float?
+
+  /// The maximum number of recent tokens in generation history to consider when computing
+  /// penalization.
+  ///
+  /// Tokens generated prior to this window are forgotten. A value of 0 means tracking all
+  /// infinite generation history. Must be >= 0. Negative values are clamped to 0 during execution.
+  public let windowSize: Int?
+
+  /// - Parameters:
+  ///   - repetitionPenalty: A multiplicative penalty applied to a token's logit if that token has
+  ///     appeared at least once inside the generated window history.
+  ///   - presencePenalty: A scalar subtracted from a logit if that token has appeared at least once
+  ///     inside the generated window history.
+  ///   - frequencyPenalty: A scalar subtracted from a logit, scaled linearly by the number of times
+  ///     that token has previously appeared inside the generated window history.
+  ///   - windowSize: The maximum number of recent tokens in generation history to consider.
+  public init(
+    repetitionPenalty: Float? = nil,
+    presencePenalty: Float? = nil,
+    frequencyPenalty: Float? = nil,
+    windowSize: Int? = nil
+  ) {
+    self.repetitionPenalty = repetitionPenalty
+    self.presencePenalty = presencePenalty
+    self.frequencyPenalty = frequencyPenalty
+    self.windowSize = windowSize
+  }
+}
+
+/// Configuration for banning repetitive ngrams during generation.
+public struct NoRepeatNgramConfig {
+
+  /// The size of the ngram to ban (e.g. 5 means 5-grams). If set to an integer greater than 0,
+  /// all ngrams of that size can only occur once. The logits of the banned tokens will be set to
+  /// -inf. The value is clamped to [0, inf) during execution.
+  public let noRepeatNgramSize: Int?
+
+  /// The maximum number of recent tokens to consider for banning. Tokens older than this are
+  /// forgotten. A value of 0 means track all infinite history. The value is clamped to [0, inf)
+  /// during execution. If set less than the ngram size, the window size will be set to the ngram
+  /// size to ensure that the ngram can be tracked.
+  public let windowSize: Int?
+
+  /// - Parameters:
+  ///   - noRepeatNgramSize: The size of the ngram to ban.
+  ///   - windowSize: The maximum number of recent tokens in generation history to consider.
+  public init(
+    noRepeatNgramSize: Int? = nil,
+    windowSize: Int? = nil
+  ) {
+    self.noRepeatNgramSize = noRepeatNgramSize
+    self.windowSize = windowSize
+  }
+}
+
+/// Configuration for suppressing tokens during generation.
+public struct SuppressTokensConfig {
+
+  /// The list of token IDs to suppress.
+  public let suppressTokens: [Int]
+
+  /// - Parameters:
+  ///   - suppressTokens: The list of token IDs to suppress. Can be any sequence of Ints (e.g.
+  ///     Array or Set).
+  public init<S: Sequence>(suppressTokens: S) where S.Element == Int {
+    self.suppressTokens = Array(suppressTokens)
   }
 }

@@ -362,6 +362,29 @@ export interface ImportPipeline {
    */
   consumed?: (n: number) => void;
 }
+/**
+ * The directory, under a run's scratch tree, that `ParseStage` hands importers
+ * as {@link ImportParams.mediaStoreDir}.
+ *
+ * A DOT directory on purpose. The bytes an importer materialises there are
+ * attachments of something it already staged — MMS parts (`sms_backup_restore`),
+ * retained Twitter DM media, iMessage downloads (`bluebubbles`) — and they reach
+ * Memory on the attachment lane (`MediaStage.runAttachments`: a file on the
+ * message, no event, no position fix). The catch-all `generic` importer walks the
+ * scratch tree AFTER the specialised importers have run, and it used to be handed
+ * the scratch root as the store: so every attachment written there was staged a
+ * second time as a standalone photo, with the sender's EXIF GPS as a `ci.position`
+ * fix asserting the USER was there. One friend's selfie texted from Austin put
+ * seven of the user's own photos, meetings and an Amazon order in Texas, because
+ * `enrich.estimate_location` lends the nearest fix within 24 hours.
+ *
+ * `generic`'s walker skips every dot entry (`datasources/generic.ts`), so a dot
+ * directory keeps the store out of its reach with no new exclusion mechanism, and
+ * the scratch service's end-of-run reclaim still removes it with the rest of the
+ * tree. Every importer that writes here already `mkdir -p`s the store first.
+ */
+export const MEDIA_STORE_DIRNAME = '.media-store';
+
 export interface ImportParams {
   options?: unknown;
   timeframe?: Timeframe;
@@ -375,6 +398,9 @@ export interface ImportParams {
    * purge-eligibility check (media.ts isPurgeCandidate) keys off this same dir.
    * Unset where there is no store (unit tests, ad-hoc CLI runs); datasources then
    * fall back to the OS temp dir.
+   *
+   * In a pipeline run it is {@link MEDIA_STORE_DIRNAME} under the run's scratch
+   * tree, never the scratch root itself — see that constant for why.
    */
   mediaStoreDir?: string;
   /**

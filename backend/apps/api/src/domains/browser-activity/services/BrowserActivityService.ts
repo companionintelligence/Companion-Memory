@@ -266,7 +266,7 @@ export class BrowserActivityService {
   }
 
   async findById(context: ServiceContext, id: string): Promise<BrowserActivity | null> {
-    return this.browserActivityRepository.findOne({
+    const entity = await this.browserActivityRepository.findOne({
       where: {
         id,
         ...(context.userId !== SYSTEM_USER && {
@@ -275,6 +275,8 @@ export class BrowserActivityService {
       },
       relations: ['user'],
     });
+
+    return entity == null ? null : BrowserActivityEntity.toEgressType(entity);
   }
 
   async update(

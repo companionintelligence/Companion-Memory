@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * The peer-ask wire protocol — the contract two Companion Memory boxes speak.

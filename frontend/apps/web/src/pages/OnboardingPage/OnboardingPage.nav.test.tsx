@@ -42,6 +42,14 @@ vi.mock('@/components/ThemePicker', () => ({
   ThemeToggle: () => <button type="button">Toggle theme</button>,
 }));
 
+// The page's own toaster, without the theme and device-layout providers the
+// real one reads.
+vi.mock('@/components/AppToaster', async () => {
+  const { Toaster } = await import('@ci/shadcn');
+
+  return { AppToaster: () => <Toaster /> };
+});
+
 vi.mock('./ConnectSourceStep', () => ({
   ConnectSourceStep: () => <div data-testid="connect-source-body">Connect sources</div>,
 }));

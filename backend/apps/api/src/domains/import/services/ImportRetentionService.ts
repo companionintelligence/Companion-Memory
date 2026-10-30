@@ -1,12 +1,17 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
+
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
 import { FILE_CLASSIFICATIONS } from '../push/canonical';
+import { realUserInboxDir } from '../sources/importRoots';
+import { inboxUnitInScratch, returnInboxUnit } from '../sources/localAcquire';
 
 import { pushableRunSql, unstoredMediaExistsSql } from './ImportRunService';
 import { ImportScratchService } from './ImportScratchService';
@@ -26,7 +31,10 @@ import { SOURCE_STATUSES_SPENT_WITH_RUN, UPLOAD_TTL_MS } from './StagedSourceSer
  */
 const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'partial', 'cancelled'] as const;
 
-/** A stage in either of these has work that has not finished. */
+/**
+ * A stage in either of these has work that has not finished: a `queued` one
+ * only while its run is still open (see {@link liveStageExistsSql}).
+ */
 const LIVE_STAGE_STATUSES = ['queued', 'running'] as const;
 
 /** The staging tables the payload sweep empties, in cascade-safe order. */
@@ -55,7 +63,10 @@ interface RetentionCandidate {
 interface DiscardCandidate extends RetentionCandidate {
   /** {@link pushableRunSql} — is the Sync card still offering this payload? */
   readonly pushable: boolean;
-  /** No stage `queued` or `running`. The stage rows, not the status cache. */
+  /**
+   * No stage `running`, and none `queued` in a run that is still open
+   * ({@link liveStageExistsSql}). The stage rows, not the status cache.
+   */
   readonly quiet: boolean;
   /**
    * {@link unstoredMediaExistsSql} — does a staged media row still name bytes
@@ -64,6 +75,34 @@ interface DiscardCandidate extends RetentionCandidate {
    * stat to imply. See {@link ImportRetentionService.discardRun}.
    */
   readonly unstoredMedia: boolean;
+  /**
+   * The run has at least one `staged_sources` row and every one of them is an
+   * upload. Such a run's scratch tree holds a copy of an archive the user sent
+   * over HTTP, never the only copy of a file from their inbox folder, so a
+   * discard of a run that will never be pushed may reclaim it. See
+   * {@link ImportRetentionService.claimForDiscard}.
+   */
+  readonly uploadsOnly: boolean;
+}
+
+/** A claimed discard, and whether it takes the run's scratch tree with it. */
+interface ClaimedDiscard extends DiscardCandidate {
+  readonly reclaimScratch: boolean;
+  /**
+   * The inbox unit to put back before the tree goes, when the run's only
+   * source is one and it is still whole in scratch. See
+   * {@link ImportRetentionService.inboxReturnFor}.
+   */
+  readonly returnUnit: InboxUnitToReturn | null;
+}
+
+/** An inbox unit sitting in a discarded run's scratch tree. */
+interface InboxUnitToReturn {
+  readonly sourceId: string;
+  /** Where the run took it from. */
+  readonly sourcePath: string;
+  /** Where it is now, inside the run's scratch tree. */
+  readonly unitPath: string;
 }
 
 /** What a discard's media stage had already stored by the time it was called. */
@@ -95,6 +134,19 @@ export interface RunRetirement {
 export interface DiscardedRun extends RunRetirement, MediaAlreadyStored {
   readonly runId: string;
   readonly label: string | null;
+  /**
+   * The run's scratch tree was deleted with it: the copy of the uploaded
+   * archive that a failed unpack leaves behind. Only ever true for a run that
+   * had no parse to push and whose sources were all uploads, or whose one
+   * source was an inbox unit that is back in the inbox or never left it.
+   */
+  readonly scratchTreeReclaimed: boolean;
+  /**
+   * Where the run's inbox unit went back to, relative to the owner's inbox:
+   * its old name, or `name (2).ext` when that was taken. Null when the run
+   * held no inbox unit in its scratch tree.
+   */
+  readonly returnedToInbox: string | null;
 }
 
 /**
@@ -182,8 +234,10 @@ export interface RetentionSweepResult {
  * holds at any TTL, including 0:
  *
  *  - **Nothing in flight.** Terminal status, `finished_at` set and older than
- *    the cutoff, `updated_at` older than the cutoff, and NO stage in `queued`
- *    or `running`. The status column is a cache; the stage rows are the truth.
+ *    the cutoff, `updated_at` older than the cutoff, and NO stage `running`.
+ *    A `queued` stage left behind in a finished run is a leftover that no
+ *    worker will reach ({@link liveStageExistsSql}). The status column is a
+ *    cache; the stage rows are the truth.
  *  - **Nothing resumable.** A run with any `pending` staged row is what the
  *    Sync card offers and `startPush` acts on; a run with any `failed` staged
  *    row is what `ImportRunService.retryFailedPush` exists for. Either
@@ -203,7 +257,10 @@ export interface RetentionSweepResult {
  *    inbox unit that tree is the user's only copy, acquired by rename. The
  *    tree's path is `<scratchDir>/<userId>/<runId>`, so the run row is the
  *    only index into it: delete the row and the archive is unattributable
- *    forever. Both passes skip such runs and log the directory.
+ *    forever. Both passes skip such runs and log the directory. The one way
+ *    such a tree goes is its owner's discard of a run with nothing to push
+ *    whose sources were all uploads (a failed unpack, typically): see
+ *    {@link ImportRetentionService.claimForDiscard}.
  *  - **No source row's bytes, ever.** A retirement takes the retired run's
  *    spent `staged_sources` rows — `ON DELETE SET NULL` would otherwise orphan
  *    one per completed run forever — but an upload whose archive is sitting in
@@ -304,13 +361,13 @@ export class ImportRetentionService {
       });
     }
 
-    for (const candidate of await this.drainedRuns(cutoff(now, stagingDays), maxRunsPerSweep)) {
-      const blocked = await this.blockedByBytes(candidate, skip);
+    const stagingCutoff = cutoff(now, stagingDays);
 
-      if (blocked) {
-        continue;
-      }
-
+    for await (const candidate of this.unblocked(
+      (seen) => this.drainedRuns(stagingCutoff, maxRunsPerSweep, seen),
+      maxRunsPerSweep,
+      skip,
+    )) {
       const deleted = await this.deletePayload(candidate.id);
 
       stagedRowsDeleted += deleted;
@@ -342,13 +399,11 @@ export class ImportRetentionService {
       });
     }
 
-    for (const candidate of await this.expiredRuns(historyCutoff, maxRunsPerSweep)) {
-      const blocked = await this.blockedByBytes(candidate, skip);
-
-      if (blocked) {
-        continue;
-      }
-
+    for await (const candidate of this.unblocked(
+      (seen) => this.expiredRuns(historyCutoff, maxRunsPerSweep, seen),
+      maxRunsPerSweep,
+      skip,
+    )) {
       // Whatever the payload sweep declined to take (a run that kept `failed`
       // rows for a retry nobody ran) goes now, in the same bounded batches, so
       // the run delete itself cascades over an empty tail.
@@ -422,11 +477,13 @@ export class ImportRetentionService {
    *  - **Pushable**, by {@link pushableRunSql} — the same expression the Sync
    *    card offers and the history sweep negates, evaluated here for a third
    *    time rather than restated. A run that is not pushable is refused with
-   *    the reason: retention already collects it.
+   *    the reason: retention already collects it. That refusal comes after the
+   *    byte guards below, because the sweep does NOT collect a run they hold.
    *  - **Quiet**, by the stage rows rather than the status cache. A run with a
-   *    `queued` or `running` stage is refused and told to cancel first;
-   *    deleting a run a worker still holds would leave that worker writing to
-   *    rows that no longer exist.
+   *    `running` stage is refused and told to cancel first; deleting a run a
+   *    worker still holds would leave that worker writing to rows that no
+   *    longer exist. A `queued` stage left behind in a finished run does not
+   *    count, because no worker will reach it ({@link liveStageExistsSql}).
    *  - **Not holding bytes on disk**, by {@link SCRATCH_TREE_REASON} and by
    *    {@link UNSTORED_MEDIA_REASON}. In practice a pushable run has neither —
    *    `ImportStageListener` keeps a tree only for a run that staged NO records,
@@ -485,6 +542,24 @@ export class ImportRetentionService {
       return null;
     }
 
+    // The inbox unit goes back BEFORE the tree is deleted: it is the user's
+    // only copy. The claim already marked its row `released` (freeing the path
+    // for a later import). Every later discard decides from the filesystem
+    // rather than from that mark, so a failed or interrupted move leaves the
+    // unit in scratch for the next discard to find and return.
+    const returnedToInbox =
+      candidate.returnUnit == null ? null : await this.returnToInbox(candidate, candidate.returnUnit);
+
+    // Before the row goes: the row is the only index into the tree. A crash or
+    // a failed delete here leaves a `cancelled` run that still holds its tree,
+    // and discarding it again finishes the job (the claim accepts it again).
+    if (candidate.reclaimScratch && !(await this.scratch.reclaim(candidate.userId, candidate.id))) {
+      throw new InternalServerErrorException(
+        `Import run ${runId}: its scratch files could not be removed, so the run was kept. Try the discard again.` +
+          (returnedToInbox == null ? '' : ` Its file is already back in your inbox as ${returnedToInbox}.`),
+      );
+    }
+
     // Counted BEFORE the payload goes. `staged_items.metadata` is the only
     // thing left that names those files, so once `deletePayload` has run the
     // question has no answer anywhere.
@@ -501,9 +576,45 @@ export class ImportRetentionService {
       finishedAt: candidate.finishedAt,
       ...retired,
       ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
+      returnedToInbox,
     });
 
-    return { runId: candidate.id, label: candidate.label, ...retired, ...kept };
+    return {
+      runId: candidate.id,
+      label: candidate.label,
+      ...retired,
+      ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
+      returnedToInbox,
+    };
+  }
+
+  /**
+   * Move a discarded run's inbox unit back into its owner's inbox. Its claim
+   * row was marked `released` by the claim and goes with the run like any
+   * released claim. Returns the unit's new path, relative to the inbox, for
+   * the reply.
+   */
+  private async returnToInbox(candidate: ClaimedDiscard, unit: InboxUnitToReturn): Promise<string> {
+    const inboxDir = await realUserInboxDir(candidate.userId);
+    let returned: string;
+
+    try {
+      returned = await returnInboxUnit({
+        unitPath: unit.unitPath,
+        sourcePath: unit.sourcePath,
+        inboxDir,
+        log: (message) => this.logger.log(message, { runId: candidate.id }),
+      });
+    } catch (err) {
+      throw new InternalServerErrorException(
+        `Import run ${candidate.id}: its file could not be put back in your inbox ` +
+          `(${(err as Error).message}), so the run and its files were kept. Try the discard again.`,
+      );
+    }
+
+    return path.relative(inboxDir, returned);
   }
 
   /**
@@ -544,7 +655,7 @@ export class ImportRetentionService {
    * costs microseconds, and doing it before the stamp is what keeps a refusal a
    * pure refusal — a run this declines is left exactly as it was found.
    */
-  private async claimForDiscard(userId: string, runId: string): Promise<DiscardCandidate | null> {
+  private async claimForDiscard(userId: string, runId: string): Promise<ClaimedDiscard | null> {
     return this.dataSource.transaction(async (manager) => {
       const [locked] = await manager.query<Array<{ id: string }>>(
         `SELECT r.id
@@ -561,10 +672,11 @@ export class ImportRetentionService {
       const [candidate] = await manager.query<DiscardCandidate[]>(
         `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt",
                 ${pushableRunSql('r')} AS pushable,
-                NOT EXISTS (
-                      SELECT 1 FROM ci_import.import_stages s
-                       WHERE s.run_id = r.id AND s.status = ANY($2::text[])) AS quiet,
-                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia"
+                NOT ${liveStageExistsSql('r', '$2')} AS quiet,
+                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia",
+                EXISTS (SELECT 1 FROM ci_import.staged_sources s WHERE s.run_id = r.id)
+                  AND NOT EXISTS (SELECT 1 FROM ci_import.staged_sources s
+                                   WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
         [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS]],
@@ -576,20 +688,58 @@ export class ImportRetentionService {
         );
       }
 
-      if (!candidate.pushable) {
-        throw new ConflictException(
-          `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
-            'to release. Retention collects this run on its own once it is past the history window.',
-        );
-      }
-
+      // The byte guards come before the "not pushable" answer, because that
+      // answer promises the sweep will collect the run, and the sweep refuses
+      // a run for exactly these two reasons. A run that failed in a worker
+      // still owns its scratch tree (the failure path never reclaims it, and
+      // `UnpackStage` moves the upload into it), so it is told about the tree
+      // rather than promised a collection that never comes.
       if (candidate.unstoredMedia) {
         throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
       }
 
-      if (await this.scratch.exists(candidate.userId, candidate.id)) {
+      const holdsTree = await this.scratch.exists(candidate.userId, candidate.id);
+
+      // The trees a discard takes, both from a run with no parse to push (a
+      // failed unpack, typically), which the sweep never collects while the
+      // tree is there:
+      //
+      //  - one fed only by uploads. That tree holds the copy of the archive
+      //    `UnpackStage` moved in, which nothing will read again.
+      //  - one whose only source is an inbox unit. That tree may hold the
+      //    user's ONLY copy of the file, so the unit goes back to the inbox
+      //    first (`returnUnit`) and only the rest of the tree is deleted. When
+      //    the unit is no longer whole in scratch because its archive was
+      //    already unpacked, the unpacked files are that only copy and the
+      //    discard is refused.
+      //
+      // A pushable run's tree is not what its discard is about, so it is still
+      // refused.
+      const inbox =
+        holdsTree && !candidate.pushable && !candidate.uploadsOnly
+          ? await this.inboxReturnFor(manager, candidate)
+          : null;
+
+      if (inbox === 'unpacked') {
+        throw new ConflictException(
+          `Import run ${runId}: its inbox file is no longer whole in the run's working files, because it ` +
+            `was unpacked or only partly moved. Those files are the only copy of it, so they and the run ` +
+            `are kept (${this.scratch.dirFor(candidate.userId, candidate.id)}).`,
+        );
+      }
+
+      const reclaimScratch = holdsTree && !candidate.pushable && (candidate.uploadsOnly || inbox != null);
+
+      if (holdsTree && !reclaimScratch) {
         throw new ConflictException(
           `${SCRATCH_TREE_REASON} (${this.scratch.dirFor(candidate.userId, candidate.id)})`,
+        );
+      }
+
+      if (!candidate.pushable && !reclaimScratch) {
+        throw new ConflictException(
+          `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
+            'to release. Retention collects this run on its own once it is past the history window.',
         );
       }
 
@@ -598,8 +748,84 @@ export class ImportRetentionService {
         [runId, DISCARD_CLAIM_ERROR],
       );
 
-      return candidate;
+      // Released in the same transaction as the stamp, BEFORE the unit moves:
+      // a `moved` row would keep holding `staged_sources_active_path_uq` on the
+      // path the file goes back to, so a crash or a failed write after the move
+      // would leave the returned file unimportable. The mark is safe that early
+      // because no discard trusts it on its own (see inboxReturnFor).
+      if (inbox != null) {
+        await manager.query(
+          `UPDATE ci_import.staged_sources SET status = 'released', updated_at = now()
+            WHERE id = $1::uuid AND origin = 'inbox' AND status IN ('claimed', 'moved')`,
+          [inbox.sourceId],
+        );
+      }
+
+      const returnUnit =
+        inbox?.unitPath == null
+          ? null
+          : { sourceId: inbox.sourceId, sourcePath: inbox.sourcePath, unitPath: inbox.unitPath };
+
+      return { ...candidate, reclaimScratch, returnUnit };
     });
+  }
+
+  /**
+   * What a discard can do with a run whose only source is an inbox FILE that
+   * the run took and never finished with (`claimed`, `moved`, or `released`
+   * by an earlier discard or by a cancel):
+   *
+   *  - the file is still whole in scratch (a failed unpack, or a file that is
+   *    not an archive): put it back, then take the tree;
+   *  - it is not in scratch but IS in the inbox (the claim never moved it, or
+   *    an earlier discard already put it back): the tree holds nothing of it
+   *    and can go;
+   *  - it is in neither: `'unpacked'`, refused by the caller, because the
+   *    tree is then the only copy of whatever the file became;
+   *  - anything else: `null`, the general scratch-tree refusal. That covers no
+   *    source or several, an upload among them, a `consumed` unit (the run
+   *    finished and its history is not a discard's to take) and a directory
+   *    unit, which the unpack changes in place.
+   *
+   * Read inside the claim's transaction, under its row lock and decided by
+   * the filesystem first, the row second: a `released` claim can still have
+   * its file in scratch, after a cancel that raced the acquire or a crash
+   * that split its two renames.
+   */
+  private async inboxReturnFor(
+    manager: EntityManager,
+    candidate: DiscardCandidate,
+  ): Promise<{ sourceId: string; sourcePath: string; unitPath: string | null } | 'unpacked' | null> {
+    const sources = await manager.query<
+      Array<{ id: string; origin: string; kind: string; status: string; sourcePath: string }>
+    >(
+      `SELECT id, origin, kind, status, source_path AS "sourcePath"
+         FROM ci_import.staged_sources
+        WHERE run_id = $1::uuid`,
+      [candidate.id],
+    );
+
+    const [source] = sources;
+
+    if (
+      sources.length !== 1 ||
+      source.origin !== 'inbox' ||
+      source.kind !== 'file' ||
+      !['claimed', 'moved', 'released'].includes(source.status)
+    ) {
+      return null;
+    }
+
+    const unitPath = await inboxUnitInScratch(
+      source.sourcePath,
+      this.scratch.dirFor(candidate.userId, candidate.id),
+    );
+
+    if (unitPath != null || (await fileExists(source.sourcePath))) {
+      return { sourceId: source.id, sourcePath: source.sourcePath, unitPath };
+    }
+
+    return 'unpacked';
   }
 
   /**
@@ -752,14 +978,60 @@ export class ImportRetentionService {
   }
 
   /**
+   * Candidates from `select`, oldest first, until `budget` of them have been
+   * handed out, skipping (and reporting) every one {@link blockedByBytes}
+   * refuses.
+   *
+   * `select` is given every id this sweep has already seen and must leave them
+   * out, so a refused run is never fetched twice and a page that gains nothing
+   * still moves forward. Without that, a full page of refused runs at the
+   * front of the queue would stop every run behind it from ever being reached,
+   * night after night. Each run is stat-ed as it is reached, right before the
+   * caller acts on it, so the gap between the check and the delete stays one
+   * run wide.
+   */
+  private async *unblocked(
+    select: (seen: readonly string[]) => Promise<RetentionCandidate[]>,
+    budget: number,
+    skip: (reason: string, candidate: RetentionCandidate, detail?: object) => void,
+  ): AsyncGenerator<RetentionCandidate> {
+    const seen: string[] = [];
+    let handedOut = 0;
+
+    while (handedOut < budget) {
+      const page = await select(seen);
+
+      if (page.length === 0) {
+        return;
+      }
+
+      for (const candidate of page) {
+        seen.push(candidate.id);
+
+        if (await this.blockedByBytes(candidate, skip)) {
+          continue;
+        }
+
+        yield candidate;
+        handedOut += 1;
+
+        if (handedOut >= budget) {
+          return;
+        }
+      }
+    }
+  }
+
+  /**
    * The one guard SQL cannot express: does this run still own a scratch tree?
    *
    * `stat`, not a query, which is why it is here and not in the candidate
-   * predicate — and why it is the one skip that can consume a sweep's budget.
-   * Acceptable because it is rare and loud: `ImportStageListener` keeps a tree
-   * only for a run that staged no records, and every such run logs a warning
-   * naming the directory. The unstored-media case, which is neither rare nor
-   * self-clearing, is filtered in SQL instead.
+   * predicate. It does not use up a sweep's budget: {@link unblocked} pages
+   * past a refused run. That matters because it is not rare. Besides a run
+   * that staged no records, every run that failed in a worker keeps its tree
+   * (the failure path never reclaims it), and those runs are old, so they sort
+   * to the front of every candidate page. Each one logs a warning naming the
+   * directory. The unstored-media case is filtered in SQL instead.
    *
    * Returns true when the run must be left alone.
    */
@@ -795,7 +1067,11 @@ export class ImportRetentionService {
    * {@link ImportRetentionService.mediaBlockedRuns} reports them separately so
    * excluding them here does not also make them invisible.
    */
-  private async drainedRuns(cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async drainedRuns(
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     return this.selectRuns(
       `${TERMINAL_AND_QUIET}
        AND (EXISTS (SELECT 1 FROM ci_import.staged_items i WHERE i.run_id = r.id)
@@ -809,6 +1085,7 @@ export class ImportRetentionService {
        AND NOT ${unstoredMediaExistsSql('r.id', '$5')}`,
       cutoffAt,
       limit,
+      seen,
     );
   }
 
@@ -824,13 +1101,18 @@ export class ImportRetentionService {
    * this sweep cannot delete rows the card is still promising to push — see the
    * "never collected at all" note on the class.
    */
-  private async expiredRuns(cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async expiredRuns(
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     return this.selectRuns(
       `${TERMINAL_AND_QUIET}
        AND NOT ${pushableRunSql('r')}
        AND NOT ${unstoredMediaExistsSql('r.id', '$5')}`,
       cutoffAt,
       limit,
+      seen,
     );
   }
 
@@ -869,18 +1151,32 @@ export class ImportRetentionService {
    * rejects a bind list longer than the statement's highest `$n`, so `$5` (the
    * file classifications) is not optional here. That is a constraint worth
    * having: it is what stops a new sweep being added that forgets the
-   * unstored-media guard.
+   * unstored-media guard. `$6` is this statement's own: the ids `seen`
+   * already ({@link unblocked}).
    */
-  private async selectRuns(where: string, cutoffAt: Date, limit: number): Promise<RetentionCandidate[]> {
+  private async selectRuns(
+    where: string,
+    cutoffAt: Date,
+    limit: number,
+    seen: readonly string[] = [],
+  ): Promise<RetentionCandidate[]> {
     const rows = await this.dataSource.query<
       Array<{ id: string; userId: string; label: string | null; status: string; finishedAt: Date | null }>
     >(
       `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt"
          FROM ci_import.import_runs r
-        WHERE ${where}
+        WHERE (${where})
+          AND NOT (r.id = ANY($6::uuid[]))
         ORDER BY r.finished_at ASC
         LIMIT $4`,
-      [cutoffAt, [...TERMINAL_RUN_STATUSES], [...LIVE_STAGE_STATUSES], limit, [...FILE_CLASSIFICATIONS]],
+      [
+        cutoffAt,
+        [...TERMINAL_RUN_STATUSES],
+        [...LIVE_STAGE_STATUSES],
+        limit,
+        [...FILE_CLASSIFICATIONS],
+        [...seen],
+      ],
     );
 
     return rows;
@@ -948,10 +1244,39 @@ const TERMINAL_AND_QUIET = `
   AND r.finished_at IS NOT NULL
   AND r.finished_at < $1::timestamptz
   AND r.updated_at < $1::timestamptz
-  AND NOT EXISTS (
+  AND NOT ${liveStageExistsSql('r', '$3')}`;
+
+/**
+ * "This run still has a stage with work ahead of it": one `running`, or one
+ * `queued` while the run itself is still open. `statusesParam` holds
+ * {@link LIVE_STAGE_STATUSES}.
+ *
+ * A `queued` stage in a FINISHED run is a leftover, not work. `failStage`
+ * closes the run when a stage fails and leaves the stages after it `queued`,
+ * which is what lets `retryStage` carry the import on from there (it requeues
+ * the stage and reopens the run in one statement, so no reader ever sees the
+ * retried stage `queued` under a closed run). Counting those leftovers as live
+ * made a run whose unpack failed refuse a discard as "still working" while
+ * cancel answered "not in flight", and kept it out of both sweeps for good.
+ * `ImportRunService.retryFailedPush` already reads them the same way.
+ */
+function liveStageExistsSql(runRef: string, statusesParam: string): string {
+  return `EXISTS (
         SELECT 1 FROM ci_import.import_stages s
-         WHERE s.run_id = r.id AND s.status = ANY($3::text[]))`;
+         WHERE s.run_id = ${runRef}.id
+           AND s.status = ANY(${statusesParam}::text[])
+           AND (s.status <> 'queued' OR ${runRef}.finished_at IS NULL))`;
+}
 
 function cutoff(now: Date, days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+}
+
+/** Is there a regular file at `target`? A symlink is not one. */
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    return (await lstat(target)).isFile();
+  } catch {
+    return false;
+  }
 }

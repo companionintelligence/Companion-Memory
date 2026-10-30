@@ -1,5 +1,5 @@
 import type { GraphQLArgument, GraphQLOutputType } from 'graphql';
-import type { ZodTypeAny } from 'zod';
+import type { ZodTypeAny } from 'zod/v3';
 
 import type { IntentPrivacy } from '@ci/domains/tools';
 

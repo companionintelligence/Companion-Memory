@@ -38,6 +38,27 @@ export const ASK_INBOX = gql(`
   }
 `);
 
+/**
+ * Which inbox asks had characters that render as nothing removed before they
+ * were stored. Read through `useHiddenCharacterFlags`, never on its own.
+ *
+ * Its own document, for the reason `GetUserTimeFormat` is one: the phone apps
+ * ship this web build and talk to whichever Memory the person runs, which can be
+ * older than the field. Selected inside {@link ASK_INBOX}, an older server fails
+ * validation for the whole inbox, and the owner sees no asks at all. Here only
+ * the note goes missing.
+ */
+export const ASK_INBOX_HIDDEN_CHARACTERS = gql(`
+  query AskInboxHiddenCharacters {
+    askInbox {
+      id
+      query {
+        promptHiddenCharactersRemoved
+      }
+    }
+  }
+`);
+
 export const ASK_OUTBOX = gql(`
   query AskOutbox {
     askOutbox {
@@ -296,6 +317,20 @@ export const ASK_DISCLOSURE_HISTORY = gql(`
             kind
             label
           }
+        }
+      }
+    }
+  }
+`);
+
+/** {@link ASK_INBOX_HIDDEN_CHARACTERS} for {@link ASK_DISCLOSURE_HISTORY}'s rows, same variables. */
+export const ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS = gql(`
+  query AskDisclosureHistoryHiddenCharacters($input: AskDisclosureHistoryInput) {
+    askDisclosureHistory(input: $input) {
+      rows {
+        id
+        query {
+          promptHiddenCharactersRemoved
         }
       }
     }

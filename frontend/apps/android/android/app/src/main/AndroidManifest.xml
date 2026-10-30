@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -61,18 +61,23 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      Location — foreground + background. Both COARSE and FINE are declared because
-      the runtime prompt for FINE offers the user a "coarse only" choice; without
-      COARSE declared, that choice yields no permission at all rather than a
-      degraded one.
+      Location. Both COARSE and FINE are declared because the runtime prompt for
+      FINE offers the user a "coarse only" choice; without COARSE declared, that
+      choice yields no permission at all rather than a degraded one.
 
-      ACCESS_BACKGROUND_LOCATION powers the "Always" mode (@capacitor-community/
-      background-geolocation), which now ships on Android as well as iOS. Per
-      DEVICE_DATA_COMPLIANCE.md §3.4/§7, this is no longer deferrable to a later
-      phase: it requires Play's background-location declaration form + demo video,
-      AND a foreground-service `location` type declaration with its own
-      description/video, BEFORE this build can go to any Play track (including
-      internal testing). Do not upload to Play until both are filed.
+      The "Always" mode is @ci/capacitor-local-hub's motion-gated tracker
+      (location/LocationTracker.kt): GPS runs only while the phone is moving,
+      through a foreground service of type `location` that shows the "Recording
+      location" notification for those minutes only, and an exit geofence around
+      the resting spot is what starts it again. ACCESS_BACKGROUND_LOCATION is what
+      lets Play Services hold that geofence and deliver it to a process with no
+      activity alive, and what lets the service receive location when it was
+      started that way. FOREGROUND_SERVICE_LOCATION lets the service start on
+      Android 14+. Play therefore needs BOTH the background-location declaration
+      with its demo video AND the foreground-service `location` declaration with
+      its own (DEVICE_DATA_COMPLIANCE.md §3.4) before a build carrying this
+      manifest goes to any track. AndroidManifestContractTest fails if either
+      permission goes missing.
 
       What location commits us to (§8): an in-app prominent-disclosure screen
       shown immediately before each runtime prompt — not in the store listing, not
@@ -85,9 +90,15 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <!-- Location hardware is optional: the app is fully usable with tracking off. -->
+    <!-- Location hardware is optional: the app is fully usable with tracking off.
+         The background-geolocation library declares GPS as required, and the manifest
+         merger ORs uses-feature android:required across dependencies. Replace that
+         attribute here so Play does not filter devices without built-in GPS. -->
     <uses-feature android:name="android.hardware.location" android:required="false" />
-    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false"
+        tools:replace="android:required" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 

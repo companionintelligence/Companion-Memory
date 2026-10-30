@@ -10,17 +10,16 @@ CI-Server. The endpoint, auth model and tool surface are explained in
 
 ## Read this first: transport
 
-**The appliance speaks streamable HTTP only.** `McpController` mounts a
-`StreamableHTTPServerTransport` and nothing else
-(`backend/apps/api/src/domains/mcp/controllers/McpController.ts:1,118-120`).
-There is no stdio transport in the server, and no process in this repo that
-bridges one — see [the stdio bridge section](#the-stdio-bridge-not-yet-landed)
-below.
+**The appliance speaks streamable HTTP on `/mcp` (or `/api/mcp` behind the gateway), and the `ci` CLI ships a local stdio bridge (`ci mcp serve --stdio`).** `McpController` mounts a
+`StreamableHTTPServerTransport`
+(`backend/apps/api/src/domains/mcp/controllers/McpController.ts:1,118-120`), while
+`backend/apps/cli/src/commands/mcp.ts` bridges newline-delimited JSON-RPC over
+stdin/stdout to the appliance's Streamable HTTP endpoint — see
+[the stdio bridge section](#the-stdio-bridge-ci-mcp-serve---stdio) below.
 
-That matters because MCP clients differ in what they will connect to. Clients
-that speak HTTP directly work today with the config blocks below. A client that
-only knows how to spawn a stdio subprocess needs the bridge, which is not
-shipped yet.
+Clients that speak Streamable HTTP directly can use the URL + header blocks
+below; clients that spawn a local subprocess (such as Claude Desktop stdio
+connectors, Goose, or MCP Inspector) can run `ci mcp serve --stdio`.
 
 The JSON shown below is each client's own configuration format, not the
 appliance's. Client config schemas change; if a block does not load, check that
@@ -140,9 +139,9 @@ Restart the app after editing; it reads the file at launch.
 **Caveat.** Claude Desktop's support for remote servers configured this way has
 changed across versions, and some builds expect a custom connector added through
 the UI rather than an entry in this file. If the entry does not appear, that is
-the likeliest reason — and it is the case the [stdio bridge](#the-stdio-bridge-not-yet-landed)
-is meant to serve. The appliance side is unaffected either way: it only ever
-sees an HTTP request with a bearer token.
+the likeliest reason — and it is the case the [stdio bridge](#the-stdio-bridge-ci-mcp-serve---stdio)
+serves. The appliance side is unaffected either way: it only ever
+sees an HTTP request with a credential.
 
 ## Cursor
 
@@ -167,26 +166,19 @@ editing.
 
 ---
 
-## The stdio bridge (not yet landed)
+## The stdio bridge (`ci mcp serve --stdio`)
 
-> **Status: landing in this same refactor — verify the command name before
-> publishing this section.** A CLI subcommand that speaks stdio to the client
-> and streamable HTTP to the appliance is being added concurrently by another
-> change. Nothing in the tree implements it as this was written: a search for
-> `mcp serve` and `--stdio` across the repo returns nothing, and the CLI
-> binary is `ci` (`backend/apps/cli/package.json` → `bin`; `ci-import` is a
-> deprecated alias of it). **Confirm the actual command name, its binary, and
-> its flags against the landed code before anyone follows this recipe.**
+Implemented in `backend/apps/cli/src/commands/mcp.ts`.
 
 ### What it is for
 
 Every client above wants a URL and a header, and the appliance is happy to
-provide both. But a client that can only spawn a subprocess has no way to reach
-a streamable-HTTP server, and there are enough of those — including some builds
-of Claude Desktop — that "just use HTTP" is not a complete answer. The bridge is
-the intended entry point for those clients: a local process that presents a
-stdio MCP server to the client and forwards every JSON-RPC message to
-`/api/mcp`, carrying the credential so the client never has to.
+provide both. For clients that spawn a local subprocess instead of speaking
+Streamable HTTP directly, `ci mcp serve --stdio` presents a stdio MCP server on
+stdin/stdout and forwards each JSON-RPC message to `/mcp` (automatically falling
+back to `/api/mcp` when behind a gateway prefix), preserving the
+`Mcp-Session-Id` header across the session lifecycle and sending `DELETE` on
+stdin EOF.
 
 It is a transport shim, not a second server. The session, the authority
 signature, the tool filtering and the TTL described in [server.md](server.md) all
@@ -194,10 +186,7 @@ still happen on the appliance, driven by whatever key the bridge presents. A
 bridge started with a `read`-capability key gets a `read` tool surface; there is
 no privilege to be gained by going through it.
 
-### The shape of the recipe, once it lands
-
-Expressed against the only two flags that have been agreed —
-`ci mcp serve --stdio` — and nothing more:
+### Configuration recipe
 
 ```json
 {
@@ -214,15 +203,5 @@ Expressed against the only two flags that have been agreed —
 }
 ```
 
-Open questions on that block, all of which the landed implementation settles:
-
-- **The binary name.** Settled since this was written: the binary is `ci`, in
-  its own workspace, so the subcommand would land as `ci mcp serve --stdio`.
-  Check `backend/apps/cli/package.json` → `bin`.
-- **How it takes its configuration.** `CI_SERVER_URL` and `CI_API_KEY` are the
-  variables `ci` already uses (`docs/cli/ci.md`), which makes them the obvious
-  choice, but nothing has been read that confirms the bridge reads them. It may
-  take flags instead.
-
-Do not add flags to that command beyond `--stdio` on the strength of this
-document. Read the implementation.
+You can also pass the global `--server <url>` and `--api-key <key>` flags on the
+`ci` command line (`ci --server https://ci-memory.example.com --api-key <key> mcp serve --stdio`).

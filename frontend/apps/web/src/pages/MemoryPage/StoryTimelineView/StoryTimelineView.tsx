@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { TimelineJsHost } from '@/components/TimelineJs';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
@@ -17,6 +18,7 @@ import {
 } from '../Components';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
 import { isDimensionActive } from '../Components/ExplorerToolbar/viewFilterSupport';
+import { LocalListView } from '../LocalListView';
 import { useEntityService } from '../useEntityService';
 
 import {
@@ -31,7 +33,25 @@ import {
 
 const TITLE_SLIDE_ID = 'memory-title';
 
+/**
+ * The timeline tab. When the Memory server does not answer and this phone has a
+ * synced replica, it renders the device's records in time order as a list
+ * (LocalListView) rather than the TimelineJS deck: the deck is built from the
+ * appliance's hydrated entities and their media, none of which the phone holds.
+ * See api/powersync/deviceFallback.ts.
+ */
 export function StoryTimelineView() {
+  const [searchParams] = useSearchParams();
+  const offline = useAnswersFromDevice();
+
+  if (offline) {
+    return <LocalListView sort={searchParams.get('sortOrder') === 'asc' ? 'oldest' : 'newest'} />;
+  }
+
+  return <OnlineStoryTimelineView />;
+}
+
+function OnlineStoryTimelineView() {
   const [searchParams] = useSearchParams();
   const filteredBrowse = countActiveFilters(searchParams) > 0 || Boolean(searchParams.get('search')?.trim());
   const dateFiltered = isDimensionActive(searchParams, 'date');
@@ -229,7 +249,7 @@ export function StoryTimelineView() {
 
   return (
     <div
-      className="relative flex h-full min-h-[16rem] flex-1 flex-col overflow-hidden rounded-lg border bg-card/40 px-2 pb-2"
+      className="relative flex h-full min-h-[32rem] flex-1 flex-col overflow-hidden rounded-xl border bg-card"
       data-testid="memory-timeline"
     >
       <ViewCrashBoundary
@@ -244,12 +264,13 @@ export function StoryTimelineView() {
           sessionKey={sessionKey}
           onSlideChange={handleSlideChange}
           onSlideOpen={handleSlideOpen}
-          className="min-h-[16rem] flex-1"
+          className="memory-story-timeline min-h-[29rem] flex-1"
         />
       </ViewCrashBoundary>
 
-      <div className="z-20 flex shrink-0 justify-center px-2 py-1.5 device:pointer-events-none device:absolute device:bottom-4 device:left-1/2 device:-translate-x-1/2 device:px-0 device:py-0">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-md">
+      <div className="z-20 flex shrink-0 items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground device:pointer-events-none device:absolute device:bottom-4 device:left-1/2 device:-translate-x-1/2 device:justify-center device:border-0 device:bg-transparent device:px-0 device:py-0 device:text-xs">
+        <span className="min-w-0 truncate device:hidden">Swipe or use arrows · tap an event to open</span>
+        <div className="pointer-events-auto flex shrink-0 items-center gap-2 device:rounded-md device:border device:border-border device:bg-card/90 device:px-3 device:py-1.5 device:shadow-md">
           <span>
             {formatLoadedCount({
               loaded: deck.events.length,

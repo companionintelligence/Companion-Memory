@@ -48,7 +48,7 @@ export {
   normalizeIcsRecurrenceId,
   utcInstantOfZonedTime,
 } from './calendar';
-export { facebookPostIdentity } from './facebook';
+export { facebookPageLikeId, facebookPageLikeIdentity, facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';
 export {
   isRedditCommentFullname,

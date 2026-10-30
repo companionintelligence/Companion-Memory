@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Channel, FrameEncoder } from '@/components/Chat/utils';
+
 import { useChatRequester } from './useChatRequester';
 
 // Mutable holder so each test can vary auth/model state; mocks read it lazily.
@@ -133,6 +135,80 @@ describe('useChatRequester', () => {
     expect(onNewThread).toHaveBeenCalledWith('thread-42');
     await waitFor(() => expect(result.current[0].streaming).toBe(true));
     expect(result.current[0].stream).not.toBeNull();
+  });
+
+  // The server sends a keep-alive frame as soon as the turn starts (so a tunnel lets the headers
+  // through). It isn't the reply: the "working" dots must stay up until the model says something.
+  it('keeps waiting for the reply through keep-alive frames', async () => {
+    const frames = new FrameEncoder();
+    let push: (bytes: Uint8Array) => void = () => undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (bytes) => controller.enqueue(bytes);
+        controller.enqueue(frames.encodeFrame(Channel.KEEPALIVE, ''));
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(body, { status: 200, headers: { 'X-Thread-Id': 't-1' } }))),
+    );
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'hello', fileIds: [] });
+    });
+    await waitFor(() => expect(result.current[0].streaming).toBe(true));
+    const reader = result.current[0].stream!.getReader();
+
+    await act(async () => {
+      await reader.read();
+    });
+    expect(result.current[0].hasStartedReceiving).toBe(false);
+
+    await act(async () => {
+      push(frames.encodeFrame(Channel.KEEPALIVE, ''));
+      await reader.read();
+    });
+    expect(result.current[0].hasStartedReceiving).toBe(false);
+
+    await act(async () => {
+      push(frames.encodeFrame(Channel.TEXT, 'Hi there'));
+      await reader.read();
+    });
+    expect(result.current[0].hasStartedReceiving).toBe(true);
+  });
+
+  it('names the action only on the turn that starts a thread', async () => {
+    // The Today action window: the server opens the new thread with the action
+    // and links it, so the action id rides on the first turn and no other.
+    const fetchMock = vi.fn((_input: RequestInfo, _init?: RequestInit) =>
+      Promise.resolve(streamResponse('t-1')),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string | null }) => useChatRequester({ threadId, actionId: 'action-1' }),
+      { initialProps: { threadId: null as string | null } },
+    );
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'Why do you suggest this?', fileIds: [] });
+    });
+
+    rerender({ threadId: 't-1' });
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'And then?', fileIds: [] });
+    });
+
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/llm/generate'))
+      .map(([, init]) => JSON.parse(String(init?.body)));
+
+    expect(bodies[0]).toMatchObject({ threadId: null, actionId: 'action-1' });
+    expect(bodies[1].threadId).toBe('t-1');
+    expect(bodies[1]).not.toHaveProperty('actionId');
   });
 
   it('stop() tears down the active stream', async () => {

@@ -5,8 +5,7 @@ import { useLocation } from 'react-router-dom';
 import { usePowerRail } from '../PowerRailContext';
 import { SecondaryNavigation } from '../SecondaryNavigation';
 
-const EDGE_PX = 28;
-const THRESHOLD_PX = 48;
+import { useDrawerSwipe } from './useDrawerSwipe';
 
 // Standard tabbable-element set for a hand-rolled focus trap: links and
 // buttons with an href/no disabled, controls, and anything holding an
@@ -23,14 +22,14 @@ const FOCUSABLE_SELECTOR = [
 /**
  * Phone chrome around the Power Rail drawer.
  *
- * Closed: a chevron in the top bar and a swipe right from the left edge.
- * Open: the same rail as desktop, as a glass drawer over a scrim. Search
- * lives in the top bar.
+ * Closed: a chevron in the top bar, or a drag right from the left edge that
+ * pulls the drawer out under the finger. Open: the same rail as desktop, as a
+ * glass drawer over a scrim; a tap on the scrim or a drag left closes it (see
+ * useDrawerSwipe). Search lives in the top bar.
  */
 export function MobileNavigation() {
   const { expanded, openOverlay, closeOverlay } = usePowerRail();
   const { pathname } = useLocation();
-  const start = useRef<{ x: number; y: number; tracking: boolean } | null>(null);
   const scrimRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -133,69 +132,14 @@ export function MobileNavigation() {
     };
   }, [expanded, closeOverlay]);
 
-  useEffect(() => {
-    const onStart = (event: TouchEvent) => {
-      const touch = event.touches[0];
-
-      if (!touch) {
-        return;
-      }
-
-      const fromEdge = touch.clientX <= EDGE_PX;
-      // Measured, not a constant: the drawer is 300px, narrower on the
-      // smallest phones, and a swipe that starts anywhere on it may close it.
-      const railRight = document.getElementById('power-rail')?.getBoundingClientRect().right ?? 0;
-      const fromRail = expanded && touch.clientX <= railRight;
-
-      start.current = {
-        x: touch.clientX,
-        y: touch.clientY,
-        tracking: expanded ? fromRail : fromEdge,
-      };
-    };
-
-    const onEnd = (event: TouchEvent) => {
-      const origin = start.current;
-      start.current = null;
-
-      if (!origin?.tracking) {
-        return;
-      }
-
-      const touch = event.changedTouches[0];
-
-      if (!touch) {
-        return;
-      }
-
-      const dx = touch.clientX - origin.x;
-      const dy = touch.clientY - origin.y;
-
-      if (Math.abs(dy) > Math.abs(dx)) {
-        return;
-      }
-
-      if (!expanded && dx >= THRESHOLD_PX) {
-        openOverlay();
-      } else if (expanded && dx <= -THRESHOLD_PX) {
-        closeOverlay();
-      }
-    };
-
-    document.addEventListener('touchstart', onStart, { passive: true });
-    document.addEventListener('touchend', onEnd, { passive: true });
-
-    return () => {
-      document.removeEventListener('touchstart', onStart);
-      document.removeEventListener('touchend', onEnd);
-    };
-  }, [expanded, openOverlay, closeOverlay]);
+  const { dragging, attachScrim } = useDrawerSwipe({ expanded, openOverlay, closeOverlay, scrimRef });
 
   return (
     <>
-      {expanded && (
+      {/* Still up while a dragged-shut drawer settles, so it fades with it. */}
+      {(expanded || dragging) && (
         <button
-          ref={scrimRef}
+          ref={attachScrim}
           type="button"
           aria-label="Dismiss menu"
           className="fixed inset-0 z-30 bg-black/25"

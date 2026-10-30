@@ -1,10 +1,10 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { IMPORT_STAGE_KINDS } from '../wire';
+import { IMPORT_STAGE_KINDS, type RunDetail } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { bytes, csv, json, table } from '../output';
-import { waitForRuns } from '../wait';
+import { unsuccessfulRunsMessage, waitForRuns } from '../wait';
 
 export interface ImportOptions {
   label?: string;
@@ -48,6 +48,10 @@ export async function importCommand(
   }
 
   const stages = parseStages(options.stages);
+  // Parsed before anything is uploaded. A bad --timeout used to surface only
+  // once the runs had started, so the command failed with its imports already
+  // under way.
+  const timeoutMs = parseTimeout(options.timeout);
 
   if (stages != null && !stages.includes('media') && stages.includes('parse')) {
     // Worth a warning rather than a refusal: `--stages unpack,parse` is a
@@ -96,7 +100,9 @@ export async function importCommand(
 
       results.push({ path: resolved, sizeBytes: info.size, runId: run.id, label: run.label });
     } catch (err) {
-      results.push({ path: resolved, error: (err as Error).message });
+      // A non-Error rejection would otherwise record `error: undefined`, and
+      // the path would count as neither started nor failed.
+      results.push({ path: resolved, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -127,20 +133,27 @@ export async function importCommand(
     }
   }
 
-  if (options.wait && started.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      started.map((result) => result.runId as string),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
-    );
+  const followed = options.wait ? started.map((result) => result.runId as string) : [];
+  let waited: RunDetail[] = [];
+
+  if (followed.length > 0) {
+    waited = await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json });
   }
+
+  const unfinished = unsuccessfulRunsMessage(followed, waited);
 
   if (failed.length > 0) {
     throw new CliError(
-      `${failed.length} of ${results.length} path(s) could not be imported.`,
-      started.length > 0 ? 2 : 1,
+      `${failed.length} of ${results.length} path(s) could not be imported.` +
+        (unfinished == null ? '' : ` ${unfinished}`),
+      // A followed run that failed is the appliance's failure, whatever else
+      // went wrong, so it decides the code as it does on its own.
+      unfinished == null && started.length > 0 ? 2 : 1,
     );
+  }
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 
@@ -171,9 +184,12 @@ export function parseTimeout(value: string | undefined): number {
 
   const seconds = Number(value);
 
-  if (!Number.isFinite(seconds) || seconds < 0) {
+  // `Number('')` is 0, so a blank value (`--timeout "$UNSET"` in a script)
+  // would otherwise mean "no limit" without a word.
+  if (value.trim() === '' || !Number.isFinite(seconds) || seconds < 0) {
     throw new CliError(`--timeout takes a number of seconds, not "${value}"`);
   }
 
-  return Math.round(seconds * 1000);
+  // A positive value never rounds down to 0, which would also mean "no limit".
+  return seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
 }

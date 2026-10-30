@@ -1,16 +1,18 @@
-import { type ReactNode, useCallback, useMemo } from 'react';
+import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import { useApolloClient, useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PersonAvatar } from '@/components/PersonAvatar';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
@@ -18,6 +20,7 @@ import type { GetPeopleQuery } from '@/graphql/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 import { namedChatContext } from '@/lib/agentChat';
 
+import { LocalPeopleList } from './LocalPeopleList';
 import {
   groupMergeCandidates,
   MergeCandidateCard,
@@ -217,10 +220,23 @@ function PersonRow({ person, onOpen }: { person: PersonNode; onOpen: () => void 
   );
 }
 
+/**
+ * The people page. While the Memory server does not answer and this phone holds
+ * a synced replica, the list comes from the phone (LocalPeopleList); otherwise
+ * from the appliance, with its merge queue. See api/powersync/deviceFallback.ts.
+ */
 export function PeoplePage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? <LocalPeopleList /> : <RemotePeoplePage />;
+}
+
+function RemotePeoplePage() {
   usePageTitle('People & communications - Companion Memory');
 
   const navigate = useNavigate();
+  const { isMobile } = useDeviceLayout();
+  const [showAllMobileMerges, setShowAllMobileMerges] = useState(false);
   // The header search box's `?search=`: it edits this page's query in place
   // (see GlobalSearchBox / isLiveSearchPath), so the page has no input of its
   // own. In the URL, it survives navigating away and back and is deep-linkable.
@@ -271,6 +287,17 @@ export function PeoplePage() {
   );
   const mergeGroups = useMemo(() => groupMergeCandidates(mergeCandidates), [mergeCandidates]);
   const candidatesPageInfo = candidatesData?.mergeCandidates.pageInfo;
+  // A phone opens with one review card. The people list is the primary content
+  // of this page and should remain visible without first crossing a 20-card
+  // moderation queue. Desktop keeps the full working set open.
+  const compactMergeQueue = isMobile !== false;
+  const visibleMergeGroups =
+    compactMergeQueue && !showAllMobileMerges ? mergeGroups.slice(0, 1) : mergeGroups;
+  const visibleMergeCandidateCount = visibleMergeGroups.reduce(
+    (total, group) => total + (group.type === 'cluster' ? group.members.length : 1),
+    0,
+  );
+  const hiddenLoadedGroupCount = mergeGroups.length - visibleMergeGroups.length;
 
   const loadMoreCandidates = () =>
     void fetchMoreCandidates({
@@ -393,7 +420,11 @@ export function PeoplePage() {
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
-    content = <LoadingPage />;
+    content = (
+      <MemoryHubPageSkeleton label="Loading people">
+        <RowsSkeleton avatar="circle" />
+      </MemoryHubPageSkeleton>
+    );
   } else if (error && view == null) {
     content = (
       <ErrorState
@@ -407,9 +438,12 @@ export function PeoplePage() {
       <PullToRefresh onRefresh={refreshPeople}>
         <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
           <MemoryHubShell>
-            <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                <div className="text-sm text-muted-foreground">{pagination.totalCount} people</div>
+            <div className="flex flex-col gap-3 px-2 pb-3 device:gap-4 device:px-4 device:pb-4">
+              <div className="flex items-baseline gap-2 px-1 device:px-0">
+                <div className="font-medium">People</div>
+                <div className="text-sm tabular-nums text-muted-foreground">
+                  {pagination.totalCount.toLocaleString()}
+                </div>
               </div>
 
               {candidatesError && (
@@ -419,20 +453,21 @@ export function PeoplePage() {
               )}
 
               {mergeCandidates.length > 0 && (
-                <Card>
-                  <Card.Header>
-                    <Card.Title className="flex items-center gap-2 text-base">
+                <Card className="gap-0 overflow-hidden py-0 shadow-none device:gap-6 device:py-6 device:shadow-sm">
+                  <Card.Header className="px-3 py-3 device:px-6 device:py-0">
+                    <Card.Title className="flex items-center gap-2 text-sm device:text-base">
                       <Merge className="h-4 w-4" />
                       Suggested merges
-                      <Badge variant="secondary">{candidatesData?.mergeCandidates.totalCount ?? 0}</Badge>
+                      <Badge variant="secondary" className="tabular-nums">
+                        {(candidatesData?.mergeCandidates.totalCount ?? 0).toLocaleString()}
+                      </Badge>
                     </Card.Title>
-                    <Card.Description>
-                      Name variants and uncertain matches. Same email or exact phone is folded automatically —
-                      what remains is a question, with what differs on each side.
+                    <Card.Description className="text-xs leading-snug device:text-sm">
+                      Review uncertain matches. Exact email and phone matches are folded automatically.
                     </Card.Description>
                   </Card.Header>
-                  <Card.Content className="flex flex-col gap-3">
-                    {mergeGroups.map((group) =>
+                  <Card.Content className="flex flex-col gap-2 border-t px-2 py-2 device:gap-3 device:border-t-0 device:px-6 device:py-0">
+                    {visibleMergeGroups.map((group) =>
                       group.type === 'cluster' ? (
                         <MergeClusterCard
                           key={`cluster:${group.anchor.id}:${group.token}`}
@@ -450,17 +485,47 @@ export function PeoplePage() {
                       ),
                     )}
 
-                    {candidatesPageInfo?.hasNextPage && (
-                      <div className="flex justify-center">
-                        <Button variant="outline" size="sm" onClick={loadMoreCandidates}>
-                          Load more suggestions
-                        </Button>
+                    {compactMergeQueue && (
+                      <div
+                        className={`flex items-center gap-3 border-t pt-2 text-xs text-muted-foreground ${
+                          mergeGroups.length > 1 ? 'justify-between' : 'justify-center'
+                        }`}
+                      >
+                        {mergeGroups.length > 1 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9"
+                            aria-expanded={showAllMobileMerges}
+                            onClick={() => setShowAllMobileMerges((shown) => !shown)}
+                          >
+                            {showAllMobileMerges
+                              ? 'Show only one'
+                              : `Show ${hiddenLoadedGroupCount.toLocaleString()} more`}
+                          </Button>
+                        )}
+                        <span className="tabular-nums">
+                          {visibleMergeCandidateCount.toLocaleString()} of{' '}
+                          {(candidatesData?.mergeCandidates.totalCount ?? 0).toLocaleString()} shown
+                        </span>
                       </div>
                     )}
 
-                    <div className="text-center text-xs text-muted-foreground">
-                      {mergeCandidates.length} of {candidatesData?.mergeCandidates.totalCount ?? 0} shown
-                    </div>
+                    {candidatesPageInfo?.hasNextPage &&
+                      (!compactMergeQueue || showAllMobileMerges || mergeGroups.length <= 1) && (
+                        <div className="flex justify-center">
+                          <Button variant="outline" size="sm" onClick={loadMoreCandidates}>
+                            Load more suggestions
+                          </Button>
+                        </div>
+                      )}
+
+                    {!compactMergeQueue && (
+                      <div className="text-center text-xs tabular-nums text-muted-foreground">
+                        {mergeCandidates.length.toLocaleString()} of{' '}
+                        {(candidatesData?.mergeCandidates.totalCount ?? 0).toLocaleString()} shown
+                      </div>
+                    )}
                   </Card.Content>
                 </Card>
               )}

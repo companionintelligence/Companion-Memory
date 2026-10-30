@@ -4,7 +4,14 @@
 import fs from 'fs';
 import path from 'path';
 
-import { type ExifBag, extractCameraFields, exifInstant, extractVideoMetadata, parseExifSafe } from './_exif';
+import {
+  type ExifBag,
+  extractCameraFields,
+  exifInstant,
+  extractVideoMetadata,
+  parseExifSafe,
+} from '@ci/common/media/exif';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Item } from './timeline';

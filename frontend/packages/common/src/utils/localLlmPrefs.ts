@@ -10,7 +10,7 @@
  * not discover.
  */
 
-import type { LocalLlmAccelerator } from './localLlmCatalog';
+import { type LocalLlmAccelerator, findLocalLlmModel } from './localLlmCatalog';
 
 /**
  * - `appliance` — always the CI-Server. The on-device model is never used.
@@ -75,7 +75,11 @@ export function parseLocalLlmPrefs(raw: string | null): LocalLlmPrefs {
 
   return {
     mode: isMode(value.mode) ? value.mode : DEFAULT_LOCAL_LLM_PREFS.mode,
-    modelId: typeof value.modelId === 'string' && value.modelId ? value.modelId : null,
+    // A stored id the catalog no longer ships reads as "no model": a preference saved before a model was
+    // dropped (Qwen3-0.6B and Qwen2.5 on 2026-10-13), or synced from another device, must not reach the
+    // strict catalog lookups downstream — on a device that surfaced as "Unknown on-device model" across
+    // the whole settings section.
+    modelId: typeof value.modelId === 'string' && findLocalLlmModel(value.modelId) ? value.modelId : null,
     accelerator: isAccelerator(value.accelerator) ? value.accelerator : null,
     thinking: typeof value.thinking === 'boolean' ? value.thinking : DEFAULT_LOCAL_LLM_PREFS.thinking,
     speculativeDecoding:

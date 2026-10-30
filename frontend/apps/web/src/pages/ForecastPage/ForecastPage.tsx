@@ -9,7 +9,7 @@ import { WeekAhead } from '@/components/WeekAhead';
 import { placeVisible } from '@/lib/forecastDisplay';
 
 import { NextForecast } from './BranchialTree';
-import { NextPlacesPanel } from './ForecastPanels';
+import { CalibrationPanel, DivergenceHeatmapPanel, NextPlacesPanel } from './ForecastPanels';
 import { OffScript } from './OffScript';
 import { useForecastExtras } from './useForecastExtras';
 
@@ -70,6 +70,16 @@ export function ForecastPage() {
             />
             <WeekAhead week={week} due={due} />
             {places.length > 0 ? <NextPlacesPanel places={places} /> : null}
+            <div
+              className="flex flex-col gap-6"
+              style={{
+                contentVisibility: 'auto',
+                containIntrinsicSize: 'auto none auto 220px',
+              }}
+            >
+              <CalibrationPanel calibration={extras.calibration} />
+              <DivergenceHeatmapPanel historyDays={extras.historyDays} buckets={forecast.buckets} />
+            </div>
           </div>
         )}
       </PageContent>

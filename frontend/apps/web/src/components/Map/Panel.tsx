@@ -1,7 +1,8 @@
 import { type ReactNode, useCallback, useRef } from 'react';
 
 import { ScrollArea, cn } from '@ci/shadcn';
-import L from 'leaflet';
+
+import { useMapIsolation } from './mapIsolation';
 
 interface Props {
   position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'left' | 'right';
@@ -20,15 +21,17 @@ const POSITION_CLASSES = {
 
 export function Panel({ position = 'right', className, children }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const isolate = useMapIsolation();
 
-  const setPanelRef = useCallback((el: HTMLDivElement | null) => {
-    if (el) {
-      panelRef.current = el;
-
-      L.DomEvent.disableClickPropagation(el);
-      L.DomEvent.disableScrollPropagation(el);
-    }
-  }, []);
+  const setPanelRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el) {
+        panelRef.current = el;
+        isolate(el);
+      }
+    },
+    [isolate],
+  );
 
   return (
     <div

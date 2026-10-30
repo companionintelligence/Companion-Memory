@@ -21,7 +21,7 @@ describe('SearchResolver — mapPins', () => {
     limit?: number;
     hasLocation?: boolean;
     ids?: string[];
-    bbox?: number[];
+    areas?: number[][];
     startTime?: Date;
     endTime?: Date;
     eventTypes?: string[];
@@ -150,7 +150,7 @@ describe('SearchResolver — mapPins', () => {
 
     await resolver.mapPins(context, {
       query: '',
-      bbox: [-122.5, 37.7, -122.3, 37.8],
+      areas: [[-122.5, 37.7, -122.3, 37.8]],
       startTime: '2026-01-01T00:00:00Z',
       endTime: '2026-06-01T00:00:00Z',
       eventTypes: ['visited'],
@@ -160,7 +160,7 @@ describe('SearchResolver — mapPins', () => {
     } as SearchInput);
 
     expect(pinCalls[0]).toMatchObject({
-      bbox: [-122.5, 37.7, -122.3, 37.8],
+      areas: [[-122.5, 37.7, -122.3, 37.8]],
       startTime: new Date('2026-01-01T00:00:00Z'),
       endTime: new Date('2026-06-01T00:00:00Z'),
       eventTypes: ['visited'],
@@ -175,7 +175,22 @@ describe('SearchResolver — mapPins', () => {
 
     await resolver.mapPins(context, { query: '', bbox: [-122.5, Number.NaN, -122.3, 37.8] } as SearchInput);
 
-    expect(pinCalls[0].bbox).toBeUndefined();
+    expect(pinCalls[0].areas).toBeUndefined();
+  });
+
+  it('reads the legacy single bbox as one more area beside the drawn ones', async () => {
+    const { resolver, pinCalls } = makeResolver();
+
+    await resolver.mapPins(context, {
+      query: '',
+      areas: [[-0.5, 51.3, 0.3, 51.7]],
+      bbox: [2.2, 48.8, 2.5, 48.9],
+    } as SearchInput);
+
+    expect(pinCalls[0].areas).toEqual([
+      [-0.5, 51.3, 0.3, 51.7],
+      [2.2, 48.8, 2.5, 48.9],
+    ]);
   });
 
   it('intersects a free-text query down to its matching event ids', async () => {

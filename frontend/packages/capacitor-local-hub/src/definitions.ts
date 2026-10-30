@@ -89,8 +89,13 @@ export interface LocalHubPlugin {
    * Android presents Chrome Auth Tab and replays `companion://` into `appUrlOpen`.
    * Portal sign-in on Android lands here. iOS opens Safari; Portal sign-in there
    * uses {@link startAuthSession} instead.
+   *
+   * `external: true` is for links that are not a sign-in. Android then hands the URL to
+   * whichever app handles it (the browser, or the provider's own app) instead of the Auth
+   * Tab, which would report any `companion://` the page navigates to as a sign-in result.
+   * iOS ignores it: Safari is already outside the app.
    */
-  openUrl(options: { url: string }): Promise<void>;
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
 
   /**
    * iOS only. Presents an in-app Safari authentication sheet and resolves when it
@@ -120,13 +125,101 @@ export interface LocalHubPlugin {
   }): Promise<{ status: NativeLocationAuthorization }>;
 
   /**
-   * iOS only. Significant-change monitoring for Always tracking: a callback when the
-   * phone moves a meaningful distance, including after the app leaves the foreground.
-   * Does not turn on the blue background location indicator. Android no-ops.
+   * Background samples for Always tracking, on both platforms, delivered as
+   * `significantLocation` events (`significantLocationError` with `code: 'NOT_AUTHORIZED'`
+   * when the OS refuses).
+   *
+   * iOS: significant-change monitoring plus one resume geofence around the last queued fix
+   * -- a callback when the phone moves a meaningful distance, including after the app leaves
+   * the foreground, without the solid blue background indicator. Armed state is persisted
+   * natively and the app delegate restarts the monitor on every launch, including the
+   * background relaunches iOS performs for a location or region event and after a reboot,
+   * so recording continues with the app swiped away. Every fix that clears the
+   * distance/interval gate is queued into the encrypted outbox from native code, and also
+   * emitted as an event when a WebView is alive. `options` is required, as on Android. If
+   * the Always grant lapses, a relaunch posts a notification asking for an app open, where
+   * the web side's re-arm runs the two-step prompt again.
+   *
+   * Android: motion-gated sampling, kept armed until `stopSignificantLocationUpdates` --
+   * across the app being swiped out of recents and across reboots. GPS runs only while the
+   * phone is moving: the fixes themselves (helped by the permission-free stationary-detect
+   * sensor) say when it has stopped, an exit geofence around the resting spot says when it
+   * starts again, and a location foreground service (with its notification) exists only in
+   * between. The geofence is what needs `ACCESS_BACKGROUND_LOCATION`, which the plugin
+   * prompts for after fine location; like iOS, nothing beyond the location grants is asked
+   * for, and the activity-recognition API is not used. The cost of that choice: the first
+   * stretch of each trip (the fence radius plus Play Services' latency) is not sampled, and
+   * a trip shorter than the radius is not sampled at all. Every fix that clears the
+   * distance/interval gate is queued straight into the encrypted outbox from native code,
+   * so nothing depends on the WebView being alive; it is also emitted as an event, and the
+   * web side's own enqueue of it collapses on the shared `source_id`. `options` is required
+   * there -- see {@link SignificantLocationOptions}. A reboot or an app update wipes the
+   * fence; a boot receiver puts it back. Should the background grant lapse later, the
+   * plugin posts one notification asking for an app open, where the web side re-prompts.
    */
-  startSignificantLocationUpdates(): Promise<void>;
+  startSignificantLocationUpdates(options?: SignificantLocationOptions): Promise<void>;
 
   stopSignificantLocationUpdates(): Promise<void>;
+
+  /**
+   * Discovers Companion Memory appliances advertising over mDNS / Bonjour on the local network
+   * (default service type `_companion-memory._tcp.`) so air-gapped or offline LAN users can pair
+   * without Portal cloud sign-in or manual IP entry.
+   *
+   * On web, resolves `{ appliances: [], supported: false }` because browser tabs cannot issue
+   * multicast DNS queries.
+   */
+  discoverLanAppliances(options?: DiscoverLanAppliancesOptions): Promise<DiscoverLanAppliancesResult>;
+}
+
+export interface DiscoverLanAppliancesOptions {
+  /** mDNS / Bonjour service type to browse; defaults to `_companion-memory._tcp.`. */
+  serviceType?: string;
+  /** Discovery window in milliseconds (clamped 500..10000; default 2500). */
+  timeoutMs?: number;
+}
+
+export interface DiscoveredLanAppliance {
+  /** Instance name advertised by mDNS / Bonjour (e.g. `Companion Home Hub`). */
+  name: string;
+  /** Resolved hostname or IPv4/IPv6 literal (e.g. `companion-hub.local` or `192.168.1.42`). */
+  host: string;
+  /** Advertised HTTP(S) port. */
+  port: number;
+  /** Canonical base URL (`http(s)://<host>:<port>`) ready for `setApiBaseUrl`. */
+  baseUrl: string;
+  /** Optional TXT record metadata (e.g. `version`, `applianceId`, `tls`). */
+  txt?: Record<string, string>;
+}
+
+export interface DiscoverLanAppliancesResult {
+  appliances: DiscoveredLanAppliance[];
+  supported: boolean;
+}
+
+/**
+ * What Android needs to build, from a process that may have no JavaScript, exactly the
+ * record the web side's `buildPositionRecord` would have built for the same fix. Every
+ * value is one the web side owns (its storage, its constants, its copy); nothing is
+ * invented natively.
+ */
+export interface SignificantLocationOptions {
+  /** Stable per-install id that prefixes `source_id` (`deviceSourceKey()`). Required on Android. */
+  deviceKey: string;
+  /** Free-text producer stored on the row; defaults to `companion-mobile`. */
+  provider?: string;
+  /** The outbox owner stamp (`outboxOwnerStamp()`), or null when nobody is signed in. */
+  owner?: string | null;
+  /** Persist gate: record on moving this far OR waiting this long. */
+  minDistanceMeters?: number;
+  minIntervalMs?: number;
+  /** Fixes looser than this are dropped, not queued. */
+  maxAccuracyMeters?: number;
+  /** Radius of the exit geofence Android sets where the phone came to rest. iOS ignores it. */
+  geofenceRadiusMeters?: number;
+  /** The foreground-service notification shown while moving (Android requires one). */
+  notificationTitle?: string;
+  notificationText?: string;
 }
 
 export type NativeLocationAuthorization =

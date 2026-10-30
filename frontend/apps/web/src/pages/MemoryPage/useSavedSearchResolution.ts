@@ -5,15 +5,19 @@ import { GlobalUID } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { useSearchParams } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
+import { toResolvedSavedSearch, useLocalSavedSearch } from '@/api/powersync/localSavedSearches';
 import { excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import type { GetSavedSearchQuery } from '@/graphql/graphql';
 
+import { AREAS_PARAM, asAreas, formatAreas, LEGACY_BBOX_PARAM } from './bbox';
 import {
   isRollingDatePreset,
   resolveDatePreset,
   type DatePreset,
 } from './Components/ExplorerToolbar/datePresets';
+import { LOADED_SEARCH_PARAM } from './Components/ExplorerToolbar/filterParams';
 
 export const GET_SAVED_SEARCH = gql(`
   query GetSavedSearch($id: ID!) {
@@ -37,6 +41,10 @@ export const GET_SAVED_SEARCH = gql(`
         hasLocation
         semantic
         direction
+        fileKinds
+        view
+        areas
+        bbox
       }
     }
   }
@@ -45,12 +53,43 @@ export const GET_SAVED_SEARCH = gql(`
 type ResolvedSavedSearch = NonNullable<GetSavedSearchQuery['savedSearch']>;
 
 /**
+ * One saved search by raw uuid, from wherever this platform keeps them: the phone's
+ * synced `saved_searches` table when a replica is bound (online or off, as with notes),
+ * the appliance's GraphQL otherwise. `null` while loading or when there is no such search.
+ */
+export function useSavedSearchById(rawId: string | null): ResolvedSavedSearch | null {
+  const replica = useReplicaDatabase();
+  const { data } = useQuery(GET_SAVED_SEARCH, {
+    variables: { id: GlobalUID.encode('saved-search', rawId ?? '') },
+    skip: !rawId || replica != null,
+  });
+  const { search: local } = useLocalSavedSearch(replica ? rawId : null);
+
+  if (!rawId) {
+    return null;
+  }
+
+  if (replica) {
+    return local ? (toResolvedSavedSearch(local) as ResolvedSavedSearch) : null;
+  }
+
+  return data?.savedSearch ?? null;
+}
+
+/**
  * Rewrites `params` to the explorer filters `savedSearch` defines, clearing
  * every param a saved search owns first so a stale filter from whatever the
  * user was looking at cannot survive the restore. Pure and side-effect-free
  * so both the `?saved_search=` deep-link resolver below and an in-page picker
  * (which needs to apply a search without a fresh mount to re-run that
  * resolver) can share one definition of what "load this search" means.
+ *
+ * The result also carries `?loaded_search=<id>` (see `LOADED_SEARCH_PARAM`):
+ * the one-shot `?saved_search=` trigger is consumed here, but the explorer
+ * still has to know which search it is showing so Save can offer to update
+ * it. The two are different params on purpose — the trigger re-applies the
+ * definition on every mount, which would wipe the person's edits each time
+ * they came back to the page; the marker only remembers.
  */
 export function applySavedSearchToParams(
   params: URLSearchParams,
@@ -77,9 +116,15 @@ export function applySavedSearchToParams(
     'hasLocation',
     'semantic',
     'direction',
+    'fileKinds',
+    AREAS_PARAM,
+    LEGACY_BBOX_PARAM,
+    LOADED_SEARCH_PARAM,
   ]) {
     next.delete(key);
   }
+
+  next.set(LOADED_SEARCH_PARAM, GlobalUID.parse('saved-search', savedSearch.id));
 
   if (query?.trim()) {
     next.set('search', query.trim());
@@ -100,9 +145,15 @@ export function applySavedSearchToParams(
 
   //Updating included entities is handled in SearchBox.tsx
 
-  if (tags?.length && tags.length > 0) {
-    next.set('tags', tags.join(','));
-  }
+  // The free-text lists go back one value per param occurrence, the way the
+  // pickers write them, so a saved street address survives the round trip.
+  const setList = (param: string, value?: readonly string[] | null) => {
+    for (const entry of value ?? []) {
+      next.append(param, entry);
+    }
+  };
+
+  setList('tags', tags);
 
   // Secondary dimensions (who / where / when / how / sort / semantic). The
   // `filters` keys mirror the explorer URL params 1:1 except for the date
@@ -116,8 +167,9 @@ export function applySavedSearchToParams(
 
     setCsv('eventTypes', filters.eventTypes);
     setCsv('connectors', filters.connectors);
-    setCsv('people', filters.people);
-    setCsv('places', filters.places);
+    setCsv('fileKinds', filters.fileKinds);
+    setList('people', filters.people);
+    setList('places', filters.places);
 
     if (isRollingDatePreset(filters.datePreset)) {
       next.set('when', filters.datePreset);
@@ -146,6 +198,14 @@ export function applySavedSearchToParams(
       next.set('sortOrder', filters.sortOrder);
     }
 
+    // The saved rectangles go back into ?areas, the param the map's drawing
+    // tools write, so the map draws them and fits to them on load. A row from
+    // before the list existed carries one `bbox`; it becomes a one-entry list.
+    const areas = asAreas(filters.areas) ?? asAreas(filters.bbox ? [filters.bbox] : null);
+
+    // Only the row's own flag: the rectangles are ORed with the Where names
+    // on the server, so a search drawn with one is not located-only, and
+    // forcing the flag would drop its named-place matches without coordinates.
     if (filters.hasLocation) {
       next.set('hasLocation', '1');
     }
@@ -156,6 +216,16 @@ export function applySavedSearchToParams(
 
     if (filters.direction) {
       next.set('direction', filters.direction);
+    }
+
+    // A saved view wins over whatever view the page was on; a search saved
+    // without one keeps the current view, so old searches stay as they were.
+    if (filters.view) {
+      next.set('view', filters.view);
+    }
+
+    if (areas) {
+      next.set(AREAS_PARAM, formatAreas(areas));
     }
   }
 
@@ -176,16 +246,13 @@ export function useSavedSearchResolution() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchId, setSearchId] = useState<string | null>(null);
 
-  const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
-    variables: { id: GlobalUID.encode('saved-search', searchId!) },
-    skip: !searchId,
-  });
+  const savedSearch = useSavedSearchById(searchId);
 
   useEffect(() => {
-    if (savedSearchData?.savedSearch) {
-      setSearchParams(applySavedSearchToParams(searchParams, savedSearchData.savedSearch));
+    if (savedSearch) {
+      setSearchParams(applySavedSearchToParams(searchParams, savedSearch));
     }
-  }, [searchId, savedSearchData]);
+  }, [searchId, savedSearch]);
 
   useEffect(() => {
     const savedSearchId = searchParams.get('saved_search') || '';

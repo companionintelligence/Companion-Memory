@@ -10,7 +10,7 @@ struct BenchCell: Codable {
   /// `account` (what the preface and the tool schemas cost), `prod` (a tool turn through the real
   /// `LocalLLMEngine`).
   var mode = "tool"
-  var model = "qwen3-0.6b-int4"
+  var model = "gemma-4-e2b-it"
   var accelerator: String?
   /// The KV cache: input plus output tokens. `nil` is the catalog default the app ships.
   var maxTokens: Int?

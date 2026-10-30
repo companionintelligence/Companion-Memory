@@ -198,15 +198,15 @@ test("a native failure is worded with the runtime's own error text") {
 }
 
 test("a failure before any stream existed is logged without progress counters") {
-  let refusal = LocalLLMError.imageInputUnsupported(modelId: "qwen3-0.6b-int4")
+  let refusal = LocalLLMError.imageInputUnsupported(modelId: "gemma-4-e2b-it")
 
   expectEqual(
     GenerationFailure.logLine(for: refusal, method: "generate"),
-    "[LocalLLM] generate failed (LocalLLMError): Image input is not supported by qwen3-0.6b-int4 on iOS",
+    "[LocalLLM] generate failed (LocalLLMError): Image input is not supported by gemma-4-e2b-it on iOS",
     "no [after …] suffix")
   expectEqual(
     GenerationFailure.rejectionMessage(for: refusal),
-    "Generation failed: Image input is not supported by qwen3-0.6b-int4 on iOS", "rejection")
+    "Generation failed: Image input is not supported by gemma-4-e2b-it on iOS", "rejection")
 }
 
 test("the reason is one bounded line, however much the runtime wrote") {
@@ -546,7 +546,7 @@ test("a hit that has to lose members loses its bookkeeping before the date") {
   let shaped = ToolResultShaper.shape(raw, budgetBytes: 230)
 
   check(shaped.utf8.count <= 230, "within the budget (\(shaped.utf8.count))")
-  check(shaped.contains("\"startTime\":\"2025-10-09T21:30:00.000Z\""), "the start time survives: \(shaped)")
+  check(shaped.contains("\"startTime\":\"2025-10-09 21:30 UTC\""), "the start time survives, rendered as a date and minute: \(shaped)")
   check(shaped.contains("\"title\":\"Dentist: Dr. Nair\""), "so does the title")
   check(!shaped.contains("sourceId"), "the bookkeeping is what was dropped")
 }
@@ -629,7 +629,7 @@ test("the dentist's appointment time survives a tight budget on a realistic resu
     let shaped = ToolResultShaper.shape(raw, budgetBytes: budget)
 
     check(shaped.utf8.count <= budget, "within \(budget) (\(shaped.utf8.count))")
-    check(shaped.contains("2025-10-09T21:30:00.000Z"), "the start time reaches the model at \(budget)")
+    check(shaped.contains("2025-10-09 21:30 UTC"), "the start time reaches the model at \(budget), rendered as a date and minute")
   }
 }
 

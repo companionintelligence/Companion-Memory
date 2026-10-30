@@ -193,10 +193,10 @@ describe('VerticalCalendar', () => {
     expect(screen.getByRole('listitem', { name: /August/ })).toBeInTheDocument();
   });
 
-  it('leaves room after the last hour when a bottom sheet covers the grid', () => {
-    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} scrollEndInset />);
+  it('does not lengthen the day when a bottom sheet covers the grid', () => {
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} liftSelectedHour />);
 
-    expect(screen.getByTestId('vertical-calendar-scroll').className).toContain('70vh');
+    expect(screen.getByTestId('vertical-calendar-scroll').className).not.toContain('70vh');
   });
 });
 

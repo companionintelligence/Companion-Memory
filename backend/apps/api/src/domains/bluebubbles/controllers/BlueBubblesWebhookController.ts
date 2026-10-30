@@ -1,5 +1,5 @@
 import { Body, Controller, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
@@ -14,6 +14,10 @@ import { BlueBubblesSyncService } from '../services/BlueBubblesSyncService';
  * `hello-world`, `server-update`, `message-send-error`, …) — every one of
  * them still gets a 200 (BlueBubbles has no interest in, or retry policy
  * around, a webhook body), just no ingestion work.
+ *
+ * That holds while the connector is switched on. While it is off, every
+ * delivery gets the same 404 as a wrong secret, whatever its type; see
+ * {@link BlueBubblesWebhookController.handle}.
  */
 const INGESTABLE_TYPES = new Set(['new-message', 'updated-message']);
 
@@ -47,12 +51,14 @@ export class BlueBubblesWebhookController {
     this.logger.setContext(BlueBubblesWebhookController.name);
   }
 
+  // The body is taken raw and validated only once the delivery has proved it
+  // holds the secret and the connector is on. A pipe on `@Body` runs before
+  // this method, so it answered a stranger's malformed body with a 400 that
+  // spelled out the schema: a different answer from the wrong-secret 404, which
+  // told a prober this route was live, and zod work done for anyone at all.
   @Post(':secret')
   @HttpCode(200)
-  async handle(
-    @Param('secret') secret: string,
-    @Body(new ValidationPipe(webhookBodySchema)) body: z.infer<typeof webhookBodySchema>,
-  ): Promise<{ ok: true }> {
+  async handle(@Param('secret') secret: string, @Body() rawBody: unknown): Promise<{ ok: true }> {
     // `find`, not `getOrCreate`: this route is UNAUTHENTICATED until the
     // comparison below succeeds, so it must not be able to write anything.
     // Minting the row here let an outsider probing the path create it — and the
@@ -69,6 +75,20 @@ export class BlueBubblesWebhookController {
     if (config == null || !BlueBubblesConfigService.secretsMatch(secret, config.webhookSecret)) {
       throw new NotFoundException();
     }
+
+    // Switched off means off: answered like a wrong secret, and nothing is
+    // recorded. The delivery used to be accepted and stamped
+    // `last_webhook_received_at`, which every account's Services card reads as
+    // activity, so one stray delivery turned BlueBubbles "In use · synced
+    // today" on an appliance where it was turned off. Messages were already
+    // dropped on this path (`ingestWebhookMessage` checks the same flag).
+    if (!config.enabled) {
+      throw new NotFoundException();
+    }
+
+    const body = new ValidationPipe(webhookBodySchema).transform(rawBody) as z.infer<
+      typeof webhookBodySchema
+    >;
 
     await this.configService.recordWebhookReceived(config.id);
 

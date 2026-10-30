@@ -105,6 +105,51 @@ async function buildCatalog(): Promise<IntentCatalogService> {
   return new IntentCatalogService(registry);
 }
 
+/**
+ * The intents whose full declaration was large enough to matter on a phone (the ten largest of the
+ * local tier, 13.5 of its 18 KB on 2026-10-12) and so carry a lean form. Asserted by name so that
+ * dropping one is a decision, not a diff that quietly puts the schema bloat back.
+ */
+const EXPECTED_WITH_LEAN_FORM = [
+  'knowledge.preferences',
+  'knowledge.search',
+  'media.entertainmentPreferences',
+  'media.findPhotos',
+  'memory.recall',
+  'memory.remember',
+  'planning.createTask',
+  'planning.findTasks',
+  'planning.scheduleTask',
+  'planning.updateTask',
+];
+
+/** Every (path, schema) pair under `properties` / `items`, depth first, for the subset check. */
+function walkProperties(schema: any, path: string[] = []): Array<[string[], any]> {
+  const out: Array<[string[], any]> = [];
+  for (const [key, child] of Object.entries<any>(schema.properties ?? {})) {
+    out.push([[...path, key], child]);
+    out.push(...walkProperties(child, [...path, key]));
+    if (child.items) {
+      out.push([[...path, key, '[]'], child.items]);
+      out.push(...walkProperties(child.items, [...path, key, '[]']));
+    }
+  }
+
+  return out;
+}
+
+function lookup(schema: any, path: string[]): any {
+  let node = schema;
+  for (const segment of path) {
+    node = segment === '[]' ? node?.items : node?.properties?.[segment];
+    if (!node) {
+      return undefined;
+    }
+  }
+
+  return node;
+}
+
 describe('IntentCatalogService broadcast (real tools)', () => {
   it('publishes the schema of every registered tool', async () => {
     const manifest = (await buildCatalog()).getManifest();
@@ -417,6 +462,117 @@ struct RememberTool: Tool {
     // `IntentTool` hands LiteRT-LM the manifest's own `parameters`; a Kotlin copy of an argument name could drift the
     // way iOS's did, so the day one appears this should be the place that says so.
     expect(readFileSync(ANDROID_PROVIDER, 'utf8')).toMatch(/\.put\("parameters",\s*intent\.parameters\)/);
+  });
+  describe('the lean local-tier forms', () => {
+    const instances = () => TOOL_CLASSES.map((Cls) => new Cls(...Array(Cls.length).fill(stub)));
+
+    it('are carried by the intents whose full schemas were too large for a phone', () => {
+      const registered = instances();
+      const withLean = registered
+        .filter((tool) => tool.schema.local)
+        .map((tool) => tool.schema.name)
+        .sort();
+
+      expect(withLean).toEqual(
+        EXPECTED_WITH_LEAN_FORM.filter((name) => registered.some((t) => t.schema.name === name)),
+      );
+    });
+
+    it('are strict subsets of the full schema, so a call the phone makes is one the appliance accepts', () => {
+      // Collected rather than asserted one by one: jest's `expect` takes no message, and "which
+      // intent, which path" is the whole point of a failure here.
+      const violations: string[] = [];
+
+      for (const { schema } of instances()) {
+        if (!schema.local) {
+          continue;
+        }
+
+        const full = schema.parameters;
+        const lean = schema.local.parameters;
+        const where = `${schema.name}'s lean form`;
+
+        if (lean.type !== 'object') {
+          violations.push(`${where} is not an object schema`);
+        }
+
+        if (
+          schema.local.description.length <= 20 ||
+          schema.local.description.length >= schema.description.length
+        ) {
+          violations.push(`${where} description is not shorter than the full one (or is empty)`);
+        }
+
+        // Lean means lean: well under the full declaration.
+        if (JSON.stringify(lean).length >= JSON.stringify(full).length) {
+          violations.push(`${where} is not smaller than the full schema`);
+        }
+
+        for (const [path, leanNode] of walkProperties(lean)) {
+          const fullNode = lookup(full, path);
+          const at = `${where}: ${path.join('.')}`;
+
+          if (!fullNode) {
+            violations.push(`${at} does not exist in the full schema`);
+            continue;
+          }
+
+          if (leanNode.type !== fullNode.type) {
+            violations.push(`${at} changes type ${String(fullNode.type)} → ${String(leanNode.type)}`);
+          }
+
+          for (const value of leanNode.enum ?? []) {
+            if (!fullNode.enum?.includes(value)) {
+              violations.push(`${at} allows ${String(value)}, which the full schema does not`);
+            }
+          }
+
+          for (const bound of ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems'] as const) {
+            if (leanNode[bound] !== undefined && leanNode[bound] !== fullNode[bound]) {
+              violations.push(
+                `${at}.${bound} is ${String(leanNode[bound])}, the full schema says ${String(fullNode[bound])}`,
+              );
+            }
+          }
+
+          // Whatever the appliance insists on at this level, the phone is told to send too.
+          if (leanNode.properties) {
+            for (const name of fullNode.required ?? []) {
+              if (!leanNode.required?.includes(name)) {
+                violations.push(`${at} drops required ${name}`);
+              }
+            }
+          }
+        }
+
+        for (const name of full.required ?? []) {
+          if (!lean.required?.includes(name)) {
+            violations.push(`${where} drops required ${name}`);
+          }
+        }
+      }
+
+      expect(violations).toEqual([]);
+    });
+
+    it('are what the local tier is served, and nothing else is', async () => {
+      const service = await buildCatalog();
+      const local = new Map(service.getManifest({ tier: 'local' }).intents.map((i) => [i.name, i]));
+      const full = new Map(service.getManifest().intents.map((i) => [i.name, i]));
+
+      const search = local.get('knowledge.search');
+      expect(search?.parameters).not.toEqual(full.get('knowledge.search')?.parameters);
+      expect(Object.keys(search?.parameters.properties ?? {})).toEqual([
+        'query',
+        'entityTypes',
+        'since',
+        'until',
+        'sort',
+        'countOnly',
+      ]);
+      // An intent without a lean form is published to the local tier unchanged.
+      expect(local.get('people.find')?.parameters).toEqual(full.get('people.find')?.parameters);
+    });
   });
 });
 

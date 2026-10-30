@@ -4,6 +4,8 @@ import { LoggerService } from '@ci/common/logging';
 
 import { EndpointServiceMapInterface } from '../types';
 
+import { syncFiles as syncDropboxFiles } from './Dropbox/sync/SyncFiles';
+import { DropboxFilesTransformService } from './Dropbox/transform/TransformDropboxFiles';
 import { syncFriends } from './Facebook/sync/SyncFriends';
 import { syncLikes } from './Facebook/sync/SyncLikes';
 import { syncPhotos } from './Facebook/sync/SyncPhotos';
@@ -108,6 +110,7 @@ export class EndpointServiceMap {
     private readonly steamAchievementsTransformService: SteamAchievementsTransformService,
     private readonly steamFriendsTransformService: SteamFriendsTransformService,
     private readonly gitHubEventsTransformService: GitHubEventsTransformService,
+    private readonly dropboxFilesTransformService: DropboxFilesTransformService,
     private readonly redditPostsTransformService: RedditPostsTransformService,
     private readonly redditCommentsTransformService: RedditCommentsTransformService,
     private readonly redditSavedTransformService: RedditSavedTransformService,
@@ -157,6 +160,9 @@ export class EndpointServiceMap {
         },
         GitHub: {
           Events: syncGitHubEvents,
+        },
+        Dropbox: {
+          Files: syncDropboxFiles,
         },
         Reddit: {
           Posts: syncRedditPosts,
@@ -247,6 +253,9 @@ export class EndpointServiceMap {
         },
         GitHub: {
           Events: this.gitHubEventsTransformService.transform.bind(this.gitHubEventsTransformService),
+        },
+        Dropbox: {
+          Files: this.dropboxFilesTransformService.transform.bind(this.dropboxFilesTransformService),
         },
         Reddit: {
           Posts: this.redditPostsTransformService.transform.bind(this.redditPostsTransformService),

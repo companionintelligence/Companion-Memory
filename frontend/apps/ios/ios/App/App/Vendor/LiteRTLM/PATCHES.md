@@ -1,9 +1,9 @@
 # Patches to the vendored LiteRT-LM Swift wrapper
 
-These files are Google's Swift wrapper for LiteRT-LM (Apache 2.0), copied from the `v0.14.0` release
-(`Sources/` of the Swift package), because the package cannot be added as an Xcode target dependency
-(it needs `-Xlinker -all_load`; see `../../../Frameworks/fetch-clitertlm-xcframework.sh`). They are
-otherwise unmodified. Every deviation is marked in the source with `CI PATCH (<name>)`:
+These files are Google's Swift wrapper for LiteRT-LM (Apache 2.0), copied from the `v0.18.0` release
+(`swift/` of the Swift package, every non-test source), because the package cannot be added as an Xcode
+target dependency (it needs `-Xlinker -all_load`; see `../../../Frameworks/fetch-clitertlm-xcframework.sh`).
+They are otherwise unmodified. Every deviation is marked in the source with `CI PATCH (<name>)`:
 
 ```bash
 grep -rn "CI PATCH" frontend/apps/ios/ios/App/App/Vendor/LiteRTLM
@@ -11,6 +11,22 @@ grep -rn "CI PATCH" frontend/apps/ios/ios/App/App/Vendor/LiteRTLM
 
 Bumping the xcframework means re-vendoring these files and re-applying what is below, unless upstream
 has taken the change. Check each one against the new release first.
+
+**Taken by upstream in 0.18.0, no longer patched here:** `output-cap` (`sendMessageStream(maxOutputTokens:)`
+is now upstream's own parameter, applied to every request of the stream) and `conversation-owns-engine`
+(`Conversation` now holds `engine: Engine` itself). `Capabilities.swift` was removed upstream; the
+speculative-decoding probe is `ModelInfo(modelPath:)?.llm?.hasSpeculativeDecodingSupport()`.
+
+**Re-applied on 0.18.0 (2026-10-12, not yet compiled on a Mac — the bump was done from Linux):**
+`continuation-context`, `release-off-callback`, `tokenizer`, `engine-tuning`. The first Xcode build after this
+bump is the check; `grep -rn "CI PATCH"` lists every site.
+
+## `engine-tuning` — `Config.swift`, `Engine.swift`
+
+`EngineConfig` gains `prefillChunkSize: Int?` and `numThreads: Int?`, applied in `Engine.initialize()`
+through `litert_lm_engine_settings_set_prefill_chunk_size` and `litert_lm_engine_settings_set_num_threads`
+(both still exported by the 0.18.0 xcframework headers). The device bench (`tests/local-llm-device`,
+`RawSession.swift`) varies them; the app leaves both `nil`.
 
 ## `continuation-context` — `Conversation.swift`
 
@@ -24,12 +40,6 @@ file has always passed `extraContext` on every round; the stream now does the sa
 - `sendMessageStream` gains `carryContextThroughToolCalls: Bool = true`. `false` is the upstream
   behaviour, kept so `tests/local-llm-device` can measure what the change is worth.
 - The continuation calls `sendToStream(..., extraContext: context.continuationExtraContext, ...)`.
-
-## `output-cap` — `Conversation.swift`
-
-The C entry point has `litert_lm_conversation_optional_args_set_max_output_tokens`; the Swift wrapper
-never set it. `sendMessageStream` gains `maxOutputTokens: Int?`, stored in `StreamContext` and applied to
-every request of the stream (the message itself and each tool-result continuation).
 
 ## `tokenizer` — `Engine.swift`
 
@@ -48,7 +58,7 @@ yet), the callback's release of the context is the **last** release. It runs `Co
 That wait cannot succeed. The runtime marks a task finished only **after** its callback returns
 (`threaded_execution_manager.cc`: `callback(responses); … UpdateTaskState(task_id, …)`), and the session is
 done when it has no active task. It is a self-wait, ended only by `Engine::kDefaultTimeout`, which is
-**10 minutes** (`runtime/engine/engine.h`, v0.14.0). The callback thread is shared, so everything queued
+**10 minutes** (`runtime/engine/engine.h`, v0.14.0; unchanged in v0.18.0). The callback thread is shared, so everything queued
 behind it — the next generation's output included — waits too.
 
 Seen on a Simulator bench run under heavy host load, which widens the race: two consecutive cells of a
@@ -74,18 +84,17 @@ Whoever else holds the conversation (the app) can still be last, and then the de
 thread and waits for the final callback to return — which it does, because nothing on the callback thread is
 waiting for it. The release inside the tool-call `Task` already ran off the callback thread and is unchanged.
 
-## `conversation-owns-engine` — `Conversation.swift`, `Engine.swift`
-
-The native conversation refers to the native engine, so the engine must be deleted second. Nothing in the
-wrapper enforced it: `LocalLLMEngine.teardown()` drops the conversation and then the engine, and if a stream's
-context still held the conversation the engine was deleted underneath it. With `release-off-callback` the
-conversation can now be deleted a moment after the app let go of it, on a queue, so this is no longer a rare
-case. `Conversation` keeps a strong reference to the `Engine` that created it (`owner`), so the engine
-outlives every conversation.
-
 ## Not patched, but worth knowing
 
 - `Conversation.renderMessageIntoString` and the C function behind it dereference a missing `content` in
   `Qwen3DataProcessor::MessageToTemplateInput` (an assistant message that has only `tool_calls`), and
   crash the process. The bench renders through the C entry point and only ever passes messages with a
   `content`; do not call it with anything else.
+
+## `pure-test-build` — `LiteRTLMError.swift`
+
+The Foundation-only suite passes `-D LOCAL_LLM_PURE_TESTS` to compile the actual
+error enums without linking the native framework. That flag excludes only the
+`CLiteRTLM` import and four native error-management functions; production and
+bench builds do not set it and retain the complete upstream API. LiteRT-LM 0.18
+added those functions, which otherwise broke the documented framework-free test.

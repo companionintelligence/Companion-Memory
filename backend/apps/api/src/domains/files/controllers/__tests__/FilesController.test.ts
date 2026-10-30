@@ -1,3 +1,7 @@
+import { Readable } from 'node:stream';
+
+import { NotFoundException, StreamableFile } from '@nestjs/common';
+
 import { type RequestContext } from '@ci/common/context';
 
 import { FilesController } from '../FilesController';
@@ -34,10 +38,42 @@ function makeController() {
   const fileService = {
     getFileHash: jest.fn(),
     upload: jest.fn(),
+    findVariantsByParentIds: jest.fn(),
+    getFileStream: jest.fn(),
   };
 
   return { controller: new FilesController(fileService as never), fileService };
 }
+
+describe('FilesController.preview — the PREVIEW rendition, streamed for the phone', () => {
+  const res = () => ({ setHeader: jest.fn() }) as unknown as import('express').Response;
+
+  it('streams the preview keyed by the ORIGINAL id, with its type and length, privately cacheable', async () => {
+    const { controller, fileService } = makeController();
+    const stream = Readable.from([Buffer.from('jpeg')]);
+    fileService.findVariantsByParentIds.mockResolvedValue([
+      { id: 'v1', parentId: 'f1', key: 'u/f1/preview.jpg', contentType: 'image/jpeg', size: 16_000 },
+    ]);
+    fileService.getFileStream.mockResolvedValue(stream);
+    const response = res();
+
+    const result = await controller.preview(ctx, 'f1', response);
+
+    expect(fileService.findVariantsByParentIds).toHaveBeenCalledWith(expect.anything(), ['f1'], 'PREVIEW');
+    expect(fileService.getFileStream).toHaveBeenCalledWith(expect.anything(), 'u/f1/preview.jpg');
+    expect(result).toBeInstanceOf(StreamableFile);
+    expect(result.getHeaders()).toMatchObject({ type: 'image/jpeg', length: 16_000 });
+    expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, max-age=86400');
+  });
+
+  it('is a 404 for a file with no preview, without touching the object store', async () => {
+    const { controller, fileService } = makeController();
+    fileService.findVariantsByParentIds.mockResolvedValue([null]);
+
+    await expect(controller.preview(ctx, 'f1', res())).rejects.toThrow(NotFoundException);
+    expect(fileService.getFileStream).not.toHaveBeenCalled();
+  });
+});
 
 describe('FilesController.upload — in-batch dedup grouping', () => {
   it('uploads each file with a distinct hash exactly once, one response entry per unique hash', async () => {
@@ -135,6 +171,104 @@ describe('FilesController.upload — in-batch dedup grouping', () => {
         skipDescription: true,
         model: 'gemma4:e4b',
       }),
+    );
+  });
+
+  it('passes the memoryCapture form field through as a boolean', async () => {
+    const { controller, fileService } = makeController();
+    fileService.getFileHash.mockResolvedValue('hash-a');
+    fileService.upload.mockResolvedValue({ id: 'id-a' });
+
+    await controller.upload(
+      ctx,
+      [multerFile()],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'true',
+    );
+
+    expect(fileService.upload).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({ memoryCapture: true }),
+    );
+
+    await controller.upload(ctx, [multerFile()]);
+
+    expect(fileService.upload).toHaveBeenLastCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({ memoryCapture: false }),
+    );
+  });
+
+  it('passes a plausible capturedAt through as a Date and drops an implausible one', async () => {
+    const { controller, fileService } = makeController();
+    fileService.getFileHash.mockResolvedValue('hash-a');
+    fileService.upload.mockResolvedValue({ id: 'id-a' });
+    const recent = new Date(Date.now() - 60_000).toISOString();
+
+    await controller.upload(
+      ctx,
+      [multerFile()],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'true',
+      recent,
+    );
+
+    expect(fileService.upload).toHaveBeenLastCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({ memoryCapture: true, capturedAt: new Date(recent) }),
+    );
+
+    for (const bad of [
+      'not-a-date',
+      '2001-01-01T00:00:00Z',
+      new Date(Date.now() + 3_600_000).toISOString(),
+    ]) {
+      await controller.upload(
+        ctx,
+        [multerFile()],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'true',
+        bad,
+      );
+
+      expect(fileService.upload).toHaveBeenLastCalledWith(
+        { userId: 'owner-1' },
+        expect.not.objectContaining({ capturedAt: expect.anything() }),
+      );
+    }
+
+    // Without memoryCapture the moment means nothing and is not forwarded.
+    await controller.upload(
+      ctx,
+      [multerFile()],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      recent,
+    );
+
+    expect(fileService.upload).toHaveBeenLastCalledWith(
+      { userId: 'owner-1' },
+      expect.not.objectContaining({ capturedAt: expect.anything() }),
     );
   });
 

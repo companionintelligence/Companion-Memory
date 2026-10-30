@@ -3,6 +3,8 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 
 import { gql } from '@/graphql';
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
 
 import { groupIntoSections, localDateOf, type Section, type SectionedTask } from './taskSections';
 
@@ -145,6 +147,8 @@ function scheduleStartOf(kind: string, patch: unknown): string | null {
   return typeof start === 'string' && start.length > 0 ? start : null;
 }
 
+const TASKS_POLL_INTERVAL_MS = 60_000;
+
 const BACKLOG_KEYS = new Set(['proposed', 'unscheduled']);
 
 /**
@@ -159,7 +163,18 @@ export function usePlanTasks(onPlaced?: () => void) {
   const { data, loading, error, refetch } = useQuery(GET_TASKS, {
     variables: { first: 200 },
     fetchPolicy: 'cache-and-network',
+    // Fallback only; the live stream below is what makes another device's
+    // edit show up. Was mount-only, so the rail went stale until a reload.
+    pollInterval: TASKS_POLL_INTERVAL_MS,
+    skipPollAttempt: () => typeof document !== 'undefined' && document.hidden,
   });
+
+  const reload = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
+  useLiveChanges(['tasks'], reload);
+  useRefetchOnReturn(reload);
 
   const [acceptProposed] = useMutation(ACCEPT_PROPOSED);
   const [declineProposed] = useMutation(DECLINE_PROPOSED);

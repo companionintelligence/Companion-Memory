@@ -5,11 +5,18 @@ import { Activity, Database, MapPin, Users } from '@ci/shadcn/icons';
 
 import { DirectionToggle, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 import { FilterValuePicker } from '@/components/SearchBox/FilterValuePicker';
+import { MapAreaList } from '@/components/SearchBox/MapAreaList';
 import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
+import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
+import { mapAreasLabel } from '@/pages/MemoryPage/bbox';
+import { datePresetLabel } from '@/pages/MemoryPage/Components/ExplorerToolbar/datePresets';
 
 import {
   addListValue,
   applySortPreset,
+  clearWhere,
+  editableAreas,
+  removeArea,
   removeListValue,
   SAVED_SEARCH_SORT_PRESETS,
   sortPresetOf,
@@ -53,6 +60,7 @@ function NamePatternField({
   searchPlaceholder,
   emptyText,
   footer,
+  extraSummary,
   field,
 }: {
   label: string;
@@ -61,19 +69,24 @@ function NamePatternField({
   searchPlaceholder: string;
   emptyText: string;
   footer?: ReactNode;
+  extraSummary?: string;
   field: ListFieldHandlers;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const { names, loading } = useSuggestions(query, open);
+  const { names, loading, hasMore, loadingMore, loadMore } = useSuggestions(query, open);
 
   return (
     <FilterValuePicker
       variant="field"
       label={label}
+      extraSummary={extraSummary}
       icon={icon}
       options={names}
       loading={loading}
+      hasMore={hasMore}
+      loadingMore={loadingMore}
+      onLoadMore={loadMore}
       onSearch={setQuery}
       onOpenChange={setOpen}
       searchPlaceholder={searchPlaceholder}
@@ -93,11 +106,14 @@ function ExactValueField({
   searchPlaceholder,
   emptyText,
   unknownValueHint,
+  formatValue,
   field,
 }: {
   label: string;
   icon: typeof Users;
   options?: string[];
+  /** How a value is shown; the stored filter keeps the value itself. */
+  formatValue: (value: string) => string;
   searchPlaceholder: string;
   emptyText: string;
   unknownValueHint: string;
@@ -110,6 +126,7 @@ function ExactValueField({
       icon={icon}
       options={options ?? []}
       optionsKnown={options != null}
+      formatValue={formatValue}
       searchPlaceholder={searchPlaceholder}
       emptyText={options == null ? 'Type a value and press Enter' : emptyText}
       unknownValueHint={unknownValueHint}
@@ -148,6 +165,8 @@ function toDateInput(iso?: string | null): string {
  * passed `value` and reports changes — so it stories and unit-tests cleanly.
  */
 export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: Props) {
+  const areas = editableAreas(value);
+
   const listField = (field: ListField): ListFieldHandlers => ({
     values: value[field] ?? [],
     onAdd: (raw: string) => {
@@ -157,7 +176,10 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         return 'Enter a value first.';
       }
 
-      if (trimmed.includes(',')) {
+      // How / sources travel in the explorer URL as CSV, so a comma would
+      // split them; Who / Where are free text (a place is often a street
+      // address) and travel one value per param, so a comma is ordinary.
+      if (trimmed.includes(',') && (field === 'eventTypes' || field === 'connectors')) {
         return 'Values cannot include commas.';
       }
 
@@ -169,17 +191,30 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
     onClear: () => onChange({ ...value, [field]: [] }),
   });
 
+  // A rolling When ("Last month") is stored as `datePreset` and wins over any
+  // dates when the search is opened, so a date set here has to replace it, or
+  // the dates were saved and then ignored.
   const setDate = (field: 'startTime' | 'endTime', dateStr: string) => {
     if (!dateStr) {
-      onChange({ ...value, [field]: undefined });
+      onChange({ ...value, [field]: undefined, datePreset: undefined });
 
       return;
     }
 
     const time = field === 'endTime' ? 'T23:59:59.999' : 'T00:00:00';
+    const date = new Date(`${dateStr}${time}`);
 
-    onChange({ ...value, [field]: new Date(`${dateStr}${time}`).toISOString() });
+    // A date input accepts years up to 275760, but a five- or six-digit year
+    // is not an ISO date `Date` can read, and toISOString() would throw.
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+
+    onChange({ ...value, [field]: date.toISOString(), datePreset: undefined });
   };
+
+  // Null for anything but a rolling preset (no value, 'custom', unknown).
+  const rollingWhen = datePresetLabel(value.datePreset);
 
   return (
     <div className="space-y-4">
@@ -203,7 +238,16 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         useSuggestions={vocabulary.usePlaceSuggestions ?? noNameSuggestions}
         searchPlaceholder="Search places…"
         emptyText="No places match"
-        field={listField('places')}
+        // The rectangles the search was drawn with, ORed with the names. New
+        // ones can only be drawn on the map; here each can be read and
+        // removed, so an edit never strips them by accident. Clear takes both.
+        extraSummary={areas.length > 0 ? mapAreasLabel(areas.length) : undefined}
+        footer={
+          areas.length > 0 ? (
+            <MapAreaList areas={areas} onRemove={(index) => onChange(removeArea(value, index))} />
+          ) : undefined
+        }
+        field={{ ...listField('places'), onClear: () => onChange(clearWhere(value)) }}
       />
       <ExactValueField
         label="How"
@@ -212,6 +256,7 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         searchPlaceholder="Search sources…"
         emptyText="No sources match"
         unknownValueHint="No connected source has this name, so this filter matches nothing."
+        formatValue={sourceFilterLabel}
         field={listField('connectors')}
       />
       <ExactValueField
@@ -221,14 +266,20 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         searchPlaceholder="Search activities…"
         emptyText="No activities match"
         unknownValueHint="No event has this activity type, so this filter matches nothing."
+        formatValue={filterValueLabel}
         field={listField('eventTypes')}
       />
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* One date per row, each sized to its content: side by side, the
+          modal's width on a phone left each field too narrow for its calendar
+          button, which was cropped away; stretched to the full row, the
+          button sat at the far right with a blank stretch before it. */}
+      <div className="space-y-3">
         <div className="space-y-1.5">
           <Label htmlFor="filters-from">From</Label>
           <Input
             id="filters-from"
+            className="w-auto"
             type="date"
             value={toDateInput(value.startTime)}
             onChange={(event) => setDate('startTime', event.target.value)}
@@ -238,11 +289,26 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
           <Label htmlFor="filters-to">To</Label>
           <Input
             id="filters-to"
+            className="w-auto"
             type="date"
             value={toDateInput(value.endTime)}
             onChange={(event) => setDate('endTime', event.target.value)}
           />
         </div>
+        {rollingWhen && (
+          <p className="text-xs text-muted-foreground" data-testid="filters-rolling-when">
+            When: {rollingWhen}, counted from the day the search is opened. Picking a From or To date replaces
+            it.{' '}
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              aria-label={`Remove ${rollingWhen}`}
+              onClick={() => onChange({ ...value, datePreset: undefined })}
+            >
+              Remove
+            </button>
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -264,7 +330,7 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         </Select>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <Label htmlFor="filters-located">Located only</Label>
         <Switch
           id="filters-located"

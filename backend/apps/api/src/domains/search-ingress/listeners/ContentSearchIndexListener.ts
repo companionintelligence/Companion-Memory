@@ -38,7 +38,10 @@ export class ContentSearchIndexListener {
       contentId: payload.contentId,
     });
 
-    await this.upsertContent(payload);
+    // Same re-drive race as EventSearchIndexListener.indexEvent: the sweep and the
+    // pipeline's `index.embed` stage can both reach a freshly imported row, so
+    // keep a vector that already exists. Only an update changes its source text.
+    await this.upsertContent(payload, { keepExistingEmbedding: true });
   }
 
   @OnEvent(ContentUpdatedEvent, { queue: 'search-index' })
@@ -80,7 +83,10 @@ export class ContentSearchIndexListener {
     });
   }
 
-  private async upsertContent(payload: ContentCreatedPayload | ContentUpdatedPayload) {
+  private async upsertContent(
+    payload: ContentCreatedPayload | ContentUpdatedPayload,
+    options: { keepExistingEmbedding?: boolean } = {},
+  ) {
     const context = {
       userId: SYSTEM_USER,
     } satisfies ServiceContext;
@@ -124,6 +130,11 @@ export class ContentSearchIndexListener {
         entityId: content.id,
         reason: skipReason,
       });
+    } else if (options.keepExistingEmbedding && (await this.hasEmbedding(ownerId, content.id))) {
+      // No clearSkip here: the backfill excludes a row that has an embedding or a skip marker.
+      this.logger.log('Content already embedded, keeping its embedding', {
+        contentId: content.id,
+      });
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
@@ -165,6 +176,14 @@ export class ContentSearchIndexListener {
 
       this.logger.log('Generated tsvector for content');
     }
+  }
+
+  private async hasEmbedding(ownerId: string, contentId: string): Promise<boolean> {
+    const embedded = await this.embeddingService.existingEntityIds({ userId: ownerId }, 'content', [
+      contentId,
+    ]);
+
+    return embedded.has(contentId);
   }
 
   private getSearchContent(content: Content): WeightedText[] {

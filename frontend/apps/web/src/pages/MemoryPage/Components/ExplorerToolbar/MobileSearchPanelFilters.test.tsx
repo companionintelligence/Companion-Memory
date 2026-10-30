@@ -145,8 +145,22 @@ describe('MobileSearchPanelFilters', () => {
     expect(within(row(sheet, 'How')).getByText('All sources').parentElement).not.toHaveClass('text-primary');
   });
 
+  it('counts the map areas on the Where row beside the place names', () => {
+    const { unmount } = renderFooter('/plan/tasks?areas=1,2,3,4;5,6,7,8');
+
+    expect(row(openFilters(), 'Where')).toHaveTextContent('Map Areas (2)');
+    unmount();
+
+    renderFooter('/plan/tasks?areas=1,2,3,4&places=100%20Duranzo%20Aisle');
+
+    const where = row(openFilters(), 'Where');
+
+    expect(where).toHaveTextContent('1 selected + Map Areas (1)');
+    expect(within(where).queryByText(/Duranzo/)).not.toBeInTheDocument();
+  });
+
   it('keeps the count of further values visible beside a truncated summary', () => {
-    renderFooter('/plan/tasks?people=Ada%20Lovelace,Alan%20Turing,Grace%20Hopper');
+    renderFooter('/plan/tasks?people=Ada%20Lovelace&people=Alan%20Turing&people=Grace%20Hopper');
 
     const who = row(openFilters(), 'Who');
 
@@ -196,7 +210,7 @@ describe('MobileSearchPanelFilters', () => {
     const sheet = openFilters();
 
     fireEvent.click(row(sheet, 'How'));
-    fireEvent.click(await screen.findByRole('option', { name: 'gmail' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Gmail' }));
 
     expect(params().get('connectors')).toBe('gmail');
 
@@ -205,7 +219,7 @@ describe('MobileSearchPanelFilters', () => {
     await waitFor(() =>
       expect(screen.queryByRole('listbox', { name: 'How options' })).not.toBeInTheDocument(),
     );
-    expect(row(sheet, 'How')).toHaveTextContent('gmail');
+    expect(row(sheet, 'How')).toHaveTextContent('Gmail');
   });
 
   it('shows the sort in force on the Sort row', () => {
