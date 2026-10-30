@@ -491,8 +491,8 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
             label: 'coffee mug',
             contentId: theirPhoto,
             sourceType: 'cv_detection',
-            sourceSystem: 'spec',
-            sourceId: `their-photo-${theirPhoto}`,
+            sourceSystem: platformIdentity('cv-server', `det-${theirPhoto}`).system,
+            sourceId: platformIdentity('cv-server', `det-${theirPhoto}`).id,
           },
         ]),
       ).rejects.toThrow(
