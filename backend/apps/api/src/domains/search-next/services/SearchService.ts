@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import { EventService } from '@ci/domains/events';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
@@ -328,19 +329,39 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
    * Lisbon is not a photo of it.
    */
   mediaEvents?: 'photos' | 'media';
+  /**
+   * Let one of those events match on its place (`location_name`, which its
+   * display title also quotes). Off unless the caller has checked that the
+   * asker may learn places: with it on, "Any photos from 14 Elm Street?"
+   * answers a location question at the photos ceiling. Off, the event side
+   * matches on the rest of the event (its date words, title and caption) with
+   * the place's words taken out.
+   */
+  mediaEventPlaces?: boolean;
 };
 
-/** Image file extensions, as `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts lists them. */
-const IMAGE_FILENAME_SQL = String.raw`\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef)$`;
-/** The video ones, from the same list. */
-const VIDEO_FILENAME_SQL = String.raw`\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$`;
+/**
+ * Image file names, from the list `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts is built from.
+ * Trailing whitespace is allowed because the indexer tests the title after `trim()`, which takes
+ * tabs and newlines off as well as spaces (`btrim` takes only spaces). Leading whitespace can't
+ * change a test anchored at the end.
+ */
+const IMAGE_FILENAME_SQL = String.raw`\.(${IMAGE_FILE_EXTENSIONS})\s*$`;
+/** The video ones, from the same place. */
+const VIDEO_FILENAME_SQL = String.raw`\.(${VIDEO_FILE_EXTENSIONS})\s*$`;
 
 /**
  * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
  * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
- * `Media Type`, or a title that is such a file name. Constant SQL, no asker text.
+ * `Media Type`, or a title that is such a file name once trimmed (see
+ * {@link IMAGE_FILENAME_SQL}). Constant SQL, no asker text.
+ *
+ * Without `places`, the event must also match `q` once the words of its place
+ * are taken out of its vector (`ts_delete`), so a match on the place alone
+ * doesn't count. The display title's "Topanga, CA" is cut from the same
+ * `location_name`, so the same lexemes cover it.
  */
-function mediaEventSql(kind: 'photos' | 'media'): string {
+function mediaEventSql(kind: 'photos' | 'media', places: boolean): string {
   const mediaTypes =
     kind === 'media'
       ? `(e.metadata ->> 'Media Type' LIKE 'image/%' OR e.metadata ->> 'Media Type' LIKE 'video/%')`
@@ -355,9 +376,34 @@ function mediaEventSql(kind: 'photos' | 'media'): string {
             FROM ci.events e
             LEFT JOIN ci.entities n ON n.entity_id = e.event_id
            WHERE e.event_id = v.entity_id
-             AND (${mediaTypes} OR ${fileNames})
+             AND (${mediaTypes} OR ${fileNames})${
+               places
+                 ? ''
+                 : `
+             AND ts_delete(v.vector, tsvector_to_array(to_tsvector('english', coalesce(e.location_name, '')))) @@ q.tq`
+             }
         )`;
 }
+
+/**
+ * One photo, one match, for a prompt search that admits media events.
+ *
+ * A capture event names the file it came with (`metadata.FileId`, which
+ * MediaStage stamps before the push), so a photo whose file and event both
+ * match would count twice. The event is dropped when its own file matched too.
+ * An event whose file didn't match, or that names none, stays.
+ */
+const ONE_MATCH_PER_PHOTO_SQL = `WHERE NOT (
+        m.entity_type = 'event'
+        AND EXISTS (
+          SELECT 1
+            FROM ci.events e
+            JOIN matched f
+              ON f.entity_type = 'file'
+             AND f.entity_id::text = e.metadata ->> 'FileId'
+           WHERE e.event_id = m.entity_id
+        )
+      )`;
 
 /** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
 export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
@@ -751,7 +797,7 @@ export class SearchService {
     // The same `$4` list, widened by the media events of `mediaEvents`.
     const typeClause =
       options.mediaEvents && resolvedOptions.includeTypes?.length
-        ? `AND (v.entity_type = ANY($4) OR (v.entity_type = 'event' AND ${mediaEventSql(options.mediaEvents)}))`
+        ? `AND (v.entity_type = ANY($4) OR (v.entity_type = 'event' AND ${mediaEventSql(options.mediaEvents, options.mediaEventPlaces === true)}))`
         : typeFilter.clause;
     const { weights } = await this.rankingLiterals();
 
@@ -791,20 +837,28 @@ export class SearchService {
           END
         )::tsquery AS tq
         FROM grouped
+      ),
+      matched AS (
+        SELECT
+          v.entity_id,
+          v.entity_type,
+          ts_rank('${weights}', v.vector, q.tq) AS score
+        FROM
+          ci_search.vectors v
+          CROSS JOIN q
+        WHERE v.user_id = $1
+          AND q.tq IS NOT NULL
+          AND v.vector @@ q.tq
+          ${typeClause}
       )
       SELECT
-        v.entity_id,
-        v.entity_type,
-        ts_rank('${weights}', v.vector, q.tq) AS score,
+        m.entity_id,
+        m.entity_type,
+        m.score,
         count(*) OVER () AS total_matches
-      FROM
-        ci_search.vectors v
-        CROSS JOIN q
-      WHERE v.user_id = $1
-        AND q.tq IS NOT NULL
-        AND v.vector @@ q.tq
-        ${typeClause}
-      ORDER BY score DESC
+      FROM matched m
+      ${options.mediaEvents ? ONE_MATCH_PER_PHOTO_SQL : ''}
+      ORDER BY m.score DESC
       LIMIT ${limit}
     `;
 

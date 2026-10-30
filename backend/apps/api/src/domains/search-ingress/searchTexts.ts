@@ -1,3 +1,4 @@
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import {
   type PersonAddress,
   NORMALIZED_PERSON_FIELDS,
@@ -242,9 +243,8 @@ export interface EventSearchFields {
   metadata?: Record<string, unknown> | null;
 }
 
-const MEDIA_FILENAME_RE =
-  /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
-const VIDEO_FILENAME_RE = /\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
+const MEDIA_FILENAME_RE = new RegExp(String.raw`\.(${IMAGE_FILE_EXTENSIONS}|${VIDEO_FILE_EXTENSIONS})$`, 'i');
+const VIDEO_FILENAME_RE = new RegExp(String.raw`\.(${VIDEO_FILE_EXTENSIONS})$`, 'i');
 
 /**
  * Compact "City, ST" from a reverse-geocoded address, mirroring the frontend
@@ -289,8 +289,8 @@ function mediaTypeOf(event: { metadata?: Record<string, unknown> | null }): stri
 
 /**
  * A photo or a video, as {@link eventDisplayTitle} decides it: an image or video
- * `Media Type`, or a title that is a media file name. `ASK_MEDIA_EVENT_SQL` in
- * search-next spells the same test in SQL.
+ * `Media Type`, or a title that is a media file name. `mediaEventSql` in
+ * search-next's SearchService spells the same test in SQL.
  */
 function isMediaEventFields(event: {
   title?: string | null;
