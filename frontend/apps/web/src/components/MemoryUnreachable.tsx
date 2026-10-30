@@ -25,14 +25,16 @@ function wayIn(
   pathname: string,
   search: string,
   from: string | undefined,
-): { to: string; label: string; state: PastOutageState } {
+): { to: string; label: string; state: PastOutageState; replace?: boolean } {
   const keepFrom = from ? { from } : {};
 
   if (pathname === '/login' || pathname === '/signup') {
+    // The same page with its form: replace, so Back does not land on this card again.
     return {
       to: pathname + search,
       label: pathname === '/signup' ? 'Sign up' : 'Log In',
       state: { pastOutage: true, ...keepFrom },
+      replace: true,
     };
   }
 
@@ -73,7 +75,7 @@ export function MemoryUnreachable({ onRetry, signedIn }: { onRetry: () => void; 
               Try again
             </Button>
             <Button asChild variant="link" size="sm">
-              <Link to={way.to} state={way.state}>
+              <Link to={way.to} state={way.state} replace={way.replace}>
                 {way.label}
               </Link>
             </Button>

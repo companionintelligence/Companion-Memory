@@ -97,7 +97,12 @@ function makeService(): Harness {
     update,
   } as unknown as Repository<ObjectObservationEntity>;
 
-  const dataSource = { query } as unknown as DataSource;
+  // refuseForeignLinks asks which linked rows belong to someone else: none here, and that read
+  // stays out of the statements the tests count and script.
+  const dataSource = {
+    query: (sql: string, params: unknown[]) =>
+      sql.includes('IS DISTINCT FROM') ? Promise.resolve([]) : query(sql, params),
+  } as unknown as DataSource;
 
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 

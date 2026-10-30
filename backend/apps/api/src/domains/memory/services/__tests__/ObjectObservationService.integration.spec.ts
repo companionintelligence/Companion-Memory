@@ -549,4 +549,42 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     expect(await queued()).toContain(sentBackId);
     expect(machineQueue.map((row) => row.id)).not.toContain(sentBackId);
   });
+
+  it("refuses a sighting on another account's photo, though content_id has no key", async () => {
+    const other = uuidv7();
+    const theirPhoto = uuidv7();
+
+    await dataSource.query(`INSERT INTO ci.users (id, name, email) VALUES ($1, $2, $3)`, [
+      other,
+      'Someone else',
+      `other.${other}@example.invalid`,
+    ]);
+    // A content row stands on its entity (content_id_entities_fk).
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Content', $2, 'Their photo')`,
+      [theirPhoto, other],
+    );
+    await dataSource.query('INSERT INTO ci.content (id, user_id) VALUES ($1, $2)', [theirPhoto, other]);
+
+    try {
+      await expect(
+        service.createMany(owner, [
+          {
+            observedAt: new Date('2026-05-01T10:00:00.000Z'),
+            label: 'coffee mug',
+            contentId: theirPhoto,
+            sourceType: 'cv_detection',
+            sourceSystem: platformIdentity('cv-server', `det-${theirPhoto}`).system,
+            sourceId: platformIdentity('cv-server', `det-${theirPhoto}`).id,
+          },
+        ]),
+      ).rejects.toThrow(
+        `content_id ${theirPhoto} is a row of ci.content that belongs to another account or to none, so the sighting was refused.`,
+      );
+    } finally {
+      await dataSource.query('DELETE FROM ci.content WHERE id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [other]);
+    }
+  });
 });

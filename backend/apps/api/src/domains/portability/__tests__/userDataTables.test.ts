@@ -2,6 +2,7 @@ import type { UserScopedTable } from '../types';
 import {
   findAccountLinks,
   findLinkTables,
+  foreignLinkSql,
   groupUserTables,
   linkOutOfAccountMessage,
   orderParentsFirst,
@@ -333,7 +334,40 @@ describe('findAccountLinks', () => {
       ),
     ).toBe(
       'The archive links ci.relationships.to_entity_id to 01a1769a-0000-7000-8000-000000000000, a row of ' +
-        'ci.entities that belongs to another account, so it was refused.',
+        'ci.entities that belongs to another account or to none, so it was refused.',
     );
+  });
+});
+
+describe('foreignLinkSql', () => {
+  const relationships: UserScopedTable = {
+    ...table('ci.relationships'),
+    userColumn: 'owner_user_id',
+    userColumns: ['owner_user_id'],
+    columns: ['to_entity_id', 'owner_user_id'],
+  };
+  const parent = {
+    schema: 'ci',
+    table: 'entities',
+    column: 'entity_id',
+    userColumn: 'owner_user_id' as const,
+  };
+
+  it('joins each row that sets the link to its parent, and counts a parent with no owner as foreign', () => {
+    const sql = foreignLinkSql({ child: relationships, column: 'to_entity_id', parent, array: false });
+
+    expect(sql).toContain('JOIN "ci"."entities" p ON p."entity_id" = c."to_entity_id"');
+    expect(sql).toContain('WHERE c."owner_user_id" = $1');
+    expect(sql).toContain('AND c."to_entity_id" IS NOT NULL');
+    expect(sql).toContain('AND p."owner_user_id" IS DISTINCT FROM $1');
+    expect(sql).not.toContain('unnest');
+  });
+
+  it('unnests an array link and names the element that is foreign', () => {
+    const sql = foreignLinkSql({ child: relationships, column: 'to_entity_id', parent, array: true });
+
+    expect(sql).toContain('CROSS JOIN LATERAL unnest(c."to_entity_id") AS u(id)');
+    expect(sql).toContain('ON p."entity_id" = u.id');
+    expect(sql).toContain('SELECT p."entity_id"::text AS id');
   });
 });

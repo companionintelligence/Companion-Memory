@@ -16,7 +16,13 @@ import {
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { appendRecordSources, computeChunkSize } from '@ci/common/persistence';
+import {
+  appendRecordSources,
+  computeChunkSize,
+  OWNED_TABLES,
+  type OwnedLink,
+  refuseForeignLinks,
+} from '@ci/common/persistence';
 
 import {
   type ObjectObservation,
@@ -225,6 +231,38 @@ export function detectionKeyFor(dto: CreateObjectObservationDto): string | null 
   return `obs:v${DETECTION_KEY_VERSION}:label:${sha256Hex([anchor, detector, label].join('\0'))}`;
 }
 
+/** A sighting's links that name another row: what a write or a resolution carries. */
+interface ObservationLinkFields {
+  contentId?: string | null;
+  fileId?: string | null;
+  eventId?: string | null;
+  placeEntityId?: string | null;
+  cropContentId?: string | null;
+  resolvedObjectId?: string | null;
+  resolvedProductId?: string | null;
+}
+
+/**
+ * What a sighting links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. The keys on `event_id`, `place_entity_id` and the two resolution columns only
+ * ask that the row exists, and the file and content columns have none.
+ */
+function observationLinks(rows: readonly ObservationLinkFields[]): OwnedLink[] {
+  return [
+    { field: 'content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.contentId) },
+    { field: 'crop_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.cropContentId) },
+    { field: 'file_id', ...OWNED_TABLES.files, ids: rows.map((row) => row.fileId) },
+    { field: 'event_id', ...OWNED_TABLES.events, ids: rows.map((row) => row.eventId) },
+    { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.placeEntityId) },
+    { field: 'resolved_object_id', ...OWNED_TABLES.objects, ids: rows.map((row) => row.resolvedObjectId) },
+    {
+      field: 'resolved_product_id',
+      ...OWNED_TABLES.productModels,
+      ids: rows.map((row) => row.resolvedProductId),
+    },
+  ];
+}
+
 /**
  * The only writer of `ci.object_observations` — the SIGHTING half of object
  * identity.
@@ -336,6 +374,8 @@ export class ObjectObservationService {
     if (dtos.length === 0) {
       return empty;
     }
+
+    await refuseForeignLinks(this.dataSource, context.userId, observationLinks(dtos), 'sighting');
 
     // Partition by arbiter, folding within-batch repeats as we go. Two maps
     // rather than one because the arbiters live in different index spaces: a
@@ -485,6 +525,10 @@ export class ObjectObservationService {
       return existing;
     }
 
+    // `user_id`, the account the sighting belongs to and the column the import scopes it by.
+    // `owner_user_id` is an attribution that may name no one.
+    await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([dto]), 'sighting');
+
     await this.observationRepository.update(
       { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
       {
@@ -531,6 +575,10 @@ export class ObjectObservationService {
 
     if (existing == null) {
       return null;
+    }
+
+    if (resolution != null) {
+      await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([resolution]), 'sighting');
     }
 
     const thingProductId =
