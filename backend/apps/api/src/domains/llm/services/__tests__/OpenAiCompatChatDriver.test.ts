@@ -400,6 +400,46 @@ describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
     expect(toolCalls).toEqual([]);
   });
 
+  it('names the calls a discarding round dropped on its last chunk, written as markup or not', async () => {
+    const lastOf = async (iterator: AsyncGenerator<{ discardedToolCalls?: unknown[] }>) => {
+      let last: { discardedToolCalls?: unknown[] } | undefined;
+
+      for await (const chunk of iterator) {
+        last = chunk;
+      }
+
+      return last;
+    };
+
+    const markup = streamingDriver(apologyThenMarkup).driver;
+    const structured = streamingDriver([
+      { content: 'One moment.' },
+      {
+        tool_calls: [{ index: 0, function: { name: 'media_findPhotos', arguments: '{"query":"rabbits"}' } }],
+      },
+    ]).driver;
+    const plain = streamingDriver([{ content: 'Rabbits are in three of your photos.' }]).driver;
+
+    await expect(lastOf(markup.chatStream({ ...request, discardToolMarkup: true }))).resolves.toMatchObject({
+      discardedToolCalls: [
+        { function: { name: 'media_findPhotos', arguments: { maxResults: '15', query: 'rabbits' } } },
+      ],
+    });
+    await expect(
+      lastOf(structured.chatStream({ ...request, discardToolMarkup: true })),
+    ).resolves.toMatchObject({
+      discardedToolCalls: [{ function: { name: 'media_findPhotos', arguments: { query: 'rabbits' } } }],
+    });
+    expect(
+      (await lastOf(plain.chatStream({ ...request, discardToolMarkup: true })))?.discardedToolCalls,
+    ).toBeUndefined();
+    // A salvage round hands its calls over as calls, so nothing counts as dropped there.
+    expect(
+      (await lastOf(streamingDriver(apologyThenMarkup).driver.chatStream({ ...request, salvageTools: true })))
+        ?.discardedToolCalls,
+    ).toBeUndefined();
+  });
+
   it('still streams plain text as it arrives when nothing about the round involves tools', async () => {
     const { driver } = streamingDriver([{ content: 'Hello' }, { content: ' there' }]);
 

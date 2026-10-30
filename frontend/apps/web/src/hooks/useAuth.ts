@@ -392,8 +392,9 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
  * The origin the app paired with lives in localStorage, which only the app's own pages can
  * write; `initApiBaseUrl` has already applied it. The keystore copy is a mirror for native
  * App Intents (`syncNativeIntentConfig`), and the LocalHub plugin writes it for any caller
- * that reaches the bridge. On Android's legacy bridge that includes a cross-origin iframe,
- * and an origin planted there would, on the next launch, be where the device API key went.
+ * that reaches the bridge. On Android's legacy bridge (run until 2026-10-26) that included a
+ * cross-origin iframe, and an origin planted there would, on the next launch, be where the
+ * device API key went.
  *
  * So the keystore never replaces a paired origin: a copy that disagrees is overwritten from
  * localStorage. It only fills in an origin the app does not have (localStorage lost while

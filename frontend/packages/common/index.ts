@@ -11,8 +11,9 @@ export {
   useDeviceLayout,
   useOverflowsRight,
   usePageTitle,
+  useScrollOverflow,
 } from './src/hooks';
-export type { DeviceSizeClass } from './src/hooks';
+export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
@@ -83,7 +84,7 @@ export {
   captureNote,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
   forgetQueuedNote,
   haversineMeters,
@@ -99,7 +100,7 @@ export {
   writeLocationTrackingMode,
 } from './src/utils/deviceSources';
 export type {
-  BackgroundGeolocationLocation,
+  NativeLocationEvent,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
@@ -252,7 +253,6 @@ export {
   addAppStateListener,
   addAppUrlOpenListener,
   addBackButtonListener,
-  addBackgroundLocationWatcher,
   startSignificantLocationUpdates,
   closeBrowser,
   exitApp,
@@ -269,7 +269,6 @@ export {
   openLinkOutsideApp,
   openNativeAppSettings,
   openNativeLocationSettings,
-  removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
   requestNotificationPermission,
   scanQrCode,
@@ -283,7 +282,7 @@ export {
   takeNativePhoto,
 } from './src/utils/nativeBridge';
 export type {
-  BackgroundGeolocationError,
+  NativeLocationError,
   BarcodeScanErrorCode,
   DeviceLocationErrorCode,
   LocalNotification,

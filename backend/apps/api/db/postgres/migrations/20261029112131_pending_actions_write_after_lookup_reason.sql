@@ -28,8 +28,9 @@ ALTER TABLE ci.pending_actions
 -- ADD CONSTRAINT checks every row, so rows with the new reason are relabelled
 -- first, as 'confirmation-required' (the reason the trust dial queues under).
 -- Their intent and input are unchanged and an open card can still be approved.
--- It then shows that reason's wording on the Approvals page, which does not
--- say the write followed a lookup.
+-- It then shows that reason's wording on the Approvals page ("This is
+-- irreversible, and an installed app asked for it."), which is wrong for these
+-- rows: the write can be undone and the owner's chat asked for it.
 UPDATE ci.pending_actions
    SET reason = 'confirmation-required'
  WHERE reason = 'write-after-lookup';
