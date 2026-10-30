@@ -33,7 +33,6 @@ import {
   PersonRemovedEvent,
   PlaceRemovedEvent,
 } from '@ci/domains/memory/events';
-
 import type { ToolCallRefusal } from '@ci/tool-core';
 
 import { BaseTool } from '../core/BaseTool';
@@ -279,7 +278,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). Archive is refused for messages, files, content and things, which would still show in search, the explorer and chat: delete those instead. archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content, of an event or of a message's attachments goes with it, bytes included, only when nothing else uses it: if another content record, another message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A message also takes the content records its attachments name (a Messenger photo's record, a Discord attachment link) unless another message or an event still holds them. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). Archive is refused for messages, files, content and things, which would still show in search, the explorer and chat: delete those instead. archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a product goes with its catalog model, its barcodes and the models merged into it while the things, sightings and receipt lines that named it stay without it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content, of an event or of a message's attachments goes with it, bytes included, only when nothing else uses it: if another content record, another message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A message also takes the content records its attachments name (a Messenger photo's record, a Discord attachment link) unless another message or an event still holds them. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -373,6 +372,18 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     // Deactivate or delete entities and relationships according to mode
     const hardDelete = mode === 'archive_and_delete';
 
+    // Before anything is read or written, so a refused call changes nothing and costs one lookup.
+    // `checkCall` turned this down before it was queued; a call queued before that, or run without
+    // asking, is turned down here. Read by id and in any state, not from the snapshots: a message
+    // archived before archive refused messages is inactive, so it has no snapshot, and still shows.
+    const refusal = hardDelete
+      ? undefined
+      : archiveRefusal(await this.graphUtility.getNodesBackedByDetailRows(entityIds, ownerId));
+
+    if (refusal) {
+      throw new ArchiveRefusedError(refusal);
+    }
+
     const entitySnapshots = [] as Array<{
       node: GraphNodeEntity;
       relationships: RelationshipEntity[];
@@ -404,18 +415,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     }
 
     const uniqueEntitySnapshots = entitySnapshots;
-
-    // Before anything is written, so a refused call changes nothing. `checkCall` turned this down
-    // before it was queued; a call queued before that, or run without asking, is turned down here.
-    // Read by id and in any state, not from the snapshots: a message archived before archive refused
-    // messages is inactive, so it has no snapshot, and still shows.
-    const refusal = hardDelete
-      ? undefined
-      : archiveRefusal(await this.graphUtility.getNodesBackedByDetailRows(entityIds, ownerId));
-
-    if (refusal) {
-      throw new ArchiveRefusedError(refusal);
-    }
 
     const explicitRelationships = relationshipIds.length
       ? await this.graphUtility.getRelationships(ownerId, {
@@ -944,7 +943,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * The model points at its `Product` node with no `ON DELETE` action, so the generic delete of the
    * node was refused, and a product could not be forgotten in any mode. The things, sightings and
    * receipt lines that name the model stay, without it: their keys are `ON DELETE SET NULL`. That is
-   * said in `warnings`, since they changed without being named.
+   * said in `warnings`, since they changed without being named, and so are the `Product` nodes of
+   * the models that had been merged into it, which went unnamed.
    *
    * A `Product` node with no model behind it goes on to the generic path, where nothing refuses it.
    */
@@ -964,6 +964,12 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     purged.nodeIds.forEach((id) => destroyed.add(id));
 
+    if (purged.duplicateIds.length > 0) {
+      warnings.push(
+        `Also deleted, because each had been merged into a product named here: ${purged.duplicateIds.join(', ')}.`,
+      );
+    }
+
     const unlinked = [
       counted(purged.unlinked.things, 'thing'),
       counted(purged.unlinked.sightings, 'sighting'),
@@ -971,9 +977,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     ].filter((part): part is string => part !== null);
 
     if (unlinked.length > 0) {
-      warnings.push(
-        `Kept but no longer linked to the deleted product: ${unlinked.length > 1 ? `${unlinked.slice(0, -1).join(', ')} and ${unlinked.at(-1)}` : unlinked[0]}.`,
-      );
+      const products = purged.nodeIds.length === 1 ? 'product' : 'products';
+      const listed =
+        unlinked.length > 1 ? `${unlinked.slice(0, -1).join(', ')} and ${unlinked.at(-1)}` : unlinked[0];
+
+      warnings.push(`Kept but no longer linked to the deleted ${products}: ${listed}.`);
     }
   }
 

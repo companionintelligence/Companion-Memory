@@ -2,6 +2,12 @@ import type { ToolRequestContext } from '../context';
 
 import type { IntentDefinition, IntentPrivacy, ToolResult } from './types';
 
+/** A {@link ToolHandle.checkCall} refusal under the error code `execute` gives the same call. */
+export interface ToolCallRefusal {
+  code: string;
+  message: string;
+}
+
 /**
  * All the registry needs a tool to be: a schema, and something that runs.
  *
@@ -15,12 +21,6 @@ import type { IntentDefinition, IntentPrivacy, ToolResult } from './types';
  * end-to-end — the API instantiates it as `ToolRegistryCore<BaseTool>`, and `getTool` there still
  * returns a `BaseTool`.
  */
-/** A {@link ToolHandle.checkCall} refusal under the error code `execute` gives the same call. */
-export interface ToolCallRefusal {
-  code: string;
-  message: string;
-}
-
 export interface ToolHandle<TOutput = unknown> {
   /** Every tool is an intent; the schema IS the curated intent definition. */
   readonly schema: IntentDefinition;

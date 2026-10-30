@@ -12,10 +12,24 @@ export interface PurgedProducts {
    */
   productIds: string[];
   /**
+   * The `Product` nodes of the models that had been merged into those, which went with them and
+   * which nobody asked for. The caller says so, because they were deleted unnamed. A merged model
+   * with no node of its own, or sharing a node that was asked for, is not listed: there is nothing
+   * the caller could have named it by.
+   */
+  duplicateIds: string[];
+  /**
    * The records that named one of those models and stay, now naming none: the schema's
-   * `ON DELETE SET NULL`. The caller says so, because they changed without being named.
+   * `ON DELETE SET NULL`. The caller says so, because they changed without being named. `things`
+   * counts the ones a person can see, not the merge tombstones among them.
    */
   unlinked: { things: number; sightings: number; receiptLines: number };
+  /**
+   * Every thing (`ci.objects` row) that was an instance of one of those models, tombstones included.
+   * Their search rows carry the model's title, brand and model number, so the caller has them
+   * indexed again once the transaction has committed.
+   */
+  unlinkedThingIds: string[];
 }
 
 /**
@@ -34,13 +48,17 @@ export interface PurgedProducts {
  *     under `subject_type = 'product_model'`, and its unique index would keep claiming them.
  *  3. **The models merged into it.** A merge leaves the loser behind as a tombstone
  *     (`merged_into_product_id`). It is the same product, and nobody can name it, so it goes too.
- *  4. **The models, then the nodes.**
+ *  4. **The merge bookkeeping**, under both kinds of id: a product merge writes its
+ *     `ci.entity_merges` row, with a snapshot of the loser's title, brand and spec, keyed by the
+ *     models' ids, not the nodes'.
+ *  5. **The models, then the nodes.**
  *
  * What it leaves alone is every record that merely MENTIONS the model, whose foreign key is
  * `ON DELETE SET NULL`: the things that are instances of it, the sightings resolved to it and the
  * receipt lines that bought it. They are records in their own right and the schema already chose
  * what happens to them, as {@link purgeItemAggregates} leaves the sightings and receipt lines of an
- * item. They are counted first, so the caller can say what changed.
+ * item. They are counted first, so the caller can say what changed, and the things are named, so
+ * the caller can index them again without the model's words.
  *
  * Only the caller's own models are purged. A node that is not the caller's, or has no model behind
  * it, is left out of the result: the generic node delete takes it, and nothing refuses that.
@@ -53,10 +71,13 @@ export async function purgeProductAggregates(
   const none: PurgedProducts = {
     nodeIds: [],
     productIds: [],
+    duplicateIds: [],
     unlinked: { things: 0, sightings: 0, receiptLines: 0 },
+    unlinkedThingIds: [],
   };
 
-  // Locked, and in a fixed order, so two purges (or a purge and a merge) cannot deadlock each other.
+  // Locked, and in a fixed order, so two purges cannot deadlock each other. A merge that names one of
+  // these waits here, and then finds it gone.
   const asked: Array<{ product_id: string; node_id: string }> = await manager.query(
     `SELECT pm.product_id, pm.product_entity_id AS node_id
        FROM ci.product_models pm
@@ -97,20 +118,30 @@ export async function purgeProductAggregates(
     new Set([...nodeIds, ...family.map((row) => row.node_id).filter((id): id is string => id !== null)]),
   );
 
-  const [counts]: Array<{ things: string; sightings: string; receipt_lines: string }> = await manager.query(
-    `SELECT (SELECT count(*) FROM ci.objects WHERE product_id = ANY($1::uuid[])) AS things,
-            (SELECT count(*) FROM ci.object_observations WHERE resolved_product_id = ANY($1::uuid[])) AS sightings,
+  // The things, tombstones included, since every one of them is indexed with the model's words. Only
+  // the ones a person can see are counted for the warning.
+  const things: Array<{ object_id: string; live: boolean }> = await manager.query(
+    `SELECT object_id, merged_into_object_id IS NULL AS live
+       FROM ci.objects
+      WHERE product_id = ANY($1::uuid[])
+      ORDER BY object_id`,
+    [productIds],
+  );
+  const [counts]: Array<{ sightings: string; receipt_lines: string }> = await manager.query(
+    `SELECT (SELECT count(*) FROM ci.object_observations WHERE resolved_product_id = ANY($1::uuid[])) AS sightings,
             (SELECT count(*) FROM ci.receipt_line_items WHERE product_id = ANY($1::uuid[])) AS receipt_lines`,
     [productIds],
   );
 
   // 1. What only points at the models or their nodes, with no foreign key to say so.
-  await deleteBareReferences(manager, [...productIds, ...everyNodeId], PRODUCT_REFERENCES);
+  const everyId = [...productIds, ...everyNodeId];
+
+  await deleteBareReferences(manager, everyId, PRODUCT_REFERENCES);
   await manager.query(
     `DELETE FROM ci.object_identifiers WHERE subject_type = 'product_model' AND subject_id = ANY($1::uuid[])`,
     [productIds],
   );
-  await deleteMergeBookkeeping(manager, everyNodeId);
+  await deleteMergeBookkeeping(manager, everyId);
 
   // 2. The models. The mentions are set to NULL by their own keys, the tombstones go in the same statement.
   await manager.query('DELETE FROM ci.product_models WHERE product_id = ANY($1::uuid[]) AND user_id = $2', [
@@ -118,19 +149,28 @@ export async function purgeProductAggregates(
     userId,
   ]);
 
-  // 3. The nodes, which nothing refuses now.
-  await manager.query(
-    `DELETE FROM ci.entities WHERE entity_type = 'Product' AND entity_id = ANY($1::uuid[]) AND owner_user_id = $2`,
+  // 3. The nodes, which nothing refuses now. A statement that only deletes answers with a row count
+  // rather than its rows, so the ids come back through a SELECT.
+  const goneNodes: Array<{ entity_id: string }> = await manager.query(
+    `WITH gone AS (
+       DELETE FROM ci.entities
+        WHERE entity_type = 'Product' AND entity_id = ANY($1::uuid[]) AND owner_user_id = $2
+       RETURNING entity_id
+     )
+     SELECT entity_id FROM gone ORDER BY entity_id`,
     [everyNodeId, userId],
   );
+  const asks = new Set(nodeIds);
 
   return {
     nodeIds,
     productIds,
+    duplicateIds: goneNodes.map((row) => row.entity_id).filter((id) => !asks.has(id)),
     unlinked: {
-      things: Number(counts?.things ?? 0),
+      things: things.filter((row) => row.live).length,
       sightings: Number(counts?.sightings ?? 0),
       receiptLines: Number(counts?.receipt_lines ?? 0),
     },
+    unlinkedThingIds: things.map((row) => row.object_id),
   };
 }

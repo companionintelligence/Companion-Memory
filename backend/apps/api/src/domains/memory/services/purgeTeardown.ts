@@ -130,11 +130,11 @@ export interface BareReferenceKind {
    *
    * Absent for a kind nothing ledgers. Every writer of the ledger
    * (`appendRecordSources`) records a communication, a content item, an event, an
-   * item, a receipt or a sighting, and none records a Person, a Place, a Concept
-   * or a stored file, so there is no table to name and nothing to clear. When one
-   * starts to, its `record_table` goes here.
+   * item, a catalog product model, a receipt or a sighting, and none records a
+   * Person, a Place, a Concept or a stored file, so there is no table to name and
+   * nothing to clear. When one starts to, its `record_table` goes here.
    */
-  ledgerTable?: 'events' | 'content' | 'communications' | 'objects';
+  ledgerTable?: 'events' | 'content' | 'communications' | 'objects' | 'product_models';
   /**
    * The `ci.identifier_claims.subject_type` its claims are written under, when it
    * is the SUBJECT of any. The person-link stages write one for every participant
@@ -182,11 +182,12 @@ export const CONCEPT_REFERENCES: BareReferenceKind = { ownsIdentifiers: true };
 export const FILE_REFERENCES: BareReferenceKind = {};
 
 /**
- * A catalog product model. Like a file it has two ids and nothing ledgers it: the search rows and
- * the tags are keyed by the id of its `ci.product_models` row, and the graph (edges, deltas) by the
- * id of its `Product` node. The caller passes both kinds of id in the one list.
+ * A catalog product model. Like a file it has two ids: the search rows, the tags and its provenance
+ * are keyed by the id of its `ci.product_models` row, and the graph (edges, deltas) by the id of its
+ * `Product` node. The caller passes both kinds of id in the one list. Its provenance is ledgered
+ * under `product_models` by the bulk ingest (`ProductModelService.createManyDetailed`).
  */
-export const PRODUCT_REFERENCES: BareReferenceKind = {};
+export const PRODUCT_REFERENCES: BareReferenceKind = { ledgerTable: 'product_models' };
 
 /**
  * Deletes every row that names one of these event, content, communication, item,

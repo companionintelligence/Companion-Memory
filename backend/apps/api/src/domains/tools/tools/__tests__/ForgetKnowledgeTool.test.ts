@@ -16,6 +16,7 @@ import {
   type PlaceService,
   type ProductModelService,
   type PurgedFiles,
+  type PurgedProducts,
   type RelationshipEntity,
   type WrappedFilesPurged,
 } from '@ci/domains/memory';
@@ -392,7 +393,8 @@ function makeConcepts(purgeableConceptIds: string[] = [], duplicatesOf: Record<s
 
 /**
  * Stand-in for `ProductModelService`. `purge` takes every id that has a `ci.product_models` row
- * (`purgeableNodeIds`) and answers with the ones it took and with what it only unlinked.
+ * (`purgeableNodeIds`) and answers with the ones it took, the merged duplicates' nodes that went with
+ * them (`duplicateIds`) and what it only unlinked.
  */
 function makeProducts(
   purgeableNodeIds: string[] = [],
@@ -401,12 +403,19 @@ function makeProducts(
     sightings: 0,
     receiptLines: 0,
   },
+  duplicateIds: string[] = [],
 ) {
   const purgeable = new Set(purgeableNodeIds);
-  const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => {
+  const purge = jest.fn(async (_context: { userId: string }, ids: string[]): Promise<PurgedProducts> => {
     const nodeIds = ids.filter((id) => purgeable.has(id));
 
-    return { nodeIds, productIds: nodeIds.map((id) => `model-of-${id}`), unlinked };
+    return {
+      nodeIds,
+      productIds: nodeIds.map((id) => `model-of-${id}`),
+      duplicateIds: nodeIds.length > 0 ? duplicateIds : [],
+      unlinked,
+      unlinkedThingIds: [],
+    };
   });
 
   return { purge };
@@ -3558,6 +3567,24 @@ describe('ForgetKnowledgeTool archive, which cannot hide messages, files, conten
     expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
     expect(result.data?.warnings).toEqual([
       'Kept but no longer linked to the deleted product: 2 things and 1 receipt line.',
+    ]);
+  });
+
+  it('names the merged duplicates that went with a product, and says products for more than one', async () => {
+    const products = makeProducts([E1, E2], { things: 1, sightings: 0, receiptLines: 0 }, [E3]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Product' }, [E2]: { entityType: 'Product' } },
+    });
+
+    const result = await toolWith(graphUtility, { products }).execute(CONTEXT, {
+      entityIds: [E1, E2],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.warnings).toEqual([
+      `Also deleted, because each had been merged into a product named here: ${E3}.`,
+      'Kept but no longer linked to the deleted products: 1 thing.',
     ]);
   });
 

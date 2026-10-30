@@ -21,7 +21,7 @@ import {
   ProductModelService,
   RelationshipEntity,
 } from '@ci/domains/memory';
-import { ProductRemovedEvent } from '@ci/domains/memory/events';
+import { ItemUpdatedEvent, ProductRemovedEvent } from '@ci/domains/memory/events';
 import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
@@ -147,6 +147,8 @@ describeWithDb(`memory.forget on a Product node, against Postgres (${availabilit
   });
 
   async function wipe(userId: string): Promise<void> {
+    await dataSource.query('DELETE FROM ci.entity_merges WHERE owner_user_id = $1', [userId]);
+    await dataSource.query('DELETE FROM ci.record_sources WHERE user_id = $1', [userId]);
     await dataSource.query('DELETE FROM ci_search.vectors WHERE user_id = $1', [userId]);
     await dataSource.query('DELETE FROM ci.object_identifiers WHERE owner_user_id = $1', [userId]);
     await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = $1', [userId]);
@@ -282,19 +284,49 @@ describeWithDb(`memory.forget on a Product node, against Postgres (${availabilit
        VALUES ($1, $2, 'MADE_BY', $3)`,
       [product.nodeId, brand, ownerId],
     );
+    // What `ObjectMergeService.mergeProductModels` writes: keyed by the MODELS' ids, with a snapshot of
+    // the loser's row.
+    await dataSource.query(
+      `INSERT INTO ci.entity_merges (owner_user_id, source_entity_id, target_entity_id, entity_type, details)
+       VALUES ($1, $2, $3, 'ProductModel', $4::jsonb)`,
+      [ownerId, duplicate.productId, product.productId, JSON.stringify({ source: { title: 'Kettle 1.7L' } })],
+    );
+    // What the bulk ingest ledgers for a model it wrote.
+    await dataSource.query(
+      `INSERT INTO ci.record_sources (user_id, record_table, record_id, source_type, source_system, source_id)
+       VALUES ($1, 'product_models', $2, 'import', 'amazon', 'B0KETTLE')`,
+      [ownerId, product.productId],
+    );
 
     const result = await tool.execute(asOwner, { entityIds: [product.nodeId], mode: 'archive_and_delete' });
 
     expect(result.success).toBe(true);
     expect(result.data?.archivedEntityIds).toEqual([product.nodeId]);
-    expect(result.data?.warnings).toEqual(['Kept but no longer linked to the deleted product: 1 thing.']);
+    expect(result.data?.warnings).toEqual([
+      `Also deleted, because each had been merged into a product named here: ${duplicate.nodeId}.`,
+      'Kept but no longer linked to the deleted product: 1 thing.',
+    ]);
     expect(
       await remains([product.nodeId, duplicate.nodeId], [product.productId, duplicate.productId]),
     ).toEqual({ nodes: 0, models: 0, barcodes: 0, searchRows: 0, edges: 0 });
+    expect(
+      await count(
+        'SELECT count(*) FROM ci.entity_merges WHERE source_entity_id = ANY($1::uuid[]) OR target_entity_id = ANY($1::uuid[])',
+        [[product.productId, duplicate.productId]],
+      ),
+    ).toBe(0);
+    expect(
+      await count(
+        `SELECT count(*) FROM ci.record_sources WHERE record_table = 'product_models' AND record_id = $1`,
+        [product.productId],
+      ),
+    ).toBe(0);
 
-    // The thing is a record in its own right: it stays, without the model.
+    // The thing is a record in its own right: it stays, without the model, and is indexed again
+    // without the model's title and brand.
     const [row] = await dataSource.query('SELECT product_id FROM ci.objects WHERE object_id = $1', [thing]);
     expect(row).toEqual({ product_id: null });
+    expect(publishedOf(ItemUpdatedEvent)).toEqual([{ itemId: thing }]);
     expect(await count('SELECT count(*) FROM ci.entities WHERE entity_id = $1', [brand])).toBe(1);
     expect(publishedOf(ProductRemovedEvent)).toEqual(
       expect.arrayContaining([{ productId: product.productId }, { productId: duplicate.productId }]),
@@ -357,6 +389,21 @@ describeWithDb(`memory.forget on a Product node, against Postgres (${availabilit
 
     expect(result.error).toMatchObject({ code: 'ARCHIVE_REFUSED' });
     expect(result.error?.message).toContain(`thing ${product.nodeId}`);
+  });
+
+  it('archives the node a merge left behind, whose model is only a tombstone', async () => {
+    const winner = await seedProduct('Blender');
+    const loser = await seedProduct('Blender 2', { mergedInto: winner.productId });
+
+    expect(await tool.checkCall(asOwner, { entityIds: [loser.nodeId], mode: 'archive' })).toBeUndefined();
+
+    const result = await tool.execute(asOwner, { entityIds: [loser.nodeId], mode: 'archive' });
+
+    expect(result.success).toBe(true);
+    const [row] = await dataSource.query('SELECT is_active FROM ci.entities WHERE entity_id = $1', [
+      loser.nodeId,
+    ]);
+    expect(row).toEqual({ is_active: false });
   });
 
   it.each([['Product'], ['Object'], ['Thing']])(

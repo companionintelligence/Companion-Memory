@@ -84,30 +84,33 @@ export function LazyView({ viewKey, load }: Props) {
             // Memory not answering, the in-place retry below fails again and
             // keeps this message, which is better than the browser's offline page.
             //
-            // The native shells and the desktop app carry the code in the bundle
-            // and only call Memory, so a reload does not depend on Memory at all.
-            // There Try again reloads whenever a network is there, as it did
-            // before it asked Memory.
-            if (isChunkLoadError(error) && !pageServedByApi()) {
-              if (navigator.onLine) {
-                window.location.reload();
+            // The native Capacitor shells carry the code in the bundle and only
+            // call Memory, so a reload does not depend on Memory at all. There Try
+            // again reloads whenever a network is there, as it did before it asked
+            // Memory. (The desktop app is not one of them: it shows the web app
+            // as Memory's gateway serves it.)
+            if (isChunkLoadError(error)) {
+              if (!pageServedByApi()) {
+                if (navigator.onLine) {
+                  window.location.reload();
 
-                return;
-              }
-            } else if (isChunkLoadError(error)) {
-              setChecking(true);
-              const answers = await memoryAnswers();
+                  return;
+                }
+              } else {
+                setChecking(true);
+                const answers = await memoryAnswers();
 
-              if (!mounted.current) {
-                return;
-              }
+                if (!mounted.current) {
+                  return;
+                }
 
-              setChecking(false);
+                setChecking(false);
 
-              if (answers) {
-                window.location.reload();
+                if (answers) {
+                  window.location.reload();
 
-                return;
+                  return;
+                }
               }
             }
 
