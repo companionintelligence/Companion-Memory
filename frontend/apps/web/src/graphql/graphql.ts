@@ -2123,7 +2123,7 @@ export type Mutation = {
   tagEntities: Array<TaggableEntityType>;
   /** Manually trigger the HBPE pipeline for the current user */
   triggerHbpe: Scalars['String']['output'];
-  /** A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing at all", which takes it out of that queue. */
+  /** A person says this sighting is not the thing it is linked to. The thing link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Its product link stays, unless it is linked to a product and no thing. Use rejectObservation for "not a thing at all", which takes it out of that queue. */
   unlinkObservation?: Maybe<ObjectObservationType>;
   /** Remove the planned block for this task and clear scheduledFor. */
   unscheduleTask?: Maybe<TaskType>;

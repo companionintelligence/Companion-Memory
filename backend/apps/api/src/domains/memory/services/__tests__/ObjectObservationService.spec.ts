@@ -81,7 +81,7 @@ function makeService(): Harness {
   const query = jest.fn(async (sql: string, params: unknown[]) => {
     calls.push({ sql, params });
 
-    const ids = (params[1] ?? []) as unknown[];
+    const ids = Array.isArray(params[1]) ? (params[1] as unknown[]) : [];
 
     return ids.map((_value, index) => ({ observation_id: `obs-${calls.length}-${index}` }));
   });
@@ -605,10 +605,15 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
 });
 
 describe('ObjectObservationService.sendBackToReview — "not this thing"', () => {
-  it("clears the link as a person's answer and marks the sighting for the review queue", async () => {
+  it("clears the thing link as a person's answer and marks the sighting for the review queue", async () => {
     const { service, findOne, update } = makeService();
 
-    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-1' });
+    findOne.mockResolvedValue({
+      id: 'obs-1',
+      confirmedByUser: true,
+      resolvedObjectId: 'item-1',
+      resolvedProductId: 'product-1',
+    });
 
     await service.sendBackToReview(ctx(), 'obs-1');
 
@@ -622,9 +627,10 @@ describe('ObjectObservationService.sendBackToReview — "not this thing"', () =>
         resolutionMethod: 'user',
         resolutionConfidence: null,
         resolvedObjectId: null,
-        resolvedProductId: null,
       }),
     );
+    // "Not this one" is not "not this product".
+    expect(patch).not.toHaveProperty('resolvedProductId');
     expect(patch.metadata()).toBe(`metadata || '{"sentBackToReview": true}'::jsonb`);
   });
 

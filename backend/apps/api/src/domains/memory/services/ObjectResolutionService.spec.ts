@@ -335,11 +335,13 @@ describe('ObjectResolutionService.resolveAndApply', () => {
 
   it('tells a sighting sent back to review apart from "not a thing"', async () => {
     const harness = makeHarness({ label: [{ object_id: OBJECT }] });
-    // What sendBackToReview leaves: unconfirmed, unlinked, method `user`, marked for review.
+    // What sendBackToReview leaves: unconfirmed, no thing link, method `user`, marked for review. The product
+    // link stays.
     harness.findById.mockResolvedValue(
       observation({
         confirmedByUser: false,
         resolvedObjectId: null,
+        resolvedProductId: PRODUCT,
         resolutionMethod: 'user',
         metadata: { sentBackToReview: true },
       }),
@@ -350,6 +352,7 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     expect(outcome).toMatchObject({
       applied: false,
       objectId: null,
+      productId: PRODUCT,
       reason: 'user-sent-back; waiting in review',
     });
     expect(harness.resolveObservation).not.toHaveBeenCalled();

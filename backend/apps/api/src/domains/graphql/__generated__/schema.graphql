@@ -2022,7 +2022,7 @@ type Mutation {
     id: ID!
 
     """
-    The owned unit this sighting is of. Omit to confirm the resolution already on the row.
+    The owned unit this sighting is of. Omit to confirm the resolution already on the row. Without a productId, the unit's product, when it has one, becomes the sighting's product.
     """
     itemId: ID
     productId: ID
@@ -2222,7 +2222,7 @@ type Mutation {
   triggerHbpe: String!
 
   """
-  A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing at all", which takes it out of that queue.
+  A person says this sighting is not the thing it is linked to. The thing link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Its product link stays, unless it is linked to a product and no thing. Use rejectObservation for "not a thing at all", which takes it out of that queue.
   """
   unlinkObservation(
     id: ID!
