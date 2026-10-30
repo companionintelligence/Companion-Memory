@@ -511,7 +511,7 @@ function EnvRowsEditor({ rows, onChange }: EnvRowsEditorProps) {
                 placeholder="KEY"
                 value={row.key}
                 onChange={(e) => updateRow(index, { key: e.target.value })}
-                className="font-mono text-sm"
+                className="font-mono text-base md:text-sm"
               />
               {showMasked ? (
                 <div className="flex items-center gap-2">
@@ -1484,7 +1484,7 @@ export function McpSection() {
                     placeholder="uvx some-mcp-server@latest"
                     value={form.command}
                     onChange={(e) => setForm({ ...form, command: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1494,7 +1494,7 @@ export function McpSection() {
                     rows={3}
                     value={form.argsText}
                     onChange={(e) => setForm({ ...form, argsText: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">

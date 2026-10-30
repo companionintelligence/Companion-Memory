@@ -286,7 +286,7 @@ function AnswerEditor({
         maxLength={ANSWER_MAX_LENGTH}
         disabled={busy}
         aria-label={`Your answer to “${question.text}”`}
-        className="min-h-0 text-sm"
+        className="min-h-0 text-base md:text-sm"
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -383,7 +383,7 @@ function AnswerPrompt({
           maxLength={ANSWER_MAX_LENGTH}
           placeholder="Your answer…"
           aria-label={`Your answer to “${question.text}”`}
-          className="min-h-0 flex-1 text-sm"
+          className="min-h-0 flex-1 text-base md:text-sm"
         />
         {busy && (
           <Loader2
@@ -408,7 +408,7 @@ function AnswerPrompt({
         // Full control height on a phone — `h-8` is 32px, under the 44px
         // Apple asks for, and these sit in a dense divided list where a
         // mistap lands on the neighbouring question.
-        className="h-9 w-full min-w-0 text-sm sm:h-8 sm:max-w-80 sm:shrink-0"
+        className="h-9 w-full min-w-0 text-base sm:h-8 sm:max-w-80 sm:shrink-0 md:text-sm"
       />
       {busy && (
         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" strokeWidth={1.5} />

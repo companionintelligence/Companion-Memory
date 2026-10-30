@@ -240,7 +240,7 @@ export function TagInput({
                       '!p-0 h-5',
                       'focus:!border-transparent focus:!ring-0 focus-visible:!ring-0 focus-visible:!border-transparent',
                       'disabled:!bg-transparent',
-                      'resize-none text-sm leading-none',
+                      'resize-none text-base leading-none md:text-sm',
                       singleLine && '!min-w-0',
                     )}
                   />

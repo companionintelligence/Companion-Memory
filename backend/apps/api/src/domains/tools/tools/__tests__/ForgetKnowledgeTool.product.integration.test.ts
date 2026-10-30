@@ -4,7 +4,6 @@ import { v7 as uuidv7 } from 'uuid';
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import type { ObjectIdentifierService } from '@ci/domains/graph';
 import {
   BaseEntity,
   type CalendarEventService,
@@ -138,7 +137,7 @@ describeWithDb(`memory.forget on a Product node, against Postgres (${availabilit
       // The purge never resolves an identifier, it deletes them.
       new ProductModelService(
         dataSource.getRepository(ProductModelEntity),
-        {} as unknown as ObjectIdentifierService,
+        {} as unknown as ConstructorParameters<typeof ProductModelService>[1],
         signalling,
         logger(),
       ),

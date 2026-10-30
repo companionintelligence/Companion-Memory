@@ -158,6 +158,10 @@ jobs:
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
       PEERS_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
+      # ScratchDatabase-backed suites need the ephemeral Postgres admin role
+      # to create and drop an isolated database instead of silently skipping.
+      DATABASE_ADMIN_USERNAME: postgres
+      DATABASE_ADMIN_PASSWORD: ci_gate_admin_pw
       PGPASSWORD: ci_gate_admin_pw
 
     steps:

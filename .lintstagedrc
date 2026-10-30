@@ -13,5 +13,7 @@
   "frontend/apps/android/android/capacitor.settings.gradle": ["node scripts/check-capacitor-native-sync.mjs"],
   "frontend/apps/android/android/app/capacitor.build.gradle": ["node scripts/check-capacitor-native-sync.mjs"],
   "frontend/apps/ios/ios/App/Podfile": ["node scripts/check-capacitor-native-sync.mjs"],
-  "frontend/packages/capacitor-*/package.json": ["node scripts/check-capacitor-native-sync.mjs"]
+  "frontend/packages/capacitor-*/package.json": ["node scripts/check-capacitor-native-sync.mjs"],
+  "*.html": ["node scripts/check-viewport-zoom.mjs"],
+  "frontend/apps/{android,ios}/capacitor.config.*": ["node scripts/check-viewport-zoom.mjs"]
 }

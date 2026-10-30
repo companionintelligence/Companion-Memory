@@ -14,7 +14,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, type FindOptionsWhere } from 'typeorm';
+import { Repository, In, IsNull, type FindOptionsWhere, type SelectQueryBuilder } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 
 import { isUniqueViolation } from '@ci/common/constants';
@@ -57,25 +57,41 @@ const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
  * no row could match it.
  */
 export function parseSignedLink(link: string): { bucket: string; key: string } | null {
-  let path: string;
-
   try {
-    path = new URL(link, 'http://placeholder.invalid').pathname;
+    const path = new URL(link, 'http://placeholder.invalid').pathname;
+    const segments = path
+      .replace(/^\/static(?=\/)/, '')
+      .split('/')
+      .filter(Boolean)
+      .map(decodeURIComponent);
+
+    if (segments.length !== 2 || !UUID_KEY.test(segments[1])) {
+      return null;
+    }
+
+    return { bucket: segments[0], key: segments[1] };
   } catch {
     return null;
   }
+}
 
-  const segments = path
-    .replace(/^\/static(?=\/)/, '')
-    .split('/')
-    .filter(Boolean)
-    .map(decodeURIComponent);
-
-  if (segments.length !== 2 || !UUID_KEY.test(segments[1])) {
-    return null;
-  }
-
-  return { bucket: segments[0], key: segments[1] };
+/**
+ * Leaves out the files an event already shows: those stamped with an `event_id`,
+ * and those wrapped by a content row that links to an event (the link from
+ * content to file is `content.external_id`; see ContentService.findIdsByFileIds).
+ * An imported photo is both a file and an event at its taken date, so a browse
+ * that merges events would otherwise list it twice, once at its row write time.
+ */
+function excludeEventLinkedFiles(query: SelectQueryBuilder<FileEntity>): SelectQueryBuilder<FileEntity> {
+  return query.andWhere('file.event_id IS NULL').andWhere(
+    `NOT EXISTS (
+      SELECT 1 FROM ci.content linked
+      WHERE linked.user_id = file.user_id
+        AND linked.external_id = file.id::text
+        AND (linked.external_id_kind = 'file' OR linked.external_id_kind IS NULL)
+        AND linked.event_id IS NOT NULL
+    )`,
+  );
 }
 
 @Injectable()
@@ -503,6 +519,8 @@ export class FileService implements OnModuleInit {
       order?: 'ASC' | 'DESC';
       /** Only these kinds of file (see `fileKinds.ts`); absent means every kind. */
       kinds?: readonly FileKind[];
+      /** Drop files an event already shows (see {@link excludeEventLinkedFiles}). */
+      excludeEventLinked?: boolean;
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.fileRepository
@@ -510,6 +528,10 @@ export class FileService implements OnModuleInit {
       .select('file.id', 'id')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.excludeEventLinked) {
+      query = excludeEventLinkedFiles(query);
+    }
 
     if (options.kinds && options.kinds.length > 0) {
       const kinds = fileKindsPredicate('file.content_type', options.kinds);
@@ -552,12 +574,16 @@ export class FileService implements OnModuleInit {
    */
   async countEntitiesForFiles(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date; kinds?: readonly FileKind[] },
+    options: { startTime?: Date; endTime?: Date; kinds?: readonly FileKind[]; excludeEventLinked?: boolean },
   ): Promise<number> {
     let query = this.fileRepository
       .createQueryBuilder('file')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.excludeEventLinked) {
+      query = excludeEventLinkedFiles(query);
+    }
 
     if (options.kinds && options.kinds.length > 0) {
       const kinds = fileKindsPredicate('file.content_type', options.kinds);

@@ -698,6 +698,7 @@ lint: ## Check the source for lint and formatting errors, both stacks
 
 	@sh scripts/check-ci-namespace.sh
 	@node scripts/check-capacitor-native-sync.mjs
+	@node scripts/check-viewport-zoom.mjs
 	@node scripts/check-depcheck-ratchet.mjs
 	@node scripts/docs-check.mjs
 

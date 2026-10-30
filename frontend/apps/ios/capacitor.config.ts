@@ -15,6 +15,13 @@ const config: CapacitorConfig = {
   server: {
     ...(process.env.CAP_SERVER_URL ? { url: process.env.CAP_SERVER_URL, cleartext: true } : {}),
   },
+  ios: {
+    // Pinch-zoom. It defaults to false, and then CAPBridgeViewController hands the web view's
+    // scroll view a delegate whose scrollViewWillBeginZooming switches the pinch recogniser off,
+    // whatever the page's viewport meta says. It is the only in-app way to enlarge the app (one
+    // input to WCAG 1.4.4, not all of it). scripts/check-viewport-zoom.mjs fails if this goes away.
+    zoomEnabled: true,
+  },
   plugins: {
     // Patch window.fetch / XHR onto URLSession. WKWebView fetch is CORS-bound;
     // Memory (core3) answers /api/health without Access-Control-Allow-Origin, which

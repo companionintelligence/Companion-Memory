@@ -610,6 +610,13 @@ describe('FileService.resignLinks — a fresh link for one that expired', () => 
     expect(repo.find).not.toHaveBeenCalled();
   });
 
+  it('returns null for a link with malformed path encoding', async () => {
+    const { service, repo } = serviceWith([row]);
+
+    await expect(service.resignLinks(ownerCtx, ['/static/ci/%E0%A4%A'])).resolves.toEqual([null]);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
   it('a row in another bucket is not the object the link named', async () => {
     const { service } = serviceWith([{ ...row, bucket: 'other-bucket' }]);
 

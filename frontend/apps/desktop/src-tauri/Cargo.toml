@@ -37,6 +37,12 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # protocol.
 tiny_http = "0.12"
 
+# GTK3's current Tauri bindings require glib 0.18, whose VariantStrIter fix only
+# landed in glib 0.20. Keep the compatible version and backport the exact
+# upstream pointer-mutability fix until the GTK/Tauri stack can move to glib 0.20.
+[patch.crates-io]
+glib = { path = "vendor/glib-0.18.5" }
+
 [dev-dependencies]
 tempfile = "3"
 
