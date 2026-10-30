@@ -11,6 +11,7 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  OWNED_TABLES,
   type OwnedLink,
   refuseForeignLinks,
 } from '@ci/common/persistence';
@@ -78,44 +79,12 @@ interface ReceiptLinkFields {
  * export checks (`UserDataPortabilityService.refuseLinksOutOfAccount`).
  */
 function receiptLinks(rows: readonly ReceiptLinkFields[]): OwnedLink[] {
-  const ids = (pick: (row: ReceiptLinkFields) => string | null | undefined) => rows.map(pick);
-
   return [
-    {
-      field: 'merchant_entity_id',
-      table: 'ci.entities',
-      key: 'entity_id',
-      ownerColumn: 'owner_user_id',
-      ids: ids((row) => row.merchantEntityId),
-    },
-    {
-      field: 'place_entity_id',
-      table: 'ci.entities',
-      key: 'entity_id',
-      ownerColumn: 'owner_user_id',
-      ids: ids((row) => row.placeEntityId),
-    },
-    {
-      field: 'event_id',
-      table: 'ci.events',
-      key: 'event_id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.eventId),
-    },
-    {
-      field: 'document_content_id',
-      table: 'ci.content',
-      key: 'id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.documentContentId),
-    },
-    {
-      field: 'source_file_id',
-      table: 'ci.files',
-      key: 'id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.sourceFileId),
-    },
+    { field: 'merchant_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.merchantEntityId) },
+    { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.placeEntityId) },
+    { field: 'event_id', ...OWNED_TABLES.events, ids: rows.map((row) => row.eventId) },
+    { field: 'document_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.documentContentId) },
+    { field: 'source_file_id', ...OWNED_TABLES.files, ids: rows.map((row) => row.sourceFileId) },
   ];
 }
 
@@ -661,8 +630,12 @@ export class ReceiptService {
   }
 
   /**
-   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so
-   * the links have to belong to the receipt's owner.
+   * {@link refuseForeignLinks} for an update: the links have to belong to the receipt's
+   * account, `user_id`, the column {@link userScope} and the import scope receipts by. That is
+   * also how a system context, with no user of its own, is checked. `owner_user_id` can be
+   * NULL (an import keeps the archive's NULL), which would leave the links unchecked. A receipt
+   * the caller cannot see is left to the update, which answers null for it, so the refusal
+   * never answers for another account's receipt.
    */
   private async refuseForeignHeaderLinks(
     context: ServiceContext,
@@ -675,14 +648,13 @@ export class ReceiptService {
       return;
     }
 
-    const ownerId =
-      context.userId !== SYSTEM_USER
-        ? context.userId
-        : (await this.receiptRepository.findOne({ select: { id: true, ownerUserId: true }, where: { id } }))
-            ?.ownerUserId;
+    const row = await this.receiptRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...this.userScope(context) },
+    });
 
-    if (ownerId != null) {
-      await refuseForeignLinks(this.receiptRepository.manager, ownerId, links, 'receipt');
+    if (row) {
+      await refuseForeignLinks(this.receiptRepository.manager, row.userId, links, 'receipt');
     }
   }
 
@@ -723,9 +695,7 @@ export class ReceiptService {
       [
         {
           field: 'line_items.product_id',
-          table: 'ci.product_models',
-          key: 'product_id',
-          ownerColumn: 'user_id',
+          ...OWNED_TABLES.productModels,
           ids: lines.map((line) => line.productId),
         },
       ],

@@ -10,6 +10,7 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  OWNED_TABLES,
   type OwnedLink,
   refuseForeignLinks,
 } from '@ci/common/persistence';
@@ -110,27 +111,13 @@ interface ProductLinkFields {
  */
 function productLinks(rows: readonly ProductLinkFields[]): OwnedLink[] {
   return [
-    {
-      field: 'image_content_id',
-      table: 'ci.content',
-      key: 'id',
-      ownerColumn: 'user_id',
-      ids: rows.map((row) => row.imageContentId),
-    },
+    { field: 'image_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.imageContentId) },
     {
       field: 'manual_content_ids',
-      table: 'ci.content',
-      key: 'id',
-      ownerColumn: 'user_id',
+      ...OWNED_TABLES.content,
       ids: rows.flatMap((row) => row.manualContentIds ?? []),
     },
-    {
-      field: 'product_entity_id',
-      table: 'ci.entities',
-      key: 'entity_id',
-      ownerColumn: 'owner_user_id',
-      ids: rows.map((row) => row.productEntityId),
-    },
+    { field: 'product_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.productEntityId) },
   ];
 }
 
@@ -530,12 +517,8 @@ export class ProductModelService {
       return existing;
     }
 
-    await refuseForeignLinks(
-      this.repository.manager,
-      existing.ownerUserId ?? existing.userId,
-      productLinks([patch]),
-      'product',
-    );
+    // `user_id`, the account the model belongs to and the column the import scopes it by.
+    await refuseForeignLinks(this.repository.manager, existing.userId, productLinks([patch]), 'product');
 
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.

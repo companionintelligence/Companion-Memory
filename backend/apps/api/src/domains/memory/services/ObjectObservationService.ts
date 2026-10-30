@@ -19,6 +19,7 @@ import { LoggerService } from '@ci/common/logging';
 import {
   appendRecordSources,
   computeChunkSize,
+  OWNED_TABLES,
   type OwnedLink,
   refuseForeignLinks,
 } from '@ci/common/persistence';
@@ -242,49 +243,17 @@ interface ObservationLinkFields {
  * ask that the row exists, and the file and content columns have none.
  */
 function observationLinks(rows: readonly ObservationLinkFields[]): OwnedLink[] {
-  const ids = (pick: (row: ObservationLinkFields) => string | null | undefined) => rows.map(pick);
-  const content = (
-    field: string,
-    pick: (row: ObservationLinkFields) => string | null | undefined,
-  ): OwnedLink => ({
-    field,
-    table: 'ci.content',
-    key: 'id',
-    ownerColumn: 'user_id',
-    ids: ids(pick),
-  });
-
   return [
-    content('content_id', (row) => row.contentId),
-    content('crop_content_id', (row) => row.cropContentId),
-    { field: 'file_id', table: 'ci.files', key: 'id', ownerColumn: 'user_id', ids: ids((row) => row.fileId) },
-    {
-      field: 'event_id',
-      table: 'ci.events',
-      key: 'event_id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.eventId),
-    },
-    {
-      field: 'place_entity_id',
-      table: 'ci.entities',
-      key: 'entity_id',
-      ownerColumn: 'owner_user_id',
-      ids: ids((row) => row.placeEntityId),
-    },
-    {
-      field: 'resolved_object_id',
-      table: 'ci.objects',
-      key: 'object_id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.resolvedObjectId),
-    },
+    { field: 'content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.contentId) },
+    { field: 'crop_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.cropContentId) },
+    { field: 'file_id', ...OWNED_TABLES.files, ids: rows.map((row) => row.fileId) },
+    { field: 'event_id', ...OWNED_TABLES.events, ids: rows.map((row) => row.eventId) },
+    { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.placeEntityId) },
+    { field: 'resolved_object_id', ...OWNED_TABLES.objects, ids: rows.map((row) => row.resolvedObjectId) },
     {
       field: 'resolved_product_id',
-      table: 'ci.product_models',
-      key: 'product_id',
-      ownerColumn: 'user_id',
-      ids: ids((row) => row.resolvedProductId),
+      ...OWNED_TABLES.productModels,
+      ids: rows.map((row) => row.resolvedProductId),
     },
   ];
 }
@@ -551,12 +520,9 @@ export class ObjectObservationService {
       return existing;
     }
 
-    await refuseForeignLinks(
-      this.dataSource,
-      existing.ownerUserId ?? existing.userId,
-      observationLinks([dto]),
-      'sighting',
-    );
+    // `user_id`, the account the sighting belongs to and the column the import scopes it by.
+    // `owner_user_id` is an attribution that may name no one.
+    await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([dto]), 'sighting');
 
     await this.observationRepository.update(
       { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
@@ -600,12 +566,7 @@ export class ObjectObservationService {
     }
 
     if (resolution != null) {
-      await refuseForeignLinks(
-        this.dataSource,
-        existing.ownerUserId ?? existing.userId,
-        observationLinks([resolution]),
-        'sighting',
-      );
+      await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([resolution]), 'sighting');
     }
 
     await this.observationRepository.update(
