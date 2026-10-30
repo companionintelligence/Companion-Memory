@@ -785,6 +785,16 @@ describe('HubForwardAuthBridgeService', () => {
       expect(userService.create).not.toHaveBeenCalled();
     });
 
+    it('still names the Hub person when the link lookup fails, so the SPA can compare addresses', async () => {
+      const { service, federatedIdentityService, logger } = makeService();
+      federatedIdentityService.findUserId.mockRejectedValue(new Error('connection terminated'));
+
+      await expect(
+        service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection terminated'));
+    });
+
     describe('says why it withholds the account of a person alignSession would refuse', () => {
       it('several case-insensitive matches', async () => {
         const { service, userService } = makeService();

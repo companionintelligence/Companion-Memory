@@ -251,6 +251,11 @@ export class HubForwardAuthBridgeService {
    * `refused` tells the last of those apart from the others: it is the reason `alignSession` would
    * give (the same `refused` it answers with) and null otherwise, for a Hub that sends no stable id
    * too.
+   *
+   * A lookup that fails answers with the username alone, for either kind of Hub, rather than
+   * failing the request. The SPA reads a failed `hub-identity` as no Hub person at all and would
+   * then compare nothing. With the username it still compares addresses, as it did before
+   * `accountId` and `refused` existed.
    */
   async describeIdentity(req: Request): Promise<HubIdentityDescription> {
     const identity = this.verifyIdentity(req);
@@ -258,46 +263,42 @@ export class HubForwardAuthBridgeService {
       return { username: null, accountId: null, refused: null };
     }
 
-    if (!identity.stableId) {
+    try {
+      if (!identity.stableId) {
+        return {
+          username: identity.username,
+          accountId: null,
+          refused: await this.refusalByEmail(req, identity.username),
+        };
+      }
+
+      const placement = await this.locate(
+        identity.username,
+        identity.stableId,
+        this.signedInAs(() => this.readSession(req)),
+      );
+
       return {
         username: identity.username,
-        accountId: null,
-        refused: await this.refusalByEmail(req, identity.username),
+        accountId: placement.kind === 'linked' || placement.kind === 'adopt' ? placement.user.id : null,
+        refused: placement.kind === 'refused' ? placement.reason : null,
       };
+    } catch (error) {
+      this.logger.warn(
+        `could not look up the Memory account for Hub person ${identity.username}: ${String(error)}`,
+      );
+
+      return { username: identity.username, accountId: null, refused: null };
     }
-
-    const placement = await this.locate(
-      identity.username,
-      identity.stableId,
-      this.signedInAs(() => this.readSession(req)),
-    );
-
-    return {
-      username: identity.username,
-      accountId: placement.kind === 'linked' || placement.kind === 'adopt' ? placement.user.id : null,
-      refused: placement.kind === 'refused' ? placement.reason : null,
-    };
   }
 
   /**
    * What {@link alignByEmail} would refuse this person for, read-only. That keeps a live session
    * already signed in to the address before it looks for the account, so such a browser is never
    * refused, whatever the lookup says (several accounts at the address included).
-   *
-   * A failed lookup answers null rather than failing the request: the SPA reads a failed
-   * `hub-identity` as no Hub person at all and would then skip the address comparison this
-   * endpoint gave it before `refused` existed.
    */
   private async refusalByEmail(req: Request, username: string): Promise<HubBridgeRefusal | null> {
-    let placement: EmailPlacement;
-    try {
-      placement = this.placementByEmail(await this.userService.findAccountByEmail(username));
-    } catch (error) {
-      this.logger.warn(`could not look up the Memory account for Hub person ${username}: ${String(error)}`);
-
-      return null;
-    }
-
+    const placement = this.placementByEmail(await this.userService.findAccountByEmail(username));
     if (placement.kind !== 'refused') {
       return null;
     }
@@ -307,7 +308,7 @@ export class HubForwardAuthBridgeService {
 
   /**
    * Whether {@link alignByEmail} keeps this browser's session as it is: a live one already signed in
-   * to the address the Hub calls this person, checked before any account is looked up.
+   * to the address the Hub calls this person. The bridge asks this before it looks up any account.
    */
   private async keepsSessionAt(session: MemorySession | null, username: string): Promise<boolean> {
     return Boolean(
@@ -680,12 +681,7 @@ export class HubForwardAuthBridgeService {
    * member who typed it into their own account would receive this person's every sign-in. The
    * caller has already kept the session of a browser signed in to that very account.
    */
-  private async ensureUser(
-    email: string,
-  ): Promise<
-    | { kind: 'account'; user: { id: string; email: string } }
-    | { kind: 'refused'; reason: Extract<HubBridgeRefusal, 'account_ambiguous' | 'account_unproven'> }
-  > {
+  private async ensureUser(email: string): Promise<Exclude<EmailPlacement, { kind: 'create' }>> {
     const placement = this.placementByEmail(await this.userService.findAccountByEmail(email));
     if (placement.kind !== 'create') {
       return placement;
