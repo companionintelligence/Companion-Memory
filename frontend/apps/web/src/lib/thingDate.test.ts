@@ -48,6 +48,16 @@ describe.each(ZONES)('thing dates in %s', (zone) => {
     }
   });
 
+  // `new Date(99, 4, 4)` is 1999; the form must not show (and save back) that.
+  it('reads a day in the first century back as that day', () => {
+    process.env.TZ = zone;
+
+    const stored = fromThingDateInput('0099-05-04');
+
+    expect(toThingDateInput(stored)).toBe('0099-05-04');
+    expect(thingDate(stored)?.getFullYear()).toBe(99);
+  });
+
   it('reads the start of a local day, as the form wrote it for a while, as that day', () => {
     process.env.TZ = zone;
 

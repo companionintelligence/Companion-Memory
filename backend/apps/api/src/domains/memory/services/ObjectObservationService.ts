@@ -525,7 +525,7 @@ export class ObjectObservationService {
     id: string,
     confirmed = true,
     resolution?: Pick<ResolveObjectObservationDto, 'resolvedObjectId' | 'resolvedProductId'>,
-    options: { sendBackToReview?: boolean } = {},
+    options: { sendBackToReview?: boolean; whileLinkedTo?: string } = {},
   ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
@@ -539,7 +539,13 @@ export class ObjectObservationService {
         : null;
 
     await this.observationRepository.update(
-      { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        // Only while the row is still linked to that thing: a merge or another
+        // answer between the read above and this write leaves it alone.
+        ...(options.whileLinkedTo !== undefined && { resolvedObjectId: options.whileLinkedTo }),
+      },
       {
         confirmedByUser: confirmed,
         resolutionMethod: 'user',
@@ -619,7 +625,7 @@ export class ObjectObservationService {
       id,
       false,
       existing.resolvedObjectId != null ? { resolvedObjectId: null } : { resolvedProductId: null },
-      { sendBackToReview: true },
+      { sendBackToReview: true, ...(fromObjectId !== undefined && { whileLinkedTo: fromObjectId }) },
     );
   }
 

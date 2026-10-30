@@ -144,23 +144,37 @@ export class DailyMetricsService {
    * On an appliance capturing today, the newest `windowDays` days with data
    * ARE the trailing `windowDays` days, so this is a no-op for the healthy
    * case and only bites on a stale corpus.
+   *
+   * With no `timezone`, the days are the user's profile timezone, the one the
+   * cron refreshes in. A refresh in another zone buckets the data differently,
+   * so its stale-day delete would remove days that have data only in the
+   * person's own zone.
    */
   async refreshForUser(
     context: UserServiceContext,
     windowDays = DEFAULT_REFRESH_WINDOW_DAYS,
-    timezone = 'UTC',
+    zone?: string,
   ): Promise<DailyMetrics[]> {
     if (!Number.isInteger(windowDays) || windowDays < 1 || windowDays > 366) {
       throw new BadRequestException('windowDays must be an integer between 1 and 366');
     }
 
-    const days = await this.recentDataDays(context.userId, timezone, windowDays);
+    const timezone = zone ?? (await this.profileTimezone(context));
+
+    // Read once: the day selection and the stale-day delete must agree on
+    // today, even when the refresh runs across local midnight.
+    const today = todayIsoInTimezone(timezone);
+    const days = await this.recentDataDays(context.userId, timezone, windowDays, today);
 
     if (days.length === 0) {
       this.logger.warn('No days with capture data; nothing to materialize', {
         userId: context.userId,
         timezone,
       });
+
+      // Nothing has data, so every stored day up to today is left over from
+      // data that has since gone (the user's only purchase deleted, say).
+      await this.dropStaleDays(context.userId, days, true, today);
 
       return [];
     }
@@ -172,9 +186,16 @@ export class DailyMetricsService {
       out.push(await this.computeAndStore(context, date, timezone));
     }
 
-    await this.dropStaleDays(context.userId, days, days.length < windowDays, timezone);
+    await this.dropStaleDays(context.userId, days, days.length < windowDays, today);
 
     return out;
+  }
+
+  /** The user's profile timezone, as `refreshAll` reads it, or UTC when the profile has none. */
+  private async profileTimezone(context: UserServiceContext): Promise<string> {
+    const user = await this.userService.findById(context, context.userId);
+
+    return user?.timezone || 'UTC';
   }
 
   /**
@@ -188,13 +209,13 @@ export class DailyMetricsService {
    * engines counted it twice. When `days` holds every day with data
    * (`complete`), the refresh covered all of them. When the window cut it
    * short, days older than the oldest one written are outside this run and
-   * stay as they are.
+   * stay as they are. `today` is the local today the days were selected with.
    */
   private async dropStaleDays(
     userId: string,
     days: string[],
     complete: boolean,
-    timezone: string,
+    today: string,
   ): Promise<void> {
     const oldest = complete ? null : days.reduce((min, day) => (day < min ? day : min));
 
@@ -204,7 +225,7 @@ export class DailyMetricsService {
           AND ($2::date IS NULL OR date >= $2::date)
           AND date <= $3::date
           AND date <> ALL($4::date[])`,
-      [userId, oldest, todayIsoInTimezone(timezone), days],
+      [userId, oldest, today, days],
     );
   }
 
@@ -245,11 +266,16 @@ export class DailyMetricsService {
    * be materialized at all. When you change a source filter there, change it
    * here.
    */
-  async recentDataDays(userId: string, timezone: string, limit: number): Promise<string[]> {
+  async recentDataDays(
+    userId: string,
+    timezone: string,
+    limit: number,
+    today = todayIsoInTimezone(timezone),
+  ): Promise<string[]> {
     const rows = (await this.repository.query(RECENT_DATA_DAYS_SQL, [
       userId,
       timezone,
-      todayIsoInTimezone(timezone),
+      today,
       limit,
     ])) as Array<{ day: Date | string }>;
 
@@ -323,7 +349,9 @@ export class DailyMetricsService {
 
     const rows = (await this.repository.query(
       `
-      SELECT max(dm.date) AS day
+      -- As text, like RECENT_DATA_DAYS_SQL: node-postgres turns a date into
+      -- local midnight, which reads back as the day before on a host east of UTC.
+      SELECT to_char(max(dm.date), 'YYYY-MM-DD') AS day
         FROM ci_derived.daily_metrics dm
        WHERE dm.user_id = $1::uuid
          AND dm.date <= $2::date

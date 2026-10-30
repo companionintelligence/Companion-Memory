@@ -602,6 +602,41 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
       expect.objectContaining({ confirmedByUser: true, resolvedObjectId: 'item-7' }),
     );
   });
+
+  it("takes the picked unit's product when no product is named", async () => {
+    const { service, findOne, query, update } = makeService();
+
+    findOne.mockResolvedValue({
+      id: 'obs-1',
+      userId: USER,
+      confirmedByUser: false,
+      resolvedProductId: 'product-1',
+    });
+    query.mockImplementationOnce(async (sql: string) =>
+      sql.includes('FROM ci.objects') ? [{ product_id: 'product-9' }] : [],
+    );
+
+    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: 'item-7' });
+
+    expect(query.mock.calls[0][1]).toEqual(['item-7', USER]);
+    expect(update.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ resolvedObjectId: 'item-7', resolvedProductId: 'product-9' }),
+    );
+  });
+
+  it("keeps a product named in the same call over the unit's own", async () => {
+    const { service, findOne, query, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', userId: USER, confirmedByUser: false });
+
+    await service.confirm(ctx(), 'obs-1', true, {
+      resolvedObjectId: 'item-7',
+      resolvedProductId: 'product-2',
+    });
+
+    expect(query).not.toHaveBeenCalled();
+    expect(update.mock.calls[0][1]).toEqual(expect.objectContaining({ resolvedProductId: 'product-2' }));
+  });
 });
 
 describe('ObjectObservationService.sendBackToReview — "not this thing"', () => {
@@ -661,6 +696,17 @@ describe('ObjectObservationService.sendBackToReview — "not this thing"', () =>
 
     expect(await service.sendBackToReview(ctx(), 'obs-1', 'item-1')).toBe(moved);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('writes only while the sighting is still linked to the thing the person was looking at', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-1' });
+
+    await service.sendBackToReview(ctx(), 'obs-1', 'item-1');
+
+    // A merge between the read and the write moves the link, and then this matches no row.
+    expect(update.mock.calls[0][0]).toEqual({ id: 'obs-1', userId: USER, resolvedObjectId: 'item-1' });
   });
 
   it('is undone by any later answer', async () => {

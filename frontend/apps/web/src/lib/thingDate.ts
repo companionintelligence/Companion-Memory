@@ -38,7 +38,12 @@ export function thingDate(value: string | Date | null | undefined): Date | null 
     return date;
   }
 
-  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  // Local midnight, with the day set by setFullYear: the Date constructor reads
+  // years 0 to 99 as 1900 to 1999, so `0099-05-04` would show as 1999.
+  const day = new Date(2000, 0, 1);
+  day.setFullYear(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+
+  return day;
 }
 
 /** A stored Thing date as the viewer's locale writes a day, or null when there is none. */
@@ -54,10 +59,11 @@ export function toThingDateInput(value: string | Date | null | undefined): strin
     return '';
   }
 
+  const year = String(date.getFullYear()).padStart(4, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
 
-  return `${date.getFullYear()}-${month}-${day}`;
+  return `${year}-${month}-${day}`;
 }
 
 /**
