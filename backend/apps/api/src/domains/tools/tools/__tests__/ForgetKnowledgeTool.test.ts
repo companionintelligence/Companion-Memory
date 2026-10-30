@@ -3557,7 +3557,7 @@ describe('ForgetKnowledgeTool archive, which cannot hide messages, files, conten
     // The purge took the node, so the generic delete is not asked to.
     expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
     expect(result.data?.warnings).toEqual([
-      'Kept, and no longer linked to the deleted product: 2 things and 1 receipt line.',
+      'Kept but no longer linked to the deleted product: 2 things and 1 receipt line.',
     ]);
   });
 

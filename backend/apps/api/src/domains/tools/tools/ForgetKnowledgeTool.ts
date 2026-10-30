@@ -972,7 +972,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     if (unlinked.length > 0) {
       warnings.push(
-        `Kept, and no longer linked to the deleted product: ${unlinked.length > 1 ? `${unlinked.slice(0, -1).join(', ')} and ${unlinked.at(-1)}` : unlinked[0]}.`,
+        `Kept but no longer linked to the deleted product: ${unlinked.length > 1 ? `${unlinked.slice(0, -1).join(', ')} and ${unlinked.at(-1)}` : unlinked[0]}.`,
       );
     }
   }

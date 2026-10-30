@@ -287,7 +287,7 @@ describeWithDb(`memory.forget on a Product node, against Postgres (${availabilit
 
     expect(result.success).toBe(true);
     expect(result.data?.archivedEntityIds).toEqual([product.nodeId]);
-    expect(result.data?.warnings).toEqual(['Kept, and no longer linked to the deleted product: 1 thing.']);
+    expect(result.data?.warnings).toEqual(['Kept but no longer linked to the deleted product: 1 thing.']);
     expect(
       await remains([product.nodeId, duplicate.nodeId], [product.productId, duplicate.productId]),
     ).toEqual({ nodes: 0, models: 0, barcodes: 0, searchRows: 0, edges: 0 });
