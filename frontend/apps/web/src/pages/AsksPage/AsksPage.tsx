@@ -335,7 +335,8 @@ export function AsksPage() {
                 tier={knownAskerLabel(ask.consentBasis)}
                 decision={decision}
                 prompt={ask.query.prompt}
-                promptHiddenCharactersRemoved={inboxHiddenCharacters.has(ask.id)}
+                promptHiddenCharactersRemoved={inboxHiddenCharacters.removed.has(ask.id)}
+                hiddenCharacterCheck={inboxHiddenCharacters.checkOf(ask.id)}
                 scopeSummary={scopeSummary(ask.query)}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
@@ -557,7 +558,10 @@ export function AsksPage() {
                 disclosedCount: row.disclosedCount,
                 consentBasis: row.consentBasis,
                 createdAt: row.createdAt as string,
-                query: { ...row.query, promptHiddenCharactersRemoved: historyHiddenCharacters.has(row.id) },
+                query: {
+                  ...row.query,
+                  promptHiddenCharactersRemoved: historyHiddenCharacters.removed.has(row.id),
+                },
               };
             })}
           />
