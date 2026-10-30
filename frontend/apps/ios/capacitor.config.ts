@@ -16,10 +16,10 @@ const config: CapacitorConfig = {
     ...(process.env.CAP_SERVER_URL ? { url: process.env.CAP_SERVER_URL, cleartext: true } : {}),
   },
   ios: {
-    // Pinch-zoom (WCAG 1.4.4). It defaults to false, and then CAPBridgeViewController hands the
-    // web view's scroll view a delegate whose scrollViewWillBeginZooming switches the pinch
-    // recogniser off, whatever the page's viewport meta says. Low-vision users have no other
-    // way to enlarge the app. scripts/check-viewport-zoom.mjs fails if this goes away.
+    // Pinch-zoom. It defaults to false, and then CAPBridgeViewController hands the web view's
+    // scroll view a delegate whose scrollViewWillBeginZooming switches the pinch recogniser off,
+    // whatever the page's viewport meta says. It is the only in-app way to enlarge the app (one
+    // input to WCAG 1.4.4, not all of it). scripts/check-viewport-zoom.mjs fails if this goes away.
     zoomEnabled: true,
   },
   plugins: {

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * Fail when the app can no longer be pinch-zoomed (WCAG 1.4.4 Resize Text).
+ * Fail when the app can no longer be pinch-zoomed, the only in-app way to enlarge it.
+ *
+ * That makes this one input to WCAG 1.4.4 Resize Text and to any store "Larger Text" claim, not the
+ * whole of either: the OS magnifiers (iOS Zoom, Android Magnification) are separate, and so is the
+ * fixed root font size, which this does not look at.
  *
  * Three places can switch zoom off, and each one is enough on its own:
  *
@@ -107,7 +111,8 @@ export function viewportProblems(source, file) {
     const max = settings.get('maximum-scale');
     if (max !== undefined && !(Number(max) >= MIN_MAXIMUM_SCALE)) {
       problems.push(
-        `${file}:${line}: viewport meta has maximum-scale=${max}, which blocks or caps pinch-zoom. ` +
+        `${file}:${line}: viewport meta has maximum-scale=${max}, which caps pinch-zoom below ${MIN_MAXIMUM_SCALE}x ` +
+          `(axe's best-practice meta-viewport-large threshold; WCAG 1.4.4 itself needs 2x). ` +
           `Remove it, or set it to ${MIN_MAXIMUM_SCALE} or more.`,
       );
     }
@@ -220,8 +225,12 @@ export function capacitorZoomProblems(source, platform, file) {
   ];
 }
 
-/** Tracked files that carry a viewport meta. `git grep` exits 1 when there are none. */
-function viewportFiles(rootDir) {
+/**
+ * Tracked files that carry a viewport meta. `git grep` exits 1 when there are none. Exported so
+ * the test can assert the web entry is among them: a pathspec that stopped matching would
+ * otherwise make the whole-tree check pass without having read the page that matters.
+ */
+export function viewportFiles(rootDir = REPO_ROOT) {
   try {
     return execFileSync(
       'git',
@@ -264,7 +273,7 @@ export function runViewportZoomCli(rootDir = REPO_ROOT) {
     return 0;
   }
 
-  console.error('pinch-zoom is blocked (WCAG 1.4.4 Resize Text); low-vision users cannot enlarge the app:\n');
+  console.error('pinch-zoom is blocked, and it is the only in-app way to enlarge the app (WCAG 1.4.4):\n');
   for (const problem of problems) {
     console.error(`  - ${problem}`);
   }

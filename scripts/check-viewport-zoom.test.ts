@@ -11,6 +11,7 @@ import {
   collectViewportZoomProblems,
   effectiveCapacitorZoom,
   parseViewport,
+  viewportFiles,
   viewportMetas,
   viewportProblems,
 } from './check-viewport-zoom.mjs';
@@ -30,6 +31,12 @@ test('the scan is not vacuous: it finds the web app viewport meta and it allows 
   assert.equal(metas.length, 1);
   assert.equal(parseViewport(metas[0].content).get('width'), 'device-width');
   assert.equal(parseViewport(metas[0].content).has('maximum-scale'), false);
+});
+
+test('the scan reads the web app entry, so the committed-tree check cannot pass without it', () => {
+  const files = viewportFiles(ROOT);
+
+  assert.ok(files.includes(WEB_ENTRY), `${WEB_ENTRY} is not among the scanned files: ${files.join(', ')}`);
 });
 
 test('the viewport meta that shipped, maximum-scale=1.0 on its own line, is flagged with its line', () => {

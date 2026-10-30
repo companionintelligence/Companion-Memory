@@ -18,10 +18,10 @@ const config: CapacitorConfig = {
   },
   android: {
     allowMixedContent: true,
-    // Pinch-zoom (WCAG 1.4.4). It defaults to false, and then Bridge.java calls
+    // Pinch-zoom. It defaults to false, and then Bridge.java calls
     // WebSettings.setBuiltInZoomControls(false), which turns the pinch gesture off whatever the
-    // page's viewport meta says. Low-vision users have no other way to enlarge the app.
-    // scripts/check-viewport-zoom.mjs fails if this goes away.
+    // page's viewport meta says. It is the only in-app way to enlarge the app (one input to
+    // WCAG 1.4.4, not all of it). scripts/check-viewport-zoom.mjs fails if this goes away.
     zoomEnabled: true,
     // Deliberately NOT `adjustMarginsForEdgeToEdge: 'auto'`. Android 15+ lays the window
     // out edge-to-edge and the WebView needs insetting from the system bars (three-button
