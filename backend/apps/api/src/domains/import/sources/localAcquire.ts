@@ -1,5 +1,6 @@
-import { constants as fsConstants, lstatSync } from 'node:fs';
-import { chmod, copyFile, cp, link, lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { constants as fsConstants, lstatSync, type Stats } from 'node:fs';
+import { chmod, chown, copyFile, cp, link, lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { freeBytesAt } from '../archive/unpack';
@@ -21,8 +22,23 @@ export interface AcquireLocalUnitInput {
   /** Advisory size of the unit, for the copy-fallback disk preflight. */
   sizeBytes: number | null;
   log: (message: string) => void;
+  /**
+   * Whether the run still holds its claim, asked after a cross-filesystem copy
+   * and before the source is deleted. A cancel releases the claim while the
+   * copy runs, and a released unit is the user's again: it stays where it is
+   * and the copy is dropped. Absent means the claim is not re-checked.
+   */
+  stillClaimed?: () => Promise<boolean>;
   /** Test seam: overrides the filesystem rename to simulate EXDEV. */
   renameImpl?: typeof rename;
+}
+
+/** The claim was released (the run was cancelled) while the unit was being copied. */
+export class ClaimReleasedDuringCopyError extends Error {
+  constructor(name: string) {
+    super(`The import was cancelled while ${name} was being copied, so it was left where it was.`);
+    this.name = 'ClaimReleasedDuringCopyError';
+  }
 }
 
 export class InsufficientScratchSpaceError extends Error {
@@ -129,6 +145,8 @@ export async function acquireLocalUnit(
 
   input.log(`acquire: inbox and scratch are on different filesystems; copying ${name}`);
 
+  const original = await lstat(resolved);
+
   // Symlinks are skipped rather than followed: the scan never offers them,
   // and a link inside a unit must not smuggle outside bytes into scratch.
   await cp(resolved, tmpPath, {
@@ -136,6 +154,22 @@ export async function acquireLocalUnit(
     dereference: false,
     filter: (src) => !isSymlink(src),
   });
+
+  // `cp` makes the copy as the API's user (root in the container). A file
+  // unit keeps its owner here as a rename would have kept it, because a
+  // discard copies this file back into the inbox with this owner. Left as
+  // root, the host user could not rename or delete it in the sticky inbox.
+  if (original.isFile()) {
+    await chown(tmpPath, original.uid, original.gid).catch(() => undefined);
+  }
+
+  // A copy can take minutes, and a cancel in that time releases the claim. The
+  // source is then the user's again, so it must not be deleted.
+  if (input.stillClaimed != null && !(await input.stillClaimed())) {
+    await rm(tmpPath, { recursive: true, force: true });
+    throw new ClaimReleasedDuringCopyError(name);
+  }
+
   await rm(resolved, { recursive: true, force: true });
   await doRename(tmpPath, destPath);
 
@@ -201,26 +235,40 @@ export interface ReturnInboxUnitInput {
  */
 export async function returnInboxUnit(input: ReturnInboxUnitInput): Promise<string> {
   const doLink = input.linkImpl ?? link;
+  const unit = await lstat(input.unitPath);
 
-  if (!(await lstat(input.unitPath)).isFile()) {
+  if (!unit.isFile()) {
     throw new Error(`${input.unitPath} is not a file. Only a file unit goes back to the inbox`);
   }
 
   const relative = path.relative(input.inboxDir, input.sourcePath);
   const underInbox = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-  const wanted = path.join(input.inboxDir, underInbox ? relative : path.basename(input.sourcePath));
+  const topLevel = path.join(input.inboxDir, path.basename(input.sourcePath));
+  let wanted = underInbox ? path.join(input.inboxDir, relative) : topLevel;
 
   await ensureInboxFolder(input.inboxDir);
 
   // The deepest folder that exists is checked BEFORE anything is created, so a
   // symlink out of the inbox cannot have folders made through it. The
   // parent is checked again after, on where it leads.
-  const missing: string[] = [];
+  let missing: string[] = [];
   let existing = path.dirname(wanted);
 
-  while (!(await exists(existing)) && existing !== input.inboxDir) {
+  // `lstat`, so a dangling symlink where a folder was stops the walk here
+  // rather than reading as missing and failing every `mkdir` after it.
+  while ((await lstatOrNull(existing)) == null && existing !== input.inboxDir) {
     missing.unshift(existing);
     existing = path.dirname(existing);
+  }
+
+  // A folder on the way that is a file now (`google/` replaced by a file of
+  // that name, or by a dangling symlink) cannot hold the unit. The link
+  // would fail with ENOTDIR on every retry, so the unit goes to the inbox's
+  // top level instead.
+  if (!(await isDirectory(existing))) {
+    wanted = topLevel;
+    missing = [];
+    existing = input.inboxDir;
   }
 
   await resolveWithinRoots(existing, [input.inboxDir]);
@@ -248,18 +296,35 @@ export async function returnInboxUnit(input: ReturnInboxUnitInput): Promise<stri
   // The split-mount case the acquire copies across. The copy goes to a temp
   // name beside the target and is linked into place only once it is whole, so
   // a disk filling up mid-copy leaves a temp file, never a truncated file under
-  // the user's own name. The scratch copy goes last.
+  // the user's own name.
+  //
+  // The temp name is tagged with this unit's path, so a retry sees only what an
+  // earlier attempt for this same unit left. A temp still linked under a second
+  // name was whole when that attempt linked it into place and stopped. Linking
+  // it again finds that name as done (see linkUnderFreeName). A fresh copy is a
+  // different file and would land beside it as `name (2)`.
   input.log(`return: inbox and scratch are on different filesystems; copying ${name}`);
 
-  const tmpPath = path.join(parent, `.returning-${name}`);
+  const tag = createHash('sha256').update(input.unitPath).digest('hex').slice(0, 12);
+  const tmpPath = path.join(parent, `.returning-${tag}-${name}`);
+  const leftover = await lstatOrNull(tmpPath);
 
-  await rm(tmpPath, { force: true });
-  await copyFile(input.unitPath, tmpPath, fsConstants.COPYFILE_EXCL);
+  if (leftover == null || !leftover.isFile() || leftover.nlink < 2) {
+    await rm(tmpPath, { force: true });
+    await copyFile(input.unitPath, tmpPath, fsConstants.COPYFILE_EXCL);
+    // The copy is made by the API's user (root in the container). In the
+    // inbox's sticky 1777 folders only a file's owner can rename or delete it,
+    // so the copy takes the scratch file's owner, which the acquire kept from
+    // the inbox file whether it renamed or copied it.
+    await chown(tmpPath, unit.uid, unit.gid).catch(() => undefined);
+  }
 
   const target = await linkUnderFreeName(link, tmpPath, parent, name);
 
-  await rm(tmpPath, { force: true });
+  // Scratch before the temp. If the scratch unlink fails, the temp is still
+  // linked here for the retry to recognise.
   await rm(input.unitPath, { force: true });
+  await rm(tmpPath, { force: true });
 
   return target;
 }
@@ -282,6 +347,11 @@ const COMPOUND_EXTENSIONS = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'];
  * yet. `link` refuses an existing name with EEXIST instead of replacing it,
  * so a file that appears in the inbox while this runs moves the unit to the
  * next name rather than being lost.
+ *
+ * A name already linked to `from` itself counts as done: an earlier return
+ * that linked the unit and then crashed or failed before unlinking scratch,
+ * or a second discard racing this one. Taking the next name there would put
+ * the same file in the inbox twice.
  */
 async function linkUnderFreeName(
   doLink: typeof link,
@@ -293,34 +363,46 @@ async function linkUnderFreeName(
   const compound = COMPOUND_EXTENSIONS.find((ext) => lower.endsWith(ext));
   const ext = compound != null ? name.slice(-compound.length) : path.extname(name);
   const stem = ext === '' ? name : name.slice(0, -ext.length);
+  const source = await lstat(from);
 
   for (let n = 1; n < 1000; n++) {
     const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
+    let taken = await lstatOrNull(candidate);
 
-    if (await occupied(candidate)) {
-      continue;
+    if (taken == null) {
+      try {
+        await doLink(from, candidate);
+
+        return candidate;
+      } catch (err: unknown) {
+        if ((err as { code?: string }).code !== 'EEXIST') {
+          throw err;
+        }
+      }
+
+      taken = await lstatOrNull(candidate);
     }
 
-    try {
-      await doLink(from, candidate);
-
+    if (taken != null && taken.dev === source.dev && taken.ino === source.ino) {
       return candidate;
-    } catch (err: unknown) {
-      if ((err as { code?: string }).code !== 'EEXIST') {
-        throw err;
-      }
     }
   }
 
   throw new Error(`No free name for ${name} in ${dir}: ${stem} (2)${ext} to (999) are all taken`);
 }
 
-/** Taken by anything, a dangling symlink included, which `stat` would miss. */
-async function occupied(target: string): Promise<boolean> {
+/** What is at `target`, a dangling symlink included (which `stat` would miss), or null. */
+async function lstatOrNull(target: string): Promise<Stats | null> {
   try {
-    await lstat(target);
+    return await lstat(target);
+  } catch {
+    return null;
+  }
+}
 
-    return true;
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
   } catch {
     return false;
   }
