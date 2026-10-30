@@ -194,14 +194,22 @@ const MAP_PIN_MAX_LIMIT = 20_000;
  * through the graph/explorer. Only the *unfiltered chronological browse* drops
  * them.
  *
- * NOTE `file` is deliberately NOT in this list. It carries the same row-write
- * problem, but #2110 just made it an explicit opt-OUT (`includeFiles`) to fix
- * the File type picker, and that decision is left standing — see
- * {@link SearchResolver.browseWants}. Files are therefore the residual undated
- * head this gate does not address.
+ * `file` joined this list on 2026-10-30, after #2110 had made it an opt-OUT
+ * (`includeFiles`). On a Hub appliance 1,719 photos and videos sat ahead of the
+ * newest real memory, ordered by when their row was last written (which the
+ * describer bumps after the import, so old photos kept returning to the top).
+ * 1,687 of them already appear at their taken date through the event their
+ * content row links to; the other 32 had no date at all. A file has no domain
+ * time of its own, so it is reached the way people and places are: by naming
+ * the type, the What picker, `includeFiles: true`, a search or a tag. #2110's
+ * actual complaint — the File picker doing nothing — still holds, because the
+ * picker's exclude-list reaches the opt-in branch of browseWants. And when files
+ * do share a browse with events, the ones an event already shows are dropped
+ * (FileService `excludeEventLinked`), as event-linked content always is.
  */
 const BROWSE_OPT_IN_TYPES: ReadonlySet<IndexableEntity> = new Set([
   'file-chunk',
+  'file',
   'person',
   'place',
   'concept',
@@ -784,8 +792,8 @@ export class SearchResolver {
       const timedOptions = {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
-        // Files ride the default browse; only an explicit `false` drops them.
-        includeFiles: input.includeFiles !== false,
+        // Absent follows the type filter (files are opt-in); true / false force them in / out.
+        includeFiles: input.includeFiles,
         startTime,
         eventTypes,
         eventFilter,
@@ -1098,7 +1106,7 @@ export class SearchResolver {
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
-      /** Opt files into the browse alongside the other types (see SearchInput.includeFiles). */
+      /** Force files into (true) or out of (false) the browse (see SearchInput.includeFiles). */
       includeFiles?: boolean;
       startTime?: Date;
       endTime?: Date;
@@ -1202,10 +1210,15 @@ export class SearchResolver {
       afterTime?: Date;
       afterId?: string;
       kinds?: readonly FileKind[];
+      excludeEventLinked?: boolean;
     } = {
       limit,
       order,
       ...(fileKinds ? { kinds: fileKinds } : {}),
+      // A file an event already shows at its real date would appear a second
+      // time at its write time. Only when events share the browse: a Files-only
+      // browse has no other copy, so it keeps them all.
+      excludeEventLinked: wants('event'),
     };
 
     const fileChunkOptions: {
@@ -1408,6 +1421,7 @@ export class SearchResolver {
         ? this.fileService.countEntitiesForFiles(context, {
             ...dateOptions,
             ...(fileKinds ? { kinds: fileKinds } : {}),
+            excludeEventLinked: wants('event'),
           })
         : 0,
       wants('file-chunk') ? this.fileChunkService.countEntitiesForFileChunks(context, dateOptions) : 0,
@@ -1473,17 +1487,11 @@ export class SearchResolver {
    *  2. the event-only dimensions (who / where / connector / areas / hasLocation),
    *     which exist only on the event timeline, so setting any restricts the
    *     browse to events;
-   *  3. the opt-in gate — {@link BROWSE_OPT_IN_TYPES} plus `file`.
+   *  3. the opt-in gate — {@link BROWSE_OPT_IN_TYPES}.
    *
-   * `file` is its own case because it has a dedicated lever, `includeFiles`,
-   * and #2110 deliberately made that lever an opt-OUT: files are part of the
-   * default timeline and a caller drops them by passing `false`. That decision
-   * is preserved verbatim here — see `SearchInput.includeFiles` for why it was
-   * inverted (the File type picker was a no-op on every surface that didn't set
-   * the flag). It does mean ~10,500 files, ordered by `created_at`, still sit
-   * ahead of the real timeline on a freshly-imported appliance; giving
-   * `ci.files` a domain timestamp (`external_created_at` is populated on 0 of
-   * 14,194 rows) is the fix, and it is a schema/ETL change, not a gate.
+   * `file` is opt-in like the rest of that list, but it also has a dedicated
+   * lever, `includeFiles`, which overrides the gate either way when set — see
+   * `SearchInput.includeFiles` and the BROWSE_OPT_IN_TYPES note for its history.
    */
   private browseWants(
     type: IndexableEntity,
@@ -1531,8 +1539,9 @@ export class SearchResolver {
 
     const namedExplicitly = includeTypes?.includes(type) ?? false;
 
-    if (type === 'file') {
-      return includeFiles !== false;
+    // The explicit lever wins either way; absent, files are opt-in like the rest.
+    if (type === 'file' && includeFiles != null) {
+      return includeFiles;
     }
 
     if (BROWSE_OPT_IN_TYPES.has(type)) {
@@ -1689,12 +1698,11 @@ export class SearchResolver {
     // "before 1970", emptying the browse. Row-write time is therefore kept as
     // the sort key, and the types for which it is a LIE about when the thing
     // happened are instead kept out of the unfiltered chronological browse —
-    // see BROWSE_OPT_IN_TYPES. What still rides the row stamp inside the browse
-    // is `note`, `file` and non-event-linked `content` — 10,524 rows ahead of
-    // the timeline on the QA appliance, against 32,666 before the gate, and all
-    // but 3 of them files. Giving those a real domain timestamp is a schema/ETL
-    // change, not a resolver change: `ci.files.external_created_at` exists and
-    // is populated on 0 of 14,194 rows.
+    // see BROWSE_OPT_IN_TYPES. What still rides the row stamp inside the
+    // unfiltered browse is `note` and non-event-linked `content`; files left it
+    // on 2026-10-30. Giving files a real domain timestamp is a schema/ETL
+    // change, not a resolver change: `ci.files.external_created_at` exists but
+    // nothing populates it.
     //
     // Types reached by NAMING them (includeTypes) still sort by write time
     // when they have no other time — except people/places with a date window,
