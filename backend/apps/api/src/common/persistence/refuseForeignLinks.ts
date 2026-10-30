@@ -14,6 +14,19 @@ export interface OwnedLink {
 }
 
 /**
+ * The tables a link names: each one's key and the column that says whose row it is, the
+ * same column the import scopes the table by. Spread into an {@link OwnedLink}.
+ */
+export const OWNED_TABLES = {
+  content: { table: 'ci.content', key: 'id', ownerColumn: 'user_id' },
+  entities: { table: 'ci.entities', key: 'entity_id', ownerColumn: 'owner_user_id' },
+  events: { table: 'ci.events', key: 'event_id', ownerColumn: 'user_id' },
+  files: { table: 'ci.files', key: 'id', ownerColumn: 'user_id' },
+  objects: { table: 'ci.objects', key: 'object_id', ownerColumn: 'user_id' },
+  productModels: { table: 'ci.product_models', key: 'product_id', ownerColumn: 'user_id' },
+} as const satisfies Record<string, Pick<OwnedLink, 'table' | 'key' | 'ownerColumn'>>;
+
+/**
  * Refuse a write whose links name a row of another account, or a row with no owner.
  *
  * A foreign key only asks that the row exists, and some link columns have none,
@@ -24,6 +37,9 @@ export interface OwnedLink {
  * the account could no longer restore its export. An id that names no row is
  * left to the column's key, if it has one.
  *
+ * Every link is checked in one statement, and the first one listed that names
+ * a foreign row is the one the refusal names.
+ *
  * `field`, `table`, `key` and `ownerColumn` come from the caller's code, never
  * from the request.
  */
@@ -33,24 +49,30 @@ export async function refuseForeignLinks(
   links: readonly OwnedLink[],
   what: string,
 ): Promise<void> {
-  for (const { field, table, key, ownerColumn, ids } of links) {
-    const named = [...new Set(ids.filter((id): id is string => id != null))];
+  const checked = links
+    .map((link) => ({ link, named: [...new Set(link.ids.filter((id): id is string => id != null))] }))
+    .filter(({ named }) => named.length > 0);
 
-    if (named.length === 0) {
-      continue;
-    }
+  if (checked.length === 0) {
+    return;
+  }
 
-    const [found] = ((await manager.query(
-      `SELECT ${key}::text AS id FROM ${table}
-        WHERE ${key} = ANY($1::uuid[]) AND ${ownerColumn} IS DISTINCT FROM $2::uuid
-        LIMIT 1`,
-      [named, ownerId],
-    )) ?? []) as Array<{ id: string }>;
+  const lookups = checked.map(
+    ({ link: { table, key, ownerColumn } }, index) =>
+      `(SELECT ${index} AS link, ${key}::text AS id FROM ${table}
+         WHERE ${key} = ANY($${index + 2}::uuid[]) AND ${ownerColumn} IS DISTINCT FROM $1::uuid
+         LIMIT 1)`,
+  );
+  const [found] = ((await manager.query(
+    `SELECT link, id FROM (${lookups.join('\n UNION ALL ')}) foreign_link ORDER BY link LIMIT 1`,
+    [ownerId, ...checked.map(({ named }) => named)],
+  )) ?? []) as Array<{ link: number; id: string }>;
 
-    if (found) {
-      throw new BadRequestException(
-        `${field} ${found.id} is a row of ${table} that belongs to another account or to none, so the ${what} was refused.`,
-      );
-    }
+  if (found) {
+    const { field, table } = checked[found.link].link;
+
+    throw new BadRequestException(
+      `${field} ${found.id} is a row of ${table} that belongs to another account or to none, so the ${what} was refused.`,
+    );
   }
 }

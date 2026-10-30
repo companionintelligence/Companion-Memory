@@ -2409,21 +2409,6 @@ export class CalendarEventService {
    * event it returns is the row as it stands after that.
    */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
-    // Below, a title is only written when it has text in it, so an emptied one
-    // was skipped while the save still answered with the event: the page said
-    // it saved and the old title stayed. An event that never had a title is
-    // still saved: the drawer sends its empty title next to a description edit.
-    if (typeof data.title === 'string' && data.title.trim() === '') {
-      const stored = await this.eventBaseRepository.findOne({
-        where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
-        select: { id: true, name: true },
-      });
-
-      if (stored?.name?.trim()) {
-        throw new BadRequestException('An event needs a title.');
-      }
-    }
-
     // An edit is one person's request, not a batch, so a rule that would hang
     // the calendar is refused outright rather than dropped as on create.
     const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
@@ -2437,7 +2422,13 @@ export class CalendarEventService {
     // title/description are base-row data (ci.entities); patched separately
     // below, in the same transaction.
     const basePatch: Partial<Pick<EventBaseEntity, 'name' | 'description'>> = {};
-    if (data.title) {
+    // A title is only written when it has text in it. An emptied one (or one
+    // that is only whitespace) is refused below when the event has a title, so
+    // the page does not say it saved while the old title stays. An event that
+    // never had a title is still saved: the drawer sends its empty title next
+    // to a description edit.
+    const titleEmptied = typeof data.title === 'string' && data.title.trim() === '';
+    if (data.title?.trim()) {
       basePatch.name = data.title;
     }
 
@@ -2623,12 +2614,16 @@ export class CalendarEventService {
     // Dropped here, it neither rewrites the base row nor reaches Change History
     // as a rename; what is left is recorded with the value it replaced.
     const storedBase =
-      basePatch.name !== undefined || basePatch.description !== undefined
+      titleEmptied || basePatch.name !== undefined || basePatch.description !== undefined
         ? await this.eventBaseRepository.findOne({
             where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
             select: { id: true, name: true, description: true },
           })
         : null;
+
+    if (titleEmptied && storedBase?.name?.trim()) {
+      throw new BadRequestException('An event needs a title.');
+    }
 
     if (storedBase && basePatch.name === storedBase.name) {
       delete basePatch.name;

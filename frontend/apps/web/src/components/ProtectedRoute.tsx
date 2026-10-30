@@ -86,8 +86,8 @@ export function ProtectedRoute({
     if (sessionUnreachable || (profileUnreachable && !user)) {
       return (
         <MemoryUnreachable
-          // `authenticated` covers a phone, whose API key leaves `authToken` empty.
-          signedIn={hadSession || authenticated || user != null}
+          // `authenticated` is a token or, on a phone, the API key that leaves `authToken` empty.
+          signedIn={authenticated || user != null}
           onRetry={() => {
             // The session first: a profile asked for with an expired token fails again.
             if (sessionUnreachable) {

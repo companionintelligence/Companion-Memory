@@ -1,7 +1,7 @@
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import type { UserServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
@@ -469,6 +469,29 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
         refused('document_content_id', theirContent, 'ci.content'),
       );
       expect((await service.findById(owner, receipt.id))?.documentContentId).toBeNull();
+    });
+
+    it("refuses a system update that points a receipt with no owner_user_id at another account's place", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      // An import keeps an archive's NULL in the second owner column; user_id still names the account.
+      await dataSource.query('UPDATE ci.receipts SET owner_user_id = NULL WHERE receipt_id = $1', [
+        receipt.id,
+      ]);
+
+      await expect(
+        service.update({ userId: SYSTEM_USER } as ServiceContext, receipt.id, { placeEntityId: theirPlace }),
+      ).rejects.toThrow(refused('place_entity_id', theirPlace, 'ci.entities'));
+      expect((await service.findById(owner, receipt.id))?.placeEntityId).toBeNull();
+    });
+
+    it("answers no receipt, not a refusal, when another account updates this account's receipt", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      await expect(
+        service.update({ userId: other } as UserServiceContext, receipt.id, { placeEntityId: myPlace }),
+      ).resolves.toBeNull();
+      expect((await service.findById(owner, receipt.id))?.placeEntityId).toBeNull();
     });
 
     it("refuses a line on another account's product", async () => {
