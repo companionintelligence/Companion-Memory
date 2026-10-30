@@ -781,7 +781,7 @@ function FilterSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className={`h-9 rounded-md border px-2 text-sm text-foreground ${stacked ? 'w-full' : ''} ${
+        className={`h-9 rounded-md border px-2 text-base text-foreground md:text-sm ${stacked ? 'w-full' : ''} ${
           value ? 'border-primary/60 bg-primary/10' : 'border-input bg-background'
         }`}
       >
