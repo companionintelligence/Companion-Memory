@@ -129,9 +129,6 @@
     margin: 0;
     padding: 0;
     line-height: 1.5;
-    /* Pinch-zoom stays; double-tap-to-zoom goes, so a quick second tap on a card
-       does not zoom the page. The viewport meta no longer blocks zoom (WCAG 1.4.4). */
-    touch-action: manipulation;
   }
 
   h1,

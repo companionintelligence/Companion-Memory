@@ -29,7 +29,9 @@ function syncVisualViewportInsets() {
   const zoomed = viewport.scale > 1.01;
   const visibleHeight = zoomed ? Math.round(viewport.height * viewport.scale) : viewport.height;
   // `innerHeight` follows the zoom in some engines and `clientHeight` never
-  // does, so the larger of the two is the layout height in all of them.
+  // does, so the larger of the two is the layout height in all of them. At 1x
+  // that is a no-op only while ios.contentInset stays Capacitor's default
+  // 'never' and the iOS shell has no keyboard plugin; re-check if either changes.
   const layoutHeight = Math.max(window.innerHeight, root.clientHeight);
   const keyboard = Math.max(0, layoutHeight - visibleHeight);
   root.style.setProperty('--keyboard-inset', `${keyboard}px`);
