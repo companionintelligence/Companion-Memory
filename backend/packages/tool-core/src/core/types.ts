@@ -340,7 +340,8 @@ export interface ToolInvocationContext extends ToolRequestContext {
 
   /**
    * This call comes from a chat round after the turn already ran a lookup. The
-   * gate then asks before any write under a dial that asks before a delete; see
+   * gate then asks before any write or any read from an outside service under
+   * a dial that asks before a delete; see
    * `ToolGateOptions.followsLookup`. Absent means false, so no other caller
    * changes behaviour.
    */

@@ -28,8 +28,8 @@ ALTER TABLE ci.pending_actions
 -- migrate:down
 -- ADD CONSTRAINT checks every row, so rows with the new reason are relabelled
 -- first, as 'external-leaves-appliance'. Nothing runs differently by reason:
--- an open card can still be approved, and its card then says "This sends data
--- to a third party, off your appliance.", which is true of these reads.
+-- an open card can still be approved. Its card then says "This sends data to a
+-- third party, off your appliance.", which is true of these reads.
 UPDATE ci.pending_actions
    SET reason = 'external-leaves-appliance'
  WHERE reason = 'read-after-lookup';

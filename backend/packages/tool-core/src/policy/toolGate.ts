@@ -55,9 +55,11 @@ export interface ToolGateOptions {
    * The call comes from a chat round after the turn already ran a lookup, so
    * what it does may have been steered by text the lookup returned: a mail, a
    * note or a page someone else wrote. Under a dial that asks before a delete,
-   * such a call asks before any write, not only a destructive or external one,
+   * such a call asks before any write (not only a destructive or external one)
    * and before a read from an outside service, whose query can carry what the
-   * lookup found off the appliance. A call the person asked for directly comes
+   * lookup found off the appliance. Whether a read asks is the dial's answer:
+   * the API's `trustForToolCall` answers review for it, and this module only
+   * names the reason. A call the person asked for directly comes
    * from the turn's first round and is judged as before. Absent means false.
    */
   followsLookup?: boolean;
@@ -129,7 +131,7 @@ function readsOutsideAfterLookup(intent: DispatchableIntent, followsLookup: bool
  * | `cautious`  | review                                 | queues for confirmation                    |
  *
  * An external read that follows a lookup is not the `balanced` exception: the
- * dial answers review for it, and it queues with the reason
+ * dial answers review for it and it queues with the reason
  * `read-after-lookup`. A write that is flagged only because it follows a lookup
  * is queued the same way under the same dial, with the reason
  * `write-after-lookup`. The managed-app rule below does not apply to that

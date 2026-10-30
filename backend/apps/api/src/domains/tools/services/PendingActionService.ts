@@ -59,9 +59,9 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  * - `balanced` (the default) asks before anything that removes data or acts
  *   outside the appliance, and runs an external READ — listing the owner's
  *   own chats, looking a title up on a streaming service — unattended when the
- *   person asked for it. A read changes nothing and sends nothing as the owner,
- *   and a read queued behind a card is a feature that stops working rather
- *   than one that asks first: the approved run's result lands on the
+ *   person asked for it. A read changes nothing and sends nothing as the owner.
+ *   A read queued behind a card is a feature that stops working rather than
+ *   one that asks first: the approved run's result lands on the
  *   pending-action row and the Approvals page, never back in the chat that
  *   wanted it. The exception is a read a chat turn makes after a lookup
  *   (`followsLookup`): its query may have been chosen by a mail or a page

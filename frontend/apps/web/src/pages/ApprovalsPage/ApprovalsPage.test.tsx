@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -100,8 +100,49 @@ describe('ApprovalsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/see you at 6/));
-    expect(screen.getByRole('status')).toHaveTextContent(/messaging\.listMessages/);
+    await waitFor(() => expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/));
+    expect(screen.getByRole('status')).toHaveTextContent(/Ran messaging\.listMessages/);
+  });
+
+  it('keeps an approved read on the page when another card is declined', async () => {
+    answer.mockImplementation(async (_id: string, verdict: 'approve' | 'decline') =>
+      verdict === 'approve' ? { success: true, data: { messages: [{ text: 'see you at 6' }] } } : null,
+    );
+    state.actions = [
+      card({ id: 'pa-1', intent: 'messaging.listMessages', reason: 'read-after-lookup' }),
+      card({ id: 'pa-2' }),
+    ];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/));
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /decline/i }));
+    await waitFor(() => expect(answer).toHaveBeenCalledWith('pa-2', 'decline'));
+
+    expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/);
+  });
+
+  it('keeps a card busy while its own answer runs, even after another card finishes', async () => {
+    const pending = new Map<string, (value: null) => void>();
+    answer.mockImplementation((id: string) => new Promise<null>((resolve) => pending.set(id, resolve)));
+    state.actions = [card({ id: 'pa-1' }), card({ id: 'pa-2' })];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }));
+    fireEvent.click(within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(pending.size).toBe(2));
+
+    pending.get('pa-1')?.(null);
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }),
+      ).toBeEnabled(),
+    );
+    expect(
+      within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /approve/i }),
+    ).toBeDisabled();
   });
 
   it('says so when an approved run failed, though the request itself succeeded', async () => {
