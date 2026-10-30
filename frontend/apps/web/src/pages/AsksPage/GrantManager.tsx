@@ -189,7 +189,7 @@ export function GrantManager({
               // this control exists to move away from, and undoing a demotion
               // must not mean deleting the setting.
               <select
-                className="border-input bg-background rounded-md border px-2 py-0.5 text-xs"
+                className="border-input bg-background rounded-md border px-2 py-0.5 text-base md:text-xs"
                 value={group.tier}
                 aria-label={`Trust tier for ${group.name}`}
                 onChange={(event) => onSetHouseholdTier(group.memberId as string, event.target.value)}
