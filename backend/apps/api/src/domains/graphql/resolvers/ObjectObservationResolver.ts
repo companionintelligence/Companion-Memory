@@ -125,7 +125,9 @@ export class ObjectObservationResolver {
     @Args('itemId', {
       type: () => ID,
       nullable: true,
-      description: 'The owned unit this sighting is of. Omit to confirm the resolution already on the row.',
+      description:
+        'The owned unit this sighting is of. Omit to confirm the resolution already on the row. Without a ' +
+        "productId, the unit's product, when it has one, becomes the sighting's product.",
     })
     itemId?: string,
     @Args('productId', { type: () => ID, nullable: true }) productId?: string,
@@ -157,26 +159,36 @@ export class ObjectObservationResolver {
    * A human says this sighting is not the thing it was linked to ("No" on a
    * thing's page).
    *
-   * The link goes and the sighting returns to the review queue
+   * The thing link goes and the sighting returns to the review queue
    * (`unresolvedObservations`), where they can pick the thing it is or answer
-   * "Not a thing" (`rejectObservation`). A machine will not link it again.
+   * "Not a thing" (`rejectObservation`). A machine will not link it again. The
+   * product link stays: "not my mug" is not "not a mug of this kind".
    */
   @Mutation(() => ObjectObservationType, {
     nullable: true,
     description:
-      'A person says this sighting is not the thing it is linked to. The link is cleared and the sighting goes ' +
-      'back to unresolvedObservations, so they can pick the right thing. Use rejectObservation for "not a thing ' +
-      'at all", which takes it out of that queue.',
+      'A person says this sighting is not the thing it is linked to. The thing link is cleared and the sighting ' +
+      'goes back to unresolvedObservations, so they can pick the right thing. Its product link stays, unless it ' +
+      'is linked to a product and no thing. Use rejectObservation for "not a thing at all", which takes it out ' +
+      'of that queue.',
   })
-  // Clears the LINK and leaves the sighting, like rejectObservation.
+  // Clears a LINK and leaves the sighting, like rejectObservation.
   @GraphqlPrivacy({ destructive: false })
   async unlinkObservation(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
+    @Args('itemId', {
+      type: () => ID,
+      nullable: true,
+      description:
+        'The thing the person said it is not. When given, a sighting no longer linked to that thing is left as it is.',
+    })
+    itemId?: string,
   ): Promise<ObjectObservationType | null> {
     const row = await this.observationService.sendBackToReview(
       toServiceContext(context),
       GlobalUID.parse('observation', gid),
+      itemId != null ? GlobalUID.parse('item', itemId) : undefined,
     );
 
     if (row == null) {

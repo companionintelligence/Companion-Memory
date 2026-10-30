@@ -42,6 +42,11 @@ import type {
  */
 const SENT_BACK_TO_REVIEW = 'sentBackToReview';
 
+/** Whether a person sent this sighting back to the review queue to say which thing it is. */
+export function isSentBackToReview(observation: Pick<ObjectObservation, 'metadata'>): boolean {
+  return observation.metadata?.[SENT_BACK_TO_REVIEW] === true;
+}
+
 /**
  * Decimal places a bbox is rounded to before it enters a detection key.
  *
@@ -551,13 +556,20 @@ export class ObjectObservationService {
    *
    * Every answer takes the {@link SENT_BACK_TO_REVIEW} mark off, except the one
    * that sets it ({@link sendBackToReview}, through `sendBackToReview: true`).
+   *
+   * A thing named without a product brings its own product along when it has
+   * one, so the sighting's product link agrees with the thing it is linked to.
+   * A sighting sent back from another thing keeps its product link (see
+   * {@link sendBackToReview}), and picking a thing of another product in
+   * review must replace it rather than leave the two links disagreeing. A thing
+   * whose product is not known leaves the sighting's product link as it is.
    */
   async confirm(
     context: ServiceContext,
     id: string,
     confirmed = true,
     resolution?: Pick<ResolveObjectObservationDto, 'resolvedObjectId' | 'resolvedProductId'>,
-    options: { sendBackToReview?: boolean } = {},
+    options: { sendBackToReview?: boolean; whileLinkedTo?: string } = {},
   ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
@@ -569,8 +581,19 @@ export class ObjectObservationService {
       await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([resolution]), 'sighting');
     }
 
+    const thingProductId =
+      resolution?.resolvedObjectId != null && resolution.resolvedProductId === undefined
+        ? await this.productOfThing(existing.userId, resolution.resolvedObjectId)
+        : null;
+
     await this.observationRepository.update(
-      { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        // Only while the row is still linked to that thing: a merge or another
+        // answer between the read above and this write leaves it alone.
+        ...(options.whileLinkedTo !== undefined && { resolvedObjectId: options.whileLinkedTo }),
+      },
       {
         confirmedByUser: confirmed,
         resolutionMethod: 'user',
@@ -589,10 +612,21 @@ export class ObjectObservationService {
         ...(resolution?.resolvedProductId !== undefined && {
           resolvedProductId: resolution.resolvedProductId,
         }),
+        ...(thingProductId != null && { resolvedProductId: thingProductId }),
       },
     );
 
     return this.findById(context, id);
+  }
+
+  /** The catalog product of one of this user's things, or `null` when it has none or is not theirs. */
+  private async productOfThing(userId: string, objectId: string): Promise<string | null> {
+    const rows: Array<{ product_id: string | null }> = await this.dataSource.query(
+      `SELECT product_id FROM ci.objects WHERE object_id = $1::uuid AND user_id::text = $2::text`,
+      [objectId, userId],
+    );
+
+    return rows[0]?.product_id ?? null;
   }
 
   /**
@@ -606,13 +640,31 @@ export class ObjectObservationService {
    * ladder nor the vision listener links it to anything again; the
    * {@link SENT_BACK_TO_REVIEW} mark is what puts it in front of the person.
    *
+   * Only the thing link goes. The product link stays, because "not my mug" is
+   * not "not a mug of this kind", and the review queue reads the thing link
+   * alone. Picking the right thing there replaces the product with that
+   * thing's, when it has one ({@link confirm}). A sighting linked to a product
+   * and no thing loses the product link instead: that is the only link the
+   * answer can be about.
+   *
    * A sighting linked to nothing is returned unchanged: "not this thing" says
-   * nothing about one that was already answered "not a thing".
+   * nothing about one that was already answered "not a thing". So is one that
+   * is no longer linked to `fromObjectId`, the thing the person was looking at:
+   * a page opened before a merge or another answer must not unlink a sighting
+   * from the thing it is linked to now.
    */
-  async sendBackToReview(context: ServiceContext, id: string): Promise<ObjectObservation | null> {
+  async sendBackToReview(
+    context: ServiceContext,
+    id: string,
+    fromObjectId?: string,
+  ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
     if (existing == null || (existing.resolvedObjectId == null && existing.resolvedProductId == null)) {
+      return existing;
+    }
+
+    if (fromObjectId !== undefined && existing.resolvedObjectId !== fromObjectId) {
       return existing;
     }
 
@@ -620,8 +672,8 @@ export class ObjectObservationService {
       context,
       id,
       false,
-      { resolvedObjectId: null, resolvedProductId: null },
-      { sendBackToReview: true },
+      existing.resolvedObjectId != null ? { resolvedObjectId: null } : { resolvedProductId: null },
+      { sendBackToReview: true, ...(fromObjectId !== undefined && { whileLinkedTo: fromObjectId }) },
     );
   }
 

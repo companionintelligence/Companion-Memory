@@ -130,8 +130,10 @@ export class DailyMetricsResolver {
     description: 'Recompute and upsert a trailing window of daily metrics for the signed-in user.',
   })
   // dailyMetricsService.refreshForUser() upserts (conflict on userId+date) one derived row per
-  // day in the window — a recompute of the caller's own analytics, not a deletion or a wholesale
-  // replace of unrelated stored data.
+  // day in the window and deletes the derived rows in that window whose day no longer has data.
+  // A recompute of the caller's own analytics, which the next refresh can rebuild; it never
+  // touches the raw data those rows are computed from. With no timezone it refreshes in the
+  // profile's, as the cron does.
   @GraphqlPrivacy({ destructive: false })
   async refreshDailyMetrics(
     @Context() context: RequestContext,
@@ -141,7 +143,7 @@ export class DailyMetricsResolver {
     const rows = await this.dailyMetricsService.refreshForUser(
       toServiceContext(context),
       days ?? DEFAULT_REFRESH_WINDOW_DAYS,
-      timezone || 'UTC',
+      timezone || undefined,
     );
 
     return rows.map(DailyMetricsType.toType);

@@ -276,7 +276,9 @@ WITH days AS (
               OR e.event_type = 'sleep'
              )
 )
-SELECT day
+-- As text: node-postgres turns a date into local midnight, which reads back as
+-- the day before in UTC on a host east of UTC.
+SELECT to_char(day, 'YYYY-MM-DD') AS day
   FROM days
  WHERE day IS NOT NULL
    AND day <= $3::date

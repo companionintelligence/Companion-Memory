@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -76,6 +76,86 @@ describe('ApprovalsPage', () => {
 
     expect(screen.getByText(/right after looking something up/i)).toBeInTheDocument();
     expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
+  });
+
+  it('says an outside read waits because chat made it right after a lookup', () => {
+    state.actions = [
+      card({
+        intent: 'messaging.listMessages',
+        tool: 'messaging_listMessages',
+        input: { chatGuid: 'iMessage;-;+15550000' },
+        reason: 'read-after-lookup',
+      }),
+    ];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText(/third-party service right after looking something up/i)).toBeInTheDocument();
+    expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
+  });
+
+  it('shows what an approved read returned, since chat never gets it back', async () => {
+    answer.mockResolvedValue({ success: true, data: { messages: [{ text: 'see you at 6' }] } });
+    state.actions = [card({ intent: 'messaging.listMessages', reason: 'read-after-lookup' })];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/));
+    expect(screen.getByRole('status')).toHaveTextContent(/Ran messaging\.listMessages/);
+  });
+
+  it('keeps an approved read on the page when another card is declined', async () => {
+    answer.mockImplementation(async (_id: string, verdict: 'approve' | 'decline') =>
+      verdict === 'approve' ? { success: true, data: { messages: [{ text: 'see you at 6' }] } } : null,
+    );
+    state.actions = [
+      card({ id: 'pa-1', intent: 'messaging.listMessages', reason: 'read-after-lookup' }),
+      card({ id: 'pa-2' }),
+    ];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/));
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /decline/i }));
+    await waitFor(() => expect(answer).toHaveBeenCalledWith('pa-2', 'decline'));
+
+    expect(screen.getByTestId('approved-run-pa-1')).toHaveTextContent(/see you at 6/);
+  });
+
+  it('keeps a card busy while its own answer runs, even after another card finishes', async () => {
+    const pending = new Map<string, (value: null) => void>();
+    answer.mockImplementation((id: string) => new Promise<null>((resolve) => pending.set(id, resolve)));
+    state.actions = [card({ id: 'pa-1' }), card({ id: 'pa-2' })];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }));
+    fireEvent.click(within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(pending.size).toBe(2));
+
+    pending.get('pa-1')?.(null);
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('approval-pa-1')).getByRole('button', { name: /approve/i }),
+      ).toBeEnabled(),
+    );
+    expect(
+      within(screen.getByTestId('approval-pa-2')).getByRole('button', { name: /approve/i }),
+    ).toBeDisabled();
+  });
+
+  it('says so when an approved run failed, though the request itself succeeded', async () => {
+    answer.mockResolvedValue({
+      success: false,
+      error: { code: 'TOOL_FAILED', message: 'BlueBubbles timed out' },
+    });
+    state.actions = [card()];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/failed: BlueBubbles timed out/));
   });
 
   it('falls back to a conservative sentence for a reason it does not know', () => {

@@ -24,6 +24,8 @@ const REASON_COPY: Record<ApprovalReason, string> = {
   'confirmation-required': 'This is irreversible, and an installed app asked for it.',
   'write-after-lookup':
     'Chat wants to make this change right after looking something up, so it waits for your OK.',
+  'read-after-lookup':
+    'Chat wants to send this question to a third-party service right after looking something up, so it waits for your OK. The answer shows here once you approve.',
   'not-local-capable': 'This needs the appliance, and cannot be answered on-device.',
   'capability-insufficient': 'This caller is not permitted to run it.',
   allowed: 'This is waiting for you.',

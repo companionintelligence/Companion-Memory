@@ -38,7 +38,12 @@ export function thingDate(value: string | Date | null | undefined): Date | null 
     return date;
   }
 
-  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  // Local midnight, with the day set by setFullYear: the Date constructor reads
+  // years 0 to 99 as 1900 to 1999, so `0099-05-04` would show as 1999.
+  const day = new Date(2000, 0, 1);
+  day.setFullYear(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+
+  return day;
 }
 
 /** A stored Thing date as the viewer's locale writes a day, or null when there is none. */
@@ -54,10 +59,11 @@ export function toThingDateInput(value: string | Date | null | undefined): strin
     return '';
   }
 
+  const year = String(date.getFullYear()).padStart(4, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
 
-  return `${date.getFullYear()}-${month}-${day}`;
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -74,17 +80,18 @@ export function fromThingDateInput(value: string): string | null {
     return null;
   }
 
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const stored = `${trimmed}T00:00:00.000Z`;
+    const date = new Date(stored);
 
-  if (match) {
-    const [year, month, day] = match.slice(1).map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-
-    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    // Parsed from the ISO string, not built with Date.UTC, which reads years
+    // 0 to 99 as 1900 to 1999. A day that does not exist (Feb 30, month 13)
+    // either fails to parse or comes back as a different day.
+    if (Number.isNaN(date.getTime()) || date.toISOString() !== stored) {
       throw new RangeError(`${trimmed} is not a day.`);
     }
 
-    return `${trimmed}T00:00:00.000Z`;
+    return stored;
   }
 
   const date = new Date(trimmed);

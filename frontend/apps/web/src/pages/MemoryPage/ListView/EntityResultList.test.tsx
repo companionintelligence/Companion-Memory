@@ -15,7 +15,7 @@ const ROWS = Array.from({ length: 40 }, (_, index) => ({
 const h = vi.hoisted(() => ({ service: {} as Record<string, unknown> }));
 
 /** What the list's service hands back on its next render. */
-function serve({ rows = 40, loading = false, hasNextPage = false } = {}) {
+function serve({ rows = 40, loading = false, hasNextPage = false, nameSortCutShort = false } = {}) {
   h.service = {
     data: ROWS.slice(0, rows),
     loading,
@@ -25,6 +25,7 @@ function serve({ rows = 40, loading = false, hasNextPage = false } = {}) {
     error: undefined,
     refetch: () => {},
     totalCount: ROWS.length,
+    nameSortCutShort,
   };
 }
 
@@ -205,5 +206,27 @@ describe('EntityResultList', () => {
     act(() => navigate('/events/event-0'));
     act(() => navigate(-1));
     expect(scrollBox().scrollTop).toBe(0);
+  });
+
+  it('says above the rows that a name sort left older ones out', () => {
+    serve({ nameSortCutShort: true });
+    renderList();
+
+    const note = screen.getByTestId('name-sort-cut-short');
+
+    expect(note).toHaveTextContent(
+      'Sorted by name from the newest 500 of each kind, so older ones are not in this list. Search to find them. For kinds with dates, such as events, you can also narrow the dates under When.',
+    );
+    // Above the first row, where the rows it is about start.
+    expect(
+      note.compareDocumentPosition(screen.getByText('event-0')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('says nothing about it when the list is whole', () => {
+    renderList();
+
+    expect(screen.getByText('event-0')).toBeInTheDocument();
+    expect(screen.queryByTestId('name-sort-cut-short')).not.toBeInTheDocument();
   });
 });
