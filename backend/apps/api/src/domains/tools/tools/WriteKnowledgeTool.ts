@@ -3,8 +3,7 @@ import { z } from 'zod/v3';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-// The file, not the `@ci/domains/graph` barrel: the barrel loads GraphModule, which loads memory.
-import { normalizeEmail, normalizeName, normalizePhone } from '@ci/domains/graph/utils/normalizeIdentifier';
+import { normalizeEmail, normalizeName, normalizePhone } from '@ci/common/normalizeIdentifier';
 import {
   canonicalEntityType,
   GraphEventService,
