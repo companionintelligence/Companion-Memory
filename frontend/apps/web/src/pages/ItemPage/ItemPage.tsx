@@ -59,8 +59,8 @@ const CONFIRM_OBSERVATION = gql(`
 // "No" here means "not this thing", not "not a thing": the sighting goes back to
 // Things > Review sightings, where the right thing can be picked for it.
 const UNLINK_OBSERVATION = gql(`
-  mutation UnlinkItemObservation($id: ID!) {
-    unlinkObservation(id: $id) {
+  mutation UnlinkItemObservation($id: ID!, $itemId: ID) {
+    unlinkObservation(id: $id, itemId: $itemId) {
       id
       confirmedByUser
       resolvedObjectId
@@ -90,13 +90,23 @@ export function ItemPage() {
   });
   const { toast } = useToast();
 
-  /** Yes or No on a sighting, then the thing re-read. A refused answer is said, not swallowed. */
+  /**
+   * Yes or No on a sighting, then the thing re-read. A refused answer is said, not swallowed. A re-read
+   * that fails after the answer was recorded is not reported as a refused answer.
+   */
   const answerSighting = async (answer: () => Promise<unknown>) => {
     try {
       await answer();
-      await refetch();
     } catch (cause) {
       toast.error(cause instanceof Error && cause.message ? cause.message : 'Could not record that.');
+
+      return;
+    }
+
+    try {
+      await refetch();
+    } catch {
+      toast.error('Saved, but this page could not reload. Refresh to see it.');
     }
   };
 
@@ -256,7 +266,9 @@ export function ItemPage() {
                         className="flex-1"
                         disabled={confirming || unlinking}
                         onClick={() =>
-                          void answerSighting(() => unlinkObservation({ variables: { id: target.id } }))
+                          void answerSighting(() =>
+                            unlinkObservation({ variables: { id: target.id, itemId: item.id } }),
+                          )
                         }
                       >
                         No

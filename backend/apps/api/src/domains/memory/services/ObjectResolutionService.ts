@@ -9,7 +9,7 @@ import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normaliz
 
 import type { ObjectObservation, ObservationResolutionMethod } from '../entities/ObjectObservationEntity';
 
-import { ObjectObservationService } from './ObjectObservationService';
+import { isSentBackToReview, ObjectObservationService } from './ObjectObservationService';
 
 /**
  * Confidence declared by each rung of the ladder.
@@ -197,8 +197,10 @@ export class ObjectResolutionService {
     if (observation.confirmedByUser || observation.resolutionMethod === 'user') {
       // A human's answer is not a machine's to revise. Reported, not thrown, so
       // a sweep skips it instead of aborting. Method `user` without the flag is
-      // a "no" (`rejectObservation`, which also clears the link) or a
-      // retraction that kept its link (`confirm(id, false)`). Both are answers.
+      // a "no" (`rejectObservation`, which also clears the link), a sighting
+      // sent back to review from its thing's page (`sendBackToReview`, still
+      // waiting for the person to say which thing it is) or a retraction that
+      // kept its link (`confirm(id, false)`). All are answers.
       const unlinked = observation.resolvedObjectId == null && observation.resolvedProductId == null;
 
       return {
@@ -209,9 +211,11 @@ export class ObjectResolutionService {
         productId: observation.resolvedProductId,
         reason: observation.confirmedByUser
           ? 'user-confirmed; left untouched'
-          : unlinked
-            ? 'user-rejected; left untouched'
-            : 'user-retracted; left untouched',
+          : isSentBackToReview(observation)
+            ? 'user-sent-back; waiting in review'
+            : unlinked
+              ? 'user-rejected; left untouched'
+              : 'user-retracted; left untouched',
         applied: false,
         observation,
       };

@@ -114,6 +114,7 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     if (dataSource?.isInitialized) {
       await dataSource.query('DELETE FROM ci.object_observations WHERE user_id = $1', [owner.userId]);
       await dataSource.query('DELETE FROM ci.objects WHERE user_id = $1', [owner.userId]);
+      await dataSource.query('DELETE FROM ci.product_models WHERE user_id = $1', [owner.userId]);
       await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [owner.userId]);
       await dataSource.query('DELETE FROM ci.users WHERE id = $1', [owner.userId]);
       // Before destroy(): the lock is held on a runner from this pool.
@@ -133,7 +134,7 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
 
   const rawRow = async (id: string) => {
     const [row] = await dataSource.query(
-      `SELECT label, bbox, attributes, metadata, resolved_object_id, resolution_method,
+      `SELECT label, bbox, attributes, metadata, resolved_object_id, resolved_product_id, resolution_method,
               resolution_confidence, confirmed_by_user,
               ST_X(location_coordinates::geometry) AS lon,
               ST_Y(location_coordinates::geometry) AS lat
@@ -148,6 +149,7 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
           attributes: Record<string, unknown>;
           metadata: Record<string, unknown>;
           resolved_object_id: string | null;
+          resolved_product_id: string | null;
           resolution_method: string;
           resolution_confidence: number | null;
           confirmed_by_user: boolean;
@@ -366,8 +368,21 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     expect(row?.lat).toBeCloseTo(lat, 6);
   });
 
+  /** A catalog product to link sightings and things to: `resolved_product_id` has a foreign key to it. */
+  const insertProduct = async (title: string): Promise<string> => {
+    const productId = uuidv7();
+
+    await dataSource.query(`INSERT INTO ci.product_models (product_id, user_id, title) VALUES ($1, $2, $3)`, [
+      productId,
+      owner.userId,
+      title,
+    ]);
+
+    return productId;
+  };
+
   /** An owned thing to link sightings to: `resolved_object_id` has a foreign key to ci.objects. */
-  const insertThing = async (name: string): Promise<string> => {
+  const insertThing = async (name: string, productId: string | null = null): Promise<string> => {
     const objectId = uuidv7();
 
     await dataSource.query(
@@ -376,15 +391,19 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
       [objectId, name, owner.userId],
     );
     await dataSource.query(
-      `INSERT INTO ci.objects (object_id, user_id, entity_type) VALUES ($1::uuid, $2::uuid, 'Item')`,
-      [objectId, owner.userId],
+      `INSERT INTO ci.objects (object_id, user_id, entity_type, product_id)
+       VALUES ($1::uuid, $2::uuid, 'Item', $3::uuid)`,
+      [objectId, owner.userId, productId],
     );
 
     return objectId;
   };
 
-  /** A sighting linked to `thingId` and confirmed, as "Yes" on the thing's page leaves it. */
-  const linkedSighting = async (thingId: string, label: string): Promise<string> => {
+  /**
+   * A sighting linked to `thingId` (and to `productId`, when given) and confirmed, as "Yes" on the thing's
+   * page leaves it.
+   */
+  const linkedSighting = async (thingId: string, label: string, productId?: string): Promise<string> => {
     const [created] = (
       await service.createMany(owner, [
         {
@@ -397,7 +416,10 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
       ])
     ).written;
 
-    await service.confirm(owner, created.id, true, { resolvedObjectId: thingId });
+    await service.confirm(owner, created.id, true, {
+      resolvedObjectId: thingId,
+      ...(productId !== undefined && { resolvedProductId: productId }),
+    });
 
     return created.id;
   };
@@ -448,6 +470,67 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     expect((await rawRow(anotherThing))?.resolved_object_id).toBe(otherMugId);
   });
 
+  it('"No" on a thing keeps the sighting\'s product link and the sighting still waits in review', async () => {
+    const mugModel = await insertProduct('Stoneware mug');
+    const thingId = await insertThing('Blue mug', mugModel);
+    const sightingId = await linkedSighting(thingId, 'mug', mugModel);
+
+    await service.sendBackToReview(owner, sightingId, thingId);
+
+    const row = await rawRow(sightingId);
+    expect(row?.resolved_object_id).toBeNull();
+    expect(row?.resolved_product_id).toBe(mugModel);
+    expect(await queued()).toContain(sightingId);
+  });
+
+  it("picking a thing in review takes that thing's product, or keeps the sighting's when the thing has none", async () => {
+    const mugModel = await insertProduct('Stoneware mug');
+    const cupModel = await insertProduct('Glass cup');
+    const wrongMug = await insertThing('Blue mug', mugModel);
+    const cup = await insertThing('Tall cup', cupModel);
+    const unknownMug = await insertThing('Old mug');
+
+    const toCup = await linkedSighting(wrongMug, 'cup', mugModel);
+    const toUnknown = await linkedSighting(wrongMug, 'mug', mugModel);
+
+    await service.sendBackToReview(owner, toCup, wrongMug);
+    await service.sendBackToReview(owner, toUnknown, wrongMug);
+
+    // "This is…" in Things > Review sightings names the thing only.
+    await service.confirm(owner, toCup, true, { resolvedObjectId: cup });
+    await service.confirm(owner, toUnknown, true, { resolvedObjectId: unknownMug });
+
+    expect(await rawRow(toCup)).toEqual(
+      expect.objectContaining({ resolved_object_id: cup, resolved_product_id: cupModel }),
+    );
+    expect(await rawRow(toUnknown)).toEqual(
+      expect.objectContaining({ resolved_object_id: unknownMug, resolved_product_id: mugModel }),
+    );
+  });
+
+  it('"No" on a sighting linked only to a product clears that link and sends it back', async () => {
+    const mugModel = await insertProduct('Stoneware mug');
+    const [created] = (
+      await service.createMany(owner, [
+        {
+          observedAt: new Date('2026-05-02T10:00:00.000Z'),
+          label: 'mug',
+          contentId: uuidv7(),
+          detector: 'yolov8',
+          bbox: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 },
+        },
+      ])
+    ).written;
+
+    await service.confirm(owner, created.id, true, { resolvedProductId: mugModel });
+    await service.sendBackToReview(owner, created.id);
+
+    const row = await rawRow(created.id);
+    expect(row?.resolved_product_id).toBeNull();
+    expect(row?.metadata).toEqual(expect.objectContaining({ sentBackToReview: true }));
+    expect(await queued()).toContain(created.id);
+  });
+
   it('does not put a sighting answered "Not a thing" back in the queue', async () => {
     const thingId = await insertThing('Grey mug');
     const sightingId = await linkedSighting(thingId, 'jar');
@@ -465,5 +548,43 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
 
     expect(await queued()).toContain(sentBackId);
     expect(machineQueue.map((row) => row.id)).not.toContain(sentBackId);
+  });
+
+  it("refuses a sighting on another account's photo, though content_id has no key", async () => {
+    const other = uuidv7();
+    const theirPhoto = uuidv7();
+
+    await dataSource.query(`INSERT INTO ci.users (id, name, email) VALUES ($1, $2, $3)`, [
+      other,
+      'Someone else',
+      `other.${other}@example.invalid`,
+    ]);
+    // A content row stands on its entity (content_id_entities_fk).
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Content', $2, 'Their photo')`,
+      [theirPhoto, other],
+    );
+    await dataSource.query('INSERT INTO ci.content (id, user_id) VALUES ($1, $2)', [theirPhoto, other]);
+
+    try {
+      await expect(
+        service.createMany(owner, [
+          {
+            observedAt: new Date('2026-05-01T10:00:00.000Z'),
+            label: 'coffee mug',
+            contentId: theirPhoto,
+            sourceType: 'cv_detection',
+            sourceSystem: platformIdentity('cv-server', `det-${theirPhoto}`).system,
+            sourceId: platformIdentity('cv-server', `det-${theirPhoto}`).id,
+          },
+        ]),
+      ).rejects.toThrow(
+        `content_id ${theirPhoto} is a row of ci.content that belongs to another account or to none, so the sighting was refused.`,
+      );
+    } finally {
+      await dataSource.query('DELETE FROM ci.content WHERE id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [other]);
+    }
   });
 });

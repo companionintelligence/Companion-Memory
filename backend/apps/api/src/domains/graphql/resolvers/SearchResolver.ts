@@ -88,7 +88,9 @@ const QUERY_CANDIDATE_LIMIT = 300;
 // SQL keyset, which walks time, so "Name (A-Z)" with no search text is paged
 // in memory like the query path: each type's newest rows up to this many,
 // sorted by name, sliced against the cursor. Below this many rows of a type the
-// list is complete; above it, only the newest rows of that type are in it.
+// list is complete; above it, only the newest rows of that type are in it, and
+// the result says so (`SearchResultConnection.nameSortCutShort`). Each type is
+// read one row past this to know, and that row is dropped (see capEachKind).
 const NAME_SORT_CANDIDATE_LIMIT = 500;
 /**
  * Kinds the text and tag searches return that carry no time of their own, only their last write:
@@ -108,6 +110,38 @@ const ROW_DATED_TYPES: ReadonlySet<ResolvedEntity['type']> = new Set([
   'action',
   'file-chunk',
 ]);
+
+/**
+ * Each kind's first `limit` identifiers, in the order they came, and whether any kind had more.
+ *
+ * The timed browse hands back every kind's rows one kind after another, each in its own time
+ * order, so a kind's first `limit` are its newest (or oldest, reading up). A name sort reads one
+ * row past {@link NAME_SORT_CANDIDATE_LIMIT} to tell a kind that has exactly that many rows from
+ * one that has more, with no count query of its own.
+ */
+function capEachKind<T extends { type: string }>(
+  identifiers: readonly T[],
+  limit: number,
+): { kept: T[]; cutShort: boolean } {
+  const seen = new Map<string, number>();
+  let cutShort = false;
+
+  const kept = identifiers.filter((identifier) => {
+    const count = (seen.get(identifier.type) ?? 0) + 1;
+
+    seen.set(identifier.type, count);
+
+    if (count > limit) {
+      cutShort = true;
+
+      return false;
+    }
+
+    return true;
+  });
+
+  return { kept, cutShort };
+}
 
 /**
  * Pin caps for the map read (`mapPins`).
@@ -280,6 +314,11 @@ const EMPTY_PAGE_INFO = {
   endCursor: null,
 };
 
+/** An empty result (e.g. for an unknown/revoked share token). */
+function emptySearchResult(): SearchResultConnection {
+  return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [], nameSortCutShort: false };
+}
+
 /**
  * A result paired with the exact timestamp {@link SearchResolver.sortEntries}
  * ordered it by.
@@ -410,7 +449,7 @@ export class SearchResolver {
     // the viewer falls into the tidy "link unavailable" state rather than an error.
     if (input.shareToken != null && input.shareToken.length > 0) {
       if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
-        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+        return emptySearchResult();
       }
 
       return this.runSharedSearch(toServiceContext(context), input);
@@ -557,7 +596,7 @@ export class SearchResolver {
     const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
 
     if (saved == null || saved.userId == null) {
-      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+      return emptySearchResult();
     }
 
     const authorization = await this.sharedSearchConsentService.authorize({
@@ -569,7 +608,7 @@ export class SearchResolver {
     });
 
     if (authorization == null) {
-      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+      return emptySearchResult();
     }
 
     // All filter values come from the owner's stored saved search (never the
@@ -614,7 +653,12 @@ export class SearchResolver {
       },
     );
 
-    const disclosed = applySearchCeiling(unclamped, authorization.ceiling);
+    // The ceiling's clamp knows only the four fields it clamps. That the list was cut short says a
+    // kind holds more than 500 rows, so it crosses only to a reader who may page the whole list.
+    const disclosed = {
+      ...applySearchCeiling(unclamped, authorization.ceiling),
+      nameSortCutShort: canPage && unclamped.nameSortCutShort,
+    };
 
     // Written AFTER the clamp and from BOTH sets, because they answer different
     // questions: `disclosedEntities` is what crossed to the reader, and
@@ -693,6 +737,8 @@ export class SearchResolver {
     // Whether SQL already paged strictly past the cursor row (the timed keyset). Every other
     // source hands the whole candidate list over and the Paginator finds the cursor in it.
     let seeksPastCursor = false;
+    // Whether a name sort's pool left out rows of some kind (see NAME_SORT_CANDIDATE_LIMIT).
+    let nameSortCutShort = false;
 
     const first = Math.min(Math.max(input.first ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const afterCursor = decodeSearchCursor(input.after);
@@ -762,10 +808,18 @@ export class SearchResolver {
           afterTime: keyset ? afterCursor!.time : undefined,
           afterId: keyset ? afterCursor!.id! : undefined,
           // Over-fetch per type so the merged page holds the globally first `first` rows in `order`.
-          limit: byName ? NAME_SORT_CANDIDATE_LIMIT : first * FETCH_MULTIPLIER,
+          // A name sort reads one row past its pool, to know whether a kind had more.
+          limit: byName ? NAME_SORT_CANDIDATE_LIMIT + 1 : first * FETCH_MULTIPLIER,
         }),
         this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
       ]);
+
+      if (byName) {
+        ({ kept: identifiers, cutShort: nameSortCutShort } = capEachKind(
+          identifiers,
+          NAME_SORT_CANDIDATE_LIMIT,
+        ));
+      }
     }
 
     // Entity-type filter: the query/timed paths apply it at their source; apply to the tags path.
@@ -959,6 +1013,7 @@ export class SearchResolver {
       // hundreds of thousands — see the SearchResolver.totalCount tests).
       totalCount: timedTotalCount ?? candidateCount,
       matchingTags: matchingTags.map((tag) => TagType.toType(tag)),
+      nameSortCutShort,
     };
   }
 

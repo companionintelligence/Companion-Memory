@@ -1,7 +1,7 @@
 import type { ToolCapability } from '../capability';
 import type { ToolPrincipal } from '../core/types';
 
-import { removesData } from './capabilityPolicy';
+import { reachesThirdParty, removesData } from './capabilityPolicy';
 import {
   resolveDispatch,
   type DispatchReason,
@@ -22,13 +22,15 @@ export type TrustDecision = 'auto' | 'review' | 'skip';
 
 /**
  * Why the gate answered as it did. The three {@link DispatchReason} queue
- * reasons come straight from {@link resolveDispatch}; the other two are the
+ * reasons come straight from {@link resolveDispatch}; the other three are the
  * appliance-tier ones this module adds. `confirmation-required` is for work
  * that removes data or leaves the appliance. `write-after-lookup` is for any
- * other write a chat turn makes once it has looked something up (see
- * {@link ToolGateOptions.followsLookup}).
+ * other write a chat turn makes once it has looked something up, and
+ * `read-after-lookup` for a read from a third-party service made the same way
+ * (see {@link ToolGateOptions.followsLookup}).
  */
-export type ToolGateReason = DispatchReason | 'confirmation-required' | 'write-after-lookup';
+export type ToolGateReason =
+  DispatchReason | 'confirmation-required' | 'write-after-lookup' | 'read-after-lookup';
 
 export interface ToolGateRuling extends Omit<DispatchRuling, 'reason'> {
   reason: ToolGateReason;
@@ -53,9 +55,14 @@ export interface ToolGateOptions {
    * The call comes from a chat round after the turn already ran a lookup, so
    * what it does may have been steered by text the lookup returned: a mail, a
    * note or a page someone else wrote. Under a dial that asks before a delete,
-   * such a call asks before any write, not only a destructive or external one.
-   * A write the person asked for directly comes from the turn's first round and
-   * is judged as before. Absent means false.
+   * such a call asks before any write (not only a destructive or external one)
+   * and before a read from a third-party service, whose query can carry what
+   * the lookup found to an outside party. A read that reaches only the owner's
+   * own server (`IntentPrivacy.ownServer`) is judged as before. Whether a read
+   * asks is the dial's answer: the API's `trustForToolCall` answers review for
+   * it, and this module only names the reason. A call the person asked for
+   * directly comes from the turn's first round and is judged as before. Absent
+   * means false.
    */
   followsLookup?: boolean;
 }
@@ -82,6 +89,31 @@ export function needsConfirmation(
 /** Any write, destructive and external ones included, from a chat round after a lookup. */
 function writesAfterLookup(intent: DispatchableIntent, followsLookup: boolean): boolean {
   return followsLookup && intent.privacy.access !== 'read';
+}
+
+/**
+ * A read from a third-party service, from a chat round after a lookup. It changes nothing, but what
+ * it sends (a search term, a title) may come from text the lookup returned. A read that reaches only
+ * the owner's own server, such as listing their texts off their own Mac, sends that party nothing.
+ */
+function readsOutsideAfterLookup(intent: DispatchableIntent, followsLookup: boolean): boolean {
+  return (
+    followsLookup &&
+    intent.privacy.access === 'read' &&
+    reachesThirdParty(intent.privacy) &&
+    !removesData(intent.privacy)
+  );
+}
+
+/** What makes a flagged intent need a yes, in the words its explanation uses. */
+function whatItDoes(intent: DispatchableIntent): string {
+  if (removesData(intent.privacy)) {
+    return 'removes data';
+  }
+
+  return reachesThirdParty(intent.privacy)
+    ? 'sends data to a third-party service'
+    : 'reaches a server outside the appliance';
 }
 
 /**
@@ -112,10 +144,13 @@ function writesAfterLookup(intent: DispatchableIntent, followsLookup: boolean): 
  * | `balanced`  | auto for an external read, else review | an external read executes; the rest queues |
  * | `cautious`  | review                                 | queues for confirmation                    |
  *
- * A write that is flagged only because it follows a lookup is queued the same
- * way under the same dial, with the reason `write-after-lookup`. The
- * managed-app rule below does not apply to it (that rule is about irreversible
- * work).
+ * A third-party read that follows a lookup is not the `balanced` exception:
+ * the dial answers review for it and it queues with the reason
+ * `read-after-lookup`. A read that reaches only the owner's own server
+ * (`IntentPrivacy.ownServer`) still is. A write that is flagged only because it follows a lookup
+ * is queued the same way under the same dial, with the reason
+ * `write-after-lookup`. The managed-app rule below does not apply to that
+ * write (the rule is about irreversible work).
  *
  * `skip` queues rather than executing or silently dropping. The dial's `skip`
  * means "don't apply this inference"; there is no such thing as declining a
@@ -156,7 +191,7 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
     return {
       decision: 'queue',
       reason: 'confirmation-required',
-      explanation: `"${intent.name}" ${removesData(intent.privacy) ? 'removes data' : 'sends data to a third-party service'} and an installed app must be confirmed before acting`,
+      explanation: `"${intent.name}" ${whatItDoes(intent)} and an installed app must be confirmed before acting`,
     };
   }
 
@@ -172,9 +207,17 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
     };
   }
 
+  if (readsOutsideAfterLookup(intent, followsLookup)) {
+    return {
+      decision: 'queue',
+      reason: 'read-after-lookup',
+      explanation: `"${intent.name}" would ask a third-party service something right after a lookup in the same chat turn, which this appliance is set to confirm first`,
+    };
+  }
+
   return {
     decision: 'queue',
     reason: 'confirmation-required',
-    explanation: `"${intent.name}" ${removesData(intent.privacy) ? 'removes data' : 'sends data to a third-party service'} and this appliance is set to confirm before acting`,
+    explanation: `"${intent.name}" ${whatItDoes(intent)} and this appliance is set to confirm before acting`,
   };
 }

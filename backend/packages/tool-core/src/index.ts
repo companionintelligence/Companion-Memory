@@ -70,6 +70,7 @@ export {
   capabilityAllows,
   capabilityRequiredFor,
   needsConfirmation,
+  reachesThirdParty,
   removesData,
   resolveDispatch,
   resolveToolGate,
