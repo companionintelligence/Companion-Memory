@@ -33,7 +33,12 @@ import { SearchResolver } from './SearchResolver';
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const CONTEXT = { userId: USER } as RequestContext;
 
-const WINDOW = { startTime: '2026-04-29T00:00:00.000Z', endTime: '2026-05-13T23:59:59.999Z' };
+// `includeFiles`: files are opt-in on the unfiltered browse, and this pages every row-stamped kind.
+const WINDOW = {
+  startTime: '2026-04-29T00:00:00.000Z',
+  endTime: '2026-05-13T23:59:59.999Z',
+  includeFiles: true,
+};
 
 interface Row {
   id: string;
@@ -413,7 +418,7 @@ describe('SearchResolver timed browse, oldest first', () => {
   it('works with no date window at all', async () => {
     const { resolver } = makeResolver();
 
-    const { rows } = await walk(resolver, { first: 9, sortBy: 'time', sortOrder: 'asc' });
+    const { rows } = await walk(resolver, { includeFiles: true, first: 9, sortBy: 'time', sortOrder: 'asc' });
 
     expect(rows.map(stamp)).toEqual(ASCENDING.map(stamp));
   });

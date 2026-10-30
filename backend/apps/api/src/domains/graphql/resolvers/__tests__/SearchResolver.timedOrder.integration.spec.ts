@@ -707,7 +707,12 @@ describeWithDb(`timed browse paging in both directions, against Postgres (${avai
   // ── Part B: the resolver over the same SQL ─────────────────────────────────
 
   describe('through SearchResolver', () => {
-    const WINDOW = { startTime: '2026-04-29T00:00:00.000Z', endTime: '2026-05-13T23:59:59.999Z' };
+    // `includeFiles`: files are opt-in on the unfiltered browse, and this pages every row-stamped kind.
+    const WINDOW = {
+      startTime: '2026-04-29T00:00:00.000Z',
+      endTime: '2026-05-13T23:59:59.999Z',
+      includeFiles: true,
+    };
     const CLUSTER_AT = '2026-05-01T12:00:00.123456Z';
     const TIE_AT = '2026-05-06T07:00:00.000000Z';
 
@@ -924,7 +929,7 @@ describeWithDb(`timed browse paging in both directions, against Postgres (${avai
     });
 
     it('stays correct with no date window', async () => {
-      const { ids } = await walk({ first: 30, sortBy: 'time', sortOrder: 'asc' });
+      const { ids } = await walk({ includeFiles: true, first: 30, sortBy: 'time', sortOrder: 'asc' });
 
       expect(ids).toEqual(ascending());
     });

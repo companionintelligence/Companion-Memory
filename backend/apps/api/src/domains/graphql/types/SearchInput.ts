@@ -22,15 +22,16 @@ export class SearchInput {
   includeTypes?: IndexableEntity[];
 
   /**
-   * Opt standalone files *out* of the timed browse. Files are part of the
-   * default timeline like every other indexed type; pass `false` to drop them
-   * without also dropping whatever `excludeTypes` is already carrying.
+   * Force standalone files into (`true`) or out of (`false`) the timed browse,
+   * whatever the type filter says. Absent, files follow the type filter and,
+   * like people and places, are left out of the UNFILTERED browse: a file has
+   * no date of its own, so it would sort by when its row was last written.
    *
-   * This used to default the other way — files were excluded unless a caller
-   * asked for them — which made the explorer's File type picker a no-op on
-   * every surface that didn't set the flag, and made the same URL mean
-   * different things in the gallery (which set it) and the list (which didn't).
-   * Callers that want a document-free feed should say so explicitly.
+   * History: files were opt-in behind this flag, then (#2110) part of the
+   * default browse with this as an opt-out, because the explorer's File type
+   * picker did nothing on surfaces that didn't set the flag. The picker now
+   * reaches files through the type filter itself, so the default could go back
+   * to opt-in (2026-10-30) without breaking it.
    */
   @Field(() => Boolean, { nullable: true })
   includeFiles?: boolean;
