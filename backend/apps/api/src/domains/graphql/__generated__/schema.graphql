@@ -3090,6 +3090,7 @@ type Query {
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
   receipt(id: ID!): ReceiptType
   receipts(after: String, extractionState: ReceiptExtractionState, first: Int, merchantName: String, purchasedFrom: DateTime, purchasedTo: DateTime): ReceiptConnection!
+  refreshMediaUrls(urls: [String!]!): [String]!
   relationship(id: ID!): RelationshipType
   relationships(after: String, before: String, first: Int, last: Int): RelationshipConnection!
 

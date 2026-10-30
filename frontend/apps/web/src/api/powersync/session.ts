@@ -1,3 +1,4 @@
+import { clearNativeReplicaSync } from '@ci/common';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import { POWER_SYNC_DEFAULT_LOOKBACK_DAYS, setLookbackDays } from './workingSet';
@@ -82,6 +83,38 @@ export function subscribeReplicaOpenState(listener: () => void): () => void {
   };
 }
 
+/**
+ * The Memory origin that answered "I run no PowerSync service", or null. Set by the
+ * provider, which stops asking that server; read by Settings, which says so rather than
+ * describe a working set that will never fill.
+ */
+let syncUnavailableFor: string | null = null;
+const syncUnavailableListeners = new Set<() => void>();
+
+export function setSyncUnavailableFor(origin: string | null): void {
+  if (origin === syncUnavailableFor) {
+    return;
+  }
+
+  syncUnavailableFor = origin;
+
+  for (const listener of syncUnavailableListeners) {
+    listener();
+  }
+}
+
+export function getSyncUnavailableFor(): string | null {
+  return syncUnavailableFor;
+}
+
+export function subscribeSyncUnavailableFor(listener: () => void): () => void {
+  syncUnavailableListeners.add(listener);
+
+  return () => {
+    syncUnavailableListeners.delete(listener);
+  };
+}
+
 export function requestPowerSyncReconnect(): void {
   window.dispatchEvent(new Event('ci-powersync-reconnect'));
 }
@@ -125,6 +158,9 @@ export const POWER_SYNC_LOGOUT_TEARDOWN_TIMEOUT_MS = 5_000;
 export async function disconnectAndClearPowerSyncForLogout(
   timeoutMs = POWER_SYNC_LOGOUT_TEARDOWN_TIMEOUT_MS,
 ): Promise<boolean> {
+  // Phone apps: no background run may sync this account's data into a replica that is about to go.
+  await clearNativeReplicaSync();
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), timeoutMs);

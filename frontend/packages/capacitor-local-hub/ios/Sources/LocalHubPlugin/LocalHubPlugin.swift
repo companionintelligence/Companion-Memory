@@ -38,6 +38,12 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "requestLocationAuthorization", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSignificantLocationUpdates", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSignificantLocationUpdates", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getBackgroundUpload", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setBackgroundUpload", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configureBackgroundSync", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "claimReplica", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "releaseReplica", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearBackgroundSync", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "discoverLanAppliances", returnType: CAPPluginReturnPromise)
     ]
 
@@ -328,6 +334,64 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             LocationTracking.shared.disarm()
             call.resolve()
         }
+    }
+
+    /// Whether queued location fixes upload while the app is not on screen (Settings ->
+    /// Location); see OutboxBackgroundUpload. UNCOMPILED as written -- build on a Mac first.
+    @objc func getBackgroundUpload(_ call: CAPPluginCall) {
+        call.resolve(["enabled": BackgroundUploadSettings.isEnabled, "supported": true])
+    }
+
+    /// Turning it on uploads anything already waiting.
+    @objc func setBackgroundUpload(_ call: CAPPluginCall) {
+        guard let enabled = call.getBool("enabled") else {
+            call.reject("A boolean 'enabled' is required")
+            return
+        }
+        BackgroundUploadSettings.isEnabled = enabled
+        if enabled {
+            OutboxBackgroundUpload.requestUpload()
+        }
+        call.resolve(["enabled": enabled, "supported": true])
+    }
+
+    /// Background replica sync (ReplicaSync.swift / ReplicaBackgroundSync.swift; the Android
+    /// twin is `replica/`). UNCOMPILED as written -- build on a Mac before relying on it.
+    ///
+    /// Hands the background task what the app's PowerSync client uses, and schedules it. Called
+    /// each time that client connects.
+    @objc func configureBackgroundSync(_ call: CAPPluginCall) {
+        guard let config = ReplicaSyncConfig.from(call.options as? [String: Any] ?? [:]) else {
+            call.reject("configureBackgroundSync needs apiBaseUrl, databaseFile, lookbackDays and startOptions")
+            return
+        }
+        ReplicaSyncConfigStore.save(config)
+        // The replica is open by now, so its key exists; reseal it (see ReplicaKeychain).
+        ReplicaKeychain.harden()
+        ReplicaBackgroundSync.schedule()
+        call.resolve()
+    }
+
+    /// The app's client is about to connect: stop a background run in progress and keep new ones
+    /// off until `releaseReplica`. Waits off the main thread; `free` is false only on timeout.
+    @objc func claimReplica(_ call: CAPPluginCall) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let free = ReplicaSyncGate.shared.claimForApp(timeout: 10)
+            call.resolve(["free": free])
+        }
+    }
+
+    /// The app's client has disconnected (the app went to the background).
+    @objc func releaseReplica(_ call: CAPPluginCall) {
+        ReplicaSyncGate.shared.releaseFromApp()
+        call.resolve()
+    }
+
+    /// Sign-out, or a Memory without sync: no more background runs, and forget the config.
+    @objc func clearBackgroundSync(_ call: CAPPluginCall) {
+        ReplicaBackgroundSync.cancel()
+        ReplicaSyncConfigStore.clear()
+        call.resolve()
     }
 
     /// Discovers Companion Memory appliances advertising over Bonjour (`_companion-memory._tcp.`)

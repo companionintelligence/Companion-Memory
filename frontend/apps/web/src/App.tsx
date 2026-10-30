@@ -24,6 +24,7 @@ import {
 import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import { AppLockGate } from '@/components/AppLock/AppLockGate';
+import { MediaLinkRefresh } from '@/components/MediaLinkRefresh';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
@@ -203,6 +204,8 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
+                          {/* Re-signs photo and video links that expired while cached. */}
+                          <MediaLinkRefresh />
                           {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
                           <DateTimeFormatProvider>

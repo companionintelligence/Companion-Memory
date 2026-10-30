@@ -54,6 +54,9 @@ private class FakePlatform : LocationPlatform {
     override fun showGrantLapsedNudge(config: LocationTrackingConfig) { calls += "nudge" }
     override fun clearNudge() { calls += "clearNudge" }
     override fun nowMs(): Long = now
+    /** Kept apart from [calls] so the OS-footprint assertions stay about location. `true` = soon. */
+    val uploadRequests = mutableListOf<Boolean>()
+    override fun requestUpload(soon: Boolean) { uploadRequests += soon }
 }
 
 /** In-memory state, round-tripped through JSON exactly as SharedPreferences would store it. */
@@ -290,6 +293,33 @@ class LocationTrackerTest {
         assertEquals(listOf("stopSampling", "geofence(33.6768,-117.7973,100.0)"), platform.calls)
         assertFalse(store.load()!!.moving)
         assertNull(tracker.configForService())
+    }
+
+    @Test
+    fun `each queued fix asks for a batched upload, and coming to rest asks for one soon`() {
+        tracker.arm(config)
+        tracker.onFix(fix(33.6767, -117.7972, platform.now))
+        assertEquals(listOf(false), platform.uploadRequests)
+
+        // Gated out (too close, too soon): nothing new to upload.
+        platform.now += 60_000L
+        tracker.onFix(fix(33.6768, -117.7972, platform.now))
+        assertEquals(listOf(false), platform.uploadRequests)
+
+        platform.now += LocationTracker.STILL_TIMEOUT_MS
+        tracker.onFix(fix(33.6768, -117.7972, platform.now))
+        assertFalse(store.load()!!.moving)
+        assertEquals(listOf(false, true), platform.uploadRequests)
+    }
+
+    @Test
+    fun `a fix the outbox refused asks for no upload`() {
+        tracker.arm(config)
+        outbox.nextEnqueueOutcome = EnqueueOutcome.AtCapacity
+
+        tracker.onFix(fix(33.6767, -117.7972, 0L))
+
+        assertTrue(platform.uploadRequests.isEmpty())
     }
 
     @Test
@@ -669,5 +699,9 @@ class LocationTrackerTest {
         assertNull(parsed.owner)
         assertEquals(config, LocationTrackingConfig.fromJson(config.toJson()))
         assertNull(LocationTrackingConfig.fromJson(JSONObject().put("deviceKey", "  ")))
+        // A config saved before the background uploader existed has no origin to send to.
+        assertNull(parsed.apiBaseUrl)
+        val withOrigin = config.copy(apiBaseUrl = "https://memory.example.lan")
+        assertEquals(withOrigin, LocationTrackingConfig.fromJson(withOrigin.toJson()))
     }
 }

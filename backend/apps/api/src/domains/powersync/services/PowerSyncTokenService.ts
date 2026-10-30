@@ -58,6 +58,19 @@ function resolveCutoffIso(cutoff?: string): string {
  * asymmetric keys (RS256/EdDSA) exposed via a JWKS endpoint — see
  * infrastructure/powersync/README.md.
  */
+/**
+ * The configured URL as the client should use it: an absolute URL as is, a path
+ * joined to the origin the request came in on. A path with no known origin is
+ * returned unchanged rather than guessed at.
+ */
+export function resolvePowerSyncUrl(configured: string, requestOrigin: string): string {
+  if (!configured.startsWith('/') || configured.startsWith('//') || !requestOrigin) {
+    return configured;
+  }
+
+  return `${requestOrigin.replace(/\/+$/, '')}${configured}`;
+}
+
 @Injectable()
 export class PowerSyncTokenService {
   constructor(private readonly jwtService: JwtService) {}
@@ -67,7 +80,14 @@ export class PowerSyncTokenService {
     return Boolean(config.powersync.jwtSecret && config.powersync.url);
   }
 
-  issueToken(userId: string, cutoff?: string): PowerSyncCredentials {
+  /**
+   * @param requestOrigin `scheme://host` the request arrived on. Used only when the
+   *   configured URL is a path (`/powersync`): an appliance reached through several
+   *   addresses (LAN, a Hub tunnel, Tailscale) serves sync on each of them through its
+   *   own gateway, so the one right answer is "this origin, at that path". The CSP pins
+   *   `connect-src` to `'self'`, which this keeps satisfied too.
+   */
+  issueToken(userId: string, cutoff?: string, requestOrigin = ''): PowerSyncCredentials {
     if (!this.isConfigured()) {
       // The feature is scaffolded but not configured for this deployment. The
       // controller answers this case before calling here; a caller that does
@@ -86,6 +106,6 @@ export class PowerSyncTokenService {
       },
     );
 
-    return { token, powersync_url: config.powersync.url };
+    return { token, powersync_url: resolvePowerSyncUrl(config.powersync.url, requestOrigin) };
   }
 }

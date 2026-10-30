@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   fetchJson,
+  getBackgroundUpload,
   isAndroidPlatform,
   isIosPlatform,
   isNativePlatform,
   openNativeLocationSettings,
+  POSITION_OUTBOX_KIND,
+  setBackgroundUpload,
+  useOutboxQueue,
+  type BackgroundUploadState,
   type LocationTrackingMode,
 } from '@ci/common';
-import { AlertDialog, Button, Card, cn } from '@ci/shadcn';
+import { AlertDialog, Button, Card, cn, Label, Switch } from '@ci/shadcn';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { useAuth, useLocationTracking } from '@/hooks';
@@ -109,6 +114,53 @@ export function LocationSection() {
     void refreshStats();
   }, [refreshStats, mode]);
 
+  // Fixes recorded while the app was closed wait in this device's outbox until the app can
+  // reach the appliance, so the stats above lag a trip until that upload lands. Show the
+  // waiting count beside them, and recount once it drops: the queue refreshes after each
+  // drain, so a drop means positions just arrived.
+  const { pendingByKind } = useOutboxQueue();
+  const waitingCount = pendingByKind[POSITION_OUTBOX_KIND] ?? 0;
+  const previousWaitingRef = useRef(waitingCount);
+
+  useEffect(() => {
+    if (waitingCount < previousWaitingRef.current) {
+      void refreshStats();
+    }
+
+    previousWaitingRef.current = waitingCount;
+  }, [waitingCount, refreshStats]);
+
+  // Native state, read once: only Android has a background uploader, and only it can say
+  // whether the person turned it off.
+  const [backgroundUpload, setBackgroundUploadState] = useState<BackgroundUploadState | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getBackgroundUpload().then((state) => {
+      if (!cancelled) {
+        setBackgroundUploadState(state);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onToggleBackgroundUpload = (enabled: boolean) => {
+    setBackgroundUploadState((current) => (current ? { ...current, enabled } : current));
+    void setBackgroundUpload(enabled)
+      .then(setBackgroundUploadState)
+      .catch(() => {
+        // The switch reflects what the phone holds, not what was asked for.
+        void getBackgroundUpload().then(setBackgroundUploadState);
+      });
+  };
+
+  const showBackgroundUpload = mode === 'always' && backgroundUpload?.supported === true;
+  const uploadsInBackground = showBackgroundUpload && backgroundUpload.enabled;
+
   const trackedCount = DEVICE_PROVIDERS.reduce(
     (total, provider) => total + (stats?.byProvider?.[provider] ?? 0),
     0,
@@ -202,8 +254,33 @@ export function LocationSection() {
             </div>
           )}
 
+          {showBackgroundUpload && (
+            <div className="flex items-start justify-between gap-4 border-t border-border pt-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="location-background-upload">Upload in the background</Label>
+                <p className="text-xs text-muted-foreground">
+                  Send places recorded while the app is closed to your Companion as soon as this phone can
+                  reach it. Off, they wait on this phone until you next open the app.
+                </p>
+              </div>
+              <Switch
+                id="location-background-upload"
+                checked={backgroundUpload.enabled}
+                onCheckedChange={onToggleBackgroundUpload}
+              />
+            </div>
+          )}
+
           <div className="text-sm text-muted-foreground">
             <div>{trackedCount} fixes recorded from your devices</div>
+            {waitingCount > 0 && (
+              <div>
+                {waitingCount} more on this device, waiting to upload.{' '}
+                {uploadsInBackground
+                  ? 'They upload in the background once this phone can reach your Companion.'
+                  : 'They upload while the app is open and can reach your Companion.'}
+              </div>
+            )}
             <div>{stats ? `${stats.total} position fixes total` : 'Loading position stats…'}</div>
             {stats?.lastFixAt && <div>Last fix {fmt.dateTime(stats.lastFixAt)}</div>}
           </div>

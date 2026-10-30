@@ -59,6 +59,13 @@ interface LocationPlatform {
     fun showGrantLapsedNudge(config: LocationTrackingConfig)
     fun clearNudge()
     fun nowMs(): Long
+
+    /**
+     * Fixes are waiting in the outbox: upload them in the background, if the person allows
+     * it. `soon` skips the batching delay -- the phone has come to rest and no more fixes are
+     * coming for a while.
+     */
+    fun requestUpload(soon: Boolean)
 }
 
 /** Everything the tracker must remember across process deaths. */
@@ -430,6 +437,7 @@ class LocationTracker(
         return when (outcome) {
             is EnqueueOutcome.Created, is EnqueueOutcome.Duplicate -> {
                 persist(next.copy(lastAccepted = seen))
+                platform.requestUpload(soon = false)
                 listener?.invoke(PositionRecordJson.eventBody(fix))
                 FixOutcome.Queued(record.getString("source_id"))
             }
@@ -449,6 +457,7 @@ class LocationTracker(
     private fun becomeStill(now: TrackingState) {
         platform.stopSampling()
         persist(now.copy(moving = false, stationaryNotedAtMs = null))
+        platform.requestUpload(soon = true)
         val centre = now.lastSeen
         if (centre != null) {
             fence(centre, now.config, nudge = true)

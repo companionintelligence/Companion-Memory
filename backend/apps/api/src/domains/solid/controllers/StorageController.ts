@@ -4,14 +4,13 @@ import { Request, Response } from 'express';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { requestOrigin } from '@ci/common/http/requestOrigin';
 import { GraphNodeEntity, GraphQueryService } from '@ci/domains/memory';
 
 import { negotiateRdf, type Quad } from '../rdf';
 import { ContainerService } from '../services/ContainerService';
 import { EntityProjectionService } from '../services/EntityProjectionService';
 import { WebIdService } from '../services/WebIdService';
-
-import { requestOrigin } from './requestOrigin';
 
 /** Page size for member enumeration; matches GraphQueryService's own 200 cap. */
 const PAGE_SIZE = 200;

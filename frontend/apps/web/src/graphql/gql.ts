@@ -98,6 +98,7 @@ type Documents = {
     "\n  fragment FeedBadgeSummary on SummaryType {\n    id\n    seen\n    dismissed\n  }\n": typeof types.FeedBadgeSummaryFragmentDoc,
     "\n  query GetFeedBadgeCount($actionLimit: Int, $summaryFirst: Int) {\n    feedActions(limit: $actionLimit) {\n      ...FeedBadgeAction\n    }\n    summaries(first: $summaryFirst) {\n      edges {\n        node {\n          ...FeedBadgeSummary\n        }\n      }\n    }\n  }\n  \n  \n": typeof types.GetFeedBadgeCountDocument,
     "\n  query GetPlanBadgeCount($first: Int) {\n    tasks(first: $first) {\n      edges {\n        node {\n          id\n          status\n        }\n      }\n    }\n    taskPendingChanges {\n      taskId\n    }\n  }\n": typeof types.GetPlanBadgeCountDocument,
+    "\n  query RefreshMediaUrls($urls: [String!]!) {\n    refreshMediaUrls(urls: $urls)\n  }\n": typeof types.RefreshMediaUrlsDocument,
     "\n  query AskInbox {\n    askInbox {\n      id\n      status\n      createdAt\n      consentBasis\n      askerId\n      peerHandle\n      query {\n        queryType\n        dataClass\n        prompt\n        purpose\n        actor {\n          kind\n          label\n        }\n      }\n    }\n  }\n": typeof types.AskInboxDocument,
     "\n  query AskInboxHiddenCharacters {\n    askInbox {\n      id\n      query {\n        promptHiddenCharactersRemoved\n      }\n    }\n  }\n": typeof types.AskInboxHiddenCharactersDocument,
     "\n  query AskOutbox {\n    askOutbox {\n      id\n      status\n      createdAt\n      responderId\n      peerHandle\n      query {\n        queryType\n        dataClass\n        prompt\n        purpose\n        actor {\n          kind\n          label\n        }\n      }\n    }\n  }\n": typeof types.AskOutboxDocument,
@@ -364,6 +365,7 @@ const documents: Documents = {
     "\n  fragment FeedBadgeSummary on SummaryType {\n    id\n    seen\n    dismissed\n  }\n": types.FeedBadgeSummaryFragmentDoc,
     "\n  query GetFeedBadgeCount($actionLimit: Int, $summaryFirst: Int) {\n    feedActions(limit: $actionLimit) {\n      ...FeedBadgeAction\n    }\n    summaries(first: $summaryFirst) {\n      edges {\n        node {\n          ...FeedBadgeSummary\n        }\n      }\n    }\n  }\n  \n  \n": types.GetFeedBadgeCountDocument,
     "\n  query GetPlanBadgeCount($first: Int) {\n    tasks(first: $first) {\n      edges {\n        node {\n          id\n          status\n        }\n      }\n    }\n    taskPendingChanges {\n      taskId\n    }\n  }\n": types.GetPlanBadgeCountDocument,
+    "\n  query RefreshMediaUrls($urls: [String!]!) {\n    refreshMediaUrls(urls: $urls)\n  }\n": types.RefreshMediaUrlsDocument,
     "\n  query AskInbox {\n    askInbox {\n      id\n      status\n      createdAt\n      consentBasis\n      askerId\n      peerHandle\n      query {\n        queryType\n        dataClass\n        prompt\n        purpose\n        actor {\n          kind\n          label\n        }\n      }\n    }\n  }\n": types.AskInboxDocument,
     "\n  query AskInboxHiddenCharacters {\n    askInbox {\n      id\n      query {\n        promptHiddenCharactersRemoved\n      }\n    }\n  }\n": types.AskInboxHiddenCharactersDocument,
     "\n  query AskOutbox {\n    askOutbox {\n      id\n      status\n      createdAt\n      responderId\n      peerHandle\n      query {\n        queryType\n        dataClass\n        prompt\n        purpose\n        actor {\n          kind\n          label\n        }\n      }\n    }\n  }\n": types.AskOutboxDocument,
@@ -884,6 +886,10 @@ export function gql(source: "\n  query GetFeedBadgeCount($actionLimit: Int, $sum
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  query GetPlanBadgeCount($first: Int) {\n    tasks(first: $first) {\n      edges {\n        node {\n          id\n          status\n        }\n      }\n    }\n    taskPendingChanges {\n      taskId\n    }\n  }\n"): (typeof documents)["\n  query GetPlanBadgeCount($first: Int) {\n    tasks(first: $first) {\n      edges {\n        node {\n          id\n          status\n        }\n      }\n    }\n    taskPendingChanges {\n      taskId\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query RefreshMediaUrls($urls: [String!]!) {\n    refreshMediaUrls(urls: $urls)\n  }\n"): (typeof documents)["\n  query RefreshMediaUrls($urls: [String!]!) {\n    refreshMediaUrls(urls: $urls)\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

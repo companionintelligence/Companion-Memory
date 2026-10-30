@@ -19,6 +19,7 @@ export const SETUP_SECRETS_REPO = (): string => process.env.SETUP_SECRETS_REPO ?
 export const SETUP_DATABASE_REPO = (): string => process.env.SETUP_DATABASE_REPO ?? 'ci/setup-database';
 export const SUMMARY_REPO = (): string => process.env.SUMMARY_REPO ?? 'ci/summary-service';
 export const HBPE_REPO = (): string => process.env.HBPE_REPO ?? 'ci/hbpe-service';
+export const POWERSYNC_REPO = (): string => process.env.POWERSYNC_REPO ?? 'ci/powersync';
 
 /** `TAG`: an explicit env override (Makefile exports it unconditionally, so
  * this is already correct whenever invoked via `make`), else the exact-match

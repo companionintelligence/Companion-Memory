@@ -135,6 +135,13 @@ export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
  * `MobileSearchDocumentDetailCron` knows it is current. Derived in SQL rather
  * than passed in, so none of the listeners or pipeline stages had to change.
  *
+ * A re-index that would leave the document as it is writes nothing: the
+ * `DO UPDATE ... WHERE` compares every stored column. PowerSync replicates this
+ * table, and it sends a phone a fresh copy of any row that is written, changed
+ * or not (measured 2026-10-30), so a no-op rewrite used to cost every phone a
+ * download -- one per entity on a full re-index. `updated_at` moves only when
+ * the document did.
+ *
  * Indexing an EVENT also moves its place's document forward: a place's time is its latest
  * visit (`entityTimeSql`), and the place itself is not re-indexed when a new event is held
  * there. The `place_visit` CTE writes only when the event is later than what the place
@@ -164,7 +171,7 @@ export function buildVectorUpsertStatement(
       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at
     ),
     document_row AS (
-      INSERT INTO ci_search.mobile_search_documents
+      INSERT INTO ci_search.mobile_search_documents AS doc
              (id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version)
       SELECT v.id, v.entity_type, v.entity_id, v.user_id, $${titleIndex}, $${bodyIndex},
              ${entityTimeSql('v')},
@@ -180,6 +187,10 @@ export function buildVectorUpsertStatement(
                     detail = EXCLUDED.detail,
                     detail_version = EXCLUDED.detail_version,
                     updated_at = now()
+              WHERE (doc.title, doc.body, doc.occurred_at, doc.related_id, doc.detail, doc.detail_version)
+                    IS DISTINCT FROM
+                    (EXCLUDED.title, EXCLUDED.body, EXCLUDED.occurred_at, EXCLUDED.related_id,
+                     EXCLUDED.detail, EXCLUDED.detail_version)
     ),
     place_visit AS (
       UPDATE ci_search.mobile_search_documents d

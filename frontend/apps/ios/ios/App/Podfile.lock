@@ -31,6 +31,7 @@ PODS:
   - CiCapacitorLocalHub (0.0.0):
     - Capacitor
     - GCDWebServer (~> 3.5)
+    - powersync-sqlite-core (~> 0.4.12)
     - SQLCipher (~> 4.9)
   - CiCapacitorSpeech (0.0.0):
     - Capacitor

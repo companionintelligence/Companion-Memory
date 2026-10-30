@@ -4,7 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import type { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
+import type { ObjectIdentifierService } from '@ci/domains/graph';
 import {
   BaseEntity,
   type CalendarEventService,

@@ -274,12 +274,12 @@ function useProgressiveSrc(src?: string | null, previewSrc?: string | null): str
  * Re-fetches the drawer's node from the server so its media links are fresh.
  *
  * Every media URL the drawer shows is a signed object-store link that expires
- * an hour after it was minted (`staticfiles.auth.signatureTTL`). The links
+ * five minutes after it was minted (`staticfiles.auth.signatureTTL`). The links
  * ride in whatever query put the entity in the cache — the search page, the
  * timeline — and stay there for as long as the tab does. A photo hides this:
  * its preview was fetched (and browser-cached) when the list rendered, and
  * the original's failure leaves the preview in place. A video is fetched
- * only when its drawer opens, so an hour after the search the object store
+ * only when its drawer opens, so minutes after the search the object store
  * answers 403 and the element reports an error — "media couldn't be loaded"
  * for a file that is fine. Measured 2026-09-22: a tampered or expired
  * signature returns 403 through the gateway; nothing else about the file

@@ -1,6 +1,13 @@
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const clearNativeReplicaSync = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  clearNativeReplicaSync,
+}));
+
 import {
   POWER_SYNC_LOGOUT_TEARDOWN_TIMEOUT_MS,
   bindPowerSyncDatabase,
@@ -34,6 +41,24 @@ describe('disconnectAndClearPowerSyncForLogout', () => {
     await expect(disconnectAndClearPowerSyncForLogout()).resolves.toBe(true);
     expect(db.disconnectAndClear).toHaveBeenCalledTimes(1);
     expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it("turns Android's background sync off before the replica goes", async () => {
+    const order: string[] = [];
+    clearNativeReplicaSync.mockImplementationOnce(async () => {
+      order.push('background sync off');
+    });
+    bindPowerSyncDatabase(
+      fakeDatabase({
+        disconnectAndClear: vi.fn(async () => {
+          order.push('replica cleared');
+        }),
+      }),
+    );
+
+    await disconnectAndClearPowerSyncForLogout();
+
+    expect(order).toEqual(['background sync off', 'replica cleared']);
   });
 
   it('resolves true immediately when no database is bound', async () => {

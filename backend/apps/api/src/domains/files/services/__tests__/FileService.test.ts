@@ -543,3 +543,78 @@ describe('FileService signed links — what the browser is told to do with the b
     expect(signed?.url).toMatch(/[?&]response-content-type=application%2Fpdf(&|$)/);
   });
 });
+
+describe('FileService.resignLinks — a fresh link for one that expired', () => {
+  const KEY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const OTHER = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const row = {
+    id: 'file-1',
+    userId: 'owner-1',
+    bucket: 'ci',
+    key: KEY,
+    contentType: 'image/jpeg',
+    filename: null,
+  };
+
+  function serviceWith(rows: Array<Record<string, unknown>>) {
+    const repo = { ...makeRepo(), find: jest.fn().mockResolvedValue(rows) };
+    const { service } = makeService(repo);
+
+    return { service, repo };
+  }
+
+  it('re-signs the same object, whatever form the app holds the old link in', async () => {
+    const { service, repo } = serviceWith([row]);
+    const old = `/ci/${KEY}?X-Amz-Expires=300&X-Amz-Signature=old`;
+
+    const fresh = await service.resignLinks(ownerCtx, [
+      `https://memory.example/static${old}`,
+      `/static${old}`,
+      old,
+    ]);
+
+    for (const link of fresh) {
+      expect(link).toMatch(new RegExp(`^/ci/${KEY}\\?`));
+      expect(link).toContain('X-Amz-Signature=');
+      expect(link).not.toContain('X-Amz-Signature=old');
+    }
+
+    // One lookup, scoped to the caller's own rows.
+    expect(repo.find).toHaveBeenCalledTimes(1);
+    expect(repo.find.mock.calls[0][0].where.userId).toBe('owner-1');
+  });
+
+  it('answers null for a link to someone else’s file, or to nothing of ours', async () => {
+    // The repository only returns the caller's rows; OTHER is not among them.
+    const { service } = serviceWith([row]);
+
+    const fresh = await service.resignLinks(ownerCtx, [
+      `/static/ci/${OTHER}?X-Amz-Signature=x`,
+      'https://elsewhere.example/picture.jpg',
+      `/static/ci/not-a-uuid?X-Amz-Signature=x`,
+      `/static/ci/${KEY}/extra?X-Amz-Signature=x`,
+      `/static/ci/${KEY}?X-Amz-Signature=x`,
+    ]);
+
+    expect(fresh.slice(0, 4)).toEqual([null, null, null, null]);
+    expect(fresh[4]).toMatch(new RegExp(`^/ci/${KEY}\\?`));
+  });
+
+  it('does not query at all when no link could name a file', async () => {
+    const { service, repo } = serviceWith([]);
+
+    await expect(service.resignLinks(ownerCtx, ['https://elsewhere.example/a.jpg', ''])).resolves.toEqual([
+      null,
+      null,
+    ]);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('a row in another bucket is not the object the link named', async () => {
+    const { service } = serviceWith([{ ...row, bucket: 'other-bucket' }]);
+
+    await expect(service.resignLinks(ownerCtx, [`/static/ci/${KEY}?X-Amz-Signature=x`])).resolves.toEqual([
+      null,
+    ]);
+  });
+});

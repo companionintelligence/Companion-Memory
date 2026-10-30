@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   // One entry per connector the provider builds: the callback it passes for
   // "this server runs no PowerSync service".
   syncOffCallbacks: [] as Array<(origin: string) => void>,
+  setSyncUnavailableFor: vi.fn(),
+  // The phone apps' background replica sync, and the order things reach it in.
+  events: [] as string[],
+  appState: null as ((isActive: boolean) => void) | null,
 }));
 
 vi.mock('@/hooks', () => ({
@@ -27,7 +31,28 @@ vi.mock('@/hooks', () => ({
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   isNativePlatform: () => mocks.native,
+  claimNativeReplica: async () => {
+    mocks.events.push('claim');
+  },
+  configureNativeReplicaSync: async (options: { databaseFile: string; startOptions: string }) => {
+    mocks.events.push(`configure ${options.databaseFile} ${options.startOptions}`);
+  },
+  releaseNativeReplica: async () => {
+    mocks.events.push('release');
+  },
+  clearNativeReplicaSync: async () => {
+    mocks.events.push('clear');
+  },
+  addAppStateListener: async (listener: (isActive: boolean) => void) => {
+    mocks.appState = listener;
+
+    return () => {
+      mocks.appState = null;
+    };
+  },
 }));
+
+vi.mock('./backgroundSync', () => ({ replicaStartOptions: () => 'START' }));
 
 vi.mock('./legacyIndexedDb', () => ({
   purgeLegacyIndexedDbReplica: mocks.purgeLegacyIndexedDbReplica,
@@ -61,6 +86,7 @@ vi.mock('./session', () => ({
   bindPowerSyncDatabase: vi.fn(),
   measurePowerSyncSizeBytes: vi.fn().mockResolvedValue(null),
   setReplicaOpenState: vi.fn(),
+  setSyncUnavailableFor: mocks.setSyncUnavailableFor,
 }));
 
 vi.mock('./connector', () => ({
@@ -94,11 +120,21 @@ beforeEach(() => {
   setApiBaseUrl('https://memory-a.example');
   mocks.native = false;
   mocks.syncOffCallbacks.length = 0;
+  mocks.events.length = 0;
+  mocks.appState = null;
+  mocks.setSyncUnavailableFor.mockReset();
   mocks.purgeLegacyIndexedDbReplica.mockReset().mockResolvedValue([]);
 
   for (const method of Object.values(mocks.nativeDatabase)) {
     method.mockReset().mockResolvedValue(undefined);
   }
+
+  mocks.nativeDatabase.connect.mockImplementation(async () => {
+    mocks.events.push('connect');
+  });
+  mocks.nativeDatabase.disconnect.mockImplementation(async () => {
+    mocks.events.push('disconnect');
+  });
 });
 
 afterEach(() => {
@@ -130,6 +166,55 @@ describe('PowerSyncProvider', () => {
 
     await waitFor(() => expect(mocks.nativeDatabase.disconnect.mock.calls.length).toBeGreaterThan(1));
     expect(mocks.nativeDatabase.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims the replica from Android background sync and hands it the config before connecting', async () => {
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+
+    await waitFor(() => expect(mocks.events).toContain('connect'));
+
+    expect(mocks.events.slice(mocks.events.indexOf('claim'))).toEqual([
+      'claim',
+      'configure ci-powersyncSQLite.db START',
+      'connect',
+    ]);
+  });
+
+  it('going to the background disconnects and then releases the replica; coming back claims it again', async () => {
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+    await waitFor(() => expect(mocks.events).toContain('connect'));
+    await waitFor(() => expect(mocks.appState).not.toBeNull());
+    mocks.events.length = 0;
+
+    act(() => mocks.appState?.(false));
+    await waitFor(() => expect(mocks.events).toEqual(['disconnect', 'release']));
+
+    mocks.events.length = 0;
+    act(() => mocks.appState?.(true));
+    await waitFor(() => expect(mocks.events).toContain('connect'));
+    expect(mocks.events.indexOf('claim')).toBeLessThan(mocks.events.indexOf('connect'));
+  });
+
+  it('turns background sync off on a server that runs no PowerSync service', async () => {
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+    await waitFor(() => expect(mocks.nativeDatabase.connect).toHaveBeenCalledTimes(1));
+
+    act(() => latestSyncOffCallback()('https://memory-a.example'));
+
+    await waitFor(() => expect(mocks.events).toContain('clear'));
+  });
+
+  it('tells Settings which server runs no PowerSync service', async () => {
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+
+    await waitFor(() => expect(mocks.nativeDatabase.connect).toHaveBeenCalledTimes(1));
+    expect(mocks.setSyncUnavailableFor).toHaveBeenLastCalledWith(null);
+
+    act(() => latestSyncOffCallback()('https://memory-a.example'));
+
+    await waitFor(() =>
+      expect(mocks.setSyncUnavailableFor).toHaveBeenLastCalledWith('https://memory-a.example'),
+    );
   });
 
   it('connects again when the app points at a different server', async () => {

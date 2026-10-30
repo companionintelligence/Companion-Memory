@@ -336,9 +336,10 @@ mode is "briefly stored twice", never "stored nowhere".
 
 These are deliberate follow-up slices, not oversights:
 
-- **Background flushing.** This pass flushes opportunistically while the app is in the
-  foreground. An Android foreground service (and the iOS background-task equivalent) is
-  future work.
+- **Background flushing of everything.** The web side flushes the whole queue while the app
+  is in the foreground. Both phone apps also upload the tracker's location fixes with the app
+  closed (see "Background upload of location fixes" below; iOS uncompiled); other kinds still
+  wait for an app open.
 - **Resumable large-media upload.** Payloads are ordinary JSON today; chunked/resumable
   media transfer is not implemented.
 - **A recovery flow for a lost database key.** See `OutboxKeyLostException` above.
@@ -516,7 +517,90 @@ rest, one while moving. `adb shell dumpsys activity service com.google.android.g
 "Geofencing:" lists the registered fence (empty = none). `adb shell dumpsys batterystats
 --charged` after a day: the `gnss` line should cover the moving minutes, not the whole
 period. Logcat tags: `LocationService`, `LocationPlatform`, `LocationGeofence`,
-`LocationRestore`.
+`LocationRestore`, `OutboxUpload`.
+
+### Background upload of location fixes (Android; iOS uncompiled)
+
+Without this, a trip recorded with the app closed sat in the outbox until the next app open,
+and the appliance showed nothing of it. Now `upload/OutboxUploadWorker` (WorkManager, unique
+work `ci-outbox-upload`, network required) sends the fixes on its own:
+
+- **When.** The tracker asks for an upload after each queued fix (two-minute delay, so a
+  drive's fixes go out in batches rather than one request each) and when the phone comes to
+  rest (no delay). KEEP policy: one scheduled run at a time; a run re-lists the queue until
+  it is empty, so fixes queued mid-run go out with it.
+- **Where and as whom.** The origin is the `apiBaseUrl` the web side passes when it arms
+  Always; the key is `ci.apiKey` from `CompanionSecureStore`, the one the app signs in with.
+  A row goes out only when its owner stamp equals `OutboxOwnerStamp.of(origin, key)`, a port
+  of `outboxOwnerStamp()` pinned to fixtures from the TypeScript, so nothing queued under one
+  account is sent with another's key. Rows of other kinds are left to the web flusher.
+- **Failures.** `OutboxUploader` mirrors `flushOutbox`: a 2xx deletes the row, a 4xx outside
+  the retryable set parks it in `needs_attention`, anything else ends the run with
+  `Result.retry()` (exponential backoff from one minute, up to ten attempts) without spending
+  the row's attempts. Then `POST /api/v1/ingest/finish` with `reverse_position` and
+  `estimate_locations`; the debt is persisted, so a finish that failed is retried by the next
+  run even with nothing new to send.
+- **The setting.** Settings -> Location -> "Upload in the background", on by default,
+  stored natively (`ci_local_hub_upload` SharedPreferences) through `getBackgroundUpload` /
+  `setBackgroundUpload`. Off cancels the pending run; on schedules one at once.
+- **iOS (written 2026-10-30, UNCOMPILED -- build and test on a Mac first).** `OutboxUpload.swift`
+  (owner stamp port, uploader; type-checked and exercised under Linux Swift 5.10 with a harness
+  porting the Android tests, stamp fixtures included) and `OutboxBackgroundUpload.swift`
+  (settings in UserDefaults, URLSession transport, `beginBackgroundTask`). It uploads right after
+  the tracker queues a fix -- iOS relaunches the app in the background for each significant
+  change, and significant changes are minutes apart, so there is nothing to batch -- and once
+  more on every `ReplicaBackgroundSync` refresh, which catches fixes left when the network was
+  down. The tracking config now carries `apiBaseUrl` on iOS too. Logs as `[OutboxUpload]`.
+
+When the app is open as well, both sides can send the same row; the appliance drops a
+position whose timestamp it already holds, so it is stored once.
+
+## Background replica sync (Android; iOS uncompiled)
+
+The PowerSync replica is synced by the web app's PowerSync client, which only runs while the app
+is on screen. `replica/` keeps it current while the app is closed, so the copy (offline search
+included) is fresh when the app opens rather than catching up then.
+
+- **What runs.** `ReplicaSyncWorker` (WorkManager, unique periodic work `ci-replica-background-sync`,
+  every 30 minutes, network + battery not low) runs `ReplicaSyncRunner`: fetch a token with the
+  stored API key (`GET /api/powersync/token?cutoff=`), open the replica as the Capacitor SQLite
+  plugin does (`AndroidReplicaCore`: SQLCipher, the passphrase under `secret` in that plugin's
+  `sqlite_encrypted_shared_prefs`, `load_extension('libpowersync.so', ...)`), then drive
+  PowerSync's core exactly as `@powersync/common`'s `rustSyncIteration` does -- `start` with the
+  app's own start options, `POST <endpoint>/sync/stream`, `connection`/`established`, each line
+  as `line_text` -- to the first `DidCompleteSync`, and `stop`. The core does all the bucket
+  work; native code only moves bytes. Four-minute budget per run.
+- **Never alongside the app.** `ReplicaSyncGate`: the app claims the replica before its client
+  connects (`claimReplica` stops a run in progress by closing its stream, and waits for it), and
+  releases it once disconnected on going to the background (`releaseReplica`) or when the
+  activity is destroyed. A run starts only while the replica is released. In memory on purpose:
+  a dead process took the WebView with it.
+- **Skipped** with local writes waiting to upload (`ps_crud` non-empty): uploads are the app's
+  job through its GraphQL connector, and the core holds checkpoints back over them anyway.
+- **Config.** The web app's provider calls `configureBackgroundSync` on every connect with the
+  Memory origin, the replica file, the working-set window and the start options
+  (`frontend/apps/web/src/api/powersync/backgroundSync.ts`; its schema must be the app's).
+  `clearBackgroundSync` on sign-out and on a Memory without sync.
+- **Testing on a device (debug builds only):** `adb shell am broadcast -n
+  com.ci.memory/com.companionintelligence.localhub.replica.ReplicaSyncNowReceiver -a
+  com.companionintelligence.localhub.debug.REPLICA_SYNC_NOW`, then `adb logcat -s ReplicaSync`.
+  The service logs the run under user agent `ci-replica-background-sync`.
+- **iOS (written 2026-10-30, UNCOMPILED -- build and test on a Mac first).**
+  `ReplicaSync.swift` (config, gate, runner; type-checked and exercised under Linux Swift 5.10
+  with a harness porting the Android tests) and `ReplicaBackgroundSync.swift` (SQLCipher core,
+  URLSession transport, `BGAppRefreshTask` `com.companionintelligence.localhub.replica-sync`;
+  not compiled anywhere). PowerSync's core is registered natively through `CiPowerSyncCore.c`
+  (the podspec now depends on `powersync-sqlite-core`), because a background launch runs no
+  JavaScript. The app registers the task in `AppDelegate` and declares it in `Info.plist`
+  (`BGTaskSchedulerPermittedIdentifiers`, background mode `fetch`). `Podfile.lock` was edited by
+  hand for the new dependency; run `pod install` to refresh its checksum.
+  Differences from Android: iOS decides when the task runs (no sooner than 30 minutes, often
+  much later) and allows about 30 seconds (25 s budget here). The replica passphrase is a
+  Keychain item the SQLite plugin writes with the default `WhenUnlocked`; `ReplicaKeychain`
+  reseals it `AfterFirstUnlockThisDeviceOnly` (at launch and on every config handover) and
+  excludes `Library/LocalDatabase` from backups, so a run can sync with the phone locked and
+  a restored phone re-syncs instead of carrying the key over. Trigger a run from Xcode (app paused):
+  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.companionintelligence.localhub.replica-sync"]`.
 
 ## Package layout
 
