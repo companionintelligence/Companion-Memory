@@ -112,7 +112,7 @@ function ColorSwatchEditor({
               placeholder="oklch(0.5 0.1 250) or #ff0000"
               value={localColor}
               onChange={(e) => handleInputChange(e.target.value)}
-              className="text-xs font-mono"
+              className="text-base md:text-xs font-mono"
             />
           </div>
 

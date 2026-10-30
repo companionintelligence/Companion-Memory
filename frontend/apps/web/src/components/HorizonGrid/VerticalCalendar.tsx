@@ -383,7 +383,7 @@ function MoveEventForm({
         aria-label={`Move${suffix} to date`}
         value={date}
         onChange={(change) => setDate(change.target.value)}
-        className="h-8 w-[9.5rem] text-xs"
+        className="h-8 w-[11.5rem] text-base md:w-[9.5rem] md:text-xs"
       />
       {allDay ? null : (
         <Input
@@ -391,7 +391,7 @@ function MoveEventForm({
           aria-label={`Move${suffix} to time`}
           value={clock}
           onChange={(change) => setClock(change.target.value)}
-          className="h-8 w-[6.5rem] text-xs"
+          className="h-8 w-[7.5rem] text-base md:w-[6.5rem] md:text-xs"
         />
       )}
       <Button type="submit" size="sm" className="h-8" aria-label={name ? `Move ${name}` : undefined}>
