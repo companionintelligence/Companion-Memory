@@ -23,6 +23,7 @@ WORKDIR /app
 # Manifests first. This layer changes only when a dependency changes, so
 # the install below is reused across source-only rebuilds.
 COPY .yarnrc.yml ./
+COPY .yarn/patches/ ./.yarn/patches/
 COPY package.json ./
 COPY yarn.lock ./
 
