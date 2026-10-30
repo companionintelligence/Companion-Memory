@@ -30,6 +30,7 @@ export {
   isNativePlatform,
   isTauriPlatform,
   needsNativeCloudConnect,
+  pageServedByApi,
   persistApiBaseUrl,
   resolveHttpOrigin,
   setApiBaseUrl,

@@ -15,6 +15,7 @@ import {
   GraphUtilityService,
   type ItemService,
   RelationshipEntity,
+  type ProductModelService,
 } from '@ci/domains/memory';
 import { ConceptRemovedEvent } from '@ci/domains/memory/events';
 import { UserEntity } from '@ci/domains/user';
@@ -159,6 +160,8 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
       graphEntities.people,
       graphEntities.places,
       graphEntities.concepts,
+      // No case here names a product, so the tool never reaches for it.
+      {} as unknown as ProductModelService,
       logger(),
     );
   });

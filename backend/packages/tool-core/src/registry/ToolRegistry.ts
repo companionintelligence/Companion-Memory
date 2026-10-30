@@ -1,6 +1,6 @@
 import type { ToolRequestContext } from '../context';
 import { coerceArgumentsToSchema } from '../core/coerceArguments';
-import type { ToolHandle } from '../core/ToolHandle';
+import type { ToolCallRefusal, ToolHandle } from '../core/ToolHandle';
 import {
   canonicalizeExecutableToolName,
   intentToolName,
@@ -551,7 +551,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     tool: TTool,
     context: ToolInvocationContext,
     input: unknown,
-  ): Promise<string | undefined> {
+  ): Promise<string | ToolCallRefusal | undefined> {
     if (!tool.checkCall) {
       return undefined;
     }
@@ -660,20 +660,23 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     const invalid = tool.checkInput?.(coerced) ?? (await this.callRefusal(tool, context, coerced));
 
     if (invalid !== undefined) {
+      const refusal =
+        typeof invalid === 'string' ? { code: 'TOOL_INVALID_INPUT', message: invalid } : invalid;
+
       // A card the owner can only approve into a failure is not a question worth asking them. The
       // caller hears why now, while it can still correct the call.
       this.logger.warn(`Refused to queue a call that could not run: ${toolName}`, {
         toolName,
         intent: tool.schema.name,
         userId: context.userId,
-        reason: invalid,
+        reason: refusal.message,
       });
 
       return {
         success: false,
         error: {
-          code: 'TOOL_INVALID_INPUT',
-          message: `Nothing was queued for confirmation: ${invalid}`,
+          code: refusal.code,
+          message: `Nothing was queued for confirmation: ${refusal.message}`,
           // The same input fails the same way; only a corrected call can succeed.
           retryable: false,
         },

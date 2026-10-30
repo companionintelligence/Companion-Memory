@@ -340,6 +340,8 @@ export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
 // objects and then could not delete its records.
 export { StoredObjectsDeletedError, type PurgedFiles } from './services/filePurge';
+// What `ProductModelService.purge` answers with: the models that went and the records only unlinked.
+export type { PurgedProducts } from './services/productPurge';
 // What a purge of content or of an event did about the stored files it wrapped: the ones it deleted,
 // and the ones it kept because something else still uses them.
 export type { KeptFile, WrappedFilesPurged } from './services/wrappedFilePurge';

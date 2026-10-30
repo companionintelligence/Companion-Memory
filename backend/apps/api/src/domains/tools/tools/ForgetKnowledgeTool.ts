@@ -18,6 +18,7 @@ import {
   ItemService,
   PersonService,
   PlaceService,
+  ProductModelService,
   RelationshipEntity,
   StoredObjectsDeletedError,
   type KeptFile,
@@ -32,6 +33,8 @@ import {
   PersonRemovedEvent,
   PlaceRemovedEvent,
 } from '@ci/domains/memory/events';
+
+import type { ToolCallRefusal } from '@ci/tool-core';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolError, ToolExecutionContext } from '../core/types';
@@ -147,6 +150,11 @@ const MAX_KEPT_FILES_LISTED = 10;
 /** How many ids of one kind a line lists. A file one message names a hundred times over, or an album of a thousand photos, is still one line. */
 const MAX_IDS_LISTED = 5;
 
+/** "2 things", "1 sighting", or `null` for none. */
+function counted(count: number, noun: string): string | null {
+  return count > 0 ? `${count} ${noun}${count === 1 ? '' : 's'}` : null;
+}
+
 function listIds(ids: string[]): string {
   return ids.length > MAX_IDS_LISTED
     ? `${ids.slice(0, MAX_IDS_LISTED).join(', ')} and ${ids.length - MAX_IDS_LISTED} more`
@@ -157,19 +165,21 @@ function listIds(ids: string[]): string {
  * The graph types archive cannot hide, under the word a refusal names them by.
  *
  * Archive only flips the `ci.entities` half of a node (`deactivateEntities`). A message, a file, a
- * content record (a photo's, a document's) and a thing are each a detail row that the half does not
- * reach, and search, the explorer and chat read the detail rows, so an archived one went on showing
- * while the call reported it archived. Archive refuses them and says to delete them instead. An
- * event has an archive of its own, the trash, and a person, place or concept IS its `ci.entities`
- * row.
+ * content record (a photo's, a document's), a thing and a product are each a detail row that the
+ * half does not reach, and search, the explorer and chat read the detail rows, so an archived one
+ * went on showing while the call reported it archived. Archive refuses them and says to delete them
+ * instead. An event has an archive of its own, the trash, and a person, place or concept IS its
+ * `ci.entities` row.
+ *
+ * Only a node that HAS its detail row is refused ({@link GraphUtilityService.getNodesBackedByDetailRows}).
+ * A node graph ingest wrote on its own, or a legacy `Object` or `Thing` node, has nothing else to
+ * hide, so archive hides it completely, and reversibly, as before.
  */
 const ARCHIVE_CANNOT_HIDE: Readonly<Record<string, string>> = {
   Communication: 'message',
   File: 'file',
   Content: 'content',
   Item: 'thing',
-  Object: 'thing',
-  Thing: 'thing',
   // The catalog model a thing is an instance of: a `ci.product_models` row, listed beside things.
   Product: 'thing',
 };
@@ -199,6 +209,9 @@ function archiveRefusal(
 
   return `Archive cannot hide messages, files, content or things: archiving one only marks its graph node and it would still show in search, the explorer and chat. Nothing was changed. Refused: ${named}. Deleting them is the only way to remove them: ask the owner first, because mode "archive_and_delete" deletes them for good and cannot be undone.`;
 }
+
+/** The code a refused archive answers under, before it is queued and when it runs. */
+const ARCHIVE_REFUSED = 'ARCHIVE_REFUSED';
 
 /** An archive {@link archiveRefusal} turned down. Nothing was written, and the same call is refused again. */
 class ArchiveRefusedError extends Error {
@@ -303,6 +316,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     private readonly people: PersonService,
     private readonly places: PlaceService,
     private readonly concepts: ConceptService,
+    private readonly products: ProductModelService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -312,10 +326,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   /**
    * Refuses an archive of a message, file, content record or thing before it is queued for
    * confirmation (see `ToolHandle.checkCall`), so the owner is never asked to approve a call that
-   * can only be refused. Ids that aren't the caller's, or don't exist, are left to `execute`, which
-   * reports them as not found.
+   * can only be refused. It answers under `ARCHIVE_REFUSED`, the code `execute` gives the same call.
+   * Ids that aren't the caller's, or don't exist, are left to `execute`, which reports them as not
+   * found.
    */
-  async checkCall(context: RequestContext, input: unknown): Promise<string | undefined> {
+  async checkCall(context: RequestContext, input: unknown): Promise<ToolCallRefusal | undefined> {
     const parsed = ForgetKnowledgeInputSchema.safeParse(input);
 
     if (!parsed.success || !context.userId || parsed.data.mode === 'archive_and_delete') {
@@ -328,7 +343,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       return undefined;
     }
 
-    return archiveRefusal(await this.graphUtility.getNodesByIds(entityIds, context.userId));
+    const refusal = archiveRefusal(
+      await this.graphUtility.getNodesBackedByDetailRows(entityIds, context.userId),
+    );
+
+    return refusal === undefined ? undefined : { code: ARCHIVE_REFUSED, message: refusal };
   }
 
   protected validateInput(input: unknown): ForgetKnowledgeInput {
@@ -388,7 +407,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     // Before anything is written, so a refused call changes nothing. `checkCall` turned this down
     // before it was queued; a call queued before that, or run without asking, is turned down here.
-    const refusal = hardDelete ? undefined : archiveRefusal(uniqueEntitySnapshots.map((entry) => entry.node));
+    // Read by id and in any state, not from the snapshots: a message archived before archive refused
+    // messages is inactive, so it has no snapshot, and still shows.
+    const refusal = hardDelete
+      ? undefined
+      : archiveRefusal(await this.graphUtility.getNodesBackedByDetailRows(entityIds, ownerId));
 
     if (refusal) {
       throw new ArchiveRefusedError(refusal);
@@ -550,6 +573,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       await this.purgePlaces(nodes, ownerId, destroyed, warnings);
       await this.purgeConcepts(nodes, ownerId, destroyed, warnings);
       await this.purgeItems(nodes, ownerId, destroyed, warnings);
+      // After the items, so a thing named in the same call is gone, not just unlinked.
+      await this.purgeProducts(nodes, ownerId, destroyed, warnings);
       await this.purgeFiles(nodes, ownerId, destroyed, warnings, contentsOnly);
     } catch (error) {
       throw destroyed.size || contentsOnly.size
@@ -913,6 +938,46 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
+   * Delete catalog products for good, through {@link ProductModelService.purge}: the
+   * `ci.product_models` row, the models merged into it, its barcodes, its search rows and the node.
+   *
+   * The model points at its `Product` node with no `ON DELETE` action, so the generic delete of the
+   * node was refused, and a product could not be forgotten in any mode. The things, sightings and
+   * receipt lines that name the model stay, without it: their keys are `ON DELETE SET NULL`. That is
+   * said in `warnings`, since they changed without being named.
+   *
+   * A `Product` node with no model behind it goes on to the generic path, where nothing refuses it.
+   */
+  private async purgeProducts(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+    warnings: string[],
+  ): Promise<void> {
+    const productIds = nodes.filter((node) => node.entity_type === 'Product').map((node) => node.entity_id);
+
+    if (productIds.length === 0) {
+      return;
+    }
+
+    const purged = await this.products.purge({ userId: ownerId }, productIds);
+
+    purged.nodeIds.forEach((id) => destroyed.add(id));
+
+    const unlinked = [
+      counted(purged.unlinked.things, 'thing'),
+      counted(purged.unlinked.sightings, 'sighting'),
+      counted(purged.unlinked.receiptLines, 'receipt line'),
+    ].filter((part): part is string => part !== null);
+
+    if (unlinked.length > 0) {
+      warnings.push(
+        `Kept, and no longer linked to the deleted product: ${unlinked.length > 1 ? `${unlinked.slice(0, -1).join(', ')} and ${unlinked.at(-1)}` : unlinked[0]}.`,
+      );
+    }
+  }
+
+  /**
    * Delete files for good, through {@link FileService.purge}: the node, the stored
    * file it shadows, every variant under it, their chunks and search rows, and the
    * objects in the object store.
@@ -991,7 +1056,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    */
   protected handleError(error: unknown): ToolError {
     if (error instanceof ArchiveRefusedError) {
-      return { code: 'ARCHIVE_REFUSED', message: error.message, retryable: false };
+      return { code: ARCHIVE_REFUSED, message: error.message, retryable: false };
     }
 
     const partial = error instanceof PartialForgetError ? error : null;

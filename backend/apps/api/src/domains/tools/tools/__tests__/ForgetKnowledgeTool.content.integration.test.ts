@@ -19,6 +19,7 @@ import {
   type FileService,
   type ItemService,
   RelationshipEntity,
+  type ProductModelService,
 } from '@ci/domains/memory';
 import { ConceptRemovedEvent, ContentRemovedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
 import { UserEntity } from '@ci/domains/user';
@@ -174,6 +175,8 @@ describeWithDb(`memory.forget on a Content node, against Postgres (${availabilit
       services.people,
       services.places,
       services.concepts,
+      // No case here names a product, so the tool never reaches for it.
+      {} as unknown as ProductModelService,
       logger(),
     );
   });

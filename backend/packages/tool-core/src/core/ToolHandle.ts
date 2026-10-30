@@ -15,6 +15,12 @@ import type { IntentDefinition, IntentPrivacy, ToolResult } from './types';
  * end-to-end — the API instantiates it as `ToolRegistryCore<BaseTool>`, and `getTool` there still
  * returns a `BaseTool`.
  */
+/** A {@link ToolHandle.checkCall} refusal under the error code `execute` gives the same call. */
+export interface ToolCallRefusal {
+  code: string;
+  message: string;
+}
+
 export interface ToolHandle<TOutput = unknown> {
   /** Every tool is an intent; the schema IS the curated intent definition. */
   readonly schema: IntentDefinition;
@@ -56,8 +62,12 @@ export interface ToolHandle<TOutput = unknown> {
    * message, which archive cannot hide), and that refusal belongs to the caller now, not to an
    * Approvals card that can only fail. A lookup that fails is not a refusal: the call is queued as
    * before and `execute` decides. Optional.
+   *
+   * A plain reason is answered as `TOOL_INVALID_INPUT`. A tool whose `execute` refuses the same call
+   * under a code of its own answers a {@link ToolCallRefusal}, so a caller sees one code for one
+   * refusal whether the owner's dial queued the call or ran it.
    */
-  checkCall?(context: ToolRequestContext, input: unknown): Promise<string | undefined>;
+  checkCall?(context: ToolRequestContext, input: unknown): Promise<string | ToolCallRefusal | undefined>;
 
   execute(context: ToolRequestContext, input: unknown): Promise<ToolResult<TOutput>>;
 }

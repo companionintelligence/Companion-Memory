@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 
 import { setApiKey } from '@ci/common/src/utils/apiAuth';
-import { setApiBaseUrl } from '@ci/common/src/utils/apiBase';
+import { pageServedByApi, setApiBaseUrl } from '@ci/common/src/utils/apiBase';
 import {
   ConnectionModeProvider,
   LOCAL_PROBE_TIMEOUT_MS,
@@ -37,6 +37,25 @@ afterEach(() => {
   vi.useRealTimers();
   setApiBaseUrl('');
   setApiKey(null);
+});
+
+// What LazyView's Try again asks first: whether a reload fetches the page's code from Memory at all.
+describe('pageServedByApi', () => {
+  it('is true on the web, where Memory serves the page and the API calls are same-origin', () => {
+    setWindow({ location: { origin: 'https://memory.example.net' } });
+
+    expect(pageServedByApi()).toBe(true);
+
+    setApiBaseUrl('https://memory.example.net');
+    expect(pageServedByApi()).toBe(true);
+  });
+
+  it('is false in a native shell, which carries the code and only calls Memory', () => {
+    setWindow({ location: { origin: 'capacitor://localhost' } });
+    setApiBaseUrl('https://memory.example.net');
+
+    expect(pageServedByApi()).toBe(false);
+  });
 });
 
 // What LazyView's Try again asks: whether Memory answers now, one fresh request each time.

@@ -229,6 +229,23 @@ describe('ToolRegistry.executeTool — a call the tool refuses after a lookup is
     expect((tool as any).execute).not.toHaveBeenCalled();
   });
 
+  it("answers the tool's own code when its refusal names one, as execute would", async () => {
+    const checkCall = jest.fn(async () => ({
+      code: 'ARCHIVE_REFUSED',
+      message: 'Archive cannot hide messages',
+    }));
+    const { registry, propose } = await harnessWithCallCheck(checkCall);
+
+    const result = await registry.executeTool('memory_forget', context(), { entityIds: ['e-1'] });
+
+    expect(result.error).toStrictEqual({
+      code: 'ARCHIVE_REFUSED',
+      message: 'Nothing was queued for confirmation: Archive cannot hide messages',
+      retryable: false,
+    });
+    expect(propose).not.toHaveBeenCalled();
+  });
+
   it('queues as before when the tool has no reason to refuse', async () => {
     const checkCall = jest.fn(async () => undefined);
     const { registry, propose } = await harnessWithCallCheck(checkCall);

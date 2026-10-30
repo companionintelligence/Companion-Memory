@@ -14,6 +14,7 @@ import {
   type KeptFile,
   type PersonService,
   type PlaceService,
+  type ProductModelService,
   type PurgedFiles,
   type RelationshipEntity,
   type WrappedFilesPurged,
@@ -129,7 +130,15 @@ function expectArchiveRefused(
 /** Builds a jest-mock GraphUtilityService double with a controllable node/relationship table. */
 function makeGraphUtility(
   options: {
-    nodes?: Record<string, { relationships?: RelationshipEntity[]; entityType?: string }>;
+    /**
+     * `detailRow: false` is a node with no detail row behind it (a legacy `Object`, a node graph
+     * ingest wrote on its own). `inactive` is one archived earlier: the default snapshot and
+     * `getNodesByIds` do not see it, the detail-row lookup does.
+     */
+    nodes?: Record<
+      string,
+      { relationships?: RelationshipEntity[]; entityType?: string; detailRow?: boolean; inactive?: boolean }
+    >;
     relationshipsById?: Record<string, RelationshipEntity>;
   } = {},
 ) {
@@ -139,9 +148,13 @@ function makeGraphUtility(
   // Edges come back only when asked for, as the real snapshot has it: a double that ignored the
   // option would hide exactly what the tool decides about them.
   const collectEntitySnapshot = jest.fn(
-    async (entityId: string, _ownerId?: string, snapshotOptions: { includeRelationships?: boolean } = {}) => {
+    async (
+      entityId: string,
+      _ownerId?: string,
+      snapshotOptions: { includeRelationships?: boolean; includeInactive?: boolean } = {},
+    ) => {
       const entry = nodes[entityId];
-      if (!entry) {
+      if (!entry || (entry.inactive && !snapshotOptions.includeInactive)) {
         return { node: null, relationships: [] };
       }
 
@@ -161,7 +174,23 @@ function makeGraphUtility(
   const deactivateEntities = jest.fn().mockResolvedValue(0);
   const deactivateRelationships = jest.fn().mockResolvedValue(0);
   const getNodesByIds = jest.fn(async (entityIds: string[]) =>
-    entityIds.filter((id) => nodes[id]).map((id) => fakeNode(id, nodes[id].entityType)),
+    entityIds
+      .filter((id) => nodes[id] && !nodes[id].inactive)
+      .map((id) => fakeNode(id, nodes[id].entityType)),
+  );
+  // The kinds whose record is a detail row, as the real lookup's CASE has them, in any state.
+  const getNodesBackedByDetailRows = jest.fn(async (entityIds: string[]) =>
+    entityIds
+      .filter((id) => {
+        const entry = nodes[id];
+
+        return (
+          entry !== undefined &&
+          entry.detailRow !== false &&
+          ['Item', 'Communication', 'Content', 'File', 'Product'].includes(entry.entityType ?? '')
+        );
+      })
+      .map((id) => fakeNode(id, nodes[id].entityType)),
   );
 
   return {
@@ -170,6 +199,7 @@ function makeGraphUtility(
     deactivateEntities,
     deactivateRelationships,
     getNodesByIds,
+    getNodesBackedByDetailRows,
   };
 }
 
@@ -360,6 +390,28 @@ function makeConcepts(purgeableConceptIds: string[] = [], duplicatesOf: Record<s
   return { purge };
 }
 
+/**
+ * Stand-in for `ProductModelService`. `purge` takes every id that has a `ci.product_models` row
+ * (`purgeableNodeIds`) and answers with the ones it took and with what it only unlinked.
+ */
+function makeProducts(
+  purgeableNodeIds: string[] = [],
+  unlinked: { things: number; sightings: number; receiptLines: number } = {
+    things: 0,
+    sightings: 0,
+    receiptLines: 0,
+  },
+) {
+  const purgeable = new Set(purgeableNodeIds);
+  const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => {
+    const nodeIds = ids.filter((id) => purgeable.has(id));
+
+    return { nodeIds, productIds: nodeIds.map((id) => `model-of-${id}`), unlinked };
+  });
+
+  return { purge };
+}
+
 /** Every collaborator the tool takes besides the graph, by name, so a case overrides only what it is about. */
 interface Collaborators {
   search: ReturnType<typeof makeSearchIndex>;
@@ -371,6 +423,7 @@ interface Collaborators {
   people: ReturnType<typeof makePeople>;
   places: ReturnType<typeof makePlaces>;
   concepts: ReturnType<typeof makeConcepts>;
+  products: ReturnType<typeof makeProducts>;
 }
 
 function toolWith(graphUtility: ReturnType<typeof makeGraphUtility>, overrides: Partial<Collaborators> = {}) {
@@ -384,6 +437,7 @@ function toolWith(graphUtility: ReturnType<typeof makeGraphUtility>, overrides: 
     people: makePeople(),
     places: makePlaces(),
     concepts: makeConcepts(),
+    products: makeProducts(),
     ...overrides,
   };
 
@@ -398,6 +452,7 @@ function toolWith(graphUtility: ReturnType<typeof makeGraphUtility>, overrides: 
     collaborators.people as unknown as PersonService,
     collaborators.places as unknown as PlaceService,
     collaborators.concepts as unknown as ConceptService,
+    collaborators.products as unknown as ProductModelService,
     logger(),
   );
 }
@@ -3394,16 +3449,44 @@ describe('ForgetKnowledgeTool archive, which cannot hide messages, files, conten
     expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['Object', 'thing'],
-    ['Thing', 'thing'],
-    ['Product', 'thing'],
-  ])('refuses a %s node as a thing', async (entityType, kind) => {
-    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType } } });
+  it('refuses a Product node with its catalog model as a thing', async () => {
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Product' } } });
 
     const result = await makeTool(graphUtility).execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
-    expectArchiveRefused(result, `${kind} ${E1}`);
+    expectArchiveRefused(result, `thing ${E1}`);
+  });
+
+  it.each([
+    ['Object', true],
+    ['Thing', true],
+    ['Item', false],
+    ['Communication', false],
+    ['Content', false],
+  ])(
+    'archives a %s node that has no detail row behind it, which archive hides completely',
+    async (entityType, legacy) => {
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType, ...(legacy ? {} : { detailRow: false }) } },
+      });
+
+      const result = await makeTool(graphUtility).execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+      expect(result.success).toBe(true);
+      expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
+    },
+  );
+
+  it('refuses a message archived before archive refused messages, instead of calling it missing', async () => {
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Communication', inactive: true } },
+    });
+
+    const result = await makeTool(graphUtility).execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expectArchiveRefused(result, `message ${E1}`);
+    expect(result.error?.message).not.toContain('not found');
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
   });
 
   it('groups the refused ids by kind', async () => {
@@ -3459,6 +3542,38 @@ describe('ForgetKnowledgeTool archive, which cannot hide messages, files, conten
     expect(result.success).toBe(true);
     expect(communications.purge).toHaveBeenCalled();
   });
+
+  it('deletes a product through its model, and says what it only unlinked', async () => {
+    const products = makeProducts([E1], { things: 2, sightings: 0, receiptLines: 1 });
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Product' } } });
+
+    const result = await toolWith(graphUtility, { products }).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.success).toBe(true);
+    expect(products.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
+    // The purge took the node, so the generic delete is not asked to.
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(result.data?.warnings).toEqual([
+      'Kept, and no longer linked to the deleted product: 2 things and 1 receipt line.',
+    ]);
+  });
+
+  it('leaves a Product node with no model behind it to the generic delete', async () => {
+    const products = makeProducts([]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Product' } } });
+
+    const result = await toolWith(graphUtility, { products }).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.success).toBe(true);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
+    expect(result.data?.warnings).toBeUndefined();
+  });
 });
 
 describe('ForgetKnowledgeTool.checkCall, asked before a forget is queued for confirmation', () => {
@@ -3473,12 +3588,24 @@ describe('ForgetKnowledgeTool.checkCall, asked before a forget is queued for con
       mode: 'archive',
     });
 
-    expect(refusal).toContain(`Refused: thing ${E1}.`);
-    expect(refusal).toContain('Nothing was changed');
+    // The code execute gives the same call, so a caller sees one code whatever the owner's dial does.
+    expect(refusal?.code).toBe('ARCHIVE_REFUSED');
+    expect(refusal?.message).toContain(`Refused: thing ${E1}.`);
+    expect(refusal?.message).toContain('Nothing was changed');
   });
 
   it('reads a call that names no mode as archive, its default', async () => {
-    expect(await makeTool(graphUtility()).checkCall(CONTEXT, { entityIds: [E1] })).toContain(`thing ${E1}`);
+    expect((await makeTool(graphUtility()).checkCall(CONTEXT, { entityIds: [E1] }))?.message).toContain(
+      `thing ${E1}`,
+    );
+  });
+
+  it('refuses a thing archived earlier, which a lookup of active nodes would not find', async () => {
+    const graph = makeGraphUtility({ nodes: { [E1]: { entityType: 'Item', inactive: true } } });
+
+    expect(
+      (await makeTool(graph).checkCall(CONTEXT, { entityIds: [E1], mode: 'archive' }))?.message,
+    ).toContain(`thing ${E1}`);
   });
 
   it('lets an archive of a person through, and any delete', async () => {
@@ -3493,7 +3620,7 @@ describe('ForgetKnowledgeTool.checkCall, asked before a forget is queued for con
     const tool = makeTool(graph);
 
     expect(await tool.checkCall(CONTEXT, { entityIds: [E_MISSING], mode: 'archive' })).toBeUndefined();
-    expect(graph.getNodesByIds).toHaveBeenCalledWith([E_MISSING], CONTEXT.userId);
+    expect(graph.getNodesBackedByDetailRows).toHaveBeenCalledWith([E_MISSING], CONTEXT.userId);
   });
 
   it('answers nothing for a call with no owner, or only relationships, without a lookup', async () => {
@@ -3502,6 +3629,6 @@ describe('ForgetKnowledgeTool.checkCall, asked before a forget is queued for con
 
     expect(await tool.checkCall({} as RequestContext, { entityIds: [E1], mode: 'archive' })).toBeUndefined();
     expect(await tool.checkCall(CONTEXT, { relationshipIds: [R1], mode: 'archive' })).toBeUndefined();
-    expect(graph.getNodesByIds).not.toHaveBeenCalled();
+    expect(graph.getNodesBackedByDetailRows).not.toHaveBeenCalled();
   });
 });

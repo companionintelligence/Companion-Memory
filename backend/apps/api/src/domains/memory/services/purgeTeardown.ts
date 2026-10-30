@@ -182,9 +182,16 @@ export const CONCEPT_REFERENCES: BareReferenceKind = { ownsIdentifiers: true };
 export const FILE_REFERENCES: BareReferenceKind = {};
 
 /**
+ * A catalog product model. Like a file it has two ids and nothing ledgers it: the search rows and
+ * the tags are keyed by the id of its `ci.product_models` row, and the graph (edges, deltas) by the
+ * id of its `Product` node. The caller passes both kinds of id in the one list.
+ */
+export const PRODUCT_REFERENCES: BareReferenceKind = {};
+
+/**
  * Deletes every row that names one of these event, content, communication, item,
- * file, person, place or concept ids and has no foreign key to say so, in the
- * caller's transaction.
+ * file, product, person, place or concept ids and has no foreign key to say so, in
+ * the caller's transaction.
  *
  * `ci.relationships` has no foreign key to `ci.entities`, and neither do the
  * provenance ledger, the pipeline bookkeeping, the tags and categories, the

@@ -74,6 +74,26 @@ export function getApiBaseUrl(): string {
 }
 
 /**
+ * Whether the page's own code comes from the Memory the API calls go to.
+ *
+ * True for the web app, which Memory serves and which calls it same-origin. False for the native
+ * Capacitor shells and the desktop app: they carry the code in the bundle (`capacitor://localhost`,
+ * `https://localhost`) and only call Memory, so whether Memory answers says nothing about whether
+ * the page can load its own code.
+ */
+export function pageServedByApi(): boolean {
+  if (!apiBaseUrl || typeof window === 'undefined') {
+    return true;
+  }
+
+  try {
+    return new URL(apiBaseUrl).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve a relative API path (`/api/...`) against the configured origin.
  * Absolute URLs are returned untouched, so callers can pass either.
  */
