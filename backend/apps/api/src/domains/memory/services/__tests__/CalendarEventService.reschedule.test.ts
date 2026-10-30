@@ -270,7 +270,8 @@ describe('CalendarEventService.create — provenance survives the DTO mapping', 
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
         { provide: EventService, useValue: { send: jest.fn() } },
-        { provide: DataSource, useValue: { getRepository: jest.fn() } },
+        // query: refuseForeignLinks finds no linked row of another account.
+        { provide: DataSource, useValue: { getRepository: jest.fn(), query: jest.fn(async () => []) } },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();

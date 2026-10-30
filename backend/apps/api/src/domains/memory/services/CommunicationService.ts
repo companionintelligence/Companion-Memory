@@ -26,6 +26,8 @@ import {
   keysetSeek,
   type KeysetPageArgs,
   type KeysetPage,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileRemovedEvent } from '@ci/domains/files/events';
@@ -83,6 +85,44 @@ export interface HourlyCommunicationCount {
   userId: string;
   bucketStart: Date;
   count: number;
+}
+
+/** A message's links that name another row, as a create or an update carries them. */
+interface CommunicationLinkFields {
+  device_id?: string | null;
+  from_entity_id?: string | null;
+  to_entity_ids?: readonly string[] | null;
+}
+
+/**
+ * What a message links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. `device_id`'s key only asks that the device exists, and the sender and
+ * recipient columns have none.
+ */
+function communicationLinks(rows: readonly CommunicationLinkFields[]): OwnedLink[] {
+  return [
+    {
+      field: 'device_id',
+      table: 'ci.devices',
+      key: 'device_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.device_id),
+    },
+    {
+      field: 'from_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: rows.map((row) => row.from_entity_id),
+    },
+    {
+      field: 'to_entity_ids',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: rows.flatMap((row) => row.to_entity_ids ?? []),
+    },
+  ];
 }
 
 /**
@@ -227,6 +267,8 @@ export class CommunicationService {
   }
 
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
+    await refuseForeignLinks(this.dataSource, context.userId, communicationLinks([data]), 'message');
+
     // Idempotency: re-sending an existing (source_type, source_system,
     // source_id) triple — a flaky-client retry, a webhook re-delivery like
     // MemoryController.turn() — must return the existing row instead of
@@ -375,6 +417,8 @@ export class CommunicationService {
     if (data.length === 0) {
       return [];
     }
+
+    await refuseForeignLinks(this.dataSource, context.userId, communicationLinks(data), 'message');
 
     const entities = data.map((item) =>
       this.communicationRepository.create({
@@ -661,6 +705,12 @@ export class CommunicationService {
       updateData.preview = data.preview;
     }
 
+    await this.refuseForeignUpdateLinks(context, id, {
+      device_id: updateData.deviceId,
+      from_entity_id: updateData.fromEntityId,
+      to_entity_ids: updateData.toEntityIds,
+    });
+
     // One transaction across both halves of the aggregate; when any source of
     // the derived label (subject/preview/content) or of the description
     // (summary) changed, the base row is re-derived from the updated detail.
@@ -731,6 +781,32 @@ export class CommunicationService {
     // The transaction already reloaded the detail row; the Communication
     // egress composes from it alone.
     return CommunicationEntity.toEgressType(updated);
+  }
+
+  /**
+   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so the
+   * links have to belong to the message's owner.
+   */
+  private async refuseForeignUpdateLinks(
+    context: ServiceContext,
+    id: string,
+    patch: CommunicationLinkFields,
+  ): Promise<void> {
+    const links = communicationLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const ownerId =
+      context.userId !== SYSTEM_USER
+        ? context.userId
+        : (await this.communicationRepository.findOne({ select: { id: true, userId: true }, where: { id } }))
+            ?.userId;
+
+    if (ownerId != null) {
+      await refuseForeignLinks(this.dataSource, ownerId, links, 'message');
+    }
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {

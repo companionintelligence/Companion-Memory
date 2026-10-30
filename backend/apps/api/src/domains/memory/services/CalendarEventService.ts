@@ -28,6 +28,8 @@ import {
   keysetPaginate,
   keysetSeek,
   INGEST_REFRESH_COLUMNS,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileRemovedEvent } from '@ci/domains/files/events';
@@ -362,6 +364,65 @@ function withoutRefusedRecurrence(item: CreateEventDto): CreateEventDto {
   }
 
   return next;
+}
+
+/** An event's links that name another row, as a create or an update carries them. */
+interface EventLinkFields {
+  location_entity_id?: string | null;
+  organizer_entity_id?: string | null;
+  participant_entity_ids?: readonly string[] | null;
+  task_id?: string | null;
+  parent_event_id?: string | null;
+}
+
+/**
+ * What an event links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. The keys on `location_entity_id` and `task_id` only ask that the row exists, and
+ * the organizer, guest and parent columns have none.
+ */
+function eventLinks(rows: readonly EventLinkFields[]): OwnedLink[] {
+  const entity = (field: string, ids: OwnedLink['ids']): OwnedLink => ({
+    field,
+    table: 'ci.entities',
+    key: 'entity_id',
+    ownerColumn: 'owner_user_id',
+    ids,
+  });
+  const location = rows.map((row) => row.location_entity_id);
+  const organizer = rows.map((row) => row.organizer_entity_id);
+  const participants = rows.flatMap((row) => row.participant_entity_ids ?? []);
+
+  return [
+    entity('location_entity_id', location),
+    entity('organizer_entity_id', organizer),
+    entity('participant_entity_ids', participants),
+    {
+      field: 'task_id',
+      table: 'ci.tasks',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.task_id),
+    },
+    {
+      field: 'parent_event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.parent_event_id),
+    },
+  ];
+}
+
+/** The links a create stores. `parent_event_id` is set by an update alone. */
+function createdEventLinks(items: readonly CreateEventDto[]): OwnedLink[] {
+  return eventLinks(
+    items.map(({ location_entity_id, organizer_entity_id, participant_entity_ids, task_id }) => ({
+      location_entity_id,
+      organizer_entity_id,
+      participant_entity_ids,
+      task_id,
+    })),
+  );
 }
 
 /** The metadata keys a series' recurrence is read from (parseRecurrence.ts), and the only ones the refresh rewrites. */
@@ -1570,6 +1631,8 @@ export class CalendarEventService {
   }
 
   async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
+    await refuseForeignLinks(this.dataSource, context.userId, createdEventLinks([data].flat()), 'event');
+
     if (!Array.isArray(data)) {
       return [await this.createOne(context, withoutRefusedRecurrence(data))];
     }
@@ -1588,6 +1651,8 @@ export class CalendarEventService {
     context: UserServiceContext,
     data: CreateEventDto[],
   ): Promise<Array<BulkInsertResult<Event>>> {
+    await refuseForeignLinks(this.dataSource, context.userId, createdEventLinks(data), 'event');
+
     return this.createManyBatchedDetailed(context, data.map(withoutRefusedRecurrence));
   }
 
@@ -2543,6 +2608,13 @@ export class CalendarEventService {
       updateData.isLocked = data.is_locked;
     }
 
+    await this.refuseForeignUpdateLinks(context, id, {
+      location_entity_id: updateData.locationEntityId,
+      organizer_entity_id: updateData.organizerEntityId,
+      participant_entity_ids: updateData.participantEntityIds,
+      parent_event_id: updateData.parentEventId,
+    });
+
     // A save that hands back the title or description already stored is not an
     // edit of it: the event page sends the unchanged title with every save.
     // Dropped here, it neither rewrites the base row nor reaches Change History
@@ -2669,6 +2741,31 @@ export class CalendarEventService {
     const [event] = await this.composeMany([updated]);
 
     return event;
+  }
+
+  /**
+   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so the
+   * links have to belong to the event's owner.
+   */
+  private async refuseForeignUpdateLinks(
+    context: ServiceContext,
+    id: string,
+    patch: EventLinkFields,
+  ): Promise<void> {
+    const links = eventLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const ownerId =
+      context.userId !== SYSTEM_USER
+        ? context.userId
+        : (await this.eventRepository.findOne({ select: { id: true, userId: true }, where: { id } }))?.userId;
+
+    if (ownerId != null) {
+      await refuseForeignLinks(this.dataSource, ownerId, links, 'event');
+    }
   }
 
   /**
