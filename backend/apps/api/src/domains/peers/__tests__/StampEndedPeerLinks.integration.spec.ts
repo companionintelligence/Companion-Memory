@@ -9,7 +9,7 @@ import { ScratchDatabase, scratchDatabaseAvailability } from '../../__tests__/su
  * which both read `revoked_at`, agree that they are. Proved against real
  * Postgres: the index is the thing that has to agree.
  */
-const MIGRATION = '20261030060719_stamp_ended_peer_links_revoked_at.sql';
+const MIGRATION = '20261030154500_stamp_ended_peer_links_revoked_at.sql';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../../db/postgres/migrations');
 

@@ -732,4 +732,41 @@ describe('PeerLinkService — a revoked peer does not authenticate', () => {
       });
     });
   });
+
+  describe('adding back a peer whose link is live', () => {
+    it('SECURITY: refuses when the link was ended after it was read, and leaves it ended', async () => {
+      // Through `save()` the merged row's `revoked_at = NULL` landed on the
+      // ended link and brought it back with its key, identity and grants.
+      const endedAt = new Date('2026-02-01T00:00:00Z');
+      const rows = [link({ id: 'link-1', status: 'revoked', revokedAt: endedAt })];
+      const { service, repository } = makeServiceOverRows(rows);
+      repository.find.mockResolvedValueOnce([link({ id: 'link-1' })]);
+
+      await expect(service.upsert(CTX as never, { ...DTO, status: 'active' })).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(rows[0]).toMatchObject({ status: 'revoked', revokedAt: endedAt });
+    });
+
+    it('refreshes the live link by id, and leaves it live', async () => {
+      const rows = [link({ id: 'link-1', status: 'pending' })];
+      const { service, repository } = makeServiceOverRows(rows);
+
+      const refreshed = await service.upsert(CTX as never, {
+        ...DTO,
+        status: 'active',
+        trustTier: 'trusted',
+      });
+
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update.mock.calls[0]?.[1]).not.toHaveProperty('revokedAt');
+      expect(refreshed).toMatchObject({
+        id: 'link-1',
+        status: 'active',
+        revokedAt: null,
+        trustTier: 'trusted',
+      });
+    });
+  });
 });

@@ -321,6 +321,21 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
       expect(await ids('Any photos or videos from Lisbon?', 'media')).toEqual([typed, named, video].sort());
     });
 
+    it('finds a photo whose file-name title ends in a newline, as the indexer reads it', async () => {
+      // The indexer tests the title after `trim()`, which takes the newline off,
+      // so the event carries its capture-date words. `btrim` in SQL took only
+      // spaces off, and the photo ask then never admitted the event.
+      const photo = await seedEvent('IMG_0042.HEIC\n', {}, 'Lisbon, Portugal');
+
+      const result = await service.searchPrompt(photoContext(), {
+        prompt: 'Any photos from last October?',
+        includeTypes: ['file'],
+        mediaEvents: 'photos',
+      });
+
+      expect(result.items.map((item) => item.id)).toEqual([photo]);
+    });
+
     it('counts a photo once when its file and the event it came with both match', async () => {
       // MediaStage stamps the file's id on its capture event as `FileId`. Before,
       // "how many photos from last October" counted that one photo twice.

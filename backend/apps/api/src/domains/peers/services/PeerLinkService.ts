@@ -274,9 +274,13 @@ export class PeerLinkService {
     let saved: PeerLinkEntity;
 
     try {
+      // An edit, and a re-add of a link that is still live (`existing` is never
+      // an ended row when `status` is `active`: that is `relinks`), both write
+      // onto the row they read. Through `save()`, a re-add that raced an end
+      // wrote `revoked_at = NULL` back and revived the ended link.
       saved =
-        data.expectedLinkId != null && existing != null
-          ? await this.updateAsRead(context, existing, record)
+        existing != null && (data.expectedLinkId != null || data.status === 'active')
+          ? await this.updateAsRead(context, existing, record, { activate: data.status === 'active' })
           : await this.repository.save(record);
     } catch (err) {
       // Two adds of one handle (a double click, two devices) both read the same
@@ -316,21 +320,26 @@ export class PeerLinkService {
   }
 
   /**
-   * Write an edit onto the row it was read from, and only while that row is as
-   * live as it was then.
+   * Write an edit, or a re-add of a live link, onto the row it was read from,
+   * and only while that row is as live as it was then.
    *
-   * `save()` writes every column it was handed, `revoked_at` among them, so a
-   * link ended between the read and this write came back live, and then
-   * collided with the link that replaced it. This writes only the fields an
-   * edit changes, and the WHERE carries the check: a link that was live must
-   * still be live. One that was already
-   * ended can only stay ended (a re-add makes a new row), so its id alone is
-   * enough. No row matched means it changed under the caller.
+   * Through `save()`, a link ended between the read and this write came back
+   * live, because the merged row carries `revoked_at = NULL`, and then
+   * collided with the link that replaced it. This writes the link's editable
+   * columns (every one of them, as merged in `upsert`) and never `revoked_at`,
+   * and the WHERE carries the check: a link that was live must still be live.
+   * One that was already ended can only stay ended (a re-add makes a new row),
+   * so its id alone is enough. No row matched means it changed under the
+   * caller.
+   *
+   * `activate` is a re-add: it writes `status = 'active'`, which the WHERE only
+   * lets land on a row that is still live.
    */
   private async updateAsRead(
     context: UserServiceContext,
     read: PeerLinkEntity,
     record: PeerLinkEntity,
+    options: { activate: boolean },
   ): Promise<PeerLinkEntity> {
     const result = await this.repository.update(
       {
@@ -345,15 +354,16 @@ export class PeerLinkService {
         peerSubject: record.peerSubject,
         personEntityId: record.personEntityId,
         trustTier: record.trustTier,
-        // Not `status` or `revoked_at`: an edit never changes whether the link
-        // is live, and writing back the `revoked_at` read in JS would round it
-        // to the millisecond.
+        // Never `revoked_at`, and `status` only for a re-add of a live link: an
+        // edit never changes whether the link is live, and writing back the
+        // `revoked_at` read in JS would round it to the millisecond.
+        ...(options.activate && read.revokedAt == null ? { status: 'active' as const } : {}),
       },
     );
 
     if (!result.affected) {
       throw new ConflictException(
-        `This link to ${read.peerHandle} changed while it was being edited. Reload to see the link.`,
+        `This link to ${read.peerHandle} changed while it was being saved. Reload to see the link.`,
       );
     }
 

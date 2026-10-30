@@ -340,16 +340,21 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   mediaEventPlaces?: boolean;
 };
 
-/** Image file names, from the list `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts is built from. */
-const IMAGE_FILENAME_SQL = String.raw`\.(${IMAGE_FILE_EXTENSIONS})$`;
+/**
+ * Image file names, from the list `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts is built from.
+ * Trailing whitespace is allowed because the indexer tests the title after `trim()`, which takes
+ * tabs and newlines off as well as spaces (`btrim` takes only spaces). Leading whitespace can't
+ * change a test anchored at the end.
+ */
+const IMAGE_FILENAME_SQL = String.raw`\.(${IMAGE_FILE_EXTENSIONS})\s*$`;
 /** The video ones, from the same place. */
-const VIDEO_FILENAME_SQL = String.raw`\.(${VIDEO_FILE_EXTENSIONS})$`;
+const VIDEO_FILENAME_SQL = String.raw`\.(${VIDEO_FILE_EXTENSIONS})\s*$`;
 
 /**
  * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
  * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
- * `Media Type`, or a title that is such a file name once trimmed, as it trims
- * it. Constant SQL, no asker text.
+ * `Media Type`, or a title that is such a file name once trimmed (see
+ * {@link IMAGE_FILENAME_SQL}). Constant SQL, no asker text.
  *
  * Without `places`, the event must also match `q` once the words of its place
  * are taken out of its vector (`ts_delete`), so a match on the place alone
@@ -363,8 +368,8 @@ function mediaEventSql(kind: 'photos' | 'media', places: boolean): string {
       : `e.metadata ->> 'Media Type' LIKE 'image/%'`;
   const fileNames =
     kind === 'media'
-      ? `(btrim(n.name) ~* '${IMAGE_FILENAME_SQL}' OR btrim(n.name) ~* '${VIDEO_FILENAME_SQL}')`
-      : `btrim(n.name) ~* '${IMAGE_FILENAME_SQL}'`;
+      ? `(n.name ~* '${IMAGE_FILENAME_SQL}' OR n.name ~* '${VIDEO_FILENAME_SQL}')`
+      : `n.name ~* '${IMAGE_FILENAME_SQL}'`;
 
   return `EXISTS (
           SELECT 1
