@@ -54,13 +54,23 @@ export function capabilityAllows(privacy: GatedPrivacy, capability: ToolCapabili
   return privacy.access === 'read';
 }
 
+/**
+ * Whether a call with this label can reach a third party: external, and not marked as reaching
+ * only the owner's own server ({@link IntentPrivacy.ownServer}).
+ */
+export function reachesThirdParty(privacy: Pick<IntentPrivacy, 'external' | 'ownServer'>): boolean {
+  return privacy.external && privacy.ownServer !== true;
+}
+
 const ACCESS_RANK: Record<IntentPrivacy['access'], number> = { read: 0, write: 1, delete: 2 };
 
 const SENSITIVITY_RANK: Record<IntentPrivacy['sensitivity'], number> = { low: 0, personal: 1, sensitive: 2 };
 
 /**
  * The stricter of two labels, facet by facet: the wider access, the higher sensitivity, and
- * destructive or external when either says so.
+ * destructive or external when either says so. An external result is marked
+ * {@link IntentPrivacy.ownServer} only when every external label among the two says so, so a
+ * per-call answer can never turn a third-party call into an own-server one.
  *
  * How a tool's per-call label (`ToolHandle.privacyFor`) meets its declared one. Taking the
  * stricter of the two rather than trusting the per-call answer means a tool can only ever raise
@@ -72,6 +82,10 @@ export function stricterPrivacy(declared: IntentPrivacy, perCall: IntentPrivacy 
     return declared;
   }
 
+  const external = declared.external || perCall.external;
+  const ownServer =
+    external && [declared, perCall].every((label) => !label.external || label.ownServer === true);
+
   return {
     access: ACCESS_RANK[perCall.access] > ACCESS_RANK[declared.access] ? perCall.access : declared.access,
     sensitivity:
@@ -79,7 +93,8 @@ export function stricterPrivacy(declared: IntentPrivacy, perCall: IntentPrivacy 
         ? perCall.sensitivity
         : declared.sensitivity,
     destructive: declared.destructive || perCall.destructive,
-    external: declared.external || perCall.external,
+    external,
+    ...(ownServer && { ownServer }),
   };
 }
 

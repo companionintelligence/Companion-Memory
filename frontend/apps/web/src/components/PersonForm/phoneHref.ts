@@ -1,6 +1,6 @@
 /**
  * `PHONE_EXTENSION_PATTERN` from the backend's
- * `domains/graph/utils/normalizeIdentifier.ts`, restated verbatim —
+ * `common/normalizeIdentifier.ts`, restated verbatim —
  * `phoneHref.node.test.ts` fails if the two differ. The server refuses a number
  * as carrying an extension by this pattern and then shows it as typed, so the
  * card has to find the same extension in it.

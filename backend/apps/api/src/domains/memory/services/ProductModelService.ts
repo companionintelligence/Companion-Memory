@@ -10,6 +10,9 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  OWNED_TABLES,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
@@ -92,6 +95,30 @@ const MAX_LIMIT = 500;
 /** The row shape written by the raw-SQL find-or-create. */
 interface ProductIdRow {
   product_id: string;
+}
+
+/** A product's links that name another row. */
+interface ProductLinkFields {
+  imageContentId?: string | null;
+  manualContentIds?: readonly string[] | null;
+  productEntityId?: string | null;
+}
+
+/**
+ * What a product links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. `product_entity_id`'s key only asks that the entity exists, and the picture and
+ * manual columns have none.
+ */
+function productLinks(rows: readonly ProductLinkFields[]): OwnedLink[] {
+  return [
+    { field: 'image_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.imageContentId) },
+    {
+      field: 'manual_content_ids',
+      ...OWNED_TABLES.content,
+      ids: rows.flatMap((row) => row.manualContentIds ?? []),
+    },
+    { field: 'product_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.productEntityId) },
+  ];
 }
 
 /**
@@ -191,6 +218,8 @@ export class ProductModelService {
   }
 
   async create(context: UserServiceContext, dto: CreateProductModelDto): Promise<ProductModel> {
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks([dto]), 'product');
+
     return this.repository.save(this.toEntity(context, dto));
   }
 
@@ -212,6 +241,8 @@ export class ProductModelService {
     if (dtos.length === 0) {
       return [];
     }
+
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks(dtos), 'product');
 
     return bulkInsertIdempotent({
       repository: this.repository,
@@ -485,6 +516,9 @@ export class ProductModelService {
     if (Object.keys(patch).length === 0) {
       return existing;
     }
+
+    // `user_id`, the account the model belongs to and the column the import scopes it by.
+    await refuseForeignLinks(this.repository.manager, existing.userId, productLinks([patch]), 'product');
 
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.
