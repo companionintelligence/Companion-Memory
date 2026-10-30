@@ -1,5 +1,5 @@
-import { constants as fsConstants, lstatSync } from 'node:fs';
-import { chmod, copyFile, cp, link, lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { constants as fsConstants, lstatSync, type Stats } from 'node:fs';
+import { chmod, chown, copyFile, cp, link, lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { freeBytesAt } from '../archive/unpack';
@@ -201,26 +201,37 @@ export interface ReturnInboxUnitInput {
  */
 export async function returnInboxUnit(input: ReturnInboxUnitInput): Promise<string> {
   const doLink = input.linkImpl ?? link;
+  const unit = await lstat(input.unitPath);
 
-  if (!(await lstat(input.unitPath)).isFile()) {
+  if (!unit.isFile()) {
     throw new Error(`${input.unitPath} is not a file. Only a file unit goes back to the inbox`);
   }
 
   const relative = path.relative(input.inboxDir, input.sourcePath);
   const underInbox = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-  const wanted = path.join(input.inboxDir, underInbox ? relative : path.basename(input.sourcePath));
+  const topLevel = path.join(input.inboxDir, path.basename(input.sourcePath));
+  let wanted = underInbox ? path.join(input.inboxDir, relative) : topLevel;
 
   await ensureInboxFolder(input.inboxDir);
 
   // The deepest folder that exists is checked BEFORE anything is created, so a
   // symlink out of the inbox cannot have folders made through it. The
   // parent is checked again after, on where it leads.
-  const missing: string[] = [];
+  let missing: string[] = [];
   let existing = path.dirname(wanted);
 
   while (!(await exists(existing)) && existing !== input.inboxDir) {
     missing.unshift(existing);
     existing = path.dirname(existing);
+  }
+
+  // A folder on the way that is a file now (`google/` replaced by a file of
+  // that name) cannot hold the unit, and the link would fail with ENOTDIR on
+  // every retry. The unit goes to the inbox's top level instead.
+  if (!(await isDirectory(existing))) {
+    wanted = topLevel;
+    missing = [];
+    existing = input.inboxDir;
   }
 
   await resolveWithinRoots(existing, [input.inboxDir]);
@@ -255,6 +266,10 @@ export async function returnInboxUnit(input: ReturnInboxUnitInput): Promise<stri
 
   await rm(tmpPath, { force: true });
   await copyFile(input.unitPath, tmpPath, fsConstants.COPYFILE_EXCL);
+  // The copy is made by the API's user (root in the container). In the inbox's
+  // sticky 1777 folders only a file's owner can rename or delete it, so the
+  // copy takes the owner of the file it replaces, as the link path keeps it.
+  await chown(tmpPath, unit.uid, unit.gid).catch(() => undefined);
 
   const target = await linkUnderFreeName(link, tmpPath, parent, name);
 
@@ -282,6 +297,11 @@ const COMPOUND_EXTENSIONS = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'];
  * yet. `link` refuses an existing name with EEXIST instead of replacing it,
  * so a file that appears in the inbox while this runs moves the unit to the
  * next name rather than being lost.
+ *
+ * A name already linked to `from` itself counts as done: an earlier return
+ * that linked the unit and then crashed or failed before unlinking scratch,
+ * or a second discard racing this one. Taking the next name there would put
+ * the same file in the inbox twice.
  */
 async function linkUnderFreeName(
   doLink: typeof link,
@@ -293,34 +313,46 @@ async function linkUnderFreeName(
   const compound = COMPOUND_EXTENSIONS.find((ext) => lower.endsWith(ext));
   const ext = compound != null ? name.slice(-compound.length) : path.extname(name);
   const stem = ext === '' ? name : name.slice(0, -ext.length);
+  const source = await lstat(from);
 
   for (let n = 1; n < 1000; n++) {
     const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
+    let taken = await lstatOrNull(candidate);
 
-    if (await occupied(candidate)) {
-      continue;
+    if (taken == null) {
+      try {
+        await doLink(from, candidate);
+
+        return candidate;
+      } catch (err: unknown) {
+        if ((err as { code?: string }).code !== 'EEXIST') {
+          throw err;
+        }
+      }
+
+      taken = await lstatOrNull(candidate);
     }
 
-    try {
-      await doLink(from, candidate);
-
+    if (taken != null && taken.dev === source.dev && taken.ino === source.ino) {
       return candidate;
-    } catch (err: unknown) {
-      if ((err as { code?: string }).code !== 'EEXIST') {
-        throw err;
-      }
     }
   }
 
   throw new Error(`No free name for ${name} in ${dir}: ${stem} (2)${ext} to (999) are all taken`);
 }
 
-/** Taken by anything, a dangling symlink included, which `stat` would miss. */
-async function occupied(target: string): Promise<boolean> {
+/** What is at `target`, a dangling symlink included (which `stat` would miss), or null. */
+async function lstatOrNull(target: string): Promise<Stats | null> {
   try {
-    await lstat(target);
+    return await lstat(target);
+  } catch {
+    return null;
+  }
+}
 
-    return true;
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
   } catch {
     return false;
   }

@@ -45,7 +45,11 @@ export interface JobControlNumberDto {
   /** What the appliance uses when `value` is null. */
   readonly default: number;
   /**
-   * The largest value that changes anything. Above it, the request is clamped.
+   * The largest value that changes anything. A write above it is refused for
+   * the two global fields; a stored value above it (from an older build) is
+   * clamped on read. A queue takes values up to its ceiling against the
+   * SHIPPED per-queue default, which can sit above this `max` while the
+   * operator has lowered that default.
    *
    * On the two global fields this equals `default`, and that is the point: these
    * controls exist to cool a box down, so the shipped figure is both what you
@@ -146,7 +150,11 @@ export interface JobControlsDto {
   };
   readonly queues: readonly JobQueueControlDto[];
   readonly crons: readonly JobCronControlDto[];
-  /** Ceiling the API will accept for any concurrency field. */
+  /**
+   * The hard ceiling on any concurrency field. Each field's own cap is lower
+   * still (its `max`, or a queue's shipped ceiling), and a write above that is
+   * refused, so this is not the most a write takes.
+   */
   readonly maxConcurrency: number;
 }
 
@@ -292,7 +300,7 @@ export class JobControlsService {
             'global',
             GLOBAL_CONCURRENCY,
             this.checkConcurrency(concurrency, 'The appliance-wide limit', {
-              most: config.queues.concurrency * queueWorkerProcesses(),
+              most: shippedApplianceConcurrency(queueWorkerProcesses()),
               why: 'the figure this build ships with',
               env: 'CI_QUEUE_CONCURRENCY',
             }),
@@ -358,17 +366,23 @@ export class JobControlsService {
         // default rather than the operator's current one: a number between the
         // two is still worth storing, because it takes effect once that default
         // is raised again. The card already says "Running at N" until then.
+        //
+        // The reason and the remedy follow whichever bound binds. A declared
+        // limit above the shipped figure (image-description sized to a large
+        // LLM_OLLAMA_NUM_PARALLEL) leaves the env var as the way up.
+        const declaredBinds =
+          entry.localConcurrency != null && entry.localConcurrency <= config.queues.perQueueConcurrency;
+
         writes.push(
           numberWrite(
             'queue',
             queue.name,
             this.checkConcurrency(queue.concurrency, `The "${queue.name}" queue`, {
               most: maxQueueConcurrency(config.queues.perQueueConcurrency, entry.localConcurrency),
-              why:
-                entry.localConcurrency != null && entry.localConcurrency < config.queues.perQueueConcurrency
-                  ? 'the limit its code declares'
-                  : 'the per-queue figure this build ships with',
-              env: entry.localConcurrency != null ? null : 'CI_QUEUE_PER_QUEUE_CONCURRENCY',
+              why: declaredBinds
+                ? 'the limit its code declares'
+                : 'the per-queue figure this build ships with',
+              env: declaredBinds ? null : 'CI_QUEUE_PER_QUEUE_CONCURRENCY',
             }),
           ),
         );
@@ -515,10 +529,7 @@ export class JobControlsService {
     const globalSetting = JobControlStore.globalConcurrency();
     const perQueueSetting = JobControlStore.perQueueConcurrency();
 
-    // The shipped appliance-wide figure is the per-process config value times
-    // the number of processes — which is what the appliance actually allows
-    // today, and is why leaving this unset changes nothing.
-    const shippedAppliance = config.queues.concurrency * processes;
+    const shippedAppliance = shippedApplianceConcurrency(processes);
     const perQueueDefault = perQueueDefaultConcurrency(perQueueSetting, config.queues.perQueueConcurrency);
 
     const queues = queueInventory().map((entry): JobQueueControlDto => {
@@ -624,6 +635,15 @@ export class JobControlsService {
       maxConcurrency: MAX_CONCURRENCY,
     };
   }
+}
+
+/**
+ * The shipped appliance-wide figure: the per-process config value times the
+ * number of processes. It is what the appliance allows today, which is why
+ * leaving the setting unset changes nothing, and it is the most a write takes.
+ */
+function shippedApplianceConcurrency(processes: number): number {
+  return config.queues.concurrency * processes;
 }
 
 /** What the settings API needs about a schedule, from wherever it learned of it. */

@@ -1,4 +1,15 @@
-import { mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  link,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -348,6 +359,42 @@ describe('returnInboxUnit', () => {
     expect(path.basename(returned)).toBe('export (2).zip');
     expect(await readFile(path.join(inbox, 'export.zip'), 'utf8')).toBe('arrived meanwhile');
     expect(await readFile(returned, 'utf8')).toBe('the only copy');
+  });
+
+  it('does not place a second copy when an earlier return linked the unit and stopped', async () => {
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+    const source = path.join(inbox, 'export.zip');
+
+    await writeFile(unit, 'the only copy');
+    // What a crash between the link and the scratch unlink leaves: the same
+    // file under both names.
+    await link(unit, source);
+
+    const returned = await returnInboxUnit({ unitPath: unit, sourcePath: source, inboxDir: inbox, log });
+
+    expect(returned).toBe(source);
+    expect(await readdir(inbox)).toEqual(['export.zip']);
+    await expect(stat(unit)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('comes back at the top level when a folder on its old path is a file now', async () => {
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+
+    await writeFile(path.join(inbox, 'google'), 'a file where the folder was');
+    await writeFile(unit, 'bytes');
+
+    const returned = await returnInboxUnit({
+      unitPath: unit,
+      sourcePath: path.join(inbox, 'google', 'export.zip'),
+      inboxDir: inbox,
+      log,
+    });
+
+    expect(returned).toBe(path.join(inbox, 'export.zip'));
+    expect(await readFile(returned, 'utf8')).toBe('bytes');
+    expect(await readFile(path.join(inbox, 'google'), 'utf8')).toBe('a file where the folder was');
   });
 
   it('copies back across filesystems, deleting the scratch copy only after', async () => {

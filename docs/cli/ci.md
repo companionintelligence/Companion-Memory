@@ -76,8 +76,9 @@ unexpected exception — which also prints a stack). `doctor` overloads **1** wi
 one more meaning: its gate tripped — see its section below.
 
 With `--wait`, `import`, `inbox --start` and `push` also exit **1** when a run they
-followed ended `failed` or `cancelled`. The message names each such run with its error. A
-`partial` run still exits 0, because it imported what it could.
+followed ended `failed` or `cancelled`, or was deleted while they waited. The message names
+each such run with its error. A `partial` run still exits 0, because it imported what it
+could. `runs <id> --wait` only follows and reports: it exits 0 however the run ended.
 
 ---
 
@@ -138,9 +139,10 @@ percentage moves, the run closes — rather than redrawing on a timer. A redrawn
 progress bar becomes thousands of lines of escape codes in a CI log, and this
 reads the same piped as it does in a terminal.
 
-When the wait ends, its exit code says how the runs ended. A run that failed or
-was cancelled exits **1**, so `ci import export.zip --wait && next-step` stops
-there instead of going on as if the import had happened.
+When the wait under `import`, `inbox --start` or `push` ends, its exit code says
+how the runs ended. A run that failed or was cancelled exits **1**, so
+`ci import export.zip --wait && next-step` stops there instead of going on as if
+the import had happened.
 
 ---
 

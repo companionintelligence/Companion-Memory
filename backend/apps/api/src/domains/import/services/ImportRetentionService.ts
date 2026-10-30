@@ -98,7 +98,6 @@ interface ClaimedDiscard extends DiscardCandidate {
 
 /** An inbox unit sitting in a discarded run's scratch tree. */
 interface InboxUnitToReturn {
-  readonly sourceId: string;
   /** Where the run took it from. */
   readonly sourcePath: string;
   /** Where it is now, inside the run's scratch tree. */
@@ -762,9 +761,7 @@ export class ImportRetentionService {
       }
 
       const returnUnit =
-        inbox?.unitPath == null
-          ? null
-          : { sourceId: inbox.sourceId, sourcePath: inbox.sourcePath, unitPath: inbox.unitPath };
+        inbox?.unitPath == null ? null : { sourcePath: inbox.sourcePath, unitPath: inbox.unitPath };
 
       return { ...candidate, reclaimScratch, returnUnit };
     });
@@ -779,7 +776,8 @@ export class ImportRetentionService {
    *    not an archive): put it back, then take the tree;
    *  - it is not in scratch but IS in the inbox (the claim never moved it, or
    *    an earlier discard already put it back): the tree holds nothing of it
-   *    and can go;
+   *    and can go. Not for a `moved` row, whose file left the inbox for sure:
+   *    a file there now is someone else's under the same name;
    *  - it is in neither: `'unpacked'`, refused by the caller, because the
    *    tree is then the only copy of whatever the file became;
    *  - anything else: `null`, the general scratch-tree refusal. That covers no
@@ -821,7 +819,11 @@ export class ImportRetentionService {
       this.scratch.dirFor(candidate.userId, candidate.id),
     );
 
-    if (unitPath != null || (await fileExists(source.sourcePath))) {
+    // `moved` is only ever set after the acquire took the file out of the
+    // inbox, and an earlier discard leaves the row `released`. So for a `moved`
+    // row, a file under the old name is a newcomer that happens to share it,
+    // and says nothing about what the tree holds.
+    if (unitPath != null || (source.status !== 'moved' && (await fileExists(source.sourcePath)))) {
       return { sourceId: source.id, sourcePath: source.sourcePath, unitPath };
     }
 

@@ -4,6 +4,7 @@ import type { DataSource, Repository } from 'typeorm';
 
 import { JobControlStore } from '@ci/common/job-controls';
 import { CronRegistry } from '@ci/common/schedule';
+import config from '@ci/configuration';
 
 import type { JobSettingEntity } from '../../entities/JobSettingEntity';
 import { EventListenerRegistry } from '../../event-registration';
@@ -237,6 +238,31 @@ describe('JobControlsService.update validation', () => {
 
     await service.update({ queues: [{ name: 'llm', concurrency: 1 }] }, 'user-1');
     expect(upserts).toEqual([expect.objectContaining({ kind: 'queue', key: 'llm', concurrency: 1 })]);
+  });
+
+  it('names the env var when a queue declares more than the shipped per-queue figure', async () => {
+    const { service, upserts } = makeHarness();
+
+    // image-description declares LLM_OLLAMA_NUM_PARALLEL, which can sit above
+    // the shipped per-queue figure. Then that figure binds, and raising it is
+    // the way up.
+    EventListenerRegistry.register('wide.job', 'WideListener', 'run', 'wide', {
+      localConcurrency: config.queues.perQueueConcurrency + 10,
+    });
+    await configureStore([]);
+
+    await expect(
+      service.update(
+        { queues: [{ name: 'wide', concurrency: config.queues.perQueueConcurrency + 1 }] },
+        'user-1',
+      ),
+    ).rejects.toThrow(
+      `The "wide" queue can be at most ${config.queues.perQueueConcurrency} ` +
+        '(the per-queue figure this build ships with). ' +
+        `It was given ${config.queues.perQueueConcurrency + 1}. ` +
+        'Running more than that is a CI_QUEUE_PER_QUEUE_CONCURRENCY change and a restart, not a setting.',
+    );
+    expect(upserts).toEqual([]);
   });
 
   it('rejects an unknown schedule', async () => {
