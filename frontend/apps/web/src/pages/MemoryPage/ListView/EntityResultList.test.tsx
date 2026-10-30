@@ -215,7 +215,7 @@ describe('EntityResultList', () => {
     const note = screen.getByTestId('name-sort-cut-short');
 
     expect(note).toHaveTextContent(
-      'Sorted by name from the newest 500 of each kind, so older ones are not in this list. Pick dates under When, or search, to find them.',
+      'Sorted by name from the newest 500 of each kind, so older ones are not in this list. Search to find them. For kinds with dates, such as events, you can also narrow the dates under When.',
     );
     // Above the first row, where the rows it is about start.
     expect(

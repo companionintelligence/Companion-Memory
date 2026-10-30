@@ -377,6 +377,25 @@ describe('SearchResolver timed browse, sorted by name, past the 500 rows a kind 
     expect(totalCount).toBe(501);
   });
 
+  it('leaves out only the kind that had more, and keeps every row of the others', async () => {
+    const events: Row[] = Array.from({ length: 3 }, (_, j) => ({
+      id: uuid(20_000 + j),
+      type: 'event' as const,
+      time: new Date(FIRST_MS + j * HOUR_MS),
+      fields: { title: `Event ${j}` },
+    }));
+    const source = [...notes(501), ...events];
+    const { rows, cutShort } = await walk(
+      makeResolver(source),
+      { first: 100, sortBy: 'name', sortOrder: 'asc' },
+      source,
+    );
+
+    expect(cutShort.every(Boolean)).toBe(true);
+    expect(rows.filter((row) => row.type === 'event')).toHaveLength(3);
+    expect(rows.filter((row) => row.type === 'note')).toHaveLength(500);
+  });
+
   it('does not say so for a kind with exactly 500 rows', async () => {
     const source = notes(500);
     const { rows, cutShort } = await walk(

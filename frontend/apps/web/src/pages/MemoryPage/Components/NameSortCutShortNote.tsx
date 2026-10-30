@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 /**
  * Said above a list sorted by name that the server cut short: a name sort with no search text reads
  * only each kind's newest 500 rows, so a bigger library is in name order but leaves its older rows
- * out (`SearchResultConnection.nameSortCutShort`). A date range or a search reaches them.
+ * out (`SearchResultConnection.nameSortCutShort`). A search reaches them. A date range reaches
+ * only the dated kinds: the explorer's When filter sets notes, files, content, people, places,
+ * things and products aside (`resolveExplorerTypes`), so it cannot be the whole answer.
  */
 export function NameSortCutShortNote() {
   const { t } = useTranslation();
