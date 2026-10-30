@@ -91,10 +91,7 @@ describe('phoneHref', () => {
 describe('PHONE_EXTENSION_PATTERN', () => {
   it('is the pattern the server refuses extension numbers by, verbatim', () => {
     const source = fs.readFileSync(
-      path.resolve(
-        __dirname,
-        '../../../../../../backend/apps/api/src/common/normalizeIdentifier.ts',
-      ),
+      path.resolve(__dirname, '../../../../../../backend/apps/api/src/common/normalizeIdentifier.ts'),
       'utf8',
     );
 
