@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import {
+  addAppStateListener,
+  claimNativeReplica,
+  clearNativeReplicaSync,
+  configureNativeReplicaSync,
   getApiBaseUrl,
   isNativePlatform,
   registerCachedDataProbe,
+  releaseNativeReplica,
   setLocalSearchReplicaFile,
   subscribeApiBaseUrl,
 } from '@ci/common';
@@ -12,13 +17,19 @@ import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import { useAuth } from '@/hooks';
 
+import { replicaStartOptions } from './backgroundSync';
 import { GraphQLBackendConnector } from './connector';
 import { purgeLegacyIndexedDbReplica } from './legacyIndexedDb';
 import { NATIVE_DB_ON_DISK_FILENAME } from './nativeDatabase';
 import { isPreviewSyncEnabled, startPreviewSync, stopPreviewSync, subscribePreviewSync } from './previews';
 import { countDocuments, ensureDocumentsTable, ensureSearchIndex, watchBulkDownloads } from './searchIndex';
-import { bindPowerSyncDatabase, measurePowerSyncSizeBytes, setReplicaOpenState } from './session';
-import { POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
+import {
+  bindPowerSyncDatabase,
+  measurePowerSyncSizeBytes,
+  setReplicaOpenState,
+  setSyncUnavailableFor,
+} from './session';
+import { getLookbackDays, POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
 
 /**
  * Mounts the local-first PowerSync database and exposes it via `PowerSyncContext`.
@@ -59,6 +70,11 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
   const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
   // The server that said it runs no PowerSync service, if any.
   const [syncOffFor, setSyncOffFor] = useState<string | null>(null);
+
+  // Published for Settings, which explains an empty working set by it.
+  useEffect(() => {
+    setSyncUnavailableFor(syncOffFor);
+  }, [syncOffFor]);
 
   // Earlier builds left an IndexedDB database behind on every platform (a synced
   // copy in browsers before 2026-10-20, an empty placeholder everywhere before
@@ -246,6 +262,11 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     if (!authenticated || syncOffFor === apiBaseUrl) {
       void database.disconnect();
 
+      if (authenticated) {
+        // This Memory runs no sync service: nothing for a background run to fetch either.
+        void clearNativeReplicaSync();
+      }
+
       return;
     }
 
@@ -265,10 +286,75 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
       },
     );
 
-    void database.connect(connector).catch((error: unknown) => {
+    let superseded = false;
+
+    void (async () => {
+      // Phone apps: a background run may be syncing this file right now. It stops and finishes
+      // before this client starts, and no new one starts until the app goes to the background.
+      await claimNativeReplica();
+
+      if (superseded) {
+        return;
+      }
+
+      void configureNativeReplicaSync({
+        apiBaseUrl,
+        databaseFile: NATIVE_DB_ON_DISK_FILENAME,
+        lookbackDays: getLookbackDays(),
+        startOptions: replicaStartOptions(),
+      });
+
+      await database.connect(connector);
+    })().catch((error: unknown) => {
       console.warn('[PowerSync] Connect skipped; GraphQL remains the source of truth', error);
     });
+
+    return () => {
+      superseded = true;
+    };
   }, [database, preparedDatabase, authenticated, reconnectNonce, apiBaseUrl, syncOffFor]);
+
+  // Phone apps: the app's client syncs while the app is on screen, the background job otherwise.
+  // Going to the background disconnects this client and then releases the replica; coming back
+  // reconnects, which claims it again first (the effect above).
+  useEffect(() => {
+    if (!database || !authenticated || !isNativePlatform()) {
+      return;
+    }
+
+    let disposed = false;
+    let unsubscribe: () => void = () => {};
+
+    void addAppStateListener((isActive) => {
+      if (disposed) {
+        return;
+      }
+
+      if (isActive) {
+        setReconnectNonce((n) => n + 1);
+
+        return;
+      }
+
+      void database
+        .disconnect()
+        .catch(() => undefined)
+        .then(() => releaseNativeReplica());
+    }).then((off) => {
+      if (disposed) {
+        off();
+
+        return;
+      }
+
+      unsubscribe = off;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [database, authenticated]);
 
   useEffect(() => {
     if (!authenticated || !database) {

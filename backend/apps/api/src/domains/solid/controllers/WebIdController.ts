@@ -3,13 +3,12 @@ import { Request, Response } from 'express';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
+import { requestOrigin } from '@ci/common/http/requestOrigin';
 import { UserService } from '@ci/domains/user';
 
 import { negotiateRdf } from '../rdf';
 import { ProfileDocumentService } from '../services/ProfileDocumentService';
 import { WebIdService } from '../services/WebIdService';
-
-import { requestOrigin } from './requestOrigin';
 
 /**
  * Serves WebID Profile Documents — the public identity cards of the Solid

@@ -14,6 +14,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -31,6 +32,7 @@ import { ApiKeyGuard, type ApiKeyScopedRequest, JwtOrPortalAuthGuard } from '@ci
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { ApiKeyService } from '../services/ApiKeyService';
+import { extractApiKey } from '../services/ApiKeyStrategy';
 import {
   CONNECT_KEY_NAME_PREFIX,
   type CreateApiKeyDto,
@@ -122,6 +124,29 @@ export class ApiKeyController {
     const signIn = input.sign_in === true || PHONE_KEY_NAME.test(input.name);
 
     return this.apiKeyService.create(serviceContext, input, signIn ? SIGN_IN_PROVENANCE : null);
+  }
+
+  /**
+   * Whether the key on this request is one Memory would accept: 204 if so, 401 if not.
+   *
+   * For CI-Hub's edge. The Hub lets a request to Memory through without a Hub session when it
+   * carries an API key (the phone apps hold nothing else), and asks this, server to server,
+   * before it does -- so a made-up key stops at the Hub instead of reaching Memory from the
+   * internet. Any usable key passes, whatever its scopes: what a key may do is decided per
+   * route when the real request arrives, as it always was. Declared without a guard for that
+   * reason (`ApiKeyGuard` would refuse a scope-limited key on a route that names no scope).
+   * Answers nothing a caller could not learn by sending the key to any other route.
+   *
+   * Declared before `:id` so `check` is never read as a key id.
+   */
+  @Get('check')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async check(@Req() req: Request): Promise<void> {
+    const raw = extractApiKey(req);
+
+    if (!raw || !(await this.apiKeyService.validateKey(raw))) {
+      throw new UnauthorizedException();
+    }
   }
 
   /**

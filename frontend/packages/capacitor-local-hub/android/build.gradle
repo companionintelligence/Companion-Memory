@@ -115,6 +115,10 @@ dependencies {
     // SupportSQLiteOpenHelper -- so the supertype has to be on the compile classpath too.
     implementation 'androidx.sqlite:sqlite:2.6.2'
 
+    // The background replica sync (replica/) reads the passphrase the Capacitor SQLite plugin
+    // keeps in its EncryptedSharedPreferences; same version as that plugin, which the app
+    // already ships.
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
     testImplementation "junit:junit:$junitVersion"
 
     // JVM router tests for LocalHubServer (src/test). Robolectric is here for exactly one

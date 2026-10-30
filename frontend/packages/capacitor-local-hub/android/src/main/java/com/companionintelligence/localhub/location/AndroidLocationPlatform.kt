@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.companionintelligence.localhub.upload.OutboxUploadWorker
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
@@ -203,6 +204,10 @@ class AndroidLocationPlatform(context: Context) : LocationPlatform {
     }
 
     override fun nowMs(): Long = System.currentTimeMillis()
+
+    override fun requestUpload(soon: Boolean) {
+        OutboxUploadWorker.schedule(app, delayMinutes = if (soon) 0 else OutboxUploadWorker.DEFAULT_DELAY_MINUTES)
+    }
 
     private fun geofenceIntent(): PendingIntent = PendingIntent.getBroadcast(
         app,

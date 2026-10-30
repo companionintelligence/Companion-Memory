@@ -153,6 +153,36 @@ describeWithDb(`device records (${availability.target})`, () => {
     expect(doc.detail_version).toBe(DEVICE_RECORD_VERSION);
   });
 
+  it('re-indexing to the same document writes nothing; a real change still does', async () => {
+    // PowerSync forwards every written row to every phone, so a no-op rewrite is a download.
+    const id = await communication(userId, { source: 'discord', thread: 'Direct Message with ana#0' });
+    const version = async () =>
+      (
+        await dataSource.query<Array<{ xmin: string; updated_at: Date }>>(
+          'SELECT xmin::text, updated_at FROM ci_search.mobile_search_documents WHERE entity_id = $1',
+          [id],
+        )
+      )[0];
+
+    await index('communication', id);
+    const first = await version();
+
+    await index('communication', id);
+    expect(await version()).toEqual(first);
+
+    const { sql, params } = buildVectorUpsertStatement([{ text: 'a different subject', weight: 10 }], {
+      id: uuidv7(),
+      entityType: 'communication',
+      entityId: id,
+      userId,
+    });
+    await dataSource.query(sql, params);
+
+    const changed = await version();
+    expect(changed.xmin).not.toBe(first.xmin);
+    expect(changed.updated_at.getTime()).toBeGreaterThanOrEqual(first.updated_at.getTime());
+  });
+
   it('keys a conversation by user, source and thread id: same thread groups, any difference splits', async () => {
     const a = await communication(userId, { source: 'email', thread: '19a987615de1b7f3' });
     const b = await communication(userId, { source: 'email', thread: '19a987615de1b7f3' });

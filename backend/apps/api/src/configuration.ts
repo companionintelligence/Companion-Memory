@@ -531,7 +531,11 @@ export const ConfigSchema = z.object({
   // url/jwtSecret = feature scaffolded but not enabled (the endpoint returns 503).
   // See infrastructure/powersync/README.md.
   powersync: z.object({
-    /** Public URL of the PowerSync service the client connects to. */
+    /**
+     * Where clients reach the PowerSync service. An absolute URL is handed out as is; a
+     * path (`/powersync`) is joined to the origin each token request arrived on, for an
+     * appliance reached through more than one address (Hub installs).
+     */
     url: z.string().default(''),
     /** Shared HS256 secret the PowerSync service's client_auth trusts. */
     jwtSecret: z.string().default(''),

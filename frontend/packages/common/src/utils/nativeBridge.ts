@@ -75,6 +75,22 @@ interface LocalHubPlugin {
   ): Promise<{ remove: () => Promise<void> }>;
   startSignificantLocationUpdates?(options?: SignificantLocationOptions): Promise<void>;
   stopSignificantLocationUpdates?(): Promise<void>;
+  getBackgroundUpload?(): Promise<BackgroundUploadState>;
+  setBackgroundUpload?(options: { enabled: boolean }): Promise<BackgroundUploadState>;
+  configureBackgroundSync?(options: NativeReplicaSyncOptions): Promise<void>;
+  claimReplica?(): Promise<{ free: boolean }>;
+  releaseReplica?(): Promise<void>;
+  clearBackgroundSync?(): Promise<void>;
+}
+
+/** What the phone apps' background replica sync needs to do what the app's PowerSync client does. */
+export interface NativeReplicaSyncOptions {
+  apiBaseUrl: string;
+  /** The replica's file name on disk (`<name>SQLite.db`). */
+  databaseFile: string;
+  lookbackDays: number;
+  /** JSON of the options the app's client passes `powersync_control('start')`. */
+  startOptions: string;
 }
 
 /**
@@ -94,7 +110,20 @@ export interface SignificantLocationOptions {
   geofenceRadiusMeters?: number;
   notificationTitle?: string;
   notificationText?: string;
+  /** The appliance origin (`getApiBaseUrl()`) the Android background uploader sends to. */
+  apiBaseUrl?: string;
 }
+
+/**
+ * Whether fixes recorded in the background upload without an app open. `supported` is false
+ * where there is no background uploader (a browser), and the setting is hidden there.
+ */
+export interface BackgroundUploadState {
+  enabled: boolean;
+  supported: boolean;
+}
+
+const BACKGROUND_UPLOAD_UNSUPPORTED: BackgroundUploadState = { enabled: false, supported: false };
 
 /** Why a native location session stopped; `NOT_AUTHORIZED` is the one the UI acts on. */
 export interface NativeLocationError {
@@ -688,6 +717,84 @@ export async function startSignificantLocationUpdates(
 }
 
 let significantLocationGeneration = 0;
+
+/**
+ * Settings -> Location's "Upload in the background". The phone apps' plugin uploads fixes its
+ * tracker queued while the app was closed. In a browser, or when the plugin call fails,
+ * resolves unsupported so the setting stays hidden.
+ */
+export async function getBackgroundUpload(): Promise<BackgroundUploadState> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isNativePlatform() || !hub?.getBackgroundUpload) {
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
+  }
+
+  try {
+    return await hub.getBackgroundUpload();
+  } catch {
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
+  }
+}
+
+/**
+ * The phone apps' background replica sync (LocalHub: Android `replica/`, iOS
+ * `ReplicaBackgroundSync.swift`): the app's PowerSync client hands it a config each time it
+ * connects, claims the replica before connecting, and releases it once disconnected, so the two
+ * never sync the same file at once. In a browser these do nothing. Failures are swallowed --
+ * the app's own sync must not depend on the background one.
+ */
+function replicaSyncHub(): LocalHubPlugin | undefined {
+  return isNativePlatform() ? plugins()?.LocalHub : undefined;
+}
+
+export async function configureNativeReplicaSync(options: NativeReplicaSyncOptions): Promise<void> {
+  try {
+    await replicaSyncHub()?.configureBackgroundSync?.(options);
+  } catch (error) {
+    console.warn('[PowerSync] Could not configure background sync', error);
+  }
+}
+
+/** Resolves once no background run is syncing the replica (or after the plugin's own timeout). */
+export async function claimNativeReplica(): Promise<void> {
+  try {
+    const result = await replicaSyncHub()?.claimReplica?.();
+
+    if (result && !result.free) {
+      console.warn('[PowerSync] A background sync did not stop in time; connecting anyway');
+    }
+  } catch (error) {
+    console.warn('[PowerSync] Could not claim the replica from background sync', error);
+  }
+}
+
+export async function releaseNativeReplica(): Promise<void> {
+  try {
+    await replicaSyncHub()?.releaseReplica?.();
+  } catch {
+    // The activity going away releases it natively too.
+  }
+}
+
+export async function clearNativeReplicaSync(): Promise<void> {
+  try {
+    await replicaSyncHub()?.clearBackgroundSync?.();
+  } catch (error) {
+    console.warn('[PowerSync] Could not turn background sync off', error);
+  }
+}
+
+/** Turn background upload on or off; resolves the state the plugin now holds. */
+export async function setBackgroundUpload(enabled: boolean): Promise<BackgroundUploadState> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isNativePlatform() || !hub?.setBackgroundUpload) {
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
+  }
+
+  return hub.setBackgroundUpload({ enabled });
+}
 
 /**
  * Opens this app's OS settings page so the user can raise the location grant to Always /

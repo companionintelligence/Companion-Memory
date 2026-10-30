@@ -58,7 +58,7 @@ describe('buildVectorUpsertStatement', () => {
 
     expect(sql).toContain('INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)');
     expect(sql).toMatch(
-      /INSERT INTO ci_search\.mobile_search_documents\s+\(id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version\)/,
+      /INSERT INTO ci_search\.mobile_search_documents AS doc\s+\(id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version\)/,
     );
     expect(sql).toContain('FROM vector_row v');
     // The vectors upsert keeps the existing row's id on conflict and the
@@ -87,6 +87,15 @@ describe('buildVectorUpsertStatement', () => {
       'are you free at noon',
       [...DEVICE_INDEXED_ENTITIES],
     ]);
+  });
+
+  it('rewrites the document only when a stored column would change', () => {
+    // PowerSync sends every written row to every phone, changed or not.
+    const { sql } = buildVectorUpsertStatement([{ text: 'Lunch?', weight: 10 }], row);
+
+    expect(sql).toMatch(
+      /WHERE \(doc\.title, doc\.body, doc\.occurred_at, doc\.related_id, doc\.detail, doc\.detail_version\)\s+IS DISTINCT FROM\s+\(EXCLUDED\.title, EXCLUDED\.body, EXCLUDED\.occurred_at, EXCLUDED\.related_id,\s+EXCLUDED\.detail, EXCLUDED\.detail_version\)/,
+    );
   });
 
   it('derives the device record from the source row and stamps the current recipe version', () => {

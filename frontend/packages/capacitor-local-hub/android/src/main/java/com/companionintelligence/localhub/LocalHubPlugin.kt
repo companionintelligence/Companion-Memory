@@ -7,6 +7,11 @@ import android.os.Build
 import android.util.Base64
 import com.companionintelligence.localhub.location.LocationTracking
 import com.companionintelligence.localhub.location.LocationTrackingConfig
+import com.companionintelligence.localhub.replica.ReplicaSyncConfig
+import com.companionintelligence.localhub.replica.ReplicaSyncConfigStore
+import com.companionintelligence.localhub.replica.ReplicaSyncGate
+import com.companionintelligence.localhub.replica.ReplicaSyncWorker
+import com.companionintelligence.localhub.upload.BackgroundUploadSettings
 import com.getcapacitor.JSObject
 import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
@@ -104,6 +109,9 @@ class LocalHubPlugin : Plugin() {
 
     override fun handleOnDestroy() {
         LocationTracking.get(context).listener = null
+        // The WebView, and the sync client in it, go with the activity: the replica is free for
+        // the background job again, even if the page never got to say so.
+        ReplicaSyncGate.releaseFromApp()
         // Synchronous best-effort cleanup: handleOnDestroy has no coroutine to await, but
         // NanoHTTPD#stop() already blocks until its listener thread has joined, so this is
         // a real stop, not a fire-and-forget one.
@@ -426,6 +434,89 @@ class LocalHubPlugin : Plugin() {
     }
 
     /**
+     * Hands the background replica sync what it needs to do what the app's own PowerSync client
+     * does (see [ReplicaSyncConfig]) and schedules it. Called each time that client connects.
+     */
+    @PluginMethod
+    fun configureBackgroundSync(call: PluginCall) {
+        val config = ReplicaSyncConfig.fromJson(call.data)
+        if (config == null) {
+            call.reject("configureBackgroundSync needs apiBaseUrl, databaseFile, lookbackDays and startOptions")
+            return
+        }
+        pluginScope.launch {
+            withContext(Dispatchers.IO) {
+                ReplicaSyncConfigStore(context).save(config)
+                ReplicaSyncWorker.schedule(context)
+            }
+            call.resolve()
+        }
+    }
+
+    /**
+     * The app's sync client is about to connect: stop a background run in progress and keep new
+     * ones off until [releaseReplica]. Resolves `{ free }` -- false only if a run would not stop
+     * in time, which the caller may log; it connects either way.
+     */
+    @PluginMethod
+    fun claimReplica(call: PluginCall) {
+        pluginScope.launch {
+            val free = withContext(Dispatchers.IO) { ReplicaSyncGate.claimForApp(CLAIM_TIMEOUT_MS) }
+            val ret = JSObject()
+            ret.put("free", free)
+            call.resolve(ret)
+        }
+    }
+
+    /** The app's sync client has disconnected (the app went to the background). */
+    @PluginMethod
+    fun releaseReplica(call: PluginCall) {
+        ReplicaSyncGate.releaseFromApp()
+        call.resolve()
+    }
+
+    /** Sign-out, or a Memory without sync: no more background runs, and forget the config. */
+    @PluginMethod
+    fun clearBackgroundSync(call: PluginCall) {
+        pluginScope.launch {
+            withContext(Dispatchers.IO) {
+                ReplicaSyncWorker.cancel(context)
+                ReplicaSyncConfigStore(context).clear()
+            }
+            call.resolve()
+        }
+    }
+
+    /**
+     * Whether queued location fixes upload while the app is closed (Settings -> Location).
+     * On unless the person turned it off; see [BackgroundUploadSettings].
+     */
+    @PluginMethod
+    fun getBackgroundUpload(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("enabled", BackgroundUploadSettings.isEnabled(context))
+        ret.put("supported", true)
+        call.resolve(ret)
+    }
+
+    /** Turning it on uploads anything already waiting; turning it off cancels a pending upload. */
+    @PluginMethod
+    fun setBackgroundUpload(call: PluginCall) {
+        val enabled = call.getBoolean("enabled")
+        if (enabled == null) {
+            call.reject("A boolean 'enabled' is required")
+            return
+        }
+        pluginScope.launch {
+            withContext(Dispatchers.IO) { BackgroundUploadSettings.setEnabled(context, enabled) }
+            val ret = JSObject()
+            ret.put("enabled", enabled)
+            ret.put("supported", true)
+            call.resolve(ret)
+        }
+    }
+
+    /**
      * Discovers Companion Memory appliances advertising over mDNS / NSD (`_companion-memory._tcp.`)
      * on the local network for zero-config air-gapped pairing.
      */
@@ -523,6 +614,8 @@ class LocalHubPlugin : Plugin() {
     }
 
     companion object {
+        /** How long a claim waits for a background run to stop; it closes the run's stream, so normally milliseconds. */
+        private const val CLAIM_TIMEOUT_MS = 10_000L
         const val ALIAS_LOCATION = "location"
         const val ALIAS_BACKGROUND_LOCATION = "backgroundLocation"
 

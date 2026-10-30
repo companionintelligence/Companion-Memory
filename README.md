@@ -625,12 +625,12 @@ With no `IMAGE`, `make build` builds the `ENV`-appropriate set, in this order:
 ```
 local        setup-database database object-store summary hbpe
 staging      api gateway setup-database database object-store summary hbpe
-production   api gateway setup-database database object-store setup-secrets summary hbpe
+production   api gateway setup-database database object-store setup-secrets powersync summary hbpe
 ```
 
 ```bash
 make build IMAGE=hbpe    # just this one — api, gateway, setup-database, database,
-                         #   object-store, setup-secrets, summary or hbpe
+                         #   object-store, setup-secrets, powersync, summary or hbpe
 make build DRY_RUN=1     # print the exact docker build commands — every --build-arg
                          #   and, on a cuda/rocm host, the wheel-image tags — and build nothing
 ```

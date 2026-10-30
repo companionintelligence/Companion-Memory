@@ -75,12 +75,22 @@ test('ENV=staging adds api+gateway and needs the frontend build', () => {
   assert.equal(plan.needsFrontendBuild, true);
 });
 
-test('ENV=production additionally adds setup-secrets', () => {
+test('ENV=production additionally adds setup-secrets and powersync', () => {
   const plan = computeBuildPlan(ROOT, 'production', 'cpu', '0.9.17');
 
   assert.deepEqual(
     plan.steps.map((s) => s.key),
-    ['api', 'gateway', 'setup-database', 'database', 'object-store', 'setup-secrets', 'summary', 'hbpe'],
+    [
+      'api',
+      'gateway',
+      'setup-database',
+      'database',
+      'object-store',
+      'setup-secrets',
+      'powersync',
+      'summary',
+      'hbpe',
+    ],
   );
   assert.equal(plan.needsFrontendBuild, true);
 });
@@ -112,6 +122,15 @@ test('an explicit "setup-secrets" builds under ENV=local, even though it default
     plan.steps.map((s) => s.key),
     ['setup-secrets'],
   );
+});
+
+test('powersync builds from its own directory, config and sync rules included', () => {
+  const [step] = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', ['powersync']).steps;
+
+  assert.equal(step.key, 'powersync');
+  assert.equal(step.context, 'infrastructure/powersync');
+  assert.equal(step.dockerfile, 'infrastructure/powersync/Dockerfile');
+  assert.equal(step.repo, 'ci/powersync');
 });
 
 test('GPU=cpu never emits a warning for hbpe', () => {

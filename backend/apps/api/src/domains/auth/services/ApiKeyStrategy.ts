@@ -30,7 +30,7 @@ const API_KEY_HEADER = 'x-api-key';
  * `jose.jwtVerify` rejects a non-JWS string while parsing, before any JWKS fetch, so the key never
  * leaves the process.
  */
-function extractApiKey(req: Request): string | null {
+export function extractApiKey(req: Request): string | null {
   const headerKey = req.get(API_KEY_HEADER)?.trim();
 
   if (headerKey) {

@@ -20,6 +20,7 @@ IMAGE_LOCAL=(
   ci/setup-database
   ci/setup-secrets
   ci/hbpe-service
+  ci/powersync
 )
 IMAGE_REMOTE=(
   companion/api
@@ -30,4 +31,5 @@ IMAGE_REMOTE=(
   companion/setup-database
   companion/setup-secrets
   companion/hbpe-service
+  companion/powersync
 )

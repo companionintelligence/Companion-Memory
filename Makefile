@@ -43,6 +43,7 @@ export SETUP_SECRETS_REPO ?= ci/setup-secrets
 export SETUP_DATABASE_REPO ?= ci/setup-database
 export SUMMARY_REPO ?= ci/summary-service
 export HBPE_REPO ?= ci/hbpe-service
+export POWERSYNC_REPO ?= ci/powersync
 
 # The seed's target user — must match the SEED_USER_ID default in
 # backend/apps/api/scripts/seed-database/data/users.ts. Override it to point
@@ -61,6 +62,7 @@ export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 LICENSE_DIRS := \
 	infrastructure/database \
 	infrastructure/object-store \
+	infrastructure/powersync \
 	infrastructure/setup-database \
 	infrastructure/setup-secrets
 

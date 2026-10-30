@@ -122,7 +122,7 @@
     "bucket": "companion",
     "auth": {
       "signatureUrl": "http://object-store:9000",
-      "signatureTTL": 3600,
+      "signatureTTL": 300,
       "accessKeyId": "OBJECT_STORE_USERNAME",
       "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }

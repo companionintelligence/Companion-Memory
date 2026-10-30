@@ -266,11 +266,18 @@ phone, and no IndexedDB database exists for them to reach.
 What this does and does not close:
 
 - **Closed:** plaintext replica on the phone; the IndexedDB-first race.
-- **Still open:** key custody on iOS — the plugin writes its keychain item
-  without a `ThisDeviceOnly` accessibility class, so the key travels with an
-  encrypted backup (D1's shape, one item over). A key lost while the file stays
-  encrypted makes the replica unreadable; the app reports it and does not
-  delete anything (`ReplicaKeyLostError`); clearing app storage starts over.
+- **Closed in code on 2026-10-30 (uncompiled; verify on a Mac):** key custody on
+  iOS. The plugin writes its keychain item (service `unlockSecret`, account
+  `ci-memory_CapacitorSQLitePlugin`) with the default `WhenUnlocked` and no
+  `ThisDeviceOnly`, so the key travelled with an encrypted backup (D1's shape, one
+  item over). `ReplicaKeychain.harden()` in the Local Hub plugin now moves it to
+  `AfterFirstUnlockThisDeviceOnly` -- the background replica sync needs it with the
+  phone locked -- and excludes `Library/LocalDatabase` from backups, so a restore
+  gets neither key nor file and re-syncs (§3.3). It runs at every launch and on
+  every sync config handover, because a freshly minted key starts at the default.
+  A key lost while the file stays encrypted still makes the replica unreadable; the
+  app reports it and does not delete anything (`ReplicaKeyLostError`); clearing app
+  storage starts over.
 - **Closed on 2026-10-20 — the browser no longer syncs at all.** Until then
   the web app in a desktop browser held its replica in plaintext IndexedDB,
   exactly as described above, and `ci_search.mobile_search_documents` had

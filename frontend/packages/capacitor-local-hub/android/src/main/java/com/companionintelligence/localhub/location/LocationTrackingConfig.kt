@@ -28,6 +28,11 @@ data class LocationTrackingConfig(
     val geofenceRadiusMeters: Float,
     val notificationTitle: String,
     val notificationText: String,
+    /**
+     * The appliance origin the app sends to (`getApiBaseUrl()`), for the background uploader.
+     * Null in a config saved before the field existed; the uploader then waits for an app open.
+     */
+    val apiBaseUrl: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put(KEY_DEVICE_KEY, deviceKey)
@@ -39,6 +44,7 @@ data class LocationTrackingConfig(
         .put(KEY_GEOFENCE_RADIUS, geofenceRadiusMeters.toDouble())
         .put(KEY_NOTIFICATION_TITLE, notificationTitle)
         .put(KEY_NOTIFICATION_TEXT, notificationText)
+        .put(KEY_API_BASE_URL, apiBaseUrl ?: JSONObject.NULL)
 
     companion object {
         const val DEFAULT_PROVIDER = "companion-mobile"
@@ -59,6 +65,7 @@ data class LocationTrackingConfig(
         private const val KEY_GEOFENCE_RADIUS = "geofenceRadiusMeters"
         private const val KEY_NOTIFICATION_TITLE = "notificationTitle"
         private const val KEY_NOTIFICATION_TEXT = "notificationText"
+        private const val KEY_API_BASE_URL = "apiBaseUrl"
 
         /**
          * Parses the JS options object (or a persisted copy). Returns null when `deviceKey` is
@@ -81,6 +88,7 @@ data class LocationTrackingConfig(
                 geofenceRadiusMeters = positiveOr(json.optDouble(KEY_GEOFENCE_RADIUS), DEFAULT_GEOFENCE_RADIUS_METERS.toDouble()).toFloat(),
                 notificationTitle = json.optString(KEY_NOTIFICATION_TITLE, "").ifBlank { DEFAULT_NOTIFICATION_TITLE },
                 notificationText = json.optString(KEY_NOTIFICATION_TEXT, "").ifBlank { DEFAULT_NOTIFICATION_TEXT },
+                apiBaseUrl = if (json.isNull(KEY_API_BASE_URL)) null else json.optString(KEY_API_BASE_URL, "").trim().ifBlank { null },
             )
         }
 

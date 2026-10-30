@@ -51,6 +51,31 @@ export interface HourlyFileCount {
 const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * The bucket and key a signed object-store link points at, from any of the forms the app holds
+ * it in: absolute (`https://memory.example/static/...`), app-relative (`/static/...`) or as
+ * signed (`/<bucket>/<key>?...`). Null for anything else, including a key that is not a UUID --
+ * no row could match it.
+ */
+export function parseSignedLink(link: string): { bucket: string; key: string } | null {
+  try {
+    const path = new URL(link, 'http://placeholder.invalid').pathname;
+    const segments = path
+      .replace(/^\/static(?=\/)/, '')
+      .split('/')
+      .filter(Boolean)
+      .map(decodeURIComponent);
+
+    if (segments.length !== 2 || !UUID_KEY.test(segments[1])) {
+      return null;
+    }
+
+    return { bucket: segments[0], key: segments[1] };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Leaves out the files an event already shows: those stamped with an `event_id`,
  * and those wrapped by a content row that links to an event (the link from
  * content to file is `content.external_id`; see ContentService.findIdsByFileIds).
@@ -418,6 +443,43 @@ export class FileService implements OnModuleInit {
     });
 
     return result ? this.signFile(result) : null;
+  }
+
+  /**
+   * Fresh signed links for links this service signed earlier, in the order given; null for a
+   * link that names no file the caller owns (or is not one of ours at all).
+   *
+   * Signed links expire (`staticfiles.auth.signatureTTL`), and the web app keeps them in its
+   * query cache for as long as it is open, so a photo shown again after that fails. The app
+   * sends the failed link back here rather than re-running whatever query first produced it.
+   * A link is `[<origin>][/static]/<bucket>/<key>?<signature>`; the bucket and key name the
+   * `ci.files` row, which must belong to the caller -- the key alone is not a secret, it rides
+   * in every link -- and the row is re-signed exactly as it was first signed. One query for
+   * the whole batch, by (bucket, key) within the caller's own rows.
+   */
+  async resignLinks(context: ServiceContext, links: string[]): Promise<(string | null)[]> {
+    const wanted = links.map((link) => parseSignedLink(link));
+    const keys = [...new Set(wanted.flatMap((target) => (target ? [target.key] : [])))];
+
+    if (keys.length === 0) {
+      return links.map(() => null);
+    }
+
+    const rows = await this.fileRepository.find({
+      where: {
+        key: In(keys),
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+    });
+    const signed = new Map<string, string>();
+
+    for (const file of await this.signFiles(rows)) {
+      if (file.bucket != null && file.key != null && file.url) {
+        signed.set(`${file.bucket}/${file.key}`, file.url);
+      }
+    }
+
+    return wanted.map((target) => (target ? (signed.get(`${target.bucket}/${target.key}`) ?? null) : null));
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(SignedFile | null)[]> {

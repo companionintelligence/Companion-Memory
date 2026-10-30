@@ -17,6 +17,7 @@ import {
   createLocationSampler,
   deviceSourceKey,
   fixFromNativeLocationEvent,
+  getApiBaseUrl,
   getNativeLocationAuthorization,
   isIosPlatform,
   isNativePlatform,
@@ -266,6 +267,9 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
           geofenceRadiusMeters: HOME_GEOFENCE_RADIUS_METERS,
           notificationTitle: 'Recording location',
           notificationText: 'Companion records your location while you are on the move.',
+          // Where Android's background uploader sends the fixes it queued; the key it sends
+          // with is the one already in the native credential store.
+          apiBaseUrl: getApiBaseUrl(),
         },
         onLocation,
         onError,

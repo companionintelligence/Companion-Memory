@@ -26,6 +26,9 @@ struct LocationTrackingConfig: Equatable {
     let minIntervalMs: Int64
     /// Fixes looser than this are dropped, not queued.
     let maxAccuracyMeters: Double
+    /// The appliance origin the app sends to (`getApiBaseUrl()`), for the background uploader.
+    /// Nil in a config saved before the field existed; the uploader then waits for an app open.
+    var apiBaseUrl: String? = nil
 
     private enum Key {
         static let deviceKey = "deviceKey"
@@ -34,6 +37,7 @@ struct LocationTrackingConfig: Equatable {
         static let minDistance = "minDistanceMeters"
         static let minInterval = "minIntervalMs"
         static let maxAccuracy = "maxAccuracyMeters"
+        static let apiBaseUrl = "apiBaseUrl"
     }
 
     func toJSON() -> [String: Any] {
@@ -43,7 +47,8 @@ struct LocationTrackingConfig: Equatable {
             Key.owner: owner ?? NSNull(),
             Key.minDistance: minDistanceMeters,
             Key.minInterval: minIntervalMs,
-            Key.maxAccuracy: maxAccuracyMeters
+            Key.maxAccuracy: maxAccuracyMeters,
+            Key.apiBaseUrl: apiBaseUrl ?? NSNull()
         ]
     }
 
@@ -60,6 +65,10 @@ struct LocationTrackingConfig: Equatable {
             value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
         }
         let provider = (json[Key.provider] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiBaseUrl = (json[Key.apiBaseUrl] as? String).flatMap { (value: String) -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
 
         return LocationTrackingConfig(
             deviceKey: deviceKey,
@@ -67,7 +76,8 @@ struct LocationTrackingConfig: Equatable {
             owner: owner,
             minDistanceMeters: positiveOr(json[Key.minDistance], defaultMinDistanceMeters),
             minIntervalMs: Int64(positiveOr(json[Key.minInterval], Double(defaultMinIntervalMs))),
-            maxAccuracyMeters: positiveOr(json[Key.maxAccuracy], defaultMaxAccuracyMeters)
+            maxAccuracyMeters: positiveOr(json[Key.maxAccuracy], defaultMaxAccuracyMeters),
+            apiBaseUrl: apiBaseUrl
         )
     }
 

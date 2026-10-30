@@ -16,7 +16,12 @@ vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   isNativePlatform: () => true,
 }));
-vi.mock('@powersync/react', () => ({ usePowerSync: () => ({}) }));
+vi.mock('@powersync/react', () => {
+  // One object, for the same reason as the session mock below.
+  const database = { currentStatus: undefined, registerListener: () => () => undefined };
+
+  return { usePowerSync: () => database };
+});
 vi.mock('@/api/powersync/session', () => {
   // One object: `useSyncExternalStore` compares snapshots by identity, and a fresh
   // literal per call would re-render without end.
@@ -27,6 +32,8 @@ vi.mock('@/api/powersync/session', () => {
     measurePowerSyncSizeBytes: async () => 1000,
     getReplicaOpenState: () => open,
     subscribeReplicaOpenState: () => () => undefined,
+    getSyncUnavailableFor: () => null,
+    subscribeSyncUnavailableFor: () => () => undefined,
   };
 });
 vi.mock('@/api/powersync/previews', () => ({

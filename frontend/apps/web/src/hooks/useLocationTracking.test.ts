@@ -321,6 +321,8 @@ describe('useLocationTracking — the native background monitor is the only reco
         geofenceRadiusMeters: 100,
         notificationTitle: expect.any(String),
         notificationText: expect.any(String),
+        // Android's background uploader sends to the origin the app itself uses.
+        apiBaseUrl: expect.any(String),
       }),
       expect.any(Function),
       expect.any(Function),
