@@ -6,7 +6,7 @@ import { initialsFor, paletteFor } from '@/components/PersonAvatar';
 import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
-import { threadInstant } from './useRecentThreads';
+import { threadStarted } from './useRecentThreads';
 
 /**
  * What a thread's tile says.
@@ -17,7 +17,7 @@ import { threadInstant } from './useRecentThreads';
  * every "Chat · …" label would give.
  */
 export function threadMarkText(
-  thread: Pick<Thread, 'name' | 'createdAt'>,
+  thread: Pick<Thread, 'name' | 'createdAt'> & { id?: string },
   fmt: DateTimeFormatter = DEVICE_DATE_TIME_FORMATTER,
 ): string {
   const name = thread.name?.trim();
@@ -26,7 +26,7 @@ export function threadMarkText(
     return initialsFor(name);
   }
 
-  const started = threadInstant(thread.createdAt);
+  const started = threadStarted(thread);
 
   if (started) {
     return fmt.dateTime(started, { day: 'numeric' });

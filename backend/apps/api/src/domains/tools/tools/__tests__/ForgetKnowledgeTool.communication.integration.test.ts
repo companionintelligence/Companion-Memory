@@ -22,6 +22,7 @@ import {
   type FileService,
   type ItemService,
   RelationshipEntity,
+  type ProductModelService,
 } from '@ci/domains/memory';
 import {
   CommunicationRemovedEvent,
@@ -201,6 +202,8 @@ describeWithDb(`memory.forget on a Communication node, against Postgres (${avail
       services.people,
       services.places,
       services.concepts,
+      // No case here names a product, so the tool never reaches for it.
+      {} as unknown as ProductModelService,
       logger(),
     );
   });

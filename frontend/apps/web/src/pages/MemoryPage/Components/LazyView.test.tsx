@@ -3,11 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LazyView, type ViewLoader } from './LazyView';
 
-const h = vi.hoisted(() => ({ memoryAnswers: vi.fn<() => Promise<boolean>>() }));
+const h = vi.hoisted(() => ({
+  memoryAnswers: vi.fn<() => Promise<boolean>>(),
+  pageServedByApi: vi.fn<() => boolean>(),
+}));
 
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   memoryAnswers: h.memoryAnswers,
+  pageServedByApi: h.pageServedByApi,
 }));
 
 describe('LazyView', () => {
@@ -17,6 +21,7 @@ describe('LazyView', () => {
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     h.memoryAnswers.mockResolvedValue(true);
+    h.pageServedByApi.mockReturnValue(true);
     // jsdom's location.reload is not implemented and its property cannot be spied on.
     Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, reload } });
   });
@@ -71,6 +76,37 @@ describe('LazyView', () => {
     expect(await screen.findByText('Loaded')).toBeInTheDocument();
     expect(h.memoryAnswers).toHaveBeenCalledTimes(1);
     expect(reload).not.toHaveBeenCalled();
+    expect(calls()).toBe(2);
+  });
+
+  // The native shells carry the code in the bundle, so Memory being down does not stop a reload.
+  it('reloads without asking Memory when the code comes with the app, as in the native shells', async () => {
+    h.pageServedByApi.mockReturnValue(false);
+    h.memoryAnswers.mockResolvedValue(false);
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const { load, calls } = failingOnce(new Error('Failed to fetch dynamically imported module'));
+
+    render(<LazyView viewKey="map" load={load} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(h.memoryAnswers).not.toHaveBeenCalled();
+    expect(calls()).toBe(1);
+  });
+
+  it('retries in place when the code comes with the app and there is no network', async () => {
+    h.pageServedByApi.mockReturnValue(false);
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const { load, calls } = failingOnce(new Error('Failed to fetch dynamically imported module'));
+
+    render(<LazyView viewKey="map" load={load} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+
+    expect(await screen.findByText('Loaded')).toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+    expect(h.memoryAnswers).not.toHaveBeenCalled();
     expect(calls()).toBe(2);
   });
 

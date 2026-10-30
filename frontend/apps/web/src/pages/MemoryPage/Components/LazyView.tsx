@@ -1,6 +1,6 @@
 import { type ComponentType, Suspense, lazy, useEffect, useRef, useState } from 'react';
 
-import { memoryAnswers } from '@ci/common';
+import { memoryAnswers, pageServedByApi } from '@ci/common';
 import { Button } from '@ci/shadcn';
 
 import { isChunkLoadError } from '@/lib/telemetry';
@@ -77,26 +77,40 @@ export function LazyView({ viewKey, load }: Props) {
             // Once the connection is back only a reload fetches them again. The
             // view is in the URL, so the reload lands on the same view.
             //
-            // Whether the reload can fetch them is Memory's to say, so it is asked
-            // now. `navigator.onLine` only says a network is there (a phone on
-            // Wi-Fi with Memory down is "online"), and the app's connection
-            // probe can be up to 30 s old. Memory not answering, the in-place
-            // retry below fails again and keeps this message, which is better
-            // than the browser's offline page.
+            // On the web, Memory serves the code, so whether the reload can fetch
+            // it is Memory's to say, and it is asked now. `navigator.onLine` only
+            // says a network is there (a phone on Wi-Fi with Memory down is
+            // "online"), and the app's connection probe can be up to 30 s old.
+            // Memory not answering, the in-place retry below fails again and
+            // keeps this message, which is better than the browser's offline page.
+            //
+            // The native Capacitor shells carry the code in the bundle and only
+            // call Memory, so a reload does not depend on Memory at all. There Try
+            // again reloads whenever a network is there, as it did before it asked
+            // Memory. (The desktop app is not one of them: it shows the web app
+            // as Memory's gateway serves it.)
             if (isChunkLoadError(error)) {
-              setChecking(true);
-              const answers = await memoryAnswers();
+              if (!pageServedByApi()) {
+                if (navigator.onLine) {
+                  window.location.reload();
 
-              if (!mounted.current) {
-                return;
-              }
+                  return;
+                }
+              } else {
+                setChecking(true);
+                const answers = await memoryAnswers();
 
-              setChecking(false);
+                if (!mounted.current) {
+                  return;
+                }
 
-              if (answers) {
-                window.location.reload();
+                setChecking(false);
 
-                return;
+                if (answers) {
+                  window.location.reload();
+
+                  return;
+                }
               }
             }
 

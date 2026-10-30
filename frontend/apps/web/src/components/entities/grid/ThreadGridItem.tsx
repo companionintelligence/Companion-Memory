@@ -3,7 +3,7 @@ import { type MouseEvent } from 'react';
 import { ThreadIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
-import { threadIdOf, threadLabel } from '@/pages/ChatPage/useRecentThreads';
+import { threadNodeLabel } from '@/pages/ChatPage/useRecentThreads';
 
 import { EntityGridItem } from './EntityGridItem';
 
@@ -29,9 +29,7 @@ export function ThreadGridItem({ thread, onClick }: Props) {
       <EntityGridItem.Header>
         <ThreadIcon className="shrink-0" />
 
-        <div className="text-md font-semibold truncate">
-          {threadLabel({ id: threadIdOf(data.id), name: data.name }, fmt)}
-        </div>
+        <div className="text-md font-semibold truncate">{threadNodeLabel(data, fmt)}</div>
       </EntityGridItem.Header>
 
       <EntityGridItem.Content>

@@ -62,6 +62,15 @@ export function threadIdOf(globalId: string): string {
 }
 
 /**
+ * When a thread started: its `createdAt`, or the time its UUIDv7 id was minted when there is no
+ * readable `createdAt`, or null. The label and the sidebar tile both read it, so an untitled chat's
+ * tile shows the day its label names.
+ */
+export function threadStarted(thread: { id?: string; createdAt?: string | null }): Date | null {
+  return threadInstant(thread.createdAt ?? undefined) ?? (thread.id ? uuidV7Time(thread.id) : null);
+}
+
+/**
  * What to call a thread.
  *
  * Shared so the drawer submenu, the desktop sidebar, the phone's chat list and the explorer cannot
@@ -86,13 +95,24 @@ export function threadLabel(
     return name;
   }
 
-  const started = threadInstant(thread.createdAt ?? undefined) ?? uuidV7Time(thread.id);
+  const started = threadStarted(thread);
 
   if (started) {
     return `Chat · ${fmt.dateTime(started, THREAD_TIME)}`;
   }
 
   return `Thread ${thread.id.slice(0, 8)}`;
+}
+
+/**
+ * {@link threadLabel} for a thread known by its GraphQL global id, which is how the explorer's
+ * rows, tiles, drawer and search results carry it.
+ */
+export function threadNodeLabel(
+  node: { id: string; name?: string | null },
+  fmt: DateTimeFormatter = DEVICE_DATE_TIME_FORMATTER,
+): string {
+  return threadLabel({ id: threadIdOf(node.id), name: node.name }, fmt);
 }
 
 interface Options {

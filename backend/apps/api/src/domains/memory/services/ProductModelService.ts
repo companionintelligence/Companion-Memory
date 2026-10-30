@@ -17,11 +17,13 @@ import {
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normalizeObjectIdentifier';
-import { ProductUpdatedEvent } from '@ci/domains/memory/events';
+import { ItemUpdatedEvent, ProductRemovedEvent, ProductUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type ProductModel, ProductModelEntity } from '../entities/ProductModelEntity';
 import type { CreateProductModelDto, FindProductModelsFilter, UpdateProductModelDto } from '../types';
+
+import { purgeProductAggregates, type PurgedProducts } from './productPurge';
 
 /**
  * The `product_models_brand_model_uniq` predicate, VERBATIM.
@@ -262,6 +264,44 @@ export class ProductModelService {
         importRunId: context.importRunId ?? null,
       },
     });
+  }
+
+  /**
+   * Permanently deletes the catalog models behind these `Product` nodes, with the nodes and the
+   * models merged into them. This is `memory.forget`'s `archive_and_delete` for a product: see
+   * {@link purgeProductAggregates} for what goes and what is only unlinked.
+   *
+   * One transaction. Search is told afterwards, once for every model that went, and once for every
+   * thing that was an instance of one: its own search rows were written with the model's title,
+   * brand and model number, and the key that unlinked it does not re-index it. Nodes that are not
+   * the caller's, or have no model behind them, are left out of the result.
+   */
+  async purge(context: UserServiceContext, nodeIds: string[]): Promise<PurgedProducts> {
+    const requested = Array.from(new Set(nodeIds));
+
+    if (requested.length === 0) {
+      return {
+        nodeIds: [],
+        productIds: [],
+        duplicateIds: [],
+        unlinked: { things: 0, sightings: 0, receiptLines: 0 },
+        unlinkedThingIds: [],
+      };
+    }
+
+    const purged = await this.repository.manager.transaction((manager) =>
+      purgeProductAggregates(manager, context.userId, requested),
+    );
+
+    for (const productId of purged.productIds) {
+      await this.eventService.send(ProductRemovedEvent, { productId });
+    }
+
+    for (const itemId of purged.unlinkedThingIds) {
+      await this.eventService.send(ItemUpdatedEvent, { itemId });
+    }
+
+    return purged;
   }
 
   async findById(context: ServiceContext, id: string, manager?: EntityManager): Promise<ProductModel | null> {
