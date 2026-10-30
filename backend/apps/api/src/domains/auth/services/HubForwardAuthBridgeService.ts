@@ -74,6 +74,12 @@ type Placement =
   | { kind: 'create' }
   | { kind: 'refused'; reason: HubBridgeRefusal };
 
+/** What the bridge does with the account an address names, for a Hub that sends no stable id. */
+type EmailPlacement =
+  | { kind: 'account'; user: User }
+  | { kind: 'refused'; reason: Extract<HubBridgeRefusal, 'account_ambiguous' | 'account_unproven'> }
+  | { kind: 'create' };
+
 interface MemorySession {
   userId: string;
   token: string;
@@ -274,29 +280,41 @@ export class HubForwardAuthBridgeService {
   }
 
   /**
-   * What {@link alignByEmail} would refuse this person for, read-only. It keeps a live session already
-   * signed in to the address before it looks for the account, so that browser is never refused.
+   * What {@link alignByEmail} would refuse this person for, read-only. That keeps a live session
+   * already signed in to the address before it looks for the account, so such a browser is never
+   * refused, whatever the lookup says (several accounts at the address included).
+   *
+   * A failed lookup answers null rather than failing the request: the SPA reads a failed
+   * `hub-identity` as no Hub person at all and would then skip the address comparison this
+   * endpoint gave it before `refused` existed.
    */
   private async refusalByEmail(req: Request, username: string): Promise<HubBridgeRefusal | null> {
-    const existing = await this.userService.findAccountByEmail(username);
-    if (existing === 'ambiguous') {
-      return 'account_ambiguous';
-    }
+    let placement: EmailPlacement;
+    try {
+      placement = this.placementByEmail(await this.userService.findAccountByEmail(username));
+    } catch (error) {
+      this.logger.warn(`could not look up the Memory account for Hub person ${username}: ${String(error)}`);
 
-    if (!existing || this.userService.isEmailProven(existing)) {
       return null;
     }
 
-    const session = await this.readSession(req);
-    if (
+    if (placement.kind !== 'refused') {
+      return null;
+    }
+
+    return (await this.keepsSessionAt(await this.readSession(req), username)) ? null : placement.reason;
+  }
+
+  /**
+   * Whether {@link alignByEmail} keeps this browser's session as it is: a live one already signed in
+   * to the address the Hub calls this person, checked before any account is looked up.
+   */
+  private async keepsSessionAt(session: MemorySession | null, username: string): Promise<boolean> {
+    return Boolean(
       session &&
       emailsEqual(session.email, username) &&
-      (await this.liveSessionUserId(session)) === session.userId
-    ) {
-      return null;
-    }
-
-    return 'account_unproven';
+      (await this.liveSessionUserId(session)) === session.userId,
+    );
   }
 
   /**
@@ -406,11 +424,7 @@ export class HubForwardAuthBridgeService {
     const { username } = identity;
     const session = await this.readSession(req);
 
-    if (
-      session &&
-      emailsEqual(session.email, username) &&
-      (await this.liveSessionUserId(session)) === session.userId
-    ) {
+    if (await this.keepsSessionAt(session, username)) {
       return { username, replaced: false };
     }
 
@@ -672,15 +686,9 @@ export class HubForwardAuthBridgeService {
     | { kind: 'account'; user: { id: string; email: string } }
     | { kind: 'refused'; reason: Extract<HubBridgeRefusal, 'account_ambiguous' | 'account_unproven'> }
   > {
-    const existing = await this.userService.findAccountByEmail(email);
-    if (existing === 'ambiguous') {
-      return { kind: 'refused', reason: 'account_ambiguous' };
-    }
-
-    if (existing) {
-      return this.userService.isEmailProven(existing)
-        ? { kind: 'account', user: existing }
-        : { kind: 'refused', reason: 'account_unproven' };
+    const placement = this.placementByEmail(await this.userService.findAccountByEmail(email));
+    if (placement.kind !== 'create') {
+      return placement;
     }
 
     const created = await this.userService.create({ userId: SYSTEM_USER }, this.accountFor(email));
@@ -688,6 +696,21 @@ export class HubForwardAuthBridgeService {
     this.logger.log(`JIT-created Memory user for Hub-invited person ${email}`);
 
     return { kind: 'account', user: created };
+  }
+
+  /** What {@link ensureUser} does with the account an address names, decided without writing anything. */
+  private placementByEmail(existing: Awaited<ReturnType<UserService['findAccountByEmail']>>): EmailPlacement {
+    if (existing === 'ambiguous') {
+      return { kind: 'refused', reason: 'account_ambiguous' };
+    }
+
+    if (!existing) {
+      return { kind: 'create' };
+    }
+
+    return this.userService.isEmailProven(existing)
+      ? { kind: 'account', user: existing }
+      : { kind: 'refused', reason: 'account_unproven' };
   }
 
   /** The account the bridge creates for a Hub person: nobody has seen its password, so none is stamped. */

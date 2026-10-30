@@ -709,6 +709,20 @@ describe('HubForwardAuthBridgeService', () => {
         ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
       });
 
+      it('not for several matches when this browser is signed in to one of them, which alignSession keeps', async () => {
+        const { service, userService, authService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(account('user-a', 'Hello@lifescope.io'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('HELLO@lifescope.io'))),
+        ).resolves.toEqual({ username: 'HELLO@lifescope.io', accountId: null, refused: null });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('HELLO@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'HELLO@lifescope.io', replaced: false });
+      });
+
       it('not for a proven account', async () => {
         const { service, userService } = makeService();
         userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
@@ -716,6 +730,16 @@ describe('HubForwardAuthBridgeService', () => {
         await expect(
           service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
         ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+      });
+
+      it('still names the Hub person when the account lookup fails, so the SPA can compare addresses', async () => {
+        const { service, userService, logger } = makeService();
+        userService.findAccountByEmail.mockRejectedValue(new Error('connection terminated'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection terminated'));
       });
     });
 

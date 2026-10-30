@@ -41,7 +41,7 @@ describe('hubNamesSomeoneElse', () => {
       'account_unproven',
       'account_ambiguous',
       'account_unavailable',
-    ]) {
+    ] as const) {
       expect(hubNamesSomeoneElse(user, { username: 'old@example.com', accountId: null, refused })).toBe(true);
     }
   });
