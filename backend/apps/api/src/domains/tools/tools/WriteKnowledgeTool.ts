@@ -3,6 +3,8 @@ import { z } from 'zod/v3';
 
 import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+// The file, not the `@ci/domains/graph` barrel: the barrel loads GraphModule, which loads memory.
+import { normalizeEmail, normalizeName, normalizePhone } from '@ci/domains/graph/utils/normalizeIdentifier';
 import {
   canonicalEntityType,
   GraphEventService,
@@ -252,18 +254,39 @@ function identityListsLeftOutMessage(keys: string[], person: GraphNodeEntity): s
   );
 }
 
-/** Lower-cased, trimmed strings of an identity list value, which is a list or a single value. */
-function identityValues(value: unknown): string[] {
+/**
+ * How each identity list is keyed, so "+1 (555) 010-0100" from the model meets the ten-digit
+ * `phones` key an import stored. A key without its own rule is compared trimmed and lower-cased.
+ */
+const IDENTITY_VALUE_KEY: Record<string, (raw: string) => string | null> = {
+  emails: normalizeEmail,
+  phones: normalizePhone,
+  Phones: normalizePhone,
+  Faxes: normalizePhone,
+  names: normalizeName,
+};
+
+/**
+ * The keyed strings of an identity list value, which is a list or a single value. A value that
+ * has no key (a phone with an extension, say) comes back as `null`, which no stored value matches.
+ */
+function identityValues(key: string, value: unknown): Array<string | null> {
+  const keyOf = IDENTITY_VALUE_KEY[key] ?? ((raw: string) => raw.trim().toLowerCase() || null);
+
   return (Array.isArray(value) ? value : [value])
     .filter((item) => item != null && item !== '')
-    .map((item) => String(item).trim().toLowerCase());
+    .map((item) => keyOf(String(item)));
 }
 
 /** Whether the stored row already holds every value the create names under `key`. */
 function holdsIdentityValues(entity: GraphNodeEntity, key: string, value: unknown): boolean {
-  const stored = new Set(identityValues((entity.properties as Record<string, unknown> | null)?.[key]));
+  const stored = new Set(
+    identityValues(key, (entity.properties as Record<string, unknown> | null)?.[key]).filter(
+      (item) => item != null,
+    ),
+  );
 
-  return identityValues(value).every((item) => stored.has(item));
+  return identityValues(key, value).every((item) => item != null && stored.has(item));
 }
 
 /** Whether `next` would overwrite a non-empty stored value with a different one. */
@@ -760,9 +783,12 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
                 kind: operation.kind,
                 status: 'skipped',
                 message:
-                  leftOut ??
-                  `The existing Person "${sameNamed.name}" (${sameNamed.entity_id}) already has ` +
-                    `${identityListWords(identityKeys)}, so there was nothing new to save.`,
+                  (leftOut ??
+                    `The existing Person "${sameNamed.name}" (${sameNamed.entity_id}) already has ` +
+                      `${identityListWords(identityKeys)}, so there was nothing new to save.`) +
+                  (keptDescription
+                    ? ' Its description was kept, so use entity.update with this entityId to change it.'
+                    : ''),
                 entityId: sameNamed.entity_id,
               });
               break;

@@ -259,8 +259,8 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// One-shot high-accuracy fix for "use my location" (e.g. adding a Place). Does not
-    /// touch the tracking outbox. Android background tracking stays on
-    /// `@capacitor-community/background-geolocation`. iOS Always uses
+    /// touch the tracking outbox. Android background tracking is the motion-gated tracker
+    /// in the Android half of this plugin. iOS Always uses
     /// `startSignificantLocationUpdates` so a move still records without the blue pill.
     @objc func getCurrentLocation(_ call: CAPPluginCall) {
         DispatchQueue.main.async {

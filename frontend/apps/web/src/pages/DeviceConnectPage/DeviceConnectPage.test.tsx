@@ -201,6 +201,7 @@ beforeEach(() => {
   h.profileLoading = false;
   sessionStorage.clear();
   localStorage.removeItem('ci.deviceConnect.portalUrl');
+  localStorage.removeItem('ci.deviceConnect.portalUrl.v2');
   localStorage.removeItem('ci.deviceConnect.portalAuth');
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
 });

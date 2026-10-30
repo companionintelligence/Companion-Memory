@@ -96,7 +96,7 @@ class PositionRecordJsonTest {
     }
 
     @Test
-    fun `the event body is the BackgroundGeolocationLocation shape the hook already adapts`() {
+    fun `the event body is the NativeLocationEvent shape the hook adapts`() {
         val body = PositionRecordJson.eventBody(LocationFix(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8L))
         assertEquals(1.0, body.getDouble("latitude"), 0.0)
         assertEquals(2.0, body.getDouble("longitude"), 0.0)
