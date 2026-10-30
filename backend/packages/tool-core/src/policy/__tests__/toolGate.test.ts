@@ -212,16 +212,27 @@ describe('resolveToolGate: a write that follows a lookup', () => {
     expect(resolveToolGate(READ_ONLY, afterLookup('review')).decision).toBe('execute');
   });
 
-  it('queues an external read after a lookup with its own reason when the dial says review', () => {
-    const LIST_MESSAGES = intent('messaging.listMessages', { external: true });
-    const ruling = resolveToolGate(LIST_MESSAGES, afterLookup('review'));
+  it('queues a third-party read after a lookup with its own reason when the dial says review', () => {
+    const STREAMING = intent('media.streamingAvailability', { external: true });
+    const ruling = resolveToolGate(STREAMING, afterLookup('review'));
 
     expect(ruling).toMatchObject({ decision: 'queue', reason: 'read-after-lookup' });
     expect(ruling.explanation).toContain('right after a lookup');
-    expect(resolveToolGate(LIST_MESSAGES, afterLookup('auto')).decision).toBe('execute');
-    expect(resolveToolGate(LIST_MESSAGES, { ...afterLookup('review'), followsLookup: false }).reason).toBe(
+    expect(resolveToolGate(STREAMING, afterLookup('auto')).decision).toBe('execute');
+    expect(resolveToolGate(STREAMING, { ...afterLookup('review'), followsLookup: false }).reason).toBe(
       'confirmation-required',
     );
+  });
+
+  // The owner's texts off their own Mac: external, but no third party receives the query.
+  it("judges a read from the owner's own server after a lookup as it would any other time", () => {
+    const LIST_MESSAGES = intent('messaging.listMessages', { external: true, ownServer: true });
+    const ruling = resolveToolGate(LIST_MESSAGES, afterLookup('review'));
+
+    expect(ruling).toMatchObject({ decision: 'queue', reason: 'confirmation-required' });
+    expect(ruling.explanation).toContain('reaches a server outside the appliance');
+    expect(ruling.explanation).not.toContain('third-party');
+    expect(resolveToolGate(LIST_MESSAGES, afterLookup('auto')).decision).toBe('execute');
   });
 
   it('keeps the reason of a delete that follows a lookup', () => {

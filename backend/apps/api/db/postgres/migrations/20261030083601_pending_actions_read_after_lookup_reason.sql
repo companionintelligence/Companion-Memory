@@ -1,7 +1,7 @@
 -- migrate:up
 -- ci.pending_actions.reason: accept 'read-after-lookup'.
 --
--- A chat turn that has looked something up may then ask an outside service
+-- A chat turn that has looked something up may then ask a third-party service
 -- something, and the query can come from what the lookup returned: a mail or a
 -- page someone else wrote. Under the balanced and cautious dials such a read
 -- now waits for the owner. resolveToolGate queues it with this reason so the

@@ -100,6 +100,14 @@ export interface IntentPrivacy {
   destructive: boolean;
   /** Touches a third-party service / sends data off the appliance. */
   external: boolean;
+  /**
+   * With `external`: the call leaves the appliance but reaches only a server the owner set up and
+   * runs, such as their own Mac's BlueBubbles server, never a third party. A read like that is not
+   * one a lookup could use to choose what an outside party receives, so the gate lets it run after
+   * a lookup where a third-party read asks (see `ToolGateOptions.followsLookup`). Absent means a
+   * third party. Set it only when the code can reach nothing else.
+   */
+  ownServer?: boolean;
 }
 
 /**
@@ -340,8 +348,8 @@ export interface ToolInvocationContext extends ToolRequestContext {
 
   /**
    * This call comes from a chat round after the turn already ran a lookup. The
-   * gate then asks before any write or any read from an outside service under
-   * a dial that asks before a delete; see
+   * gate then asks before any write or any read from a third-party service
+   * under a dial that asks before a delete; see
    * `ToolGateOptions.followsLookup`. Absent means false, so no other caller
    * changes behaviour.
    */

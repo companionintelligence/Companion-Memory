@@ -89,7 +89,7 @@ describe('ApprovalsPage', () => {
     ];
     renderWithProviders(<ApprovalsPage />);
 
-    expect(screen.getByText(/outside service right after looking something up/i)).toBeInTheDocument();
+    expect(screen.getByText(/third-party service right after looking something up/i)).toBeInTheDocument();
     expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
   });
 

@@ -16,7 +16,7 @@ import {
   TERMINAL_PENDING_ACTION_STATUSES,
   type PendingActionStatus,
 } from '../pendingActionStatus';
-import { removesData } from '../policy';
+import { reachesThirdParty, removesData } from '../policy';
 import { needsConfirmation, resolveToolGate, type ToolGateRuling } from '../policy/toolGate';
 
 /**
@@ -63,9 +63,14 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  *   A read queued behind a card is a feature that stops working rather than
  *   one that asks first: the approved run's result lands on the
  *   pending-action row and the Approvals page, never back in the chat that
- *   wanted it. The exception is a read a chat turn makes after a lookup
- *   (`followsLookup`): its query may have been chosen by a mail or a page
- *   someone else wrote, and the query is what leaves the appliance, so it asks.
+ *   wanted it. The exception is a read from a third party that a chat turn
+ *   makes after a lookup (`followsLookup`): its query may have been chosen by a
+ *   mail or a page someone else wrote, and the query is what that party
+ *   receives, so it asks. A read that reaches only a server the owner runs
+ *   (`IntentPrivacy.ownServer`, such as their texts off their own Mac) sends no
+ *   outside party anything and runs unattended after a lookup too. Without
+ *   that, "what did Alex text me?" (a chat list, then that chat's messages)
+ *   could never answer on the default dial.
  * - `cautious` asks before all of it, reads included.
  *
  * "Read" is the intent's own label: `access: 'read'` and not
@@ -79,7 +84,7 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  * This is consulted only for intents {@link needsConfirmation} already flags,
  * so an on-appliance read or write never reaches it, except a write a chat turn
  * makes after a lookup (`ToolInvocationContext.followsLookup`). For that write,
- * and for an external read after a lookup, `balanced` and `cautious` both
+ * and for a third-party read after a lookup, `balanced` and `cautious` both
  * answer `review` and only `hands_off` runs it unattended.
  */
 export function trustForToolCall(
@@ -91,7 +96,12 @@ export function trustForToolCall(
     return 'auto';
   }
 
-  if (trustMode === 'balanced' && privacy.access === 'read' && !removesData(privacy) && !followsLookup) {
+  if (
+    trustMode === 'balanced' &&
+    privacy.access === 'read' &&
+    !removesData(privacy) &&
+    !(followsLookup && reachesThirdParty(privacy))
+  ) {
     return 'auto';
   }
 
