@@ -93,7 +93,7 @@ describe('PHONE_EXTENSION_PATTERN', () => {
     const source = fs.readFileSync(
       path.resolve(
         __dirname,
-        '../../../../../../backend/apps/api/src/domains/graph/utils/normalizeIdentifier.ts',
+        '../../../../../../backend/apps/api/src/common/normalizeIdentifier.ts',
       ),
       'utf8',
     );
