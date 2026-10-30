@@ -11,6 +11,8 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
@@ -56,6 +58,66 @@ const RECEIPT_BROWSE_TIME = 'COALESCE(receipt.purchased_at, receipt.updated_at)'
 /** The `receipts_source_identity_uniq` arbiter. */
 const SOURCE_IDENTITY_CONFLICT_TARGET =
   '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL';
+
+/** The header columns that name another row, as a create, an update or an extraction carries them. */
+interface ReceiptLinkFields {
+  merchantEntityId?: string | null;
+  placeEntityId?: string | null;
+  eventId?: string | null;
+  documentContentId?: string | null;
+  sourceFileId?: string | null;
+}
+
+/**
+ * What a receipt header links to, for {@link refuseForeignLinks}.
+ *
+ * The keys on `merchant_entity_id`, `place_entity_id` and `event_id` only ask
+ * that the row exists, and `document_content_id` and `source_file_id` have
+ * none, so `/v1/receipts` stored a receipt at another account's place when it
+ * was handed that id. These are the receipt links an import of the account's
+ * export checks (`UserDataPortabilityService.refuseLinksOutOfAccount`).
+ */
+function receiptLinks(rows: readonly ReceiptLinkFields[]): OwnedLink[] {
+  const ids = (pick: (row: ReceiptLinkFields) => string | null | undefined) => rows.map(pick);
+
+  return [
+    {
+      field: 'merchant_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: ids((row) => row.merchantEntityId),
+    },
+    {
+      field: 'place_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: ids((row) => row.placeEntityId),
+    },
+    {
+      field: 'event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.eventId),
+    },
+    {
+      field: 'document_content_id',
+      table: 'ci.content',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.documentContentId),
+    },
+    {
+      field: 'source_file_id',
+      table: 'ci.files',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.sourceFileId),
+    },
+  ];
+}
 
 /**
  * Confidence written onto an identifier claim promoted off a receipt line, by
@@ -241,6 +303,8 @@ export class ReceiptService {
   }
 
   async create(context: UserServiceContext, dto: CreateReceiptDto): Promise<Receipt> {
+    await refuseForeignLinks(this.receiptRepository.manager, context.userId, receiptLinks([dto]), 'receipt');
+
     return this.receiptRepository.save(this.toEntity(context, dto));
   }
 
@@ -257,6 +321,8 @@ export class ReceiptService {
     if (dtos.length === 0) {
       return [];
     }
+
+    await refuseForeignLinks(this.receiptRepository.manager, context.userId, receiptLinks(dtos), 'receipt');
 
     return bulkInsertIdempotent({
       repository: this.receiptRepository,
@@ -580,6 +646,8 @@ export class ReceiptService {
       return this.findById(context, id);
     }
 
+    await this.refuseForeignHeaderLinks(context, id, patch);
+
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -590,6 +658,32 @@ export class ReceiptService {
     await this.eventService.send(ReceiptUpdatedEvent, { receiptId: id });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so
+   * the links have to belong to the receipt's owner.
+   */
+  private async refuseForeignHeaderLinks(
+    context: ServiceContext,
+    id: string,
+    patch: ReceiptLinkFields,
+  ): Promise<void> {
+    const links = receiptLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const ownerId =
+      context.userId !== SYSTEM_USER
+        ? context.userId
+        : (await this.receiptRepository.findOne({ select: { id: true, ownerUserId: true }, where: { id } }))
+            ?.ownerUserId;
+
+    if (ownerId != null) {
+      await refuseForeignLinks(this.receiptRepository.manager, ownerId, links, 'receipt');
+    }
   }
 
   /**
@@ -621,6 +715,22 @@ export class ReceiptService {
     manager?: EntityManager,
   ): Promise<ReceiptLineItem[]> {
     const em = manager ?? this.lineRepository.manager;
+
+    // A line's key into ci.product_models only asks that the product exists.
+    await refuseForeignLinks(
+      em,
+      context.userId,
+      [
+        {
+          field: 'line_items.product_id',
+          table: 'ci.product_models',
+          key: 'product_id',
+          ownerColumn: 'user_id',
+          ids: lines.map((line) => line.productId),
+        },
+      ],
+      'receipt',
+    );
 
     // Collapse within-batch repeats before the statement runs: two rows sharing
     // a conflict target make Postgres abort the WHOLE chunk with "ON CONFLICT
@@ -985,6 +1095,8 @@ export class ReceiptService {
     em: EntityManager,
   ): Promise<ReceiptEntity> {
     const repository = em.withRepository(this.receiptRepository);
+
+    await refuseForeignLinks(em, context.userId, receiptLinks([extraction]), 'receipt');
 
     const existing =
       // Identity is (source_system, source_id) — source_type is provenance

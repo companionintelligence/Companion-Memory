@@ -26,7 +26,6 @@ import type {
   UserScopedTable,
 } from '../types';
 import {
-  type AccountLink,
   DISCOVER_INSERTABLE_COLUMNS_SQL,
   DISCOVER_LINK_REFERENCES_SQL,
   DISCOVER_UNDECLARED_ENTITY_LINKS_SQL,
@@ -39,6 +38,7 @@ import {
   USER_DATA_SCHEMAS,
   findAccountLinks,
   findLinkTables,
+  foreignLinkSql,
   groupUserTables,
   linkOutOfAccountMessage,
   qualifiedName,
@@ -541,18 +541,21 @@ export class UserDataPortabilityService {
 
   /**
    * Refuse the archive, naming the link, when a row it put in links to a row
-   * another account owns. Every row of this account is the archive's by now
-   * (the import deleted the rest first), so this reads what the archive set.
+   * another account owns, or a row with no owner. Every row of this account is
+   * the archive's by now (the import deleted the rest first), so this reads what
+   * the archive set.
    *
    * A foreign key only asks that the parent exists, so an archive that named
    * someone's thread, person or place by id got the link and with it their
    * row in this account's chat, graph and known places. An export never
-   * carries one, as its links are between the account's own rows. A row with
-   * no owner, or an id that names no row at all (a column with no key can hold
-   * one), is not another account's and imports as before.
+   * carries one, as its links are between the account's own rows. A row with no
+   * owner counts too: rows a deleted account left behind lose their owner (the
+   * key is ON DELETE SET NULL), and they are no more this account's than a live
+   * account's. An id that names no row at all (a column with no key can hold
+   * one) imports as before.
    *
-   * One pass over each table that has links, looking each one up by the key it
-   * names, rather than one join per link.
+   * One join per link, over the rows that set it. A NULL link joins nothing, so
+   * the planner can hash the parent's keys once instead of probing it per row.
    */
   private async refuseLinksOutOfAccount(
     queryRunner: QueryRunner,
@@ -563,44 +566,14 @@ export class UserDataPortabilityService {
     const entityLinks = ((await queryRunner.query(DISCOVER_UNDECLARED_ENTITY_LINKS_SQL, [
       USER_DATA_SCHEMAS,
     ])) ?? []) as DiscoveredEntityLink[];
-    const byChild = new Map<string, AccountLink[]>();
 
     for (const link of findAccountLinks(references, entityLinks, tables)) {
-      const name = qualifiedName(link.child);
-      const links = byChild.get(name);
-
-      if (links) {
-        links.push(link);
-      } else {
-        byChild.set(name, [link]);
-      }
-    }
-
-    for (const links of byChild.values()) {
-      const child = links[0].child;
-      // The first id each link names that is a row of another account, or NULL.
-      const foreign = links.map(
-        ({ column, parent, array }) =>
-          `(SELECT p.${quoteIdentifier(parent.column)}::text FROM ${quotedTableName(parent)} p
-             WHERE p.${quoteIdentifier(parent.column)} ${array ? '= ANY' : '='} (c.${quoteIdentifier(column)})
-               AND p.${quoteIdentifier(parent.userColumn)} <> $1
-             LIMIT 1)`,
-      );
-      const [found] = ((await queryRunner.query(
-        `SELECT * FROM (
-           SELECT ${foreign.map((sql, index) => `${sql} AS l${index}`).join(',\n                  ')}
-             FROM ${quotedTableName(child)} c
-            WHERE c.${quoteIdentifier(child.userColumn)} = $1
-         ) found
-         WHERE ${foreign.map((_, index) => `l${index} IS NOT NULL`).join(' OR ')}
-         LIMIT 1`,
-        [userId],
-      )) ?? []) as Array<Record<string, string | null>>;
+      const [found] = ((await queryRunner.query(foreignLinkSql(link), [userId])) ?? []) as Array<{
+        id: string;
+      }>;
 
       if (found) {
-        const index = links.findIndex((_, at) => found[`l${at}`] != null);
-
-        throw new BadRequestException(linkOutOfAccountMessage(links[index], found[`l${index}`]!));
+        throw new BadRequestException(linkOutOfAccountMessage(link, found.id));
       }
     }
   }
@@ -1099,7 +1072,7 @@ export class UserDataPortabilityService {
       if ((result?.[1] ?? 0) === 0) {
         const [foreign] = ((await queryRunner.query(
           `SELECT 1 FROM ${quotedTableName(parent)} p
-            WHERE p.${quoteIdentifier(parent.key)} = $1 AND p.${quoteIdentifier(parent.userColumn)} <> $2
+            WHERE p.${quoteIdentifier(parent.key)} = $1 AND p.${quoteIdentifier(parent.userColumn)} IS DISTINCT FROM $2
             LIMIT 1`,
           [value, userId],
         )) ?? []) as unknown[];

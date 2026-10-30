@@ -568,7 +568,28 @@ export function findAccountLinks(
   return links;
 }
 
-/** What an import that would link to another account's row answers, naming the link. */
+/**
+ * The first id a link names that is a row of another account, or of no account, among the
+ * importer's rows (`$1`); no row when there is none.
+ *
+ * A join rather than a lookup per row: the rows that leave the link empty drop out first, and the
+ * planner can hash the parent's keys once. `IS DISTINCT FROM` so a parent with no owner counts.
+ */
+export function foreignLinkSql(link: AccountLink): string {
+  const child = `c.${quoteIdentifier(link.column)}`;
+  const named = link.array ? 'u.id' : child;
+  const unnest = link.array ? `\n   CROSS JOIN LATERAL unnest(${child}) AS u(id)` : '';
+
+  return `SELECT p.${quoteIdentifier(link.parent.column)}::text AS id
+    FROM ${quotedTableName(link.child)} c${unnest}
+    JOIN ${quotedTableName(link.parent)} p ON p.${quoteIdentifier(link.parent.column)} = ${named}
+   WHERE c.${quoteIdentifier(link.child.userColumn)} = $1
+     AND ${child} IS NOT NULL
+     AND p.${quoteIdentifier(link.parent.userColumn)} IS DISTINCT FROM $1
+   LIMIT 1`;
+}
+
+/** What an import that would link to another account's row, or a row with no owner, answers. */
 export function linkOutOfAccountMessage(
   link: {
     child: Pick<UserScopedTable, 'schema' | 'table'>;
@@ -579,6 +600,6 @@ export function linkOutOfAccountMessage(
 ): string {
   return (
     `The archive links ${qualifiedName(link.child)}.${link.column} to ${value}, a row of ` +
-    `${qualifiedName(link.parent)} that belongs to another account, so it was refused.`
+    `${qualifiedName(link.parent)} that belongs to another account or to none, so it was refused.`
   );
 }

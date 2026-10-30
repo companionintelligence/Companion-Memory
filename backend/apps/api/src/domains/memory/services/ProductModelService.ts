@@ -10,6 +10,8 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
@@ -115,6 +117,44 @@ interface ProductIdRow {
  * objects against it, and re-creates the duplicate the merge just removed.
  * The filter lives in {@link liveScope} so no read path can forget it.
  */
+/** A product's links that name another row. */
+interface ProductLinkFields {
+  imageContentId?: string | null;
+  manualContentIds?: readonly string[] | null;
+  productEntityId?: string | null;
+}
+
+/**
+ * What a product links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. `product_entity_id`'s key only asks that the entity exists, and the picture and
+ * manual columns have none.
+ */
+function productLinks(rows: readonly ProductLinkFields[]): OwnedLink[] {
+  return [
+    {
+      field: 'image_content_id',
+      table: 'ci.content',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.imageContentId),
+    },
+    {
+      field: 'manual_content_ids',
+      table: 'ci.content',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: rows.flatMap((row) => row.manualContentIds ?? []),
+    },
+    {
+      field: 'product_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: rows.map((row) => row.productEntityId),
+    },
+  ];
+}
+
 @Injectable()
 export class ProductModelService {
   constructor(
@@ -191,6 +231,8 @@ export class ProductModelService {
   }
 
   async create(context: UserServiceContext, dto: CreateProductModelDto): Promise<ProductModel> {
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks([dto]), 'product');
+
     return this.repository.save(this.toEntity(context, dto));
   }
 
@@ -212,6 +254,8 @@ export class ProductModelService {
     if (dtos.length === 0) {
       return [];
     }
+
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks(dtos), 'product');
 
     return bulkInsertIdempotent({
       repository: this.repository,
@@ -485,6 +529,13 @@ export class ProductModelService {
     if (Object.keys(patch).length === 0) {
       return existing;
     }
+
+    await refuseForeignLinks(
+      this.repository.manager,
+      existing.ownerUserId ?? existing.userId,
+      productLinks([patch]),
+      'product',
+    );
 
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.

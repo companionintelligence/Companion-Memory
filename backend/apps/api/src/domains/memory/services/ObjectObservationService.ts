@@ -16,7 +16,12 @@ import {
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { appendRecordSources, computeChunkSize } from '@ci/common/persistence';
+import {
+  appendRecordSources,
+  computeChunkSize,
+  type OwnedLink,
+  refuseForeignLinks,
+} from '@ci/common/persistence';
 
 import {
   type ObjectObservation,
@@ -258,6 +263,70 @@ export function detectionKeyFor(dto: CreateObjectObservationDto): string | null 
  * design. Reads go back through the repository, which is what keeps 768 floats
  * per row out of every ordinary query.
  */
+/** A sighting's links that name another row: what a write or a resolution carries. */
+interface ObservationLinkFields {
+  contentId?: string | null;
+  fileId?: string | null;
+  eventId?: string | null;
+  placeEntityId?: string | null;
+  cropContentId?: string | null;
+  resolvedObjectId?: string | null;
+  resolvedProductId?: string | null;
+}
+
+/**
+ * What a sighting links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. The keys on `event_id`, `place_entity_id` and the two resolution columns only
+ * ask that the row exists, and the file and content columns have none.
+ */
+function observationLinks(rows: readonly ObservationLinkFields[]): OwnedLink[] {
+  const ids = (pick: (row: ObservationLinkFields) => string | null | undefined) => rows.map(pick);
+  const content = (
+    field: string,
+    pick: (row: ObservationLinkFields) => string | null | undefined,
+  ): OwnedLink => ({
+    field,
+    table: 'ci.content',
+    key: 'id',
+    ownerColumn: 'user_id',
+    ids: ids(pick),
+  });
+
+  return [
+    content('content_id', (row) => row.contentId),
+    content('crop_content_id', (row) => row.cropContentId),
+    { field: 'file_id', table: 'ci.files', key: 'id', ownerColumn: 'user_id', ids: ids((row) => row.fileId) },
+    {
+      field: 'event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.eventId),
+    },
+    {
+      field: 'place_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: ids((row) => row.placeEntityId),
+    },
+    {
+      field: 'resolved_object_id',
+      table: 'ci.objects',
+      key: 'object_id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.resolvedObjectId),
+    },
+    {
+      field: 'resolved_product_id',
+      table: 'ci.product_models',
+      key: 'product_id',
+      ownerColumn: 'user_id',
+      ids: ids((row) => row.resolvedProductId),
+    },
+  ];
+}
+
 @Injectable()
 export class ObjectObservationService {
   constructor(
@@ -331,6 +400,8 @@ export class ObjectObservationService {
     if (dtos.length === 0) {
       return empty;
     }
+
+    await refuseForeignLinks(this.dataSource, context.userId, observationLinks(dtos), 'sighting');
 
     // Partition by arbiter, folding within-batch repeats as we go. Two maps
     // rather than one because the arbiters live in different index spaces: a
@@ -480,6 +551,13 @@ export class ObjectObservationService {
       return existing;
     }
 
+    await refuseForeignLinks(
+      this.dataSource,
+      existing.ownerUserId ?? existing.userId,
+      observationLinks([dto]),
+      'sighting',
+    );
+
     await this.observationRepository.update(
       { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
       {
@@ -519,6 +597,15 @@ export class ObjectObservationService {
 
     if (existing == null) {
       return null;
+    }
+
+    if (resolution != null) {
+      await refuseForeignLinks(
+        this.dataSource,
+        existing.ownerUserId ?? existing.userId,
+        observationLinks([resolution]),
+        'sighting',
+      );
     }
 
     await this.observationRepository.update(

@@ -705,7 +705,7 @@ describeWithDatabase(
             } as UserDataArchive,
           ),
         ).rejects.toThrow(
-          `The archive links ci.messages.parent_message_id to ${theirMessage}, a row of ci.messages that belongs to another account, so it was refused.`,
+          `The archive links ci.messages.parent_message_id to ${theirMessage}, a row of ci.messages that belongs to another account or to none, so it was refused.`,
         );
 
         expect(
@@ -784,7 +784,7 @@ describeWithDatabase(
             'jane@example.com',
           ),
         ).rejects.toThrow(
-          `The archive links ci.messages.thread_id to ${theirThread}, a row of ci.threads that belongs to another account, so it was refused.`,
+          `The archive links ci.messages.thread_id to ${theirThread}, a row of ci.threads that belongs to another account or to none, so it was refused.`,
         );
 
         expect(await notesFor()).toEqual([{ id: kept, title: 'before the import' }]);
@@ -803,7 +803,7 @@ describeWithDatabase(
             archiveWith({ 'ci.entities': [me], 'ci.relationships': [knows(theirs)] }),
           ),
         ).rejects.toThrow(
-          `The archive links ci.relationships.to_entity_id to ${theirs}, a row of ci.entities that belongs to another account, so it was refused.`,
+          `The archive links ci.relationships.to_entity_id to ${theirs}, a row of ci.entities that belongs to another account or to none, so it was refused.`,
         );
 
         const linked = await dataSource.query(
@@ -811,6 +811,56 @@ describeWithDatabase(
           [theirs],
         );
         expect(linked).toHaveLength(0);
+      });
+
+      it('refuses a relationship to a place no account owns, as a deleted account leaves its rows', async () => {
+        const leftBehind = randomUUID();
+
+        // owner_user_id is ON DELETE SET NULL: what a purge missed keeps its row and loses its owner.
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Location', NULL, 'Left behind')`,
+          [leftBehind],
+        );
+
+        try {
+          await expect(
+            service.importArchive(
+              { userId: testUserId } as never,
+              archiveWith({ 'ci.entities': [me], 'ci.relationships': [knows(leftBehind)] }),
+            ),
+          ).rejects.toThrow(
+            `The archive links ci.relationships.to_entity_id to ${leftBehind}, a row of ci.entities that belongs to another account or to none, so it was refused.`,
+          );
+        } finally {
+          await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1::uuid', [leftBehind]);
+        }
+      });
+
+      it('refuses a place inside a place no account owns, a link set once every row is in', async () => {
+        const leftBehind = randomUUID();
+        const town = randomUUID();
+
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Location', NULL, 'Left behind')`,
+          [leftBehind],
+        );
+
+        try {
+          await expect(
+            service.importArchive(
+              { userId: testUserId } as never,
+              archiveWith({
+                'ci.entities': [
+                  { entity_id: town, entity_type: 'Location', name: 'Town', parent_place_id: leftBehind },
+                ],
+              }),
+            ),
+          ).rejects.toThrow(
+            `The archive links ci.entities.parent_place_id to ${leftBehind}, a row of ci.entities that belongs to another account or to none, so it was refused.`,
+          );
+        } finally {
+          await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1::uuid', [leftBehind]);
+        }
       });
 
       it("refuses an agent job on another account's thread, though that column has no key", async () => {
@@ -827,7 +877,7 @@ describeWithDatabase(
             archiveWith({ 'ci.agent_jobs': [{ id: randomUUID(), thread_id: theirThread }] }),
           ),
         ).rejects.toThrow(
-          `The archive links ci.agent_jobs.thread_id to ${theirThread}, a row of ci.threads that belongs to another account, so it was refused.`,
+          `The archive links ci.agent_jobs.thread_id to ${theirThread}, a row of ci.threads that belongs to another account or to none, so it was refused.`,
         );
       });
 
@@ -859,7 +909,7 @@ describeWithDatabase(
             }),
           ),
         ).rejects.toThrow(
-          `The archive links ci.product_models.image_content_id to ${theirPhoto}, a row of ci.content that belongs to another account, so it was refused.`,
+          `The archive links ci.product_models.image_content_id to ${theirPhoto}, a row of ci.content that belongs to another account or to none, so it was refused.`,
         );
       });
 
@@ -881,7 +931,7 @@ describeWithDatabase(
             }),
           ),
         ).rejects.toThrow(
-          `The archive links ci.events.participant_entity_ids to ${theirs}, a row of ci.entities that belongs to another account, so it was refused.`,
+          `The archive links ci.events.participant_entity_ids to ${theirs}, a row of ci.entities that belongs to another account or to none, so it was refused.`,
         );
       });
 
