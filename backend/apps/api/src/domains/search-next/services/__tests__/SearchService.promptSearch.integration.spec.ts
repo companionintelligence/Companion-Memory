@@ -309,7 +309,7 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
         service.searchPrompt(photoContext(), {
           prompt,
           includeTypes: ['file'],
-          ...(mediaEvents ? { mediaEvents } : {}),
+          ...(mediaEvents ? { mediaEvents, mediaEventPlaces: true } : {}),
         });
       const ids = async (prompt: string, mediaEvents?: 'photos' | 'media') =>
         (await ask(prompt, mediaEvents)).items.map((item) => item.id).sort();
@@ -319,6 +319,54 @@ describeWithDatabase(`SearchService.searchPrompt against a live Postgres (${avai
       expect(await ids('Any photos from Lisbon?', 'photos')).toEqual([typed, named].sort());
       expect(await ids('Any photos from last October?', 'photos')).toEqual([typed, named].sort());
       expect(await ids('Any photos or videos from Lisbon?', 'media')).toEqual([typed, named, video].sort());
+    });
+
+    it('counts a photo once when its file and the event it came with both match', async () => {
+      // MediaStage stamps the file's id on its capture event as `FileId`. Before,
+      // "how many photos from last October" counted that one photo twice.
+      const fileId = await seed(photoOwner, 'file', 'PXL_20251003_101500_001.jpg October 2025');
+      const linked = await seedEvent(
+        'PXL_20251003_101500_001.jpg',
+        { 'Media Type': 'image/jpeg', FileId: fileId },
+        'Lisbon, Portugal',
+      );
+      const unlinked = await seedEvent('IMG_0042.HEIC', { 'Media Type': 'image/heic' }, 'Lisbon, Portugal');
+
+      const result = await service.searchPrompt(photoContext(), {
+        prompt: 'Any photos from last October?',
+        includeTypes: ['file'],
+        mediaEvents: 'photos',
+      });
+
+      expect(result.items.map((item) => item.id).sort()).toEqual([fileId, unlinked].sort());
+      expect(result.items.map((item) => item.id)).not.toContain(linked);
+      expect(result.totalMatches).toBe(2);
+    });
+
+    it('does not match a photo by its place unless the caller allows places', async () => {
+      // Matching on the place answers a location question ("Any photos from
+      // 14 Elm Street?"), so an asker whose location ceiling is lower gets the
+      // event side without its place words. Its month still matches.
+      const photo = await seedEvent(
+        'PXL_20251003_101500_001.jpg',
+        { 'Media Type': 'image/jpeg' },
+        '14 Elm Street, Springfield, IL 62704, USA',
+      );
+      const ids = async (prompt: string, mediaEventPlaces?: boolean) =>
+        (
+          await service.searchPrompt(photoContext(), {
+            prompt,
+            includeTypes: ['file'],
+            mediaEvents: 'photos',
+            ...(mediaEventPlaces != null ? { mediaEventPlaces } : {}),
+          })
+        ).items.map((item) => item.id);
+
+      expect(await ids('Any photos from 14 Elm Street?')).toEqual([]);
+      expect(await ids('Any photos from Springfield?', false)).toEqual([]);
+      expect(await ids('Any photos from 14 Elm Street?', true)).toEqual([photo]);
+      expect(await ids('Any photos from Springfield?', true)).toEqual([photo]);
+      expect(await ids('Any photos from last October?')).toEqual([photo]);
     });
   });
 

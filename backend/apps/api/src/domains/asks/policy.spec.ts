@@ -3,6 +3,7 @@ import {
   disclosureCeiling,
   minRung,
   narrowerForm,
+  photoAskMayMatchPlaces,
   rungAtLeast,
   rungForForm,
 } from './policy';
@@ -262,5 +263,24 @@ describe('the household exemption (D6)', () => {
   it('a demoted housemate gets the floor, because the tier is what decides it', () => {
     expect(disclosureCeiling('household', 'health')).toBe('full');
     expect(disclosureCeiling('trusted', 'health')).toBe('none');
+  });
+});
+
+describe('photoAskMayMatchPlaces', () => {
+  // A photo event's place answers a location question, so it may match only
+  // where the location ceiling reaches the photo ask's own.
+  it('lets a housemate match a photo by its place, and nobody below that', () => {
+    expect(photoAskMayMatchPlaces('household', 'photos')).toBe(true);
+
+    for (const tier of ['family', 'trusted', 'peer', 'stranger'] as const) {
+      expect(photoAskMayMatchPlaces(tier, 'photos')).toBe(false);
+    }
+  });
+
+  it('agrees with the tier ceilings it is read from', () => {
+    expect(rungAtLeast(disclosureCeiling('family', 'location'), disclosureCeiling('family', 'photos'))).toBe(
+      false,
+    );
+    expect(disclosureCeiling('stranger', 'location')).toBe('none');
   });
 });
