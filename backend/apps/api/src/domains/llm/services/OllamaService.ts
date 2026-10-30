@@ -984,7 +984,8 @@ export class OllamaService implements OnModuleInit {
         // Calls from a round after one whose calls already ran: a later round
         // is offered tools only after lookups, so these may act on what a
         // lookup returned. Under a dial that asks before a delete, every write
-        // among them asks too (see ToolGateOptions.followsLookup).
+        // among them asks too, and so does every read from an outside service
+        // (see ToolGateOptions.followsLookup).
         const { messages: toolEvaluations, failed: failedCalls } = await self.runToolCalls(
           context,
           iterationToolCalls,

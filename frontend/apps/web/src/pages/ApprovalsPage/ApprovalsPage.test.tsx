@@ -78,6 +78,45 @@ describe('ApprovalsPage', () => {
     expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
   });
 
+  it('says an outside read waits because chat made it right after a lookup', () => {
+    state.actions = [
+      card({
+        intent: 'messaging.listMessages',
+        tool: 'messaging_listMessages',
+        input: { chatGuid: 'iMessage;-;+15550000' },
+        reason: 'read-after-lookup',
+      }),
+    ];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText(/outside service right after looking something up/i)).toBeInTheDocument();
+    expect(screen.queryByText(/irreversible/i)).not.toBeInTheDocument();
+  });
+
+  it('shows what an approved read returned, since chat never gets it back', async () => {
+    answer.mockResolvedValue({ success: true, data: { messages: [{ text: 'see you at 6' }] } });
+    state.actions = [card({ intent: 'messaging.listMessages', reason: 'read-after-lookup' })];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/see you at 6/));
+    expect(screen.getByRole('status')).toHaveTextContent(/messaging\.listMessages/);
+  });
+
+  it('says so when an approved run failed, though the request itself succeeded', async () => {
+    answer.mockResolvedValue({
+      success: false,
+      error: { code: 'TOOL_FAILED', message: 'BlueBubbles timed out' },
+    });
+    state.actions = [card()];
+    renderWithProviders(<ApprovalsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/failed: BlueBubbles timed out/));
+  });
+
   it('falls back to a conservative sentence for a reason it does not know', () => {
     // A gate reason added later must read as "something serious" before anyone
     // writes its copy — not as a raw slug.

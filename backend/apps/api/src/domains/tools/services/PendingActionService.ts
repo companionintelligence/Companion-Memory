@@ -58,11 +58,14 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  *   every flagged intent unattended.
  * - `balanced` (the default) asks before anything that removes data or acts
  *   outside the appliance, and runs an external READ — listing the owner's
- *   own chats, looking a title up on a streaming service — unattended. A read
- *   changes nothing and sends nothing as the owner, and a read queued behind
- *   a card is a feature that stops working rather than one that asks first:
- *   the approved run's result lands on the pending-action row, never back in
- *   the chat that wanted it.
+ *   own chats, looking a title up on a streaming service — unattended when the
+ *   person asked for it. A read changes nothing and sends nothing as the owner,
+ *   and a read queued behind a card is a feature that stops working rather
+ *   than one that asks first: the approved run's result lands on the
+ *   pending-action row and the Approvals page, never back in the chat that
+ *   wanted it. The exception is a read a chat turn makes after a lookup
+ *   (`followsLookup`): its query may have been chosen by a mail or a page
+ *   someone else wrote, and the query is what leaves the appliance, so it asks.
  * - `cautious` asks before all of it, reads included.
  *
  * "Read" is the intent's own label: `access: 'read'` and not
@@ -75,16 +78,20 @@ type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trus
  *
  * This is consulted only for intents {@link needsConfirmation} already flags,
  * so an on-appliance read or write never reaches it, except a write a chat turn
- * makes after a lookup (`ToolInvocationContext.followsLookup`). Such a write is
- * never an external read, so `balanced` and `cautious` both answer `review` for
- * it and only `hands_off` runs it unattended.
+ * makes after a lookup (`ToolInvocationContext.followsLookup`). For that write,
+ * and for an external read after a lookup, `balanced` and `cautious` both
+ * answer `review` and only `hands_off` runs it unattended.
  */
-export function trustForToolCall(trustMode: TrustMode, privacy: IntentDefinition['privacy']): TrustDecision {
+export function trustForToolCall(
+  trustMode: TrustMode,
+  privacy: IntentDefinition['privacy'],
+  { followsLookup = false }: { followsLookup?: boolean } = {},
+): TrustDecision {
   if (trustMode === 'hands_off') {
     return 'auto';
   }
 
-  if (trustMode === 'balanced' && privacy.access === 'read' && !removesData(privacy)) {
+  if (trustMode === 'balanced' && privacy.access === 'read' && !removesData(privacy) && !followsLookup) {
     return 'auto';
   }
 
@@ -231,6 +238,7 @@ export class PendingActionService {
         ? trustForToolCall(
             (await this.personalization.getProfile(context.userId, { fresh: true })).trustMode,
             schema.privacy,
+            { followsLookup },
           )
         : null;
 

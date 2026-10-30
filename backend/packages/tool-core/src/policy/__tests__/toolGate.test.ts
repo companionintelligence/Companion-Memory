@@ -212,6 +212,18 @@ describe('resolveToolGate: a write that follows a lookup', () => {
     expect(resolveToolGate(READ_ONLY, afterLookup('review')).decision).toBe('execute');
   });
 
+  it('queues an external read after a lookup with its own reason when the dial says review', () => {
+    const LIST_MESSAGES = intent('messaging.listMessages', { external: true });
+    const ruling = resolveToolGate(LIST_MESSAGES, afterLookup('review'));
+
+    expect(ruling).toMatchObject({ decision: 'queue', reason: 'read-after-lookup' });
+    expect(ruling.explanation).toContain('right after a lookup');
+    expect(resolveToolGate(LIST_MESSAGES, afterLookup('auto')).decision).toBe('execute');
+    expect(resolveToolGate(LIST_MESSAGES, { ...afterLookup('review'), followsLookup: false }).reason).toBe(
+      'confirmation-required',
+    );
+  });
+
   it('keeps the reason of a delete that follows a lookup', () => {
     expect(resolveToolGate(DESTRUCTIVE, afterLookup('review')).reason).toBe('confirmation-required');
   });

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { ApprovalCard } from './ApprovalCard';
-import { useApprovals } from './useApprovals';
+import { useApprovals, type ApprovalOutcome } from './useApprovals';
 
 /**
  * The owner's answer queue.
@@ -20,14 +20,24 @@ export function ApprovalsPage() {
   const { actions, loading, error, answer } = useApprovals();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
+  // The last approved card's run. Its card is gone once the queue reloads, and for a read chat
+  // queued this is the only place its answer appears.
+  const [ran, setRan] = useState<{ intent: string; outcome: ApprovalOutcome } | null>(null);
 
   const onAnswer = useCallback(
     async (id: string, verdict: 'approve' | 'decline') => {
+      const intent = actions?.find((action) => action.id === id)?.intent ?? id;
+
       setBusyId(id);
       setAnswerError(null);
+      setRan(null);
 
       try {
-        await answer(id, verdict);
+        const outcome = await answer(id, verdict);
+
+        if (outcome != null) {
+          setRan({ intent, outcome });
+        }
       } catch (err: unknown) {
         // Surfaced, not swallowed. Approving RE-RUNS the intent, so a failure here
         // can mean the run itself failed — and an owner who tapped Approve and saw
@@ -37,7 +47,7 @@ export function ApprovalsPage() {
         setBusyId(null);
       }
     },
-    [answer],
+    [actions, answer],
   );
 
   return (
@@ -60,6 +70,25 @@ export function ApprovalsPage() {
           {answerError}
         </p>
       )}
+
+      {ran != null &&
+        (ran.outcome.success ? (
+          <section role="status" className="flex flex-col gap-2 rounded border p-3">
+            <p className="text-sm">
+              Ran <code>{ran.intent}</code>.{ran.outcome.data !== undefined && ' It returned:'}
+            </p>
+            {ran.outcome.data !== undefined && (
+              <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs">
+                {JSON.stringify(ran.outcome.data, null, 2)}
+              </pre>
+            )}
+          </section>
+        ) : (
+          <p className="text-sm text-destructive" role="alert">
+            Approved <code>{ran.intent}</code>, but it failed:{' '}
+            {ran.outcome.error?.message ?? 'no reason given'}
+          </p>
+        ))}
 
       {loading && actions == null && <p className="text-sm text-muted-foreground">Loading…</p>}
 

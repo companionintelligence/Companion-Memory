@@ -1314,7 +1314,8 @@ export const ConfigSchema = z.object({
      * a plain read (every connected-MCP tool is labelled this way), from the
      * owner's own chat is queued as an approval card under the `balanced` and
      * `cautious` dials and runs unattended only under `hands_off`; an external
-     * read (`messaging.listMessages`) asks only under `cautious`. See
+     * read (`messaging.listMessages`) asks only under `cautious`, unless chat
+     * makes it after a lookup in the same turn, when `balanced` asks too. See
      * `PendingActionService.trustForToolCall` for the mapping and for why the
      * dial is read directly rather than through the inference scorer.
      * `?tier=local` execute calls are queued rather than run.

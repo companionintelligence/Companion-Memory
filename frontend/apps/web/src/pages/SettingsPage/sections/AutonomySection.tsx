@@ -82,8 +82,9 @@ export function AutonomySection() {
           growth, inferred answers, and feed actions all respect this setting. So does chat: deleting data,
           importing the inbox, sending a message, completing a task, and every tool from a connected MCP
           server wait for your approval unless you choose Hands-off. So does anything else chat changes right
-          after looking something up in the same reply. Reading from an outside service — your messages,
-          streaming availability — asks first only on Cautious.
+          after looking something up in the same reply, and anything it asks an outside service then. Reading
+          from an outside service at your request — your messages, streaming availability — asks first only on
+          Cautious.
         </p>
       </div>
 

@@ -245,6 +245,31 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
     }
   });
 
+  // A read after a lookup can carry what the lookup returned off the appliance: a planted mail can
+  // choose the query. So it asks wherever a write after a lookup does, and only hands_off runs it.
+  it.each([
+    ['hands_off', 'execute'],
+    ['balanced', 'queue'],
+    ['cautious', 'queue'],
+  ] as const)(
+    'trust mode %s → %s for an external read that follows a lookup',
+    async (trustMode, expected) => {
+      const service = new PendingActionService(
+        makeRepository(),
+        personalizationFor(trustMode),
+        features(true),
+        makeLogger(),
+      );
+
+      const ruling = await service.evaluate(LIST_MESSAGES, context({ followsLookup: true }));
+
+      expect(ruling.decision).toBe(expected);
+      if (expected === 'queue') {
+        expect(ruling.reason).toBe('read-after-lookup');
+      }
+    },
+  );
+
   it('never consults the dial for a write the turn did not make after a lookup', async () => {
     const personalization = personalizationFor('cautious');
     const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
