@@ -333,6 +333,31 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     expect(harness.resolveObservation).not.toHaveBeenCalled();
   });
 
+  it('tells a sighting sent back to review apart from "not a thing"', async () => {
+    const harness = makeHarness({ label: [{ object_id: OBJECT }] });
+    // What sendBackToReview leaves: unconfirmed, no thing link, method `user`, marked for review. The product
+    // link stays.
+    harness.findById.mockResolvedValue(
+      observation({
+        confirmedByUser: false,
+        resolvedObjectId: null,
+        resolvedProductId: PRODUCT,
+        resolutionMethod: 'user',
+        metadata: { sentBackToReview: true },
+      }),
+    );
+
+    const outcome = await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
+
+    expect(outcome).toMatchObject({
+      applied: false,
+      objectId: null,
+      productId: PRODUCT,
+      reason: 'user-sent-back; waiting in review',
+    });
+    expect(harness.resolveObservation).not.toHaveBeenCalled();
+  });
+
   it('calls a retraction that kept its link a retraction, not a rejection', async () => {
     const harness = makeHarness({ label: [{ object_id: OBJECT }] });
     // What confirm(id, false) leaves when no resolution is passed: unconfirmed,

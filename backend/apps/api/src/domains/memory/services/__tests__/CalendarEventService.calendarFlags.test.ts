@@ -319,6 +319,21 @@ describe('CalendarEventService — calendar flags survive create and update', ()
       expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: 'Morning walk' });
     });
 
+    it('does not store a title of only spaces on an event that never had one', async () => {
+      baseRepo.findOne.mockImplementation(async ({ where: { id } }: { where: { id: string } }) => ({
+        id,
+        name: null,
+        description: null,
+      }));
+
+      await service.update({ userId: 'user-1' } as ServiceContext, 'e1', {
+        title: '   ',
+        description: 'Morning walk',
+      });
+
+      expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { description: 'Morning walk' });
+    });
+
     it('records a real rename with the title it replaced', async () => {
       await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { title: 'Team standup' });
 
