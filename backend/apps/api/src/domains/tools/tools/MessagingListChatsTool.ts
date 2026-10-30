@@ -40,9 +40,10 @@ export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, Me
     domain: 'messaging',
     title: 'List message chats',
     description: 'List the iMessage/SMS conversations known to the connected BlueBubbles server.',
-    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true },
     // Reads live off the configured Mac's BlueBubbles server, not off any
-    // on-device mirror.
+    // on-device mirror. That server is the owner's own, so `ownServer`: a lookup
+    // before this call cannot use it to send anything to a third party.
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true, ownServer: true },
     localCapable: false,
     phrases: ['What conversations do I have', 'List my text chats'],
     parameters: {

@@ -215,4 +215,31 @@ describeWithDb(`ProductModelService — index-decided behaviour, in Postgres (${
 
     expect(updated?.modelNumber).toBe(`4-SLICE-${suffix}`);
   });
+
+  it("refuses a product whose picture is another account's content, though that column has no key", async () => {
+    const other = uuidv7();
+    const theirPhoto = uuidv7();
+
+    await dataSource.query(`INSERT INTO ci.users (id, name, email) VALUES ($1, $2, $3)`, [
+      other,
+      'Someone else',
+      `other.${other}@example.invalid`,
+    ]);
+    // A content row stands on its entity (content_id_entities_fk).
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1, 'Content', $2, 'Their photo')`,
+      [theirPhoto, other],
+    );
+    await dataSource.query('INSERT INTO ci.content (id, user_id) VALUES ($1, $2)', [theirPhoto, other]);
+
+    try {
+      await expect(service.create(owner, { title: 'Kettle', imageContentId: theirPhoto })).rejects.toThrow(
+        `image_content_id ${theirPhoto} is a row of ci.content that belongs to another account or to none, so the product was refused.`,
+      );
+    } finally {
+      await dataSource.query('DELETE FROM ci.content WHERE id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1', [theirPhoto]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [other]);
+    }
+  });
 });

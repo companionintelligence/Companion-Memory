@@ -24,13 +24,17 @@ function accountIdOf(userId: string): string {
   }
 }
 
+/** Why the session bridge would not sign the Hub person in (the server's `HubBridgeRefusal`). */
+export type HubRefusal =
+  'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous' | 'account_unproven';
+
 /** What `GET /api/authenticate/hub-identity` says about the Hub person behind this request. */
 export interface HubIdentity {
   username: string | null;
   /** The Memory account the Hub person signs in as, when the Hub sends a stable id. */
   accountId: string | null;
   /** Why Memory would not sign the Hub person in at all, when it would not. */
-  refused?: string | null;
+  refused?: HubRefusal | null;
 }
 
 /**
@@ -39,8 +43,9 @@ export interface HubIdentity {
  * By account when the server could say which one the Hub person signs in as. Their address
  * may have changed on the Hub or here since they were linked, and proves nothing either way.
  * By address otherwise, which is all a Hub without stable ids gives to go on. A person Memory
- * refuses has no account here, so any session this browser holds is someone else's, even one
- * at their address.
+ * refuses is not signed in to any account here, so any session this browser holds is someone
+ * else's, even one at their address. (For `account_unproven` the account at the address may be
+ * theirs; signing in to it with its password, then reloading, links them.)
  */
 export function hubNamesSomeoneElse(user: { id: string; email: string }, hub: HubIdentity): boolean {
   if (!hub.username) {

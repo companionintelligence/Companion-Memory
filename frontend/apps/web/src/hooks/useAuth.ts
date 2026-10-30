@@ -653,6 +653,10 @@ function useAuth(): ReturnValue {
           setAccessToken(jwt);
         }
 
+        // Memory answered the sign-in, so the session check it left unanswered no longer
+        // holds. Left set, `/` would show "Can't reach Memory" until the profile loads.
+        setUnreachable(false);
+
         const returnTo = (location.state as { from?: string })?.from ?? '/';
         navigate(returnTo, { replace: true });
       } catch (err: unknown) {
@@ -901,6 +905,8 @@ function useAuth(): ReturnValue {
           setAccessToken(jwt);
         }
 
+        // As in login: Memory answered, so the outage the session check saw is over.
+        setUnreachable(false);
         navigate('/');
       } catch (err: unknown) {
         setLoginError(err);
@@ -918,6 +924,9 @@ function useAuth(): ReturnValue {
       const data = await refreshSession();
 
       setAccessToken(data?.accessToken ?? null);
+      // Memory answered, as in login: "Try again" on the outage card opens the page now,
+      // not on the retry's next tick.
+      setUnreachable(false);
     } catch (err: unknown) {
       if (err instanceof FetchJsonError && err.status === 401) {
         let bridged: Awaited<ReturnType<typeof alignHubSession>>;
@@ -941,6 +950,7 @@ function useAuth(): ReturnValue {
           }
 
           setAccessToken(bridged.accessToken);
+          setUnreachable(false);
 
           return;
         }
@@ -956,6 +966,7 @@ function useAuth(): ReturnValue {
 
       setRefreshError(err);
       setAccessToken(null);
+      setUnreachable(false);
     }
   }, [decoded?.sub]);
 
@@ -1023,6 +1034,10 @@ function useAuth(): ReturnValue {
     // tick leaves the previous one to finish rather than stacking requests on a Memory
     // that is not answering.
     let asking = false;
+    // Set once something else ended the outage (a sign-in, a sign-out). A check still in
+    // flight was sent with the cookies from before it, so its answer must not replace the
+    // session that came after: a 401 there would sign out the person who just signed in.
+    let superseded = false;
 
     const timer = setInterval(() => {
       if (asking) {
@@ -1032,11 +1047,15 @@ function useAuth(): ReturnValue {
       asking = true;
       refreshSession()
         .then((data) => {
+          if (superseded) {
+            return;
+          }
+
           setAccessToken(data?.accessToken ?? null);
           setUnreachable(false);
         })
         .catch((err: unknown) => {
-          if (!isUnansweredAuthError(err)) {
+          if (!superseded && !isUnansweredAuthError(err)) {
             // Memory answered: there is no session after all.
             setAccessToken(null);
             setUnreachable(false);
@@ -1047,7 +1066,10 @@ function useAuth(): ReturnValue {
         });
     }, UNREACHABLE_RETRY_MS);
 
-    return () => clearInterval(timer);
+    return () => {
+      superseded = true;
+      clearInterval(timer);
+    };
   }, [unreachable]);
 
   useAutoRefreshToken(accessToken, refresh);
