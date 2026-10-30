@@ -3,6 +3,7 @@ package com.companionintelligence.localhub
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Base64
 import com.companionintelligence.localhub.location.LocationTracking
 import com.companionintelligence.localhub.location.LocationTrackingConfig
@@ -45,13 +46,19 @@ import org.json.JSONObject
 @CapacitorPlugin(
     name = "LocalHub",
     permissions = [
-        // The one grant Always-mode recording needs, as a Capacitor alias so
-        // startSignificantLocationUpdates can prompt for it. Deliberately no
-        // ACCESS_BACKGROUND_LOCATION: the location service is started from inside the app,
-        // which Android counts as while-in-use access (see location/LocationTracker).
+        // The two grants motion-gated Always-mode recording needs, as Capacitor aliases so
+        // startSignificantLocationUpdates can walk them in the order Android insists on
+        // (fine first; background on its own prompt). The background grant is what lets Play
+        // Services hold the exit geofence that restarts sampling with no activity alive.
+        // Deliberately no ACTIVITY_RECOGNITION: the motion signals are permission-free sensors
+        // and that geofence (see location/LocationTracker).
         Permission(
             strings = [Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION],
             alias = LocalHubPlugin.ALIAS_LOCATION,
+        ),
+        Permission(
+            strings = [Manifest.permission.ACCESS_BACKGROUND_LOCATION],
+            alias = LocalHubPlugin.ALIAS_BACKGROUND_LOCATION,
         ),
     ],
 )
@@ -69,14 +76,14 @@ class LocalHubPlugin : Plugin() {
      */
     private var outbox: OutboxStore? = null
 
-    /** The pending `startSignificantLocationUpdates` options while its permission prompt runs. */
+    /** The pending `startSignificantLocationUpdates` options while its permission prompts run. */
     private var pendingTrackingConfig: LocationTrackingConfig? = null
 
     /**
-     * Further `startSignificantLocationUpdates` calls that arrived while the prompt was
-     * already up. Android allows one permission request at a time, so a second request
-     * would lose outright and read as "denied"; these instead ride the prompt in flight and
-     * are resolved with its outcome, under the newest options.
+     * Further `startSignificantLocationUpdates` calls that arrived while the prompts were
+     * already running. Android allows one permission request at a time, so a second chain
+     * would lose its request outright and read as "denied"; these instead ride the chain in
+     * flight and are resolved with its outcome, under the newest options.
      */
     private val waitingTrackingCalls = mutableListOf<PluginCall>()
 
@@ -89,8 +96,8 @@ class LocalHubPlugin : Plugin() {
     }
 
     override fun handleOnResume() {
-        // The one moment the location service is sure to be allowed to start: puts it back
-        // after a reboot, an update or a process death when Always is on.
+        // The one moment the location service is sure to be allowed to start: puts back a
+        // service that died mid-trip, or the exit geofence of a phone at rest, when Always is on.
         LocationTracking.get(context).onAppResumed()
         super.handleOnResume()
     }
@@ -185,9 +192,10 @@ class LocalHubPlugin : Plugin() {
      * Encrypts and commits one value. Rejects if it could not be stored **protected** -- there
      * is no plaintext fallback anywhere below this, which is the whole point of the store.
      *
-     * Only the keys in [WRITABLE_SECURE_KEYS] are accepted. This app runs Capacitor's legacy
-     * bridge (see `frontend/apps/android/capacitor.config.ts`), which reaches every frame in
-     * the WebView, so the store does not take arbitrary names from whoever calls it.
+     * Only the keys in [WRITABLE_SECURE_KEYS] are accepted. Until 2026-10-26 this app ran
+     * Capacitor's legacy bridge, which reaches every frame in the WebView, so the store does
+     * not take arbitrary names from whoever calls it -- and still does not, whichever bridge
+     * the shell runs.
      */
     @PluginMethod
     fun secureSet(call: PluginCall) {
@@ -291,8 +299,8 @@ class LocalHubPlugin : Plugin() {
 
     /**
      * One-shot high-accuracy fix ("use my location") is iOS-only for now -- see
-     * `LocationTracker.swift`. Always-mode recording on Android is this plugin's location
-     * service (location/); the While-using trail is still `@capacitor-community/background-geolocation`.
+     * `LocationTracker.swift`. Always-mode recording on Android is this plugin's motion-gated
+     * tracker (location/); there is no While-using trail.
      */
     @PluginMethod
     fun getCurrentLocation(call: PluginCall) {
@@ -312,7 +320,7 @@ class LocalHubPlugin : Plugin() {
         }
     }
 
-    /** Always-authorization two-step is iOS-only; Android's prompt runs in startSignificantLocationUpdates. */
+    /** Always-authorization two-step is iOS-only; Android's prompts run in startSignificantLocationUpdates. */
     @PluginMethod
     fun getLocationAuthorization(call: PluginCall) {
         val ret = JSObject()
@@ -328,12 +336,16 @@ class LocalHubPlugin : Plugin() {
     }
 
     /**
-     * Android's Always mode: the location foreground service in
-     * [com.companionintelligence.localhub.location.LocationTracker], started here, from the
-     * screen, and kept running until [stopSignificantLocationUpdates] -- across the app being
-     * swiped away. Prompts for fine location if it is not held yet. A refusal resolves the
-     * call and emits `significantLocationError` `NOT_AUTHORIZED`, the same shape iOS uses, so
-     * the web side's "Open Settings" path lights up.
+     * Android's Always mode: motion-gated background sampling (see
+     * [com.companionintelligence.localhub.location.LocationTracker]), kept armed until
+     * [stopSignificantLocationUpdates] -- across the app being swiped away and across
+     * reboots. Walks the permission prompts Android requires one at a time -- fine location,
+     * then background location (its own prompt from API 30, and a Settings page from 31) --
+     * and arms the tracker once both are held. A refusal resolves the call and emits
+     * `significantLocationError` `NOT_AUTHORIZED`, the same shape iOS uses, so the web side's
+     * "Open Settings" path lights up. Nothing beyond the location grants is asked for: like
+     * iOS's significant-change monitoring, the motion signals need no "Physical activity"
+     * permission.
      *
      * Options come from `@ci/common`'s `startSignificantLocationUpdates`; `deviceKey` is
      * required because without it no record can share the web side's `source_id`.
@@ -345,9 +357,9 @@ class LocalHubPlugin : Plugin() {
             call.reject("startSignificantLocationUpdates needs a non-empty deviceKey")
             return
         }
-        val promptInFlight = pendingTrackingConfig != null
+        val chainInFlight = pendingTrackingConfig != null
         pendingTrackingConfig = config
-        if (promptInFlight) {
+        if (chainInFlight) {
             waitingTrackingCalls += call
             return
         }
@@ -355,20 +367,41 @@ class LocalHubPlugin : Plugin() {
             requestPermissionForAlias(ALIAS_LOCATION, call, "trackingLocationPermission")
             return
         }
-        finishTrackingStart(call)
+        continueAfterLocation(call)
     }
 
     @PermissionCallback
     private fun trackingLocationPermission(call: PluginCall) {
+        continueAfterLocation(call)
+    }
+
+    private fun continueAfterLocation(call: PluginCall) {
+        if (getPermissionState(ALIAS_LOCATION) != PermissionState.GRANTED) {
+            finishTrackingStart(call)
+            return
+        }
+        if (!backgroundLocationHeld()) {
+            requestPermissionForAlias(ALIAS_BACKGROUND_LOCATION, call, "trackingBackgroundPermission")
+            return
+        }
         finishTrackingStart(call)
     }
+
+    @PermissionCallback
+    private fun trackingBackgroundPermission(call: PluginCall) {
+        finishTrackingStart(call)
+    }
+
+    /** Before Android 10 there is no separate background grant; the foreground one covers it. */
+    private fun backgroundLocationHeld(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || getPermissionState(ALIAS_BACKGROUND_LOCATION) == PermissionState.GRANTED
 
     private fun finishTrackingStart(call: PluginCall) {
         val config = pendingTrackingConfig
         val calls = listOf(call) + waitingTrackingCalls
         pendingTrackingConfig = null
         waitingTrackingCalls.clear()
-        if (config == null || getPermissionState(ALIAS_LOCATION) != PermissionState.GRANTED) {
+        if (config == null || getPermissionState(ALIAS_LOCATION) != PermissionState.GRANTED || !backgroundLocationHeld()) {
             val error = JSObject()
             error.put("code", "NOT_AUTHORIZED")
             notifyListeners("significantLocationError", error)
@@ -491,6 +524,7 @@ class LocalHubPlugin : Plugin() {
 
     companion object {
         const val ALIAS_LOCATION = "location"
+        const val ALIAS_BACKGROUND_LOCATION = "backgroundLocation"
 
         /**
          * The credentials the app itself stores: the device API key, its id and capability, and

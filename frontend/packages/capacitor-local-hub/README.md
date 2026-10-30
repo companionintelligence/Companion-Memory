@@ -420,6 +420,104 @@ These are deliberate follow-up slices, not oversights:
 - **iOS: builds, launches, and creates the outbox -- but the ciphertext assertion above has
   no iOS equivalent yet.** See the section below.
 
+## Motion-gated background location (Android; implemented)
+
+`startSignificantLocationUpdates` / `stopSignificantLocationUpdates` have an Android half
+under `android/src/main/java/com/companionintelligence/localhub/location/`. iOS keeps
+significant-change monitoring; the JS contract is one method on both.
+
+**Why.** A location request that stays open for as long as Always is on keeps the GPS
+receiver on around the clock, including the hours the phone spends sitting still.
+`@capacitor-community/background-geolocation`'s once-per-second request measured at about a
+quarter of the phone's daily drain; the always-on `LocationService` that replaced it (while
+the background-location grant was off the table) idled better but still held a request all
+day.
+
+**What runs.** GPS only while moving, decided by signals that need nothing beyond the
+location grants Always already holds. The activity-recognition API is deliberately not
+used: it is its own "Physical activity" runtime permission, which reads as a different kind
+of monitoring than location, and iOS's significant-change monitoring asks for nothing of
+the sort.
+
+| Signal | Source | Permission | Role |
+|---|---|---|---|
+| moving → still | the fixes: no 50 m of movement from where movement was last confirmed, for 5 minutes | location | stop `LocationService`, set a 100 m exit geofence at the resting spot |
+| moving → still (sooner) | `TYPE_STATIONARY_DETECT` one-shot sensor (five seconds at rest); armed only while the service runs | none | never stops GPS by itself (a red light fires it too); shortens the fixes clock to 3 minutes |
+| still → moving | the exit geofence, and nothing else | location + background location | evaluated by Android with cheap location, survives the process being frozen or killed, exempt for starting a location foreground service from the background |
+| service refused | `startForegroundService` throws `ForegroundServiceStartNotAllowedException` | — | treated as "still": fence the fused provider's last known fix (then the last fix seen) and wait for the exit; with no location at all, stay "moving" and restart on the next resume |
+| service missing on resume | state says moving, `LocationService.isRunning` is false | — | start it (allowed: the app is on screen); a running service, swiped notification or not, is never touched |
+| reboot / app update | `TrackingRestoreReceiver` (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) | `RECEIVE_BOOT_COMPLETED` (normal) | put the fence back, or restart the service mid-trip; `TrackingRestoreWorker` retries while Play Services comes up |
+| background grant lapsed | the fence cannot be registered and `ACCESS_BACKGROUND_LOCATION` is no longer held | — | one notification asking for an app open, where the web side re-prompts; never posted while the app is on screen |
+
+The geofence broadcast reaches `GeofenceReceiver` with no WebView, no plugin instance and no
+JavaScript. `LocationService` (foreground service type `location`, with the notification
+Android requires) runs in between and feeds every fix to `LocationTracker`.
+
+**Why no sensor restarts sampling.** Since Android 9 an app in the background with no
+foreground service receives no sensor events, one-shot triggers included. On a device, the
+significant-motion trigger fired for the system's own listeners while this app's, registered
+the same way, never heard it: the app had been frozen a minute after the stop. The
+activity-recognition API is the OS-sanctioned route around that (Play Services delivers it
+as a PendingIntent) and is exactly the permission this design declines. The stationary
+sensor is unaffected, because it is only needed while the service is running, which keeps
+the app eligible. The trade-off, stated plainly: the first stretch of every trip (the fence
+radius plus Play Services' evaluation latency, typically a few hundred metres on foot and a
+kilometre or two by car) is not sampled, and a trip shorter than the radius is not sampled
+at all.
+
+**When Android refuses the service.** A location foreground service may not be started from
+the background, and "background" is wider than it sounds: an app launched behind the lock
+screen (uid state `TOP_SLEEPING`, which is what `cap run`'s install-and-launch does to a locked
+phone) or re-armed while another app is on screen is refused too. An earlier revision swallowed
+that exception and recorded "moving" anyway: no GPS, no fence, and nothing that could ever
+wake it. A phone sat in that state for three days (2026-10-09 15:52 to 10-12), and every trip in
+between went unrecorded; `dumpsys activity services` showed the record with
+`startForegroundCount=0`, `uidState: TPSL`, `code:DENIED`. Now `startSampling` reports the
+refusal, and the tracker fences the phone's last known location and waits for the exit, the
+one restart Android always allows. A second guard runs on every resume: if the state says
+moving and the service is not alive in this process (refused with nothing to fence, or the
+process died mid-trip before the sticky restart), it is started then, while the app is on
+screen and the start is permitted. It is never restarted while running, so a swiped-away
+notification stays away.
+
+**What is recorded.** The tracker applies the web side's gate (150 m or 5 min, fixes looser
+than 200 m dropped) and queues each accepted fix into the encrypted outbox from native code,
+through the same `OutboxStore` the HTTP sidecar uses (`OutboxStores.shared`, one instance per
+process so the idempotency check stays atomic). The record is `PositionRecordJson`, built
+field for field like `buildPositionRecord` in `@ci/common` and pinned to the same fixture in
+`PositionRecordJsonTest` and `deviceSourceLocation.test.ts`; the `source_id`
+(`<deviceKey>:<epochMillis>`) is the outbox's idempotency key, so when the plugin is alive
+and also hands the fix to JS as `significantLocation`, the web side's re-enqueue is a no-op.
+Fixes are recorded whether or not the app is on screen: there is no second recorder.
+
+**What JS hands over** (`SignificantLocationOptions` in `src/definitions.ts`): the device
+key, provider, outbox owner stamp, the gate numbers, the geofence radius and the
+notification copy — every value the web side owns, persisted in SharedPreferences so a
+broadcast-started process builds exactly the record the web side would have. Nothing is
+invented natively; a missing `deviceKey` rejects the call.
+
+**Permissions.** `@CapacitorPlugin(permissions = …)` declares two aliases — `location`,
+`backgroundLocation` — and `startSignificantLocationUpdates` walks them in the order
+Android insists on (fine first; background on its own prompt, a Settings page from API 31).
+Either refused → the call resolves, nothing is armed, and `significantLocationError`
+`NOT_AUTHORIZED` fires, the iOS shape. No `ACTIVITY_RECOGNITION` anywhere in the manifest.
+
+**State** lives in `SharedPreferencesTrackingStateStore` (config, moving/still, the last
+queued fix for the gate, the last seen fix for the geofence centre, the still clock and the
+stationary-sensor note) so a new process picks up mid-journey; a state saved by the
+always-on predecessor (config + last queued fix only) reads as "moving", and the first fix
+sets the rest. `LocationTrackerTest` drives the state machine through a fake platform and
+the test support's `FakeOutbox`; `LocationSamplingGateTest` and `PositionRecordJsonTest` pin
+the pure pieces.
+
+**Verifying on a device.** `adb shell dumpsys location`: at rest, no `ProviderRequest`
+with this app's uid. `adb shell dumpsys activity services <pkg>`: no `LocationService` at
+rest, one while moving. `adb shell dumpsys activity service com.google.android.gms` →
+"Geofencing:" lists the registered fence (empty = none). `adb shell dumpsys batterystats
+--charged` after a day: the `gnss` line should cover the moving minutes, not the whole
+period. Logcat tags: `LocationService`, `LocationPlatform`, `LocationGeofence`,
+`LocationRestore`.
+
 ## Package layout
 
 Modeled on `@ci/capacitor-local-llm` for consistency:

@@ -20,6 +20,14 @@ import {
 const SERVER_PROPS_TTL_MS = 5 * 60_000;
 
 /**
+ * A `chatStream` chunk. The last one of a `discardToolMarkup` round also names the calls that
+ * round dropped, structured or written as markup, so the tool loop can tell a preamble ("let me
+ * check one more place") from an answer the same way it does on the native path, where the engine
+ * hands the calls over and the loop drops them itself.
+ */
+export type DriverChatResponse = ChatResponse & { discardedToolCalls?: ToolCall[] };
+
+/**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
  * OpenAI-compatible server). It speaks `/v1/chat/completions` (+ `/v1/models`)
@@ -345,6 +353,7 @@ export class OpenAiCompatChatDriver {
      * text. Measured 2026-09-30 on Lemonade: the model was told tool use was
      * over, apologised for a bad argument, and streamed a fresh
      * `<tool_call>…</tool_call>` block which the chat showed verbatim.
+     * The last chunk names the dropped calls in `discardedToolCalls`.
      */
     discardToolMarkup?: boolean;
     /**
@@ -353,7 +362,7 @@ export class OpenAiCompatChatDriver {
      * admission pass. Absent leaves the server's default alone.
      */
     maxTokens?: number;
-  }): AsyncGenerator<ChatResponse> {
+  }): AsyncGenerator<DriverChatResponse> {
     const messages = toOpenAiMessages(request.messages);
     const tools = request.tools && request.tools.length > 0 ? toOpenAiTools(request.tools) : undefined;
     const open = (thinking: ReturnType<typeof thinkingBody>) =>
@@ -464,6 +473,9 @@ export class OpenAiCompatChatDriver {
     const emitted =
       structured.length > 0 ? structured : request.salvageTools === true ? salvaged.toolCalls : [];
     const toolCalls = request.discardToolMarkup ? [] : emitted;
+    // What a discarding round wanted to call: the engine's own calls, or else the markup it wrote,
+    // which this round never salvages.
+    const discarded = request.discardToolMarkup ? (emitted.length > 0 ? emitted : salvaged.toolCalls) : [];
     const prose = emitted.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     if (bufferContent && prose.trim() !== '') {
@@ -474,7 +486,10 @@ export class OpenAiCompatChatDriver {
       yield toChatResponse(request.model, { toolCalls, done: false });
     }
 
-    yield toChatResponse(request.model, { done: true, usage });
+    yield {
+      ...toChatResponse(request.model, { done: true, usage }),
+      ...(discarded.length > 0 && { discardedToolCalls: discarded }),
+    };
   }
 }
 

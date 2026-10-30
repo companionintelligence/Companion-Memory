@@ -213,7 +213,9 @@ describe('the What strip shares its line with the filter controls without being 
   it('floors the strip at its buttons at rest from xl up and never lets it grow past its content', () => {
     const { container } = renderNav();
 
-    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
+    // The strip's place on the line is the box around the scroller that also
+    // holds its "more this way" arrows (ScrollMoreArrows), so the sizing is there.
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
 
     expect(strip).not.toBeNull();
     expect(strip).toHaveClass('flex-1', 'basis-0', 'min-w-0');
@@ -226,7 +228,7 @@ describe('the What strip shares its line with the filter controls without being 
   it("floors the events explorer's strip at its own four buttons", () => {
     const { container } = renderNav('/memory/events');
 
-    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
 
     // Messages, Events (caret), Browser, Tags (caret): 193 px, not /memory's 392.
     expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(10.875rem + 8px)');

@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   needsSettingsUpgrade: false,
   isNativePlatform: vi.fn(() => false),
   isIosPlatform: vi.fn(() => false),
+  isAndroidPlatform: vi.fn(() => false),
   fetchJson: vi.fn(),
   openNativeLocationSettings: vi.fn(),
 }));
@@ -27,6 +28,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   fetchJson: h.fetchJson,
   isNativePlatform: h.isNativePlatform,
   isIosPlatform: h.isIosPlatform,
+  isAndroidPlatform: h.isAndroidPlatform,
   openNativeLocationSettings: h.openNativeLocationSettings,
 }));
 
@@ -38,6 +40,8 @@ beforeEach(() => {
   h.isNativePlatform.mockReturnValue(false);
   h.isIosPlatform.mockReset();
   h.isIosPlatform.mockReturnValue(false);
+  h.isAndroidPlatform.mockReset();
+  h.isAndroidPlatform.mockReturnValue(false);
   h.fetchJson.mockReset();
   h.fetchJson.mockResolvedValue({ total: 0, byProvider: {}, lastFixAt: null });
   h.openNativeLocationSettings.mockReset();
@@ -70,7 +74,8 @@ describe('LocationSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'While using' }));
 
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
-    expect(screen.getByText(/Record your location while using Companion/)).toBeInTheDocument();
+    expect(screen.getByText(/Use your location while using Companion/)).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/Nothing is recorded in the background/);
     expect(h.setMode).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Agree' }));
@@ -89,6 +94,7 @@ describe('LocationSection', () => {
     expect(screen.getByText(/Remember places in the background/)).toBeInTheDocument();
     expect(screen.getByText(/no solid blue location indicator/)).toBeInTheDocument();
     expect(screen.getByText(/iOS asks twice/)).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent(/Android/);
     expect(h.setMode).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Agree' }));
@@ -98,6 +104,7 @@ describe('LocationSection', () => {
 
   it('shows Android the disclosure Play asks for, without the iPhone steps, and requires Agree', async () => {
     h.isNativePlatform.mockReturnValue(true);
+    h.isAndroidPlatform.mockReturnValue(true);
     render(<LocationSection />);
     await waitFor(() => expect(h.fetchJson).toHaveBeenCalled());
 
@@ -106,12 +113,18 @@ describe('LocationSection', () => {
     const dialog = screen.getByRole('alertdialog');
 
     expect(dialog).toHaveTextContent(/Remember places in the background/);
+    // Play's required shape: location data, the feature it serves, and that collection goes
+    // on when the app is closed or not in use.
     expect(dialog).toHaveTextContent(
       'Companion collects location data to place your notes, photos and events on your map, even when the app is closed or not in use.',
     );
-    expect(dialog).toHaveTextContent(/Android shows a notification that Companion is using your location/);
+    expect(dialog).toHaveTextContent(/only while you are on the move/);
+    expect(dialog).toHaveTextContent(/A notification shows while that is happening/);
+    expect(dialog).toHaveTextContent(/Allow all the time/);
     expect(dialog).toHaveTextContent(/never used for ads/);
     expect(dialog).not.toHaveTextContent(/iPhone|iOS/);
+    // Background sampling needs no "Physical activity" grant; the copy must not suggest one.
+    expect(dialog).not.toHaveTextContent(/physical activity/i);
     expect(h.setMode).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));

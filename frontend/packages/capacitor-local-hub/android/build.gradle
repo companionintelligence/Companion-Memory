@@ -87,11 +87,15 @@ dependencies {
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 
-    // Always-mode location recording (location/): the fused location request behind
-    // LocationService. `playServicesLocationVersion` is the app's if variables.gradle sets
-    // it, else this module's own default above -- the same default
-    // @capacitor-community/background-geolocation uses, so one version resolves.
+    // Motion-gated Always-mode location recording (location/): the exit geofence, the last
+    // known fix and the fused location request behind LocationService (the motion sensor is
+    // a framework API). `playServicesLocationVersion` is the app's if variables.gradle sets
+    // it, else this module's own default above.
     implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"
+
+    // TrackingRestoreWorker: the retry when putting the geofence back after boot fails because
+    // Play Services is not up yet. Same version capacitor-local-llm pins, so one resolves.
+    implementation 'androidx.work:work-runtime-ktx:2.10.0'
 
     // Encryption at rest for the capture outbox (OutboxStore.kt). This is the CURRENT Zetetic
     // artifact (package net.zetetic.database.sqlcipher), NOT the legacy

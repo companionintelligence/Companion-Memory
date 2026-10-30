@@ -5,24 +5,6 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
-"@capacitor-community/background-geolocation@npm:1.2.26":
-  version: 1.2.26
-  resolution: "@capacitor-community/background-geolocation@npm:1.2.26"
-  peerDependencies:
-    "@capacitor/core": ">=3.0.0"
-  checksum: 10c0/32904b5821885fafb51cbcbb35c088351644b410b62a3f98658447147ca13dc63ea1bc60491ffc3e09d3de3feccfd9eca4f9b95aeb05deea2ecbeb5ae94c217e
-  languageName: node
-  linkType: hard
-
-"@capacitor-community/background-geolocation@patch:@capacitor-community/background-geolocation@npm%3A1.2.26#~/.yarn/patches/@capacitor-community-background-geolocation-npm-1.2.26-e4d02e234f.patch":
-  version: 1.2.26
-  resolution: "@capacitor-community/background-geolocation@patch:@capacitor-community/background-geolocation@npm%3A1.2.26#~/.yarn/patches/@capacitor-community-background-geolocation-npm-1.2.26-e4d02e234f.patch::version=1.2.26&hash=2d11ff"
-  peerDependencies:
-    "@capacitor/core": ">=3.0.0"
-  checksum: 10c0/e27ac0e247b4780df05cb8c8543be67a0d5a8b069d652eae7331f747d5902bd61036ced4c62189116108da23d7ed1648b834a5520bd77567b01dda38830f3393
-  languageName: node
-  linkType: hard
-
 "@capacitor-community/sqlite@npm:^7.0.1":
   version: 7.0.3
   resolution: "@capacitor-community/sqlite@npm:7.0.3"
@@ -206,7 +188,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/fe-android@workspace:."
   dependencies:
-    "@capacitor-community/background-geolocation": "patch:@capacitor-community/background-geolocation@npm%3A1.2.26#~/.yarn/patches/@capacitor-community-background-geolocation-npm-1.2.26-e4d02e234f.patch"
     "@capacitor-community/sqlite": "npm:^7.0.1"
     "@capacitor-mlkit/barcode-scanning": "npm:^7.5.0"
     "@capacitor/android": "npm:^7.6.9"
