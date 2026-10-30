@@ -355,6 +355,21 @@ function makeServiceOverRows(rows: FakeRow[]) {
     ),
     create: jest.fn().mockImplementation((row: unknown) => row),
     save: jest.fn().mockImplementation((row: FakeRow) => Promise.resolve(row)),
+    // A conditional UPDATE: only rows the criteria still match are written.
+    update: jest.fn((criteria: Record<string, unknown>, changes: Partial<FakeRow>) => {
+      const hit = rows.filter((row) => rowMatches(row, criteria));
+
+      for (const row of hit) {
+        Object.assign(row, changes);
+      }
+
+      return Promise.resolve({ affected: hit.length });
+    }),
+    findOneOrFail: jest.fn(({ where }: { where: Record<string, unknown> }) => {
+      const row = rows.find((candidate) => rowMatches(candidate, where));
+
+      return row ? Promise.resolve(row) : Promise.reject(new Error('EntityNotFound'));
+    }),
   };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn() };
 
@@ -656,5 +671,65 @@ describe('PeerLinkService — a revoked peer does not authenticate', () => {
     );
     // Only the re-add touches grants. An edit of the live link leaves them.
     expect(grantService.revokeForPeerLink).toHaveBeenCalledTimes(1);
+  });
+
+  describe('an edit names the link it read', () => {
+    it('SECURITY: refuses an edit of an ended link whose peer was added again since, and writes nothing', async () => {
+      // `upsert` reads the handle's current row, which is now the new link. The
+      // edit carries the ended link's tier and identity, which must not land on it.
+      const rows = [
+        link({
+          id: 'link-old',
+          status: 'revoked',
+          revokedAt: new Date('2026-02-01T00:00:00Z'),
+          trustTier: 'family',
+        }),
+        link({ id: 'link-new', trustTier: 'stranger', peerIssuer: null, peerSubject: null }),
+      ];
+      const { service, repository } = makeServiceOverRows(rows);
+
+      await expect(
+        service.upsert(CTX as never, { ...DTO, expectedLinkId: 'link-old', trustTier: 'family' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
+      expect(rows[1]).toMatchObject({ trustTier: 'stranger', peerIssuer: null, peerSubject: null });
+    });
+
+    it('refuses an edit of a live link that was ended after it was read, and leaves it ended', async () => {
+      const endedAt = new Date('2026-02-01T00:00:00Z');
+      const rows = [link({ id: 'link-1', status: 'revoked', revokedAt: endedAt })];
+      const { service, repository } = makeServiceOverRows(rows);
+      // The read still sees it live: the end lands between that read and the write.
+      repository.find.mockResolvedValueOnce([link({ id: 'link-1' })]);
+
+      await expect(
+        service.upsert(CTX as never, { ...DTO, expectedLinkId: 'link-1', trustTier: 'trusted' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(rows[0]).toMatchObject({ status: 'revoked', revokedAt: endedAt, trustTier: 'peer' });
+    });
+
+    it('writes an edit of the current link onto that row by id, leaving whether it is live alone', async () => {
+      const rows = [link({ id: 'link-1' })];
+      const { service, repository } = makeServiceOverRows(rows);
+
+      const updated = await service.upsert(CTX as never, {
+        ...DTO,
+        expectedLinkId: 'link-1',
+        displayName: 'Devon L.',
+        trustTier: 'trusted',
+      });
+
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update.mock.calls[0]?.[1]).not.toHaveProperty('revokedAt');
+      expect(repository.update.mock.calls[0]?.[1]).not.toHaveProperty('status');
+      expect(updated).toMatchObject({
+        id: 'link-1',
+        displayName: 'Devon L.',
+        trustTier: 'trusted',
+        revokedAt: null,
+      });
+    });
   });
 });

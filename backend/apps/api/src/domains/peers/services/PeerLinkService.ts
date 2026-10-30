@@ -25,6 +25,14 @@ export interface CreatePeerLinkDto {
   personEntityId?: string | null;
   trustTier?: PeerTrustTier;
   status?: PeerLinkStatus;
+  /**
+   * For an edit: the link the caller read. Refused with a 409 unless it is
+   * still the handle's current link, and written by id only while it is still
+   * as live as it was when read. Without it, an end plus a re-add between the
+   * caller's read and this write put the ended link's tier and identity on the
+   * new link.
+   */
+  expectedLinkId?: string;
 }
 
 /**
@@ -185,6 +193,14 @@ export class PeerLinkService {
 
     const current = await this.findCurrentByHandle(context.userId, data.peerHandle);
 
+    // An edit of a link the peer was added back after: the handle's current
+    // row is the new link, and the values the caller read belong to the old.
+    if (data.expectedLinkId != null && current?.id !== data.expectedLinkId) {
+      throw new ConflictException(
+        `This link to ${data.peerHandle} was ended and they were added again since. Change the current link instead.`,
+      );
+    }
+
     // ═══ ADDING AN ENDED LINK BACK MAKES A NEW ONE ═══
     //
     // Reviving the ended row brought back everything it had collected: its
@@ -258,7 +274,10 @@ export class PeerLinkService {
     let saved: PeerLinkEntity;
 
     try {
-      saved = await this.repository.save(record);
+      saved =
+        data.expectedLinkId != null && existing != null
+          ? await this.updateAsRead(context, existing, record)
+          : await this.repository.save(record);
     } catch (err) {
       // Two adds of one handle (a double click, two devices) both read the same
       // current row, or none, and both insert; the index lets one through.
@@ -294,6 +313,51 @@ export class PeerLinkService {
     }
 
     return PeerLinkEntity.toEgressType(saved);
+  }
+
+  /**
+   * Write an edit onto the row it was read from, and only while that row is as
+   * live as it was then.
+   *
+   * `save()` writes every column it was handed, `revoked_at` among them, so a
+   * link ended between the read and this write came back live, and then
+   * collided with the link that replaced it. This writes only the fields an
+   * edit changes, and the WHERE carries the check: a link that was live must
+   * still be live. One that was already
+   * ended can only stay ended (a re-add makes a new row), so its id alone is
+   * enough. No row matched means it changed under the caller.
+   */
+  private async updateAsRead(
+    context: UserServiceContext,
+    read: PeerLinkEntity,
+    record: PeerLinkEntity,
+  ): Promise<PeerLinkEntity> {
+    const result = await this.repository.update(
+      {
+        id: read.id,
+        ownerUserId: context.userId,
+        ...(read.revokedAt == null ? { revokedAt: IsNull() } : {}),
+      },
+      {
+        memoryEndpoint: record.memoryEndpoint,
+        displayName: record.displayName,
+        peerIssuer: record.peerIssuer,
+        peerSubject: record.peerSubject,
+        personEntityId: record.personEntityId,
+        trustTier: record.trustTier,
+        // Not `status` or `revoked_at`: an edit never changes whether the link
+        // is live, and writing back the `revoked_at` read in JS would round it
+        // to the millisecond.
+      },
+    );
+
+    if (!result.affected) {
+      throw new ConflictException(
+        `This link to ${read.peerHandle} changed while it was being edited. Reload to see the link.`,
+      );
+    }
+
+    return this.repository.findOneOrFail({ where: { id: read.id, ownerUserId: context.userId } });
   }
 
   /**
