@@ -172,7 +172,40 @@ export class DailyMetricsService {
       out.push(await this.computeAndStore(context, date, timezone));
     }
 
+    await this.dropStaleDays(context.userId, days, days.length < windowDays, timezone);
+
     return out;
+  }
+
+  /**
+   * Delete the stored days up to today that this refresh covered but did not
+   * write.
+   *
+   * Every day that still has data was just written, so a stored row on any
+   * other covered day is left over from data that has since moved or gone: a
+   * thing picked as Oct 1 used to count on Sep 30 west of UTC, and once it
+   * moved to Oct 1 the upsert alone left Sep 30's spend in place, so the
+   * engines counted it twice. When `days` holds every day with data
+   * (`complete`), the refresh covered all of them. When the window cut it
+   * short, days older than the oldest one written are outside this run and
+   * stay as they are.
+   */
+  private async dropStaleDays(
+    userId: string,
+    days: string[],
+    complete: boolean,
+    timezone: string,
+  ): Promise<void> {
+    const oldest = complete ? null : days.reduce((min, day) => (day < min ? day : min));
+
+    await this.repository.query(
+      `DELETE FROM ci_derived.daily_metrics
+        WHERE user_id = $1::uuid
+          AND ($2::date IS NULL OR date >= $2::date)
+          AND date <= $3::date
+          AND date <> ALL($4::date[])`,
+      [userId, oldest, todayIsoInTimezone(timezone), days],
+    );
   }
 
   /**

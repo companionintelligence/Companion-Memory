@@ -36,6 +36,11 @@ import type {
  */
 const SENT_BACK_TO_REVIEW = 'sentBackToReview';
 
+/** Whether a person sent this sighting back to the review queue to say which thing it is. */
+export function isSentBackToReview(observation: Pick<ObjectObservation, 'metadata'>): boolean {
+  return observation.metadata?.[SENT_BACK_TO_REVIEW] === true;
+}
+
 /**
  * Decimal places a bbox is rounded to before it enters a detection key.
  *
