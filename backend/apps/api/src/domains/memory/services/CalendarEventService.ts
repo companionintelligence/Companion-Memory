@@ -413,14 +413,17 @@ function eventLinks(rows: readonly EventLinkFields[]): OwnedLink[] {
   ];
 }
 
-/** The links a create stores. `parent_event_id` is set by an update alone. */
+/**
+ * The links a create stores, read the way toEntityFields reads them: an empty id is no link
+ * there, so it is none here either. `parent_event_id` is set by an update alone.
+ */
 function createdEventLinks(items: readonly CreateEventDto[]): OwnedLink[] {
   return eventLinks(
     items.map(({ location_entity_id, organizer_entity_id, participant_entity_ids, task_id }) => ({
-      location_entity_id,
-      organizer_entity_id,
+      location_entity_id: location_entity_id || null,
+      organizer_entity_id: organizer_entity_id || null,
       participant_entity_ids,
-      task_id,
+      task_id: task_id || null,
     })),
   );
 }
@@ -2744,8 +2747,10 @@ export class CalendarEventService {
   }
 
   /**
-   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so the
-   * links have to belong to the event's owner.
+   * {@link refuseForeignLinks} for an update: the links have to belong to the event's owner,
+   * which is also how a system context, with no user of its own, is checked. An event the
+   * caller cannot see is left to the update, which answers null for it, so the refusal never
+   * tells a caller whose rows the ids it sent are.
    */
   private async refuseForeignUpdateLinks(
     context: ServiceContext,
@@ -2758,13 +2763,13 @@ export class CalendarEventService {
       return;
     }
 
-    const ownerId =
-      context.userId !== SYSTEM_USER
-        ? context.userId
-        : (await this.eventRepository.findOne({ select: { id: true, userId: true }, where: { id } }))?.userId;
+    const row = await this.eventRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
 
-    if (ownerId != null) {
-      await refuseForeignLinks(this.dataSource, ownerId, links, 'event');
+    if (row) {
+      await refuseForeignLinks(this.dataSource, row.userId, links, 'event');
     }
   }
 

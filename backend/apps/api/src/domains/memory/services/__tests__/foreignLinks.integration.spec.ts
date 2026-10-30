@@ -1,7 +1,7 @@
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import type { UserServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import type { HbpeNotifyService } from '@ci/common/hbpe';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
@@ -72,6 +72,7 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
   const ownerId = uuidv7();
   const otherId = uuidv7();
   const owner = { userId: ownerId } as UserServiceContext;
+  const system: ServiceContext = { userId: SYSTEM_USER };
 
   const myPerson = uuidv7();
   const theirPerson = uuidv7();
@@ -240,6 +241,27 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
       ).rejects.toThrow(refused('from_entity_id', theirPerson, 'ci.entities', 'message'));
       expect((await communications.findById(owner, stored.id))?.fromEntityId ?? null).toBeNull();
     });
+
+    it("refuses a system update that sends the message to another account's person", async () => {
+      const [stored] = await communications.createMany(owner, [message('plain')]);
+
+      await expect(
+        communications.update(system, stored.id, { content: '', to_entity_ids: [theirPerson] }),
+      ).rejects.toThrow(refused('to_entity_ids', theirPerson, 'ci.entities', 'message'));
+    });
+
+    it("answers no message for an update of another account's message, whatever it links to", async () => {
+      const [theirs] = await communications.createMany({ userId: otherId } as UserServiceContext, [
+        message('theirs'),
+      ]);
+
+      await expect(
+        communications.update(owner, theirs.id, { content: '', from_entity_id: theirPerson }),
+      ).resolves.toBeNull();
+      await expect(
+        communications.update(owner, uuidv7(), { content: '', from_entity_id: theirPerson }),
+      ).resolves.toBeNull();
+    });
   });
 
   describe('events', () => {
@@ -285,6 +307,30 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
       await expect(events.update(owner, stored.id, { parent_event_id: theirEvent })).rejects.toThrow(
         refused('parent_event_id', theirEvent, 'ci.events', 'event'),
       );
+    });
+
+    it("refuses a system update that makes another account's person the organizer", async () => {
+      const [stored] = await events.create(owner, [event('standup')]);
+
+      await expect(events.update(system, stored.id, { organizer_entity_id: theirPerson })).rejects.toThrow(
+        refused('organizer_entity_id', theirPerson, 'ci.entities', 'event'),
+      );
+    });
+
+    it("answers no event for an update of another account's event, whatever it links to", async () => {
+      await expect(
+        events.update(owner, theirEvent, { organizer_entity_id: theirPerson }),
+      ).resolves.toBeNull();
+      await expect(events.update(owner, uuidv7(), { organizer_entity_id: theirPerson })).resolves.toBeNull();
+    });
+
+    it('takes an event whose place, organizer and task ids are empty, as an event with none', async () => {
+      const [stored] = await events.create(owner, [
+        event('no links', { location_entity_id: '', organizer_entity_id: '', task_id: '' }),
+      ]);
+
+      expect(stored.locationEntityId ?? null).toBeNull();
+      expect(stored.organizerEntityId ?? null).toBeNull();
     });
   });
 

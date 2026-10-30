@@ -784,8 +784,10 @@ export class CommunicationService {
   }
 
   /**
-   * {@link refuseForeignLinks} for an update. A system context has no user of its own, so the
-   * links have to belong to the message's owner.
+   * {@link refuseForeignLinks} for an update: the links have to belong to the message's owner,
+   * which is also how a system context, with no user of its own, is checked. A message the
+   * caller cannot see is left to the update, which answers null for it, so the refusal never
+   * tells a caller whose rows the ids it sent are.
    */
   private async refuseForeignUpdateLinks(
     context: ServiceContext,
@@ -798,14 +800,13 @@ export class CommunicationService {
       return;
     }
 
-    const ownerId =
-      context.userId !== SYSTEM_USER
-        ? context.userId
-        : (await this.communicationRepository.findOne({ select: { id: true, userId: true }, where: { id } }))
-            ?.userId;
+    const row = await this.communicationRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
 
-    if (ownerId != null) {
-      await refuseForeignLinks(this.dataSource, ownerId, links, 'message');
+    if (row) {
+      await refuseForeignLinks(this.dataSource, row.userId, links, 'message');
     }
   }
 
