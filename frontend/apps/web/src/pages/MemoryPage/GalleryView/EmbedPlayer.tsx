@@ -6,10 +6,11 @@ import type { EmbedPlayer as EmbedPlayerModel } from './media';
 /**
  * Whether provider players open outside the app instead of in an iframe.
  *
- * True in the iOS and Android apps. Android runs Capacitor's legacy bridge
- * (`frontend/apps/android/capacitor.config.ts`, kept because background
- * location stalls without it), which hands every frame, cross-origin ones
- * included, the means to call the app's native plugins. A provider player is
+ * True in the iOS and Android apps. Until 2026-10-26 Android ran Capacitor's
+ * legacy bridge (for `@capacitor-community/background-geolocation`, since
+ * removed), which hands every frame, cross-origin ones included, the means to
+ * call the app's native plugins; the rule stays because it costs nothing and a
+ * shell that opts back in must not reopen the hole. A provider player is
  * script from YouTube, Spotify and the rest, plus whatever ads they load, so
  * the phone apps never mount one. iOS follows the same rule so the two apps
  * behave alike.

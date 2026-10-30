@@ -140,16 +140,22 @@ export interface LocalHubPlugin {
    * the Always grant lapses, a relaunch posts a notification asking for an app open, where
    * the web side's re-arm runs the two-step prompt again.
    *
-   * Android: a location foreground service of this plugin's own, started from the screen
-   * and kept running until `stopSignificantLocationUpdates` -- across the app being swiped
-   * out of recents, which ended the previous plugin's bound service. Every fix that clears
-   * the distance/interval gate is queued straight into the encrypted outbox from native
-   * code, so nothing depends on the WebView being alive; it is also emitted as an event, and
-   * the web side's own enqueue of it collapses on the shared `source_id`. `options` is
-   * required there -- see {@link SignificantLocationOptions}. A reboot, an app update or a
-   * process death ends the service, and without the background-location grant nothing but
-   * an app open may start it again: the plugin posts a notification asking for that open,
-   * and the open itself restarts sampling.
+   * Android: motion-gated sampling, kept armed until `stopSignificantLocationUpdates` --
+   * across the app being swiped out of recents and across reboots. GPS runs only while the
+   * phone is moving: the fixes themselves (helped by the permission-free stationary-detect
+   * sensor) say when it has stopped, an exit geofence around the resting spot says when it
+   * starts again, and a location foreground service (with its notification) exists only in
+   * between. The geofence is what needs `ACCESS_BACKGROUND_LOCATION`, which the plugin
+   * prompts for after fine location; like iOS, nothing beyond the location grants is asked
+   * for, and the activity-recognition API is not used. The cost of that choice: the first
+   * stretch of each trip (the fence radius plus Play Services' latency) is not sampled, and
+   * a trip shorter than the radius is not sampled at all. Every fix that clears the
+   * distance/interval gate is queued straight into the encrypted outbox from native code,
+   * so nothing depends on the WebView being alive; it is also emitted as an event, and the
+   * web side's own enqueue of it collapses on the shared `source_id`. `options` is required
+   * there -- see {@link SignificantLocationOptions}. A reboot or an app update wipes the
+   * fence; a boot receiver puts it back. Should the background grant lapse later, the
+   * plugin posts one notification asking for an app open, where the web side re-prompts.
    */
   startSignificantLocationUpdates(options?: SignificantLocationOptions): Promise<void>;
 
@@ -209,7 +215,9 @@ export interface SignificantLocationOptions {
   minIntervalMs?: number;
   /** Fixes looser than this are dropped, not queued. */
   maxAccuracyMeters?: number;
-  /** The foreground-service notification shown while recording (Android requires one). */
+  /** Radius of the exit geofence Android sets where the phone came to rest. iOS ignores it. */
+  geofenceRadiusMeters?: number;
+  /** The foreground-service notification shown while moving (Android requires one). */
   notificationTitle?: string;
   notificationText?: string;
 }
