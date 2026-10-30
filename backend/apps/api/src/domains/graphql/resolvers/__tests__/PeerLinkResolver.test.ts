@@ -61,9 +61,6 @@ function build(
     findById: jest.fn().mockResolvedValue(makeLink()),
     upsert: jest.fn().mockImplementation((_ctx, dto) => Promise.resolve(makeLink({ ...dto }))),
     revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
-    // The handle's current link is the one `findById` read, unless a test says
-    // a newer link has replaced it.
-    findByHandle: jest.fn((ctx: unknown): Promise<PeerLink | null> => service.findById(ctx)),
     ...overrides,
   };
 
@@ -201,16 +198,18 @@ describe('PeerLinkResolver', () => {
       expect(service.upsert.mock.calls[0][1].status).toBeUndefined();
     });
 
-    it('SECURITY: refuses to edit an ended link whose peer was added again since, without writing', async () => {
-      // `upsert` writes the handle's current row, which is the NEW link. This
-      // edit would copy the ended link's tier and identity onto it.
+    it('SECURITY: hands upsert the link it read, so the write refuses a link replaced since', async () => {
+      // `upsert` writes the handle's current row. If the peer was added again
+      // after this read, that row is the NEW link, and this edit would copy the
+      // ended link's tier and identity onto it. The id travels with the write,
+      // which refuses then (PeerLinkService.spec covers the refusal).
       const { resolver, service, context } = build({
         findById: jest
           .fn()
           .mockResolvedValue(
             makeLink({ id: 'link-old', status: 'revoked', revokedAt: new Date(), trustTier: 'family' }),
           ),
-        findByHandle: jest.fn().mockResolvedValue(makeLink({ id: 'link-new', trustTier: 'stranger' })),
+        upsert: jest.fn().mockRejectedValue(new ConflictException('added again since')),
       });
 
       await expect(
@@ -219,7 +218,7 @@ describe('PeerLinkResolver', () => {
           displayName: 'Ada',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(service.upsert).not.toHaveBeenCalled();
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({ expectedLinkId: 'link-old' });
     });
 
     it('preserves the existing tier when an update does not mention it', async () => {

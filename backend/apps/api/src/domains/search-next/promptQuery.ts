@@ -49,6 +49,8 @@
  * words, and every rule is a narrowing one.
  */
 
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
+
 /**
  * One conjunct of the rebuilt query.
  *
@@ -344,11 +346,13 @@ const PLAIN_WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
  * Anything else with a `.` or `_` inside is split there, as before: Postgres
  * reads "alice.wong" as one lexeme too, which no "Alice Wong" carries, and
  * splits "photos_of_me" back into 'photo' on its own, which every photo event
- * carries. The media extensions mirror `MEDIA_FILENAME_RE` in
- * `search-ingress/searchTexts.ts`.
+ * carries. The media extensions are the lists `MEDIA_FILENAME_RE` in
+ * `search-ingress/searchTexts.ts` is built from.
  */
-const FILE_NAME_PATTERN =
-  /\.(?:jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv|mp3|m4a|wav|flac|pdf|docx?|xlsx?|pptx?|txt|csv|md|json|zip)$/iu;
+const FILE_NAME_PATTERN = new RegExp(
+  String.raw`\.(?:${IMAGE_FILE_EXTENSIONS}|${VIDEO_FILE_EXTENSIONS}|mp3|m4a|wav|flac|pdf|docx?|xlsx?|pptx?|txt|csv|md|json|zip)$`,
+  'iu',
+);
 
 /** The prompt's words and where each starts, with only file names kept whole. */
 function* promptWords(prompt: string): Generator<{ word: string; start: number }> {

@@ -1,8 +1,8 @@
 import { ApiError } from '../client';
 import { CliError, type CliContext } from '../context';
 import { json, stamp, table } from '../output';
-import { unsuccessfulRunsMessage, waitForRuns } from '../wait';
-import type { RetryFailedPushResult, RunDetail } from '../wire';
+import { followRuns } from '../wait';
+import type { RetryFailedPushResult } from '../wire';
 
 import { parseTimeout } from './import';
 
@@ -99,16 +99,13 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
     ctx.term.out(`\n${runs.length} run(s) queued for push.`);
   }
 
-  if (options.wait && runs.length > 0) {
-    const followed = runs.map((run) => run.id);
-    const unfinished = unsuccessfulRunsMessage(
-      followed,
-      await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json }),
-    );
+  const unfinished = await followRuns(ctx.client, ctx.term, options.wait ? runs.map((run) => run.id) : [], {
+    timeoutMs,
+    quiet: options.json,
+  });
 
-    if (unfinished != null) {
-      throw new CliError(unfinished, 1);
-    }
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 
@@ -241,14 +238,12 @@ async function retryFailedPush(ctx: CliContext, options: PushOptions, timeoutMs:
     }
   }
 
-  const followed = options.wait ? requeued.map((entry) => entry.runId) : [];
-  let waited: RunDetail[] = [];
-
-  if (followed.length > 0) {
-    waited = await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json });
-  }
-
-  const unfinished = unsuccessfulRunsMessage(followed, waited);
+  const unfinished = await followRuns(
+    ctx.client,
+    ctx.term,
+    options.wait ? requeued.map((entry) => entry.runId) : [],
+    { timeoutMs, quiet: options.json },
+  );
 
   if (refused.length > 0) {
     throw new CliError(

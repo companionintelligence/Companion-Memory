@@ -1,11 +1,28 @@
-import { mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  link,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
 import { PathOutsideImportRootsError } from '../importRoots';
-import { acquireLocalUnit, inboxUnitInScratch, returnInboxUnit } from '../localAcquire';
+import {
+  acquireLocalUnit,
+  ClaimReleasedDuringCopyError,
+  inboxUnitInScratch,
+  returnInboxUnit,
+} from '../localAcquire';
 
 /**
  * The transactional move that consumes an inbox unit — the only code that
@@ -166,6 +183,41 @@ describe('acquireLocalUnit', () => {
       expect(await readFile(path.join(result.destPath, 'data.json'), 'utf8')).toBe('data');
       // Deleted only after the copy completed.
       await expect(stat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('leaves the source in place when the claim was released while it was copied', async () => {
+    const { inbox, scratch } = await fixture();
+    const source = path.join(inbox, 'export.zip');
+
+    await writeFile(source, 'zip bytes');
+
+    const exdev: typeof rename = async (from, to) => {
+      if (from === source) {
+        const err = new Error('cross-device link') as Error & { code: string };
+
+        err.code = 'EXDEV';
+        throw err;
+      }
+
+      return rename(from, to);
+    };
+
+    await withInbox(inbox, async () => {
+      await expect(
+        acquireLocalUnit({
+          sourcePath: source,
+          scratchDir: scratch,
+          sizeBytes: 9,
+          log,
+          renameImpl: exdev,
+          // The run was cancelled during the copy.
+          stillClaimed: async () => false,
+        }),
+      ).rejects.toBeInstanceOf(ClaimReleasedDuringCopyError);
+
+      expect(await readFile(source, 'utf8')).toBe('zip bytes');
+      expect(await readdir(scratch)).toEqual([]);
     });
   });
 
@@ -348,6 +400,105 @@ describe('returnInboxUnit', () => {
     expect(path.basename(returned)).toBe('export (2).zip');
     expect(await readFile(path.join(inbox, 'export.zip'), 'utf8')).toBe('arrived meanwhile');
     expect(await readFile(returned, 'utf8')).toBe('the only copy');
+  });
+
+  it('does not place a second copy when an earlier return linked the unit and stopped', async () => {
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+    const source = path.join(inbox, 'export.zip');
+
+    await writeFile(unit, 'the only copy');
+    // What a crash between the link and the scratch unlink leaves: the same
+    // file under both names.
+    await link(unit, source);
+
+    const returned = await returnInboxUnit({ unitPath: unit, sourcePath: source, inboxDir: inbox, log });
+
+    expect(returned).toBe(source);
+    expect(await readdir(inbox)).toEqual(['export.zip']);
+    await expect(stat(unit)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('comes back at the top level when a folder on its old path is a file now', async () => {
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+
+    await writeFile(path.join(inbox, 'google'), 'a file where the folder was');
+    await writeFile(unit, 'bytes');
+
+    const returned = await returnInboxUnit({
+      unitPath: unit,
+      sourcePath: path.join(inbox, 'google', 'export.zip'),
+      inboxDir: inbox,
+      log,
+    });
+
+    expect(returned).toBe(path.join(inbox, 'export.zip'));
+    expect(await readFile(returned, 'utf8')).toBe('bytes');
+    expect(await readFile(path.join(inbox, 'google'), 'utf8')).toBe('a file where the folder was');
+  });
+
+  it('comes back at the top level when a dangling symlink sits where its folder was', async () => {
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+
+    await symlink(path.join(inbox, 'gone'), path.join(inbox, 'google'));
+    await writeFile(unit, 'bytes');
+
+    const returned = await returnInboxUnit({
+      unitPath: unit,
+      sourcePath: path.join(inbox, 'google', 'export.zip'),
+      inboxDir: inbox,
+      log,
+    });
+
+    expect(returned).toBe(path.join(inbox, 'export.zip'));
+    expect(await readFile(returned, 'utf8')).toBe('bytes');
+  });
+
+  it('does not place a second copy across filesystems when an earlier return stopped after the link', async () => {
+    // Root ignores the folder mode, so the failed scratch unlink cannot be staged.
+    if (process.getuid?.() === 0) {
+      return;
+    }
+
+    const { inbox, scratch } = await fixture();
+    const unit = path.join(scratch, 'export.zip');
+    const crossDevice = async (): Promise<void> => {
+      throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+    };
+
+    await writeFile(unit, 'the only copy');
+
+    // The copy is linked into place, then the scratch unlink fails.
+    await chmod(scratch, 0o555);
+
+    try {
+      await expect(
+        returnInboxUnit({
+          unitPath: unit,
+          sourcePath: path.join(inbox, 'export.zip'),
+          inboxDir: inbox,
+          log,
+          linkImpl: crossDevice,
+        }),
+      ).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      await chmod(scratch, 0o755);
+    }
+
+    const returned = await returnInboxUnit({
+      unitPath: unit,
+      sourcePath: path.join(inbox, 'export.zip'),
+      inboxDir: inbox,
+      log,
+      linkImpl: crossDevice,
+    });
+
+    expect(returned).toBe(path.join(inbox, 'export.zip'));
+    expect(await readdir(inbox)).toEqual(['export.zip']);
+    expect(await readFile(returned, 'utf8')).toBe('the only copy');
+    await expect(stat(unit)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('copies back across filesystems, deleting the scratch copy only after', async () => {

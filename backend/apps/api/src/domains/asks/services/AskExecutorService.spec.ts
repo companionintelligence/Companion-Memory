@@ -63,8 +63,37 @@ describe('AskExecutorService.execute', () => {
 
     expect(searchService.searchPrompt).toHaveBeenCalledWith(
       { userId: 'responder-1' },
-      { prompt: 'lake', subjectIsName: false, maxResults: 50, includeTypes: ['file'], mediaEvents: 'photos' },
+      {
+        prompt: 'lake',
+        subjectIsName: false,
+        maxResults: 50,
+        includeTypes: ['file'],
+        mediaEvents: 'photos',
+        mediaEventPlaces: false,
+      },
     );
+  });
+
+  it('lets a photo ask match an event by its place only for a tier that may learn places', async () => {
+    // "Any photos from 14 Elm Street?" matched on a photo event's place answers
+    // a location question at the photos ceiling. Below household the location
+    // ceiling is lower, so the place there must not match.
+    const { service, searchService } = makeService();
+    const ask = fakeAsk({
+      query: { queryType: 'content', dataClass: 'photos', prompt: 'Any photos from 14 Elm Street?' },
+    });
+
+    await service.execute(ask, { tier: 'stranger' });
+    await service.execute(ask, { tier: 'family' });
+    await service.execute(ask, { tier: 'household' });
+    await service.execute(ask);
+
+    expect(searchService.searchPrompt.mock.calls.map((call) => call[1].mediaEventPlaces)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
   });
 
   it('searches photo events beside files for a photo ask, and no events for other file classes', async () => {
@@ -102,6 +131,7 @@ describe('AskExecutorService.execute', () => {
         maxResults: 50,
         includeTypes: ['file'],
         mediaEvents: 'photos',
+        mediaEventPlaces: false,
       },
     );
   });

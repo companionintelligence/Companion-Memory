@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException, Optional, UseGuards } from '@nestjs/common';
+import { NotFoundException, Optional, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -185,14 +185,10 @@ export class PeerLinkResolver {
     // `upsert` writes the handle's CURRENT row. An ended link whose peer was
     // added back since is not that row, and writing its stored tier and
     // identity onto the new link would hand the peer back what ending it took
-    // away.
-    if ((await this.peerLinkService.findByHandle(serviceContext, existing.peerHandle))?.id !== existing.id) {
-      throw new ConflictException(
-        `This link to ${existing.peerHandle} was ended and they were added again since. Change the current link instead.`,
-      );
-    }
-
+    // away. `expectedLinkId` makes the write itself refuse that, so an end
+    // plus a re-add after the read above can't slip in before it.
     const link = await this.peerLinkService.upsert(serviceContext, {
+      expectedLinkId: existing.id,
       peerHandle: existing.peerHandle,
       memoryEndpoint: existing.memoryEndpoint,
       displayName: input.displayName ?? existing.displayName,

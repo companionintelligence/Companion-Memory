@@ -1,4 +1,5 @@
 import { sanitizeAskerText } from './promptSafety';
+import type { HiddenCharacterCheck } from './useHiddenCharacterFlags';
 
 interface Props {
   /** The raw, asker-supplied text. Sanitized here — callers pass it unmodified. */
@@ -15,6 +16,8 @@ interface Props {
    * note below still has to show in that case.
    */
   hiddenCharactersRemoved?: boolean;
+  /** Whether the server's answer to that has arrived. Absent, it has. */
+  hiddenCharacterCheck?: HiddenCharacterCheck;
 }
 
 /**
@@ -46,7 +49,12 @@ interface Props {
  * disclose needs to know when they are not seeing the whole request, and when
  * the request contained characters that render as nothing.
  */
-export function AskerQuote({ prompt, attribution, hiddenCharactersRemoved = false }: Props) {
+export function AskerQuote({
+  prompt,
+  attribution,
+  hiddenCharactersRemoved = false,
+  hiddenCharacterCheck = 'checked',
+}: Props) {
   const sanitized = sanitizeAskerText(prompt);
   const { text, truncated } = sanitized;
   const removedHiddenCharacters = sanitized.removedHiddenCharacters || hiddenCharactersRemoved;
@@ -70,6 +78,14 @@ export function AskerQuote({ prompt, attribution, hiddenCharactersRemoved = fals
       {removedHiddenCharacters ? (
         <p className="text-muted-foreground text-xs">
           Characters that render as nothing were removed from this message.
+        </p>
+      ) : hiddenCharacterCheck === 'checking' ? (
+        <p className="text-muted-foreground text-xs">
+          Checking this message for characters that render as nothing…
+        </p>
+      ) : hiddenCharacterCheck === 'failed' ? (
+        <p className="text-muted-foreground text-xs">
+          This message couldn&apos;t be checked for characters that render as nothing.
         </p>
       ) : null}
     </figure>

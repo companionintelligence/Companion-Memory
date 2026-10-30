@@ -1705,9 +1705,69 @@ describe('AsksPage', () => {
     ]);
 
     expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Approve/i })).toBeEnabled());
     expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t be checked/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/couldn.t load your inbox/i)).not.toBeInTheDocument();
+  });
+
+  it('holds Approve until the hidden-characters check has answered', async () => {
+    // The note arrives on its own query. Approve used to be live while it was
+    // in flight, so an owner could approve before the warning could show.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated({ ...inboxHiddenOk({ 'ask-1': true }), delay: 60_000 }),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeDisabled();
+    expect(
+      screen.getByText(/Checking this message for characters that render as nothing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decline/i })).toBeEnabled();
+  });
+
+  it('says a message could not be checked when the check fails on a current Memory', async () => {
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated({ request: { query: ASK_INBOX_HIDDEN_CHARACTERS }, error: new Error('502 Bad Gateway') }),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(
+      await screen.findByText(/This message couldn.t be checked for characters that render as nothing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeEnabled();
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
   });
 
   it('keeps the inbox query free of the hidden-characters field, so an older Memory can answer it', () => {

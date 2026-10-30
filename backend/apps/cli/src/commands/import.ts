@@ -1,10 +1,10 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { IMPORT_STAGE_KINDS, type RunDetail } from '../wire';
+import { IMPORT_STAGE_KINDS } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { bytes, csv, json, table } from '../output';
-import { unsuccessfulRunsMessage, waitForRuns } from '../wait';
+import { followRuns } from '../wait';
 
 export interface ImportOptions {
   label?: string;
@@ -133,14 +133,12 @@ export async function importCommand(
     }
   }
 
-  const followed = options.wait ? started.map((result) => result.runId as string) : [];
-  let waited: RunDetail[] = [];
-
-  if (followed.length > 0) {
-    waited = await waitForRuns(ctx.client, ctx.term, followed, { timeoutMs, quiet: options.json });
-  }
-
-  const unfinished = unsuccessfulRunsMessage(followed, waited);
+  const unfinished = await followRuns(
+    ctx.client,
+    ctx.term,
+    options.wait ? started.map((result) => result.runId as string) : [],
+    { timeoutMs, quiet: options.json },
+  );
 
   if (failed.length > 0) {
     throw new CliError(

@@ -164,6 +164,7 @@ export {
   minTrustTier,
   narrowerForm,
   narrowestRung,
+  photoAskMayMatchPlaces,
   resolveGroupTier,
   rungAtLeast,
   rungForForm,

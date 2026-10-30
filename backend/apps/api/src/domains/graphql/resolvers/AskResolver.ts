@@ -465,7 +465,7 @@ export class AskResolver {
       throw new BadRequestException(`Ask ${ask.id} is not ready to answer (status: ${ask.status})`);
     }
 
-    const identifiers = await this.executorService.execute(ask);
+    const identifiers = await this.executorService.execute(ask, { tier: options.tier });
     const matches = identifiers.map((identifier) => ({ id: identifier.id, type: identifier.type }));
 
     const redacted = new Set(options.redactItemIds ?? []);
