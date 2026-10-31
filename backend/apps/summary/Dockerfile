@@ -23,10 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=uv /uv /usr/local/bin/uv
 
-# Install into the system interpreter rather than a virtualenv, so the
-# entrypoint can invoke `uvicorn` and `python -m` directly with no
-# activation step.
-ENV UV_PROJECT_ENVIRONMENT=/usr/local \
+# Keep the project runtime isolated from the base image's system Python.
+# The project pins Python in `.python-version`, which can differ from the
+# interpreter shipped by the slim image; uv creates the matching interpreter
+# inside this environment, and PATH lets the entrypoint invoke `uvicorn` and
+# `python -m` without an activation step.
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+    VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
