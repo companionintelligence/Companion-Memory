@@ -5,6 +5,7 @@
   "description": "Native iOS shell (Capacitor) wrapping the @ci/fe-web build as a thin client. Standalone project (NOT a yarn workspace) so the root Yarn PnP install stays intact; it consumes the web build via webDir, not as a dependency.",
   "packageManager": "yarn@4.9.1",
   "resolutions": {
+    "glob": "14.0.2",
     "minimatch": "11.0.1"
   },
   "scripts": {
