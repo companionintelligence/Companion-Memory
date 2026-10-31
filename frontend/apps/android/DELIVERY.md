@@ -63,17 +63,22 @@ The backend/frontend work is green on PR CI.
 >   Play at https://play.google.com/store/apps/details?id=com.ci.memory. The internal
 >   upload does not promote that build to the public production track.
 > - The exact-eb6505b iOS simulator app from Mobile Build run 41198428441 rendered
->   login and Advanced screens on an iOS 27 iPhone 17 simulator and opened the Companion
->   sign-in page. No credentials were entered. Mobile Release run 41202396610 uploaded
->   signed version 1.0.7, build 1020, to TestFlight successfully. App Store Connect
+>   login and Advanced screens on an iOS 27 iPhone 17e simulator and opened the Companion
+>   sign-in page. No credentials were entered. Its Safari extension was recognized by
+>   Safari, enabled, and granted one-day access to the public Companion Hub page. The
+>   extension popup still showed its loading skeleton after 10 seconds on a fresh
+>   simulator, so Safari popup startup is a failed QA check. Mobile Release run 41202396610
+>   uploaded signed version 1.0.7, build 1020, to TestFlight successfully. App Store Connect
 >   processing and tester availability were not verified; there is no public App Store
 >   listing or physical-device test.
 > - All seven required release gates passed on eb6505b8d1496b45c1f3d5321ed12b638dd3cc41.
 >   Release tag v2026.10.31.2 is pushed. Publish run 41202389990 completed: all nine
 >   server images have linux/amd64 and linux/arm64 manifests, and the production
 >   CI-Portal catalog reports 2026.10.31.2. Desktop appliance E2E run 41204722844
->   passed all six checks. Desktop Release run 41205230913 is in progress; verify its
->   signed assets and published release before marking desktop complete.
+>   passed all six checks. Desktop Release run 41205230913 published
+>   [desktop-v0.1.6](https://github.com/companionintelligence/Companion-Memory/releases/tag/desktop-v0.1.6).
+>   The macOS universal DMG passed stapler validation and Gatekeeper assessment; the
+>   Windows signing job succeeded; Linux DEB and RPM assets are unsigned by design.
 > ### ⚠️ 2026-08-13 — correction to the line that used to sit here
 > This file previously said *"both native builds (iOS + Android) were verified green on a
 > `mobile-v*` tag."* That was true of the **Android** job and misleading about **iOS**.
