@@ -123,7 +123,7 @@ dependencies {
     // (MainActivityPluginRegistrationTest, MergedManifestPermissionsTest). 4.14.x is the
     // generation that supports compileSdk 35+; it pulls the shadows framework and
     // Robolectric.buildActivity transitively.
-    testImplementation "org.robolectric:robolectric:4.14.1"
+    testImplementation "org.robolectric:robolectric:4.17"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
