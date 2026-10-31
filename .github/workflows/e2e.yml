@@ -58,15 +58,15 @@ jobs:
       DATABASE_HOST: localhost
       DATABASE_PORT: '5432'
       DATABASE_USERNAME: companion
-      DATABASE_PASSWORD: comp4nion_1ntel_ftw!
-      DATABASE_ADMIN_PASSWORD: pgadmin_s3cure!
+      DATABASE_PASSWORD: ${{ secrets.E2E_DATABASE_PASSWORD }}
+      DATABASE_ADMIN_PASSWORD: ${{ secrets.E2E_DATABASE_ADMIN_PASSWORD }}
       DB_HOST_PORT: '5432'
       PORT: '3030'
       E2E_API_PORT: '3030'
       E2E_WEB_PORT: '5173'
       E2E_BASE_URL: http://localhost:5173
       AUTH_DEFAULT_USER_EMAIL: jsmith@example.com
-      AUTH_DEFAULT_USER_PASSWORD: 'replace-me-pw-000000'
+      AUTH_DEFAULT_USER_PASSWORD: ${{ secrets.E2E_AUTH_DEFAULT_USER_PASSWORD }}
       # The `Start Ollama` step below publishes it on the runner's own
       # localhost. `services.ollama.host` defaults to
       # `http://host.docker.internal:11434`, which does not resolve OUTSIDE a
