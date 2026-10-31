@@ -20,5 +20,5 @@ module-name = "ci.telemetry"
 namespace = true
 
 [build-system]
-requires = ["uv_build>=0.9,<0.10"]
+requires = ["uv_build>=0.9,<0.14"]
 build-backend = "uv_build"
