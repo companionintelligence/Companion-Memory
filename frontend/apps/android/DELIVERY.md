@@ -48,30 +48,30 @@ needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 | ✅ `UIRequiredDeviceCapabilities` `armv7` → `arm64` (stale 32-bit template value) | `ios/App/App/Info.plist` |
 | ✅ Android `allowBackup="false"` (keep the private-memory app's local state out of cloud/adb backup) | `android/app/src/main/AndroidManifest.xml` |
 | ✅ **In-app account deletion, end to end** — `DELETE /account` (access revoked immediately) + Settings → Account, **and** the background purge that destroys the data 30 days later | `backend/.../auth/controllers/AccountController.ts`, `backend/.../user/services/AccountPurgeService.ts`, `frontend/apps/web/src/pages/SettingsPage/sections/AccountSection.tsx` |
-| ✅ **Signed store lanes exercised** — Android `.aab` uploaded to Play internal in run `41197902119` from SHA `9accc13`; iOS `.ipa` signed and App Store Connect validated in run `41198645807` from `eb6505b`, with TestFlight upload skipped. No public store release is verified. | `.github/workflows/mobile-release.yml`, `android/app/build.gradle` |
+| ✅ **Version 1.0.7 delivered to tester tracks** — run 41202396610 from release SHA eb6505b uploaded Android build code 1020 to Play internal and uploaded iOS build 1020 to TestFlight. Companion Memory also has a public Google Play listing; the Android workflow upload is internal-track only. The iOS build is not a public App Store release. | .github/workflows/mobile-release.yml, android/app/build.gradle |
 
 The backend/frontend work is green on PR CI.
 
 > ### ✅ 2026-10-31 — current mobile QA and distribution status
 > This update supersedes older release-lane claims below where they conflict.
 >
-> - Android's exact-`eb6505b` debug APK from Mobile Build run `41198428441` installed
+> - Android's exact-eb6505b debug APK from Mobile Build run 41198428441 installed
 >   and rendered the login and Advanced screens on a clean Android 36.1 Play emulator.
->   No account sign-in was attempted. The signed Play internal upload is from the earlier
->   SHA `9accc13207f30dd6bf68e8d0ca3797140caa4f71`, so the current main commit still needs
->   a new release run after its CI gates pass.
-> - The exact-`eb6505b` iOS simulator app from Mobile Build run `41198428441` rendered
+>   No account sign-in was attempted. Mobile Release run 41202396610 then built version
+>   1.0.7, code 1020, and completed its signed upload to the Play internal track from
+>   the same release SHA. The public Companion Memory listing is also live on Google
+>   Play at https://play.google.com/store/apps/details?id=com.ci.memory. The internal
+>   upload does not promote that build to the public production track.
+> - The exact-eb6505b iOS simulator app from Mobile Build run 41198428441 rendered
 >   login and Advanced screens on an iOS 27 iPhone 17 simulator and opened the Companion
->   sign-in page. No credentials were entered. The signed IPA from Mobile Release run
->   `41198645807` passed App Store Connect validation, but **Upload to TestFlight was
->   skipped**. No physical-device test or TestFlight distribution is verified.
-> - The current public mobile guide still describes both Memory apps as closed preview,
->   with no App Store or Play Store listing. The successful Android internal upload does
->   not establish a public release: [mobile app availability](https://docs.ci.computer/docs/apps-available/first-party-apps/mobile-app).
-> - The seven exact-SHA release gates for `eb6505b` are not all terminal yet: six passed
->   and full CI run `41198428586` remains in backend API tests. Do not tag or publish
->   this SHA until that run succeeds.
-
+>   sign-in page. No credentials were entered. Mobile Release run 41202396610 uploaded
+>   signed version 1.0.7, build 1020, to TestFlight successfully. App Store Connect
+>   processing and tester availability were not verified; there is no public App Store
+>   listing or physical-device test.
+> - All seven required release gates passed on eb6505b8d1496b45c1f3d5321ed12b638dd3cc41.
+>   Release tag v2026.10.31.2 is pushed; Publish run 41202389990 is still building the
+>   server images. Do not mark the server or desktop release complete until their
+>   workflows finish and the resulting assets/images are verified.
 > ### ⚠️ 2026-08-13 — correction to the line that used to sit here
 > This file previously said *"both native builds (iOS + Android) were verified green on a
 > `mobile-v*` tag."* That was true of the **Android** job and misleading about **iOS**.
@@ -230,10 +230,10 @@ it means an AGP upgrade rather than a one-line edit. Start it in parallel with e
 | 9 | ~~**iPad layout pass**~~ — iOS-only; resolved 2026-08-19 as iPhone-only (see [`../ios/DELIVERY.md`](../ios/DELIVERY.md) §1a). **Android large screens remain unaddressed** and have no opt-out | [code] | large-screen quality on Play | not a submission gate |
 | 10 | **On-device Android + iOS pass** — cleartext/LAN, edge-to-edge, and the three things the simulator cannot prove (see below) | [both] | launch confidence | after 1–3 |
 
-**Fastest defensible route to "in a store":** items 1–4 put builds in **TestFlight internal**
-and **Play internal testing**, both of which distribute to your own testers. Neither is
-an escape from policy, but internal tracks let the pipeline start proving itself while
-5–7 are still being written.
+**Current release route:** Android is already publicly listed on Google Play. The
+current CI build was uploaded to the Play internal track only; that does not change
+the public production release. On iOS, items 1–4 put a signed build in TestFlight
+internal; public App Store availability still requires the iOS review path below.
 
 **The two things most likely to slip the date, ranked:**
 
@@ -283,11 +283,11 @@ not only from a PR description)*:
 
 ## 2. Recommended ship path
 
-**Public App Store + Google Play, fronted by a seeded HTTPS demo CI-Server, staged through the testing tracks first.**
+**Maintain Android on Google Play; launch iOS on the App Store with a seeded HTTPS demo CI-Server and App Store review.**
 
 1. Build the review-enabling assets first (all the 🔴 P0s): demo server + account, privacy policy + EULA + **in-app account deletion**, honest nutrition-label / Data-Safety answers (cleartext disclosed), signing lanes.
-2. Ship to **TestFlight external + Play closed/internal testing** first — *not* an escape from review (both still enforce policy), but it validates the demo-server review path at low stakes.
-3. Promote to **public App Store + Play production**, **iPhone-only** initially to minimize first-review surface.
+2. Stage Android updates on the Play internal track, and submit iOS through **TestFlight internal then external testing**.
+3. Submit iOS for public App Store review, **iPhone-only** initially to minimize first-review surface. Promote Android updates from internal testing to Play production after confirming test results and policy declarations.
 
 **Alternatives** (secondary, not primary): Apple Business Manager **Custom Apps** + Play **private/unlisted** are a good *parallel* channel for enterprise appliance buyers (still full review, capped reach). **Unlisted** distribution is a useful interim soft-launch. **Apple Developer Enterprise Program is off the table** unless the audience is strictly internal Lifescope staff — using it for a public/self-hosted product violates the agreement. The demo server is the load-bearing unlock for *every* review-based channel, so build it once.
 

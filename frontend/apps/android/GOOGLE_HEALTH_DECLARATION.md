@@ -454,16 +454,19 @@ That is a manufactured inconsistency and exactly what §2.5 punishes.
 
 ## 4. Current store status — verified 2026-10-31
 
-- GitHub Actions run [41197902119](https://github.com/companionintelligence/Companion-Memory/actions/runs/41197902119)
-  built the signed Android release from `9accc13207f30dd6bf68e8d0ca3797140caa4f71`.
-- Its **Android → Play (internal)** job completed successfully, including the
-  **Upload to Play (internal track)** step. This confirms a Play Console app record
-  and a successful internal-track upload.
-- This workflow result does not show whether that release is still active, or whether
-  a release was later promoted to closed testing, open testing, or production. Confirm
-  the active track in Play Console before relying on the policy conclusion above.
-- The current `Mobile Release` workflow has a signed `bundleRelease` lane and the
-  Play publishing service account configured. `mobile-build.yml` remains the separate
+- Companion Memory has a public Google Play listing for package com.ci.memory:
+  https://play.google.com/store/apps/details?id=com.ci.memory. The storefront shows
+  the listing updated 2026-10-28.
+- GitHub Actions run 41202396610 built signed version 1.0.7, code 1020, from release
+  SHA eb6505b8d1496b45c1f3d5321ed12b638dd3cc41. Its Android → Play (internal) job
+  completed successfully, including the Upload to Play (internal track) step.
+- That upload updates the internal track only; it does not promote build 1020 to
+  production or establish which release is currently active in each Play track.
+  Confirm track state and declarations in Play Console before any promotion.
+- Earlier run 41197902119 also uploaded a signed build to the internal track from
+  SHA 9accc13207f30dd6bf68e8d0ca3797140caa4f71.
+- The current Mobile Release workflow has a signed bundleRelease lane and the Play
+  publishing service account configured. mobile-build.yml remains the separate
   debug/simulator build lane.
 
 ---
@@ -472,11 +475,13 @@ That is a manufactured inconsistency and exactly what §2.5 punishes.
 
 ### 5.1 🔴 [acct] Trigger point — the one rule to remember
 
-> **File the Health apps declaration before the first upload to *any* Play track.**
+> The first Play upload has already happened. Check the Health apps declaration state
+> in Play Console now, and resolve any declaration required for the app's actual features
+> before submitting another change for review or promoting an update to production.
 
-Not "before production." Not "when Google emails us." Before the first upload, full stop.
-It is a checkbox, it costs ten minutes, and doing it early removes the internal-testing
-ambiguity in §2.2 entirely.
+Do not infer the declaration's current state from a successful internal upload or from
+the public listing. Confirm it in Play Console; the public sources and CI logs do not
+expose the account's declaration answers.
 
 ### 5.2 🔴 [acct] Exact steps
 
