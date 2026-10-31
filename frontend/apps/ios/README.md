@@ -156,6 +156,12 @@ xcrun simctl launch booted com.companionintelligence.app
 `mobile-release.yml` is the **only** store lane: a signed `.ipa` to TestFlight and a
 signed `.aab` to Play's internal track.
 
+The iOS release lane also needs `CI_BROWSER_EXTENSION_DEPLOY_KEY`: a read-only SSH
+deploy key registered on the private `CI-Browser-Extension` repository and stored as a
+secret on `Companion-Memory`. The workflow checks out an immutable extension-source
+revision, verifies its version, and builds the Safari bundle during the archive. This
+keeps the signed app independent of a cross-repository release-asset download.
+
 ```bash
 # Rehearsal: build + sign + validate with Apple, submit nothing.
 # Always dispatch on a BRANCH. dry_run defaults to true; platform defaults to ios.
