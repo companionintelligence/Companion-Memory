@@ -16,13 +16,7 @@ vi.mock('@/api/powersync/deviceFallback', () => ({
 }));
 
 vi.mock('../ListView', () => ({
-  EntityResultList: ({
-    grouped,
-    emptyState,
-  }: {
-    grouped: boolean;
-    emptyState: React.ReactNode;
-  }) => (
+  EntityResultList: ({ grouped, emptyState }: { grouped: boolean; emptyState: React.ReactNode }) => (
     <div data-testid="entity-result-list" data-grouped={String(grouped)}>
       {emptyState}
     </div>
@@ -34,13 +28,7 @@ vi.mock('../LocalListView', () => ({
 }));
 
 vi.mock('@/pages/MemoryPage/Components', () => ({
-  MemoryEmptyState: ({
-    filtered,
-    whenDroppedTypes,
-  }: {
-    filtered: boolean;
-    whenDroppedTypes: number;
-  }) => (
+  MemoryEmptyState: ({ filtered, whenDroppedTypes }: { filtered: boolean; whenDroppedTypes: number }) => (
     <div data-testid="memory-empty-state" data-filtered={String(filtered)}>
       dropped:{whenDroppedTypes}
     </div>

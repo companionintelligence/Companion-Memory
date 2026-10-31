@@ -23,7 +23,9 @@ vi.mock('@/lib/utils', () => ({ formatEnumLabel: (value: string) => value.toUppe
 
 vi.mock('../Components', () => ({
   DateGroupHeader: ({ label, count }: { label: string; count: number }) => (
-    <h3>{label} ({count})</h3>
+    <h3>
+      {label} ({count})
+    </h3>
   ),
   Empty: ({ title, description }: { title: string; description: string }) => (
     <div role="status">
@@ -38,7 +40,9 @@ vi.mock('../Components', () => ({
   ),
   ErrorState: ({ onRetry }: { onRetry: () => void }) => (
     <div role="alert">
-      <button type="button" onClick={onRetry}>Try again</button>
+      <button type="button" onClick={onRetry}>
+        Try again
+      </button>
     </div>
   ),
   TimelineSkeleton: ({ count, className }: { count: number; className?: string }) => (
@@ -72,7 +76,10 @@ function baseService(overrides: Record<string, unknown> = {}) {
   ];
 }
 
-function renderTimeline(url = '/memory?sortBy=relevance', props: React.ComponentProps<typeof TimelineView> = {}) {
+function renderTimeline(
+  url = '/memory?sortBy=relevance',
+  props: React.ComponentProps<typeof TimelineView> = {},
+) {
   return render(
     <MemoryRouter initialEntries={[url]}>
       <TimelineView {...props} />
@@ -86,8 +93,9 @@ describe('TimelineView', () => {
     mocks.groupEntitiesByBucket.mockImplementation((entities: EntityItem[]) =>
       entities.length ? [{ key: 'today', label: 'Today', entities }] : [],
     );
-    mocks.isChronologicalSort.mockImplementation((sortBy: string | null, hasSearch: boolean) =>
-      !hasSearch && (sortBy === 'newest' || sortBy === 'oldest'),
+    mocks.isChronologicalSort.mockImplementation(
+      (sortBy: string | null, hasSearch: boolean) =>
+        !hasSearch && (sortBy === 'newest' || sortBy === 'oldest'),
     );
     mocks.observerCallback = undefined;
     vi.stubGlobal(
