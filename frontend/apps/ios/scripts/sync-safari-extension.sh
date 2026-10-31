@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fill SafariWebExtension/Resources from CI-Browser-Extension (sibling checkout
-# or a pinned GitHub safari-mobile release).
+# Fill SafariWebExtension/Resources from CI-Browser-Extension (explicit checkout,
+# sibling checkout, or a pinned GitHub safari-mobile release).
 #
 # FAIL CLOSED ONLY ON A BUILD THAT COULD SHIP, so an archive never ships an
 # empty .appex while a Debug/simulator build — which cannot be submitted to
@@ -17,10 +17,11 @@
 #     resources, and a silent no-op there is how an empty .appex reaches an
 #     archive in the first place.
 #
-# GitHub Actions does not check out the extension repo as a sibling, so CI
-# downloads a pinned public release and syncs its safari-mobile asset. Keep
-# PINNED_VERSION aligned with the extension release. Local builds can set
-# CI_BROWSER_EXTENSION_DIR to a checkout and build the bundle directly.
+# The mobile release workflow checks out an immutable extension-source revision
+# using a read-only deploy key, then sets CI_BROWSER_EXTENSION_DIR so this script
+# builds the Safari bundle from that source. Other CI or local builds can use a
+# sibling checkout; the pinned release download remains a fallback when neither
+# source checkout is available. Keep PINNED_VERSION aligned with the extension.
 set -euo pipefail
 
 # Xcode GUI Run scripts do not load a login shell, so asdf/nvm/Homebrew yarn
@@ -150,7 +151,8 @@ populate_resources() {
       curl -fsSL -o "$tmp/$zip_name" "$url"
     fi
     unzip -q "$tmp"/*safari-mobile.zip -d "$tmp/unpacked"
-    src="$(find "$tmp/unpacked" -name manifest.json -print -quit | xargs dirname)"
+    src="$(find "$tmp/unpacked" -name manifest.json -print -quit)"
+    src="${src%/*}"
     sync_from_dir "$src"
     rewrite_safari_asset_urls "$DEST"
   fi

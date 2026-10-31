@@ -56,6 +56,12 @@ name: Mobile Release
 #                               and under manual signing an appex needs its OWN
 #                               profile — the container app's profile does not cover
 #                               it.
+#   CI_BROWSER_EXTENSION_DEPLOY_KEY
+#                               read-only SSH deploy key for the private
+#                               companionintelligence/CI-Browser-Extension repo.
+#                               The archive builds its pinned Safari source locally,
+#                               avoiding a cross-repo release download the runner
+#                               cannot authorize.
 # Android:
 #   ANDROID_KEYSTORE_BASE64     base64 of the upload .jks
 #   ANDROID_KEYSTORE_PASSWORD
@@ -69,7 +75,8 @@ name: Mobile Release
 # but not all of a lane's secrets are set the lane FAILS immediately and names the
 # missing ones: a half-configured lane is a configuration mistake, and letting it run
 # means dying an hour later, after an archive that has already burned a build number.
-# The Safari extension profile is included in the iOS lane's required-secret gate.
+# The Safari extension profile and source-read key are included in the iOS lane's
+# required-secret gate; both are necessary for a shippable archive.
 
 # >>> ci-local:gated original triggers below, restore with `ci-local restore`
 # on:
@@ -138,6 +145,7 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
+  CI_BROWSER_EXTENSION_VERSION: '1.6.2'
   VITE_DISABLE_PWA: 'true'
   # Phone cloud-connect talks to production Portal, not the internal Hub appliance host.
   VITE_CI_CLOUD_URL: 'https://hub.ci.computer'
@@ -235,8 +243,9 @@ jobs:
       # checked only three of the seven secrets then required, so a run missing
       # APPLE_TEAM_ID or APPSTORE_PRIVATE_KEY sailed through, spent ~40 minutes on install
       # + archive, and only then died at the signing or upload step — with the build number
-      # already spent. The Safari extension profile brings the required total to eight.
-      # All eight present → run. None present → skip green (wiring one store first).
+      # already spent. The Safari extension profile and source-read key bring the required
+      # total to nine. All nine present → run. None present → skip green (wiring one store
+      # first).
       # Some but not all → hard fail, naming exactly what is missing.
       - name: Check for iOS signing secrets
         id: secrets
@@ -249,11 +258,12 @@ jobs:
           IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
+          CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
         run: |
           set -uo pipefail
           REQUIRED="APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY APPLE_TEAM_ID
                     IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64
-                    IOS_EXTENSION_PROVISIONING_PROFILE_BASE64"
+                    IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 CI_BROWSER_EXTENSION_DEPLOY_KEY"
           MISSING=""
           FOUND=0
           TOTAL=0
@@ -283,6 +293,33 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - if: steps.secrets.outputs.present == 'true'
         run: corepack enable
+
+      # The iOS archive needs the private Safari extension source. The main repo's
+      # GITHUB_TOKEN cannot read a second private repository, and the extension
+      # release asset is not a reliable source for this build. Check out the
+      # immutable source revision with a read-only deploy key and build it locally.
+      - name: Checkout pinned Safari extension source
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: companionintelligence/CI-Browser-Extension
+          ref: 99acfb48451d47b66f80641e4ff45c2e05b294ed
+          path: CI-Browser-Extension
+          ssh-key: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Verify pinned Safari extension source
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          EXPECTED_EXTENSION_VERSION: ${{ env.CI_BROWSER_EXTENSION_VERSION }}
+        run: |
+          set -euo pipefail
+          actual="$(node -p "require('./CI-Browser-Extension/package.json').version")"
+          if [[ "$actual" != "$EXPECTED_EXTENSION_VERSION" ]]; then
+            echo "::error::Pinned Safari extension source is version $actual; expected $EXPECTED_EXTENSION_VERSION. Update the immutable ref and version together."
+            exit 1
+          fi
+          echo "Verified Safari extension source version $actual."
 
       - name: Install root dependencies
         if: steps.secrets.outputs.present == 'true'
@@ -411,11 +448,9 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios/ios/App
         env:
-          # The Xcode Safari extension build phase uses `gh release download`
-          # to fetch the pinned public extension asset. Authenticate that API
-          # request so shared macOS runner IPs cannot exhaust the anonymous
-          # GitHub API rate limit and fail the archive.
-          GH_TOKEN: ${{ github.token }}
+          CI_BROWSER_EXTENSION_DIR: ${{ github.workspace }}/CI-Browser-Extension
+          CI_BROWSER_EXTENSION_VERSION: '1.6.2'
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
