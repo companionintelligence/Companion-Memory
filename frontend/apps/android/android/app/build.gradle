@@ -118,7 +118,7 @@ dependencies {
     // org.json on the classpath would otherwise be AGP's mockable android.jar stub, whose
     // methods all throw "not mocked". @capacitor/android declares this same coordinate for
     // exactly the same reason in its own build.gradle.
-    testImplementation "org.json:json:20240303"
+    testImplementation "org.json:json:20260814"
     // Needed only by the two tests that require a real Activity / merged manifest
     // (MainActivityPluginRegistrationTest, MergedManifestPermissionsTest). 4.14.x is the
     // generation that supports compileSdk 35+; it pulls the shadows framework and
