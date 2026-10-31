@@ -8,7 +8,7 @@
 # processes. Nothing from this stage reaches the
 # runtime image except dist/.
 # ──────────────────────────────────────────────────
-FROM node:22.15.1-slim AS builder
+FROM node:26.12.0-slim AS builder
 
 # Both .yarnrc.yml files in this repo pin `nodeLinker: pnp`, and a nested
 # rc file outranks the root one. A YARN_* environment variable outranks
@@ -66,7 +66,7 @@ RUN yarn build
 # ──────────────────────────────────────────────────
 # Stage 2 — runtime
 # ──────────────────────────────────────────────────
-FROM node:22.15.1-slim AS runtime
+FROM node:26.12.0-slim AS runtime
 
 ENV YARN_NODE_LINKER=node-modules
 ENV NODE_ENV=production
