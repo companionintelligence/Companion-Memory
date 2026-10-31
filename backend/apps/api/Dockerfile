@@ -16,7 +16,9 @@ FROM node:26.12.0-slim AS builder
 # wins here. Keep this alongside any .yarnrc.yml copy.
 ENV YARN_NODE_LINKER=node-modules
 
-RUN corepack enable && corepack prepare yarn@4.9.1 --activate
+RUN npm install --global corepack@0.36.0 \
+    && corepack enable \
+    && corepack prepare yarn@4.9.1 --activate
 
 WORKDIR /app
 
@@ -127,7 +129,9 @@ RUN apt-get update && \
 # image, run `yarn dbmate …`: a bare `node bin/dbmate.js` bypasses yarn and finds
 # no dbmate at all.
 
-RUN corepack enable && corepack prepare yarn@4.9.1 --activate
+RUN npm install --global corepack@0.36.0 \
+    && corepack enable \
+    && corepack prepare yarn@4.9.1 --activate
 
 WORKDIR /app
 
