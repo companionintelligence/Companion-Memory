@@ -24,7 +24,7 @@
     "eslint": "^9.27.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-import-resolver-typescript": "^4.4.4",
-    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-import": "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch",
     "globals": "^16.1.0",
     "jest": "^30.0.4",
     "oxlint": "^1.36.0",
