@@ -78,7 +78,7 @@ FROM ${LLAMA_CPP_WHEEL_IMAGE:-scratch} AS llama-cpp-wheel
 #
 # `-cudnn-` rather than the old `-cudnn8-`: NVIDIA dropped the version suffix
 # when cuDNN 9 became the default.
-FROM nvidia/cuda:12.9.2-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:13.4.3-cudnn-devel-ubuntu22.04
 
 # System dependencies. Python does NOT come from apt here — see below.
 #
