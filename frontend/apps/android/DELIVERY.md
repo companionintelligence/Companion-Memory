@@ -48,10 +48,44 @@ needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 | ✅ `UIRequiredDeviceCapabilities` `armv7` → `arm64` (stale 32-bit template value) | `ios/App/App/Info.plist` |
 | ✅ Android `allowBackup="false"` (keep the private-memory app's local state out of cloud/adb backup) | `android/app/src/main/AndroidManifest.xml` |
 | ✅ **In-app account deletion, end to end** — `DELETE /account` (access revoked immediately) + Settings → Account, **and** the background purge that destroys the data 30 days later | `backend/.../auth/controllers/AccountController.ts`, `backend/.../user/services/AccountPurgeService.ts`, `frontend/apps/web/src/pages/SettingsPage/sections/AccountSection.tsx` |
-| ⚠️ **Signed store lanes** — TestFlight `.ipa` + Play internal `.aab`, with build numbers stamped from CI. **Authored and merged to `main`, but never yet exercised: no run has produced either artifact** (see the note below the table) | `.github/workflows/mobile-release.yml`, `android/app/build.gradle` |
+| ✅ **Version 1.0.7 delivered to tester tracks** — run 41202396610 from release SHA eb6505b uploaded Android build code 1020 to Play internal and uploaded iOS build 1020 to TestFlight. Companion Memory also has a public Google Play listing; the Android workflow upload is internal-track only. The iOS build is not a public App Store release. | .github/workflows/mobile-release.yml, android/app/build.gradle |
 
 The backend/frontend work is green on PR CI.
 
+> ### ✅ 2026-10-31 — current mobile QA and distribution status
+> This update supersedes older release-lane claims below where they conflict.
+>
+> - Android's exact-eb6505b debug APK from Mobile Build run 41198428441 installed
+>   and rendered the login and Advanced screens on a clean Android 36.1 Play emulator.
+>   No account sign-in was attempted. Mobile Release run 41202396610 then built version
+>   1.0.7, code 1020, and completed its signed upload to the Play internal track from
+>   the same release SHA. The public Companion Memory listing is also live on Google
+>   Play at https://play.google.com/store/apps/details?id=com.ci.memory. The internal
+>   upload does not promote that build to the public production track.
+> - The exact-eb6505b iOS simulator app from Mobile Build run 41198428441 rendered
+>   login and Advanced screens on an iOS 27 iPhone 17e simulator and opened the Companion
+>   sign-in page. No credentials were entered. Its Safari extension was recognized by
+>   Safari, enabled, and granted one-day access to the public Companion Hub page. The
+>   extension popup still showed its loading skeleton after 10 seconds on a fresh
+>   simulator, so Safari popup startup is a failed QA check. Mobile Release run 41202396610
+>   uploaded signed version 1.0.7, build 1020, to TestFlight successfully. App Store Connect
+>   processing and tester availability were not verified; there is no public App Store
+>   listing or physical-device test.
+> - Follow-up: WebKit logs tied the 1.6.1 startup failure to the missing
+>   `webNavigation.onHistoryStateUpdated` event. The guard fix is merged in
+>   [CI-Browser-Extension PR #122](https://github.com/companionintelligence/CI-Browser-Extension/pull/122)
+>   as v1.6.2. All six 1.6.2 release archives built; the Safari mobile bundle opened
+>   the signed-out welcome screen on the clean simulator. This fix is not in the
+>   current mobile store build. Release is blocked by missing Chrome/Edge publishing
+>   secrets and AMO credentials for the listing owner.
+> - All seven required release gates passed on eb6505b8d1496b45c1f3d5321ed12b638dd3cc41.
+>   Release tag v2026.10.31.2 is pushed. Publish run 41202389990 completed: all nine
+>   server images have linux/amd64 and linux/arm64 manifests, and the production
+>   CI-Portal catalog reports 2026.10.31.2. Desktop appliance E2E run 41204722844
+>   passed all six checks. Desktop Release run 41205230913 published
+>   [desktop-v0.1.6](https://github.com/companionintelligence/Companion-Memory/releases/tag/desktop-v0.1.6).
+>   The macOS universal DMG passed stapler validation and Gatekeeper assessment; the
+>   Windows signing job succeeded; Linux DEB and RPM assets are unsigned by design.
 > ### ⚠️ 2026-08-13 — correction to the line that used to sit here
 > This file previously said *"both native builds (iOS + Android) were verified green on a
 > `mobile-v*` tag."* That was true of the **Android** job and misleading about **iOS**.
@@ -119,13 +153,12 @@ Owner: **[code]** = doable in-repo · **[acct]** = needs an Apple/Google/Sentry 
   - **Chosen strategy: soft-delete + background purge.** `deleted_at` is a TypeORM `@DeleteDateColumn`, so every read on the user repository skips the row — all three auth entry points (`findById` for JWT *and* API-key, `validatePassword`, `findByEmail`) inherit the gate for free and no future auth path can forget it. `purge_after` is pinned at request time so config changes can't rewrite a promise already made.
   - [x] 🔴 **[code]** **The background purge job — *done*.** `AccountPurgeService` + `AccountPurgeCron` (hourly) consume `purge_after`: batched (`ctid IN (… LIMIT n)`), resumable (each batch commits), idempotent (every statement scoped by "belongs to this account"), and hypertable-aware (chunk-by-chunk, because `ctid` is only unique within one physical table). The plan is **derived from the live catalog on every run** rather than from a committed table list, so a new user-scoped table is covered the run after it lands — see [`docs/architecture/account-deletion.md`](../../../docs/architecture/account-deletion.md) for why that beat `ON DELETE CASCADE`. Covers 68 tables, deletes the uploaded objects from the object store too (nothing in the repo had ever deleted one), and records every purge in `ci.account_purges`. Verified end to end against a throwaway database with all migrations applied.
   - [ ] 🔴 **[acct]** **Remaining: the public web deletion URL** Google requires (in addition to the in-app path) — reachable **without installing the app**, and it must say what is deleted and what is retained. The copy for it is now writable: `docs/architecture/account-deletion.md` §"What is true afterwards" is the source of truth, including the three residues the page must not paper over (nulled attributions on other accounts' rows, the retained purge-audit uuid, and backups).
-- [x] 🔴 **[code]** **Signed release CI lanes** — *written and merged to `main`: [`mobile-release.yml`](../../../.github/workflows/mobile-release.yml).* ⚠️ **"Done" here means the lane exists, not that it has delivered a build — no run has yet produced a `.aab` or `.ipa` (§0, 2026-09-07).** iOS `xcodebuild archive → -exportArchive` (`app-store-connect`) → `.ipa` → `altool --validate-app` → TestFlight; Android `bundleRelease` → signed `.aab` → Play **internal** track. Notes on how it behaves:
-  - **`dry_run` defaults to true** on manual runs: it builds, signs, and *validates* against App Store Connect but does not submit. Use it to prove the signing chain before burning a build number — both stores permanently consume a build number on upload, so a failed submission after a successful one still costs you that number. Pushing `ios-v*`, `android-v*`, or `mobile-release-v*` **always submits** (iOS-only, Android-only, or both).
-  - Each platform **skips rather than fails** when its secrets are absent, so iOS and Android can be wired up independently.
-  - The Android half is verified locally end-to-end: a throwaway keystore produced a signed `app-release.aab` (`META-INF/*.RSA` present) with `versionCode` stamped from the environment. The iOS half is unverifiable without a real Apple Developer account — the certs/profile/API key are all [acct] work, so **first run it with `dry_run: true`.**
-  - `./gradlew bundleRelease` now **fails at configuration time** when no keystore is configured, instead of quietly emitting an unsigned bundle that Play rejects at the end of the upload — a failure that otherwise lands very far from its cause.
+- [x] 🔴 **[code]** **Signed release CI lanes** — *delivered on 2026-10-31; see the QA snapshot above.* The verified workflow uploads Android builds to Play **internal** and iOS builds to TestFlight. These are tester-track submissions; they do not establish public production rollout or App Store availability.
+  - Manual `dry_run` defaults to true. iOS validates without uploading; Android creates a draft with no rollout, which still consumes the version code.
+  - A platform lane skips only when all of that lane's secrets are absent; a partial configuration fails early. The successful 2026-10-31 run exercised both signed lanes.
+  - `./gradlew bundleRelease` fails at configuration time when no keystore is configured, instead of producing an unsigned bundle for Play to reject later.
 - [ ] 🟠 **[code]** **Scope Android cleartext** — replace app-wide `usesCleartextTraffic="true"` with an `android:networkSecurityConfig`. ⚠️ **Deferred deliberately:** the appliance can be *any* user-entered LAN/tailnet http host, so a scoped config still has to permit cleartext broadly; changing it risks regressing the hard-won LAN-http connectivity. Do this only with an on-device Android retest. Keep the iOS `NSAllowsArbitraryLoadsInWebContent` scoping as the model. Reconcile with the Data Safety "encrypted in transit" answer (see C3 below). ℹ️ **The iOS ATS decision that used to be copied here verbatim has been removed** — it is iOS-only, it drifted (the Android copy kept an "Applied now" claim the iOS copy had already corrected), and Android has no `Info.plist` at all. It lives in [`../ios/DELIVERY.md`](../ios/DELIVERY.md) §1a, referenced rather than duplicated, the same way the iPad item below is.
-- [x] 🟠 **[code]** **Version/build automation** — *implemented for both native apps; **never yet exercised end to end**.* The only run that reached the build steps' version inputs did not build, and the 2026-08-27 dispatch failed inside the `Resolve version` job itself (§0) — so the resolution logic below is reviewed code, not observed behaviour. `mobile-release.yml` resolves the version once and hands the same numbers to both stores: marketing version from the `mobile-release-v*` tag (or a manual input), build number from `github.run_number`, which is monotonic per workflow and so satisfies the "never repeats, always increases" rule both stores enforce. iOS takes them as `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` xcodebuild overrides; Android reads `ANDROID_VERSION_NAME` / `ANDROID_VERSION_CODE` in `build.gradle`, with the old literals kept only as the local-dev fallback. *(A web build id is still unstamped — 🟢, it does not gate a store upload.)*
+- [x] 🟠 **[code]** **Version/build automation** — *exercised end to end on 2026-10-31.* Mobile Release run 41202396610 resolved version 1.0.7 and build 1020 for both native apps, then uploaded the Android AAB to Play internal and the iOS IPA to TestFlight. The app version is derived from the release tag or manual input; the build number is monotonically assigned by the workflow. iOS uses `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` xcodebuild overrides; Android reads `ANDROID_VERSION_NAME` / `ANDROID_VERSION_CODE` in `build.gradle`. *(A web build id is still unstamped — 🟢, it does not gate a store upload.)*
 - [x] 🟠 **[code]** **iPad — not an Android concern; settled on the iOS side.** Decided 2026-08-19: ship **iPhone-only** (`TARGETED_DEVICE_FAMILY = 1`). Full rationale in [`../ios/DELIVERY.md`](../ios/DELIVERY.md) §1a — this file inherited the item because the iOS/Android split copied the delivery doc verbatim.
   - ⚠️ **The Android-side analogue is real and still open.** The shared `@ci/fe-web` layout has no tablet tier — one `MOBILE_BREAKPOINT = 896` boolean in `@ci/common`, no `isTablet`, no split-view handling. Play delivers to **tablets and Chromebooks by default** and there is no `TARGETED_DEVICE_FAMILY` equivalent to opt out with, so Android large screens get that layout whether or not anyone designed for it. Not a submission gate (unlike iPad review), but it is the one place where the iOS decision does **not** cover Android. Tracked in §3 Later.
 - [x] 🟢 **[code]** `CODE_SIGN_IDENTITY = "iPhone Developer"` (the pre-Xcode-9 name) and `CODE_SIGN_STYLE = Automatic` with no `DEVELOPMENT_TEAM` — *handled, deliberately without touching the pbxproj.* Automatic signing cannot work on a runner with no Apple ID session, so the release job overrides `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY='Apple Distribution'`, `DEVELOPMENT_TEAM`, and `PROVISIONING_PROFILE_SPECIFIER` on the `xcodebuild` command line. Opening the project in Xcode locally therefore behaves exactly as before. If you later prefer the settings baked in, change them in Xcode and drop the overrides — but *not* both half-done.
@@ -210,10 +243,10 @@ it means an AGP upgrade rather than a one-line edit. Start it in parallel with e
 | 9 | ~~**iPad layout pass**~~ — iOS-only; resolved 2026-08-19 as iPhone-only (see [`../ios/DELIVERY.md`](../ios/DELIVERY.md) §1a). **Android large screens remain unaddressed** and have no opt-out | [code] | large-screen quality on Play | not a submission gate |
 | 10 | **On-device Android + iOS pass** — cleartext/LAN, edge-to-edge, and the three things the simulator cannot prove (see below) | [both] | launch confidence | after 1–3 |
 
-**Fastest defensible route to "in a store":** items 1–4 put builds in **TestFlight internal**
-and **Play internal testing**, both of which distribute to your own testers. Neither is
-an escape from policy, but internal tracks let the pipeline start proving itself while
-5–7 are still being written.
+**Current release route:** Android is already publicly listed on Google Play. The
+current CI build was uploaded to the Play internal track only; that does not change
+the public production release. On iOS, items 1–4 put a signed build in TestFlight
+internal; public App Store availability still requires the iOS review path below.
 
 **The two things most likely to slip the date, ranked:**
 
@@ -263,11 +296,11 @@ not only from a PR description)*:
 
 ## 2. Recommended ship path
 
-**Public App Store + Google Play, fronted by a seeded HTTPS demo CI-Server, staged through the testing tracks first.**
+**Maintain Android on Google Play; launch iOS on the App Store with a seeded HTTPS demo CI-Server and App Store review.**
 
 1. Build the review-enabling assets first (all the 🔴 P0s): demo server + account, privacy policy + EULA + **in-app account deletion**, honest nutrition-label / Data-Safety answers (cleartext disclosed), signing lanes.
-2. Ship to **TestFlight external + Play closed/internal testing** first — *not* an escape from review (both still enforce policy), but it validates the demo-server review path at low stakes.
-3. Promote to **public App Store + Play production**, **iPhone-only** initially to minimize first-review surface.
+2. Stage Android updates on the Play internal track, and submit iOS through **TestFlight internal then external testing**.
+3. Submit iOS for public App Store review, **iPhone-only** initially to minimize first-review surface. Promote Android updates from internal testing to Play production after confirming test results and policy declarations.
 
 **Alternatives** (secondary, not primary): Apple Business Manager **Custom Apps** + Play **private/unlisted** are a good *parallel* channel for enterprise appliance buyers (still full review, capped reach). **Unlisted** distribution is a useful interim soft-launch. **Apple Developer Enterprise Program is off the table** unless the audience is strictly internal Lifescope staff — using it for a public/self-hosted product violates the agreement. The demo server is the load-bearing unlock for *every* review-based channel, so build it once.
 

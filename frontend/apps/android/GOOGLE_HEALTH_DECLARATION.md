@@ -21,18 +21,18 @@ Severity + owner tags follow `DELIVERY.md`:
 
 ## 0. Verdict
 
-**Does it apply to us right now? No — not yet. There is no live violation and nothing is overdue.**
-
-**When does it apply? The moment `com.ci.memory` has a release active on a
-Play *closed testing*, *open testing*, or *production* track.** The obligation binds
-**published** apps; ours has never been uploaded to Play at all.
+**Current status: no violation is established by the available evidence.** The
+latest verified upload is to Play's **internal testing** track. The policy sources
+reviewed in §2.2 name closed testing, open testing, and production; they do not
+clearly state whether an internal-only release is in scope. Confirm the active
+track in Play Console before promoting beyond internal testing.
 
 | Question | Answer |
 |---|---|
 | Is the rule real? | ✅ **Yes.** Verified verbatim in Play Console Help. |
 | Does it bind developers with *zero* health features? | ✅ **Yes**, explicitly and in Google's own words. |
 | Does it bind apps only in testing? | ✅ **Yes** — closed and open testing are named. **Internal testing is not named** (see §2.2 — important, and partly inferred). |
-| Are we in violation today? | ❌ **No.** Nothing is published. See §4. |
+| Are we in violation today? | No violation is established. An internal-track upload is verified; the active track state still needs confirmation in Play Console. See §4. |
 | Is there a passed deadline we blew? | ❌ **No.** The 2024-08-31 date is a cutover for *then-published* apps, not a standing date we missed. |
 | What does non-compliance actually cost? | Blocked updates — you cannot submit anything for review until the form is filed. Escalates from there. See §2.5. |
 | Effort to comply | **~10 minutes**, one person, one form, no engineering. |
@@ -452,32 +452,22 @@ That is a manufactured inconsistency and exactly what §2.5 punishes.
 
 ---
 
-## 4. Current store status — why nothing is overdue
+## 4. Current store status — verified 2026-10-31
 
-Verified in-repo, 2026-08-13:
-
-- [`DELIVERY.md`](./DELIVERY.md) §1b lists **every** Android store prerequisite as unchecked
-  🔴 **[acct]**: release signing, upload keystore, Play App Signing enrolment. §1c lists the
-  privacy policy URL, Data Safety form and EU trader status as unchecked.
-- [`DELIVERY.md`](./DELIVERY.md) §1a: *"`mobile-build.yml` only produces an unsigned debug
-  APK + a Simulator `.app`"* — confirmed at
-  `.github/workflows/mobile-build.yml:8` (*"Android — a debug APK (sideload-installable; not
-  for store distribution)"*) and `:10` (*"Signed, device-/store-ready artifacts (release
-  APK/AAB, signed .ipa) require the…"* signing secrets, which are not wired).
-- No `bundleRelease` lane, no `fastlane`/`supply` config, no Play publishing service account
-  anywhere in the repo.
-- [`DELIVERY.md`](./DELIVERY.md) §2 describes shipping *to* Play closed/internal testing as a
-  **future** step.
-
-**Conclusion: `com.ci.memory` has never been uploaded to any Play track, and
-there is very likely no Play Console app record yet.** The declaration obligation has not
-attached. There is no violation, no missed deadline, and no exposure today.
-
-> 🟢 **[acct] Worth confirming in Console anyway.** This is an inference from the repo, and
-> the repo cannot see the Console. If a Lifescope Play developer account already exists with a
-> `com.ci.memory` draft or an internal-testing upload someone made by hand,
-> the picture changes. **Two minutes: log in, check whether the app record exists and whether
-> any track has an active release.** Do this before trusting §0.
+- Companion Memory has a public Google Play listing for package com.ci.memory:
+  https://play.google.com/store/apps/details?id=com.ci.memory. On 2026-10-31 the
+  storefront reported public version 1.0.2, updated 2026-10-29.
+- GitHub Actions run 41202396610 built signed version 1.0.7, code 1020, from release
+  SHA eb6505b8d1496b45c1f3d5321ed12b638dd3cc41. Its Android → Play (internal) job
+  completed successfully, including the Upload to Play (internal track) step.
+- That upload updates the internal track only; it does not promote build 1020 to
+  production or establish which release is currently active in each Play track.
+  Confirm track state and declarations in Play Console before any promotion.
+- Earlier run 41197902119 also uploaded a signed build to the internal track from
+  SHA 9accc13207f30dd6bf68e8d0ca3797140caa4f71.
+- The current Mobile Release workflow has a signed bundleRelease lane and the Play
+  publishing service account configured. mobile-build.yml remains the separate
+  debug/simulator build lane.
 
 ---
 
@@ -485,11 +475,13 @@ attached. There is no violation, no missed deadline, and no exposure today.
 
 ### 5.1 🔴 [acct] Trigger point — the one rule to remember
 
-> **File the Health apps declaration before the first upload to *any* Play track.**
+> The first Play upload has already happened. Check the Health apps declaration state
+> in Play Console now, and resolve any declaration required for the app's actual features
+> before submitting another change for review or promoting an update to production.
 
-Not "before production." Not "when Google emails us." Before the first upload, full stop.
-It is a checkbox, it costs ten minutes, and doing it early removes the internal-testing
-ambiguity in §2.2 entirely.
+Do not infer the declaration's current state from a successful internal upload or from
+the public listing. Confirm it in Play Console; the public sources and CI logs do not
+expose the account's declaration answers.
 
 ### 5.2 🔴 [acct] Exact steps
 
