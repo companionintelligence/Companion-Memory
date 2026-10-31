@@ -71,6 +71,13 @@ The backend/frontend work is green on PR CI.
 >   uploaded signed version 1.0.7, build 1020, to TestFlight successfully. App Store Connect
 >   processing and tester availability were not verified; there is no public App Store
 >   listing or physical-device test.
+> - Follow-up: WebKit logs tied the 1.6.1 startup failure to the missing
+>   `webNavigation.onHistoryStateUpdated` event. The guard fix is merged in
+>   [CI-Browser-Extension PR #122](https://github.com/companionintelligence/CI-Browser-Extension/pull/122)
+>   as v1.6.2. All six 1.6.2 release archives built; the Safari mobile bundle opened
+>   the signed-out welcome screen on the clean simulator. This fix is not in the
+>   current mobile store build. Release is blocked by missing Chrome/Edge publishing
+>   secrets and AMO credentials for the listing owner.
 > - All seven required release gates passed on eb6505b8d1496b45c1f3d5321ed12b638dd3cc41.
 >   Release tag v2026.10.31.2 is pushed. Publish run 41202389990 completed: all nine
 >   server images have linux/amd64 and linux/arm64 manifests, and the production
