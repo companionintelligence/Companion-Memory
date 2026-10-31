@@ -2521,7 +2521,7 @@ __metadata:
     eslint: "npm:^9.27.0"
     eslint-config-prettier: "npm:^10.1.5"
     eslint-import-resolver-typescript: "npm:^4.4.4"
-    eslint-plugin-import: "npm:^2.32.0"
+    eslint-plugin-import: "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch"
     exifr: "npm:^7.1.3"
     express: "npm:^5.1.0"
     fluent-ffmpeg: "npm:^2.1.3"
@@ -2646,7 +2646,7 @@ __metadata:
     eslint: "npm:^9.27.0"
     eslint-config-prettier: "npm:^10.1.5"
     eslint-import-resolver-typescript: "npm:^4.4.4"
-    eslint-plugin-import: "npm:^2.32.0"
+    eslint-plugin-import: "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch"
     globals: "npm:^16.1.0"
     husky: "npm:^9.1.7"
     lint-staged: "npm:^16.1.2"
@@ -2784,7 +2784,7 @@ __metadata:
     embla-carousel-react: "npm:^8.6.0"
     eslint: "npm:^9.27.0"
     eslint-import-resolver-typescript: "npm:^4.4.4"
-    eslint-plugin-import: "npm:^2.32.0"
+    eslint-plugin-import: "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch"
     force-graph: "npm:^1.51.0"
     globals: "npm:^16.1.0"
     graphql: "npm:^16.12.0"
@@ -2911,7 +2911,7 @@ __metadata:
     eslint: "npm:^9.27.0"
     eslint-config-prettier: "npm:^10.1.5"
     eslint-import-resolver-typescript: "npm:^4.4.4"
-    eslint-plugin-import: "npm:^2.32.0"
+    eslint-plugin-import: "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch"
     globals: "npm:^16.1.0"
     jest: "npm:^30.0.4"
     oxlint: "npm:^1.36.0"
@@ -16507,7 +16507,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-import@npm:^2.32.0":
+"eslint-plugin-import@npm:2.32.0":
   version: 2.32.0
   resolution: "eslint-plugin-import@npm:2.32.0"
   dependencies:
@@ -16533,6 +16533,35 @@ __metadata:
   peerDependencies:
     eslint: ^2 || ^3 || ^4 || ^5 || ^6 || ^7.2.0 || ^8 || ^9
   checksum: 10c0/bfb1b8fc8800398e62ddfefbf3638d185286edfed26dfe00875cc2846d954491b4f5112457831588b757fa789384e1ae585f812614c4797f0499fa234fd4a48b
+  languageName: node
+  linkType: hard
+
+"eslint-plugin-import@patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch":
+  version: 2.32.0
+  resolution: "eslint-plugin-import@patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch::version=2.32.0&hash=1d4b3f"
+  dependencies:
+    "@rtsao/scc": "npm:^1.1.0"
+    array-includes: "npm:^3.1.9"
+    array.prototype.findlastindex: "npm:^1.2.6"
+    array.prototype.flat: "npm:^1.3.3"
+    array.prototype.flatmap: "npm:^1.3.3"
+    debug: "npm:^3.2.7"
+    doctrine: "npm:^2.1.0"
+    eslint-import-resolver-node: "npm:^0.3.9"
+    eslint-module-utils: "npm:^2.12.1"
+    hasown: "npm:^2.0.2"
+    is-core-module: "npm:^2.16.1"
+    is-glob: "npm:^4.0.3"
+    minimatch: "npm:^3.1.2"
+    object.fromentries: "npm:^2.0.8"
+    object.groupby: "npm:^1.0.3"
+    object.values: "npm:^1.2.1"
+    semver: "npm:^6.3.1"
+    string.prototype.trimend: "npm:^1.0.9"
+    tsconfig-paths: "npm:^3.15.0"
+  peerDependencies:
+    eslint: ^2 || ^3 || ^4 || ^5 || ^6 || ^7.2.0 || ^8 || ^9
+  checksum: 10c0/99b8e6ac073c39f4654c433f42e0d3ce3a29a8148ca9a5177c79cc65f8658d29111682cf565f7c96ee934e2c9952e04e2ddf0d976b0e931d0dc50068756eb836
   languageName: node
   linkType: hard
 
