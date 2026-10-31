@@ -455,8 +455,8 @@ That is a manufactured inconsistency and exactly what §2.5 punishes.
 ## 4. Current store status — verified 2026-10-31
 
 - Companion Memory has a public Google Play listing for package com.ci.memory:
-  https://play.google.com/store/apps/details?id=com.ci.memory. The storefront shows
-  the listing updated 2026-10-28.
+  https://play.google.com/store/apps/details?id=com.ci.memory. On 2026-10-31 the
+  storefront reported public version 1.0.2, updated 2026-10-29.
 - GitHub Actions run 41202396610 built signed version 1.0.7, code 1020, from release
   SHA eb6505b8d1496b45c1f3d5321ed12b638dd3cc41. Its Android → Play (internal) job
   completed successfully, including the Upload to Play (internal track) step.
