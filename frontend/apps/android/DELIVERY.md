@@ -48,9 +48,29 @@ needs it. Nothing ships to either store until the 🔴 P0 items below are done.
 | ✅ `UIRequiredDeviceCapabilities` `armv7` → `arm64` (stale 32-bit template value) | `ios/App/App/Info.plist` |
 | ✅ Android `allowBackup="false"` (keep the private-memory app's local state out of cloud/adb backup) | `android/app/src/main/AndroidManifest.xml` |
 | ✅ **In-app account deletion, end to end** — `DELETE /account` (access revoked immediately) + Settings → Account, **and** the background purge that destroys the data 30 days later | `backend/.../auth/controllers/AccountController.ts`, `backend/.../user/services/AccountPurgeService.ts`, `frontend/apps/web/src/pages/SettingsPage/sections/AccountSection.tsx` |
-| ⚠️ **Signed store lanes** — TestFlight `.ipa` + Play internal `.aab`, with build numbers stamped from CI. **Authored and merged to `main`, but never yet exercised: no run has produced either artifact** (see the note below the table) | `.github/workflows/mobile-release.yml`, `android/app/build.gradle` |
+| ✅ **Signed store lanes exercised** — Android `.aab` uploaded to Play internal in run `41197902119` from SHA `9accc13`; iOS `.ipa` signed and App Store Connect validated in run `41198645807` from `eb6505b`, with TestFlight upload skipped. No public store release is verified. | `.github/workflows/mobile-release.yml`, `android/app/build.gradle` |
 
 The backend/frontend work is green on PR CI.
+
+> ### ✅ 2026-10-31 — current mobile QA and distribution status
+> This update supersedes older release-lane claims below where they conflict.
+>
+> - Android's exact-`eb6505b` debug APK from Mobile Build run `41198428441` installed
+>   and rendered the login and Advanced screens on a clean Android 36.1 Play emulator.
+>   No account sign-in was attempted. The signed Play internal upload is from the earlier
+>   SHA `9accc13207f30dd6bf68e8d0ca3797140caa4f71`, so the current main commit still needs
+>   a new release run after its CI gates pass.
+> - The exact-`eb6505b` iOS simulator app from Mobile Build run `41198428441` rendered
+>   login and Advanced screens on an iOS 27 iPhone 17 simulator and opened the Companion
+>   sign-in page. No credentials were entered. The signed IPA from Mobile Release run
+>   `41198645807` passed App Store Connect validation, but **Upload to TestFlight was
+>   skipped**. No physical-device test or TestFlight distribution is verified.
+> - The current public mobile guide still describes both Memory apps as closed preview,
+>   with no App Store or Play Store listing. The successful Android internal upload does
+>   not establish a public release: [mobile app availability](https://docs.ci.computer/docs/apps-available/first-party-apps/mobile-app).
+> - The seven exact-SHA release gates for `eb6505b` are not all terminal yet: six passed
+>   and full CI run `41198428586` remains in backend API tests. Do not tag or publish
+>   this SHA until that run succeeds.
 
 > ### ⚠️ 2026-08-13 — correction to the line that used to sit here
 > This file previously said *"both native builds (iOS + Android) were verified green on a
