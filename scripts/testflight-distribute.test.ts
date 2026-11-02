@@ -106,7 +106,10 @@ test('assigns a processed iOS build to internal groups only', async () => {
       });
     }
 
-    if (url.startsWith('https://api.appstoreconnect.apple.com/v1/builds/build-1024/betaGroups?')) {
+    if (
+      url ===
+      'https://api.appstoreconnect.apple.com/v1/betaGroups/internal-group/relationships/builds?limit=200'
+    ) {
       return Response.json({ data: [] });
     }
 
