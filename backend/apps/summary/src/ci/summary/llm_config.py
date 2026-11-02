@@ -206,16 +206,19 @@ def create_llm_config() -> LLMConfig:
     This is a pure factory function that creates the configuration
     based on settings. It's called once when the worker starts.
     """
+    # Configured (Hub-injected) model, else discovered from the endpoint. First,
+    # because it raises until there is one and a client built before it would leak.
+    model_name = resolve_llm_model()
+
     # Create HTTP client with long timeout for LLM calls
     http_client = httpx.AsyncClient(timeout=180.0)
 
-    # Create model pointing to self-hosted endpoint. The model name is the
-    # configured (Hub-injected) one, else discovered from the endpoint.
+    # Create model pointing to self-hosted endpoint.
     # Qwen3.x thinks by default. A dossier/insights call with thinking on
     # occupies vLLM's tiny `--max-num-seqs` budget for minutes and starves
     # interactive chat. Accoutrements do not need a reasoning trace.
     model = OpenAIChatModel(
-        resolve_llm_model(),
+        model_name,
         provider=OpenAIProvider(
             base_url=settings.llm_api_base,
             api_key=settings.llm_api_key,
