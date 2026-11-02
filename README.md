@@ -1,6 +1,6 @@
 
 <p align="center">
-    <img width="320" height="320" alt="Companion Memory" src="docs/images/companion-memory-mark.gif" />
+    <img src="https://raw.githubusercontent.com/companionintelligence/.github/main/profile/assets/icons/companion-memory.png" width="96" height="96" alt="Companion Memory icon">
 </p>
 
 
