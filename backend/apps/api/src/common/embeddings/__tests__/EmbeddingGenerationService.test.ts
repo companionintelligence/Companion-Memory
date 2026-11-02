@@ -413,6 +413,46 @@ describe('EmbeddingGenerationService', () => {
       expect(calls[2]?.body.input[1]).toBe('short');
     });
 
+    it('leaves a shorter input whole when it shares a batch with the one being cut', async () => {
+      const service = makeService(
+        makeEndpoint({
+          driver: { baseUrl: 'http://lemonade.test:13305/api/v1', served: ['nomic-embed-text-v1.5-GGUF'] },
+        }),
+      );
+      const calls = stubFetch((_url, init) => {
+        const inputs = JSON.parse(String(init.body)).input as string[];
+
+        return inputs.some((text) => text.length > 4000)
+          ? lemonadeRefusal
+          : { status: 200, body: { data: inputs.map((_, index) => ({ index, embedding: [index] })) } };
+      });
+
+      await service.generateEmbeddings(['a'.repeat(8000), 'b'.repeat(3000)]);
+
+      expect(calls.map((call) => call.body.input.map((text: string) => text.length))).toEqual([
+        [8000, 3000],
+        [4000, 3000],
+      ]);
+    });
+
+    it("retries on llama-server's context-size refusal, as a pool relays it from Lemonade's /api/embed", async () => {
+      const service = makeService(
+        makeEndpoint({
+          driver: { baseUrl: 'http://lemonade.test:13305/api/v1', served: ['nomic-embed-text-v1.5-GGUF'] },
+        }),
+      );
+      const calls = stubFetch((_url, init) => {
+        const inputs = JSON.parse(String(init.body)).input as string[];
+
+        return inputs.some((text) => text.length > 4000)
+          ? { status: 400, body: { error: 'input (2286 tokens) is larger than the max context size (2048 tokens). skipping' } }
+          : { status: 200, body: { data: [{ index: 0, embedding: [1] }] } };
+      });
+
+      await expect(service.generateEmbeddings(['a'.repeat(8000)])).resolves.toEqual([[1]]);
+      expect(calls).toHaveLength(2);
+    });
+
     it('remembers the accepted length, so later batches on the same engine are cut up front', async () => {
       const service = makeService(
         makeEndpoint({
