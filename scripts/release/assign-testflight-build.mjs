@@ -140,33 +140,45 @@ export async function assignBuildToInternalGroups({
     );
   }
 
-  const existingQuery = new URLSearchParams({ 'fields[betaGroups]': 'name,isInternalGroup', limit: '200' });
-  const existingPayload = await requestJson(
-    fetchImpl,
-    `${API_ROOT}/builds/${build.id}/betaGroups?${existingQuery}`,
-    token,
-  );
-  const existingIds = new Set((existingPayload.data ?? []).map((group) => group.id));
-  const toAssign = internalGroups.filter(
-    (group) => !group.attributes?.hasAccessToAllBuilds && !existingIds.has(group.id),
-  );
+  const groupsMissingBuild = [];
+  for (const group of internalGroups) {
+    if (group.attributes?.hasAccessToAllBuilds) {
+      continue;
+    }
 
-  if (toAssign.length > 0) {
+    let nextUrl = `${API_ROOT}/betaGroups/${group.id}/relationships/builds?limit=200`;
+    let alreadyAssigned = false;
+    while (nextUrl) {
+      const existingPayload = await requestJson(fetchImpl, nextUrl, token);
+      if ((existingPayload.data ?? []).some((existingBuild) => existingBuild.id === build.id)) {
+        alreadyAssigned = true;
+        break;
+      }
+
+      nextUrl = existingPayload.links?.next ?? '';
+    }
+
+    if (!alreadyAssigned) {
+      groupsMissingBuild.push(group);
+    }
+  }
+
+  if (groupsMissingBuild.length > 0) {
     await requestJson(fetchImpl, `${API_ROOT}/builds/${build.id}/relationships/betaGroups`, token, {
       method: 'POST',
-      body: JSON.stringify({ data: toAssign.map(({ id }) => ({ type: 'betaGroups', id })) }),
+      body: JSON.stringify({ data: groupsMissingBuild.map(({ id }) => ({ type: 'betaGroups', id })) }),
     });
   }
 
   const names = internalGroups.map((group) => group.attributes?.name ?? group.id);
   console.log(
-    toAssign.length > 0
+    groupsMissingBuild.length > 0
       ? `Build ${buildNumber} is available to internal TestFlight groups: ${names.join(', ')}.`
       : `Build ${buildNumber} already has access for all internal TestFlight groups: ${names.join(', ')}.`,
   );
   console.log('External tester groups were left unchanged.');
 
-  return { buildId: build.id, internalGroupNames: names, assignedGroupCount: toAssign.length };
+  return { buildId: build.id, internalGroupNames: names, assignedGroupCount: groupsMissingBuild.length };
 }
 
 async function main() {
