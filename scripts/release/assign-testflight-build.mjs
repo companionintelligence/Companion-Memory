@@ -120,8 +120,13 @@ export async function assignBuildToInternalGroups({
   nowImpl = Date.now,
   timeoutMs = PROCESSING_TIMEOUT_MS,
   testerEmail,
+  resendInvitation = false,
 }) {
   assertBuildNumber(buildNumber);
+  if (resendInvitation && !testerEmail?.trim()) {
+    throw new Error('Set tester_email when resend_invitation is true.');
+  }
+
   const token = createAscToken({ issuerId, keyId, privateKey });
   const build = await findProcessedBuild({ fetchImpl, token, buildNumber, sleepImpl, timeoutMs, nowImpl });
 
@@ -191,6 +196,7 @@ export async function assignBuildToInternalGroups({
   console.log('External tester groups were left unchanged.');
 
   const testerMemberships = [];
+  const resendableTesterIds = [];
   if (testerEmail) {
     const normalizedEmail = testerEmail.trim().toLowerCase();
     for (const group of allGroups) {
@@ -214,6 +220,10 @@ export async function assignBuildToInternalGroups({
         const state = tester.attributes?.state ?? 'unknown';
         const hasBuild = buildAccess.get(group.id) ?? false;
         testerMemberships.push({ groupName, groupType, state, hasBuild });
+        if (groupType === 'internal' && state === 'INVITED' && hasBuild) {
+          resendableTesterIds.push(tester.id);
+        }
+
         console.log(
           `The supplied Apple ID is listed in ${groupType} group "${groupName}" (invite state: ${state}; build ${buildNumber} access: ${hasBuild ? 'yes' : 'no'}).`,
         );
@@ -223,6 +233,29 @@ export async function assignBuildToInternalGroups({
     if (testerMemberships.length === 0) {
       console.log('The supplied Apple ID is not listed in any Companion Memory TestFlight group.');
     }
+  }
+
+  if (resendInvitation) {
+    const testerIds = [...new Set(resendableTesterIds)];
+    if (testerIds.length !== 1) {
+      throw new Error(
+        'Cannot resend the TestFlight invitation: the supplied Apple ID must have exactly one pending internal tester entry with build access.',
+      );
+    }
+
+    await requestJson(fetchImpl, `${API_ROOT}/betaTesterInvitations`, token, {
+      method: 'POST',
+      body: JSON.stringify({
+        data: {
+          type: 'betaTesterInvitations',
+          relationships: {
+            app: { data: { type: 'apps', id: APP_ID } },
+            betaTester: { data: { type: 'betaTesters', id: testerIds[0] } },
+          },
+        },
+      }),
+    });
+    console.log('Resent the TestFlight invitation to the supplied Apple ID.');
   }
 
   return {
@@ -244,6 +277,8 @@ async function main() {
     ? (JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).inputs ?? {})
     : {};
   const testerEmail = workflowInputs.tester_email?.trim();
+  const resendInvitation =
+    workflowInputs.resend_invitation === true || workflowInputs.resend_invitation === 'true';
   if (testerEmail) {
     process.stdout.write(`::add-mask::${testerEmail}\n`);
   }
@@ -254,6 +289,7 @@ async function main() {
     keyId: process.env.APPSTORE_KEY_ID,
     privateKey: process.env.APPSTORE_PRIVATE_KEY,
     testerEmail,
+    resendInvitation,
   });
   console.log(`Distribution complete for iOS build ${process.env.BUILD_NUMBER} (${result.buildId}).`);
 }

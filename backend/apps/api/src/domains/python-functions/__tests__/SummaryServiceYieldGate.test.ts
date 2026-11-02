@@ -21,7 +21,9 @@ function makeLogger() {
 }
 
 function health(model: unknown): Response {
-  return new Response(JSON.stringify({ status: 'degraded', llm: { reachable: false, model } }), { status: 200 });
+  return new Response(JSON.stringify({ status: 'degraded', llm: { reachable: false, model } }), {
+    status: 200,
+  });
 }
 
 /** Lets the background `/health` request and its `.json()` settle. */
@@ -172,7 +174,9 @@ describe('SummaryServiceYieldGate', () => {
 
   it('counts only runs started since the summary service did, and learns of a restart at its next look', async () => {
     const startedAt = (at: string) =>
-      new Response(JSON.stringify({ started_at: at, llm: { reachable: true, model: 'small-chat' } }), { status: 200 });
+      new Response(JSON.stringify({ started_at: at, llm: { reachable: true, model: 'small-chat' } }), {
+        status: 200,
+      });
 
     fetchMock.mockResolvedValue(startedAt('2026-11-02T10:00:00+00:00'));
 
@@ -203,7 +207,9 @@ describe('SummaryServiceYieldGate', () => {
     'counts every active run when the summary service gives %p for its start',
     async (startedAt) => {
       fetchMock.mockResolvedValue(
-        new Response(JSON.stringify({ started_at: startedAt, llm: { model: 'small-chat' } }), { status: 200 }),
+        new Response(JSON.stringify({ started_at: startedAt, llm: { model: 'small-chat' } }), {
+          status: 200,
+        }),
       );
 
       const gate = makeGate();

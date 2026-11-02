@@ -138,7 +138,9 @@ export class SummaryServiceYieldGate {
 
       waiting = body.llm?.model === null;
       this.serviceStartedAt =
-        typeof body.started_at === 'string' && !Number.isNaN(Date.parse(body.started_at)) ? body.started_at : null;
+        typeof body.started_at === 'string' && !Number.isNaN(Date.parse(body.started_at))
+          ? body.started_at
+          : null;
     } catch (err) {
       unreachable = true;
 

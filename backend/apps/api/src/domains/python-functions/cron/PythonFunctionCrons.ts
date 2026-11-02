@@ -159,8 +159,12 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     // moved, which is the shipped-config behaviour because `smart.rotation`
     // (the only other dossier scheduler, and the only one that had a freshness
     // gate) is false in config/default.json.
-    await this.fanOut('summary', 'dossier_refresh', CURRENT_STATE_KEY, { lookback_days: DOSSIER_LOOKBACK_DAYS }, () =>
-      this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
+    await this.fanOut(
+      'summary',
+      'dossier_refresh',
+      CURRENT_STATE_KEY,
+      { lookback_days: DOSSIER_LOOKBACK_DAYS },
+      () => this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
     );
   }
 
@@ -362,7 +366,9 @@ function hourKey(hourStart: Date): string {
  * last hour and lose the other 23.
  */
 function previousHourWindow(now = new Date()): { start_time: string; end_time: string } {
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()));
+  const end = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()),
+  );
   const start = new Date(end.getTime() - 60 * 60 * 1000);
 
   return { start_time: start.toISOString(), end_time: end.toISOString() };

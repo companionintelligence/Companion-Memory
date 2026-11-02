@@ -11,6 +11,11 @@ on:
         description: 'Optional Apple ID email to check for TestFlight group membership (masked in logs)'
         required: false
         type: string
+      resend_invitation:
+        description: 'Resend the TestFlight email only if this tester is still invited and has build access'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
