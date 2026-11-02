@@ -224,6 +224,10 @@ function installFetch(sidecar: ReturnType<typeof fakeSidecar>['handler']) {
         throw new TypeError('Network request failed');
       }
 
+      if (url.includes('/api/graphql')) {
+        return jsonResponse(200, { data: { __typename: 'Query' } });
+      }
+
       return jsonResponse(url.includes('/api/health') ? 200 : 201, { status: 'ok' });
     }),
   );
