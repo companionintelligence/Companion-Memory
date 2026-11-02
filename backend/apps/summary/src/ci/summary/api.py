@@ -8,7 +8,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import nest_asyncio
@@ -29,6 +29,10 @@ init_telemetry("ci-server-summary")
 
 # Allow nested event loops (needed for run_sync() in async FastAPI context)
 nest_asyncio.apply()
+
+# Runs are held in memory, so a queue row older than this is one a restart lost.
+# The API's SummaryServiceYieldGate reads it from /health and stops counting that row.
+STARTED_AT = datetime.now(UTC).isoformat()
 
 
 @asynccontextmanager
@@ -70,7 +74,8 @@ async def health() -> dict[str, Any]:
     so nobody has to infer it from a stream of failed jobs. Probed live rather
     than cached from boot, because "the model came back" is the more common
     transition. The API's SummaryServiceYieldGate reads `llm.model` from here to
-    hold summary jobs until there is a model.
+    hold summary jobs until there is a model, and `started_at` to tell a run this
+    process holds from one a restart lost.
     """
     llm = await asyncio.to_thread(llm_report)
 
@@ -78,6 +83,7 @@ async def health() -> dict[str, Any]:
         "status": "ok" if llm["reachable"] and llm["model"] else "degraded",
         "service": "ci-summary",
         "version": __version__,
+        "started_at": STARTED_AT,
         "llm": llm,
     }
 

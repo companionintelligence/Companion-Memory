@@ -51,7 +51,10 @@ export const MAX_RUNS_IN_FLIGHT = 4;
  * hands a run over and frees its worker slot, so nothing else limits how fast a
  * backlog leaves the queue. When a model arrives, everything that was waiting for
  * one would reach the service at once. What doesn't fit in its run queue gets a 429
- * that spends a retry.
+ * that spends a retry. The service holds runs in memory, so a row started before its
+ * process did is one a restart lost. That row stays `active` until its 30 minute
+ * expiry retries it, but it isn't counted here. A restart with a full queue costs
+ * new work {@link OPEN_RECHECK_MS} at most, the time until the next look at `/health`.
  */
 @Injectable()
 export class SummaryServiceYieldGate {
@@ -62,6 +65,9 @@ export class SummaryServiceYieldGate {
   private checking = false;
 
   private unreachable = false;
+
+  /** When the summary service's process started, as `/health` last said. */
+  private serviceStartedAt: string | null = null;
 
   constructor(
     @InjectDataSource()
@@ -89,10 +95,25 @@ export class SummaryServiceYieldGate {
     return (await this.runsInFlight()) >= MAX_RUNS_IN_FLIGHT;
   }
 
+  /**
+   * A failed dispatch is the first sign the summary service has gone, up to
+   * {@link OPEN_RECHECK_MS} before the next scheduled look. A refused connection fails
+   * in milliseconds and leaves nothing active, so left open the gate would let a
+   * backlog spend a retry per job in that time. Closed until `/health` answers again.
+   */
+  handoverFailed(): void {
+    this.waitingForModel = true;
+    this.nextCheckAt = 0;
+  }
+
   private async runsInFlight(): Promise<number> {
     const rows = (await this.dataSource.query(
-      `SELECT count(*)::int AS active FROM pgboss.job WHERE name = $1 AND state = 'active'`,
-      [PYTHON_FUNCTION_QUEUES.summary],
+      `SELECT count(*)::int AS active
+         FROM pgboss.job
+        WHERE name = $1
+          AND state = 'active'
+          AND ($2::timestamptz IS NULL OR started_on >= $2::timestamptz)`,
+      [PYTHON_FUNCTION_QUEUES.summary, this.serviceStartedAt],
     )) as Array<{ active: number }>;
 
     return rows[0]?.active ?? 0;
@@ -107,12 +128,17 @@ export class SummaryServiceYieldGate {
       const response = await fetch(url, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
 
       if (!response.ok) {
+        // An unread body keeps its connection until the garbage collector finds it.
+        await response.body?.cancel();
+
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const body = (await response.json()) as { llm?: { model?: unknown } };
+      const body = (await response.json()) as { started_at?: unknown; llm?: { model?: unknown } };
 
       waiting = body.llm?.model === null;
+      this.serviceStartedAt =
+        typeof body.started_at === 'string' && !Number.isNaN(Date.parse(body.started_at)) ? body.started_at : null;
     } catch (err) {
       unreachable = true;
 

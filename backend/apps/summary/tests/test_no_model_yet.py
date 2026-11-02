@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -181,6 +182,17 @@ def test_failing_to_find_a_model_settles_nothing_about_the_endpoint(endpoint):
 
 
 # ── /health ─────────────────────────────────────────────────────────────────
+
+
+def test_health_says_when_this_process_started(endpoint, client):
+    """The API's gate stops counting queue rows older than this as in flight."""
+    from ci.summary import api
+
+    before = api.STARTED_AT
+
+    assert client.get("/health").json()["started_at"] == before
+    assert datetime.fromisoformat(before).tzinfo is not None
+    assert datetime.fromisoformat(before) <= datetime.now(UTC)
 
 
 def test_health_says_no_model_when_the_endpoint_refuses(endpoint, client):

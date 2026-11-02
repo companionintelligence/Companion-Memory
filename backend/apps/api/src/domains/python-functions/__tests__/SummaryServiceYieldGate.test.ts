@@ -166,7 +166,75 @@ describe('SummaryServiceYieldGate', () => {
 
     expect(query).toHaveBeenLastCalledWith(expect.stringContaining("state = 'active'"), [
       PYTHON_FUNCTION_QUEUES.summary,
+      null,
     ]);
+  });
+
+  it('counts only runs started since the summary service did, and learns of a restart at its next look', async () => {
+    const startedAt = (at: string) =>
+      new Response(JSON.stringify({ started_at: at, llm: { reachable: true, model: 'small-chat' } }), { status: 200 });
+
+    fetchMock.mockResolvedValue(startedAt('2026-11-02T10:00:00+00:00'));
+
+    const gate = makeGate();
+
+    await gate.shouldYield();
+    await settled();
+    await gate.shouldYield();
+
+    const asked = query.mock.lastCall as [string, unknown[]];
+
+    expect(asked[0]).toContain('started_on >= $2');
+    expect(asked[1]).toEqual([PYTHON_FUNCTION_QUEUES.summary, '2026-11-02T10:00:00+00:00']);
+
+    fetchMock.mockResolvedValue(startedAt('2026-11-02T11:00:00+00:00'));
+    now += OPEN_RECHECK_MS;
+    await gate.shouldYield();
+    await settled();
+    await gate.shouldYield();
+
+    expect((query.mock.lastCall as [string, unknown[]])[1]).toEqual([
+      PYTHON_FUNCTION_QUEUES.summary,
+      '2026-11-02T11:00:00+00:00',
+    ]);
+  });
+
+  it.each([[undefined], ['not a time'], [12345]])(
+    'counts every active run when the summary service gives %p for its start',
+    async (startedAt) => {
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ started_at: startedAt, llm: { model: 'small-chat' } }), { status: 200 }),
+      );
+
+      const gate = makeGate();
+
+      await gate.shouldYield();
+      await settled();
+      await gate.shouldYield();
+
+      expect((query.mock.lastCall as [string, unknown[]])[1]).toEqual([PYTHON_FUNCTION_QUEUES.summary, null]);
+    },
+  );
+
+  it('closes at once when a dispatch fails and opens again once the service answers', async () => {
+    fetchMock.mockResolvedValue(health('small-chat'));
+
+    const gate = makeGate();
+
+    await gate.shouldYield();
+    await settled();
+    await expect(gate.shouldYield()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockResolvedValue(health('small-chat'));
+    gate.handoverFailed();
+
+    // Well inside OPEN_RECHECK_MS, and it asks straight away instead of waiting that out.
+    await expect(gate.shouldYield()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await settled();
+    await expect(gate.shouldYield()).resolves.toBe(false);
   });
 
   it('does not count runs while it is waiting for a model', async () => {

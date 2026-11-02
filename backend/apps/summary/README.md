@@ -579,7 +579,9 @@ The web Jobs page (`/jobs`) shows the same queue with its dead letters.
 - **Token Usage**: Adjust `LLM_MAX_TOKENS` based on summary detail needs
 - **Temperature**: Lower for more factual, higher for more creative
 - **Concurrency**: `FUNCTION_RUNNER_CONCURRENCY` (default 2) bounds how many runs
-  execute at once — this replaced the old per-priority task queues
+  execute at once — this replaced the old per-priority task queues. The API hands
+  over at most four runs at a time (`MAX_RUNS_IN_FLIGHT` in
+  `SummaryServiceYieldGate.ts`), so raising this past 4 needs that raised too
 - **Prompt Budget**: `MAX_HOURLY_PROMPT_CHARS`,
   `MAX_PROMPT_ITEMS_PER_SOURCE`, and `MAX_PROMPT_ITEM_CHARS` bound context while
   preserving space for every non-empty source
