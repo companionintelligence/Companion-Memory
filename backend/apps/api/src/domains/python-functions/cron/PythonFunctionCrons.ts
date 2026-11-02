@@ -14,6 +14,14 @@ import type { PythonFunctionTarget } from '../types';
 const DOSSIER_LOOKBACK_DAYS = 30;
 
 /**
+ * Singleton window for work that reads the user's current state instead of naming
+ * a window. The queue keeps one waiting copy per user. With an hourly key, every
+ * tick while the summary service has no model adds a job. Each one later runs the
+ * same LLM pass over the same input.
+ */
+const CURRENT_STATE_KEY = 'current';
+
+/**
  * Nightly (02:30) and ensure_bootstrap (boot+30s / 03:00) share one worker and
  * one pipeline. Distinct keys let both sit `active` after a missed callback.
  * Manual Predict keeps `fn:nightly:<user>:manual` and is not this path.
@@ -58,9 +66,9 @@ function hbpePipelineSingleton(
  * SmartRotationListener dispatches the same Python functions on its own cadence:
  * `insights` (rotation's `insights` work type) and `hourlySummaries` /
  * `dossierRefresh` (rotation's `summaries` work type dispatches both as
- * independent products). Their singleton keys do NOT collide — this class
- * scopes by time window (`fn:<name>:<user>:<hourKey>`) and rotation scopes by
- * `fn:<name>:<user>:rotation` — so without the guard pg-boss treats them as
+ * independent products). Their singleton keys do NOT collide. This class uses
+ * `fn:<name>:<user>:<hourKey>` or `fn:<name>:<user>:current` and rotation uses
+ * `fn:<name>:<user>:rotation`, so without the guard pg-boss treats them as
  * distinct jobs and both run. These are LLM-bound and take minutes per run.
  *
  * The rest stay unconditional: daily/weekly/monthly summaries, actions, and the
@@ -114,7 +122,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    await this.fanOut('summary', 'hourly_summary', hourKey());
+    await this.fanOut('summary', 'hourly_summary', hourKey(), previousHourWindow());
   }
 
   @Cron('0 10 0 * * *', { name: 'PythonFunctionCrons.dailySummaries' })
@@ -145,7 +153,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     // moved, which is the shipped-config behaviour because `smart.rotation`
     // (the only other dossier scheduler, and the only one that had a freshness
     // gate) is false in config/default.json.
-    await this.fanOut('summary', 'dossier_refresh', hourKey(), { lookback_days: DOSSIER_LOOKBACK_DAYS }, () =>
+    await this.fanOut('summary', 'dossier_refresh', CURRENT_STATE_KEY, { lookback_days: DOSSIER_LOOKBACK_DAYS }, () =>
       this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
     );
   }
@@ -156,12 +164,12 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    await this.fanOut('summary', 'insights_generation', hourKey(), { lookback_hours: 72 });
+    await this.fanOut('summary', 'insights_generation', CURRENT_STATE_KEY, { lookback_hours: 72 });
   }
 
   @Cron('0 45 * * * *', { name: 'PythonFunctionCrons.actions' })
   async actions(): Promise<void> {
-    await this.fanOut('summary', 'actions_generation', hourKey(), { lookback_days: 7 });
+    await this.fanOut('summary', 'actions_generation', CURRENT_STATE_KEY, { lookback_days: 7 });
   }
 
   @Cron('0 30 2 * * *', { name: 'PythonFunctionCrons.hbpeNightly' })
@@ -339,6 +347,19 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
 /** Window key for hourly-cadence work: dedupes within the current UTC hour. */
 function hourKey(now = new Date()): string {
   return now.toISOString().slice(0, 13);
+}
+
+/**
+ * The hour this tick summarizes, named in the job. Left to the function it means
+ * the hour before the job RUNS. A job can wait, because the queue holds them while
+ * the summary service has no model. A day of held jobs would all summarize the same
+ * last hour and lose the other 23.
+ */
+function previousHourWindow(now = new Date()): { start_time: string; end_time: string } {
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()));
+  const start = new Date(end.getTime() - 60 * 60 * 1000);
+
+  return { start_time: start.toISOString(), end_time: end.toISOString() };
 }
 
 /** Window key for daily-cadence work: dedupes within the current UTC day. */

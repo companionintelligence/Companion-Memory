@@ -25,12 +25,14 @@ import { PythonRunCallbackGuard } from './guards/PythonRunCallbackGuard';
 import { PythonFunctionDispatchListener } from './listeners/PythonFunctionDispatchListener';
 import { PythonFunctionService } from './services/PythonFunctionService';
 import { PythonFunctionTokenService } from './services/PythonFunctionTokenService';
+import { SummaryServiceYieldGate } from './services/SummaryServiceYieldGate';
 
 @Module({
   imports: [EventsModule, LoggingModule, JwtModule.register({})],
   providers: [
     PythonFunctionService,
     PythonFunctionTokenService,
+    SummaryServiceYieldGate,
     PythonRunCallbackGuard,
     PythonFunctionDispatchListener,
     PythonFunctionCrons,

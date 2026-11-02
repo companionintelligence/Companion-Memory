@@ -45,20 +45,63 @@ describe('PythonFunctionCrons', () => {
     expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(2);
 
     const hourKey = new Date().toISOString().slice(0, 13);
+    const window = expect.objectContaining({ start_time: expect.any(String), end_time: expect.any(String) });
 
     expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
       'summary',
       'hourly_summary',
       'user-1',
-      {},
+      window,
       { singletonKey: `fn:hourly_summary:user-1:${hourKey}` },
     );
     expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
       'summary',
       'hourly_summary',
       'user-2',
-      {},
+      window,
       { singletonKey: `fn:hourly_summary:user-2:${hourKey}` },
+    );
+  });
+
+  it('names the hour in the job, so one that waits in the queue still summarizes that hour', async () => {
+    jest.useFakeTimers({ now: new Date('2026-11-02T14:05:00.000Z') });
+
+    try {
+      const { crons, pythonFunctionService } = makeCrons(['user-1']);
+
+      await crons.hourlySummaries();
+
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+        'summary',
+        'hourly_summary',
+        'user-1',
+        { start_time: '2026-11-02T13:00:00.000Z', end_time: '2026-11-02T14:00:00.000Z' },
+        { singletonKey: 'fn:hourly_summary:user-1:2026-11-02T14' },
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps one waiting copy per user of work that names no window', async () => {
+    const { crons, pythonFunctionService } = makeCrons(['user-1']);
+
+    await crons.actions();
+    await crons.insights();
+
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+      'summary',
+      'actions_generation',
+      'user-1',
+      { lookback_days: 7 },
+      { singletonKey: 'fn:actions_generation:user-1:current' },
+    );
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+      'summary',
+      'insights_generation',
+      'user-1',
+      { lookback_hours: 72 },
+      { singletonKey: 'fn:insights_generation:user-1:current' },
     );
   });
 
@@ -170,15 +213,13 @@ describe('PythonFunctionCrons', () => {
 
       await crons.dossierRefresh();
 
-      const hourKey = new Date().toISOString().slice(0, 13);
-
       expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
       expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
         'summary',
         'dossier_refresh',
         'user-2',
         { lookback_days: 30 },
-        { singletonKey: `fn:dossier_refresh:user-2:${hourKey}` },
+        { singletonKey: 'fn:dossier_refresh:user-2:current' },
       );
     });
 

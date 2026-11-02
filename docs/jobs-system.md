@@ -73,7 +73,7 @@ invariants are enforced at registration, i.e. before Nest even starts:
 | `localConcurrency` | in-process worker slots for this queue — **can only lower**, never raise | `queues.perQueueConcurrency` (6) |
 | `role` | which process **consumes** this queue | `web` |
 | `lane` | name of a slot pool shared with other queues: members draw from ONE in-process semaphore sized to the smallest member's `localConcurrency`. The four Ollama-bound background queues share `ollama-background`, so at most one background generation is at the runner at a time | none (own semaphore) |
-| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running | none (never yields) |
+| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running. `py-fn-summary` names `summary-service`, which stays closed while the summary service has no chat model or already holds four runs | none (never yields) |
 
 ### 1.2 Boot
 
@@ -632,7 +632,7 @@ row-level expiry and the in-process execution deadline, and a blank one means
 | `import-media` | **2** | **worker** | `short` | **43 200 s** | `import.stage` (media) |
 | `import-push` | **1** | **worker** | `short` | **43 200 s** | `import.stage` (push) |
 | `import-stages` | **1** | **worker** | — *(deliberate)* | **43 200 s** | Legacy drain + deleted-stage fallback |
-| `py-fn-summary` | 6 | web | `short` | **1800 s** | `python.function.run` → Summary sidecar. **Deferred completion** |
+| `py-fn-summary` | **1** | web | `short` | **1800 s** | `python.function.run` → Summary sidecar. **Deferred completion**; `yieldsTo: summary-service` |
 | `py-fn-hbpe` | 6 | web | `short` | **14400 s** | `python.function.run` → HBPE sidecar. **Deferred completion**, `retryLimit 2`, `retryDelay 300` |
 | `ingest-coalesce` | 6 | web | `short` | **3600 s** | `ingest.coalesce`, `retryDelay 60` |
 | `etl` | 6 | web | `short` | — | `connectionSyncJob.execute`, `connectionSyncJob.transform` |

@@ -20,7 +20,7 @@ from ci.telemetry import init_telemetry
 from . import __version__, functions
 from .auth import install_sidecar_auth
 from .data_aggregator import aggregator
-from .llm_health import check_endpoint_at_startup, probe_endpoint
+from .llm_health import check_endpoint_at_startup, llm_report
 from .runner import RunRequest, runner
 from .runner import router as runner_router
 
@@ -65,18 +65,20 @@ async def health() -> dict[str, Any]:
     Liveness, plus the state of the one dependency that silently breaks.
 
     Always 200: the process is up and its HTTP surface works, which is what a
-    container healthcheck is asking. An unreachable model shows as
-    `status: degraded` with the endpoint and the reason, so nobody has to infer
-    it from a stream of failed jobs. Probed live rather than cached from boot,
-    because "the model came back" is the more common transition.
+    container healthcheck is asking. An unreachable endpoint, or `llm.model: null`
+    when no chat model is available, shows as `status: degraded` with the reason,
+    so nobody has to infer it from a stream of failed jobs. Probed live rather
+    than cached from boot, because "the model came back" is the more common
+    transition. The API's SummaryServiceYieldGate reads `llm.model` from here to
+    hold summary jobs until there is a model.
     """
-    status = await asyncio.to_thread(probe_endpoint)
+    llm = await asyncio.to_thread(llm_report)
 
     return {
-        "status": "ok" if status.reachable else "degraded",
+        "status": "ok" if llm["reachable"] and llm["model"] else "degraded",
         "service": "ci-summary",
         "version": __version__,
-        "llm": status.as_dict(),
+        "llm": llm,
     }
 
 

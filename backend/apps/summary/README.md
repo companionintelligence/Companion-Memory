@@ -82,7 +82,9 @@ LLM_API_BASE=http://host.docker.internal:11434/v1
 # The chat model is normally injected by CI Hub as LLM_DEFAULT_CHAT_MODEL.
 # SUMMARY_LLM_MODEL overrides it; LLM_MODEL is the legacy spelling. There is
 # deliberately NO hardcoded fallback — when all three are unset the model is
-# discovered from the endpoint at startup.
+# discovered from the endpoint on first use. With nothing to discover the service
+# still starts, /health says `llm.model: null` and the API holds summary jobs in
+# the queue until a model appears.
 SUMMARY_LLM_MODEL=
 EMBEDDING_MODEL=nomic-embed-text   # or LLM_DEFAULT_EMBEDDING_MODEL
 
@@ -133,11 +135,16 @@ job here:
 // POST /functions/run  → 202 { run_id, status, function }
 {
   "function": "hourly_summary",
-  "args": { "user_id": "<uuid>" },
+  "args": { "user_id": "<uuid>", "start_time": "<ISO>", "end_time": "<ISO>" },
   "job_id": "<pg-boss job id>",   // completion is reported back for it
   "queue": "py-fn-summary"
 }
 ```
+
+While `/health` says `llm.model: null`, the API's `SummaryServiceYieldGate` keeps
+these jobs in the queue, unleased and with no retry spent. They run in order once
+a model appears. That is why the hourly job names its window: it may run long
+after the hour it summarizes.
 
 The runner accepts the run into a bounded worker pool
 (`FUNCTION_RUNNER_CONCURRENCY`, default 2), returns immediately, and POSTs the
