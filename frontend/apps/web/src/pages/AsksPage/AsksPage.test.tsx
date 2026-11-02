@@ -407,7 +407,7 @@ describe('AsksPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sent' }));
 
     expect(await screen.findByText(/Couldn.t load the asks you have sent/i)).toBeInTheDocument();
-    expect(screen.queryByText(/haven't asked anyone anything yet/i)).toBeNull();
+    expect(screen.queryByText(/haven’t asked anyone anything yet/i)).toBeNull();
   });
 
   it('does not claim there are no standing grants while that query is in flight', async () => {

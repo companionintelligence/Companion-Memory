@@ -37,7 +37,7 @@ function TaskColumn<T extends SectionedTask>({
   return (
     <section className={cn('flex min-h-0 min-w-0 flex-col', className)}>
       {showHeading ? (
-        <h2 className="shrink-0 px-1 pb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h2 className="shrink-0 px-1 pb-2 text-sm font-semibold text-muted-foreground">
           {section.label}
           <span className="ml-2 font-normal">{section.count}</span>
           <OverdueHint count={overdue} className="ml-2" />
@@ -60,7 +60,7 @@ function TaskColumn<T extends SectionedTask>({
             {lane.label ? (
               <h3
                 className={cn(
-                  'shrink-0 px-1 text-xs font-semibold uppercase tracking-wide',
+                  'shrink-0 px-1 text-xs font-semibold',
                   lane.key === 'overdue' ? 'text-destructive' : 'text-muted-foreground',
                 )}
               >

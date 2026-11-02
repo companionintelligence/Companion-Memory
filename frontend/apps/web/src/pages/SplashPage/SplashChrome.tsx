@@ -13,7 +13,6 @@ export const SPLASH_MARK_SIZE =
   'aspect-square w-[min(88vw,34rem)] md:w-[min(44vw,40rem)] lg:w-[min(48vw,48rem)]';
 /** Compact enough on a phone that Log in sits on-screen under the wordmark. */
 export const CONNECT_MARK_SIZE = 'aspect-square w-[min(72vw,20rem)]';
-const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(30,207,224,0.45)]';
 
 function usePrefersReducedMotion() {
   return useMemo(
@@ -60,7 +59,7 @@ export function BrainMark({ sizeClass = SPLASH_MARK_SIZE }: { sizeClass?: string
   }, [reducedMotion]);
 
   if (reducedMotion) {
-    return <img src={brainMarkSvg} alt="" className={`${sizeClass} ${MARK_GLOW}`} />;
+    return <img src={brainMarkSvg} alt="" className={sizeClass} />;
   }
 
   // Nothing stands in for the animation while its chunk arrives. The loop opens
@@ -74,7 +73,7 @@ export function BrainMark({ sizeClass = SPLASH_MARK_SIZE }: { sizeClass?: string
   // intro/idle segment handoff, because starting from nothing is the point.
   return (
     <Suspense fallback={<div className={sizeClass} aria-hidden="true" />}>
-      <Lottie animationData={animationData} loop autoplay className={`${sizeClass} ${MARK_GLOW}`} />
+      <Lottie animationData={animationData} loop autoplay className={sizeClass} />
     </Suspense>
   );
 }
@@ -97,7 +96,7 @@ export function Reveal({
 
   return (
     <div
-      className={`${className ?? ''} animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards duration-700`}
+      className={`${className ?? ''} animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards duration-500`}
       style={{ animationDelay: `${delay}ms` }}
     >
       {children}
@@ -110,17 +109,6 @@ export function SplashShell({ children }: { children: ReactNode }) {
   return (
     <div className="relative h-lvh overflow-hidden bg-background text-foreground">
       <AnimatedBackground />
-
-      {/* Two low, wide washes of brand light so the mark reads as lit rather than
-          pasted onto a flat ground. Both sit under the content. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -top-1/3 -left-1/4 h-[80vmax] w-[80vmax] rounded-full bg-[radial-gradient(circle,var(--aqua)_0%,transparent_62%)] opacity-[0.13] blur-3xl"
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-1/4 -bottom-1/3 h-[70vmax] w-[70vmax] rounded-full bg-[radial-gradient(circle,var(--info)_0%,transparent_62%)] opacity-[0.10] blur-3xl"
-      />
 
       {/* Above the page's content layer, which is `relative z-10` and fills the screen:
           at the same z-index the later content won and swallowed every click here.

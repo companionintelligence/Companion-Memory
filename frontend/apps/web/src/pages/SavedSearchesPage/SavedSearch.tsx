@@ -112,7 +112,7 @@ export function SavedSearch({
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate font-medium">{savedSearch.name || 'Untitled saved search'}</span>
             {savedSearch.isSeed && (
-              <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Starter
               </span>
             )}
@@ -188,6 +188,7 @@ export function SavedSearch({
             }}
             variant="ghost"
             label={t('SAVED_SEARCH_EDIT')}
+            className="max-device:size-11"
           >
             <Pencil className="h-4 w-4" />
           </IconButton>
@@ -196,7 +197,12 @@ export function SavedSearch({
               <Share2 className="h-4 w-4" />
             </IconButton>
           )}
-          <IconButton onClick={openSavedSearchDeleteModal} variant="ghost" label={t('SAVED_SEARCH_DELETE')}>
+          <IconButton
+            onClick={openSavedSearchDeleteModal}
+            variant="ghost"
+            label={t('SAVED_SEARCH_DELETE')}
+            className="max-device:size-11"
+          >
             <Trash className="h-4 w-4" />
           </IconButton>
         </div>

@@ -173,7 +173,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                     <div className="absolute inset-0 flex items-center">
                       <span className="w-full border-t border-border/50" />
                     </div>
-                    <div className="relative flex justify-center text-xs uppercase tracking-wider">
+                    <div className="relative flex justify-center text-xs">
                       <span className="bg-gradient-to-r from-background/50 to-muted/20 px-3 text-muted-foreground font-medium">
                         Recent Threads
                       </span>
@@ -217,7 +217,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                                 e.stopPropagation();
                                 onDeleteThread(thread.id);
                               }}
-                              className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 cursor-pointer"
+                              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring transition-all duration-200 cursor-pointer"
                               aria-label={t('CHAT_THREAD_DELETE')}
                               role="button"
                               tabIndex={0}

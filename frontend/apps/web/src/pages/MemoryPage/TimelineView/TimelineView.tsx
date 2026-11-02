@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { cn } from '@ci/shadcn';
+import { Archive, Brain, Search as SearchIcon } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
@@ -167,7 +168,7 @@ export function TimelineView({
         <Empty
           title="No timeline events match this search"
           description="These results aren't time-based. Switch to List to see them."
-          icon="🗂️"
+          icon={Archive}
         />
       );
     }
@@ -181,7 +182,7 @@ export function TimelineView({
         <Empty
           title="No memories match these filters"
           description="Try removing a filter (or the Located filter on the map) to see more."
-          icon="🔍"
+          icon={SearchIcon}
         />
       );
     }
@@ -190,7 +191,7 @@ export function TimelineView({
       <Empty
         title="No memories yet"
         description="Your timeline will fill in as memories are created."
-        icon="🧠"
+        icon={Brain}
       />
     );
   }

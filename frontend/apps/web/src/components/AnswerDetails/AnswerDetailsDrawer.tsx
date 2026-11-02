@@ -80,7 +80,7 @@ function Section({
 }) {
   return (
     <section className={cn('space-y-1.5', className)}>
-      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
       {children}
     </section>
   );

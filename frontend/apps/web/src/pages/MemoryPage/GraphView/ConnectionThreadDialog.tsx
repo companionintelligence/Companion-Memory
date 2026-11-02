@@ -71,7 +71,7 @@ export function ConnectionThreadDialog({
     >
       <div {...handleProps} className={cn('flex items-start gap-2 border-b p-3', handleProps.className)}>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Connection</p>
+          <p className="text-xs font-medium text-muted-foreground">Connection</p>
           <Badge variant="secondary" className="mt-1">
             {formatEnumLabel(link.relationship_type)}
           </Badge>
@@ -107,7 +107,7 @@ export function ConnectionThreadDialog({
 
         {properties.length > 0 && (
           <div className="space-y-1">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Metadata</p>
+            <p className="text-xs font-medium text-muted-foreground">Metadata</p>
             <ul className="space-y-1">
               {properties.map(([key, value]) => (
                 <li key={key} className="flex min-w-0 gap-2 text-xs">

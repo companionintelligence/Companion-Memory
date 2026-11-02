@@ -616,7 +616,7 @@ export function AsksPage() {
         })}
       </div>
     ) : (
-      <EmptyState message="You haven't asked anyone anything yet." />
+      <EmptyState message="You haven’t asked anyone anything yet." />
     );
   }
 
@@ -648,7 +648,7 @@ export function AsksPage() {
               key={key}
               size="sm"
               variant={tab === key ? 'default' : 'outline'}
-              aria-current={tab === key ? 'page' : undefined}
+              aria-pressed={tab === key}
               onClick={() => setTab(key)}
             >
               {label}

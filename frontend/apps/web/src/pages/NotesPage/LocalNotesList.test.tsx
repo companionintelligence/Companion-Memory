@@ -85,7 +85,7 @@ describe('NotesPage on a phone with a replica', () => {
     h.notes = [];
     renderWithProviders(<NotesPage />, { route: '/notes' });
 
-    expect(screen.getByText("You don't have any notes yet.")).toBeInTheDocument();
+    expect(screen.getByText('You don’t have any notes yet.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create note' })).toBeInTheDocument();
   });
 });

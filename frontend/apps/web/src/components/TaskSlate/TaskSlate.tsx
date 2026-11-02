@@ -203,7 +203,7 @@ function BacklogColumn({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showHeading ? (
-        <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold text-muted-foreground">
           {section.label}
           <span className="ml-2 font-normal">{count}</span>
           {overdue > 0 ? (
@@ -224,7 +224,7 @@ function BacklogColumn({
             {lane.label ? (
               <h5
                 className={cn(
-                  'shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wide',
+                  'shrink-0 px-1 text-[11px] font-semibold',
                   lane.key === 'overdue' ? 'text-destructive' : 'text-muted-foreground',
                 )}
               >
@@ -482,10 +482,7 @@ export function TaskSlateDrawer({
             aria-labelledby="slot-predictions-label"
             className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
           >
-            <h4
-              id="slot-predictions-label"
-              className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
+            <h4 id="slot-predictions-label" className="text-[10px] font-semibold text-muted-foreground">
               Predictions
             </h4>
             <p
@@ -533,9 +530,7 @@ export function TaskSlateDrawer({
           ) : (
             <>
               <div>
-                <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Possibilities
-                </h4>
+                <h4 className="mb-2 text-[10px] font-semibold text-muted-foreground">Possibilities</h4>
                 <SlateBody
                   sections={sections}
                   loading={loading}

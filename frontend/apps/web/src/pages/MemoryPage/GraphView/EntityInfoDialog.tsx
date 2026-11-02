@@ -96,7 +96,7 @@ export function EntityInfoDialog({
 
         {properties.length > 0 && (
           <div className="space-y-1">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Properties</p>
+            <p className="text-xs font-medium text-muted-foreground">Properties</p>
             <ul className="space-y-1">
               {properties.map(([key, value]) => (
                 <li key={key} className="flex min-w-0 gap-2 text-xs">
@@ -110,7 +110,7 @@ export function EntityInfoDialog({
 
         {relations.length > 0 && (
           <div className="space-y-1">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Connections</p>
+            <p className="text-xs font-medium text-muted-foreground">Connections</p>
             <ul className="space-y-1">
               {relations.slice(0, MAX_RELATIONS).map(({ link, otherNode }) => (
                 <li key={link.id} className="flex min-w-0 items-center justify-between gap-2 text-xs">

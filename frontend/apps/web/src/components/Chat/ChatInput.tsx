@@ -401,6 +401,8 @@ function ChatInput(
                     resize-none
                     text-base
                     leading-relaxed
+                    break-normal
+                    [overflow-wrap:break-word]
                   "
                   onKeyDown={handleEnterSubmit}
                 />
@@ -485,6 +487,7 @@ function ChatInput(
                       type={streaming ? 'button' : 'submit'}
                       disabled={loading || disabled || uploading}
                       size="sm"
+                      aria-label={streaming ? 'Stop' : 'Send'}
                       className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
                       onClick={streaming ? handleStop : undefined}
                     >

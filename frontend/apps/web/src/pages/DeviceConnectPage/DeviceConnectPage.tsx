@@ -589,9 +589,7 @@ export function DeviceConnectPage() {
         <div className="relative z-10 flex h-full flex-col items-center justify-center gap-5 overflow-y-auto px-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
           <Reveal delay={0} className="flex shrink-0 flex-col items-center">
             <BrainMark sizeClass={CONNECT_MARK_SIZE} />
-            <p className="-mt-3 text-sm font-semibold tracking-[0.2em] text-muted-foreground uppercase">
-              Companion Memory
-            </p>
+            <p className="-mt-3 text-sm font-semibold text-muted-foreground ">Companion Memory</p>
           </Reveal>
 
           <Reveal delay={180} className="flex w-full max-w-sm flex-col items-center gap-3">

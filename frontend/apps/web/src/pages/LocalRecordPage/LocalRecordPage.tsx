@@ -310,9 +310,7 @@ export function LocalRecordPage() {
 
       {parent && (
         <Card className="p-3">
-          <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">
-            {t('MEMORY_RECORD_PART_OF')}
-          </div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">{t('MEMORY_RECORD_PART_OF')}</div>
           <LocalDocumentRow
             document={parent}
             time={formatEntityTimestamp(parent.occurredAt, fmt) ?? undefined}
@@ -324,9 +322,7 @@ export function LocalRecordPage() {
       {conversation && (
         <Card className="p-3" data-testid="conversation">
           <div className="mb-1 flex items-baseline justify-between">
-            <div className="text-xs font-medium uppercase text-muted-foreground">
-              {t('MEMORY_RECORD_CONVERSATION')}
-            </div>
+            <div className="text-xs font-medium text-muted-foreground">{t('MEMORY_RECORD_CONVERSATION')}</div>
             <div className="text-xs text-muted-foreground">{conversation.total.toLocaleString()}</div>
           </div>
           {conversation.moreBefore && (

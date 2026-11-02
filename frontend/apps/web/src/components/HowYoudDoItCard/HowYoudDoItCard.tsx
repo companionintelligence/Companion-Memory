@@ -40,7 +40,7 @@ export function HowYoudDoItCard({
           <Sparkles className="h-4 w-4 text-foreground/70" strokeWidth={1.5} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">How you’d do it</p>
+          <p className="text-xs font-medium text-muted-foreground">How you’d do it</p>
           <h3 className="text-[15px] font-semibold leading-snug text-foreground">{result.task.title}</h3>
           {result.task.goal && <p className="mt-0.5 text-xs text-muted-foreground">{result.task.goal}</p>}
         </div>

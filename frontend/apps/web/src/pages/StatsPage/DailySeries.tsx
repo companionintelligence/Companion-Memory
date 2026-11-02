@@ -46,9 +46,7 @@ export function DailySeries({ from, to }: { from?: string; to?: string }) {
   return (
     <Card>
       <Card.Content className="flex flex-col gap-3 pt-6">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Daily series
-        </span>
+        <span className="text-xs font-medium text-muted-foreground">Daily series</span>
         <ChartContainer config={CHART_CONFIG} className="h-56 w-full">
           <LineChart data={rows}>
             <XAxis dataKey="date" tick={{ fontSize: 11 }} />

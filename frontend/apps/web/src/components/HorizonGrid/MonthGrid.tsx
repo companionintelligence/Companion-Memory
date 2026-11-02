@@ -125,7 +125,7 @@ export function MonthGrid({
           <div
             key={name}
             role="columnheader"
-            className="py-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+            className="py-1.5 text-center text-[10px] font-medium text-muted-foreground"
           >
             {name}
           </div>

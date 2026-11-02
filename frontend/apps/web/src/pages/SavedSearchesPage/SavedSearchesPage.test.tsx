@@ -86,7 +86,7 @@ describe('SavedSearchesPage', () => {
       mocks: [mockQuery(GetSavedSearchesDocument, BASE_VARIABLES, connectionOf([]))],
     });
 
-    expect(await screen.findByText("You don't have any Saved Searches yet.")).toBeInTheDocument();
+    expect(await screen.findByText('You don’t have any saved searches yet.')).toBeInTheDocument();
   });
 
   it('shows the shared ErrorState with a working retry when the query fails, not a silent empty state', async () => {
@@ -98,7 +98,7 @@ describe('SavedSearchesPage', () => {
     });
 
     expect(await screen.findByText('Could not load your saved searches')).toBeInTheDocument();
-    expect(screen.queryByText("You don't have any Saved Searches yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText('You don’t have any saved searches yet.')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
@@ -148,7 +148,7 @@ describe('SavedSearchesPage', () => {
 
   /**
    * QA MEM-08: on an account with no searches of its own, opening Starter
-   * searches drew the "You don't have any Saved Searches yet" block ON TOP of the
+   * searches drew the "You don’t have any saved searches yet" block ON TOP of the
    * starter rows. `EmptyState` is an `absolute inset-0` overlay on its nearest
    * positioned ancestor, and that was the whole scrolling page — the very box the
    * starter list opens into. jsdom does no layout, so the assertion is on the
@@ -167,7 +167,7 @@ describe('SavedSearchesPage', () => {
       ],
     });
 
-    const message = await screen.findByText("You don't have any Saved Searches yet.");
+    const message = await screen.findByText('You don’t have any saved searches yet.');
 
     fireEvent.click(screen.getByRole('button', { name: /Starter searches/ }));
 

@@ -470,7 +470,7 @@ type ScheduleRow = {
 function UnnamedCronWarning() {
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700 dark:text-amber-400"
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
       title="The @Cron behind this schedule has no name, so the scheduler mints a new one every boot and its run history cannot be found. Give the decorator a { name }."
     >
       <AlertTriangle aria-hidden className="h-3 w-3" />
@@ -493,7 +493,7 @@ function UnnamedCronWarning() {
  * decision rather than a symptom.
  */
 function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; className?: string }) {
-  const badge = cn('text-[10px] uppercase', className);
+  const badge = cn('text-[10px] ', className);
 
   // Outranks every other status. The scheduler still holds a disabled schedule
   // and `nextRunAt` still advances, so without this the row reads "scheduled" —
@@ -670,7 +670,7 @@ function SchedulesTable({
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
+          <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
             {switchable ? (
               <th scope="col" className="w-10 py-1.5 pr-3 font-medium">
                 {/* The switches identify themselves; a visible "On" here would

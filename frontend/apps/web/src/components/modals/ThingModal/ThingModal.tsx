@@ -385,9 +385,7 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className="grid gap-4 border-t pt-4">
-      <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </legend>
+      <legend className="px-1 text-xs font-semibold text-muted-foreground">{title}</legend>
       {children}
     </fieldset>
   );

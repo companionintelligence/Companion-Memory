@@ -1,5 +1,7 @@
 import { useCallback, useState } from 'react';
 
+import { PageContent } from '@/components/layout';
+
 import { ApprovalCard } from './ApprovalCard';
 import { useApprovals } from './useApprovals';
 
@@ -41,7 +43,7 @@ export function ApprovalsPage() {
   );
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <PageContent className="p-4 gap-4">
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold">Approvals</h1>
         <p className="text-sm text-muted-foreground">
@@ -83,6 +85,6 @@ export function ApprovalsPage() {
           />
         ))}
       </div>
-    </div>
+    </PageContent>
   );
 }

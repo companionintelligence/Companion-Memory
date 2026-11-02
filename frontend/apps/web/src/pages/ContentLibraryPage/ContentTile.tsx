@@ -131,7 +131,7 @@ export function ContentTile({
                   </div>
                 )}
 
-                <div className="mt-auto truncate text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                <div className="mt-auto truncate text-[11px] text-muted-foreground/80">
                   {label}
                   {content.mimetype ? ` · ${content.mimetype}` : ''}
                 </div>

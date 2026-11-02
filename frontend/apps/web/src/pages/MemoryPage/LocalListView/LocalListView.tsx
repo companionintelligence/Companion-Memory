@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { Smartphone } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -240,7 +241,7 @@ export function LocalListView({ sort }: { sort?: LocalListSort } = {}) {
         <Empty
           title={t('MEMORY_LOCAL_LIST_EMPTY_TITLE')}
           description={t('MEMORY_LOCAL_LIST_EMPTY_DESCRIPTION')}
-          icon="📱"
+          icon={Smartphone}
         />
       </div>
     );

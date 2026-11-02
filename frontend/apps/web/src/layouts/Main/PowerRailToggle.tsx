@@ -11,7 +11,7 @@ import { usePowerRail } from './PowerRailContext';
 // closes it — same property both ways, so closing is the reverse of opening
 // instead of unmounting the wordmark.
 const CAPSULE =
-  'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out dark:border-white/20 dark:bg-white/10';
+  'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out motion-reduce:transition-none dark:border-white/20 dark:bg-white/10';
 
 /**
  * Mark and name. Desktop keeps the full product name. The phone drawer
@@ -114,7 +114,12 @@ export function PowerRailToggle() {
     // so this box does not grow the header; the parent cell centers it, which
     // keeps padding above and below the mark the same. Pinning must not add
     // extra padding — that used to shove the rail down.
-    <div className={cn('flex items-center px-2 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}>
+    <div
+      className={cn(
+        'flex items-center px-2 transition-[width] duration-200 motion-reduce:transition-none',
+        pinned ? 'w-56' : 'w-14',
+      )}
+    >
       <Tooltip delayDuration={600}>
         <Tooltip.Content>{label}</Tooltip.Content>
         <Tooltip.Trigger asChild>

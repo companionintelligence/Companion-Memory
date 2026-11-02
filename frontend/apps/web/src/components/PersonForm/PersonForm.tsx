@@ -240,8 +240,7 @@ export function PersonForm({
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${uid}-name`} className="text-xs text-muted-foreground">
-            Display name{' '}
-            <span className="font-normal text-muted-foreground/70">(defaults to first + last)</span>
+            Display name <span className="font-normal text-muted-foreground">(defaults to first + last)</span>
           </Label>
           <Input
             id={`${uid}-name`}
@@ -307,14 +306,16 @@ export function PersonForm({
               <div key={contact.key} className="flex flex-col gap-1.5">
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="order-1 flex w-24 shrink-0 flex-col gap-1.5">
-                    <Label className="text-xs text-muted-foreground">Type</Label>
+                    <Label htmlFor={`${uid}-${contact.key}-kind`} className="text-xs text-muted-foreground">
+                      Type
+                    </Label>
                     <Select
                       value={contact.kind}
                       onValueChange={(kind) =>
                         updateContact(contact.key, { kind: kind as PersonContactKind })
                       }
                     >
-                      <Select.Trigger className="w-full">
+                      <Select.Trigger id={`${uid}-${contact.key}-kind`} className="w-full">
                         <Select.Value />
                       </Select.Trigger>
                       <Select.Content>

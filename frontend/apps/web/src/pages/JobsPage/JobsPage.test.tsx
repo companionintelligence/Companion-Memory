@@ -297,7 +297,7 @@ describe('JobsPage summary', () => {
   function tile(label: string): HTMLElement {
     const heading = screen
       .getAllByText(label)
-      .find((node) => node.className.includes('uppercase') && node.tagName === 'SPAN');
+      .find((node) => node.className.includes('text-[11px]') && node.tagName === 'SPAN');
 
     const button = heading?.closest('button');
 

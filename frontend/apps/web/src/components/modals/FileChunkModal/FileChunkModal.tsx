@@ -34,22 +34,20 @@ export function FileChunkModal({ entity, onClose }: Props) {
         <div className="space-y-6 overflow-y-auto px-6 py-5">
           {data.file?.filename && (
             <section className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File</div>
+              <div className="text-xs font-medium text-muted-foreground">File</div>
               <div className="text-sm">{data.file.filename}</div>
             </section>
           )}
 
           {data.createdAt && (
             <section className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Indexed at
-              </div>
+              <div className="text-xs font-medium text-muted-foreground">Indexed at</div>
               <div className="text-sm">{fmt.dateTime(data.createdAt)}</div>
             </section>
           )}
 
           <section className="space-y-3">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Excerpt</div>
+            <div className="text-xs font-medium text-muted-foreground">Excerpt</div>
             <div className="rounded-md border bg-muted/40 p-4 text-sm whitespace-pre-wrap leading-relaxed">
               {getFileChunkPreview(data.chunkContent, data.chunkContent.length)}
             </div>

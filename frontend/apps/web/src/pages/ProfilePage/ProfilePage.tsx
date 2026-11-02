@@ -70,9 +70,7 @@ function ProfileHub() {
         </div>
 
         <section className="flex flex-col gap-1">
-          <h2 className="px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Settings
-          </h2>
+          <h2 className="px-3 text-xs font-semibold text-muted-foreground">Settings</h2>
           {visibleSettingsSections().map((section) => {
             const Icon = section.icon;
 
@@ -91,7 +89,7 @@ function ProfileHub() {
         </section>
 
         <section className="flex flex-col gap-1">
-          <h2 className="px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Help</h2>
+          <h2 className="px-3 text-xs font-semibold text-muted-foreground">Help</h2>
           {HELP_LINKS.map((link) => {
             const Icon = link.icon;
 

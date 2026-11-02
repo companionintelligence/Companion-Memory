@@ -982,9 +982,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
           {dotsEligible && mode === 'overview' && dotsConnectivity && dotsConnectivity.total > 0 && (
             <div className="flex flex-col gap-1" data-testid="graph-relatedness">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Relatedness
-                </span>
+                <span className="text-[10px] font-semibold text-muted-foreground">Relatedness</span>
                 <span className="font-semibold tabular-nums text-foreground">
                   {Math.round(dotsConnectivity.relatedRatio * 100)}% linked
                 </span>
@@ -1033,9 +1031,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               {dotsTruncated && dotsEligible ? ' · top by links' : ''}
             </span>
             {dotsEligible && mode === 'overview' && dotsHydrating && (
-              <span className="constellation-hydrating-chip text-[10px] uppercase tracking-wide text-primary/80">
-                materializing
-              </span>
+              <span className="constellation-hydrating-chip text-[10px] text-primary/80">materializing</span>
             )}
             {legendTypes.map(([type]) => (
               <span key={type} className="flex items-center gap-1">

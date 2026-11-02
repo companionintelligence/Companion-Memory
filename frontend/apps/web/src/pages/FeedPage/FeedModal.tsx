@@ -344,9 +344,7 @@ export function FeedModal({ onClose }: Props) {
 
             <div className="flex-1 prose dark:prose-invert">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Why this suggestion
-                </div>
+                <div className="text-xs font-semibold text-muted-foreground">Why this suggestion</div>
                 {chatContext ? <ChatWithAgentMenu context={chatContext} size="sm" /> : null}
               </div>
               {rationaleText != null && <Markdown>{rationaleText}</Markdown>}
@@ -356,9 +354,7 @@ export function FeedModal({ onClose }: Props) {
                 // container, and a dl/ul here would pick up typography margins
                 // meant for rendered Markdown.
                 <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Evidence
-                  </div>
+                  <div className="text-xs font-semibold text-muted-foreground">Evidence</div>
 
                   <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                     {evidenceRows.map((row) => (

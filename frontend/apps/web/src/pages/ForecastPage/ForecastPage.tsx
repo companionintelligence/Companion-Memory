@@ -45,13 +45,13 @@ export function ForecastPage() {
           <div className="relative min-h-60 flex-1">
             <EmptyState
               icon={<CloudSun size={48} />}
-              message="Couldn't reach the forecasting service just now. Try again shortly."
+              message="Couldn’t reach the forecasting service just now. Try again shortly."
             />
           </div>
         ) : (
           <div className="flex flex-col gap-6" data-testid="tomorrows-forecast">
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Tomorrow&apos;s Forecast</h2>
+              <h2 className="text-2xl font-bold text-foreground">Tomorrow’s Forecast</h2>
               <ForecastStrip
                 buckets={forecast.buckets}
                 generatedAt={forecast.generatedAt}

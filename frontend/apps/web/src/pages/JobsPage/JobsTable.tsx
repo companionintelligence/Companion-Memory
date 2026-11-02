@@ -346,7 +346,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
                 and the whole page scrolls sideways. */}
             <table className="w-full table-fixed border-collapse text-sm">
               <thead>
-                <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
+                <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
                   <th scope="col" className="w-8 py-1.5" />
                   <th scope="col" className="min-w-0 py-1.5 pr-3 font-medium">
                     Job
@@ -589,7 +589,7 @@ function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean 
 function StateBadge({ job }: { job: JobListItem }) {
   if (job.deadLettered) {
     return (
-      <Badge variant="destructive" className="text-xs uppercase">
+      <Badge variant="destructive" className="text-xs ">
         dead-lettered
       </Badge>
     );
@@ -599,7 +599,7 @@ function StateBadge({ job }: { job: JobListItem }) {
     job.state === 'failed' ? 'destructive' : job.state === 'completed' ? 'secondary' : 'outline';
 
   return (
-    <Badge variant={variant} className="text-xs uppercase">
+    <Badge variant={variant} className="text-xs ">
       {job.state}
     </Badge>
   );
@@ -677,12 +677,7 @@ function FilterRow({ label, phone, children }: { label: string; phone: boolean; 
         phone ? 'flex flex-col gap-1' : 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3',
       )}
     >
-      <span
-        className={cn(
-          'font-medium uppercase tracking-wider text-muted-foreground',
-          phone ? 'text-[10px]' : 'pt-2 text-[11px]',
-        )}
-      >
+      <span className={cn('font-medium text-muted-foreground', phone ? 'text-[10px]' : 'pt-2 text-[11px]')}>
         {label}
       </span>
       <div className="min-w-0">{children}</div>

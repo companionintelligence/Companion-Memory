@@ -32,9 +32,7 @@ export function InsightCards({ insights }: { insights: readonly LifeInsight[] })
       {insights.map((insight) => {
         const body = (
           <Card.Content className="flex flex-col gap-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {insight.title}
-            </span>
+            <span className="text-xs font-medium text-muted-foreground">{insight.title}</span>
             <span className="text-sm font-semibold">{insight.body}</span>
           </Card.Content>
         );

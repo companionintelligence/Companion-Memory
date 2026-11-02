@@ -396,9 +396,9 @@ function DuplicateGroupCard({
 
   return (
     <div className="rounded-md border p-2.5 device:p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <Merge className="h-4 w-4" />
-        <span>
+      <div className="mb-2 flex flex-nowrap items-center gap-2 text-sm text-muted-foreground">
+        <Merge className="h-4 w-4 shrink-0" />
+        <span className="min-w-0">
           {DUPLICATE_REASON_LABELS[group.reason]}:{' '}
           <span className="font-medium text-foreground">{group.value}</span>
         </span>
@@ -814,12 +814,16 @@ export function ThingsPage() {
                 {isMobile && activeFilterChips.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {activeFilterChips.map((chip) => (
-                      <Badge key={chip.id} variant="secondary" className="gap-1 pr-1 font-normal">
+                      <Badge
+                        key={chip.id}
+                        variant="secondary"
+                        className="gap-1 pr-1 font-normal overflow-visible"
+                      >
                         {chip.label}
                         <button
                           type="button"
                           aria-label={`Clear ${chip.label}`}
-                          className="rounded-sm p-0.5 hover:bg-muted"
+                          className="rounded-sm p-1.5 -m-1 hover:bg-muted"
                           onClick={chip.onClear}
                         >
                           <X className="h-3 w-3" />
@@ -880,7 +884,7 @@ export function ThingsPage() {
                 )}
 
                 {duplicateGroups.length > 0 && (
-                  <Card className="gap-0">
+                  <Card className="gap-0 py-0">
                     <Card.Header className="p-3 pb-2 device:p-6 device:pb-3">
                       <Card.Title className="flex items-center gap-2 text-base">
                         <Merge className="h-4 w-4" />

@@ -34,7 +34,7 @@ export function AppearanceSection() {
                   aria-checked={themeState.mode === entry.value}
                   onClick={() => setTheme(entry.value)}
                   className={cn(
-                    'flex-1 cursor-pointer rounded-sm px-2 py-1.5 transition-colors',
+                    'flex-1 cursor-pointer rounded-sm px-2 py-1.5 transition-colors max-device:min-h-11',
                     themeState.mode === entry.value
                       ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground',

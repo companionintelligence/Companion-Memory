@@ -1,4 +1,5 @@
 import { Button } from '@ci/shadcn';
+import { Inbox, Search as SearchIcon } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { useOptionalFeatures } from '@/common/feature';
@@ -63,7 +64,7 @@ export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmpt
   const importEnabled = features?.isFeatureEnabled('import.page') ?? false;
 
   if (whenDroppedTypes.length > 0) {
-    return <Empty title="No results" description={whenFilterNudge(whenDroppedTypes)} icon="🔍" />;
+    return <Empty title="No results" description={whenFilterNudge(whenDroppedTypes)} icon={SearchIcon} />;
   }
 
   if (filtered) {
@@ -71,7 +72,7 @@ export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmpt
       <Empty
         title="No results"
         description="Try clearing your filters or searching for something else."
-        icon="🔍"
+        icon={SearchIcon}
       />
     );
   }
@@ -81,7 +82,7 @@ export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmpt
       <Empty
         title="Your memory is empty"
         description="Connect a source or import data to start building your timeline."
-        icon="✨"
+        icon={Inbox}
       />
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
         <Button asChild>

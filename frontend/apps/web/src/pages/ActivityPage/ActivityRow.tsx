@@ -18,7 +18,7 @@ const OUTCOME_COPY: Record<ActivityOutcome, { label: string; className: string }
   success: { label: 'ran', className: 'text-muted-foreground' },
   error: { label: 'failed', className: 'text-destructive' },
   timeout: { label: 'timed out', className: 'text-destructive' },
-  refused: { label: 'refused', className: 'font-medium text-amber-600 dark:text-amber-500' },
+  refused: { label: 'refused', className: 'font-medium text-warning dark:text-amber-500' },
 };
 
 function outcomeCopy(outcome: ActivityOutcome) {

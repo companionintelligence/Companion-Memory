@@ -62,7 +62,7 @@ function MiniMonth({
       </button>
       <div className="grid grid-cols-7 gap-y-0.5 text-center">
         {days.slice(0, DAYS_IN_WEEK).map((day) => (
-          <span key={day.toISOString()} className="text-[10px] font-medium uppercase text-muted-foreground">
+          <span key={day.toISOString()} className="text-[10px] font-medium text-muted-foreground">
             {day.toLocaleDateString([], { weekday: 'narrow', timeZone: zone })}
           </span>
         ))}

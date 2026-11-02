@@ -1124,7 +1124,7 @@ export function VerticalCalendar({
               >
                 <span
                   className={cn(
-                    'text-[10px] font-medium uppercase tracking-wide',
+                    'text-[10px] font-medium',
                     isSelected || isToday ? 'text-foreground' : 'text-muted-foreground',
                   )}
                 >

@@ -65,9 +65,7 @@ export function DesktopSignInPage() {
       <div className="relative z-10 flex h-full flex-col items-center justify-center gap-8 overflow-y-auto px-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
         <Reveal delay={0} className="flex shrink-0 flex-col items-center">
           <BrainMark />
-          <p className="-mt-4 text-sm font-semibold tracking-[0.2em] text-muted-foreground uppercase md:-mt-10">
-            Companion Memory
-          </p>
+          <p className="-mt-4 text-sm font-semibold text-muted-foreground md:-mt-10">Companion Memory</p>
         </Reveal>
 
         <Reveal delay={120} className="flex w-full max-w-sm flex-col items-center gap-4">

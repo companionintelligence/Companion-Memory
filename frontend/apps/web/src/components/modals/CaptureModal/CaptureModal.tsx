@@ -920,12 +920,12 @@ function AudioRecorderPanel({
       {isRecording ? (
         <div className="flex items-center gap-3 text-red-400">
           <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-          <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_RECORDING')}</span>
+          <span className="text-sm font-medium ">{t('CAPTURE_RECORDING')}</span>
         </div>
       ) : (
         <div className="flex items-center gap-3 text-zinc-400">
           <Mic className="h-5 w-5" strokeWidth={1.5} />
-          <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_READY_TO_RECORD')}</span>
+          <span className="text-sm font-medium ">{t('CAPTURE_READY_TO_RECORD')}</span>
         </div>
       )}
       <div className="text-5xl font-light tabular-nums tracking-tight">
