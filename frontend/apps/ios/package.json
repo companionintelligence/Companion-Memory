@@ -32,8 +32,8 @@
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub",
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm",
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech",
-    "@powersync/capacitor": "^0.5.2",
-    "capacitor-secure-storage-plugin": "^0.11.0"
+    "@powersync/capacitor": "^0.9.4",
+    "capacitor-secure-storage-plugin": "^0.13.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.0",
