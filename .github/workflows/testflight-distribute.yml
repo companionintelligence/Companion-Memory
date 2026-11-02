@@ -1,0 +1,38 @@
+name: TestFlight Distribute
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Numeric iOS build number already uploaded to App Store Connect'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight-distribute-${{ inputs.build_number }}
+  cancel-in-progress: false
+
+jobs:
+  distribute:
+    name: Assign build to internal testers
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Wait for processing and assign internal groups
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: node scripts/release/assign-testflight-build.mjs
