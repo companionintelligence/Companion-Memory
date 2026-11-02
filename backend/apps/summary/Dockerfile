@@ -77,18 +77,25 @@ USER memorizer
 # An image that can't run as its own user fails here in its own build, not on
 # someone's Hub. 2026.11.1 got through every release gate and then exited 126 on
 # every install, because its venv's python pointed somewhere memorizer can't
-# read. This starts what entrypoint.sh starts, found through PATH the way it and
+# read. This loads what entrypoint.sh starts, found through PATH the way it and
 # the compose healthcheck find them: the uvicorn script, whose shebang is that
-# python, then both apps. markitdown is listed because only the parser's worker
-# process imports it. Importing the apps needs a database URL to exist and tries
-# to list the LLM endpoint's models, so the placeholders stay in this one command
-# and there is no network. The "Could not list models" line in the build log is
-# expected.
+# python, then the two apps uvicorn is pointed at. _new_markitdown is called
+# because only the parser's worker process loads MarkItDown. /health stays green
+# when that breaks, so nothing else would notice. Importing the apps needs a
+# database URL to exist and tries to list the LLM endpoint's models, so the
+# placeholders stay in this one command and there is no network. The "Could not
+# list models" line in the build log is expected. The model placeholder also
+# hides #3339, where this same import with no model stops the service. Remove it
+# when that lands, so this step covers that start too.
 RUN --network=none test -x ./entrypoint.sh \
+    && bash -n ./entrypoint.sh \
     && uvicorn --version \
     && DATABASE_URL=postgresql://build-check@localhost/build-check \
        LLM_DEFAULT_CHAT_MODEL=build-check \
-       python -c "import ci.summary.api, ci.summary.parser, markitdown"
+       python -c "from ci.summary.api import app; \
+                  from ci.summary.parser import app; \
+                  from ci.summary.parser_worker import _new_markitdown; \
+                  _new_markitdown()"
 
 # Expose API ports
 EXPOSE 8001
