@@ -86,7 +86,7 @@
       "enabled": true,
       "issuer": "https://hub.ci.computer",
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
-      "audience": "ci-server,ci-hub,ci-browser-extension,ci-even,ci-applet",
+      "audience": "ci-server,ci-hub,ci-browser-extension,ci-even,ci-applet,companion-atlas",
       "pushRelayUrl": "",
       "serviceClients": "",
       "applianceAudience": "",
