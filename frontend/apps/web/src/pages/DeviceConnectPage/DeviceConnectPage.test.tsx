@@ -81,6 +81,7 @@ const h = vi.hoisted(() => ({
   ios: false,
   persistApiBaseUrl: vi.fn(),
   getApiBaseUrl: vi.fn(() => ''),
+  needsNativeCloudConnect: vi.fn(() => h.ios && !h.getApiBaseUrl()),
   signInToPortal: vi.fn(),
   listMemoryServers: vi.fn(),
   listMemoryServersByCode: vi.fn(),
@@ -107,6 +108,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   persistApiBaseUrl: h.persistApiBaseUrl,
   getApiBaseUrl: () => h.getApiBaseUrl(),
+  needsNativeCloudConnect: () => h.needsNativeCloudConnect(),
   isIosPlatform: () => h.ios,
 }));
 
@@ -227,6 +229,17 @@ function portalListingByCode(servers: MemoryServerDevice[] = [HOME]) {
 }
 
 describe('DeviceConnectPage', () => {
+  it('keeps an unpaired iOS on the picker when a cached Memory session remains', () => {
+    h.ios = true;
+    h.authenticated = true;
+    h.profileUser = { id: 'cached-user', onboarded: true };
+
+    render(<DeviceConnectPage />);
+
+    expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalledWith('/', { replace: true });
+  });
+
   it('opens on the splash with Log in and an Advanced link', () => {
     render(<DeviceConnectPage />);
 

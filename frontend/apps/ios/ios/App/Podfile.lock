@@ -182,7 +182,7 @@ SPEC CHECKSUMS:
   CapacitorSplashScreen: 409eeaaeac603d264f209c0fcb718aa22fe1f7bb
   CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
   CiCapacitorAppLock: 1bcfb9599da9bfbf2d515eee83b00ec9b806271b
-  CiCapacitorLocalHub: 6f4edf12392375a81c8c4fe8226928d9eb5b090c
+  CiCapacitorLocalHub: 71b87c296392da1273ed6b5d11dfb4dda5c7513f
   CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
   GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539

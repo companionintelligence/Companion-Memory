@@ -5,18 +5,20 @@
  * local cache, or nothing at all yet. Mirrors the design doc's degradation
  * ladder (2g / A3 stories):
  *
- *   1. "connected" — the configured remote CI-Server origin (the existing
- *      `buildApiUrl()` target) answers its health endpoint.
+ *   1. "connected" — the configured remote origin answers its health endpoint
+ *      and a real Memory GraphQL query. Health alone only proves that a web
+ *      server is alive; identity hosts can answer it without serving Memory.
  *   2. "local"     — the remote is unreachable, but the on-device LocalHub
  *      sidecar (native only — see `frontend/packages/capacitor-local-hub`)
  *      is running and answers its own health endpoint.
  *   3. "cached"    — neither is reachable, but there is local data to show.
  *   4. "fresh"     — nothing is available yet.
  *
- * Both probes run in parallel. Remote health wins whenever it succeeds — the
- * sidecar is a fallback, not a faster path to "local" while the appliance is
- * up. On iOS the sidecar answers in milliseconds, so first-wins painted
- * "On this phone" against a Memory Server the rest of the app was using.
+ * The remote Memory checks and the local sidecar probe run in parallel. A
+ * Memory API response wins whenever it succeeds — the sidecar is a fallback,
+ * not a faster path to "local" while the appliance is up. On iOS the sidecar
+ * answers in milliseconds, so first-wins painted "On this phone" against a
+ * Memory Server the rest of the app was using.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -87,7 +89,7 @@ export function resetRecordedConnectionMode(): void {
 }
 
 /**
- * Re-run the health check from outside React, if a provider is mounted. The write guard calls
+ * Re-run the connection check from outside React, if a provider is mounted. The write guard calls
  * this when it refuses a write: the mode it refused on may be up to one re-probe interval old,
  * and the person who just tried is the one who most wants it current.
  */
@@ -96,17 +98,16 @@ export function requestConnectionRefresh(): void {
 }
 
 /**
- * Runs a health request under a bound that covers the whole exchange, and
- * reports only whether it succeeded.
+ * Runs one or more requests under a bound that covers their full exchanges,
+ * and reports only whether the complete probe succeeded.
  *
  * The probes own their `AbortController` rather than passing `fetchJson`'s
  * `timeout`. That option covers a success body, but it still ends at an error
  * response's headers (see `fetchJson`), and the error body is then read under
  * `fetchJson`'s own 3 s bound rather than the probe's budget, so a server that
  * answers an error and then stalls its body would outlive that budget. One
- * signal for the whole exchange keeps every probe inside its budget, and
- * aborting cancels the body read too, so each probe releases its connection
- * when its budget expires.
+ * signal for the whole probe keeps every request inside its budget. Aborting
+ * also cancels body reads and any sibling request when one check fails.
  *
  * `fetchJson` only installs its own timer when the caller passes no signal, so
  * handing it one is the supported way to take over.
@@ -126,16 +127,40 @@ async function probeHealth<T>(
     return { ok: false };
   } finally {
     clearTimeout(timer);
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
   }
 }
 
-/** Probes the configured remote CI-Server origin's `/api/health` endpoint. */
+interface MemoryGraphQLProbeResponse {
+  data?: { __typename?: unknown };
+  errors?: unknown[];
+}
+
+/** Checks liveness and a Memory-only API operation; a portal health page is not enough. */
 function probeRemote(): Promise<HealthProbe<unknown>> {
-  return probeHealth(REMOTE_PROBE_TIMEOUT_MS, (signal) => fetchJson(buildApiUrl('/api/health'), { signal }));
+  return probeHealth(REMOTE_PROBE_TIMEOUT_MS, async (signal) => {
+    const [health, graphql] = await Promise.all([
+      fetchJson(buildApiUrl('/api/health'), { signal }),
+      fetchJson<MemoryGraphQLProbeResponse>(buildApiUrl('/api/graphql'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'query ConnectionModeProbe { __typename }' }),
+        signal,
+      }),
+    ]);
+
+    if (graphql?.data?.__typename !== 'Query' || (graphql.errors?.length ?? 0) > 0) {
+      throw new Error('The configured origin is not answering as a Memory API.');
+    }
+
+    return health;
+  });
 }
 
 /**
- * Whether the configured Memory answers its health endpoint now: one fresh request under the
+ * Whether the configured Memory API answers now: a fresh probe under the
  * remote probe's budget, not the mode a probe settled on up to {@link CONNECTION_REPROBE_INTERVAL_MS}
  * ago, and not `navigator.onLine`, which only says a network is there. For a choice that turns on
  * the answer at this moment, like reloading the page onto a view whose code failed to download.

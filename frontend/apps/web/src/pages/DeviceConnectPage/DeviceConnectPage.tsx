@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { isIosPlatform, LoadingPage, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
+import {
+  isIosPlatform,
+  LoadingPage,
+  needsNativeCloudConnect,
+  persistApiBaseUrl,
+  resolveHttpOrigin,
+} from '@ci/common';
 import { Button, Card, LoadingButton } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
@@ -157,7 +163,12 @@ export function DeviceConnectPage() {
   };
 
   useEffect(() => {
-    if (!initializing && authenticated && user) {
+    // A cached Memory session can outlive the server origin. On iOS the
+    // cloud-connect picker is required until a non-local Memory origin has
+    // answered and accepted a key; redirecting on the stale profile alone
+    // bounces straight back to the offline screen and makes reconnection
+    // impossible.
+    if (!needsNativeCloudConnect() && !initializing && authenticated && user) {
       navigate('/', { replace: true });
     }
   }, [authenticated, initializing, navigate, user]);
