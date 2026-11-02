@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { assignBuildToInternalGroups, createAscToken } from './release/assign-testflight-build.mjs';
 
 const APP_ID = '6803774762';
-const TESTER_EMAIL = 'liam.broza@gmail.com';
+const TESTER_EMAIL = 'tester@example.com';
 
 test('creates an App Store Connect ES256 token with the expected claims', () => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -181,4 +181,159 @@ test('assigns a processed iOS build to internal groups only', async () => {
   assert.doesNotMatch(logs.join('\n'), new RegExp(TESTER_EMAIL));
   const assignment = requests.find(({ method }) => method === 'POST');
   assert.deepEqual(assignment?.body, { data: [{ type: 'betaGroups', id: 'internal-group' }] });
+});
+
+test('resends a pending invitation only for an internal tester with build access', async () => {
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const privatePem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+  const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+  const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+
+    if (url.startsWith('https://api.appstoreconnect.apple.com/v1/builds?')) {
+      return Response.json({
+        data: [
+          {
+            id: 'build-1024',
+            type: 'builds',
+            attributes: { version: '1024', processingState: 'VALID' },
+            relationships: { preReleaseVersion: { data: { id: 'ios-version', type: 'preReleaseVersions' } } },
+          },
+        ],
+        included: [{ id: 'ios-version', type: 'preReleaseVersions', attributes: { platform: 'IOS' } }],
+      });
+    }
+
+    if (url.startsWith(`https://api.appstoreconnect.apple.com/v1/apps/${APP_ID}/betaGroups?`)) {
+      return Response.json({
+        data: [
+          {
+            id: 'internal-group',
+            type: 'betaGroups',
+            attributes: { name: 'lifescope', isInternalGroup: true, hasAccessToAllBuilds: true },
+          },
+        ],
+      });
+    }
+
+    if (url.startsWith('https://api.appstoreconnect.apple.com/v1/betaGroups/internal-group/betaTesters?')) {
+      return Response.json({
+        data: [
+          { id: 'tester-id', type: 'betaTesters', attributes: { email: TESTER_EMAIL, state: 'INVITED' } },
+        ],
+      });
+    }
+
+    if (url === 'https://api.appstoreconnect.apple.com/v1/betaTesterInvitations' && method === 'POST') {
+      return new Response(JSON.stringify({ data: { id: 'invitation-id', type: 'betaTesterInvitations' } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    throw new Error(`Unexpected request ${method} ${url}`);
+  };
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => logs.push(values.join(' '));
+  try {
+    await assignBuildToInternalGroups({
+      buildNumber: '1024',
+      issuerId: 'issuer-test',
+      keyId: 'key-test',
+      privateKey: privatePem,
+      fetchImpl,
+      nowImpl: () => 0,
+      testerEmail: TESTER_EMAIL,
+      resendInvitation: true,
+    });
+  } finally {
+    console.log = originalLog;
+  }
+
+  const invitation = requests.find(
+    ({ url, method }) =>
+      url === 'https://api.appstoreconnect.apple.com/v1/betaTesterInvitations' && method === 'POST',
+  );
+  assert.deepEqual(invitation?.body, {
+    data: {
+      type: 'betaTesterInvitations',
+      relationships: {
+        app: { data: { type: 'apps', id: APP_ID } },
+        betaTester: { data: { type: 'betaTesters', id: 'tester-id' } },
+      },
+    },
+  });
+  assert.match(logs.join('\n'), /Resent the TestFlight invitation/);
+  assert.doesNotMatch(logs.join('\n'), new RegExp(TESTER_EMAIL));
+});
+
+test('refuses to resend an invitation after the tester has accepted', async () => {
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const privatePem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+  let invitationPosts = 0;
+  const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+
+    if (url.startsWith('https://api.appstoreconnect.apple.com/v1/builds?')) {
+      return Response.json({
+        data: [
+          {
+            id: 'build-1024',
+            type: 'builds',
+            attributes: { version: '1024', processingState: 'VALID' },
+            relationships: { preReleaseVersion: { data: { id: 'ios-version', type: 'preReleaseVersions' } } },
+          },
+        ],
+        included: [{ id: 'ios-version', type: 'preReleaseVersions', attributes: { platform: 'IOS' } }],
+      });
+    }
+
+    if (url.startsWith(`https://api.appstoreconnect.apple.com/v1/apps/${APP_ID}/betaGroups?`)) {
+      return Response.json({
+        data: [
+          {
+            id: 'internal-group',
+            type: 'betaGroups',
+            attributes: { name: 'lifescope', isInternalGroup: true, hasAccessToAllBuilds: true },
+          },
+        ],
+      });
+    }
+
+    if (url.startsWith('https://api.appstoreconnect.apple.com/v1/betaGroups/internal-group/betaTesters?')) {
+      return Response.json({
+        data: [
+          { id: 'tester-id', type: 'betaTesters', attributes: { email: TESTER_EMAIL, state: 'ACCEPTED' } },
+        ],
+      });
+    }
+
+    if (url === 'https://api.appstoreconnect.apple.com/v1/betaTesterInvitations' && method === 'POST') {
+      invitationPosts += 1;
+
+      return Response.json({ data: { id: 'invitation-id', type: 'betaTesterInvitations' } }, { status: 201 });
+    }
+
+    throw new Error(`Unexpected request ${method} ${url}`);
+  };
+
+  await assert.rejects(
+    assignBuildToInternalGroups({
+      buildNumber: '1024',
+      issuerId: 'issuer-test',
+      keyId: 'key-test',
+      privateKey: privatePem,
+      fetchImpl,
+      nowImpl: () => 0,
+      testerEmail: TESTER_EMAIL,
+      resendInvitation: true,
+    }),
+    /exactly one pending internal tester entry with build access/,
+  );
+  assert.equal(invitationPosts, 0);
 });
