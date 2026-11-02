@@ -403,7 +403,7 @@ jobs:
         # Pinned to a master commit with the toolchain named explicitly: the
         # `stable` branch is regenerated from master, so a commit on it can
         # stop being reachable.
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -642,7 +642,7 @@ jobs:
 
       - name: Rust toolchain
         if: steps.secrets.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
@@ -772,7 +772,7 @@ jobs:
           fetch-tags: true
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-gnu
