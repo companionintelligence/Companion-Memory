@@ -270,7 +270,7 @@ jobs:
           echo "Release tag ${tag} accepted."
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -312,7 +312,7 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
 
@@ -340,7 +340,7 @@ jobs:
       # is built. Same step ci.yml's `python` job uses; the version comes from
       # `required-version` in pyproject.toml, so this stays pinned with everything else.
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
 
@@ -372,7 +372,7 @@ jobs:
           ls -lh "${RUNNER_TEMP}/images-${{ matrix.arch }}.tar.zst"
 
       - name: Upload ${{ matrix.arch }} images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: images-${{ matrix.arch }}
           path: ${{ runner.temp }}/images-${{ matrix.arch }}.tar.zst
@@ -422,7 +422,7 @@ jobs:
 
       # For scripts/publish/ only. No history, no tags, no stored token.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -465,7 +465,7 @@ jobs:
           fi
 
       - name: Download ${{ matrix.arch }} images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: images-${{ matrix.arch }}
           path: ${{ runner.temp }}/images
@@ -491,7 +491,7 @@ jobs:
           cat "${DIGEST_FILE}"
 
       - name: Upload ${{ matrix.arch }} digests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/${{ matrix.arch }}.txt
@@ -535,7 +535,7 @@ jobs:
           echo "Release tag ${tag} accepted."
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -548,7 +548,7 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Install jq
         run: |
@@ -595,7 +595,7 @@ jobs:
           fi
 
       - name: Download the per-arch digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digests-*
           merge-multiple: true
