@@ -13,12 +13,43 @@ import {
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { okResponse, slowServer, urlOf } from './fetchFakes';
+import { okResponse, urlOf } from './fetchFakes';
 
 type GlobalWithWindow = { window?: unknown };
 
 function setWindow(value: unknown): void {
   (globalThis as GlobalWithWindow).window = value;
+}
+
+function memoryResponseFor(input: RequestInfo): Response {
+  return urlOf(input).endsWith('/api/graphql')
+    ? okResponse({ data: { __typename: 'Query' } })
+    : okResponse({ status: 'ok', apiVersion: 1, minClientVersion: 1 });
+}
+
+function slowMemoryServer(latencyMs: number) {
+  return vi.fn(
+    (input: RequestInfo, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const abort = () => {
+          clearTimeout(timer);
+          const error = new Error('The operation was aborted');
+          error.name = 'AbortError';
+          reject(error);
+        };
+
+        const timer = setTimeout(() => {
+          init?.signal?.removeEventListener('abort', abort);
+          resolve(memoryResponseFor(input));
+        }, latencyMs);
+
+        if (init?.signal?.aborted) {
+          abort();
+        } else {
+          init?.signal?.addEventListener('abort', abort, { once: true });
+        }
+      }),
+  );
 }
 
 // Captured at module load, before any test below replaces `globalThis.window` with a
@@ -60,15 +91,60 @@ describe('pageServedByApi', () => {
 
 // What LazyView's Try again asks: whether Memory answers now, one fresh request each time.
 describe('memoryAnswers', () => {
-  it('is true when /api/health answers, and asks again on every call', async () => {
+  it('requires both liveness and a Memory GraphQL response, and asks again on every call', async () => {
     setWindow({});
-    const fetchMock = vi.fn(async (_input: RequestInfo) => okResponse());
+    const fetchMock = vi.fn(async (input: RequestInfo) => memoryResponseFor(input));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(memoryAnswers()).resolves.toBe(true);
     await expect(memoryAnswers()).resolves.toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(urlOf(fetchMock.mock.calls[0][0])).toContain('/api/health');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const urls = fetchMock.mock.calls.map(([input]) => urlOf(input));
+    expect(urls.some((url) => url.endsWith('/api/health'))).toBe(true);
+    expect(urls.some((url) => url.endsWith('/api/graphql'))).toBe(true);
+  });
+
+  it('does not call an identity host a connected Memory API just because health answers', async () => {
+    setWindow({});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo) =>
+        urlOf(input).endsWith('/api/graphql')
+          ? okResponse({ errors: [{ message: 'Not a Memory GraphQL API' }] })
+          : okResponse({ status: 'ok', apiVersion: 1, minClientVersion: 1 }),
+      ),
+    );
+
+    await expect(memoryAnswers()).resolves.toBe(false);
+  });
+
+  it('aborts the other request when one half of the remote probe fails', async () => {
+    setWindow({});
+    let healthAborted = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo, init?: RequestInit) => {
+        if (urlOf(input).endsWith('/api/graphql')) {
+          return Promise.resolve({ ok: false, status: 404, text: async () => 'Not found' } as Response);
+        }
+
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => {
+              healthAborted = true;
+              const error = new Error('The operation was aborted');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+
+    await expect(memoryAnswers()).resolves.toBe(false);
+    expect(healthAborted).toBe(true);
   });
 
   it('is false when the request fails', async () => {
@@ -86,7 +162,7 @@ describe('memoryAnswers', () => {
   it('gives up after the remote probe budget instead of waiting on a stalled server', async () => {
     vi.useFakeTimers();
     setWindow({});
-    vi.stubGlobal('fetch', slowServer(REMOTE_PROBE_TIMEOUT_MS * 10));
+    vi.stubGlobal('fetch', slowMemoryServer(REMOTE_PROBE_TIMEOUT_MS * 10));
 
     const answered = memoryAnswers();
     await vi.advanceTimersByTimeAsync(REMOTE_PROBE_TIMEOUT_MS + 1);
@@ -96,11 +172,11 @@ describe('memoryAnswers', () => {
 });
 
 describe('resolveConnectionMode — "connected"', () => {
-  it('resolves "connected" when the remote /api/health endpoint answers (web, no LocalHub in play)', async () => {
+  it('resolves "connected" when the remote health and GraphQL endpoints answer (web, no LocalHub in play)', async () => {
     setWindow({});
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => okResponse()),
+      vi.fn(async (input: RequestInfo) => memoryResponseFor(input)),
     );
 
     await expect(resolveConnectionMode()).resolves.toBe('connected');
@@ -139,7 +215,7 @@ describe('resolveConnectionMode — "connected"', () => {
           return okResponse();
         }
 
-        return okResponse();
+        return memoryResponseFor(input);
       }),
     );
 
@@ -165,7 +241,7 @@ describe('resolveConnectionMode — "connected"', () => {
 
         await new Promise((resolve) => setTimeout(resolve, 30));
 
-        return okResponse();
+        return memoryResponseFor(input);
       }),
     );
 
@@ -218,7 +294,7 @@ describe('resolveConnectionMode — "local"', () => {
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => okResponse()),
+      vi.fn(async (input: RequestInfo) => memoryResponseFor(input)),
     );
 
     await expect(resolveConnectionMode()).resolves.toBe('connected');
@@ -330,7 +406,7 @@ describe('resolveConnectionMode — race respects the per-probe timeout', () => 
 
     // The stand-in honours the abort signal (see `slowServer`), which is what
     // makes this assert anything at all under a changed budget.
-    vi.stubGlobal('fetch', slowServer(remoteLatencyMs));
+    vi.stubGlobal('fetch', slowMemoryServer(remoteLatencyMs));
 
     const resultPromise = resolveConnectionMode();
 
@@ -400,7 +476,7 @@ describe('useConnectionMode — refresh coalescing', () => {
     setWindow(REAL_WINDOW);
 
     let releaseFirstProbe: (() => void) | undefined;
-    const fetchMock = vi.fn(() => {
+    const fetchMock = vi.fn((input: RequestInfo) => {
       // First call: the probe already running when the caller's `online` event fires.
       // Held open until the test releases it, then reports failure — modelling the
       // still-offline read that was in flight the instant connectivity actually returned.
@@ -411,7 +487,7 @@ describe('useConnectionMode — refresh coalescing', () => {
       }
 
       // Second call: the trailing re-run's probe, made after the real reconnect.
-      return Promise.resolve(okResponse());
+      return Promise.resolve(memoryResponseFor(input));
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -421,7 +497,7 @@ describe('useConnectionMode — refresh coalescing', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     // Three refresh() calls land while that first probe is still pending (e.g. `online`
     // firing, then a render re-running an effect that also calls refresh()). All three
@@ -431,7 +507,7 @@ describe('useConnectionMode — refresh coalescing', () => {
       result.current.refresh();
       result.current.refresh();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     // The in-flight (offline-era) probe finally settles...
     await act(async () => {
@@ -441,7 +517,7 @@ describe('useConnectionMode — refresh coalescing', () => {
 
     // ...which must trigger exactly the one coalesced re-run, not zero (the request that
     // arrived mid-flight would be lost forever) and not three (one per requeued call).
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     // And that re-run is what actually answers the request that arrived mid-flight: the
     // mode ends up "connected", not stuck on the stale failure the first probe reported.
@@ -451,7 +527,7 @@ describe('useConnectionMode — refresh coalescing', () => {
   it('runs a refresh requested after the in-flight one has already settled as its own probe', async () => {
     vi.useFakeTimers();
     setWindow(REAL_WINDOW);
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (input: RequestInfo) => memoryResponseFor(input));
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useConnectionMode(), { wrapper: useConnectionModeWrapper });
@@ -460,7 +536,7 @@ describe('useConnectionMode — refresh coalescing', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.isResolved).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     // Nothing in flight now — this is a genuinely new request, not a coalesced one, and
     // must run its own probe rather than being mistaken for a stale requeue.
@@ -469,6 +545,6 @@ describe('useConnectionMode — refresh coalescing', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });
