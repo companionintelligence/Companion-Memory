@@ -7,6 +7,7 @@ import { OnEvent, type Acknowledgement } from '@ci/domains/events';
 
 import { PythonFunctionRunEvent } from '../events';
 import { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
+import { SummaryServiceYieldGate } from '../services/SummaryServiceYieldGate';
 import {
   PYTHON_FUNCTION_QUEUE_OPTIONS,
   PYTHON_FUNCTION_QUEUES,
@@ -51,6 +52,7 @@ export class PythonFunctionDispatchListener {
   constructor(
     private readonly logger: LoggerService,
     private readonly tokens: PythonFunctionTokenService,
+    private readonly summaryGate: SummaryServiceYieldGate,
   ) {
     this.logger.setContext(PythonFunctionDispatchListener.name);
   }
@@ -126,6 +128,10 @@ export class PythonFunctionDispatchListener {
         jobId: ack.jobId,
         error: err instanceof Error ? err.message : String(err),
       });
+
+      if (target === 'summary') {
+        this.summaryGate.handoverFailed();
+      }
 
       ack.fail(err);
     }

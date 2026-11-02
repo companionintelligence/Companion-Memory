@@ -18,6 +18,13 @@ export const PYTHON_FUNCTION_QUEUES: Record<PythonFunctionTarget, string> = {
 };
 
 /**
+ * The yield gate `py-fn-summary` names; see SummaryServiceYieldGate. It stays closed
+ * while the summary service has no chat model or already has enough to do, so those
+ * jobs wait in the queue.
+ */
+export const SUMMARY_SERVICE_YIELD_GATE = 'summary-service';
+
+/**
  * HBPE's labeling wall-clock budget — mirrors `HBPE_LABEL_BUDGET_SECONDS` in
  * `backend/apps/hbpe/src/ci/hbpe/config.py`. `label_unlabeled` runs a hard
  * `started_at + budget` deadline, so on any appliance whose backlog outlasts
@@ -62,10 +69,26 @@ const HBPE_POST_LABEL_SECONDS = 4 * 60 * 60;
  */
 export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   PythonFunctionTarget,
-  { policy: 'short'; expireInSeconds: number; retryLimit: number; retryDelay: number }
+  {
+    policy: 'short';
+    expireInSeconds: number;
+    retryLimit: number;
+    retryDelay: number;
+    yieldsTo?: string;
+    localConcurrency?: number;
+  }
 > = {
   // Summaries/insights/actions: LLM-bound, minutes per run on CPU.
-  summary: { policy: 'short', expireInSeconds: 30 * 60, retryLimit: 3, retryDelay: 60 },
+  summary: {
+    policy: 'short',
+    expireInSeconds: 30 * 60,
+    retryLimit: 3,
+    retryDelay: 60,
+    yieldsTo: SUMMARY_SERVICE_YIELD_GATE,
+    // A dispatch only hands the run over, so one slot is plenty. It makes each fetch
+    // one job, so the gate's in-flight count is asked before every handover.
+    localConcurrency: 1,
+  },
   // HBPE nightly/bootstrap: the labeling drain spends its WHOLE budget before
   // the rest of the pipeline starts, so the two costs add — the expiry has to
   // be the sum, not the budget. It used to be exactly HBPE_LABEL_BUDGET_SECONDS,

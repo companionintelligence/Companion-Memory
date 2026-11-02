@@ -32,13 +32,18 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .config import settings
+from .config import NoChatModelError, resolve_llm_model, settings
 from .llm_host import DEFAULT_HOST_GATEWAY, LOOPBACK_HOSTS, running_in_container
 
 logger = logging.getLogger(__name__)
 
 STARTUP_TIMEOUT_SECONDS = 5.0
 HEALTH_TIMEOUT_SECONDS = 3.0
+
+WAITING_FOR_MODEL = (
+    "No chat model is available yet, so summaries, insights and actions are waiting "
+    "for one. They start without a restart once one appears."
+)
 
 
 @dataclass(frozen=True)
@@ -130,6 +135,28 @@ def probe_endpoint(
     )
 
 
+def available_chat_model(status: EndpointStatus) -> str | None:
+    """The model work would run on right now, or None while there isn't one."""
+    if not status.reachable and not settings.llm_model:
+        # resolve_llm_model would only repeat the request that just failed, and
+        # against an address that drops packets that takes ten more seconds.
+        return None
+
+    try:
+        return resolve_llm_model()
+    except NoChatModelError:
+        return None
+
+
+def llm_report() -> dict[str, object]:
+    """The `llm` block of /health: the endpoint and the model work would use."""
+    status = probe_endpoint()
+    model = available_chat_model(status)
+    detail = status.detail if model else f"{status.detail} {WAITING_FOR_MODEL}"
+
+    return {**status.as_dict(), "detail": detail, "model": model}
+
+
 def check_endpoint_at_startup() -> EndpointStatus:
     """Probe once at boot, loudly. Never raises — a down model is not a crash."""
     try:
@@ -139,6 +166,14 @@ def check_endpoint_at_startup() -> EndpointStatus:
         return EndpointStatus(
             url=settings.llm_api_base, reachable=False, detail=str(exc)
         )
+
+    if available_chat_model(status) is None:
+        # WARNING, not ERROR: this is a Hub nobody has added an AI engine to yet,
+        # and nothing has failed. Memory runs without it and the work waits.
+        logger.warning(
+            "LLM endpoint %s: %s %s", status.url, status.detail, WAITING_FOR_MODEL
+        )
+        return status
 
     if status.reachable:
         logger.info("LLM endpoint %s is reachable. %s", status.url, status.detail)
@@ -160,7 +195,10 @@ def check_endpoint_at_startup() -> EndpointStatus:
 __all__ = [
     "HEALTH_TIMEOUT_SECONDS",
     "STARTUP_TIMEOUT_SECONDS",
+    "WAITING_FOR_MODEL",
     "EndpointStatus",
+    "available_chat_model",
     "check_endpoint_at_startup",
+    "llm_report",
     "probe_endpoint",
 ]

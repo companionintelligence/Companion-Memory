@@ -113,11 +113,8 @@ function checkOllamaReachableFromContainers(): void {
   }
 
   console.log(`  ${YELLOW}•${RESET} ollama is listening on loopback only, so containers cannot reach it`);
-  console.log('    through host.docker.internal and the summary service will crash-loop on model');
-  console.log(
-    `    discovery. Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}`,
-  );
-  console.log(`    (or pin ${YELLOW}LLM_DEFAULT_CHAT_MODEL${RESET} in .env to skip discovery entirely).\n`);
+  console.log('    through host.docker.internal and summary jobs will wait in the queue until they can.');
+  console.log(`    Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}\n`);
 }
 
 /** `ollama list`'s columns are padded with runs of whitespace, so the model

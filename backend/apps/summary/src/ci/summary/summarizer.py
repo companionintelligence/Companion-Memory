@@ -312,23 +312,30 @@ class ActionsResponse(BaseModel):
 class Summarizer:
     """Generates the user dossier using the self-hosted LLM via PydanticAI.
 
-    Only the dossier agent is built here. `summarizer = Summarizer()` runs at
-    import time, and llm_config.py imports this module purely for the response
-    models above, so every agent declared in __init__ is constructed on that
-    import too -- agents for paths nobody calls are startup cost for nothing.
+    Only the dossier agent is built here and only on first use.
+    `summarizer = Summarizer()` runs at import time and llm_config.py imports
+    this module purely for the response models above, so anything __init__ did
+    with the model happened on every start of the service. On a Hub with no AI
+    engine there is no model to name yet. That stopped the service starting.
     """
 
     def __init__(self):
+        self.dossier_agent: Agent | None = None
+
+    def _get_dossier_agent(self) -> Agent:
+        if self.dossier_agent is not None:
+            return self.dossier_agent
+
         # Create model pointing to your self-hosted endpoint
         # Use httpx async client with longer timeout for LLM calls
         import httpx
 
+        # Configured (Hub-injected) model, else discovered from the endpoint. First,
+        # because it raises until there is one and a client built before it would leak.
+        model_name = resolve_llm_model()
         http_client = httpx.AsyncClient(timeout=180.0)  # 3 minutes
-
-        # Configured (Hub-injected) model, else discovered from the endpoint.
-        self.model_name = resolve_llm_model()
-        self.model = OpenAIChatModel(
-            self.model_name,
+        model = OpenAIChatModel(
+            model_name,
             provider=OpenAIProvider(
                 base_url=settings.llm_api_base,
                 api_key=settings.llm_api_key,
@@ -337,7 +344,7 @@ class Summarizer:
         )
 
         self.dossier_agent = Agent(
-            self.model,
+            model,
             output_type=wrap_output(UserDossierResponse),
             retries=settings.output_retries,
             system_prompt=(
@@ -348,9 +355,11 @@ class Summarizer:
 
         logger.info(
             "pydantic_ai_initialized",
-            model=self.model_name,
+            model=model_name,
             base_url=settings.llm_api_base,
         )
+
+        return self.dossier_agent
 
     def generate_user_dossier(
         self,
@@ -371,7 +380,7 @@ class Summarizer:
             daily_summaries, hourly_summaries, previous_dossier
         )
 
-        result = self.dossier_agent.run_sync(
+        result = self._get_dossier_agent().run_sync(
             prompt,
             model_settings={
                 "temperature": 0.2,

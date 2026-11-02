@@ -82,16 +82,13 @@ USER memorizer
 # python, then the two apps uvicorn is pointed at. _new_markitdown is called
 # because only the parser's worker process loads MarkItDown. /health stays green
 # when that breaks, so nothing else would notice. Importing the apps needs a
-# database URL to exist and tries to list the LLM endpoint's models, so the
-# placeholders stay in this one command and there is no network. The "Could not
-# list models" line in the build log is expected. The model placeholder also
-# hides #3339, where this same import with no model stops the service. Remove it
-# when that lands, so this step covers that start too.
+# database URL to exist, so that placeholder stays in this one command. There is no
+# network and no model, the same as a Hub with no AI engine, where the service still
+# has to start.
 RUN --network=none test -x ./entrypoint.sh \
     && bash -n ./entrypoint.sh \
     && uvicorn --version \
     && DATABASE_URL=postgresql://build-check@localhost/build-check \
-       LLM_DEFAULT_CHAT_MODEL=build-check \
        python -c "from ci.summary.api import app; \
                   from ci.summary.parser import app; \
                   from ci.summary.parser_worker import _new_markitdown; \
