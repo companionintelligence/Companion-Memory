@@ -237,7 +237,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Gate on EVERY secret this lane consumes, not a sample of them. The old gate
       # checked only three of the seven secrets then required, so a run missing
@@ -288,7 +288,7 @@ jobs:
 
       - name: Node.js + Corepack (Yarn 4)
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
       - if: steps.secrets.outputs.present == 'true'
@@ -300,7 +300,7 @@ jobs:
       # immutable source revision with a read-only deploy key and build it locally.
       - name: Checkout pinned Safari extension source
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: companionintelligence/CI-Browser-Extension
           ref: 99acfb48451d47b66f80641e4ff45c2e05b294ed
@@ -527,7 +527,7 @@ jobs:
 
       - name: Upload .ipa artifact
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: companion-ios-ipa
@@ -575,7 +575,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Same rule as the iOS gate: check all five secrets this lane consumes, not just the
       # keystore. A keystore with no ANDROID_KEY_ALIAS used to pass here and then fail deep
@@ -617,7 +617,7 @@ jobs:
 
       - name: Node.js + Corepack (Yarn 4)
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
       - if: steps.secrets.outputs.present == 'true'
@@ -634,13 +634,13 @@ jobs:
 
       - name: JDK 21 (Temurin)
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - name: Android SDK
         if: steps.secrets.outputs.present == 'true'
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           # v3 defaults `packages` to `tools platform-tools`, and Google has
           # REMOVED the obsolete `tools` package from the SDK repository, so the
@@ -692,7 +692,7 @@ jobs:
 
       - name: Upload .aab artifact
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: companion-android-aab
