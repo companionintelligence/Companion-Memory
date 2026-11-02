@@ -186,8 +186,8 @@ __metadata:
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub"
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm"
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech"
-    "@powersync/capacitor": "npm:^0.5.2"
-    capacitor-secure-storage-plugin: "npm:^0.11.0"
+    "@powersync/capacitor": "npm:^0.9.4"
+    capacitor-secure-storage-plugin: "npm:^0.13.0"
     typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
@@ -308,13 +308,25 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@powersync/capacitor@npm:^0.5.2":
-  version: 0.5.3
-  resolution: "@powersync/capacitor@npm:0.5.3"
+"@powersync/capacitor@npm:^0.9.4":
+  version: 0.9.4
+  resolution: "@powersync/capacitor@npm:0.9.4"
+  dependencies:
+    "@powersync/shared-internals": "npm:1.4.0"
   peerDependencies:
-    "@capacitor-community/sqlite": ^7.0.2
-    "@powersync/web": ^1.38.0
-  checksum: 10c0/18713d3b584dc6904a9ca525796534774a67f846d577ac9585d14391fb95368d2d4c1ca508c5eaf7c25b8bd26b03741a05968c9f923a62714a153518d4842350
+    "@capacitor-community/sqlite": ^8.1.0
+    "@capacitor/core": ">=8.0.0"
+    "@powersync/web": ^2.5.0
+  checksum: 10c0/cb846e0b1418c22d1a398e02f3c7d617245439803c9839b336c6f927f53277663b4f251be3d7eaaaaae3035fcef8056193974cb082a3278a0aa39881e2c7e09d
+  languageName: node
+  linkType: hard
+
+"@powersync/shared-internals@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@powersync/shared-internals@npm:1.4.0"
+  peerDependencies:
+    "@powersync/common": ^2.4.0
+  checksum: 10c0/54606a2d12cb56c1ec7e48c4a09027d82156765e9e49c27f4717c5dc75dc5a974174ff995eb8b3ccab94e8c024b0ca6f2a0a83a04d7b1ed633022dd59de5b5a7
   languageName: node
   linkType: hard
 
@@ -524,12 +536,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"capacitor-secure-storage-plugin@npm:^0.11.0":
-  version: 0.11.0
-  resolution: "capacitor-secure-storage-plugin@npm:0.11.0"
+"capacitor-secure-storage-plugin@npm:^0.13.0":
+  version: 0.13.0
+  resolution: "capacitor-secure-storage-plugin@npm:0.13.0"
   peerDependencies:
-    "@capacitor/core": ">=7.0.0"
-  checksum: 10c0/1672bbc958f8b432bc0667e640552bce96ebad0a4bd4bef0543471161116c81c0bca202b62fa536ff2b59876b947e4b12b14b1f4ec4a5eb4066c9c781b398a16
+    "@capacitor/core": ">=8.0.0"
+  checksum: 10c0/5369995a718563f991a98d41e734d6095c35bc5fa6dd22af63415d1a36dd026497799eddc081705d442a3be5c9049bf69519dd72d38e893bdf2e3a2e72332124
   languageName: node
   linkType: hard
 
