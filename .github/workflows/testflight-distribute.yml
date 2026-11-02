@@ -7,6 +7,10 @@ on:
         description: 'Numeric iOS build number already uploaded to App Store Connect'
         required: true
         type: string
+      tester_email:
+        description: 'Optional Apple ID email to check for TestFlight group membership (masked in logs)'
+        required: false
+        type: string
 
 permissions:
   contents: read

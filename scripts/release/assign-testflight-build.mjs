@@ -1,4 +1,5 @@
 import { createSign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const API_ROOT = 'https://api.appstoreconnect.apple.com/v1';
 const APP_ID = '6803774762';
@@ -118,6 +119,7 @@ export async function assignBuildToInternalGroups({
   sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   nowImpl = Date.now,
   timeoutMs = PROCESSING_TIMEOUT_MS,
+  testerEmail,
 }) {
   assertBuildNumber(buildNumber);
   const token = createAscToken({ issuerId, keyId, privateKey });
@@ -132,17 +134,19 @@ export async function assignBuildToInternalGroups({
     `${API_ROOT}/apps/${APP_ID}/betaGroups?${groupsQuery}`,
     token,
   );
-  const internalGroups = (groupsPayload.data ?? []).filter((group) => group.attributes?.isInternalGroup);
+  const allGroups = groupsPayload.data ?? [];
+  const internalGroups = allGroups.filter((group) => group.attributes?.isInternalGroup);
   if (internalGroups.length === 0) {
-    const available = (groupsPayload.data ?? []).map((group) => group.attributes?.name).filter(Boolean);
+    const available = allGroups.map((group) => group.attributes?.name).filter(Boolean);
     throw new Error(
       `No internal TestFlight groups exist for Companion Memory${available.length ? `; found only: ${available.join(', ')}` : ''}. No tester access was changed.`,
     );
   }
 
-  const groupsMissingBuild = [];
-  for (const group of internalGroups) {
+  const buildAccess = new Map();
+  for (const group of allGroups) {
     if (group.attributes?.hasAccessToAllBuilds) {
+      buildAccess.set(group.id, true);
       continue;
     }
 
@@ -158,7 +162,12 @@ export async function assignBuildToInternalGroups({
       nextUrl = existingPayload.links?.next ?? '';
     }
 
-    if (!alreadyAssigned) {
+    buildAccess.set(group.id, alreadyAssigned);
+  }
+
+  const groupsMissingBuild = [];
+  for (const group of internalGroups) {
+    if (!buildAccess.get(group.id)) {
       groupsMissingBuild.push(group);
     }
   }
@@ -168,6 +177,9 @@ export async function assignBuildToInternalGroups({
       method: 'POST',
       body: JSON.stringify({ data: groupsMissingBuild.map(({ id }) => ({ type: 'betaGroups', id })) }),
     });
+    for (const group of groupsMissingBuild) {
+      buildAccess.set(group.id, true);
+    }
   }
 
   const names = internalGroups.map((group) => group.attributes?.name ?? group.id);
@@ -178,7 +190,47 @@ export async function assignBuildToInternalGroups({
   );
   console.log('External tester groups were left unchanged.');
 
-  return { buildId: build.id, internalGroupNames: names, assignedGroupCount: groupsMissingBuild.length };
+  const testerMemberships = [];
+  if (testerEmail) {
+    const normalizedEmail = testerEmail.trim().toLowerCase();
+    for (const group of allGroups) {
+      let nextUrl = `${API_ROOT}/betaGroups/${group.id}/betaTesters?fields%5BbetaTesters%5D=email%2Cstate&limit=200`;
+      let tester = null;
+      while (nextUrl) {
+        const testersPayload = await requestJson(fetchImpl, nextUrl, token);
+        tester = (testersPayload.data ?? []).find(
+          (candidate) => candidate.attributes?.email?.trim().toLowerCase() === normalizedEmail,
+        );
+        if (tester) {
+          break;
+        }
+
+        nextUrl = testersPayload.links?.next ?? '';
+      }
+
+      if (tester) {
+        const groupName = group.attributes?.name ?? group.id;
+        const groupType = group.attributes?.isInternalGroup ? 'internal' : 'external';
+        const state = tester.attributes?.state ?? 'unknown';
+        const hasBuild = buildAccess.get(group.id) ?? false;
+        testerMemberships.push({ groupName, groupType, state, hasBuild });
+        console.log(
+          `The supplied Apple ID is listed in ${groupType} group "${groupName}" (invite state: ${state}; build ${buildNumber} access: ${hasBuild ? 'yes' : 'no'}).`,
+        );
+      }
+    }
+
+    if (testerMemberships.length === 0) {
+      console.log('The supplied Apple ID is not listed in any Companion Memory TestFlight group.');
+    }
+  }
+
+  return {
+    buildId: build.id,
+    internalGroupNames: names,
+    assignedGroupCount: groupsMissingBuild.length,
+    testerMemberships,
+  };
 }
 
 async function main() {
@@ -188,11 +240,20 @@ async function main() {
     }
   }
 
+  const workflowInputs = process.env.GITHUB_EVENT_PATH
+    ? (JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).inputs ?? {})
+    : {};
+  const testerEmail = workflowInputs.tester_email?.trim();
+  if (testerEmail) {
+    process.stdout.write(`::add-mask::${testerEmail}\n`);
+  }
+
   const result = await assignBuildToInternalGroups({
     buildNumber: process.env.BUILD_NUMBER,
     issuerId: process.env.APPSTORE_ISSUER_ID,
     keyId: process.env.APPSTORE_KEY_ID,
     privateKey: process.env.APPSTORE_PRIVATE_KEY,
+    testerEmail,
   });
   console.log(`Distribution complete for iOS build ${process.env.BUILD_NUMBER} (${result.buildId}).`);
 }
