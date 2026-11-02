@@ -80,14 +80,12 @@ USER memorizer
 # read. This starts what entrypoint.sh starts, found through PATH the way it and
 # the compose healthcheck find them: the uvicorn script, whose shebang is that
 # python, then both apps. markitdown is listed because only the parser's worker
-# process imports it. Importing the apps needs a database URL to exist and tries
-# to list the LLM endpoint's models, so the placeholders stay in this one command
-# and there is no network. The "Could not list models" line in the build log is
-# expected.
+# process imports it. Importing the apps needs a database URL to exist, so that
+# placeholder stays in this one command. There is no network and no model, the same
+# as a Hub with no AI engine, where the service still has to start.
 RUN --network=none test -x ./entrypoint.sh \
     && uvicorn --version \
     && DATABASE_URL=postgresql://build-check@localhost/build-check \
-       LLM_DEFAULT_CHAT_MODEL=build-check \
        python -c "import ci.summary.api, ci.summary.parser, markitdown"
 
 # Expose API ports
