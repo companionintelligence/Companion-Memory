@@ -25,14 +25,20 @@ COPY --from=uv /uv /usr/local/bin/uv
 
 # Keep the project runtime isolated from the base image's system Python.
 # The project pins Python in `.python-version`, which can differ from the
-# interpreter shipped by the slim image; uv creates the matching interpreter
-# inside this environment, and PATH lets the entrypoint invoke `uvicorn` and
-# `python -m` without an activation step.
+# interpreter shipped by the slim image. uv downloads the pinned interpreter
+# into UV_PYTHON_INSTALL_DIR and the venv's `python` is a link to it, so that
+# directory has to be reachable by the runtime user. uv's default is under
+# root's home, which is mode 700, so memorizer couldn't run it. only-managed
+# means a base image bump can't change which interpreter the service runs on.
+# PATH lets the entrypoint invoke `uvicorn` and `python -m` without an
+# activation step.
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_PYTHON_PREFERENCE=only-managed
 
 # Dependency layer. Only the manifests and the lock, so it stays cached
 # until a dependency actually changes rather than on every source edit.
@@ -67,6 +73,22 @@ COPY --chmod=755 backend/apps/summary/entrypoint.sh ./entrypoint.sh
 RUN chown -R memorizer:memorizer /app
 
 USER memorizer
+
+# An image that can't run as its own user fails here in its own build, not on
+# someone's Hub. 2026.11.1 got through every release gate and then exited 126 on
+# every install, because its venv's python pointed somewhere memorizer can't
+# read. This starts what entrypoint.sh starts, found through PATH the way it and
+# the compose healthcheck find them: the uvicorn script, whose shebang is that
+# python, then both apps. markitdown is listed because only the parser's worker
+# process imports it. Importing the apps needs a database URL to exist and tries
+# to list the LLM endpoint's models, so the placeholders stay in this one command
+# and there is no network. The "Could not list models" line in the build log is
+# expected.
+RUN --network=none test -x ./entrypoint.sh \
+    && uvicorn --version \
+    && DATABASE_URL=postgresql://build-check@localhost/build-check \
+       LLM_DEFAULT_CHAT_MODEL=build-check \
+       python -c "import ci.summary.api, ci.summary.parser, markitdown"
 
 # Expose API ports
 EXPOSE 8001
