@@ -200,9 +200,10 @@ export class PortalTokenService implements PortalTokenVerifier {
    * The client ids whose tokens are accepted at all (`auth.portal.audience`).
    *
    * The Portal's own URL used to be added here, for "a phone that only holds the access token".
-   * The Portal's access tokens are opaque and never verify here; the only JWT carrying that
-   * audience is the Portal's own session JWT, which names no client and so has no business on a
-   * Memory. No client sends one.
+   * Most of the Portal's access tokens are opaque and never verify here. The ones it issues as JWTs
+   * (companion-atlas) verify by their client id, as an id_token does. The only JWT carrying the
+   * Portal's own URL as its audience is its session JWT, which names no client and so has no business
+   * on a Memory. No client sends one.
    */
   private acceptedAudiences(): string[] {
     return parseClientIds(config.auth.portal.audience);
