@@ -41,8 +41,6 @@ jobs:
       - name: Wait for processing and assign internal groups
         env:
           BUILD_NUMBER: ${{ inputs.build_number }}
-          TESTER_EMAIL: ${{ inputs.tester_email }}
-          RESEND_INVITATION: ${{ inputs.resend_invitation }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}

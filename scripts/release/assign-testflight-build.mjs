@@ -278,9 +278,7 @@ async function main() {
     : {};
   const testerEmail = workflowInputs.tester_email?.trim();
   const resendInvitation =
-    process.env.RESEND_INVITATION === 'true' ||
-    workflowInputs.resend_invitation === true ||
-    workflowInputs.resend_invitation === 'true';
+    workflowInputs.resend_invitation === true || workflowInputs.resend_invitation === 'true';
   if (testerEmail) {
     process.stdout.write(`::add-mask::${testerEmail}\n`);
   }
