@@ -60,7 +60,8 @@ function hbpePipelineSingleton(
  * - HBPE bootstrap    app start + 03:00 daily sweep (no-op for warm users)
  *
  * Per-user window resolution (timezones) and personalization stay inside the
- * Python functions — the cron only sends the user id and a reference instant.
+ * Python functions. The cron only sends the user id and a reference instant, or
+ * the UTC hour for hourly summaries.
  *
  * Three of these crons stand down when `smart.rotation` is on, because
  * SmartRotationListener dispatches the same Python functions on its own cadence:
@@ -122,7 +123,12 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    await this.fanOut('summary', 'hourly_summary', hourKey(), previousHourWindow());
+    const window = previousHourWindow();
+
+    // Keyed by the hour the job names, not the hour this tick ran in. That is the key
+    // SummaryBackfillService gives the same hour. Off by one, a job waiting in the queue
+    // would make the backfill's insert for the NEXT hour a silent no-op.
+    await this.fanOut('summary', 'hourly_summary', hourKey(new Date(window.start_time)), window);
   }
 
   @Cron('0 10 0 * * *', { name: 'PythonFunctionCrons.dailySummaries' })
@@ -344,9 +350,9 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
   }
 }
 
-/** Window key for hourly-cadence work: dedupes within the current UTC hour. */
-function hourKey(now = new Date()): string {
-  return now.toISOString().slice(0, 13);
+/** Window key for one UTC hour, named by the hour's start. */
+function hourKey(hourStart: Date): string {
+  return hourStart.toISOString().slice(0, 13);
 }
 
 /**

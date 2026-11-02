@@ -44,7 +44,7 @@ describe('PythonFunctionCrons', () => {
 
     expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(2);
 
-    const hourKey = new Date().toISOString().slice(0, 13);
+    const hourKey = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13);
     const window = expect.objectContaining({ start_time: expect.any(String), end_time: expect.any(String) });
 
     expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
@@ -76,7 +76,8 @@ describe('PythonFunctionCrons', () => {
         'hourly_summary',
         'user-1',
         { start_time: '2026-11-02T13:00:00.000Z', end_time: '2026-11-02T14:00:00.000Z' },
-        { singletonKey: 'fn:hourly_summary:user-1:2026-11-02T14' },
+        // The key SummaryBackfillService gives this same hour, so the two dedupe.
+        { singletonKey: 'fn:hourly_summary:user-1:2026-11-02T13' },
       );
     } finally {
       jest.useRealTimers();
