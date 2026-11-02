@@ -577,7 +577,7 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
 
     expect(audiences).toContain('ci-server');
     expect(audiences).toContain('ci-hub');
-    expect(audiences).toContain('ci-import-tools');
+    expect(audiences).not.toContain('ci-import-tools');
     expect(audiences).toContain('ci-browser-extension');
     expect(audiences).toContain('ci-even');
     // Companion Memory App (CI-Applet), the desktop capture client.
@@ -594,7 +594,7 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     ).auth;
 
     expect(portal.captureClients.split(',').sort()).toEqual(
-      ['ci-applet', 'ci-browser-extension', 'ci-even', 'ci-import-tools'].sort(),
+      ['ci-applet', 'ci-browser-extension', 'ci-even'].sort(),
     );
     // Nothing presents a service token: the sidecars authenticate with SIDECAR_AUTH_SECRET.
     expect(portal.serviceClients).toBe('');
