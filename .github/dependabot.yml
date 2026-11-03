@@ -40,6 +40,21 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Tailwind 4.3 calls module.registerHooks. Node then passes `conditions` on
+      # every require(), and Yarn 4.9.1's PnP refuses it, so the web app can't
+      # build at all. Lift this with a Yarn upgrade or a load of
+      # scripts/pnp-tsx-compat.cjs for vite.
+      - dependency-name: "tailwindcss"
+        versions: [">=4.3.0"]
+      - dependency-name: "@tailwindcss/vite"
+        versions: [">=4.3.0"]
+      # 0.6+ needs @powersync/web 2.x and Capacitor 8 on the web app, and
+      # frontend/apps/web/src/api/powersync/nativeDatabase.ts carries a copy of
+      # 0.5.3's init(). That upgrade has to be done on purpose, with that copy
+      # re-read (nativeDatabase.drift.node.test.ts).
+      - dependency-name: "@powersync/capacitor"
+        versions: [">=0.6.0"]
     groups:
       minor-patch:
         update-types:
