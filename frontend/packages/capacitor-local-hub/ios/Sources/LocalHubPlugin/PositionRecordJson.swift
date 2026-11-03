@@ -122,9 +122,9 @@ enum PositionRecordJson {
         return ["records": [record]]
     }
 
-    /// The `significantLocation` event body: the `BackgroundGeolocationLocation` shape the
-    /// web side converts with `fixFromBackgroundGeolocationLocation`, so iOS and Android emit
-    /// one event body and the hook needs no platform-specific adapter.
+    /// The `significantLocation` event body: the `NativeLocationEvent` shape the web side
+    /// converts with `fixFromNativeLocationEvent`, so iOS and Android emit one event body and
+    /// the hook needs no platform-specific adapter.
     static func eventBody(_ fix: LocationFix) -> [String: Any] {
         return [
             "latitude": fix.latitude,

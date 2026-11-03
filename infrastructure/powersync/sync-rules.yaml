@@ -43,9 +43,9 @@
 # searchable entity in ci_search.mobile_search_documents — search text plus a
 # `related_id` and a small `detail` JSON of display fields — and reads nothing
 # else for search, the offline Memory list, the offline record page or the
-# on-device model's tool. Notes are the one exception: something the user writes
-# in this app and may edit offline, so they keep their own writable table. See
-# docs/architecture/mobile-local-search-plan.md, "Revision 2026-10-21".
+# on-device model's tool. Notes and saved searches are the exceptions: things the
+# user writes in this app and may edit offline, so they keep their own writable
+# tables. See docs/architecture/mobile-local-search-plan.md, "Revision 2026-10-21".
 #
 # Synced (each has a uuid `id`-aliasable PK + `user_id`):
 #   - ci_search.mobile_search_documents   (id, entity_type, entity_id, title,
@@ -54,6 +54,10 @@
 #                            updated_at, see the bucket below)
 #   - ci.notes             (id, title, content, user_id, created_at, updated_at;
 #                            written offline and uploaded by the client connector)
+#   - ci.saved_searches    (id, name, description, query, entity_types, tags,
+#                            filters, is_public, share_token, is_seed, user_id,
+#                            created_at, updated_at; written offline and uploaded
+#                            by the client connector like notes, 2026-10-26)
 #   - ci_search.tags        (id, label, description, user_id, ...)
 #   - ci_search.entity_tag  (id::text AS id, entity_type, entity_id, tag_id,
 #                            created_at — no user_id of its own; scoped via a
@@ -180,6 +184,16 @@ bucket_definitions:
       - SELECT id, entity_type, entity_id, title, body, occurred_at,
                related_id, detail
         FROM ci_search.mobile_search_documents
+        WHERE user_id = bucket.user_id
+      # The second thing a person authors in this app and may edit offline (see the
+      # notes above): a saved search is a name plus the filter set the offline Memory
+      # list already applies. Arrays and the filters JSON arrive on the device as JSON
+      # text, booleans as 0/1. The sharing posture columns (share_max_disclosure,
+      # share_expires_at) stay server-side: sharing is managed online only; is_public
+      # and share_token come down so the row's badge and its existing link render.
+      - SELECT id, name, description, query, entity_types, tags, filters,
+               is_public, share_token, is_seed, user_id, created_at, updated_at
+        FROM ci.saved_searches
         WHERE user_id = bucket.user_id
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it

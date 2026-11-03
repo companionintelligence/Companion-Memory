@@ -95,10 +95,12 @@ in CI where `linuxdeploy` is installed, via `-b deb,rpm,appimage`).
 
 ## Icon
 
-`src-tauri/icons/app-icon-source.png` is the Companion Memory logo from
-`CI-Marketplace/apps/ci-memory/metadata/logo.png` (2048×2048). Every other
-file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`)
-— re-run that after replacing the source, don't hand-edit the generated sizes.
+`src-tauri/icons/app-icon-source.png` is the Companion Memory store icon (2048×2048) as a
+transparent squircle: Tauri applies no platform mask, so a square source would render as a
+hard square in the macOS Dock and on Windows. The artwork is the same opaque 1024² icon the
+App Store and Play listings show, scaled up and masked with the squircle's alpha. Every other
+file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`) — re-run that
+after replacing the source, don't hand-edit the generated sizes.
 
 ## Local model (chat + embeddings) without a separate Ollama install
 

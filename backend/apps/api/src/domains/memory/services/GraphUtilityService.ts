@@ -239,6 +239,49 @@ export class GraphUtilityService {
     });
   }
 
+  /**
+   * The nodes among `entityIds` whose record is a detail row beside the node, active or archived:
+   * an `Item` with its `ci.objects` row, a `Communication` with its `ci.communications` row, a
+   * `Content` node with its `ci.content` row, a `File` node with the `ci.files` row it shadows and a
+   * `Product` node with its `ci.product_models` row. Search, the explorer and chat read those rows,
+   * and archiving the node does not reach them. A node with no detail row behind it (a legacy
+   * `Object` or `Thing`, or a node graph ingest wrote on its own) is left out, and so is a `Product`
+   * node whose only model lost a merge: every read filters that tombstone and the merge took its
+   * search rows, so archiving the node hides all that is left of it.
+   *
+   * Archived nodes are included on purpose: one archived before archive refused these kinds still
+   * shows, and a second archive has to be told the same as the first.
+   */
+  async getNodesBackedByDetailRows(
+    entityIds: string[],
+    ownerUserId: string,
+  ): Promise<Array<Pick<GraphNodeEntity, 'entity_id' | 'entity_type'>>> {
+    if (entityIds.length === 0) {
+      return [];
+    }
+
+    return this.entityRepo.manager.query(
+      `SELECT e.entity_id, e.entity_type
+         FROM ci.entities e
+        WHERE e.entity_id = ANY($1::uuid[])
+          AND e.owner_user_id = $2
+          AND CASE e.entity_type
+                WHEN 'Item' THEN EXISTS (SELECT 1 FROM ci.objects o WHERE o.object_id = e.entity_id)
+                WHEN 'Communication' THEN EXISTS (SELECT 1 FROM ci.communications c WHERE c.id = e.entity_id)
+                WHEN 'Content' THEN EXISTS (SELECT 1 FROM ci.content c WHERE c.id = e.entity_id)
+                WHEN 'File' THEN e.linked_table = 'files'
+                             AND EXISTS (SELECT 1 FROM ci.files f WHERE f.id = e.linked_id)
+                WHEN 'Product' THEN EXISTS (
+                  SELECT 1 FROM ci.product_models pm
+                   WHERE pm.product_entity_id = e.entity_id AND pm.merged_into_product_id IS NULL
+                )
+                ELSE false
+              END
+        ORDER BY e.entity_id`,
+      [entityIds, ownerUserId],
+    );
+  }
+
   async getNodeByLinkedRecord(
     ownerUserId: string,
     linkedTable: string,

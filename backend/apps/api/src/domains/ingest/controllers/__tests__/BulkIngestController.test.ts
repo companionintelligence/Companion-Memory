@@ -842,6 +842,29 @@ describe('BulkIngestController', () => {
       expect((itemService.createMany as jest.Mock).mock.calls[0][1]).toHaveLength(2);
     });
 
+    it('rejects an off-the-globe position line with the axis in the reason, and keeps the rest', async () => {
+      const { controller, positionService } = makeController();
+      (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }]);
+
+      const body = [
+        JSON.stringify({ time: '2026-01-01T00:00:00.000Z', source: 'gps', location: { x: 500, y: 20 } }),
+        JSON.stringify({ time: '2026-01-01T00:01:00.000Z', source: 'gps', location: { x: -122.4, y: 37.8 } }),
+      ].join('\n');
+
+      const res = await controller.ingestPositions(ctx, ndjsonReq(body), undefined);
+
+      expect(res.ingested).toBe(1);
+      expect(res.rejected).toEqual([
+        {
+          line: 1,
+          reason: expect.stringContaining('location.x is a longitude and must be between -180 and 180'),
+        },
+      ]);
+      expect((positionService.create as jest.Mock).mock.calls[0][1]).toEqual([
+        expect.objectContaining({ location: { x: -122.4, y: 37.8 } }),
+      ]);
+    });
+
     it('reports a repeated capture key as duplicate (positions, same as the envelope path)', async () => {
       const { controller, positionService } = makeController();
       (positionService.create as jest.Mock).mockResolvedValueOnce([{ id: 'p-1' }]);
@@ -905,5 +928,52 @@ describe('bulk envelope validation (the shapes the route ValidationPipes enforce
     const body = caught!.getResponse() as { message: string; errors: Array<{ path: (string | number)[] }> };
     expect(body.message).toBe('Validation failed');
     expect(body.errors[0].path).toEqual(['records', 0, 'communication_type']);
+  });
+
+  /**
+   * `ci.position.location` is geography(Point, 4326), and PostGIS wraps an
+   * out-of-range point instead of refusing it: `{x: 500, y: 200}` was stored as
+   * `POINT(140 -20)` and answered `ingested 1` (RC2 QA, D5).
+   */
+  it('refuses a position whose coordinates are off the globe, naming the axis', () => {
+    const pipe = new ValidationPipe(ingestPositionsSchema);
+    const fix = (location: { x: number; y: number }) => ({
+      records: [{ time: '2026-01-01T00:00:00.000Z', source: 'gps', location }],
+    });
+    const issues = (location: { x: number; y: number }) => {
+      try {
+        pipe.transform(fix(location));
+      } catch (err) {
+        return (
+          (err as BadRequestException).getResponse() as { errors: Array<{ path: unknown; message: string }> }
+        ).errors;
+      }
+
+      return [];
+    };
+
+    expect(issues({ x: 500, y: 200 })).toEqual([
+      expect.objectContaining({
+        path: ['records', 0, 'location', 'x'],
+        message: 'location.x is a longitude and must be between -180 and 180',
+      }),
+      expect.objectContaining({
+        path: ['records', 0, 'location', 'y'],
+        message: 'location.y is a latitude and must be between -90 and 90',
+      }),
+    ]);
+    expect(issues({ x: -122.4, y: 91 })).toEqual([
+      expect.objectContaining({ message: 'location.y is a latitude and must be between -90 and 90' }),
+    ]);
+    expect(issues({ x: -180.0001, y: 0 })).toHaveLength(1);
+
+    // The edges of the range are real places.
+    for (const location of [
+      { x: 180, y: 90 },
+      { x: -180, y: -90 },
+      { x: -122.4, y: 37.8 },
+    ]) {
+      expect(issues(location)).toEqual([]);
+    }
   });
 });

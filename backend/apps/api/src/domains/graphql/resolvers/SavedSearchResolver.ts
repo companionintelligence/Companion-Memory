@@ -67,6 +67,8 @@ export class SavedSearchResolver {
     assertValidFilters(input.filters);
 
     const entity = await this.savedSearchService.create(serviceContext, {
+      // A client-minted id (an offline replica's), or none: the service mints one.
+      id: input.id ? GlobalUID.parse('saved-search', input.id) : undefined,
       name: input.name,
       description: input.description,
       query: input.query,

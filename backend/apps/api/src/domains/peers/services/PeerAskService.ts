@@ -568,7 +568,7 @@ export class PeerAskService {
 
     // relationship / content resolve through the shared run-as-owner executor
     // and the shared disclosure filter.
-    const identifiers = await this.executorService.execute(ask);
+    const identifiers = await this.executorService.execute(ask, { tier: link.trustTier });
     const matches = identifiers.map((identifier) => ({ id: identifier.id, type: identifier.type }));
 
     const built = buildDisclosedAnswer({

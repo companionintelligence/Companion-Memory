@@ -18,6 +18,9 @@ import {
   ReceiptIcon,
   ThreadIcon,
 } from '@/components/icons';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
+import { threadLabel } from '@/pages/ChatPage/useRecentThreads';
 
 import { EntityRow } from '../ListView/rows/EntityRow';
 
@@ -90,7 +93,6 @@ const UNTITLED: Record<string, string> = {
   product: 'Untitled product',
   receipt: 'Receipt',
   task: 'Untitled task',
-  thread: 'Untitled chat',
 };
 
 const SNIPPET_MAX_CHARS = 160;
@@ -100,14 +102,23 @@ const SNIPPET_MAX_CHARS = 160;
  * type has no title (a chat message's text is its body), with the body as the
  * snippet under a real title. Online rows read richer fields per type; the
  * record carries the one text the search index has, so every type shares
- * this one layout.
+ * this one layout. An untitled chat has the name Chat gives it, for when it
+ * started.
  */
-export function localDocumentLines(document: LocalDocument): { title: string; subtitle: string | null } {
+export function localDocumentLines(
+  document: LocalDocument,
+  fmt: DateTimeFormatter = DEVICE_DATE_TIME_FORMATTER,
+): { title: string; subtitle: string | null } {
   const body = document.body?.replace(/\s+/g, ' ').trim() ?? '';
   const snippet = body.length > SNIPPET_MAX_CHARS ? `${body.slice(0, SNIPPET_MAX_CHARS - 1)}…` : body;
 
-  if (document.title) {
+  if (document.title?.trim()) {
     return { title: document.title, subtitle: snippet || null };
+  }
+
+  // Online, an untitled chat is named for when it started, with its description under it.
+  if (document.entityType === 'thread') {
+    return { title: threadLabel({ id: document.entityId, name: null }, fmt), subtitle: snippet || null };
   }
 
   if (snippet) {
@@ -128,7 +139,8 @@ export function LocalDocumentRow({
   onClick?: () => void;
   className?: string;
 }) {
-  const { title, subtitle } = localDocumentLines(document);
+  const fmt = useDateTimeFormat();
+  const { title, subtitle } = localDocumentLines(document, fmt);
 
   return (
     <EntityRow

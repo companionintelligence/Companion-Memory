@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 
-import { AskEntity, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
+import { AskEntity, AskExecutorService, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
 
 import { PEER_ASK_NO_ANSWER_REASON, PEER_ASK_PENDING, type PeerAskBody } from '../protocol';
 
@@ -332,6 +332,42 @@ describe('PeerAskService.handle', () => {
     // revoked grant widen an answer on the local path; the same stamp keeps a
     // re-run of this ask capped at what the owner consented to.
     expect(askService.setConsentBasis).toHaveBeenCalledWith('ask-1', 'g1', 'count');
+  });
+
+  it('SECURITY: a stranger with an auto photos grant cannot find a photo by the place on its event', async () => {
+    // "Any photos from 14 Elm Street?" matched on a photo event's place would
+    // answer a location question at the photos ceiling, and a stranger's
+    // location ceiling is `none`. The real executor runs here; only the index
+    // is faked, so the assertion is on what the search was allowed to match.
+    const mocks = makeService({ links: [link({ trustTier: 'stranger' })], decision: 'auto' });
+    const searchService = {
+      searchPrompt: jest.fn().mockResolvedValue({ items: [], totalMatches: 0, truncated: false, limit: 50 }),
+    };
+    const logger = { setContext: jest.fn(), warn: jest.fn(), log: jest.fn() };
+    const service = new PeerAskService(
+      mocks.peerLinkService as never,
+      mocks.askService as never,
+      mocks.grantService as never,
+      new AskExecutorService(searchService as never, logger as never),
+      mocks.answerService as never,
+      mocks.auditService as never,
+      mocks.eventRepository as never,
+      logger as never,
+    );
+
+    const result = await service.handle(
+      PEER,
+      body({ archetype: 'content', subject: 'Any photos from 14 Elm Street?', dataClass: 'photos' }),
+    );
+
+    expect(result.status).toBe('answered');
+    expect(searchService.searchPrompt).toHaveBeenCalledTimes(1);
+    expect(searchService.searchPrompt.mock.calls[0][1]).toMatchObject({
+      prompt: 'Any photos from 14 Elm Street?',
+      includeTypes: ['file'],
+      mediaEvents: 'photos',
+      mediaEventPlaces: false,
+    });
   });
 
   it('answers a relationship ask as a boolean with NO item references', async () => {

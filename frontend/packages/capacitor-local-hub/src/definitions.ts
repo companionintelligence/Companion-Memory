@@ -140,20 +140,60 @@ export interface LocalHubPlugin {
    * the Always grant lapses, a relaunch posts a notification asking for an app open, where
    * the web side's re-arm runs the two-step prompt again.
    *
-   * Android: a location foreground service of this plugin's own, started from the screen
-   * and kept running until `stopSignificantLocationUpdates` -- across the app being swiped
-   * out of recents, which ended the previous plugin's bound service. Every fix that clears
-   * the distance/interval gate is queued straight into the encrypted outbox from native
-   * code, so nothing depends on the WebView being alive; it is also emitted as an event, and
-   * the web side's own enqueue of it collapses on the shared `source_id`. `options` is
-   * required there -- see {@link SignificantLocationOptions}. A reboot, an app update or a
-   * process death ends the service, and without the background-location grant nothing but
-   * an app open may start it again: the plugin posts a notification asking for that open,
-   * and the open itself restarts sampling.
+   * Android: motion-gated sampling, kept armed until `stopSignificantLocationUpdates` --
+   * across the app being swiped out of recents and across reboots. GPS runs only while the
+   * phone is moving: the fixes themselves (helped by the permission-free stationary-detect
+   * sensor) say when it has stopped, an exit geofence around the resting spot says when it
+   * starts again, and a location foreground service (with its notification) exists only in
+   * between. The geofence is what needs `ACCESS_BACKGROUND_LOCATION`, which the plugin
+   * prompts for after fine location; like iOS, nothing beyond the location grants is asked
+   * for, and the activity-recognition API is not used. The cost of that choice: the first
+   * stretch of each trip (the fence radius plus Play Services' latency) is not sampled, and
+   * a trip shorter than the radius is not sampled at all. Every fix that clears the
+   * distance/interval gate is queued straight into the encrypted outbox from native code,
+   * so nothing depends on the WebView being alive; it is also emitted as an event, and the
+   * web side's own enqueue of it collapses on the shared `source_id`. `options` is required
+   * there -- see {@link SignificantLocationOptions}. A reboot or an app update wipes the
+   * fence; a boot receiver puts it back. Should the background grant lapse later, the
+   * plugin posts one notification asking for an app open, where the web side re-prompts.
    */
   startSignificantLocationUpdates(options?: SignificantLocationOptions): Promise<void>;
 
   stopSignificantLocationUpdates(): Promise<void>;
+
+  /**
+   * Whether location fixes queued by the background tracker upload while the app is closed.
+   *
+   * On unless the person turned it off in Settings -> Location. Android: a WorkManager job sends
+   * them once the phone has a network. iOS: sent in background time right after each fix is
+   * queued, and again on each background refresh (uncompiled as of 2026-10-30). Web:
+   * `supported: false`; there is no native queue.
+   */
+  getBackgroundUpload(): Promise<BackgroundUploadState>;
+
+  /** Turn background upload on (uploading anything already waiting) or off. */
+  setBackgroundUpload(options: { enabled: boolean }): Promise<BackgroundUploadState>;
+
+  /**
+   * Hand the background replica sync what the app's PowerSync client uses and schedule it, only
+   * ever running while the app does not hold the replica. Android: every 30 minutes, network and
+   * battery permitting. iOS: a background refresh task iOS runs when it chooses, no sooner than
+   * 30 minutes apart, also with the phone locked once it has been unlocked since boot
+   * (uncompiled as of 2026-10-30). Call each time that client connects. Web: no-op.
+   */
+  configureBackgroundSync(options: ReplicaSyncOptions): Promise<void>;
+
+  /**
+   * Phone apps: the app's sync client is about to connect. Stops a background run in progress and
+   * keeps new ones off until `releaseReplica`. `free` is false only if a run did not stop in time.
+   */
+  claimReplica(): Promise<{ free: boolean }>;
+
+  /** Phone apps: the app's sync client has disconnected; background runs may go ahead. */
+  releaseReplica(): Promise<void>;
+
+  /** Phone apps: sign-out, or a Memory without sync. Cancels background runs and forgets the config. */
+  clearBackgroundSync(): Promise<void>;
 
   /**
    * Discovers Companion Memory appliances advertising over mDNS / Bonjour on the local network
@@ -197,6 +237,23 @@ export interface DiscoverLanAppliancesResult {
  * value is one the web side owns (its storage, its constants, its copy); nothing is
  * invented natively.
  */
+export interface ReplicaSyncOptions {
+  /** The Memory origin (`getApiBaseUrl()`) the token is fetched from. */
+  apiBaseUrl: string;
+  /** The replica's file name on disk (`<name>SQLite.db`). */
+  databaseFile: string;
+  /** The working-set window, for the token request's `cutoff`. */
+  lookbackDays: number;
+  /** JSON of the options the app's client passes `powersync_control('start')`, schema included. */
+  startOptions: string;
+}
+
+export interface BackgroundUploadState {
+  enabled: boolean;
+  /** False where the platform has no background uploader; hide the setting there. */
+  supported: boolean;
+}
+
 export interface SignificantLocationOptions {
   /** Stable per-install id that prefixes `source_id` (`deviceSourceKey()`). Required on Android. */
   deviceKey: string;
@@ -209,9 +266,13 @@ export interface SignificantLocationOptions {
   minIntervalMs?: number;
   /** Fixes looser than this are dropped, not queued. */
   maxAccuracyMeters?: number;
-  /** The foreground-service notification shown while recording (Android requires one). */
+  /** Radius of the exit geofence Android sets where the phone came to rest. iOS ignores it. */
+  geofenceRadiusMeters?: number;
+  /** The foreground-service notification shown while moving (Android requires one). */
   notificationTitle?: string;
   notificationText?: string;
+  /** The appliance origin (`getApiBaseUrl()`) the Android background uploader sends to. */
+  apiBaseUrl?: string;
 }
 
 export type NativeLocationAuthorization =

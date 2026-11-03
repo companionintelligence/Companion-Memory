@@ -76,9 +76,10 @@ object PositionRecordJson {
     fun payload(record: JSONObject): JSONObject = JSONObject().put("records", JSONArray().put(record))
 
     /**
-     * The `significantLocation` event body: the `BackgroundGeolocationLocation` shape the web
-     * side converts with `fixFromBackgroundGeolocationLocation`, so iOS and Android emit one
-     * event body and the hook needs no Android-specific adapter.
+     * The `significantLocation` event body: the `NativeLocationEvent` shape the web side
+     * converts with `fixFromNativeLocationEvent` (inherited from the
+     * `@capacitor-community/background-geolocation` watcher callback it replaced), so iOS and
+     * Android emit one event body and the hook needs no Android-specific adapter.
      */
     fun eventBody(fix: LocationFix): JSONObject = JSONObject()
         .put("latitude", fix.latitude)

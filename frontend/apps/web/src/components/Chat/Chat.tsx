@@ -17,6 +17,8 @@ import * as smd from 'streaming-markdown';
 import { type Parser as StreamingParser } from 'streaming-markdown';
 import { v7 as uuid7 } from 'uuid';
 
+import { isPrimaryPointerTouch } from '@/hooks/useDeviceBreakpoint';
+
 import { AssistantMessage } from './blocks/AssistantMessage';
 import { ThinkBlock } from './blocks/ThinkBlock';
 import { ToolBlock } from './blocks/ToolBlock';
@@ -422,10 +424,12 @@ export function Chat({
     maybeAutoScroll();
   }, [accumulatedMessages]);
 
+  // Not on a touch screen, where focus opens the keyboard over the conversation. Opening a thread sets `messages`, and
+  // a dispatch thread sets them again on every update, so this would bring the keyboard back while the person reads.
   useEffect(() => {
     const input = autoFocusRef.current;
 
-    if (input && autoFocus) {
+    if (input && autoFocus && !isPrimaryPointerTouch()) {
       requestAnimationFrame(() => {
         input.focus();
       });
@@ -440,8 +444,13 @@ export function Chat({
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       {children == null && (messages?.length ?? 0) === 0 && accumulatedMessages.length === 1 && (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-2 device:p-4">
-          {emptyState}
+        // Scrolls on its own, like the starters column inside it: with the keyboard up a phone
+        // has less height than an error state with its button, and an overflowing flex item
+        // used to spill its bottom edge over the composer below. `m-auto` on the inner box
+        // centres it while there is room and gives that up, rather than clipping the top,
+        // when there is not -- `justify-center` on a scroll container would hide the start.
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 device:p-4">
+          <div className="m-auto flex w-full flex-col items-center">{emptyState}</div>
         </div>
       )}
 

@@ -62,6 +62,15 @@ export function headerValue(headers: Record<string, string> | undefined, name: s
   return '';
 }
 
+/** Remove every spelling of header `name` from a parsed header map. */
+function dropHeader(map: Record<string, string>, name: string): void {
+  for (const k of Object.keys(map)) {
+    if (k.toLowerCase() === name.toLowerCase()) {
+      delete map[k];
+    }
+  }
+}
+
 /**
  * Gmail API `labelIds` (`CATEGORY_PROMOTIONS`, `SPAM`) → Takeout
  * `X-Gmail-Labels` spelling (`Category Promotions`, `Spam`) so the same
@@ -95,8 +104,13 @@ export function headersFromGmailApi(args: {
     }
   }
 
+  // labelIds are Google's; an `X-Gmail-Labels` among the payload headers is
+  // whatever the sender wrote (email_direction.ts#trustedGmailLabels), and
+  // keeping it let a stranger's `X-Gmail-Labels: Sent` file their mail as the
+  // owner's sent mail.
+  dropHeader(map, 'X-Gmail-Labels');
   const labels = gmailApiLabelsToTakeout(args.labelIds);
-  if (labels && !headerValue(map, 'X-Gmail-Labels')) {
+  if (labels) {
     map['X-Gmail-Labels'] = labels;
   }
 
@@ -153,7 +167,9 @@ export function headersFromOutlookMessage(args: {
     labels.push('Important');
   }
 
-  if (labels.length && !headerValue(map, 'X-Gmail-Labels')) {
+  // Outlook writes no X-Gmail-Labels, so one in the message is the sender's.
+  dropHeader(map, 'X-Gmail-Labels');
+  if (labels.length) {
     map['X-Gmail-Labels'] = labels.join(',');
   }
 

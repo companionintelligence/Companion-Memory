@@ -180,7 +180,8 @@ describe('AskResolver — enabled', () => {
 
     const result = await resolver.runAsk(CTX, GlobalUID.encode('ask', 'ask-1'));
 
-    expect(executorService.execute).toHaveBeenCalledWith(ownAsk);
+    // With the asker's tier, which decides whether a photo's place may match.
+    expect(executorService.execute).toHaveBeenCalledWith(ownAsk, { tier: expect.any(String) });
     // a 'photos' query is retrieval-form → the one match is disclosed as a reference
     expect(answerService.create).toHaveBeenCalledWith(
       expect.objectContaining({

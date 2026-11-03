@@ -182,6 +182,72 @@ describe('ci import', () => {
     expect(polls).toBe(1);
     expect(ctx.term.text()).toContain('completed');
   });
+
+  it.each([
+    ['failed', 'run-4 failed (cannot unpack a.zip: the file is truncated)'],
+    ['cancelled', 'run-4 was cancelled'],
+  ])('exits 1 when --wait sees the run end %s', async (status, named) => {
+    const archive = path.join(dir, 'a.zip');
+
+    await writeFile(archive, 'x');
+
+    const ctx = harness({
+      upload: async () => [
+        { dropId: 'd', originalFilename: 'a.zip', sizeBytes: 1, status: 'staged', expiresAt: null },
+      ],
+      startRun: async () => runDetail('run-4'),
+      getRun: async () => ({
+        ...runDetail('run-4'),
+        status,
+        error: status === 'failed' ? 'cannot unpack a.zip: the file is truncated' : null,
+      }),
+    });
+
+    const outcome = importCommand(ctx, [archive], { wait: true });
+
+    await expect(outcome).rejects.toBeInstanceOf(CliError);
+    await expect(outcome).rejects.toMatchObject({ exitCode: 1 });
+    await expect(outcome).rejects.toThrow(`1 of 1 run(s) did not finish: ${named}.`);
+  });
+
+  it('exits 1, not 2, when a path was bad and the run it did start failed', async () => {
+    const archive = path.join(dir, 'a.zip');
+
+    await writeFile(archive, 'x');
+
+    const ctx = harness({
+      upload: async () => [
+        { dropId: 'd', originalFilename: 'a.zip', sizeBytes: 1, status: 'staged', expiresAt: null },
+      ],
+      startRun: async () => runDetail('run-6'),
+      getRun: async () => ({ ...runDetail('run-6'), status: 'failed', error: 'push failed' }),
+    });
+
+    const outcome = importCommand(ctx, [archive, path.join(dir, 'missing.zip')], { wait: true });
+
+    // The bad path alone is the caller's to fix (2), but a followed run that
+    // failed is the appliance's (1). A script branching on the code must
+    // not read the second as the first.
+    await expect(outcome).rejects.toMatchObject({ exitCode: 1 });
+    await expect(outcome).rejects.toThrow(
+      /1 of 2 path\(s\) could not be imported\. 1 of 1 run\(s\) did not finish/,
+    );
+  });
+
+  it('still exits 0 without --wait, when nothing was followed', async () => {
+    const archive = path.join(dir, 'a.zip');
+
+    await writeFile(archive, 'x');
+
+    const ctx = harness({
+      upload: async () => [
+        { dropId: 'd', originalFilename: 'a.zip', sizeBytes: 1, status: 'staged', expiresAt: null },
+      ],
+      startRun: async () => runDetail('run-5'),
+    });
+
+    await expect(importCommand(ctx, [archive], {})).resolves.toBeUndefined();
+  });
 });
 
 describe('parseStages', () => {

@@ -211,9 +211,9 @@ describe('MobileNavigation', () => {
     expect(within(wordmark).getByText('Memory')).toHaveAttribute('aria-hidden', 'false');
     expect(within(wordmark).queryByText('Companion Memory')).toBeNull();
     // The Companion Memory mark, not the old raster logo.png: the drawer, the
-    // splash hero and the app icons are one drawing now. Under jsdom this is
-    // the static SVG — `CompanionMark` only reaches for the Lottie player when
-    // something asks it to animate, which the drawer never does.
+    // splash hero and the app icons are one drawing now — the static solid-teal
+    // SVG, which `CompanionMark` always renders (`animated` only adds a CSS
+    // entrance, which the drawer never asks for).
     expect(wordmark.querySelector('img[src*="companion-memory-brain"]')).not.toBeNull();
     // Same inset as Capture / Planning — without it the 32px disc sat on the
     // pane edge while every row below had px-2 + a 2px active border.
@@ -661,5 +661,28 @@ describe('MobileNavigation', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(banner).not.toHaveAttribute('inert');
+  });
+
+  // The shut drawer is translated off-canvas but stays `visibility: visible`,
+  // so `aria-hidden` alone left its ten controls in the Tab order. `inert`
+  // takes them out while shut, and comes off the moment it opens so the
+  // focus trap above still lands on its first control.
+  it('keeps the shut drawer out of the tab order, and the open one in it', async () => {
+    renderMobileNav();
+
+    const nav = drawerNav();
+
+    expect(nav).toHaveAttribute('aria-hidden', 'true');
+    expect(nav).toHaveAttribute('inert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    await screen.findByRole('navigation');
+
+    expect(nav).not.toHaveAttribute('inert');
+    expect(nav).toContainElement(document.activeElement as HTMLElement);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(nav).toHaveAttribute('inert');
   });
 });

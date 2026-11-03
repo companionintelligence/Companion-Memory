@@ -222,6 +222,9 @@ services:
     # volume, so a deployment that never set them by hand got empty passwords
     # and a replicator that could not authenticate.
     #
+    # infrastructure/powersync/entrypoint.sh runs these same steps inside the
+    # companion/powersync image Hub installs use; change the two together.
+    #
     # Anything already exported wins (`:-`), so the documented override path of
     # setting PS_REPLICATION_URI/PS_STORAGE_URI/PS_JWT_SECRET_B64URL explicitly
     # — an external database, a managed Postgres — still takes precedence.

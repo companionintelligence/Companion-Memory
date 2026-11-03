@@ -1,7 +1,6 @@
 package com.companionintelligence.localhub.location
 
 import android.Manifest
-import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -24,23 +23,25 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 
 /**
- * The foreground location service behind Android's Always mode.
+ * The foreground location service behind Android's Always mode, alive only while the phone
+ * is moving.
  *
  * Android requires a foreground service, with its notification, for any app that wants
  * location after leaving the screen, so the notification is the price of background
  * sampling. The service is *started*, not bound: it outlives the activity, the WebView and
  * the plugin, which is what keeps recording going after the app is swiped out of recents.
+ * What makes it cheap is that [LocationTracker] starts it when motion begins and stops it
+ * when the phone comes to rest, so the notification -- and the GPS -- are present for the
+ * moving minutes of a day rather than all of it.
  *
- * The request mirrors the one measured on a device for the plugin this replaces (a fix every
- * 60 s, 15 s once fixes are flowing, high accuracy, delivered only after
- * [LocationTrackingConfig.minDistanceMeters] of movement): the 1 Hz request upstream shipped
- * was about a quarter of a day's battery drain, and the displacement filter lets the receiver
- * idle between fixes. Fixes go to [LocationTracker], which gates and queues them.
+ * Fixes arrive every [INTERVAL_MS] while moving and go to the tracker, which gates and queues
+ * them. No distance filter is set on the request: it would not save any power (the receiver
+ * runs regardless) and the tracker needs every fix to centre the geofence and to notice when
+ * the phone has stopped.
  *
- * Sticky, so that a process Android kills under memory pressure brings the service back. A
- * restart with the app off screen cannot resume sampling, though: without the
- * background-location grant a location service started from the background gets no fixes,
- * and from API 31 the start itself is refused. That restart posts the resume nudge instead.
+ * Sticky, so that a process Android kills under memory pressure brings the service back
+ * mid-trip; the tracker's persisted config fills in for the missing intent, and a restart
+ * after the tracker was disarmed or declared the phone still stops itself.
  */
 class LocationService : Service() {
     private var client: FusedLocationProviderClient? = null
@@ -72,29 +73,22 @@ class LocationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val tracker = LocationTracking.get(this)
+        // A START_STICKY restart carries no intent; the tracker's persisted config fills in.
         val config = tracker.configForService()
-        if (config == null) {
-            // Always was turned off (or never on) and this is a stale sticky restart.
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        if (intent == null && !appOnScreen()) {
-            // A sticky restart after a process death, with the app in the background. Even
-            // where Android allows the service to start here, it would receive no location
-            // (see the class docs), so do not post a "Recording location" notification that
-            // would be a lie. Ask for an app open instead; onAppResumed restarts sampling.
-            tracker.onSamplingLost(SamplingLossReason.PROCESS_DEATH)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        val title = intent?.getStringExtra(EXTRA_TITLE) ?: config.notificationTitle
-        val text = intent?.getStringExtra(EXTRA_TEXT) ?: config.notificationText
+        val title = intent?.getStringExtra(EXTRA_TITLE) ?: config?.notificationTitle
+        val text = intent?.getStringExtra(EXTRA_TEXT) ?: config?.notificationText
 
         // FIRST, before any reason to stop: once startForegroundService() has been called,
         // Android (12+) throws ForegroundServiceDidNotStartInTimeException into this process
-        // -- fatally -- if the service is stopped before it has called startForeground().
+        // -- fatally -- if the service is stopped before it has called startForeground(). The
+        // tracker can legitimately stop sampling within milliseconds of starting it (the web
+        // side re-arms on every effect run in development), so entering the foreground must
+        // not be conditional on anything that follows.
         try {
-            goForeground(title, text)
+            goForeground(
+                title ?: LocationTrackingConfig.DEFAULT_NOTIFICATION_TITLE,
+                text ?: LocationTrackingConfig.DEFAULT_NOTIFICATION_TEXT,
+            )
         } catch (e: Exception) {
             // ForegroundServiceStartNotAllowedException or a missing notification permission.
             Log.w(TAG, "could not enter the foreground: ${e.message}")
@@ -102,6 +96,11 @@ class LocationService : Service() {
             return START_NOT_STICKY
         }
         isRunning = true
+        if (config == null && intent == null) {
+            // Restarted after the tracker was disarmed or told the phone is still.
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -113,7 +112,6 @@ class LocationService : Service() {
             val fused = LocationServices.getFusedLocationProviderClient(this)
             val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, INTERVAL_MS)
                 .setMinUpdateIntervalMillis(MIN_INTERVAL_MS)
-                .setMinUpdateDistanceMeters(config.minDistanceMeters.toFloat())
                 .setWaitForAccurateLocation(false)
                 .build()
             try {
@@ -135,18 +133,11 @@ class LocationService : Service() {
         super.onDestroy()
     }
 
-    /** Whether one of this app's activities is on screen (or visible behind a dialog). */
-    private fun appOnScreen(): Boolean {
-        val info = ActivityManager.RunningAppProcessInfo()
-        ActivityManager.getMyMemoryState(info)
-        return info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-    }
-
     private fun goForeground(title: String, text: String) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Recording location", NotificationManager.IMPORTANCE_LOW).apply {
+                NotificationChannel(CHANNEL_ID, "Location while moving", NotificationManager.IMPORTANCE_LOW).apply {
                     setShowBadge(false)
                 },
             )
@@ -163,7 +154,9 @@ class LocationService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(applicationInfo.icon)
+            // The status bar tints a stencil: a single-colour mark, not the launcher icon,
+            // whose colours Android cannot tint (it showed as a filled blob on Samsung).
+            .setSmallIcon(NotificationIcons.small(this))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -180,8 +173,9 @@ class LocationService : Service() {
     companion object {
         /**
          * True from a successful startForeground() until onDestroy(), in this process only.
-         * [LocationTracker] reads it (through the platform) to tell "already sampling" from
-         * "the service is missing" -- only the latter is restarted on an app open.
+         * [LocationTracker] reads it (through the platform) to tell "the service is running
+         * and its notification was swiped" from "the service is missing" -- only the latter
+         * may be restarted, or every swipe-away would be undone on the next resume.
          */
         @Volatile
         var isRunning: Boolean = false
@@ -189,8 +183,8 @@ class LocationService : Service() {
 
         const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
-        const val INTERVAL_MS = 60_000L
-        const val MIN_INTERVAL_MS = 15_000L
+        const val INTERVAL_MS = 5_000L
+        const val MIN_INTERVAL_MS = 2_000L
         private const val TAG = "LocationService"
         private const val CHANNEL_ID = "ci_location_recording"
         private const val NOTIFICATION_ID = 41_001

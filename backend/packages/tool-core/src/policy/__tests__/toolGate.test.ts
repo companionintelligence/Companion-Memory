@@ -175,3 +175,82 @@ describe('resolveToolGate — the appliance-tier trust dial', () => {
     expect(ruling.reason).toBe('destructive-requires-confirmation');
   });
 });
+
+/**
+ * A chat turn that has looked something up may act on what the lookup returned, which can be a
+ * mail or a note someone else wrote. Under a dial that asks before a delete, its writes ask too.
+ */
+describe('resolveToolGate: a write that follows a lookup', () => {
+  const REMEMBER = intent('memory.remember', { access: 'write' });
+  const afterLookup = (trust: TrustDecision | null, over: Record<string, unknown> = {}) => ({
+    tier: 'appliance' as const,
+    capability: FULL_CAPABILITY,
+    trust,
+    followsLookup: true,
+    ...over,
+  });
+
+  it('flags any write after a lookup but still no read', () => {
+    expect(needsConfirmation(REMEMBER, { followsLookup: true })).toBe(true);
+    expect(needsConfirmation(REMEMBER)).toBe(false);
+    expect(needsConfirmation(READ_ONLY, { followsLookup: true })).toBe(false);
+  });
+
+  it('queues it with its own reason when the dial says review', () => {
+    const ruling = resolveToolGate(REMEMBER, afterLookup('review'));
+
+    expect(ruling).toMatchObject({ decision: 'queue', reason: 'write-after-lookup' });
+    expect(ruling.explanation).toContain('right after a lookup');
+  });
+
+  it('runs it when the dial says auto (hands_off) or was not consulted', () => {
+    expect(resolveToolGate(REMEMBER, afterLookup('auto')).decision).toBe('execute');
+    expect(resolveToolGate(REMEMBER, afterLookup(null)).decision).toBe('execute');
+  });
+
+  it('runs a read after a lookup without asking', () => {
+    expect(resolveToolGate(READ_ONLY, afterLookup('review')).decision).toBe('execute');
+  });
+
+  it('queues a third-party read after a lookup with its own reason when the dial says review', () => {
+    const STREAMING = intent('media.streamingAvailability', { external: true });
+    const ruling = resolveToolGate(STREAMING, afterLookup('review'));
+
+    expect(ruling).toMatchObject({ decision: 'queue', reason: 'read-after-lookup' });
+    expect(ruling.explanation).toContain('right after a lookup');
+    expect(resolveToolGate(STREAMING, afterLookup('auto')).decision).toBe('execute');
+    expect(resolveToolGate(STREAMING, { ...afterLookup('review'), followsLookup: false }).reason).toBe(
+      'confirmation-required',
+    );
+  });
+
+  // The owner's texts off their own Mac: external, but no third party receives the query.
+  it("judges a read from the owner's own server after a lookup as it would any other time", () => {
+    const LIST_MESSAGES = intent('messaging.listMessages', { external: true, ownServer: true });
+    const ruling = resolveToolGate(LIST_MESSAGES, afterLookup('review'));
+
+    expect(ruling).toMatchObject({ decision: 'queue', reason: 'confirmation-required' });
+    expect(ruling.explanation).toContain('reaches a server outside the appliance');
+    expect(ruling.explanation).not.toContain('third-party');
+    expect(resolveToolGate(LIST_MESSAGES, afterLookup('auto')).decision).toBe('execute');
+  });
+
+  it('keeps the reason of a delete that follows a lookup', () => {
+    expect(resolveToolGate(DESTRUCTIVE, afterLookup('review')).reason).toBe('confirmation-required');
+  });
+
+  it('does not apply the installed-app rule, which is about irreversible work', () => {
+    expect(resolveToolGate(REMEMBER, afterLookup(null, { principal: 'managed-app' })).decision).toBe(
+      'execute',
+    );
+    expect(resolveToolGate(DESTRUCTIVE, afterLookup(null, { principal: 'managed-app' })).decision).toBe(
+      'queue',
+    );
+  });
+
+  it('never turns a refusal into a queue', () => {
+    expect(resolveToolGate(REMEMBER, afterLookup('review', { capability: READ_CAPABILITY })).decision).toBe(
+      'deny',
+    );
+  });
+});

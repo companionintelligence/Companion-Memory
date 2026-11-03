@@ -17,19 +17,35 @@ import { apiFetch } from '@ci/common';
  * `CI_CLOUD_URL` are the Memory server / Hub appliance Portal, not the phone —
  * a local Vite or unmarked store build must not silently aim Sign in at the
  * internal host (`hub.companionintelligence.com`). Advanced can override the
- * Companion URL. A persisted internal host is ignored so old installs migrate
- * to production.
+ * Companion URL. An internal host persisted by an older build is ignored so
+ * old installs migrate to production.
  */
 export const DEFAULT_PORTAL_URL = 'https://hub.ci.computer';
-const PORTAL_URL_STORAGE_KEY = 'ci.deviceConnect.portalUrl';
+/**
+ * Written by builds that saved whatever the Save URL form held, the internal
+ * host included, so a stored internal host here is a leftover, not a choice.
+ */
+const LEGACY_PORTAL_URL_STORAGE_KEY = 'ci.deviceConnect.portalUrl';
+/** Only ever written by an explicit Save URL, so whatever it holds is honoured, internal host or not. */
+const PORTAL_URL_STORAGE_KEY = 'ci.deviceConnect.portalUrl.v2';
 
 /** Portal Hub URL for the next Safari OIDC hop. Independent of the Memory origin. */
 export function readPersistedPortalUrl(): string {
   try {
-    const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem(PORTAL_URL_STORAGE_KEY);
+    if (typeof localStorage === 'undefined') {
+      return DEFAULT_PORTAL_URL;
+    }
 
-    if (stored && !stored.includes('companionintelligence.com')) {
-      return normalizePortalUrl(stored);
+    const chosen = localStorage.getItem(PORTAL_URL_STORAGE_KEY);
+
+    if (chosen) {
+      return normalizePortalUrl(chosen);
+    }
+
+    const legacy = localStorage.getItem(LEGACY_PORTAL_URL_STORAGE_KEY);
+
+    if (legacy && !legacy.includes('companionintelligence.com')) {
+      return normalizePortalUrl(legacy);
     }
 
     return DEFAULT_PORTAL_URL;
@@ -43,6 +59,7 @@ export function persistPortalUrl(url: string): string {
 
   try {
     localStorage.setItem(PORTAL_URL_STORAGE_KEY, next);
+    localStorage.removeItem(LEGACY_PORTAL_URL_STORAGE_KEY);
   } catch {
     /* private mode / quota */
   }

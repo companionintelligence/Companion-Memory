@@ -1,8 +1,9 @@
-import { Controller, Get, HttpStatus, Query, Res, UseGuards } from '@nestjs/common';
-import type { Response } from 'express';
+import { Controller, Get, HttpStatus, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { requestOrigin } from '@ci/common/http/requestOrigin';
 
 import {
   POWERSYNC_NOT_CONFIGURED_BODY,
@@ -33,6 +34,7 @@ export class PowerSyncController {
   @Get('token')
   issueToken(
     @Context() context: RequestContext,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
     @Query('cutoff') cutoff?: string,
   ): PowerSyncCredentials | PowerSyncNotConfigured {
@@ -44,6 +46,6 @@ export class PowerSyncController {
 
     const { userId } = toServiceContext(context);
 
-    return this.tokenService.issueToken(userId, cutoff);
+    return this.tokenService.issueToken(userId, cutoff, requestOrigin(req));
   }
 }

@@ -71,7 +71,7 @@ Severity + owner tags follow `DELIVERY.md`:
 | 7 | **Location — foreground / precise** | ⚠️ / ✅ | `ACCESS_FINE_LOCATION` (+`COARSE`) → **Permissions Declaration Form (location)**; from Android 17 the **location button** becomes the recommended minimum scope | `CLLocationManager` → `NSLocationWhenInUseUsageDescription` | Precise location | 🟠 implies who you were with | **2** |
 | 8 | **Health & fitness** | ⚠️ / ⚠️ | Health Connect `android.permission.health.READ_*` → **Health apps declaration form** (+`READ_HEALTH_DATA_HISTORY` for >30 days) | HealthKit → `com.apple.developer.healthkit` entitlement + `NSHealthShareUsageDescription` (+`NSHealthUpdateUsageDescription` if writing) | Health info · Health | ✅ none | **3** |
 | 9 | **Contacts** | ⚠️ / ⚠️ | `READ_CONTACTS` → **contacts declaration form from Sept 2026, mandatory 2027-01-27** for targetSdk 37+; **Contact Picker** is the minimum-scope alternative | `CNContactPickerViewController` (**no string**) vs `CNContactStore` (`NSContactsUsageDescription`) | Contacts · Contacts | 🔴🔴 **entire address book of non-consenting people** | **3 (picker only)** |
-| 10 | **Location — background** | ⚠️ / ⚠️ | FGS `location` needs the **FGS-type declaration + video**. No `ACCESS_BACKGROUND_LOCATION` since 2026-10-14 (§3.4) | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **shipped 2026-08-21, ahead of plan — §3.4** |
+| 10 | **Location — background** | ⚠️ / ⚠️ | `ACCESS_BACKGROUND_LOCATION` (declared again since 2026-10-26, §3.4) + FGS `location` → **background-location declaration + video demo** + FGS-type declaration | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **shipped 2026-08-21, ahead of plan — §3.4** |
 | 11 | **Photos & videos — full library read** | ⚠️ / ⚠️ | `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` → **Photo & Video Permissions declaration**; broad access is for *"gallery apps"* | `PHPhotoLibrary` full auth → `NSPhotoLibraryUsageDescription`; Apple 5.1.1(iii) says *use the picker* | Photos and videos | 🟠 | **4 (only if 1+2 provably insufficient)** |
 | 12 | **App usage / screen time** | ⚠️ / ⛔ | `PACKAGE_USAGE_STATS` (Settings special access, **no runtime prompt, no Play form found**) but *"inventory of other apps on the device"* is named personal & sensitive data | **No path.** `FamilyControls` entitlement is special-request; `DeviceActivityReport` data is sandboxed in-extension and cannot reach your app | App interactions · Installed apps | ✅ none | **4 — Android only** |
 | 13 | **Installed-apps list** | ⛔ / ⛔ | `QUERY_ALL_PACKAGES` → form; permitted uses are *"device search, antivirus apps, file managers, and browsers"* only | No public API; 5.1.2(iv) bans it outright | Installed apps | ✅ | **never** |
@@ -267,13 +267,15 @@ Background is a different animal:
 > `AndroidManifestContractTest` fails if the permission comes back.
 
 **Always mode (both platforms).** Foreground Off / While using stays available on this
-client; Always additionally requests `NSLocationAlwaysAndWhenInUseUsageDescription` (iOS), or
-starts a `location` foreground service (Android, no `ACCESS_BACKGROUND_LOCATION`),
-and keeps sampling once the app is backgrounded — filtered by distance rather than by
-significant-change. Android shows a persistent "Recording location" notification while this
-is on (the OS's price of admission for a background location session); iOS shows the blue
+client (since 2026-10-26 it records nothing by itself: a current location is fetched on
+request); Always additionally requests `NSLocationAlwaysAndWhenInUseUsageDescription` (iOS)
+or `ACCESS_BACKGROUND_LOCATION` (Android, "Allow all the time") and keeps sampling once the
+app is backgrounded — iOS by significant-change monitoring, Android by the motion-gated
+tracker below. Android shows the "Recording location" notification only while the phone is
+moving (the OS's price of admission for a location foreground service); iOS shows the blue
 status-bar indicator. Writes `ci.position` only — Places still come from existing server
-enrichment. There is no home geofence in this design.
+enrichment. There is no home geofence; Android's exit geofence around wherever the phone
+came to rest is the restart signal, not a place.
 
 > 🟢 **[code] Update 2026-10-19: the Android service is `@ci/capacitor-local-hub`'s own
 > (`location/LocationService.kt`), not the community plugin's.** The plugin's service was
@@ -288,6 +290,29 @@ enrichment. There is no home geofence in this design.
 > sampling. `RECEIVE_BOOT_COMPLETED` (a normal permission, no prompt) is declared for that
 > receiver. The `background-location-tracking` branch swaps the nudge for a geofence restart
 > once the background grant is approved.
+
+> 🔵 **[code] Update 2026-10-26: `ACCESS_BACKGROUND_LOCATION` is declared again, and the
+> Android tracker is motion-gated.** The app was approved in October 2026 with everything but
+> the background permission, so this build re-applies the `background-location-tracking`
+> design on top of the approved one and resubmits for it. GPS now runs only while the phone
+> is moving: the fixes (and the permission-free stationary-detect sensor) declare it still,
+> the `location` foreground service stops, and a 100 m exit geofence around the resting spot
+> is the one signal that starts it again — Play Services evaluates the fence with cheap
+> location, it survives the process being frozen or killed, and its exit may start a location
+> foreground service from the background. Registering that fence is what needs
+> `ACCESS_BACKGROUND_LOCATION`, so the plugin walks fine location → `Allow all the time` and
+> arms nothing until both are held. No `ACTIVITY_RECOGNITION`: the "Physical activity" grant
+> reads as a different kind of monitoring, and iOS's significant-change monitoring asks for
+> nothing of the sort. A reboot or an update wipes the fence; the boot receiver puts it back
+> instead of nudging. The nudge survives for one case only — the background grant lapsing
+> later (lowered in Settings, or reset by Android on an unused app), when no fence can be set.
+> `@capacitor-community/background-geolocation` is gone from both shells with this change:
+> there is no on-screen trail, and "While using" means a current location on request only.
+> The declarations below are therefore all required again: the background-location form with
+> its video, the foreground-service `location` form with its own, and the prominent
+> disclosure (`LocationSection.tsx`, which now describes moving-only recording and the
+> `Allow all the time` step). `AndroidManifestContractTest` fails if either permission goes
+> missing.
 
 Apple: `NSLocationWhenInUseUsageDescription` → `NSLocationAlwaysAndWhenInUseUsageDescription`
 + `UIBackgroundModes: location`. No declaration form, but 5.1.5 requires location be

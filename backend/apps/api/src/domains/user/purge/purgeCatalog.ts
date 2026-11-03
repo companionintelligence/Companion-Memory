@@ -155,7 +155,57 @@ export async function readUserRefColumns(
   return columns.filter((column) => !excludedSet.has(`${column.schema}.${column.table}.${column.column}`));
 }
 
+/**
+ * References Postgres does not know about, read as if they were `NO ACTION`
+ * foreign keys: the plan then deletes the child rows through the parent rows
+ * the account owns, before the parent goes.
+ *
+ * `hbpe.summary_l1_label.summary_id` names a `ci.summaries` row with no foreign
+ * key (20260903162709_unique_summary_window.sql explains why), and the table has
+ * no user column. Nothing else in the catalog leads to it, so the purge left the
+ * labels of a deleted account's summaries behind; the immediate delete listed
+ * the table by hand. Applied only where both tables exist.
+ */
+const IMPLICIT_REFERENCES: readonly FkEdge[] = [
+  {
+    constraintName: 'implicit:summary_l1_label_summary_id',
+    childSchema: 'hbpe',
+    childTable: 'summary_l1_label',
+    childColumn: 'summary_id',
+    parentSchema: 'ci',
+    parentTable: 'summaries',
+    parentColumn: 'summary_id',
+    deleteAction: 'a',
+  },
+];
+
 export async function readFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
+  const implicit = (await executor.query(
+    `SELECT n FROM unnest($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL`,
+    [
+      [
+        ...new Set(
+          IMPLICIT_REFERENCES.flatMap((edge) => [
+            `${edge.childSchema}.${edge.childTable}`,
+            `${edge.parentSchema}.${edge.parentTable}`,
+          ]),
+        ),
+      ],
+    ],
+  )) as Array<{ n: string }>;
+  const present = new Set(implicit.map((row) => row.n));
+
+  return [
+    ...(await readCatalogFkEdges(executor)),
+    ...IMPLICIT_REFERENCES.filter(
+      (edge) =>
+        present.has(`${edge.childSchema}.${edge.childTable}`) &&
+        present.has(`${edge.parentSchema}.${edge.parentTable}`),
+    ),
+  ];
+}
+
+async function readCatalogFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
   const rows = (await executor.query(FK_EDGE_SQL, [IGNORED_SCHEMA_PATTERNS])) as Array<{
     constraint_name: string;
     child_schema: string;

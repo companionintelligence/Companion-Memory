@@ -1,7 +1,7 @@
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import type { UserServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
@@ -390,5 +390,118 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
 
     expect(lines).toHaveLength(2);
     expect(lines[0].description).toBe('Milk, semi-skimmed');
+  });
+
+  describe("links to another account's rows", () => {
+    // A key only asks that the row exists, and document_content_id has none, so
+    // /v1/receipts stored a receipt at whatever place it was handed. The import
+    // of this account's export then refused to restore it.
+    const other = uuidv7();
+    const theirPlace = uuidv7();
+    const myPlace = uuidv7();
+    const theirContent = uuidv7();
+    const theirProduct = uuidv7();
+    const refused = (field: string, id: string, table: string) =>
+      `${field} ${id} is a row of ${table} that belongs to another account or to none, so the receipt was refused.`;
+
+    beforeAll(async () => {
+      await dataSource.query(`INSERT INTO ci.users (id, name, email) VALUES ($1, $2, $3)`, [
+        other,
+        'Someone else',
+        `receipt.${other}@example.invalid`,
+      ]);
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name)
+         VALUES ($1, 'Location', $2, 'Their shop'), ($3, 'Location', $4, 'My shop'), ($5, 'Content', $2, 'Their scan')`,
+        [theirPlace, other, myPlace, owner.userId, theirContent],
+      );
+      await dataSource.query('INSERT INTO ci.content (id, user_id) VALUES ($1, $2)', [theirContent, other]);
+      await dataSource.query(
+        `INSERT INTO ci.product_models (product_id, owner_user_id, user_id, title) VALUES ($1, $2, $2, 'Their kettle')`,
+        [theirProduct, other],
+      );
+    });
+
+    afterAll(async () => {
+      await dataSource.query('DELETE FROM ci.receipt_line_items WHERE user_id = $1', [owner.userId]);
+      await dataSource.query('DELETE FROM ci.receipts WHERE user_id = $1', [owner.userId]);
+      await dataSource.query('DELETE FROM ci.product_models WHERE product_id = $1', [theirProduct]);
+      await dataSource.query('DELETE FROM ci.content WHERE id = $1', [theirContent]);
+      await dataSource.query('DELETE FROM ci.entities WHERE entity_id = ANY($1::uuid[])', [
+        [theirPlace, myPlace, theirContent],
+      ]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [other]);
+    });
+
+    it("refuses a batch with a receipt at another account's place, and takes one at the account's own", async () => {
+      const merchantName = `Batch ${uuidv7()}`;
+
+      await expect(
+        service.createMany(owner, [
+          { merchantName, placeEntityId: myPlace },
+          { merchantName, placeEntityId: theirPlace },
+        ]),
+      ).rejects.toThrow(refused('place_entity_id', theirPlace, 'ci.entities'));
+      expect(
+        await dataSource.query('SELECT 1 FROM ci.receipts WHERE merchant_name = $1', [merchantName]),
+      ).toHaveLength(0);
+
+      const [mine] = await service.createMany(owner, [{ merchantName, placeEntityId: myPlace }]);
+
+      expect(mine.placeEntityId).toBe(myPlace);
+    });
+
+    it("refuses an extraction whose merchant is another account's", async () => {
+      await expect(
+        service.upsertFromExtraction(owner, {
+          merchantName: 'Their shop',
+          merchantEntityId: theirPlace,
+          lines: [],
+          skipMint: true,
+        }),
+      ).rejects.toThrow(refused('merchant_entity_id', theirPlace, 'ci.entities'));
+    });
+
+    it("refuses an update that points the receipt at another account's scan", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      await expect(service.update(owner, receipt.id, { documentContentId: theirContent })).rejects.toThrow(
+        refused('document_content_id', theirContent, 'ci.content'),
+      );
+      expect((await service.findById(owner, receipt.id))?.documentContentId).toBeNull();
+    });
+
+    it("refuses a system update that points a receipt with no owner_user_id at another account's place", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      // An import keeps an archive's NULL in the second owner column; user_id still names the account.
+      await dataSource.query('UPDATE ci.receipts SET owner_user_id = NULL WHERE receipt_id = $1', [
+        receipt.id,
+      ]);
+
+      await expect(
+        service.update({ userId: SYSTEM_USER } as ServiceContext, receipt.id, { placeEntityId: theirPlace }),
+      ).rejects.toThrow(refused('place_entity_id', theirPlace, 'ci.entities'));
+      expect((await service.findById(owner, receipt.id))?.placeEntityId).toBeNull();
+    });
+
+    it("answers no receipt, not a refusal, when another account updates this account's receipt", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      await expect(
+        service.update({ userId: other } as UserServiceContext, receipt.id, { placeEntityId: myPlace }),
+      ).resolves.toBeNull();
+      expect((await service.findById(owner, receipt.id))?.placeEntityId).toBeNull();
+    });
+
+    it("refuses a line on another account's product", async () => {
+      const receipt = await service.create(owner, { merchantName: 'Grocer' });
+
+      await expect(
+        service.replaceLineItems(owner, receipt.id, [
+          { lineNumber: 1, description: 'Kettle', productId: theirProduct },
+        ]),
+      ).rejects.toThrow(refused('line_items.product_id', theirProduct, 'ci.product_models'));
+    });
   });
 });

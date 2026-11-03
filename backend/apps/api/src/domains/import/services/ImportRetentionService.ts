@@ -1,12 +1,17 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
+
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
 import { FILE_CLASSIFICATIONS } from '../push/canonical';
+import { realUserInboxDir } from '../sources/importRoots';
+import { inboxUnitInScratch, returnInboxUnit } from '../sources/localAcquire';
 
 import { pushableRunSql, unstoredMediaExistsSql } from './ImportRunService';
 import { ImportScratchService } from './ImportScratchService';
@@ -70,6 +75,33 @@ interface DiscardCandidate extends RetentionCandidate {
    * stat to imply. See {@link ImportRetentionService.discardRun}.
    */
   readonly unstoredMedia: boolean;
+  /**
+   * The run has at least one `staged_sources` row and every one of them is an
+   * upload. Such a run's scratch tree holds a copy of an archive the user sent
+   * over HTTP, never the only copy of a file from their inbox folder, so a
+   * discard of a run that will never be pushed may reclaim it. See
+   * {@link ImportRetentionService.claimForDiscard}.
+   */
+  readonly uploadsOnly: boolean;
+}
+
+/** A claimed discard, and whether it takes the run's scratch tree with it. */
+interface ClaimedDiscard extends DiscardCandidate {
+  readonly reclaimScratch: boolean;
+  /**
+   * The inbox unit to put back before the tree goes, when the run's only
+   * source is one and it is still whole in scratch. See
+   * {@link ImportRetentionService.inboxReturnFor}.
+   */
+  readonly returnUnit: InboxUnitToReturn | null;
+}
+
+/** An inbox unit sitting in a discarded run's scratch tree. */
+interface InboxUnitToReturn {
+  /** Where the run took it from. */
+  readonly sourcePath: string;
+  /** Where it is now, inside the run's scratch tree. */
+  readonly unitPath: string;
 }
 
 /** What a discard's media stage had already stored by the time it was called. */
@@ -101,6 +133,19 @@ export interface RunRetirement {
 export interface DiscardedRun extends RunRetirement, MediaAlreadyStored {
   readonly runId: string;
   readonly label: string | null;
+  /**
+   * The run's scratch tree was deleted with it: the copy of the uploaded
+   * archive that a failed unpack leaves behind. Only ever true for a run that
+   * had no parse to push and whose sources were all uploads, or whose one
+   * source was an inbox unit that is back in the inbox or never left it.
+   */
+  readonly scratchTreeReclaimed: boolean;
+  /**
+   * Where the run's inbox unit went back to, relative to the owner's inbox:
+   * its old name, or `name (2).ext` when that was taken. Null when the run
+   * held no inbox unit in its scratch tree.
+   */
+  readonly returnedToInbox: string | null;
 }
 
 /**
@@ -211,7 +256,10 @@ export interface RetentionSweepResult {
  *    inbox unit that tree is the user's only copy, acquired by rename. The
  *    tree's path is `<scratchDir>/<userId>/<runId>`, so the run row is the
  *    only index into it: delete the row and the archive is unattributable
- *    forever. Both passes skip such runs and log the directory.
+ *    forever. Both passes skip such runs and log the directory. The one way
+ *    such a tree goes is its owner's discard of a run with nothing to push
+ *    whose sources were all uploads (a failed unpack, typically): see
+ *    {@link ImportRetentionService.claimForDiscard}.
  *  - **No source row's bytes, ever.** A retirement takes the retired run's
  *    spent `staged_sources` rows — `ON DELETE SET NULL` would otherwise orphan
  *    one per completed run forever — but an upload whose archive is sitting in
@@ -493,6 +541,24 @@ export class ImportRetentionService {
       return null;
     }
 
+    // The inbox unit goes back BEFORE the tree is deleted: it is the user's
+    // only copy. The claim already marked its row `released` (freeing the path
+    // for a later import). Every later discard decides from the filesystem
+    // rather than from that mark, so a failed or interrupted move leaves the
+    // unit in scratch for the next discard to find and return.
+    const returnedToInbox =
+      candidate.returnUnit == null ? null : await this.returnToInbox(candidate, candidate.returnUnit);
+
+    // Before the row goes: the row is the only index into the tree. A crash or
+    // a failed delete here leaves a `cancelled` run that still holds its tree,
+    // and discarding it again finishes the job (the claim accepts it again).
+    if (candidate.reclaimScratch && !(await this.scratch.reclaim(candidate.userId, candidate.id))) {
+      throw new InternalServerErrorException(
+        `Import run ${runId}: its scratch files could not be removed, so the run was kept. Try the discard again.` +
+          (returnedToInbox == null ? '' : ` Its file is already back in your inbox as ${returnedToInbox}.`),
+      );
+    }
+
     // Counted BEFORE the payload goes. `staged_items.metadata` is the only
     // thing left that names those files, so once `deletePayload` has run the
     // question has no answer anywhere.
@@ -509,9 +575,45 @@ export class ImportRetentionService {
       finishedAt: candidate.finishedAt,
       ...retired,
       ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
+      returnedToInbox,
     });
 
-    return { runId: candidate.id, label: candidate.label, ...retired, ...kept };
+    return {
+      runId: candidate.id,
+      label: candidate.label,
+      ...retired,
+      ...kept,
+      scratchTreeReclaimed: candidate.reclaimScratch,
+      returnedToInbox,
+    };
+  }
+
+  /**
+   * Move a discarded run's inbox unit back into its owner's inbox. Its claim
+   * row was marked `released` by the claim and goes with the run like any
+   * released claim. Returns the unit's new path, relative to the inbox, for
+   * the reply.
+   */
+  private async returnToInbox(candidate: ClaimedDiscard, unit: InboxUnitToReturn): Promise<string> {
+    const inboxDir = await realUserInboxDir(candidate.userId);
+    let returned: string;
+
+    try {
+      returned = await returnInboxUnit({
+        unitPath: unit.unitPath,
+        sourcePath: unit.sourcePath,
+        inboxDir,
+        log: (message) => this.logger.log(message, { runId: candidate.id }),
+      });
+    } catch (err) {
+      throw new InternalServerErrorException(
+        `Import run ${candidate.id}: its file could not be put back in your inbox ` +
+          `(${(err as Error).message}), so the run and its files were kept. Try the discard again.`,
+      );
+    }
+
+    return path.relative(inboxDir, returned);
   }
 
   /**
@@ -552,7 +654,7 @@ export class ImportRetentionService {
    * costs microseconds, and doing it before the stamp is what keeps a refusal a
    * pure refusal — a run this declines is left exactly as it was found.
    */
-  private async claimForDiscard(userId: string, runId: string): Promise<DiscardCandidate | null> {
+  private async claimForDiscard(userId: string, runId: string): Promise<ClaimedDiscard | null> {
     return this.dataSource.transaction(async (manager) => {
       const [locked] = await manager.query<Array<{ id: string }>>(
         `SELECT r.id
@@ -570,7 +672,10 @@ export class ImportRetentionService {
         `SELECT r.id, r.user_id AS "userId", r.label, r.status, r.finished_at AS "finishedAt",
                 ${pushableRunSql('r')} AS pushable,
                 NOT ${liveStageExistsSql('r', '$2')} AS quiet,
-                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia"
+                ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia",
+                EXISTS (SELECT 1 FROM ci_import.staged_sources s WHERE s.run_id = r.id)
+                  AND NOT EXISTS (SELECT 1 FROM ci_import.staged_sources s
+                                   WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
         [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS]],
@@ -592,13 +697,45 @@ export class ImportRetentionService {
         throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
       }
 
-      if (await this.scratch.exists(candidate.userId, candidate.id)) {
+      const holdsTree = await this.scratch.exists(candidate.userId, candidate.id);
+
+      // The trees a discard takes, both from a run with no parse to push (a
+      // failed unpack, typically), which the sweep never collects while the
+      // tree is there:
+      //
+      //  - one fed only by uploads. That tree holds the copy of the archive
+      //    `UnpackStage` moved in, which nothing will read again.
+      //  - one whose only source is an inbox unit. That tree may hold the
+      //    user's ONLY copy of the file, so the unit goes back to the inbox
+      //    first (`returnUnit`) and only the rest of the tree is deleted. When
+      //    the unit is no longer whole in scratch because its archive was
+      //    already unpacked, the unpacked files are that only copy and the
+      //    discard is refused.
+      //
+      // A pushable run's tree is not what its discard is about, so it is still
+      // refused.
+      const inbox =
+        holdsTree && !candidate.pushable && !candidate.uploadsOnly
+          ? await this.inboxReturnFor(manager, candidate)
+          : null;
+
+      if (inbox === 'unpacked') {
+        throw new ConflictException(
+          `Import run ${runId}: its inbox file is no longer whole in the run's working files, because it ` +
+            `was unpacked or only partly moved. Those files are the only copy of it, so they and the run ` +
+            `are kept (${this.scratch.dirFor(candidate.userId, candidate.id)}).`,
+        );
+      }
+
+      const reclaimScratch = holdsTree && !candidate.pushable && (candidate.uploadsOnly || inbox != null);
+
+      if (holdsTree && !reclaimScratch) {
         throw new ConflictException(
           `${SCRATCH_TREE_REASON} (${this.scratch.dirFor(candidate.userId, candidate.id)})`,
         );
       }
 
-      if (!candidate.pushable) {
+      if (!candidate.pushable && !reclaimScratch) {
         throw new ConflictException(
           `Import run ${runId} has no parse waiting to be pushed, so there is nothing here for a discard ` +
             'to release. Retention collects this run on its own once it is past the history window.',
@@ -610,8 +747,94 @@ export class ImportRetentionService {
         [runId, DISCARD_CLAIM_ERROR],
       );
 
-      return candidate;
+      // Released in the same transaction as the stamp, BEFORE the unit moves:
+      // a `moved` row would keep holding `staged_sources_active_path_uq` on the
+      // path the file goes back to, so a crash or a failed write after the move
+      // would leave the returned file unimportable. The mark is safe that early
+      // because no discard trusts it on its own (see inboxReturnFor).
+      if (inbox != null) {
+        await manager.query(
+          `UPDATE ci_import.staged_sources SET status = 'released', updated_at = now()
+            WHERE id = $1::uuid AND origin = 'inbox' AND status IN ('claimed', 'moved')`,
+          [inbox.sourceId],
+        );
+      }
+
+      const returnUnit =
+        inbox?.unitPath == null ? null : { sourcePath: inbox.sourcePath, unitPath: inbox.unitPath };
+
+      return { ...candidate, reclaimScratch, returnUnit };
     });
+  }
+
+  /**
+   * What a discard can do with a run whose only source is an inbox FILE that
+   * the run took and never finished with (`claimed`, `moved`, or `released`
+   * by an earlier discard or by a cancel):
+   *
+   *  - the file is still whole in scratch (a failed unpack, or a file that is
+   *    not an archive): put it back, then take the tree;
+   *  - it is not in scratch but IS in the inbox (the claim never moved it, or
+   *    an earlier discard already put it back): the tree holds nothing of it
+   *    and can go. Not for a `moved` row, whose file left the inbox for sure:
+   *    a file there now is someone else's under the same name;
+   *  - it is in neither: `'unpacked'`, refused by the caller, because the
+   *    tree is then the only copy of whatever the file became;
+   *  - anything else: `null`, the general scratch-tree refusal. That covers no
+   *    source or several, an upload among them, a `consumed` unit (the run
+   *    finished and its history is not a discard's to take) and a directory
+   *    unit, which the unpack changes in place.
+   *
+   * Read inside the claim's transaction, under its row lock and decided by
+   * the filesystem first, the row second: a `released` claim can still have
+   * its file in scratch, after a cancel that raced the acquire or a crash
+   * that split its two renames.
+   */
+  private async inboxReturnFor(
+    manager: EntityManager,
+    candidate: DiscardCandidate,
+  ): Promise<{ sourceId: string; sourcePath: string; unitPath: string | null } | 'unpacked' | null> {
+    const sources = await manager.query<
+      Array<{ id: string; origin: string; kind: string; status: string; sourcePath: string }>
+    >(
+      `SELECT id, origin, kind, status, source_path AS "sourcePath"
+         FROM ci_import.staged_sources
+        WHERE run_id = $1::uuid`,
+      [candidate.id],
+    );
+
+    const [source] = sources;
+
+    if (
+      sources.length !== 1 ||
+      source.origin !== 'inbox' ||
+      source.kind !== 'file' ||
+      !['claimed', 'moved', 'released'].includes(source.status)
+    ) {
+      return null;
+    }
+
+    const unitPath = await inboxUnitInScratch(
+      source.sourcePath,
+      this.scratch.dirFor(candidate.userId, candidate.id),
+    );
+
+    // `moved` is only ever set after the acquire took the file out of the
+    // inbox. An earlier discard leaves the row `released`. So for a `moved`
+    // row, a file under the old name is a newcomer that happens to share it
+    // and says nothing about what the tree holds.
+    //
+    // A `released` row is still trusted here. A cancel during a copy across
+    // filesystems leaves the file in the inbox (the acquire checks the claim
+    // before it deletes the source). A cancel that lands between a rename and
+    // `markMoved` does not: its file left the inbox under a `released` row.
+    // Telling that apart from a claim that never moved needs a record of the
+    // move, which the row does not keep.
+    if (unitPath != null || (source.status !== 'moved' && (await fileExists(source.sourcePath)))) {
+      return { sourceId: source.id, sourcePath: source.sourcePath, unitPath };
+    }
+
+    return 'unpacked';
   }
 
   /**
@@ -1056,4 +1279,13 @@ function liveStageExistsSql(runRef: string, statusesParam: string): string {
 
 function cutoff(now: Date, days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+}
+
+/** Is there a regular file at `target`? A symlink is not one. */
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    return (await lstat(target)).isFile();
+  } catch {
+    return false;
+  }
 }

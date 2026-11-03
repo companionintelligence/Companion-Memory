@@ -67,11 +67,13 @@ describe('ServerSettingsPage', () => {
     render(<ServerSettingsPage />);
 
     fireEvent.change(screen.getByLabelText('Companion URL'), {
-      target: { value: 'https://hub.ci.computer' },
+      target: { value: 'https://hub.companionintelligence.com' },
     });
     fireEvent.submit(screen.getByRole('button', { name: /^save url$/i }).closest('form')!);
 
-    expect(localStorage.getItem('ci.deviceConnect.portalUrl')).toBe('https://hub.ci.computer');
+    expect(localStorage.getItem('ci.deviceConnect.portalUrl.v2')).toBe(
+      'https://hub.companionintelligence.com',
+    );
     expect(navigate).toHaveBeenCalledWith('/device-connect');
     expect(h.persistApiBaseUrl).not.toHaveBeenCalled();
   });

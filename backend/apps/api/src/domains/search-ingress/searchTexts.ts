@@ -1,3 +1,4 @@
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import {
   type PersonAddress,
   NORMALIZED_PERSON_FIELDS,
@@ -242,9 +243,8 @@ export interface EventSearchFields {
   metadata?: Record<string, unknown> | null;
 }
 
-const MEDIA_FILENAME_RE =
-  /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|dng|raw|cr2|nef|mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
-const VIDEO_FILENAME_RE = /\.(mp4|mov|m4v|avi|mkv|webm|3gp|mpe?g|wmv)$/i;
+const MEDIA_FILENAME_RE = new RegExp(String.raw`\.(${IMAGE_FILE_EXTENSIONS}|${VIDEO_FILE_EXTENSIONS})$`, 'i');
+const VIDEO_FILENAME_RE = new RegExp(String.raw`\.(${VIDEO_FILE_EXTENSIONS})$`, 'i');
 
 /**
  * Compact "City, ST" from a reverse-geocoded address, mirroring the frontend
@@ -280,6 +280,31 @@ function shortPlace(locationName?: string | null): string | null {
   return result.length > 0 && result.length <= 28 ? result : null;
 }
 
+/** The `Media Type` an importer recorded on the event ("image/jpeg"), if any. */
+function mediaTypeOf(event: { metadata?: Record<string, unknown> | null }): string | null {
+  const mediaType = (event.metadata ?? {})['Media Type'];
+
+  return typeof mediaType === 'string' ? mediaType : null;
+}
+
+/**
+ * A photo or a video, as {@link eventDisplayTitle} decides it: an image or video
+ * `Media Type`, or a title that is a media file name. `mediaEventSql` in
+ * search-next's SearchService spells the same test in SQL.
+ */
+function isMediaEventFields(event: {
+  title?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): boolean {
+  const mediaType = mediaTypeOf(event);
+
+  return (
+    mediaType?.startsWith('image/') === true ||
+    mediaType?.startsWith('video/') === true ||
+    MEDIA_FILENAME_RE.test(event.title?.trim() ?? '')
+  );
+}
+
 /**
  * Backend port of the frontend's `eventDisplayTitle`: rewrite a bare media
  * filename into "Photo · Topanga, CA · Jun 17, 2026" using capture time + place.
@@ -295,13 +320,8 @@ export function eventDisplayTitle(event: {
 }): string | null {
   const title = event.title?.trim() ?? '';
 
-  const mediaType = (event.metadata ?? {})['Media Type'];
-  const mediaTypeStr = typeof mediaType === 'string' ? mediaType : null;
-
-  const isMediaEvent =
-    mediaTypeStr?.startsWith('image/') === true ||
-    mediaTypeStr?.startsWith('video/') === true ||
-    MEDIA_FILENAME_RE.test(title);
+  const mediaTypeStr = mediaTypeOf(event);
+  const isMediaEvent = isMediaEventFields(event);
 
   const looksAuthored = /\s/.test(title) && !MEDIA_FILENAME_RE.test(title);
 
@@ -530,6 +550,17 @@ export function eventWeightedTexts(event: EventSearchFields): WeightedText[] {
 
   if (cameraTokens.length > 0) {
     parts.push({ text: cameraTokens.join(' '), weight: 4 });
+  }
+
+  // "photos from October 2025": the display title spells the month short
+  // ("Oct"), and Postgres stems "October" to a lexeme 'oct' never matches. Only
+  // a photo or video gets these, since the date is the most of what one says.
+  if (isMediaEventFields(event)) {
+    const dateTokens = captureDateTokens(event.startTime);
+
+    if (dateTokens.length > 0) {
+      parts.push({ text: dateTokens.join(' '), weight: 3 });
+    }
   }
 
   const sourceTokens = sourceSystemSearchTokens(event.sourceSystem);

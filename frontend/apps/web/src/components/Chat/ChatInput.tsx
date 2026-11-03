@@ -29,6 +29,7 @@ import { v7 as uuid7 } from 'uuid';
 import type { File as FileData } from '@/api/types';
 import { useUploadFile } from '@/api/useUploadFile';
 import { ModelSelector, ToolsOffNotice } from '@/components/ModelSelector';
+import { isPrimaryPointerTouch } from '@/hooks/useDeviceBreakpoint';
 
 const FormSchema = s.object({
   message: s.string(),
@@ -101,7 +102,8 @@ interface Props {
   /**
    * Give the textarea focus back each time it is enabled again. It is disabled while a turn loads or streams, while
    * a file uploads and whenever `disabled` is set. A browser drops focus from a disabled control to <body>, so
-   * without this the next message needs a click first. Left alone when the person has moved focus elsewhere.
+   * without this the next message needs a click first. Left alone when the person has moved focus elsewhere. Also
+   * left alone on a touch screen, where focus opens the keyboard over the reply.
    */
   refocusWhenEnabled?: boolean;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
@@ -314,7 +316,7 @@ function ChatInput(
 
     const input = textareaRef.current;
 
-    if (!refocusWhenEnabled || !wasDisabled || inputDisabled || !input) {
+    if (!refocusWhenEnabled || !wasDisabled || inputDisabled || !input || isPrimaryPointerTouch()) {
       return;
     }
 

@@ -333,6 +333,31 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     expect(harness.resolveObservation).not.toHaveBeenCalled();
   });
 
+  it('tells a sighting sent back to review apart from "not a thing"', async () => {
+    const harness = makeHarness({ label: [{ object_id: OBJECT }] });
+    // What sendBackToReview leaves: unconfirmed, no thing link, method `user`, marked for review. The product
+    // link stays.
+    harness.findById.mockResolvedValue(
+      observation({
+        confirmedByUser: false,
+        resolvedObjectId: null,
+        resolvedProductId: PRODUCT,
+        resolutionMethod: 'user',
+        metadata: { sentBackToReview: true },
+      }),
+    );
+
+    const outcome = await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
+
+    expect(outcome).toMatchObject({
+      applied: false,
+      objectId: null,
+      productId: PRODUCT,
+      reason: 'user-sent-back; waiting in review',
+    });
+    expect(harness.resolveObservation).not.toHaveBeenCalled();
+  });
+
   it('calls a retraction that kept its link a retraction, not a rejection', async () => {
     const harness = makeHarness({ label: [{ object_id: OBJECT }] });
     // What confirm(id, false) leaves when no resolution is passed: unconfirmed,
@@ -366,5 +391,15 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     // The retired inventory listener wrote speculative possessions straight from a
     // vision guess; ci.object_observations exists to stop exactly that.
     expect(harness.statements.some(({ sql }) => sql.includes('INSERT INTO ci.objects'))).toBe(false);
+  });
+});
+
+describe('ObjectResolutionService.resolveUnresolved', () => {
+  it('sweeps only the sightings nobody has answered, not the ones a person sent back to review', async () => {
+    const harness = makeHarness();
+
+    await harness.service.resolveUnresolved(CONTEXT, { limit: 25 });
+
+    expect(harness.findForReview).toHaveBeenCalledWith(CONTEXT, 25, 0, { sentBack: false });
   });
 });

@@ -240,6 +240,20 @@ describe('parseAskQueryInput — the only shape allowed downstream', () => {
     });
   });
 
+  it('strips and flags a combining grapheme joiner, which #3184 kept in the stored prompt', () => {
+    expect(parseAskQueryInput({ queryType: 'content', prompt: 'Any pho\u034ftos of the lake?' })).toEqual({
+      queryType: 'content',
+      prompt: 'Any photos of the lake?',
+      promptHiddenCharactersRemoved: true,
+    });
+  });
+
+  it("keeps an emoji's own joiner and selector, and does not flag them", () => {
+    const prompt = 'Photos of the \u{1f468}\u200d\u{1f469}\u200d\u{1f467} with \u2764\ufe0f?';
+
+    expect(parseAskQueryInput({ queryType: 'content', prompt })).toEqual({ queryType: 'content', prompt });
+  });
+
   it('leaves the flag off when nothing was stripped (whitespace tidying does not count)', () => {
     expect(
       parseAskQueryInput({ queryType: 'relationship', prompt: '  Do you have the lake photos?  ' }),

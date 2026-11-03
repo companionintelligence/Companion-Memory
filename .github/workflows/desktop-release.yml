@@ -57,10 +57,11 @@
 #   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID,
 #   AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE
 #
-# None of the above are currently provisioned in this repo. Each platform's
-# job is SKIPPED (not failed) when its secrets are absent, so macOS/Windows
-# signing can be wired up independently without blocking a release. The
-# Linux lane always runs unsigned — no signing convention exists for
+# The six Azure values are configured on the `production` Environment. The
+# four macOS-specific values still need repository secrets; APPLE_TEAM_ID is
+# shared with the iOS lane. A lane skips when none of its platform-specific
+# signing values are configured and fails early on a partial configuration.
+# The Linux lane always runs unsigned — no signing convention exists for
 # .deb/.rpm in this codebase.
 name: Desktop Release
 
@@ -278,7 +279,7 @@ jobs:
       # shallow clone has none — which that script treats as a hard failure
       # under CI rather than baking in an unpullable dev-<sha>.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -297,7 +298,7 @@ jobs:
           echo "Version ${NAME}"
 
       - name: Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -349,11 +350,13 @@ jobs:
     # later edit that drops or reorders `version` cannot silently release an
     # untested commit from this lane. Same on the windows and linux jobs.
     needs: [verify-desktop-build-passed, version]
-    runs-on: macos-15
+    # The Apple on-device bridge uses Swift tools 6.2 and the macOS 26 SDK;
+    # macos-15 currently ships Swift 6.1 and fails before the signed build.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -361,15 +364,38 @@ jobs:
       - name: Check for macOS signing secrets
         id: secrets
         env:
-          CERT: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$CERT" ] && [ -n "$APPLE_ID_SECRET" ] && [ -n "$TEAM_ID" ]; then
+          set -uo pipefail
+          REQUIRED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+          MISSING=""
+          FOUND=0
+          PLATFORM_FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+              if [ "$VAR" != "APPLE_TEAM_ID" ]; then
+                PLATFORM_FOUND=$((PLATFORM_FOUND + 1))
+              fi
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$PLATFORM_FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::macOS signing secrets not configured — skipping the signed macOS build."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::macOS lane is partially configured. Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Rust toolchain
@@ -377,14 +403,14 @@ jobs:
         # Pinned to a master commit with the toolchain named explicitly: the
         # `stable` branch is regenerated from master, so a commit on it can
         # stop being reachable.
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Node.js
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -410,8 +436,8 @@ jobs:
       # every signed artifact died at its first `docker compose` pull.
       #
       # It then passed nothing at all and let the script resolve a tag per
-      # job. THAT WAS WRONG ON THIS RUNNER SPECIFICALLY: macos-15 (like every
-      # GitHub-hosted macOS image) ships no docker CLI, so
+      # job. That was wrong because GitHub-hosted macOS images ship no Docker
+      # CLI, so
       # sync-compose-resources.cjs took its `!hasDocker()` branch and returned
       # the nearest ancestor release tag with the GHCR completeness check
       # SKIPPED — i.e. the .dmg, the primary artifact, was the ONE build baking
@@ -444,7 +470,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CI_SERVER_IMAGE_TAG}" ]; then
-            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself — and macos-15 has no docker to verify it with. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
+            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself — and the macOS runner has no Docker CLI to verify it with. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
             exit 1
           fi
           node scripts/sync-compose-resources.cjs
@@ -462,7 +488,7 @@ jobs:
             conf.version = '${{ needs.version.outputs.name }}';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
-          # BSD sed (macos-15 runner) — `-i` REQUIRES the backup-suffix
+          # BSD sed (macOS runner) — `-i` REQUIRES the backup-suffix
           # argument, hence the empty ''. The identical steps in the windows
           # and linux jobs run GNU sed, where `-i ''` would be read as the
           # script and clobber the edit, so they use a bare `-i`.
@@ -505,6 +531,7 @@ jobs:
         working-directory: frontend/apps/desktop
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          REQUIRE_SIGNED_APPLE_BRIDGE: 'true'
         run: |
           yarn tauri build \
             --target universal-apple-darwin \
@@ -519,16 +546,35 @@ jobs:
         run: |
           set -euo pipefail
           DMG=$(find frontend/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' | head -1)
+          SUBMIT_LOG="$RUNNER_TEMP/notarytool-submit.txt"
+          set +e
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID_SECRET" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 600
+            --wait --timeout 600 2>&1 | tee "$SUBMIT_LOG"
+          SUBMIT_EXIT=${PIPESTATUS[0]}
+          set -e
+          SUBMISSION_ID=$(sed -nE 's/^[[:space:]]*id: ([[:xdigit:]-]+)$/\1/p' "$SUBMIT_LOG" | head -1)
+          NOTARY_STATUS=$(sed -nE 's/^[[:space:]]*status: ([[:alpha:][:space:]]+)$/\1/p' "$SUBMIT_LOG" | tail -1 | xargs)
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::error::notarytool returned no submission ID (exit $SUBMIT_EXIT)."
+            exit 1
+          fi
+          NOTARY_LOG="$RUNNER_TEMP/notarytool-log.json"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID_SECRET" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            "$NOTARY_LOG"
+          cat "$NOTARY_LOG"
+          if [ "$NOTARY_STATUS" != "Accepted" ] || [ "$SUBMIT_EXIT" -ne 0 ]; then
+            echo "::error::Notarization status was '$NOTARY_STATUS' (submission $SUBMISSION_ID)."
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
           spctl -a -vvv -t open --context context:primary-signature "$DMG" 2>&1 | grep -q 'source=Notarized Developer ID'
           xcrun stapler validate "$DMG"
 
       - name: Upload macOS artifact
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: release-macos
@@ -554,7 +600,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -570,24 +616,40 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
         run: |
-          if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ] \
-            && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_CERTIFICATE_PROFILE" ]; then
+          set -uo pipefail
+          REQUIRED="AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_SUBSCRIPTION_ID AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE"
+          MISSING=""
+          FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Windows signing secrets not configured — skipping the signed Windows build."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Windows lane is partially configured. Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Rust toolchain
         if: steps.secrets.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Node.js
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -687,7 +749,7 @@ jobs:
 
       - name: Upload Windows artifact
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: release-windows
@@ -704,13 +766,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-gnu
@@ -724,7 +786,7 @@ jobs:
             librsvg2-dev patchelf rpm
 
       - name: Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -796,7 +858,7 @@ jobs:
             -c '{"bundle":{"createUpdaterArtifacts":false}}' -b deb,rpm
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: release-linux
@@ -845,7 +907,7 @@ jobs:
       contents: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: release-*
@@ -902,7 +964,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: desktop-v${{ needs.version.outputs.name }}
           name: Desktop ${{ needs.version.outputs.name }} (${{ steps.platforms.outputs.names }})

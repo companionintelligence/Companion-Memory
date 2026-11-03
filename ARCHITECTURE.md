@@ -395,8 +395,9 @@ is reached.
 
 **`make lint`** — `yarn lint` (oxlint then ESLint) and `yarn format:check`
 (Prettier), then `uv run ruff check .`, `uv run ruff format --check .`,
-`uv run mypy`, `uv lock --check`, `scripts/check-ci-namespace.sh` and
-`scripts/check-capacitor-native-sync.mjs`. `make format` is the writing half.
+`uv run mypy`, `uv lock --check`, `scripts/check-ci-namespace.sh`,
+`scripts/check-capacitor-native-sync.mjs` and `scripts/check-viewport-zoom.mjs`.
+`make format` is the writing half.
 
 ### One lockfile per stack
 
@@ -447,6 +448,23 @@ not oversights, and they have two different reasons:
 `scripts/check-capacitor-native-sync.mjs` runs in `make lint` and in lint-staged
 precisely because those three trees are outside the normal install: nothing else
 would notice them drifting.
+
+`scripts/check-viewport-zoom.mjs` guards pinch-zoom, the only in-app way to
+enlarge the app (one input to WCAG 1.4.4, not all of it: the fixed root font size
+is a separate gap). Three independent settings can switch it off: a viewport meta
+with `user-scalable=no` or a `maximum-scale` below 5, and Capacitor's
+`zoomEnabled`, which defaults to **false** in each shell (`ios.zoomEnabled` in
+`frontend/apps/ios/capacitor.config.ts`, `android.zoomEnabled` in
+`frontend/apps/android/capacitor.config.ts`). With it off, iOS disables the web
+view's pinch recogniser and Android calls `setBuiltInZoomControls(false)`,
+whatever the page's meta says, so dropping the setting from a config puts the
+lock back silently. It runs in `make lint`, in lint-staged (the root
+`.lintstagedrc`, plus `frontend/apps/web/.lintstagedrc.mjs` for the web app's
+HTML, since that config replaces the root one) and, with negative cases, in
+`yarn test` (`scripts/check-viewport-zoom.test.ts`). Nothing in CI runs it (see
+below). With zoom on, the page height that `usePreventOverscroll` publishes as
+`--vv-height` must stay in layout pixels: the visual viewport shrinks as the page
+is zoomed, and read as a keyboard it crushes the phone column.
 
 ## CI reality
 

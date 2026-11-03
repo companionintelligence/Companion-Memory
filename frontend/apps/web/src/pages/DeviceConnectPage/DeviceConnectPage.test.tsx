@@ -81,6 +81,7 @@ const h = vi.hoisted(() => ({
   ios: false,
   persistApiBaseUrl: vi.fn(),
   getApiBaseUrl: vi.fn(() => ''),
+  needsNativeCloudConnect: vi.fn(() => h.ios && !h.getApiBaseUrl()),
   signInToPortal: vi.fn(),
   listMemoryServers: vi.fn(),
   listMemoryServersByCode: vi.fn(),
@@ -107,6 +108,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   persistApiBaseUrl: h.persistApiBaseUrl,
   getApiBaseUrl: () => h.getApiBaseUrl(),
+  needsNativeCloudConnect: () => h.needsNativeCloudConnect(),
   isIosPlatform: () => h.ios,
 }));
 
@@ -159,11 +161,10 @@ vi.mock('./oidc', async (importOriginal) => {
 });
 
 beforeEach(() => {
-  // The splash mark lazily imports a 1.9 MB Lottie animation unless reduced
-  // motion is on, and `lottie-web` throws when it evaluates under jsdom (no
-  // canvas context). That surfaced as an unhandled error landing on whichever
-  // test happened to be running; the static SVG is the deterministic path — the
-  // same stub DesktopSignInPage.test.tsx uses for the same reason.
+  // jsdom has no `matchMedia`, and `Reveal` reads it to decide whether to
+  // stagger the copy. Reduced motion is the deterministic path: no entrance
+  // animation classes, nothing timing-dependent — the same stub
+  // DesktopSignInPage.test.tsx uses for the same reason.
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion'),
     media: query,
@@ -202,6 +203,7 @@ beforeEach(() => {
   h.profileLoading = false;
   sessionStorage.clear();
   localStorage.removeItem('ci.deviceConnect.portalUrl');
+  localStorage.removeItem('ci.deviceConnect.portalUrl.v2');
   localStorage.removeItem('ci.deviceConnect.portalAuth');
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
 });
@@ -227,6 +229,17 @@ function portalListingByCode(servers: MemoryServerDevice[] = [HOME]) {
 }
 
 describe('DeviceConnectPage', () => {
+  it('keeps an unpaired iOS on the picker when a cached Memory session remains', () => {
+    h.ios = true;
+    h.authenticated = true;
+    h.profileUser = { id: 'cached-user', onboarded: true };
+
+    render(<DeviceConnectPage />);
+
+    expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalledWith('/', { replace: true });
+  });
+
   it('opens on the splash with Log in and an Advanced link', () => {
     render(<DeviceConnectPage />);
 

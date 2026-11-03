@@ -1,7 +1,7 @@
 import type { InboxUnit } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { bytes, csv, json, table } from '../output';
-import { waitForRuns } from '../wait';
+import { followRuns } from '../wait';
 
 import { parseTimeout } from './import';
 
@@ -171,17 +171,19 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
     ctx.term.out(`\n${started.length} of ${batch.results.length} unit(s) started.`);
   }
 
-  if (options.wait && started.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      started.map((result) => result.runId as string),
-      { timeoutMs, quiet: options.json },
-    );
-  }
-
   if (started.length === 0) {
     throw new CliError('No unit could be started.', 1);
+  }
+
+  const unfinished = await followRuns(
+    ctx.client,
+    ctx.term,
+    options.wait ? started.map((result) => result.runId as string) : [],
+    { timeoutMs, quiet: options.json },
+  );
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 

@@ -25,4 +25,10 @@ export default {
     prettierWrite,
     () => `${YARN} typecheck`,
   ],
+
+  // The pinch-zoom guard. This config replaces the root `.lintstagedrc` for everything under this
+  // directory, so the root `*.html` entry never fires for `index.html` or `jobs-preview.html`, the
+  // pages that carry the viewport meta both Capacitor shells load. Tasks run from this directory,
+  // hence the ../../../ path. The guard ignores the file list and always scans the whole tree.
+  '*.html': () => 'node ../../../scripts/check-viewport-zoom.mjs',
 };

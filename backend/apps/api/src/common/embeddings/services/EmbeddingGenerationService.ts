@@ -463,7 +463,11 @@ export class EmbeddingGenerationService {
           throw err;
         }
 
-        inputs = inputs.map((text) => text.slice(0, Math.max(MIN_INPUT_CHARS, Math.floor(text.length / 2))));
+        // The engine does not say which input it refused, so cut to half the
+        // longest: a shorter text sharing the batch keeps all of its words.
+        const nextCap = Math.max(MIN_INPUT_CHARS, Math.floor(longest / 2));
+
+        inputs = inputs.map((text) => text.slice(0, nextCap));
         this.logger.warn('Embedding engine refused the batch as too long; retrying with shorter inputs', {
           dialect: target.dialect,
           longestChars: longest,

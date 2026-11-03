@@ -1,10 +1,11 @@
-import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, type EntityManager, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import {
   BaseOAuth2Client,
   ClientFactory,
@@ -15,37 +16,42 @@ import {
   type Connection,
 } from '@ci/domains/connections';
 import { OrphanCleanupService } from '@ci/domains/search-ingress';
-import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '@ci/domains/user';
-
 import {
-  CONNECTION_SCOPED_TABLES,
-  USER_OWNED_TABLES,
-  type ConnectionScopedTable,
-  type UserOwnedTable,
-} from '../dataDeletionPlan';
+  AccountPurgeService,
+  LastAdminDeletionRefused,
+  UserService,
+  type AccountPurgeOutcome,
+  type DeletionOptions,
+} from '@ci/domains/user';
+
+import { CONNECTION_SCOPED_TABLES, type ConnectionScopedTable } from '../dataDeletionPlan';
 import { DataDeletionAuditEntity } from '../entities/DataDeletionAuditEntity';
-
-/** Objects read and deleted per page: one S3 DeleteObjects call's worth. */
-const OBJECT_PAGE_SIZE = 1000;
-
-/**
- * How long an account delete waits on the object store. The S3 client sets no
- * timeout of its own, and the delete runs while `handOverAdministration` holds
- * the lock every account creation takes, so a hung store must not hold that
- * lock for good. The same bound a file purge uses
- * (`STORED_OBJECT_DELETE_DEADLINE_MS` in `memory/services/filePurge.ts`).
- */
-export const OBJECT_DELETE_DEADLINE_MS = 60_000;
 
 /**
  * How long an account delete waits on one connection's revocation (the provider,
- * and CI Portal for a brokered one). Revoking is best-effort, but the requests
- * have no timeout of their own and the delete runs under the same account-creation
- * lock as above, so a provider that never answers would hold every sign-up for
- * minutes per token. Past this the grant counts as not revoked, as any other
- * failed revocation does, and the purge goes on.
+ * and CI Portal for a brokered one). Revoking is best-effort, and the requests
+ * have no timeout of their own. They run before the account is ended and hold no
+ * lock, but the person is waiting on the request. Past this the grant counts as
+ * not revoked, as any other failed revocation does, and the delete goes on.
  */
 export const REVOCATION_DEADLINE_MS = 10_000;
+
+/**
+ * How long `POST /users/me/delete` waits for the purge before it answers. The
+ * account is already ended by then (nobody can sign in to it, its keys and
+ * sessions are gone); what this bounds is only whether the answer can say the
+ * rows are gone too. A purge still running past it carries on, and the answer
+ * says `deleting`.
+ */
+export const IMMEDIATE_PURGE_WAIT_MS = 30_000;
+
+/**
+ * How long the `failed` audit row of an account delete that never ended the
+ * account may wait for a connection. Written after that transaction has rolled
+ * back, but a pool that stays full (requests queued behind something else) must
+ * not hold the failing request for good: past this the failure is only logged.
+ */
+export const FAILED_AUDIT_DEADLINE_MS = 10_000;
 
 /** Result of a single per-connection disconnect + purge. */
 export interface DisconnectResult {
@@ -69,15 +75,29 @@ export interface DisconnectResult {
 /** Result of a full account deletion. */
 export interface AccountDeletionResult {
   userId: string;
+  /**
+   * `deleted`: the account and every row of it are gone. `deleting`: the account is
+   * ended (nobody can sign in to it, its sessions, API keys and provider tokens are
+   * gone) and the purge of its rows is still running, or will be finished by the
+   * hourly purge; `ci.data_deletion_audit` gets its `completed` row then.
+   */
+  status: 'deleted' | 'deleting';
   /** Per-connection revocation outcome, keyed by connection id. */
   revocations: Array<{ connectionId: string; providerId: string | null; tokenRevoked: boolean }>;
-  /** Per-table row counts purged across every user-owned table. */
+  /** Per-table row counts purged. Empty while `deleting`. */
   deletedCounts: Record<string, number>;
+  /**
+   * Rows that named this account and were kept with that reference removed:
+   * `ci.ask_audit` rows another account is a party to, `ci.users.created_by` of
+   * accounts this one created, and the other columns the purge detaches.
+   */
+  detachedCounts: Record<string, number>;
   totalDeleted: number;
   /** Stored file objects removed from the object store. */
   deletedObjects: number;
   /** True once the ci.users row itself has been removed. */
   userDeleted: boolean;
+  /** The `started` audit row, written when the account was ended. */
   auditId: string;
 }
 
@@ -91,15 +111,13 @@ export interface AccountDeletionResult {
  *     index rows. Scoped to the connection's owner.
  *
  *  2. {@link deleteAccount} — delete the WHOLE account: revoke every connection's
- *     grant, then purge every user-owned table (people/places/concepts graph,
- *     communications, events, files, embeddings, summaries, notes, agent memory,
- *     sessions, api keys, provider credentials, …) in FK-safe order, delete the
- *     user row, and truncate the user's search-index footprint.
+ *     grant, end the account in one short transaction, then purge every row of it
+ *     through the batched, resumable account purge (`AccountPurgeService`), and
+ *     reap the search index.
  *
- * Both are owner-scoped, audit-logged (ci.data_deletion_audit), and idempotent:
- * re-running after a completed deletion finds nothing to delete and simply writes
- * a fresh zero-count audit row (or, for a disconnect, 404s if the connection is
- * already gone).
+ * Both are owner-scoped and audit-logged (ci.data_deletion_audit). A disconnect
+ * of a connection already gone 404s; an account already ended has nothing left
+ * to sign in with, and its purge finishes on its own.
  */
 @Injectable()
 export class DataDeletionService {
@@ -114,8 +132,8 @@ export class DataDeletionService {
     private readonly providerKeyService: ProviderKeyService,
     private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly logger: LoggerService,
-    /** The bytes behind `ci.files` rows. Optional so a module without the files domain still builds. */
-    @Optional() @Inject(PURGE_OBJECT_STORE) private readonly objectStore?: PurgeObjectStore,
+    private readonly userService: UserService,
+    private readonly accountPurgeService: AccountPurgeService,
   ) {
     this.logger.setContext(DataDeletionService.name);
   }
@@ -239,26 +257,54 @@ export class DataDeletionService {
   }
 
   /**
-   * Delete the whole account: revoke every connection grant, purge every
-   * user-owned table in FK-safe order, delete the user row, and clear the
-   * search-index footprint. Idempotent.
+   * Delete the whole account, in three steps:
    *
-   * With `transaction`, the user row and the audit row are written through it,
-   * so they commit or roll back with whatever else the caller does there (the
-   * administrator handover). The revocations and the table purge still commit
-   * as they go. The search-index sweep is then the caller's to run, through
-   * {@link cleanupSearchIndex} once that transaction has committed: it reads
-   * the whole appliance's index and can take minutes, too long to hold the
-   * caller's locks for.
+   * 1. Revoke every connection's OAuth grant, best-effort and with no lock held,
+   *    so access stops on the provider side whatever happens next. Asked first
+   *    whether the request would be refused ({@link UserService.assertMayEndAccount}),
+   *    so a last administrator who named no successor loses no grant.
+   * 2. End the account, in one short transaction under the lock every sign-up
+   *    takes ({@link UserService.endAccountNow}): the successor promoted when
+   *    one is needed, the account hidden from every read with its purge due now,
+   *    its sessions and API keys deleted, its provider tokens cleared, and the
+   *    `started` audit row written. All of it or none of it.
+   * 3. Purge the rows through `AccountPurgeService`: batched, every batch its
+   *    own commit, no lock but its own advisory one. The stored bytes go first,
+   *    while the rows that name them are still there; then the table purge, the
+   *    ask records, the detached columns (`ci.users.created_by`) and the user
+   *    row; then the `completed` audit row with the counts. An interruption
+   *    loses one batch, not the delete: the hourly purge finds the account due
+   *    and carries on, and whichever run finishes writes `completed`.
+   *
+   * Waits up to {@link IMMEDIATE_PURGE_WAIT_MS} for step 3 and answers
+   * `deleted` or `deleting`. A failure in step 2 leaves the account as it was,
+   * is recorded as a `failed` audit row once its transaction has rolled back,
+   * and is rethrown; asking again is safe. {@link LastAdminDeletionRefused} is
+   * rethrown without one, as nothing was attempted.
+   *
+   * Why not one transaction: that held the sign-up lock for the whole purge (a
+   * graph-heavy account ran past 49 minutes in review, every sign-up waiting),
+   * and an interruption anywhere threw all of it away, which is the reason the
+   * 30-day purge is batched (`purge/purgePlan.ts`). Once step 2 commits nobody
+   * can sign in to the account, and its share links, peer links and grants are
+   * closed (`UserService.endAccount`), so a partial purge is never a partial live
+   * account: it is an ended account with rows still to delete. The operator undo
+   * that `DELETE /account` has inside its grace period (clearing `deleted_at` and
+   * `purge_after`) does not apply here: it would revive an account whose purge
+   * may already have removed part of it.
+   *
+   * With `accountDeletion.purge.enabled` off (the operator's stop for an
+   * irreversible job), step 3 does not run: the account is ended, the answer is
+   * `deleting`, and the rows wait for the purge to be switched back on.
    */
   async deleteAccount(
     context: UserServiceContext,
-    { transaction }: { transaction?: EntityManager } = {},
+    options: DeletionOptions = {},
   ): Promise<AccountDeletionResult> {
     const userId = context.userId;
 
-    // 1) Revoke every connection's OAuth grant first (best-effort), so access
-    // stops on the provider side even if the local purge is interrupted.
+    await this.userService.assertMayEndAccount(context, userId, options);
+
     const connections = await this.connectionRepository.find({
       where: { userId },
       relations: ['provider'],
@@ -271,7 +317,7 @@ export class DataDeletionService {
         REVOCATION_DEADLINE_MS,
         'The revocation',
       ).catch((error: unknown) => {
-        this.logger.warn('Connection grant revocation timed out; continuing with purge', {
+        this.logger.warn('Connection grant revocation timed out; continuing with the delete', {
           connectionId: connection.id,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
@@ -285,73 +331,193 @@ export class DataDeletionService {
       });
     }
 
-    // 2) The bytes of the account's files, before the rows that point at them,
-    // as the 30-day purge does: if the purge below stops part way, the rows are
-    // still there to find the keys again, while the other order would strand
-    // the bytes in the bucket for good.
-    const deletedObjects = await this.deleteFileObjects(userId);
+    const tokenRevoked = revocations.some((r) => r.tokenRevoked);
 
-    // 3) Purge every user-owned table, children before parents.
-    const deletedCounts: Record<string, number> = {};
+    let ended: { requestedAt: Date; purgeAfter: Date; result: string };
 
-    // Special-case: ci_search.entity_tag has no user_id; delete its rows that
-    // reference this user's tags BEFORE we delete ci_search.tags.
-    const entityTagDeleted = await this.deleteEntityTagsForUser(userId);
-    if (entityTagDeleted > 0) {
-      deletedCounts['ci_search.entity_tag'] = entityTagDeleted;
-    }
+    try {
+      const outcome = await this.userService.endAccountNow(context, userId, options, (manager) =>
+        this.revokeAccessAndRecordStart(manager, userId, tokenRevoked),
+      );
 
-    for (const table of USER_OWNED_TABLES) {
-      // The user row points at the account's own "You" person, which this
-      // deletes; see deleteEntitiesUnlinkingSelf.
-      const count =
-        table.schema === 'ci' && table.table === 'entities'
-          ? await this.deleteEntitiesUnlinkingSelf(userId)
-          : await this.deleteUserOwned(table, userId);
-      if (count > 0) {
-        deletedCounts[`${table.schema}.${table.table}`] = count;
+      if (outcome == null) {
+        throw new NotFoundException('Account not found');
       }
+
+      ended = outcome;
+    } catch (error) {
+      if (!(error instanceof LastAdminDeletionRefused) && !(error instanceof NotFoundException)) {
+        // The transaction has rolled back by now and released what it held, so
+        // this waits for a pooled connection like any other request (bounded).
+        await this.writeFailedAccountAudit(userId, tokenRevoked, error);
+      }
+
+      throw error;
     }
 
-    // 4) Delete the user row itself. With every RESTRICT child already gone and
-    // the CASCADE children handled above, this now succeeds (previously it would
-    // fail on the first RESTRICT FK — the bug this feature fixes).
-    const userDeletedCount = await this.deleteWhere('ci', 'users', 'id', userId, transaction);
-    const userDeleted = userDeletedCount > 0;
-    if (userDeletedCount > 0) {
-      deletedCounts['ci.users'] = userDeletedCount;
-    }
+    const purge = this.purgeEndedAccount(userId, ended.requestedAt, ended.purgeAfter);
+    const outcome = await waitAtMost(purge, IMMEDIATE_PURGE_WAIT_MS);
+    const done = outcome?.status === 'purged';
 
-    // 5) Reap any search-index rows whose source rows we deleted.
-    if (transaction == null) {
-      await this.cleanupSearchIndex();
-    }
+    this.logger.log(done ? 'Account deleted and all data purged' : 'Account ended; its purge goes on', {
+      userId,
+      connectionsRevoked: revocations.length,
+      status: outcome?.status ?? 'running',
+      totalDeleted: done ? sumCounts(outcome.deletedRows) : 0,
+      deletedObjects: outcome?.deletedObjects ?? 0,
+    });
 
-    const totalDeleted = sumCounts(deletedCounts);
+    return {
+      userId,
+      status: done ? 'deleted' : 'deleting',
+      revocations,
+      deletedCounts: done ? outcome.deletedRows : {},
+      detachedCounts: done ? outcome.detachedRows : {},
+      totalDeleted: done ? sumCounts(outcome.deletedRows) : 0,
+      deletedObjects: done ? outcome.deletedObjects : 0,
+      userDeleted: done && (outcome.deletedRows['ci.users'] ?? 0) > 0,
+      auditId: ended.result,
+    };
+  }
 
-    const auditId = await this.writeAudit(
+  /**
+   * The writes that end the account's access, in the transaction that ends the
+   * account. Hiding the user row already fails every sign-in, token and key that
+   * resolves through it; these go further, so nothing holding a session, a key or
+   * a provider token keeps writing for the account while its purge runs. None of
+   * these tables has a foreign key pointing into it, so the deletes are cheap.
+   * What other people could read through the account (share links, peer links,
+   * grants) is closed by `UserService.endAccount` in the same transaction, for
+   * this delete and `DELETE /account` alike.
+   *
+   * @returns the id of the `started` audit row.
+   */
+  private async revokeAccessAndRecordStart(
+    manager: EntityManager,
+    userId: string,
+    tokenRevoked: boolean,
+  ): Promise<string> {
+    await manager.query(`DELETE FROM ci.sessions WHERE user_id = $1`, [userId]);
+    await manager.query(`DELETE FROM ci.api_keys WHERE user_id = $1`, [userId]);
+    await manager.query(
+      `UPDATE ci.connections
+          SET active = false, access_token = NULL, refresh_token = NULL
+        WHERE user_id = $1`,
+      [userId],
+    );
+
+    return this.writeAudit(
       {
         subjectUserId: userId,
         requestedByUserId: userId,
         scope: 'account',
         connectionId: null,
         providerId: null,
-        tokenRevoked: revocations.some((r) => r.tokenRevoked),
-        deletedCounts,
-        totalDeleted,
+        tokenRevoked,
+        deletedCounts: {},
+        totalDeleted: 0,
+        status: 'started',
       },
-      transaction,
+      manager,
     );
+  }
 
-    this.logger.log('Account deleted and all derived data purged', {
-      userId,
-      connectionsRevoked: revocations.length,
-      totalDeleted,
-      deletedObjects,
-      userDeleted,
-    });
+  /**
+   * The purge of an ended account, tried twice: a row written for the account
+   * after its table was purged (a job that was already running when the account
+   * ended) refuses the user row's delete, and a second pass removes it. Past that,
+   * the hourly purge retries. Then the search-index sweep, which reads the whole
+   * appliance's index; a purge the hourly run finishes leaves the sweep to
+   * `OrphanCleanupCron`. Never rejects.
+   *
+   * Not run at all while `accountDeletion.purge.enabled` is off: that switch is
+   * the operator's stop for the purge, and it holds here as it does for the
+   * hourly run.
+   */
+  private async purgeEndedAccount(
+    userId: string,
+    requestedAt: Date,
+    purgeAfter: Date,
+  ): Promise<AccountPurgeOutcome | null> {
+    if (!config.accountDeletion.purge.enabled) {
+      this.logger.warn('Account ended; its purge waits because the account purge is switched off', {
+        userId,
+      });
 
-    return { userId, revocations, deletedCounts, totalDeleted, deletedObjects, userDeleted, auditId };
+      return null;
+    }
+
+    try {
+      let outcome = await this.accountPurgeService.purgeAccount(userId, requestedAt, purgeAfter);
+
+      if (outcome.status === 'failed') {
+        const first = outcome;
+        outcome = await this.accountPurgeService.purgeAccount(userId, requestedAt, purgeAfter);
+        outcome = mergeOutcomes(first, outcome);
+      }
+
+      if (outcome.status === 'purged') {
+        await this.cleanupSearchIndex();
+      } else {
+        this.logger.warn('Purge of an ended account did not finish; the hourly purge will retry it', {
+          userId,
+          status: outcome.status,
+          error: outcome.error,
+        });
+      }
+
+      return outcome;
+    } catch (error) {
+      this.logger.error('Purge of an ended account threw; the hourly purge will retry it', {
+        userId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return null;
+    }
+  }
+
+  /**
+   * The audit row of an account delete that did not end the account. Written
+   * after the transaction that tried has rolled back, on any pooled connection,
+   * and given up on past {@link FAILED_AUDIT_DEADLINE_MS}. Best-effort, so it
+   * never hides the failure it records.
+   */
+  private async writeFailedAccountAudit(
+    userId: string,
+    tokenRevoked: boolean,
+    error: unknown,
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+
+    this.logger.error('Account deletion failed and was rolled back', { userId, error: message });
+
+    try {
+      await withDeadline(
+        this.auditRepository.save(
+          this.auditRepository.create({
+            id: uuidv7(),
+            subjectUserId: userId,
+            requestedByUserId: userId,
+            scope: 'account',
+            connectionId: null,
+            providerId: null,
+            tokenRevoked,
+            deletedCounts: {},
+            totalDeleted: 0,
+            status: 'failed',
+            error: message,
+          }),
+        ),
+        FAILED_AUDIT_DEADLINE_MS,
+        'The audit write',
+      );
+    } catch (auditError) {
+      this.logger.error('Could not record the failed account deletion', {
+        userId,
+        error: auditError instanceof Error ? auditError.message : 'Unknown error',
+      });
+    }
   }
 
   /**
@@ -635,44 +801,16 @@ export class DataDeletionService {
   }
 
   /**
-   * DELETE ... WHERE <column> = <value>, returning the affected row count. Runs
-   * through `within` when given, otherwise on a connection of its own.
+   * DELETE ... WHERE <column> = <value>, returning the affected row count.
    */
-  private async deleteWhere(
-    schema: string,
-    table: string,
-    column: string,
-    value: string,
-    within?: EntityManager,
-  ): Promise<number> {
+  private async deleteWhere(schema: string, table: string, column: string, value: string): Promise<number> {
     // schema/table/column come exclusively from the trusted internal deletion
     // plan (never request input); the value is always a bound parameter.
-    const result = await (within ?? this.dataSource).query(
-      `DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`,
-      [value],
-    );
+    const result = await this.dataSource.query(`DELETE FROM "${schema}"."${table}" WHERE "${column}" = $1`, [
+      value,
+    ]);
 
     return affectedRows(result);
-  }
-
-  private async deleteUserOwned(table: UserOwnedTable, userId: string): Promise<number> {
-    try {
-      if (table.through) {
-        return await this.deleteThroughParent(table, table.through, userId);
-      }
-
-      return await this.deleteWhere(table.schema, table.table, table.userColumn, userId);
-    } catch (error) {
-      // A table in the plan may not exist in every deployment (e.g. the hbpe
-      // schema is only present when the prediction engine is installed). Treat a
-      // missing relation as "nothing to delete" rather than failing the whole
-      // account deletion; re-throw anything else.
-      if (isUndefinedTableError(error)) {
-        return 0;
-      }
-
-      throw error;
-    }
   }
 
   /**
@@ -691,96 +829,6 @@ export class DataDeletionService {
         WHERE "${ownerColumn}" = $1
           AND properties->>'connection_id' = $2`,
       [userId, connectionId],
-    );
-
-    return affectedRows(result);
-  }
-
-  /** Delete the rows of a table with no user column, through the parent rows the user owns. */
-  private async deleteThroughParent(
-    table: UserOwnedTable,
-    through: NonNullable<UserOwnedTable['through']>,
-    userId: string,
-  ): Promise<number> {
-    // Every identifier comes from the trusted internal deletion plan (never
-    // request input); the user id is a bound parameter.
-    const result = await this.dataSource.query(
-      `DELETE FROM "${table.schema}"."${table.table}" t
-        USING "${through.parentSchema}"."${through.parentTable}" p
-        WHERE t."${through.column}" = p."${through.parentKey}"
-          AND p."${table.userColumn}" = $1`,
-      [userId],
-    );
-
-    return affectedRows(result);
-  }
-
-  /**
-   * Remove from the object store the bytes of every file only this account
-   * points at. File rows are deduplicated on content, so an object another
-   * account's row also names stays: deleting it would lose that account's file.
-   */
-  private async deleteFileObjects(userId: string): Promise<number> {
-    try {
-      if (!this.objectStore) {
-        const [{ count }] = (await this.dataSource.query(
-          `SELECT count(*)::int AS count FROM "ci"."files" WHERE user_id = $1 AND key IS NOT NULL`,
-          [userId],
-        )) as Array<{ count: number }>;
-
-        if (count > 0) {
-          this.logger.warn('No object store wired into account deletion; stored file objects will remain', {
-            userId,
-            objects: count,
-          });
-        }
-
-        return 0;
-      }
-
-      // Nothing in the database is touched yet, so giving up here leaves the
-      // account whole apart from any objects already gone; deleting again is safe.
-      return await withDeadline(
-        deleteSoleOwnedObjects(this.dataSource, this.objectStore, userId, OBJECT_PAGE_SIZE),
-        OBJECT_DELETE_DEADLINE_MS,
-      );
-    } catch (error) {
-      // Same tolerance as the table purge: a deployment without ci.files has no objects.
-      if (isUndefinedTableError(error)) {
-        return 0;
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * ci.entities, once the user row no longer points into it. `ci.users.entity_id`
-   * names the account's own "You" person with no cascade, so the pointer has to
-   * be cleared first or the delete is refused. Both statements share one
-   * transaction: the UPDATE holds the user row's lock until the delete commits,
-   * so a graph ingest still running for this account (`ensureSelfEntity` sets the
-   * pointer whenever it finds it NULL) waits instead of re-linking it in between
-   * and failing the delete after most of the account is already gone.
-   */
-  private async deleteEntitiesUnlinkingSelf(userId: string): Promise<number> {
-    return this.dataSource.transaction(async (manager) => {
-      await manager.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
-
-      const result = await manager.query(`DELETE FROM "ci"."entities" WHERE "owner_user_id" = $1`, [userId]);
-
-      return affectedRows(result);
-    });
-  }
-
-  /** Delete ci_search.entity_tag rows referencing this user's tags. */
-  private async deleteEntityTagsForUser(userId: string): Promise<number> {
-    const result = await this.dataSource.query(
-      `DELETE FROM "ci_search"."entity_tag" et
-        USING "ci_search"."tags" t
-        WHERE et.tag_id = t.id
-          AND t.user_id = $1`,
-      [userId],
     );
 
     return affectedRows(result);
@@ -813,6 +861,7 @@ export class DataDeletionService {
       tokenRevoked: boolean | null;
       deletedCounts: Record<string, number>;
       totalDeleted: number;
+      status?: 'started' | 'completed';
     },
     within?: EntityManager,
   ): Promise<string> {
@@ -826,7 +875,7 @@ export class DataDeletionService {
       tokenRevoked: data.tokenRevoked,
       deletedCounts: data.deletedCounts,
       totalDeleted: data.totalDeleted,
-      status: 'completed',
+      status: data.status ?? 'completed',
       error: null,
     });
 
@@ -854,7 +903,7 @@ function affectedRows(result: unknown): number {
 }
 
 /** `work`, or a rejection once `ms` have passed without it settling. */
-function withDeadline<T>(work: Promise<T>, ms: number, what = 'The object store'): Promise<T> {
+function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
 
   return Promise.race([
@@ -865,9 +914,33 @@ function withDeadline<T>(work: Promise<T>, ms: number, what = 'The object store'
   ]).finally(() => clearTimeout(timer));
 }
 
-/** True for Postgres error 42P01 (undefined_table) / 3F000 (invalid_schema). */
-function isUndefinedTableError(error: unknown): boolean {
-  const code = (error as { code?: string } | null)?.code;
+/** What `work` resolves to, or `null` once `ms` have passed; `work` itself carries on. */
+function waitAtMost<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
 
-  return code === '42P01' || code === '3F000';
+  return Promise.race([
+    work,
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** A second purge attempt's outcome, with what the first attempt already removed counted in. */
+function mergeOutcomes(first: AccountPurgeOutcome, second: AccountPurgeOutcome): AccountPurgeOutcome {
+  const add = (a: Record<string, number>, b: Record<string, number>) => {
+    const sum = { ...a };
+    for (const [table, count] of Object.entries(b)) {
+      sum[table] = (sum[table] ?? 0) + count;
+    }
+
+    return sum;
+  };
+
+  return {
+    ...second,
+    deletedRows: add(first.deletedRows, second.deletedRows),
+    detachedRows: add(first.detachedRows, second.detachedRows),
+    deletedObjects: first.deletedObjects + second.deletedObjects,
+  };
 }

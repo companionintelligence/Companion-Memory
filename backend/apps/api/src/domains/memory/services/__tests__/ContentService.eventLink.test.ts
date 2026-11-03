@@ -27,7 +27,7 @@ describe('ContentService.create — event link (single, per-row path)', () => {
   let repo: {
     create: jest.Mock;
     save: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
   let baseRepo: {
     create: jest.Mock;
@@ -49,6 +49,8 @@ describe('ContentService.create — event link (single, per-row path)', () => {
       create: jest.fn((x: unknown) => x),
       save: jest.fn(async (x: { id?: string }) => ({ ...x, id: x.id ?? 'content-1' })),
       manager: {
+        // refuseForeignLinks: the named event is not another account's.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : repo),
@@ -122,7 +124,7 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
   let service: ContentService;
   let contentRepo: {
     create: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
   let baseRepo: {
     create: jest.Mock;
@@ -170,6 +172,8 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     contentRepo = {
       create: jest.fn((x: Partial<ContentEntity>) => x as ContentEntity),
       manager: {
+        // refuseForeignLinks: the named event is not another account's.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : contentRepo),

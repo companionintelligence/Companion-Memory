@@ -128,6 +128,24 @@ describe('PowerSync routes', () => {
           expect(body.powersync_url).toBe('https://ps.test');
         });
     });
+
+    it('joins a path-only sync URL to the origin the request came in on', async () => {
+      mockPowersync.url = '/powersync';
+
+      try {
+        // As the gateway forwards a request that arrived over a Hub tunnel.
+        await request(app.getHttpServer())
+          .get('/powersync/token')
+          .set('Host', 'memory.example.lan')
+          .set('X-Forwarded-Proto', 'https')
+          .expect(200)
+          .expect(({ body }) => {
+            expect(body.powersync_url).toBe('https://memory.example.lan/powersync');
+          });
+      } finally {
+        mockPowersync.url = 'https://ps.test';
+      }
+    });
   });
 
   describe('when this deployment runs no PowerSync service', () => {

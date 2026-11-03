@@ -6,6 +6,8 @@ import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { GET_TAG_SUGGESTIONS } from '@/components/TagInput';
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { withFresherEntity, type EntityItem, type MemoryEntity } from '../../useEntityService';
@@ -67,6 +69,31 @@ describe('EntityDetailScaffold', () => {
     expect(sheet).toHaveClass('pb-[var(--safe-area-bottom)]');
     expect(sheet).toHaveClass('[&>button]:top-[calc(var(--safe-area-top)+1rem)]');
     expect(await screen.findByRole('heading', { name: 'Project Planning Assistant' })).toBeInTheDocument();
+  });
+
+  // The drawer called an untitled chat "Thread", its kind, while Chat called it for when it started.
+  it('heads an untitled chat with the name Chat gives it', async () => {
+    renderWithProviders(
+      <DateTimeFormatOverride formatter={createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' })}>
+        <EntityDrawerHostProvider value={host}>
+          <Sheet open>
+            <FallbackDetails
+              entity={
+                {
+                  __typename: 'ThreadType',
+                  id: btoa('thread:01a17e07-73a0-7abc-8def-0123456789ab'),
+                  name: null,
+                  description: null,
+                  tags: [],
+                } as unknown as EntityItem
+              }
+            />
+          </Sheet>
+        </EntityDrawerHostProvider>
+      </DateTimeFormatOverride>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Chat · Oct 27, 15:43' })).toBeInTheDocument();
   });
 
   /**

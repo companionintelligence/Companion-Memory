@@ -1,9 +1,11 @@
 package com.companionintelligence.app;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
+import android.content.pm.FeatureInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import java.util.ArrayList;
@@ -54,6 +56,29 @@ public class MergedManifestPermissionsTest {
                 + "request them: " + dropped + ". A library manifest most likely removed them with "
                 + "tools:node=\"remove\". Merged set was: " + merged,
             dropped.isEmpty()
+        );
+    }
+
+    @Test
+    public void gps_is_not_required_in_the_merged_manifest() throws Exception {
+        Application application = RuntimeEnvironment.getApplication();
+        PackageInfo packageInfo = application
+            .getPackageManager()
+            .getPackageInfo(application.getPackageName(), PackageManager.GET_CONFIGURATIONS);
+
+        assertNotNull("The merged manifest must expose its requested hardware features.", packageInfo.reqFeatures);
+        FeatureInfo gps = null;
+        for (FeatureInfo feature : packageInfo.reqFeatures) {
+            if ("android.hardware.location.gps".equals(feature.name)) {
+                gps = feature;
+                break;
+            }
+        }
+
+        assertNotNull("The app must declare GPS explicitly to prevent permission-based filtering.", gps);
+        assertFalse(
+            "The merged manifest must keep GPS optional even when a dependency declares it required.",
+            (gps.flags & FeatureInfo.FLAG_REQUIRED) != 0
         );
     }
 }

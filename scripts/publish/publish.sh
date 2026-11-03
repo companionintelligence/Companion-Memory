@@ -170,6 +170,21 @@ fail() {
 #     is 0600 root, so pointing a non-root reader (hbpe, summary) at it instead
 #     is not a fallback: it cannot read it and exits. The gateway reads no
 #     secrets and mounts none, as in production.
+#   * `powersync` runs companion/powersync (infrastructure/powersync/Dockerfile),
+#     not production's upstream image with infrastructure/powersync mounted:
+#     runtipi can mount nothing from this repo, so the config, sync rules and
+#     the secrets wrapper are baked into the image. The api's POWERSYNC_URL is
+#     \${APP_BASE_URL}/powersync, production's own default; if a Hub ever hands
+#     out an empty APP_BASE_URL it reads `/powersync`, which the token endpoint
+#     joins to the origin each request arrived on.
+#   * `sync-publication` exists only here: setup-database again, after
+#     migrate-database. setup-database runs BEFORE the migrations, so on a fresh
+#     install the tables PowerSync replicates do not exist yet and the
+#     `powersync` publication stays empty; compose installs fill it on their next
+#     `up`, which re-runs setup-database, but a Hub restart does not re-run
+#     one-shot services, so a store install never would (seen on a Hub install
+#     2026-10-30: replication running, nothing published). setup-database is
+#     idempotent, so the second run only adds the now-existing tables.
 #   * `fix-db-permissions` exists only here: runtipi creates ${APP_DATA_DIR}
 #     as root, and postgres:18.4-bookworm runs as uid 999.
 #   * `setup-secrets` is production compose's `generate-secrets`, renamed after
@@ -289,7 +304,8 @@ generate_compose() {
         { "key": "CI_ROLE", "value": "web" },
         { "key": "CI_IMPORT_UPLOADS_DIR", "value": "/app-data/data/import-work/uploads" },
         { "key": "CI_IMPORT_SCRATCH_DIR", "value": "/app-data/data/import-work/scratch" },
-        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" }
+        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" },
+        { "key": "POWERSYNC_URL", "value": "\${APP_BASE_URL}/powersync" }
       ],
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
@@ -421,6 +437,31 @@ generate_compose() {
         "database": { "condition": "service_healthy" },
         "setup-database": { "condition": "service_completed_successfully" },
         "setup-secrets": { "condition": "service_completed_successfully" }
+      }
+    },
+    {
+      "name": "powersync",
+      "image": "${reg}/companion/powersync:${ver}",
+      "restart": "unless-stopped",
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/powersync", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "dependsOn": {
+        "database": { "condition": "service_healthy" },
+        "sync-publication": { "condition": "service_completed_successfully" },
+        "setup-secrets": { "condition": "service_completed_successfully" }
+      }
+    },
+    {
+      "name": "sync-publication",
+      "image": "${reg}/companion/setup-database:${ver}",
+      "restart": "no",
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/setup-database", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "dependsOn": {
+        "migrate-database": { "condition": "service_completed_successfully" },
+        "database": { "condition": "service_healthy" }
       }
     },
     {

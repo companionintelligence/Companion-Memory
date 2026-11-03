@@ -67,6 +67,7 @@ export interface PeerLinkLookup {
   peerHandle: string;
   displayName?: string | null;
   avatarUrl?: string | null;
+  revokedAt?: string | null;
 }
 
 /**
@@ -80,7 +81,19 @@ export interface PeerLinkLookup {
  * composer row already carries the ids it renders against.
  */
 export function peerLinksByHandle(links: readonly PeerLinkLookup[]): ReadonlyMap<string, PeerLinkLookup> {
-  return new Map(links.map((link) => [link.peerHandle, link]));
+  const byHandle = new Map<string, PeerLinkLookup>();
+
+  for (const link of links) {
+    const held = byHandle.get(link.peerHandle);
+
+    // A peer added back after their link ended has two links under one
+    // handle. The live one names them; the ended one is history.
+    if (held == null || held.revokedAt != null || link.revokedAt == null) {
+      byHandle.set(link.peerHandle, link);
+    }
+  }
+
+  return byHandle;
 }
 
 /** What a party avatar needs: a name to show and initial from, and a photo if there is one. */

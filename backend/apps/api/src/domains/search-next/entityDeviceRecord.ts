@@ -42,11 +42,14 @@
  */
 
 /**
- * The recipe below, as a number. Bump it whenever a type's fields change:
- * `MobileSearchDocumentDetailCron` re-derives every document whose
- * `detail_version` is lower, in batches, without re-running the tsvector.
+ * The recipe below, as a number. Bump it whenever a type's fields change, or
+ * a type's time rule in `entityTimeSql` does: `MobileSearchDocumentDetailCron`
+ * re-derives every document whose `detail_version` is lower -- `related_id`,
+ * `detail` and `occurred_at` -- in batches, without re-running the tsvector.
+ *
+ * 4: a place's time became its latest visit, not its promotion time.
  */
-export const DEVICE_RECORD_VERSION = 3;
+export const DEVICE_RECORD_VERSION = 4;
 
 /**
  * Fixed namespace for the conversation uuid (`uuid_generate_v5`). Arbitrary but

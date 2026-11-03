@@ -43,6 +43,16 @@
  * integration spec (`GraphIngestService.propertyMerge.integration.spec.ts`)
  * checks the two against each other on real Postgres.
  */
+import { stableJson } from '@ci/common/stableJson';
+import { USER_EDITED_KEYS, userEditedKeys, userEditedSql } from '@ci/common/userEditedProperties';
+
+export { stableJson } from '@ci/common/stableJson';
+export {
+  USER_EDITED_KEYS,
+  userEditedKeys,
+  userEditedListSql,
+  userEditedSql,
+} from '@ci/common/userEditedProperties';
 
 /**
  * The plural identity keys a Person carries, unioned on every re-ingest
@@ -61,41 +71,6 @@
 export const IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
 
 /**
- * The property holding the keys a person set by hand: a list of key names,
- * written by the Edit Person form (`PersonService.patch` with `handEdit`) when
- * it changes or clears a value. A re-ingest skips an arriving value for any of
- * them, and `GraphIngestService` keeps a hand-set `name` or `description` the
- * same way. The list itself is never taken from a source.
- */
-export const USER_EDITED_KEYS = 'user_edited_keys';
-
-/** The keys a stored bag records as set by hand: the string members of {@link USER_EDITED_KEYS}. */
-export function userEditedKeys(properties: Record<string, unknown> | null | undefined): string[] {
-  const listed = isObject(properties) ? properties[USER_EDITED_KEYS] : undefined;
-
-  return Array.isArray(listed) ? listed.filter((key): key is string => typeof key === 'string') : [];
-}
-
-/**
- * The bag `properties`' {@link USER_EDITED_KEYS} list as a SQL jsonb array. A
- * missing or non-array list reads as `[]`.
- */
-export function userEditedListSql(properties: string): string {
-  return (
-    `(CASE WHEN jsonb_typeof(${properties} -> '${USER_EDITED_KEYS}') = 'array' ` +
-    `THEN ${properties} -> '${USER_EDITED_KEYS}' ELSE '[]'::jsonb END)`
-  );
-}
-
-/**
- * {@link USER_EDITED_KEYS} as SQL: true when the bag `properties` lists `key`.
- * A missing or non-array list holds nothing.
- */
-export function userEditedSql(properties: string, key: string): string {
-  return `(${userEditedListSql(properties)} @> jsonb_build_array(${key}))`;
-}
-
-/**
  * Every key a re-ingest of this entity unions: the identity lists, then the
  * keys its parser declared as accumulating (`Entity.accumulate`, carried from
  * the staged row). Trimmed, blanks dropped, de-duplicated in order.
@@ -112,28 +87,6 @@ export function unionKeysFor(accumulate?: readonly string[] | null): string[] {
   }
 
   return keys;
-}
-
-/**
- * JSON with object keys in sorted order, so two payloads that differ only in key
- * order compare equal — the equality jsonb itself uses. A stored `properties`
- * value comes back from jsonb in Postgres' own key order, not the order the
- * source sent it.
- */
-export function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-
-      return sorted;
-    }
-
-    return v;
-  });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -8,6 +8,8 @@ import { AppLockGate } from './AppLockGate';
 const mocks = vi.hoisted(() => ({
   native: true,
   pending: 0,
+  pendingByKind: {} as Record<string, number>,
+  uploads: {} as Record<string, number>,
   plugin: {
     getStatus: vi.fn(),
     configure: vi.fn(),
@@ -27,11 +29,16 @@ vi.mock('@ci/common', async (importOriginal) => ({
   useOutboxQueue: () => ({
     available: true,
     pending: mocks.pending,
+    pendingByKind: mocks.pendingByKind,
     needsAttention: 0,
     total: 0,
     capacity: null,
     refresh: vi.fn(),
   }),
+}));
+
+vi.mock('@/api/powersync/pendingUploads', () => ({
+  usePendingUploadsByTable: () => mocks.uploads,
 }));
 
 const status = (locked: boolean) => ({
@@ -47,6 +54,8 @@ beforeEach(() => {
   resetAppLockStoreForTests();
   mocks.native = true;
   mocks.pending = 0;
+  mocks.pendingByKind = {};
+  mocks.uploads = {};
   mocks.lockListener = null;
   mocks.plugin.getStatus.mockReset().mockResolvedValue(status(true));
   mocks.plugin.unlock.mockReset().mockResolvedValue(status(false));
@@ -103,8 +112,9 @@ describe('AppLockGate', () => {
     await waitFor(() => expect(screen.getByRole('dialog', { name: /locked/i })).toBeInTheDocument());
   });
 
-  it('tells the native lock screen how many captures are waiting, and nothing else', async () => {
+  it('tells the native lock screen what is waiting to sync, by kind, and nothing else', async () => {
     mocks.pending = 3;
+    mocks.pendingByKind = { positions: 3 };
     mocks.plugin.getStatus.mockResolvedValue(status(false));
 
     render(
@@ -114,7 +124,28 @@ describe('AppLockGate', () => {
     );
 
     await waitFor(() =>
-      expect(mocks.plugin.setLockScreenNote).toHaveBeenCalledWith({ text: '3 captures waiting to sync' }),
+      expect(mocks.plugin.setLockScreenNote).toHaveBeenCalledWith({ text: '3 locations waiting to sync' }),
+    );
+  });
+
+  it("counts PowerSync's own upload queue -- offline notes and saved searches -- beside the outbox", async () => {
+    mocks.pending = 18;
+    // 17 fixes plus one note the outbox holds; an outbox row under a kind the note does
+    // not name is still reported, as a capture.
+    mocks.pendingByKind = { positions: 16, note: 1, 'voice-memo': 1 };
+    mocks.uploads = { notes: 1, saved_searches: 2 };
+    mocks.plugin.getStatus.mockResolvedValue(status(false));
+
+    render(
+      <AppLockGate>
+        <div>the memory</div>
+      </AppLockGate>,
+    );
+
+    await waitFor(() =>
+      expect(mocks.plugin.setLockScreenNote).toHaveBeenCalledWith({
+        text: '16 locations, 2 notes, 2 saved searches and 1 capture waiting to sync',
+      }),
     );
   });
 

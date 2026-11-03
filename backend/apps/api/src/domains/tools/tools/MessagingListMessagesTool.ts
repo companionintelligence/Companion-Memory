@@ -44,7 +44,10 @@ export class MessagingListMessagesTool extends BaseTool<
     title: 'List messages in a chat',
     description:
       'List recent iMessage/SMS messages in one chat on the connected BlueBubbles server, newest first.',
-    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true },
+    // The owner's own BlueBubbles server and nothing else, so `ownServer`. Its
+    // `chatGuid` only ever comes from `messaging.listChats`, so on the default
+    // dial "what did Alex text me?" must not ask just because that ran first.
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true, ownServer: true },
     localCapable: false,
     phrases: ['What did $person say', 'Show me my texts with $person'],
     parameters: {

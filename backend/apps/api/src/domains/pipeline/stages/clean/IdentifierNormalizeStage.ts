@@ -38,7 +38,7 @@ const ENTITY_TYPE = 'entity';
 
 /**
  * Generation of the SHARED normalization rule —
- * `domains/graph/utils/normalizeIdentifier.ts`.
+ * `common/normalizeIdentifier.ts`.
  *
  * Bump it in the same commit that changes `normalizeEmail`, `normalizePhone` or
  * `normalizeName`, because that is exactly when every `value_normalized` in the
@@ -319,7 +319,7 @@ export interface IdentifierPatch {
  * failure this stage exists to avoid.
  *
  * The fix is a `normalizeHandle` branch in
- * `domains/graph/utils/normalizeIdentifier.ts` plus a bump of
+ * `common/normalizeIdentifier.ts` plus a bump of
  * {@link IDENTIFIER_RULE_GENERATION}, which
  * re-opens every row skipped here. Until then the count of
  * `identifiers_unnormalizable` IS the size of that job.

@@ -74,6 +74,19 @@ describe('partyAvatar', () => {
     });
   });
 
+  it('names a peer added back after their link ended by the live link, whichever order they arrive in', () => {
+    const ended = {
+      peerHandle: 'ada',
+      displayName: 'Ada (old)',
+      avatarUrl: null,
+      revokedAt: '2026-10-01T00:00:00Z',
+    };
+    const live = { peerHandle: 'ada', displayName: 'Ada L.', avatarUrl: '/avatars/ada.png', revokedAt: null };
+
+    expect(partyAvatar('ada', null, peerLinksByHandle([ended, live])).name).toBe('Ada L.');
+    expect(partyAvatar('ada', null, peerLinksByHandle([live, ended])).name).toBe('Ada L.');
+  });
+
   it('falls back to the handle itself when the link has no display name', () => {
     const links = peerLinksByHandle([{ peerHandle: 'ada', displayName: null, avatarUrl: null }]);
 

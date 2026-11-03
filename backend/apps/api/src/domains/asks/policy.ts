@@ -213,6 +213,26 @@ export function disclosureCeiling(tier: TrustTier, dataClass?: unknown): Disclos
 }
 
 /**
+ * Whether a photo ask from this tier may match a photo by the place on its
+ * event.
+ *
+ * A photo's place is on its event (`location_name`, quoted again in its
+ * display title), and a photo ask searches those events beside files. Matching
+ * on the place there answers a location question ("Any photos from 14 Elm
+ * Street?") at the photos ceiling, which for every tier below household
+ * discloses more than the same question asked as `location` would. So the
+ * place may match only where the tier's location ceiling reaches the ceiling
+ * this ask gets. Decided from the tier alone, before any search: capping only
+ * the answers that happened to match an event would make "nothing was shared"
+ * itself say that a photo was taken there.
+ *
+ * Pure.
+ */
+export function photoAskMayMatchPlaces(tier: TrustTier, dataClass?: unknown): boolean {
+  return rungAtLeast(disclosureCeiling(tier, 'location'), disclosureCeiling(tier, dataClass));
+}
+
+/**
  * The more restrictive of two answer forms, compared on the disclosure ladder.
  *
  * Used to let the OWNER pick the form without letting them widen it. The

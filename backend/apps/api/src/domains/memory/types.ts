@@ -1054,6 +1054,14 @@ export enum CommunicationType {
   POST = 'post',
 }
 
+/**
+ * `category` of the messages `POST /memory/turn` stores: one side of a
+ * conversation with an agent such as OpenClaw or Hermes. The agent's replies
+ * are stored inbound, like mail, so anything that reads inbound messages as
+ * received mail has to leave these out.
+ */
+export const AGENT_TURN_MESSAGE_CATEGORY = 'agent-turn';
+
 export enum CommunicationDirection {
   INBOUND = 'inbound',
   OUTBOUND = 'outbound',

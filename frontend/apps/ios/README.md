@@ -156,6 +156,12 @@ xcrun simctl launch booted com.companionintelligence.app
 `mobile-release.yml` is the **only** store lane: a signed `.ipa` to TestFlight and a
 signed `.aab` to Play's internal track.
 
+The iOS release lane also needs `CI_BROWSER_EXTENSION_DEPLOY_KEY`: a read-only SSH
+deploy key registered on the private `CI-Browser-Extension` repository and stored as a
+secret on `Companion-Memory`. The workflow checks out an immutable extension-source
+revision, verifies its version, and builds the Safari bundle during the archive. This
+keeps the signed app independent of a cross-repository release-asset download.
+
 ```bash
 # Rehearsal: build + sign + validate with Apple, submit nothing.
 # Always dispatch on a BRANCH. dry_run defaults to true; platform defaults to ios.
@@ -261,20 +267,25 @@ into `ios/` with
 
 ```bash
 cd frontend/apps/ios
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
-# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
-# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
+# assets/ holds: icon-only.png, icon-foreground.png (identical), icon-background.png (1024²)
 #                splash.png, splash-dark.png (2732²)
+# icon-only/-foreground ARE the Companion Memory store icon (opaque 1024², the artwork the App
+# Store listing shows). They are NOT mirrors of @companionintelligence/assets (whose
+# logos/app-icon-source.png is the company aperture mark), so `brand:sync` does not touch them.
 npx @capacitor/assets generate \
-  --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' \
+  --iconBackgroundColor '#041620' --iconBackgroundColorDark '#041620' \
   --splashBackgroundColor '#ffffff' --splashBackgroundColorDark '#0b1f28'
 ```
 
-The home-screen icon is the Companion Memory mark from CI-Marketplace
-(`apps/ci-memory/metadata/logo.png` — neural-map brain on black). The splash
-keeps the CI globe, slightly larger than the original 201px mark. Re-run after
-changing the artwork, then rebuild. (Note: `icon-only.png` is required for the
-flat iOS/legacy icon; without it the iOS icon falls back to the tool's placeholder.)
+The home-screen icon is the Companion Memory store icon: a solid teal brain with a white
+node network and a dark M on `#041620`. iOS needs it opaque with no alpha, so
+`ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png` is the same bytes as
+`assets/icon-only.png` (re-running the generator above reproduces it pixel for pixel; the
+iOS generator reads only `icon-only.png`, and `--iconBackgroundColor` is a no-op on an
+opaque source). `icon-background.png` is flat `#041620` to match. The splash keeps the CI
+globe, slightly larger than the original 201px mark. Re-run after changing the artwork, then
+rebuild. (Note: `icon-only.png` is required for the flat iOS/legacy icon; without it the
+iOS icon falls back to the tool's placeholder.)
 
 ## iOS 26 SDK compatibility (re-apply if you regenerate `ios/`)
 

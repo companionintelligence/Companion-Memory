@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 
-import { Portal, useDeviceLayout } from '@ci/common';
+import { Portal, useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { cn } from '@ci/shadcn';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
 
 import { MEMORY_HUB_SECTIONS } from './memoryHubSections';
 
@@ -71,6 +72,14 @@ export function MemoryHubNav() {
   const visibleKey = visible.map((section) => section.to).join('|');
   const scrollerRef = useRef<HTMLDivElement>(null);
   const activeLinkRef = useRef<HTMLAnchorElement>(null);
+  const [measureScroller, more] = useScrollOverflow<HTMLDivElement>();
+  const setScroller = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollerRef.current = element;
+      measureScroller(element);
+    },
+    [measureScroller],
+  );
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
@@ -106,34 +115,36 @@ export function MemoryHubNav() {
       aria-label="Memory sections"
       className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-2 md:gap-2 md:px-3"
     >
-      <div
-        ref={scrollerRef}
-        data-testid="memory-section-scroller"
-        className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain md:overflow-visible"
-      >
-        <div className="flex w-max items-center gap-1 md:w-auto md:flex-wrap md:gap-2">
-          {visible.map((section) => {
-            const active = section.match(pathname);
+      <ScrollMoreArrows more={more} className="flex min-w-0 flex-1">
+        <div
+          ref={setScroller}
+          data-testid="memory-section-scroller"
+          className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain md:overflow-visible"
+        >
+          <div className="flex w-max items-center gap-1 md:w-auto md:flex-wrap md:gap-2">
+            {visible.map((section) => {
+              const active = section.match(pathname);
 
-            return (
-              <Link
-                key={section.to}
-                ref={active ? activeLinkRef : undefined}
-                to={sectionHref(section.to, searchParams)}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'shrink-0 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
-                  active
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                {section.label}
-              </Link>
-            );
-          })}
+              return (
+                <Link
+                  key={section.to}
+                  ref={active ? activeLinkRef : undefined}
+                  to={sectionHref(section.to, searchParams)}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn(
+                    'shrink-0 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
+                    active
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  )}
+                >
+                  {section.label}
+                </Link>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      </ScrollMoreArrows>
 
       {/* Create lives in the top-bar Add menu on a phone, so page actions
           (a "New place" / "New thing" button) are omitted there — rendering

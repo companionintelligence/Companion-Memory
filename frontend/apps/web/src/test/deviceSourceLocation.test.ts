@@ -6,9 +6,9 @@ import {
   buildPositionRecord,
   captureLocationFix,
   createLocationSampler,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
-  type BackgroundGeolocationLocation,
+  type NativeLocationEvent,
   haversineMeters,
   positionSourceId,
   type DeviceLocationFix,
@@ -373,9 +373,9 @@ describe('buildPositionRecord — the wire contract with createPositionSchemaRoo
 describe('buildPositionRecord — parity fixture shared with the Android native builder', () => {
   // The SAME inputs and expected record live in
   // frontend/packages/capacitor-local-hub/android/src/test/.../PositionRecordJsonTest.kt.
-  // Android's location service builds this record natively, from a process that may have
-  // no JavaScript, and the two must stay byte-for-byte equivalent: a drift here means a
-  // background fix and its web-side re-enqueue stop collapsing on `source_id`, or one of
+  // Android's motion-gated tracker builds this record natively, from a process that may
+  // have no JavaScript, and the two must stay byte-for-byte equivalent: a drift here means
+  // a background fix and its web-side re-enqueue stop collapsing on `source_id`, or one of
   // them starts failing the server's schema. Change both or neither.
   const deviceKey = 'cd12ea3d-b4d5-4ba6-a1e1-b02d18653e93';
 
@@ -845,14 +845,12 @@ describe('fixFromGeolocationPosition', () => {
 });
 
 /**
- * The `@capacitor-community/background-geolocation` counterpart to
- * `fixFromGeolocationPosition` — same adapter contract, different field names
- * (`bearing`/`time` rather than `heading`/`timestamp`).
+ * The native `significantLocation` event counterpart to `fixFromGeolocationPosition` — same
+ * adapter contract, different field names (`bearing`/`time` rather than
+ * `heading`/`timestamp`).
  */
-describe('fixFromBackgroundGeolocationLocation', () => {
-  function backgroundLocation(
-    overrides: Partial<BackgroundGeolocationLocation> = {},
-  ): BackgroundGeolocationLocation {
+describe('fixFromNativeLocationEvent', () => {
+  function backgroundLocation(overrides: Partial<NativeLocationEvent> = {}): NativeLocationEvent {
     return {
       latitude: SF_LAT,
       longitude: SF_LNG,
@@ -867,7 +865,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
   }
 
   it('carries every field across, renamed to the DeviceLocationFix contract', () => {
-    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation());
+    const fix = fixFromNativeLocationEvent(backgroundLocation());
 
     expect(fix).toEqual({
       latitude: SF_LAT,
@@ -882,7 +880,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
 
   it('falls back to the current time only when the plugin reports no timestamp at all', () => {
     const before = Date.now();
-    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation({ time: 0 }));
+    const fix = fixFromNativeLocationEvent(backgroundLocation({ time: 0 }));
     const after = Date.now();
 
     expect(fix.capturedAtMs).toBeGreaterThanOrEqual(before);
@@ -890,7 +888,7 @@ describe('fixFromBackgroundGeolocationLocation', () => {
   });
 
   it('passes through null optional fields rather than coercing them to 0', () => {
-    const fix = fixFromBackgroundGeolocationLocation(
+    const fix = fixFromNativeLocationEvent(
       backgroundLocation({ altitude: null, bearing: null, speed: null }),
     );
 

@@ -40,6 +40,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -51,6 +59,14 @@ updates:
     directory: "/frontend/apps/ios"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -61,6 +77,14 @@ updates:
     directory: "/frontend/apps/android"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -71,6 +95,14 @@ updates:
     directory: "/frontend/apps/desktop"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -82,6 +114,14 @@ updates:
     directory: "/frontend/apps/desktop/src-tauri"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -93,6 +133,14 @@ updates:
     directory: "/frontend/apps/android/android"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -104,6 +152,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -119,6 +175,14 @@ updates:
     directory: "/backend/apps/api"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -128,6 +192,14 @@ updates:
     directory: "/backend/apps/hbpe"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -137,6 +209,14 @@ updates:
     directory: "/backend/apps/summary"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -146,6 +226,14 @@ updates:
     directory: "/infrastructure/database"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -155,6 +243,14 @@ updates:
     directory: "/infrastructure/gateway"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -164,6 +260,14 @@ updates:
     directory: "/infrastructure/object-store"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -173,6 +277,14 @@ updates:
     directory: "/infrastructure/setup-database"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -182,6 +294,14 @@ updates:
     directory: "/infrastructure/setup-secrets"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -192,6 +312,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        update-types:
+          - "major"
     labels:
       - "dependencies"
       - "github-actions"

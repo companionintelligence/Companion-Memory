@@ -101,8 +101,8 @@ const PLUGINS: PluginUnderTest[] = [
     iosPlugin: 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift',
     anchorMethod: 'secureGet',
     // `startSignificantLocationUpdates` / `stopSignificantLocationUpdates` are on both
-    // halves: significant-change monitoring on iOS, the plugin's own location foreground
-    // service on Android (location/).
+    // halves: significant-change monitoring on iOS, the plugin's motion-gated tracker on
+    // Android (location/).
   },
   {
     pkg: 'capacitor-local-llm',
@@ -618,8 +618,9 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
 
 /**
  * The LocalHub credential store takes writes from anything that reaches the bridge. On
- * Android that is every frame in the WebView (the app runs Capacitor's legacy bridge for
- * background location), so `secureSet` accepts only the app's own keys, on both platforms.
+ * Android's legacy bridge (which the app ran for background location until 2026-10-26) that
+ * was every frame in the WebView, so `secureSet` accepts only the app's own keys, on both
+ * platforms -- and keeps doing so, whichever bridge a shell runs.
  */
 describe('LocalHub secureSet — only the keys the app itself writes', () => {
   const hubDir = join(PACKAGES, 'capacitor-local-hub');

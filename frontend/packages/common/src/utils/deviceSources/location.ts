@@ -46,11 +46,11 @@
  * ## Foreground vs background
  *
  * This module shapes and queues a fix; it does not talk to the OS location APIs itself.
- * On native (iOS + Android), `useLocationTracking` drives
- * `@capacitor-community/background-geolocation` and hands each delivered fix to
- * {@link captureLocationFix} via {@link fixFromBackgroundGeolocationLocation}. Plain web
- * (no Capacitor) falls back to `navigator.geolocation` via {@link fixFromGeolocationPosition}
- * instead, foreground-only.
+ * On native (iOS + Android), `useLocationTracking` starts the LocalHub plugin's background
+ * monitor (Always mode only; there is no on-screen trail) and hands each delivered fix to
+ * {@link captureLocationFix} via {@link fixFromNativeLocationEvent}. Plain web records no
+ * trail; {@link fixFromGeolocationPosition} remains for a browser position captured on
+ * demand.
  */
 
 import { fetchJson } from '../fetchJson';
@@ -73,9 +73,9 @@ export type LocationSourceKind = 'gps' | 'wifi' | 'cell_tower' | 'manual' | 'inf
  * on every sensor update; without it the queue, the request volume and the hypertable all
  * grow by two orders of magnitude for no extra information.
  *
- * One gate for every mode. Until 2026-10-14 "While using" kept a tighter 50 m trail than
- * Always; nothing about the app being on screen makes a denser trail more useful, and the
- * looser gate is what lets the native location request idle between fixes.
+ * One gate, the native tracker's. Until 2026-10-14 "While using" kept a tighter 50 m trail
+ * than Always; nothing about the app being on screen made a denser trail more useful, and
+ * since the on-screen trail itself went this is the only gate there is.
  */
 export const MIN_DISTANCE_METERS = 150;
 
@@ -472,12 +472,14 @@ export function fixFromGeolocationPosition(position: GeolocationPosition): Devic
 }
 
 /**
- * The location shape delivered by `@capacitor-community/background-geolocation`'s
- * `addWatcher` callback (both iOS and Android). Declared here — not imported from the
- * plugin package — for the same reason every other native payload shape in this module
- * is declared locally: the web bundle must stay free of `@capacitor/*` native deps.
+ * The location shape the LocalHub plugin's `significantLocation` event carries on both
+ * platforms (inherited from the `@capacitor-community/background-geolocation` watcher
+ * callback it replaced, so neither native side had to change its event body). Declared
+ * here — not imported from the plugin package — for the same reason every other native
+ * payload shape in this module is declared locally: the web bundle must stay free of
+ * `@capacitor/*` native deps.
  */
-export interface BackgroundGeolocationLocation {
+export interface NativeLocationEvent {
   latitude: number;
   longitude: number;
   /** Radius of horizontal uncertainty in metres, with 68% confidence. */
@@ -492,10 +494,8 @@ export interface BackgroundGeolocationLocation {
   time: number;
 }
 
-/** Adapt a `@capacitor-community/background-geolocation` fix to {@link DeviceLocationFix}. */
-export function fixFromBackgroundGeolocationLocation(
-  location: BackgroundGeolocationLocation,
-): DeviceLocationFix {
+/** Adapt a native `significantLocation` event to {@link DeviceLocationFix}. */
+export function fixFromNativeLocationEvent(location: NativeLocationEvent): DeviceLocationFix {
   return {
     latitude: location.latitude,
     longitude: location.longitude,

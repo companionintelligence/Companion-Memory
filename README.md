@@ -1,11 +1,23 @@
 
 <p align="center">
-    <img width="320" height="320" alt="Companion Memory" src="docs/images/companion-memory-mark.gif" />
+    <img src="https://raw.githubusercontent.com/companionintelligence/.github/main/profile/assets/icons/companion-memory.png" width="96" height="96" alt="Companion Memory icon">
 </p>
 
 
-# Companion Memory
-### Personal Database for Companion Intelligence
+<h1 align="center">Companion Memory</h1>
+
+<p align="center"><strong>Personal Database for Companion Intelligence</strong></p>
+
+[![release](https://img.shields.io/github/v/release/companionintelligence/Companion-Memory?style=flat-square&color=0a6358&label=release)](https://github.com/companionintelligence/Companion-Memory/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Docker%20%C2%B7%20Web%20%C2%B7%20iOS%20%C2%B7%20Android-0a6358?style=flat-square)](https://github.com/companionintelligence/Companion-Memory)
+[![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-0a6358?style=flat-square)](LICENSE.md)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.com/invite/yQp9hwpzAa)
+
+<p align="center"><a href="https://ci.computer/memory">Website</a> · <a href="#docs">Documentation</a> · <a href="#install-from-store">Get started</a> · <a href="https://docs.ci.computer/docs/reference/open-source-systems">Systems map</a></p>
+
+<p align="center">
+  <a href="https://hub.ci.computer/store/ci-memory"><img src="https://img.shields.io/badge/Install%20in%20Hub-Install%20in%20Hub-0a6358?style=for-the-badge&logo=docker&logoColor=white" alt="Install in Hub" height="30"></a>
+</p>
 
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
@@ -60,6 +72,41 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
     ├── editor/                 # Rich-text editor package
     ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
     └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
+```
+
+
+## Features
+
+| Feature | What it provides |
+|---|---|
+| **Capture and import** | Accept authenticated events, files and personal archive imports. |
+| **Search and retrieval** | Expose the same memory domain through REST, GraphQL and Memory MCP. |
+| **Background intelligence** | Run parsing, summaries and predictions in workers and Python sidecars. |
+| **Clients** | Serve web, CLI and mobile clients from shared API contracts. |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td valign="top"><img src="video/assets/shots/feed-overview.png" alt="Companion Memory feed showing captured and summarized activity" width="420"><p align="center">Companion Memory feed showing captured and summarized activity</p></td>
+    <td valign="top"><img src="video/assets/shots/memory-search-results.png" alt="Companion Memory search results across personal records" width="420"><p align="center">Companion Memory search results across personal records</p></td>
+    <td valign="top"><img src="video/assets/shots/insights-list.png" alt="Companion Memory insight list" width="420"><p align="center">Companion Memory insight list</p></td>
+  </tr>
+</table>
+
+
+## How it fits together
+
+Clients send captures and queries to the authenticated API. Workers handle slower imports and parsing, while PostgreSQL remains the source of truth for structured records and vectors.
+
+```mermaid
+flowchart LR
+  Clients[Capture, web, CLI and agents] --> API[Authenticated API]
+  API --> Queue[Background jobs]
+  API --> DB[(PostgreSQL and extensions)]
+  Queue --> Workers[Import, parsing and summary workers]
+  Workers --> DB
+  API --> MCP[REST, GraphQL and Memory MCP]
 ```
 
 ## Architecture at a glance
@@ -578,12 +625,12 @@ With no `IMAGE`, `make build` builds the `ENV`-appropriate set, in this order:
 ```
 local        setup-database database object-store summary hbpe
 staging      api gateway setup-database database object-store summary hbpe
-production   api gateway setup-database database object-store setup-secrets summary hbpe
+production   api gateway setup-database database object-store setup-secrets powersync summary hbpe
 ```
 
 ```bash
 make build IMAGE=hbpe    # just this one — api, gateway, setup-database, database,
-                         #   object-store, setup-secrets, summary or hbpe
+                         #   object-store, setup-secrets, powersync, summary or hbpe
 make build DRY_RUN=1     # print the exact docker build commands — every --build-arg
                          #   and, on a cuda/rocm host, the wheel-image tags — and build nothing
 ```
@@ -777,3 +824,17 @@ yarn typecheck              # Type-check without emitting
 yarn lint                   # Lint frontend code
 yarn lint:fix               # Auto-fix frontend linting issues
 ```
+
+<!-- companion-hub-readme-deep-review -->
+
+## Documentation and local service map
+
+| Need | Start here |
+|---|---|
+| Local development stack | `make dev` and the local development section below |
+| Architecture and request routing | [Architecture at a glance](#architecture-at-a-glance) and Caddy routing |
+| Configuration and deployment | [Documentation index](docs/README.md) |
+| Security review | [Security guidance](SECURITY.md) |
+
+For issue reports, include the deployment mode (Hub, standalone, or local development), the service involved, and redacted request/health output. Never include API keys or captured memory content in public issue text.
+

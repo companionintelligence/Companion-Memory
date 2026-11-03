@@ -23,7 +23,11 @@ jest.mock('@ci/configuration', () => {
 import { ServiceUnavailableException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
-import { POWERSYNC_NOT_CONFIGURED_BODY, PowerSyncTokenService } from '../services/PowerSyncTokenService';
+import {
+  POWERSYNC_NOT_CONFIGURED_BODY,
+  PowerSyncTokenService,
+  resolvePowerSyncUrl,
+} from '../services/PowerSyncTokenService';
 
 interface DecodedToken {
   header: { kid?: string; alg?: string };
@@ -91,6 +95,35 @@ describe('PowerSyncTokenService', () => {
     expect(decoded.header.kid).toBe('ci-powersync-hs256');
     expect(decoded.header.alg).toBe('HS256');
     expect(decoded.payload.parameters?.cutoff).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('hands out an absolute URL as configured, whatever origin asked', () => {
+    mockPowersync.url = 'https://ps.test';
+    mockPowersync.jwtSecret = 'shh-secret';
+
+    expect(service.issueToken('user-1', undefined, 'https://memory.example').powersync_url).toBe(
+      'https://ps.test',
+    );
+  });
+
+  it('joins a path to the origin the request arrived on', () => {
+    mockPowersync.url = '/powersync';
+    mockPowersync.jwtSecret = 'shh-secret';
+
+    expect(service.issueToken('user-1', undefined, 'https://box.ci0.pw').powersync_url).toBe(
+      'https://box.ci0.pw/powersync',
+    );
+    expect(service.issueToken('user-1', undefined, 'http://192.168.86.20:8642').powersync_url).toBe(
+      'http://192.168.86.20:8642/powersync',
+    );
+  });
+
+  it('resolves only real paths, and never invents an origin', () => {
+    expect(resolvePowerSyncUrl('/powersync', 'https://a.example/')).toBe('https://a.example/powersync');
+    expect(resolvePowerSyncUrl('/powersync', '')).toBe('/powersync');
+    // Protocol-relative is a host, not a path.
+    expect(resolvePowerSyncUrl('//ps.example', 'https://a.example')).toBe('//ps.example');
+    expect(resolvePowerSyncUrl('', 'https://a.example')).toBe('');
   });
 
   it('embeds a client-supplied cutoff in JWT parameters', () => {

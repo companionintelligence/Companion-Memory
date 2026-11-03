@@ -8,10 +8,18 @@
  *
  * `uploadData()` replays the local CRUD queue through CI-Server's EXISTING GraphQL
  * mutations rather than writing Postgres directly — this is a hard requirement, see
- * `infrastructure/powersync/README.md`. It supports **notes only**:
+ * `infrastructure/powersync/README.md`. It supports **notes and saved searches**:
  *
  *   - notes:      full create/update/delete via `createNote`/`updateNote`/`deleteNote`
  *                 (`NoteResolver`). Simple per-row CRUD, so it fits the replay model.
+ *   - saved_searches: full create/update/delete via `createSavedSearch`/
+ *                 `updateSavedSearch`/`deleteSavedSearch` (`SavedSearchResolver`), the
+ *                 same shape. The device writes the definition (name, description,
+ *                 query, entity_types, tags, filters); the JSON-text columns are parsed
+ *                 back into the arrays and object the input types take. Sharing
+ *                 (`is_public`, `share_token`) is server-managed and never written on
+ *                 the device, so a PATCH never carries it; one that somehow did is
+ *                 ignored here rather than mapped to `setSavedSearchSharing`.
  *   - tags:       READ-ONLY. `TagResolver` has no `createTag`/`updateTag`/`deleteTag`
  *                 mutation — only `tagEntities`/`untagEntities`, which mutate the
  *                 entity_tag join table (labels attached to OTHER entities) and only
@@ -80,6 +88,60 @@ const DELETE_NOTE_MUTATION = `
     }
   }
 `;
+
+const CREATE_SAVED_SEARCH_MUTATION = `
+  mutation PowerSyncCreateSavedSearch($input: CreateSavedSearchInput!) {
+    createSavedSearch(input: $input) {
+      success
+      savedSearch {
+        id
+      }
+    }
+  }
+`;
+
+const UPDATE_SAVED_SEARCH_MUTATION = `
+  mutation PowerSyncUpdateSavedSearch($input: UpdateSavedSearchInput!) {
+    updateSavedSearch(input: $input) {
+      success
+    }
+  }
+`;
+
+const DELETE_SAVED_SEARCH_MUTATION = `
+  mutation PowerSyncDeleteSavedSearch($input: DeleteByIdInput!) {
+    deleteSavedSearch(input: $input) {
+      success
+    }
+  }
+`;
+
+/**
+ * A `text[]` or jsonb column as the device stores it (JSON text) back to the value the
+ * GraphQL input takes. `undefined` for an absent key (a PATCH that did not touch it, which
+ * JSON.stringify then drops so the server leaves the column alone); `null` for an explicit
+ * NULL; the parsed value otherwise. Text that is not JSON is passed through as-is, so a
+ * bad row fails loudly at the resolver (a PermanentMutationError) instead of being guessed at.
+ */
+function jsonColumn(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
 
 /** Tables whose local writes are intentionally not replayed — see the module comment. */
 const READ_ONLY_TABLES = new Set(['tags', 'entity_tag']);
@@ -211,7 +273,9 @@ export class GraphQLBackendConnector implements PowerSyncBackendConnector {
           // This specific record will never succeed (bad input, or it belongs to a
           // note the server doesn't recognize for this user) — drop it and move on
           // rather than retrying it forever.
-          console.error(`[PowerSync] Dropping unreplayable ${op.op} on notes#${op.id}: ${error.message}`);
+          console.error(
+            `[PowerSync] Dropping unreplayable ${op.op} on ${op.table}#${op.id}: ${error.message}`,
+          );
           continue;
         }
 
@@ -227,6 +291,10 @@ export class GraphQLBackendConnector implements PowerSyncBackendConnector {
   private async replay(op: CrudEntry): Promise<void> {
     if (op.table === 'notes') {
       return this.replayNote(op);
+    }
+
+    if (op.table === 'saved_searches') {
+      return this.replaySavedSearch(op);
     }
 
     if (READ_ONLY_TABLES.has(op.table)) {
@@ -282,6 +350,62 @@ export class GraphQLBackendConnector implements PowerSyncBackendConnector {
         });
 
         assertMutationSucceeded(result, 'deleteNote');
+
+        return;
+      }
+    }
+  }
+
+  private async replaySavedSearch(op: CrudEntry): Promise<void> {
+    const id = GlobalUID.encode('saved-search', op.id);
+
+    switch (op.op) {
+      case UpdateType.PUT: {
+        // The row's own id goes with the create, so the server keeps it and the
+        // search that syncs back down is this row, not a duplicate under a new id.
+        const result = await this.request(CREATE_SAVED_SEARCH_MUTATION, {
+          input: {
+            id,
+            name: op.opData?.name ?? null,
+            description: op.opData?.description ?? null,
+            query: op.opData?.query ?? null,
+            entityTypes: jsonColumn(op.opData?.entity_types) ?? [],
+            tags: jsonColumn(op.opData?.tags) ?? [],
+            filters: jsonColumn(op.opData?.filters) ?? null,
+          },
+        });
+
+        assertMutationSucceeded(result, 'createSavedSearch');
+
+        return;
+      }
+
+      case UpdateType.PATCH: {
+        // Only columns that actually changed are present on a PATCH; `undefined` keys
+        // are dropped by JSON.stringify, so the mutation leaves those columns alone.
+        // `updated_at` is the server's to stamp, and the sharing columns are not the
+        // device's to write (see the module comment), so none of those are forwarded.
+        const result = await this.request(UPDATE_SAVED_SEARCH_MUTATION, {
+          input: {
+            id,
+            name: op.opData?.name,
+            description: op.opData?.description,
+            query: op.opData?.query,
+            entityTypes: jsonColumn(op.opData?.entity_types),
+            tags: jsonColumn(op.opData?.tags),
+            filters: jsonColumn(op.opData?.filters),
+          },
+        });
+
+        assertMutationSucceeded(result, 'updateSavedSearch');
+
+        return;
+      }
+
+      case UpdateType.DELETE: {
+        const result = await this.request(DELETE_SAVED_SEARCH_MUTATION, { input: { id } });
+
+        assertMutationSucceeded(result, 'deleteSavedSearch');
 
         return;
       }

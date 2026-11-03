@@ -21,6 +21,7 @@ import {
 import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
 import { ConsentLock } from './ConsentLock';
 import { consentLockState } from './consentProvenance';
+import type { HiddenCharacterCheck } from './useHiddenCharacterFlags';
 
 export interface AskReviewItem {
   id: string;
@@ -55,6 +56,12 @@ interface Props {
   prompt: string;
   /** Whether the server stripped characters that render as nothing from `prompt`. See {@link AskerQuote}. */
   promptHiddenCharactersRemoved?: boolean;
+  /**
+   * Whether that has been checked yet. While it is `checking`, Approve and the
+   * answer-with-less buttons wait, so nothing is approved before the note could
+   * appear. `failed` says so on the card and leaves the decision to the owner.
+   */
+  hiddenCharacterCheck?: HiddenCharacterCheck;
   /** The structured ask as SENT, rendered legibly. */
   scopeSummary: string;
   /**
@@ -120,6 +127,7 @@ export function AskReviewCard({
   tier,
   prompt,
   promptHiddenCharactersRemoved = false,
+  hiddenCharacterCheck = 'checked',
   scopeSummary,
   searchBreadth,
   items = [],
@@ -138,6 +146,8 @@ export function AskReviewCard({
   const kept = items.filter((item) => !item.withheld);
   const shareLabel = items.length > 0 ? `Share ${kept.length} of ${items.length}` : askApproveLabel(decision);
   const preAuthorized = decision === 'pre-authorized';
+  // Approving discloses; declining doesn't, so only the first waits.
+  const holdApproval = busy || hiddenCharacterCheck === 'checking';
 
   return (
     <Card className="flex flex-col gap-3 p-4">
@@ -174,7 +184,7 @@ export function AskReviewCard({
           ) : null}
         </div>
 
-        <Button size="sm" onClick={onApprove} disabled={busy}>
+        <Button size="sm" onClick={onApprove} disabled={holdApproval}>
           {shareLabel}
         </Button>
       </div>
@@ -186,6 +196,7 @@ export function AskReviewCard({
         prompt={prompt}
         attribution={`${askerName} asked:`}
         hiddenCharactersRemoved={promptHiddenCharactersRemoved}
+        hiddenCharacterCheck={hiddenCharacterCheck}
       />
 
       {/* WHO is asking, when they said. Its own line rather than a chip beside
@@ -260,7 +271,7 @@ export function AskReviewCard({
                 key={form}
                 size="sm"
                 variant="outline"
-                disabled={busy}
+                disabled={holdApproval}
                 onClick={() => onDowngrade?.(form)}
               >
                 {answerFormLabel(form)}

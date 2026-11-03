@@ -79,7 +79,8 @@ export class McpServerConfigService {
       url: dto.url ?? null,
       auth: this.secretCodec.encryptAuth(dto.auth ?? null),
       enabled: dto.enabled ?? true,
-      source: dto.source ?? 'user_added',
+      // A catalogSlug means the row came from the catalog; callers (the web dialog) send only the slug.
+      source: dto.source ?? (dto.catalogSlug ? 'catalog' : 'user_added'),
       catalogSlug: dto.catalogSlug ?? null,
       discoveredTools: null,
       // `[]`, never null: a server added after the approval gate exists contributes zero tools to

@@ -155,9 +155,10 @@ export class CreateAskGrantInput {
   /**
    * The linked peer Companion this grant addresses, for a FEDERATED grant.
    *
-   * The raw `ci.peer_links.id`, matching what {@link AskGrantType
-   * .granteePeerLinkId} emits — peer links have no global-id type of their own,
-   * so encoding one here would make the value the API hands out un-resubmittable.
+   * Either the `peer-link` global id (`PeerLinkType.id`, what `createPeerLink`
+   * and `peerLinks` return) or the raw `ci.peer_links.id` that {@link
+   * AskGrantType.granteePeerLinkId} emits, so both values the API hands out
+   * can be resubmitted (`AskResolver#peerLinkIdFrom`).
    */
   @Field(() => ID, { nullable: true })
   granteePeerLinkId?: string;

@@ -428,6 +428,16 @@ describe('PortalTokenService', () => {
       expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
     });
 
+    it('confines a companion-atlas token the Portal stamped to the capture scope', async () => {
+      // The Companion Atlas viewer's token: a JWT the Portal stamps (CI-Portal jwtAccessToken.ts),
+      // addressed to no appliance. Not a capture client, so it takes the route any other client's
+      // unaddressed token takes: the capture scope.
+      portalConfig.audience = 'ci-server,ci-import-tools,ci-even,companion-atlas';
+      signedInAs({ aud: 'companion-atlas', ci_appliance_binding: 1 });
+
+      expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
+    });
+
     it('keeps an unaddressed token from an older Portal working for pairing, but not for admin routes', async () => {
       // Before the Portal addresses tokens, nothing could have addressed this one: phone pairing
       // mints its key with it, so it keeps credential routes. Admin routes it loses.
@@ -577,11 +587,13 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
 
     expect(audiences).toContain('ci-server');
     expect(audiences).toContain('ci-hub');
-    expect(audiences).toContain('ci-import-tools');
+    expect(audiences).not.toContain('ci-import-tools');
     expect(audiences).toContain('ci-browser-extension');
     expect(audiences).toContain('ci-even');
     // Companion Memory App (CI-Applet), the desktop capture client.
     expect(audiences).toContain('ci-applet');
+    // Companion Atlas, the globe viewer. The Portal stamps its tokens, so they are capture-only here.
+    expect(audiences).toContain('companion-atlas');
 
     expect(new Set(audiences).size).toBe(audiences.length);
     expect(audiences.every((a) => a.length > 0)).toBe(true);
@@ -594,7 +606,7 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     ).auth;
 
     expect(portal.captureClients.split(',').sort()).toEqual(
-      ['ci-applet', 'ci-browser-extension', 'ci-even', 'ci-import-tools'].sort(),
+      ['ci-applet', 'ci-browser-extension', 'ci-even'].sort(),
     );
     // Nothing presents a service token: the sidecars authenticate with SIDECAR_AUTH_SECRET.
     expect(portal.serviceClients).toBe('');

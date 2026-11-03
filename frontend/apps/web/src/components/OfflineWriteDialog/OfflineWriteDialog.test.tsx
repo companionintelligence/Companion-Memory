@@ -15,7 +15,7 @@ import {
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { okResponse } from '@/test/fetchFakes';
+import { memoryApiResponse } from '@/test/fetchFakes';
 
 import { CHECK_AGAIN_DISPLAY_MS, OfflineWriteDialog } from './OfflineWriteDialog';
 
@@ -110,7 +110,7 @@ describe('OfflineWriteDialog', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => okResponse()),
+      vi.fn(async (input: RequestInfo) => memoryApiResponse(input)),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 

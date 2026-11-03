@@ -467,6 +467,7 @@ export function jestFiltersByName(jestArgs: string[]): boolean {
  * disagree, so a suite that starts reading a new one cannot go unset here.
  */
 export const TEST_DATABASE_URL_VARS: readonly string[] = [
+  'AGENT_TEST_DATABASE_URL',
   'ASKS_TEST_DATABASE_URL',
   'AUTH_TEST_DATABASE_URL',
   'BROWSER_ACTIVITY_TEST_DATABASE_URL',
@@ -476,8 +477,10 @@ export const TEST_DATABASE_URL_VARS: readonly string[] = [
   'GEOCODE_TEST_DATABASE_URL',
   'IMPORT_TEST_DATABASE_URL',
   'MACOS_TEST_DATABASE_URL',
+  'MAINTENANCE_TEST_DATABASE_URL',
   'MEMORY_TEST_DATABASE_URL',
   'NOTES_TEST_DATABASE_URL',
+  'ONBOARDING_TEST_DATABASE_URL',
   'PEERS_TEST_DATABASE_URL',
   'PERSISTENCE_TEST_DATABASE_URL',
   'PERSONALIZATION_TEST_DATABASE_URL',

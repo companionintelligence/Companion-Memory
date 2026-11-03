@@ -1,5 +1,6 @@
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+import { threadNodeLabel } from '@/pages/ChatPage/useRecentThreads';
 
 import type { EntityItem } from '../../useEntityService';
 
@@ -58,8 +59,13 @@ export function FallbackDetails({ entity }: Props) {
     record.question && typeof record.question === 'object'
       ? firstString(record.question as Record<string, unknown>, ['text', 'question'])
       : null;
+  // An untitled chat gets the name Chat gives it, not the bare kind ("Thread").
   const title =
-    question ?? firstString(record, ['title', 'name', 'filename', 'label', 'subject', 'answer']) ?? kind;
+    entity.__typename === 'ThreadType'
+      ? threadNodeLabel({ id: String(record.id ?? ''), name: firstString(record, ['name']) }, fmt)
+      : (question ??
+        firstString(record, ['title', 'name', 'filename', 'label', 'subject', 'answer']) ??
+        kind);
   const body = firstString(record, [
     'answer',
     'description',

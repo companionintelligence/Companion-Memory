@@ -5,6 +5,7 @@ import static com.companionintelligence.app.SourceManifest.elements;
 import static com.companionintelligence.app.SourceManifest.names;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
@@ -230,23 +231,45 @@ public class AndroidManifestContractTest {
             permissions.contains("android.permission.ACCESS_COARSE_LOCATION")
         );
 
-        // "Always" mode records through the plugin's location-typed foreground service, which the
-        // person starts from inside the app, so Android treats it as while-in-use access. Without
-        // the typed declaration that service cannot start on API 34+.
+        // "Always" mode is the plugin's motion-gated tracker: an exit geofence restarts a
+        // location-typed foreground service from the background. The geofence needs the
+        // background grant (Play Services refuses it otherwise) and the service needs the typed
+        // declaration (refused at start time on API 34+). Play reviews the first with its
+        // background-location declaration + video; that review is the point of this build.
+        assertTrue(
+            "ACCESS_BACKGROUND_LOCATION is missing -- the exit geofence behind \"Always\" cannot be "
+                + "registered without it, so nothing restarts sampling after the phone comes to rest. "
+                + "Declared: " + permissions,
+            permissions.contains("android.permission.ACCESS_BACKGROUND_LOCATION")
+        );
         assertTrue(
             "FOREGROUND_SERVICE_LOCATION is missing -- a location-typed foreground service is refused at "
                 + "startActivity time on Android 14+. Declared: " + permissions,
             permissions.contains("android.permission.FOREGROUND_SERVICE_LOCATION")
         );
-        // Nothing requests ACCESS_BACKGROUND_LOCATION at runtime. Declaring it alone makes Play
-        // review the app as accessing location in the background (declaration form, demo video
-        // and a "core functionality" judgement). It is the permission the 2026-10-06 Play
-        // rejection named.
-        assertFalse(
-            "ACCESS_BACKGROUND_LOCATION is declared again. \"Always\" doesn't need it: its foreground service "
-                + "has while-in-use access. Declaring it puts the app through Play's background-location "
-                + "review. Declared: " + permissions,
-            permissions.contains("android.permission.ACCESS_BACKGROUND_LOCATION")
+    }
+
+    @Test
+    public void gps_hardware_is_optional_and_overrides_dependency_requirement() {
+        Element gps = null;
+        for (Element feature : elements(manifest, "uses-feature")) {
+            if ("android.hardware.location.gps".equals(attr(feature, "name"))) {
+                gps = feature;
+                break;
+            }
+        }
+
+        assertNotNull("GPS must be explicitly declared because the app requests precise location.", gps);
+        assertEquals(
+            "Location tracking is optional; devices without built-in GPS must remain installable.",
+            "false",
+            attr(gps, "required")
+        );
+        assertEquals(
+            "The manifest merger ORs uses-feature required flags, so the app must replace the "
+                + "dependency's android:required value rather than merge it.",
+            "android:required",
+            gps.getAttributeNS("http://schemas.android.com/tools", "replace")
         );
     }
 

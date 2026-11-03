@@ -489,7 +489,7 @@ export function ApiKeysSection() {
               <Input
                 readOnly
                 value={revealedKey}
-                className="!flex-1 !border-0 !ring-0 !shadow-none !bg-transparent !p-0 !ml-1 !h-auto !rounded-none font-mono text-sm focus-visible:!ring-0 focus-visible:!border-transparent"
+                className="!flex-1 !border-0 !ring-0 !shadow-none !bg-transparent !p-0 !ml-1 !h-auto !rounded-none font-mono text-base md:text-sm focus-visible:!ring-0 focus-visible:!border-transparent"
               />
               <IconButton
                 variant="ghost"

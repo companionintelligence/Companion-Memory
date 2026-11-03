@@ -1,6 +1,6 @@
 import type { ToolRequestContext } from '../context';
 import { coerceArgumentsToSchema } from '../core/coerceArguments';
-import type { ToolHandle } from '../core/ToolHandle';
+import type { ToolCallRefusal, ToolHandle } from '../core/ToolHandle';
 import {
   canonicalizeExecutableToolName,
   intentToolName,
@@ -542,6 +542,34 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
   }
 
   /**
+   * The tool's own reason this call could never run ({@link ToolHandle.checkCall}), or `undefined`.
+   *
+   * A lookup that throws is not a refusal: the call is queued as it was before the tool could
+   * answer, and `execute` makes the same decision after it is approved.
+   */
+  private async callRefusal(
+    tool: TTool,
+    context: ToolInvocationContext,
+    input: unknown,
+  ): Promise<string | ToolCallRefusal | undefined> {
+    if (!tool.checkCall) {
+      return undefined;
+    }
+
+    try {
+      return await tool.checkCall(context, input);
+    } catch (error) {
+      this.logger.warn(`Could not check this call to ${tool.schema.name} before queueing it`, {
+        intent: tool.schema.name,
+        userId: context.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return undefined;
+    }
+  }
+
+  /**
    * {@link privacyOf} for a resolved tool and an already-coerced input.
    *
    * A per-call answer that throws (a lookup the tool needed failed) is read as destructive rather
@@ -629,23 +657,26 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       };
     }
 
-    const invalid = tool.checkInput?.(coerced);
+    const invalid = tool.checkInput?.(coerced) ?? (await this.callRefusal(tool, context, coerced));
 
     if (invalid !== undefined) {
+      const refusal =
+        typeof invalid === 'string' ? { code: 'TOOL_INVALID_INPUT', message: invalid } : invalid;
+
       // A card the owner can only approve into a failure is not a question worth asking them. The
       // caller hears why now, while it can still correct the call.
       this.logger.warn(`Refused to queue a call that could not run: ${toolName}`, {
         toolName,
         intent: tool.schema.name,
         userId: context.userId,
-        reason: invalid,
+        reason: refusal.message,
       });
 
       return {
         success: false,
         error: {
-          code: 'TOOL_INVALID_INPUT',
-          message: `Nothing was queued for confirmation: ${invalid}`,
+          code: refusal.code,
+          message: `Nothing was queued for confirmation: ${refusal.message}`,
           // The same input fails the same way; only a corrected call can succeed.
           retryable: false,
         },

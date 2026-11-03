@@ -227,7 +227,12 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    */
   [STAGE_IDS.INDEX_VECTOR]: 2,
   [STAGE_IDS.INDEX_VECTOR_COMMUNICATION]: 2,
-  [STAGE_IDS.INDEX_VECTOR_EVENT]: 2,
+  /**
+   * v3 (2026-10-29) — a photo or video event's recipe gained its capture month,
+   * year and season (`eventWeightedTexts`), so an ask for "photos from October"
+   * finds it. Re-running the stage is how photos already indexed get them.
+   */
+  [STAGE_IDS.INDEX_VECTOR_EVENT]: 3,
   /** v2 — the recipe gained the last-seen place name (weight 8). v3 — documents, as above. */
   [STAGE_IDS.INDEX_VECTOR_ITEM]: 3,
   [STAGE_IDS.INDEX_VECTOR_PERSON]: 2,

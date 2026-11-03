@@ -225,11 +225,12 @@ export class IngestResetService {
         [ctx.userId],
       );
 
-      // The ci_search index tables carry no FK edges — plain truncates, same as
-      // OrphanCleanupService.truncateSearchIndex but inside THIS transaction.
-      for (const ref of SEARCH_TABLES) {
-        await manager.query(`TRUNCATE TABLE ${qualified(ref)}`);
-      }
+      // One statement, same as OrphanCleanupService.truncateSearchIndex but
+      // inside THIS transaction. `mobile_search_documents` references `vectors`,
+      // and Postgres refuses to TRUNCATE a referenced table on its own even when
+      // the referencing one was emptied a statement earlier; naming both in one
+      // TRUNCATE is what it accepts, without a CASCADE that could reach further.
+      await manager.query(`TRUNCATE TABLE ${SEARCH_TABLES.map(qualified).join(', ')}`);
 
       // The caller's other rows (notes, people, messages...) lost their index
       // entries with that truncate. Re-open their ledger so the pipeline embeds

@@ -19,9 +19,10 @@ import { ENTITY_SOURCE_MAP, type EntitySource } from '../entitySourceMap';
  */
 export const SEARCH_TABLES = [
   { schema: 'ci_search', table: 'embeddings', keyColumns: ['id'] },
-  // Before `vectors`: it references vectors(id) ON DELETE CASCADE, so the
-  // orphan sweep finds nothing here that the vectors pass would not also take,
-  // but TRUNCATE refuses a table another one still points at.
+  // References vectors(id) ON DELETE CASCADE, so the orphan sweep finds nothing
+  // here that the vectors pass would not also take. `truncateSearchIndex` and
+  // the ingest reset name every table here in ONE TRUNCATE, because Postgres
+  // refuses to truncate `vectors` alone while this table points at it.
   { schema: 'ci_search', table: 'mobile_search_documents', keyColumns: ['id'] },
   { schema: 'ci_search', table: 'vectors', keyColumns: ['id'] },
   { schema: 'ci_search', table: 'index_skips', keyColumns: ['entity_type', 'entity_id'] },
@@ -242,12 +243,16 @@ export class OrphanCleanupService {
     // together, or not at all. See REOPEN_INDEX_LEDGER_SQL for why the ledger
     // has to move.
     return this.dataSource.transaction(async (manager) => {
-      const truncated: string[] = [];
+      const truncated = SEARCH_TABLES.map(({ schema, table }) => `${schema}.${table}`);
 
-      for (const { schema, table } of SEARCH_TABLES) {
-        await manager.query(`TRUNCATE TABLE "${schema}"."${table}"`);
-        truncated.push(`${schema}.${table}`);
-      }
+      // One statement for all of them. `mobile_search_documents` references
+      // `vectors`, and Postgres refuses to TRUNCATE a referenced table on its own,
+      // whatever order the statements run in and even when the referencing table
+      // is already empty. Listed together they are accepted, without a CASCADE
+      // that would also empty whatever else points at them.
+      await manager.query(
+        `TRUNCATE TABLE ${SEARCH_TABLES.map(({ schema, table }) => `"${schema}"."${table}"`).join(', ')}`,
+      );
 
       const reopened = (await manager.query(REOPEN_INDEX_LEDGER_SQL, [null])) as Array<{ count: number }>;
       const ledgerRowsReopened = Number(reopened[0]?.count ?? 0);

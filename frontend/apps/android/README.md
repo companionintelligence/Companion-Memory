@@ -339,19 +339,64 @@ into `android/` with
 
 ```bash
 cd frontend/apps/android
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
-# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
-# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
+# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²)
 #                splash.png, splash-dark.png (2732²)
+# icon-only/-foreground/-background are the Companion Memory store icon (see below), NOT mirrors
+# of @companionintelligence/assets logos/app-icon-source.png (the company aperture mark).
 npx @capacitor/assets generate \
-  --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#0b1418' \
+  --iconBackgroundColor '#041620' --iconBackgroundColorDark '#041620' \
   --splashBackgroundColor '#ffffff' --splashBackgroundColorDark '#0b1418'
 ```
 
-The current icon is the CI globe mark (rendered from
-`frontend/apps/web/public/logo.svg` at 1024px). Re-run after changing the artwork,
-then rebuild. (`assets/` is shared in shape with the iOS package but generated
-separately; `icon-only.png` is what the iOS side needs, so keep it present.)
+**The installed icon must match the Play listing** (Play rejected 1007 under Misleading
+Claims when it did not, #3056). The listing shows the Companion Memory icon: a solid teal
+brain with a white node network and a dark M on `#041620`. The sources are built from that
+one opaque 1024² master:
+
+- `assets/icon-only.png` — the master itself (full-bleed, opaque). Source of the legacy
+  `ic_launcher.png` / `ic_launcher_round.png`.
+- `assets/icon-foreground.png` — the master with the ground removed (colour-to-alpha against
+  `#041620`, so the glow becomes translucent teal); composited over `#041620` it gives the master
+  back to within 1/255.
+- `assets/icon-background.png` — flat `#041620`, the same colour as
+  `res/values/ic_launcher_background.xml` and every `mipmap-*/ic_launcher_background.png`. Keep all
+  of them equal or the foreground shows a faint seam.
+
+The adaptive XML insets both layers 16.7 %, so each layer PNG is the 72 dp visible window and the
+brain sits well inside the 66 dp safe zone.
+
+**The committed `res/` is not byte-for-byte what that command writes.** Run against these sources
+it carries the same artwork, but it writes the adaptive layers at 36–192 px (the committed ones are
+54–288 px), pads the legacy square icon by a flat 8 px and does not round its corners (the committed
+ones keep a rounded-square mask), and rewrites `mipmap-anydpi-v26/ic_launcher*.xml` without the
+`<monochrome>` element. Prefer editing the committed layers; if you do regenerate, restore the layer
+sizes and the XML from git and re-add the two stencils below.
+
+**Two single-colour rasters are NOT produced by that command and survive it only if
+re-added.** Android tints a notification's small icon and (from Android 13) a themed
+launcher icon as a stencil: it reads the alpha channel and fills the shape with the bar's
+or the launcher's colour, so the multi-colour launcher icon cannot serve — on Samsung it
+showed as a filled blob that never matched the bar. Both are the brain silhouette with the M knocked
+out, white on transparent (the vector master's alpha, aligned to the raster node for node; the node
+network is left out because it turns to mush at these sizes):
+
+- `android/app/src/main/res/drawable-*/ic_stat_memory.png` — 24 dp (24/36/48/72/96 px),
+  the silhouette filling 84 % of the box height, the M stroked slightly heavier so it reads at
+  24 px. Every notification the app posts uses it: the location
+  foreground service and the resume nudge (`@ci/capacitor-local-hub`), the model download
+  and the generation service (`@ci/capacitor-local-llm`). The plugins look it up by name
+  in the host app's resources (`NotificationIcons.kt` in each) rather than shipping it,
+  since it is the app's brand, and fall back to what they used before if a host has none.
+- `android/app/src/main/res/mipmap-*/ic_launcher_monochrome.png` — the 108 dp adaptive
+  layer (54–288 px) with the silhouette 52 % of the layer high (inside the 66 dp safe circle),
+  referenced by the `<monochrome>`
+  element in `mipmap-anydpi-v26/ic_launcher*.xml`. `@capacitor/assets generate` rewrites
+  those XML files without it: put the element back after regenerating.
+
+The splash (`assets/splash*.png`) still shows the CI globe; before Android 12 that is what
+`@drawable/splash` draws, and Android 12+ shows the launcher icon instead. Re-run after
+changing the artwork, then rebuild. (`assets/` is shared in shape with the iOS package but
+generated separately; `icon-only.png` is what the iOS side needs, so keep it present.)
 
 ## Native auth (wired)
 
@@ -392,6 +437,55 @@ light bar in light mode — and re-applies on theme change via a `MutationObserv
 with a web no-op fallback. Android 13+ needs the `POST_NOTIFICATIONS` runtime permission
 (declared). All native-bridge helpers are unit-tested in
 `frontend/apps/web/src/test/nativeBridge.test.ts`.
+
+**Location (Always mode).** One recorder, the LocalHub plugin's background monitor, and no
+on-screen trail. `when_in_use` records nothing by itself (a current location is fetched on
+request, e.g. placing a note or photo), and `always` is the monitor below. Until 2026-10-26
+the foreground trail was `@capacitor-community/background-geolocation`, kept "foreground-only"
+for a trail while the app was open. That plugin asks the OS for a high-accuracy fix every
+**1 second** for as long as its watcher exists and never removes the request when the app
+leaves the screen; on its own Android cuts a backgrounded app off from location, but a
+location foreground service of our own grants the whole process background location, so the
+moment a trip started the old watcher ran alongside the tracker -- a double trail and the 1 Hz
+GPS cost the tracker was built to remove (the phone's own battery stats had put that one
+request at about a quarter of a day's drain). The on-screen trail added nothing the background
+trail did not, so the plugin is gone from both shells, which also unblocks Capacitor 8.
+
+Background samples come from `@ci/capacitor-local-hub`'s `startSignificantLocationUpdates`
+-- **motion-gated sampling**, under `android/src/main/java/.../localhub/location/`. GPS runs
+only while the phone is moving, and every signal that decides that needs nothing beyond the
+location grants Always already holds. The fixes themselves say when the phone has stopped
+(five minutes without 50 m of movement from where movement was last confirmed, or three once
+the permission-free stationary-detect sensor has reported it physically at rest); an exit
+geofence of 100 m around the resting spot says when it starts again. That geofence is the
+**only** restart signal: Android evaluates it with cheap location, it survives the process
+being frozen or killed, and it is one of the few events that may start a location foreground
+service from the background. No sensor can fill that role -- since Android 9 a backgrounded
+app with no foreground service receives no sensor events, one-shot triggers included
+(verified on a device: the significant-motion trigger fired for the system's listeners and
+never reached the app, frozen a minute after it stopped). The cost is that the first stretch
+of every trip, the radius plus Play Services' latency, is not sampled, and a walk shorter
+than the radius is not sampled at all. A location foreground service, with the notification
+Android requires, exists only in between. The activity-recognition API is deliberately
+**not** used: it is a separate "Physical activity" permission that reads as a different kind
+of monitoring than location, and iOS's significant-change monitoring asks for nothing of the
+sort. Each fix that clears the 150 m / 5 min gate is queued into the encrypted outbox **from
+native code**, so recording continues after the WebView is gone; the plugin also emits it as
+`significantLocation`, and the web side's own enqueue collapses on the shared `source_id`
+(the record builder is pinned to the same fixture as the web one, see
+`PositionRecordJsonTest`). Two runtime grants, walked one prompt at a time by the plugin:
+fine location, then background location (`Allow all the time`), which is what lets Play
+Services hold the geofence; nothing is armed until both are held. Refusing either emits
+`significantLocationError` `NOT_AUTHORIZED`, which is what lights up "Open Settings". A
+reboot or an app update wipes the fence; `TrackingRestoreReceiver` puts it back (or restarts
+the service mid-trip), retrying through WorkManager while Play Services comes up. Should the
+background grant lapse later (lowered in Settings, or reset by Android on an app unused for
+months), no fence can be set and the tracker posts one notification asking for an app open,
+where the web side re-prompts. Check the footprint on a device with `adb shell dumpsys
+location`: while the phone is still there must be **no** `ProviderRequest` carrying this
+app's uid, `dumpsys activity services com.ci.memory` must list no `LocationService`, and
+`adb shell dumpsys activity service com.google.android.gms` → "Geofencing:" must list the
+fence.
 
 These bridges live in `@ci/common/src/utils/nativeBridge.ts` and reach the plugins via
 the runtime `window.Capacitor.Plugins` global (no `@capacitor/*` import in the web

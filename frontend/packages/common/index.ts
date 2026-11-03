@@ -11,8 +11,9 @@ export {
   useDeviceLayout,
   useOverflowsRight,
   usePageTitle,
+  useScrollOverflow,
 } from './src/hooks';
-export type { DeviceSizeClass } from './src/hooks';
+export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
@@ -30,6 +31,7 @@ export {
   isNativePlatform,
   isTauriPlatform,
   needsNativeCloudConnect,
+  pageServedByApi,
   persistApiBaseUrl,
   resolveHttpOrigin,
   setApiBaseUrl,
@@ -48,6 +50,7 @@ export type {
   AppLockPluginBridge,
   AppLockSettings,
   AppLockStatus,
+  LockScreenQueueCounts,
 } from './src/utils/appLock';
 export {
   CONNECTION_REPROBE_INTERVAL_MS,
@@ -59,6 +62,7 @@ export {
   useOptionalConnectionMode,
   getLatestConnectionMode,
   isConnectionModeResolved,
+  memoryAnswers,
   requestConnectionRefresh,
   registerCachedDataProbe,
 } from './src/utils/connectionMode';
@@ -80,7 +84,7 @@ export {
   captureNote,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
   forgetQueuedNote,
   haversineMeters,
@@ -96,7 +100,7 @@ export {
   writeLocationTrackingMode,
 } from './src/utils/deviceSources';
 export type {
-  BackgroundGeolocationLocation,
+  NativeLocationEvent,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
@@ -249,10 +253,14 @@ export {
   addAppStateListener,
   addAppUrlOpenListener,
   addBackButtonListener,
-  addBackgroundLocationWatcher,
+  claimNativeReplica,
+  clearNativeReplicaSync,
+  configureNativeReplicaSync,
+  releaseNativeReplica,
   startSignificantLocationUpdates,
   closeBrowser,
   exitApp,
+  getBackgroundUpload,
   getCurrentDeviceLocation,
   getLaunchUrl,
   getNativeCurrentLocation,
@@ -266,7 +274,6 @@ export {
   openLinkOutsideApp,
   openNativeAppSettings,
   openNativeLocationSettings,
-  removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
   requestNotificationPermission,
   scanQrCode,
@@ -274,13 +281,16 @@ export {
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
+  setBackgroundUpload,
   setStatusBarStyle,
   setSystemBarsBackground,
   syncNativeIntentConfig,
   takeNativePhoto,
 } from './src/utils/nativeBridge';
 export type {
-  BackgroundGeolocationError,
+  BackgroundUploadState,
+  NativeReplicaSyncOptions,
+  NativeLocationError,
   BarcodeScanErrorCode,
   DeviceLocationErrorCode,
   LocalNotification,

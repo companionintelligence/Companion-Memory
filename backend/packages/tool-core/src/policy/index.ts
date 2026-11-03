@@ -10,6 +10,7 @@
 export {
   capabilityAllows,
   capabilityRequiredFor,
+  reachesThirdParty,
   removesData,
   stricterPrivacy,
   type GatedPrivacy,

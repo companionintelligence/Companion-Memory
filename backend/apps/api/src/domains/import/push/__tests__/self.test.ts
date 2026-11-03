@@ -360,6 +360,20 @@ describe('readSentLabelSenders', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining("'sent_label'"), ['run-1']);
   });
 
+  it('leaves out an address that also sent this run a mail with a refused Sent label', async () => {
+    const query = jest.fn(async () => [
+      { sender: '"Liam Broza" <liam@alias.example>', refused: false },
+      // Got a Sent label through somehow, but forged one elsewhere in the run.
+      { sender: 'Mallory <mallory@evil.example>', refused: false },
+      { sender: '"Mallory" <Mallory@Evil.example>', refused: true },
+      // Only ever refused: never a candidate.
+      { sender: 'Eve <eve@evil.example>', refused: true },
+    ]);
+
+    await expect(readSentLabelSenders({ query } as never, 'run-1')).resolves.toEqual(['liam@alias.example']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("'SentLabelRefused'"), ['run-1']);
+  });
+
   it('maps a contact holding one of those addresses to the owner', () => {
     const identity = {
       names: ['Liam Broza'],

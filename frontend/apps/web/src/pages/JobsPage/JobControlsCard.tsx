@@ -570,7 +570,7 @@ function NumberControl({
             event.currentTarget.blur();
           }
         }}
-        className={labelHidden ? 'h-7 w-16 px-2 text-xs tabular-nums' : 'mt-1 h-8'}
+        className={labelHidden ? 'h-7 w-16 px-2 text-base tabular-nums md:text-xs' : 'mt-1 h-8'}
       />
       {help ? <p className="mt-1 text-xs text-muted-foreground">{help}</p> : null}
       {/* Only shown when it disagrees with the request — the case where a number

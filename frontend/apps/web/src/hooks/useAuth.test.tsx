@@ -179,6 +179,110 @@ describe('useAuth', () => {
       expect(result.current[0].unreachable).toBe(true);
     });
 
+    it('ends the outage once Memory answers a sign-in, though the session check still fails', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          return emptyResponse(false, 502);
+        }
+
+        if (url.endsWith('/api/authenticate')) {
+          return jsonResponse({ accessToken: 'signed-in' });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].unreachable).toBe(true);
+
+      await act(async () => {
+        await result.current[1].login('jo@example.com', 'secret');
+      });
+
+      expect(result.current[0].authToken).toBe('signed-in');
+      expect(result.current[0].unreachable).toBe(false);
+    });
+
+    it('keeps a sign-in when a retry sent before it comes back with no session', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      try {
+        document.cookie = 'csrfToken=csrf-abc';
+        let refreshCalls = 0;
+        let answerRetry: (res: Response) => void = () => undefined;
+
+        setFetch((url) => {
+          if (url.endsWith('/api/authenticate/refresh')) {
+            refreshCalls += 1;
+
+            // The check on mount goes unanswered. The first retry is still out when the person signs in.
+            return refreshCalls === 1
+              ? emptyResponse(false, 502)
+              : new Promise<Response>((resolve) => {
+                  answerRetry = resolve;
+                });
+          }
+
+          if (url.endsWith('/api/authenticate')) {
+            return jsonResponse({ accessToken: 'signed-in' });
+          }
+
+          return emptyResponse();
+        });
+
+        const { result } = renderHook(() => useAuth(), { wrapper });
+
+        await waitFor(() => expect(result.current[0].unreachable).toBe(true));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(refreshCalls).toBe(2);
+
+        await act(async () => {
+          await result.current[1].login('jo@example.com', 'secret');
+        });
+
+        // The retry carried the cookies from before the sign-in, so Memory finds no session.
+        await act(async () => {
+          answerRetry(emptyResponse(false, 401));
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(result.current[0].authToken).toBe('signed-in');
+        expect(result.current[0].unreachable).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ends the outage as soon as Try again gets an answer', async () => {
+      document.cookie = 'csrfToken=csrf-abc';
+      let memoryUp = false;
+
+      setFetch((url) => {
+        if (url.endsWith('/api/authenticate/refresh')) {
+          return memoryUp ? jsonResponse({ accessToken: 'back' }) : emptyResponse(false, 502);
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].unreachable).toBe(true));
+
+      memoryUp = true;
+      await act(async () => {
+        await result.current[1].refresh();
+      });
+
+      expect(result.current[0].authToken).toBe('back');
+      expect(result.current[0].unreachable).toBe(false);
+    });
+
     it('keeps the token when a later refresh goes unanswered', async () => {
       document.cookie = 'csrfToken=csrf-abc';
       let refreshCalls = 0;

@@ -147,7 +147,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Upload archives and run them through unpack → parse → media → push')
     .option('--label <label>', 'display name for the run; defaults to the filename')
     .option('--stages <list>', 'comma-separated stages to run; default is all four')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((paths: string[], options) => importCommand(context(), paths, options));
@@ -160,7 +160,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--skip <sources>', 'drop units recognized as these data sources')
     .option('--units <paths>', 'exact unit paths from a scan')
     .option('--label <label>', 'display name for the runs')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((options) => inboxCommand(context(), options));
@@ -181,7 +181,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--run <id>', 'restrict to this run (repeatable)', collect, [])
     .option('--dry-run', 'list what would be pushed')
     .option('--retry-failed', 're-push the rows a finished push could not write (needs --run)')
-    .option('--wait', 'follow the runs until they finish')
+    .option('--wait', 'follow the runs until they finish; exit 1 if one fails or is cancelled')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')
     .action((options) => pushCommand(context(), options));

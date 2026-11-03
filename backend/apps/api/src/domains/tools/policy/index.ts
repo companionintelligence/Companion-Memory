@@ -7,7 +7,13 @@
  * on-device dispatcher follows via the intent manifest. Anything that needed injection would not
  * be shareable across all three.
  */
-export { capabilityAllows, capabilityRequiredFor, removesData, type GatedPrivacy } from './capabilityPolicy';
+export {
+  capabilityAllows,
+  capabilityRequiredFor,
+  reachesThirdParty,
+  removesData,
+  type GatedPrivacy,
+} from './capabilityPolicy';
 export {
   DISPATCH_TIERS,
   resolveDispatch,

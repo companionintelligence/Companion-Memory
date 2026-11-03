@@ -93,6 +93,24 @@ describe('AppLockSection', () => {
     expect(mocks.plugin.lock).toHaveBeenCalledTimes(1);
   });
 
+  it('offers the switcher-and-screenshots switch on Android only; iOS always blurs and has no screenshot block', async () => {
+    const { unmount } = render(<AppLockSection />);
+
+    expect(
+      await screen.findByRole('switch', { name: 'Hide in app switcher and prevent screenshots' }),
+    ).toBeInTheDocument();
+    unmount();
+    resetAppLockStoreForTests();
+
+    mocks.android = false;
+    render(<AppLockSection />);
+
+    await screen.findAllByRole('switch', { name: 'Require unlock' });
+    expect(
+      screen.queryByRole('switch', { name: 'Hide in app switcher and prevent screenshots' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('on the web, explains the lock lives in the apps', () => {
     mocks.native = false;
 

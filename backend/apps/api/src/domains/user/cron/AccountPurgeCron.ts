@@ -31,6 +31,15 @@ export class AccountPurgeCron {
   @Cron(ACCOUNT_PURGE_CRON, { name: 'AccountPurgeCron.purgeDueAccounts' })
   async purgeDueAccounts() {
     if (!config.accountDeletion.purge.enabled) {
+      // Switched off, nothing is purged; but accounts left ended and unpurged
+      // are still reported, so an off switch forgotten after an incident shows.
+      await this.accountPurgeService.reportStalledPurges().catch((err: unknown) => {
+        this.logger.error(
+          'Could not check for stalled account purges',
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      });
+
       return;
     }
 
@@ -48,11 +57,12 @@ export class AccountPurgeCron {
     try {
       const summary = await this.accountPurgeService.purgeDueAccounts();
 
-      if (summary.considered > 0) {
+      if (summary.considered > 0 || summary.stalled > 0) {
         this.logger.log('Account purge run complete', {
           considered: summary.considered,
           purged: summary.purged,
           failed: summary.failed,
+          stalled: summary.stalled,
         });
       }
     } catch (err) {

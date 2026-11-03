@@ -21,6 +21,7 @@ import {
   GraphUtilityService,
   type ItemService,
   RelationshipEntity,
+  type ProductModelService,
 } from '@ci/domains/memory';
 import { ContentRemovedEvent } from '@ci/domains/memory/events';
 import { UserEntity } from '@ci/domains/user';
@@ -195,6 +196,8 @@ describeWithDb(
         graphEntities.people,
         graphEntities.places,
         graphEntities.concepts,
+        // No case here names a product, so the tool never reaches for it.
+        {} as unknown as ProductModelService,
         logger(),
       );
     });
@@ -499,13 +502,17 @@ describeWithDb(
       expect(objectCalls).toEqual([{ bucket: BUCKET, keys: [photo.originalKey, photo.variantKey].sort() }]);
     });
 
-    it('does not touch the file in archive mode, which only deactivates the content’s node', async () => {
+    it('does not touch the file when it refuses to archive the content', async () => {
       const photo = await seedPhoto('Trip photo');
       const content = await seedWrapper(photo.fileId);
 
       const result = await forget([content], 'archive');
 
-      expect(result.success).toBe(true);
+      expect(result.error?.code).toBe('ARCHIVE_REFUSED');
+      // Not even its graph node was touched.
+      expect(
+        await dataSource.query('SELECT is_active FROM ci.entities WHERE entity_id = $1', [content]),
+      ).toEqual([{ is_active: true }]);
       expect(await remains(photo)).toEqual(WHOLE);
       expect(storage.deleteObjects).not.toHaveBeenCalled();
       expect(publishedOf(FileRemovedEvent)).toEqual([]);

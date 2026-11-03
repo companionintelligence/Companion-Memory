@@ -24,6 +24,7 @@ import {
 import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import { AppLockGate } from '@/components/AppLock/AppLockGate';
+import { MediaLinkRefresh } from '@/components/MediaLinkRefresh';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
@@ -150,10 +151,11 @@ function RedirectProfileToSelfSettings() {
  * PowerSync only matters once someone is signed in.
  *
  * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
- * every visitor downloads before first paint and opened a WASQLite IndexedDB
- * database for people sitting on the splash screen who may never sign in. Signed
- * out, the tree renders without it; signed in, it loads and mounts exactly as
- * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ * every visitor downloads before first paint (and, until 2026-10-26, opened a
+ * WASQLite IndexedDB database for people sitting on the splash screen who may
+ * never sign in). Signed out, the tree renders without it; signed in, it loads
+ * and mounts exactly as before — every consumer of PowerSyncContext lives behind
+ * ProtectedRoute.
  */
 function PowerSyncBoundary({ children }: { children: ReactNode }) {
   const [{ authenticated, authToken }] = useAuth();
@@ -202,6 +204,8 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
+                          {/* Re-signs photo and video links that expired while cached. */}
+                          <MediaLinkRefresh />
                           {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
                           <DateTimeFormatProvider>
@@ -301,7 +305,7 @@ function AppRoutes() {
         />
 
         {/* Full-bleed splash on sign-in; the picker centers itself. Do not wrap
-            this in CenteredLayout — that card column is what hid the Lottie. */}
+            this in CenteredLayout — that card column is what hid the hero mark. */}
         <Route path="/device-connect" element={<DeviceConnectPage />} />
 
         <Route element={<CenteredLayout />}>

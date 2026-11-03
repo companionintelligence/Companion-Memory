@@ -9,3 +9,5 @@ export {
 export type { DeviceSizeClass } from './useDeviceLayout';
 export { usePageTitle } from './usePageTitle';
 export { useOverflowsRight } from './useOverflowsRight';
+export { useScrollOverflow } from './useScrollOverflow';
+export type { ScrollOverflow } from './useScrollOverflow';

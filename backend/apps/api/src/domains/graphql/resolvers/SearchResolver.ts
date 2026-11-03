@@ -88,8 +88,61 @@ const QUERY_CANDIDATE_LIMIT = 300;
 // SQL keyset, which walks time, so "Name (A-Z)" with no search text is paged
 // in memory like the query path: each type's newest rows up to this many,
 // sorted by name, sliced against the cursor. Below this many rows of a type the
-// list is complete; above it, only the newest rows of that type are in it.
+// list is complete; above it, only the newest rows of that type are in it, and
+// the result says so (`SearchResultConnection.nameSortCutShort`). Each type is
+// read one row past this to know, and that row is dropped (see capEachKind).
 const NAME_SORT_CANDIDATE_LIMIT = 500;
+/**
+ * Kinds the text and tag searches return that carry no time of their own, only their last write:
+ * a chat thread (its last message or title), a planner task, a feed action and a document excerpt.
+ * {@link SearchResolver.getEntityTimestamp} has to give them that write time, because it is also
+ * their cursor, so a date window kept them as if they had happened then: a chat started today
+ * came back under "Last week". A date window leaves them out instead, as the timed browse never
+ * fetches them and the explorer's When filter already sets them aside (`UNDATED_UNLISTED_TYPES`
+ * in the web app's `filterParams.ts`). The API and shared links get the same answer.
+ *
+ * Notes, files, content, people and places also ride a row stamp here, and stay: an agent's or a
+ * saved search's date range has always included them, and the explorer leaves them out itself.
+ */
+const ROW_DATED_TYPES: ReadonlySet<ResolvedEntity['type']> = new Set([
+  'thread',
+  'task',
+  'action',
+  'file-chunk',
+]);
+
+/**
+ * Each kind's first `limit` identifiers, in the order they came, and whether any kind had more.
+ *
+ * The timed browse hands back every kind's rows one kind after another, each in its own time
+ * order, so a kind's first `limit` are its newest (or oldest, reading up). A name sort reads one
+ * row past {@link NAME_SORT_CANDIDATE_LIMIT} to tell a kind that has exactly that many rows from
+ * one that has more, with no count query of its own.
+ */
+function capEachKind<T extends { type: string }>(
+  identifiers: readonly T[],
+  limit: number,
+): { kept: T[]; cutShort: boolean } {
+  const seen = new Map<string, number>();
+  let cutShort = false;
+
+  const kept = identifiers.filter((identifier) => {
+    const count = (seen.get(identifier.type) ?? 0) + 1;
+
+    seen.set(identifier.type, count);
+
+    if (count > limit) {
+      cutShort = true;
+
+      return false;
+    }
+
+    return true;
+  });
+
+  return { kept, cutShort };
+}
+
 /**
  * Pin caps for the map read (`mapPins`).
  *
@@ -141,14 +194,22 @@ const MAP_PIN_MAX_LIMIT = 20_000;
  * through the graph/explorer. Only the *unfiltered chronological browse* drops
  * them.
  *
- * NOTE `file` is deliberately NOT in this list. It carries the same row-write
- * problem, but #2110 just made it an explicit opt-OUT (`includeFiles`) to fix
- * the File type picker, and that decision is left standing — see
- * {@link SearchResolver.browseWants}. Files are therefore the residual undated
- * head this gate does not address.
+ * `file` joined this list on 2026-10-30, after #2110 had made it an opt-OUT
+ * (`includeFiles`). On a Hub appliance 1,719 photos and videos sat ahead of the
+ * newest real memory, ordered by when their row was last written (which the
+ * describer bumps after the import, so old photos kept returning to the top).
+ * 1,687 of them already appear at their taken date through the event their
+ * content row links to; the other 32 had no date at all. A file has no domain
+ * time of its own, so it is reached the way people and places are: by naming
+ * the type, the What picker, `includeFiles: true`, a search or a tag. #2110's
+ * actual complaint — the File picker doing nothing — still holds, because the
+ * picker's exclude-list reaches the opt-in branch of browseWants. And when files
+ * do share a browse with events, the ones an event already shows are dropped
+ * (FileService `excludeEventLinked`), as event-linked content always is.
  */
 const BROWSE_OPT_IN_TYPES: ReadonlySet<IndexableEntity> = new Set([
   'file-chunk',
+  'file',
   'person',
   'place',
   'concept',
@@ -260,6 +321,11 @@ const EMPTY_PAGE_INFO = {
   startCursor: null,
   endCursor: null,
 };
+
+/** An empty result (e.g. for an unknown/revoked share token). */
+function emptySearchResult(): SearchResultConnection {
+  return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [], nameSortCutShort: false };
+}
 
 /**
  * A result paired with the exact timestamp {@link SearchResolver.sortEntries}
@@ -391,7 +457,7 @@ export class SearchResolver {
     // the viewer falls into the tidy "link unavailable" state rather than an error.
     if (input.shareToken != null && input.shareToken.length > 0) {
       if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
-        return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+        return emptySearchResult();
       }
 
       return this.runSharedSearch(toServiceContext(context), input);
@@ -538,7 +604,7 @@ export class SearchResolver {
     const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
 
     if (saved == null || saved.userId == null) {
-      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+      return emptySearchResult();
     }
 
     const authorization = await this.sharedSearchConsentService.authorize({
@@ -550,7 +616,7 @@ export class SearchResolver {
     });
 
     if (authorization == null) {
-      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+      return emptySearchResult();
     }
 
     // All filter values come from the owner's stored saved search (never the
@@ -595,7 +661,12 @@ export class SearchResolver {
       },
     );
 
-    const disclosed = applySearchCeiling(unclamped, authorization.ceiling);
+    // The ceiling's clamp knows only the four fields it clamps. That the list was cut short says a
+    // kind holds more than 500 rows, so it crosses only to a reader who may page the whole list.
+    const disclosed = {
+      ...applySearchCeiling(unclamped, authorization.ceiling),
+      nameSortCutShort: canPage && unclamped.nameSortCutShort,
+    };
 
     // Written AFTER the clamp and from BOTH sets, because they answer different
     // questions: `disclosedEntities` is what crossed to the reader, and
@@ -674,6 +745,8 @@ export class SearchResolver {
     // Whether SQL already paged strictly past the cursor row (the timed keyset). Every other
     // source hands the whole candidate list over and the Paginator finds the cursor in it.
     let seeksPastCursor = false;
+    // Whether a name sort's pool left out rows of some kind (see NAME_SORT_CANDIDATE_LIMIT).
+    let nameSortCutShort = false;
 
     const first = Math.min(Math.max(input.first ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const afterCursor = decodeSearchCursor(input.after);
@@ -719,8 +792,8 @@ export class SearchResolver {
       const timedOptions = {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
-        // Files ride the default browse; only an explicit `false` drops them.
-        includeFiles: input.includeFiles !== false,
+        // Absent follows the type filter (files are opt-in); true / false force them in / out.
+        includeFiles: input.includeFiles,
         startTime,
         eventTypes,
         eventFilter,
@@ -743,10 +816,18 @@ export class SearchResolver {
           afterTime: keyset ? afterCursor!.time : undefined,
           afterId: keyset ? afterCursor!.id! : undefined,
           // Over-fetch per type so the merged page holds the globally first `first` rows in `order`.
-          limit: byName ? NAME_SORT_CANDIDATE_LIMIT : first * FETCH_MULTIPLIER,
+          // A name sort reads one row past its pool, to know whether a kind had more.
+          limit: byName ? NAME_SORT_CANDIDATE_LIMIT + 1 : first * FETCH_MULTIPLIER,
         }),
         this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
       ]);
+
+      if (byName) {
+        ({ kept: identifiers, cutShort: nameSortCutShort } = capEachKind(
+          identifiers,
+          NAME_SORT_CANDIDATE_LIMIT,
+        ));
+      }
     }
 
     // Entity-type filter: the query/timed paths apply it at their source; apply to the tags path.
@@ -848,9 +929,20 @@ export class SearchResolver {
     }
 
     // Date filter (when date wasn't the candidate source — the timed path filters in SQL).
-    // Entities without a domain timestamp are dropped while a date filter is active.
+    // Entities without a domain timestamp, and the kinds dated only by their last write
+    // (ROW_DATED_TYPES), are dropped while a date filter is active.
     if (hasDate && candidateSource !== 'timed') {
+      // A caller that names the kind (`includeTypes: ['task']`) asked for it under this window
+      // knowing what it is dated by, so a text or tag search keeps its rows. The timed browse is not
+      // the same: it never fetches threads, tasks or feed actions, named or not, so the same window
+      // with no search text returns none of them.
+      const namedTypes = new Set<string>(input.includeTypes ?? []);
+
       entries = entries.filter((entry) => {
+        if (ROW_DATED_TYPES.has(entry.type) && !namedTypes.has(entry.type)) {
+          return false;
+        }
+
         const timestamp = SearchResolver.getEntityTimestamp(entry);
 
         if (timestamp == null) {
@@ -929,6 +1021,7 @@ export class SearchResolver {
       // hundreds of thousands — see the SearchResolver.totalCount tests).
       totalCount: timedTotalCount ?? candidateCount,
       matchingTags: matchingTags.map((tag) => TagType.toType(tag)),
+      nameSortCutShort,
     };
   }
 
@@ -1013,7 +1106,7 @@ export class SearchResolver {
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
-      /** Opt files into the browse alongside the other types (see SearchInput.includeFiles). */
+      /** Force files into (true) or out of (false) the browse (see SearchInput.includeFiles). */
       includeFiles?: boolean;
       startTime?: Date;
       endTime?: Date;
@@ -1117,10 +1210,15 @@ export class SearchResolver {
       afterTime?: Date;
       afterId?: string;
       kinds?: readonly FileKind[];
+      excludeEventLinked?: boolean;
     } = {
       limit,
       order,
       ...(fileKinds ? { kinds: fileKinds } : {}),
+      // A file an event already shows at its real date would appear a second
+      // time at its write time. Only when events share the browse: a Files-only
+      // browse has no other copy, so it keeps them all.
+      excludeEventLinked: wants('event'),
     };
 
     const fileChunkOptions: {
@@ -1323,6 +1421,7 @@ export class SearchResolver {
         ? this.fileService.countEntitiesForFiles(context, {
             ...dateOptions,
             ...(fileKinds ? { kinds: fileKinds } : {}),
+            excludeEventLinked: wants('event'),
           })
         : 0,
       wants('file-chunk') ? this.fileChunkService.countEntitiesForFileChunks(context, dateOptions) : 0,
@@ -1388,17 +1487,11 @@ export class SearchResolver {
    *  2. the event-only dimensions (who / where / connector / areas / hasLocation),
    *     which exist only on the event timeline, so setting any restricts the
    *     browse to events;
-   *  3. the opt-in gate — {@link BROWSE_OPT_IN_TYPES} plus `file`.
+   *  3. the opt-in gate — {@link BROWSE_OPT_IN_TYPES}.
    *
-   * `file` is its own case because it has a dedicated lever, `includeFiles`,
-   * and #2110 deliberately made that lever an opt-OUT: files are part of the
-   * default timeline and a caller drops them by passing `false`. That decision
-   * is preserved verbatim here — see `SearchInput.includeFiles` for why it was
-   * inverted (the File type picker was a no-op on every surface that didn't set
-   * the flag). It does mean ~10,500 files, ordered by `created_at`, still sit
-   * ahead of the real timeline on a freshly-imported appliance; giving
-   * `ci.files` a domain timestamp (`external_created_at` is populated on 0 of
-   * 14,194 rows) is the fix, and it is a schema/ETL change, not a gate.
+   * `file` is opt-in like the rest of that list, but it also has a dedicated
+   * lever, `includeFiles`, which overrides the gate either way when set — see
+   * `SearchInput.includeFiles` and the BROWSE_OPT_IN_TYPES note for its history.
    */
   private browseWants(
     type: IndexableEntity,
@@ -1446,8 +1539,9 @@ export class SearchResolver {
 
     const namedExplicitly = includeTypes?.includes(type) ?? false;
 
-    if (type === 'file') {
-      return includeFiles !== false;
+    // The explicit lever wins either way; absent, files are opt-in like the rest.
+    if (type === 'file' && includeFiles != null) {
+      return includeFiles;
     }
 
     if (BROWSE_OPT_IN_TYPES.has(type)) {
@@ -1604,12 +1698,11 @@ export class SearchResolver {
     // "before 1970", emptying the browse. Row-write time is therefore kept as
     // the sort key, and the types for which it is a LIE about when the thing
     // happened are instead kept out of the unfiltered chronological browse —
-    // see BROWSE_OPT_IN_TYPES. What still rides the row stamp inside the browse
-    // is `note`, `file` and non-event-linked `content` — 10,524 rows ahead of
-    // the timeline on the QA appliance, against 32,666 before the gate, and all
-    // but 3 of them files. Giving those a real domain timestamp is a schema/ETL
-    // change, not a resolver change: `ci.files.external_created_at` exists and
-    // is populated on 0 of 14,194 rows.
+    // see BROWSE_OPT_IN_TYPES. What still rides the row stamp inside the
+    // unfiltered browse is `note` and non-event-linked `content`; files left it
+    // on 2026-10-30. Giving files a real domain timestamp is a schema/ETL
+    // change, not a resolver change: `ci.files.external_created_at` exists but
+    // nothing populates it.
     //
     // Types reached by NAMING them (includeTypes) still sort by write time
     // when they have no other time — except people/places with a date window,

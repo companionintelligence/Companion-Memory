@@ -181,8 +181,9 @@ interface McpCatalogResponse {
   highRisk: CatalogEntry[];
 }
 
+/** Mirrors the API's `McpProbeResult` (`{ success, tools?, error? }`) for both test-connection routes. */
 interface TestConnectionResult {
-  ok: boolean;
+  success: boolean;
   tools?: McpTool[];
   error?: string;
 }
@@ -435,6 +436,14 @@ function buildServerPayload(
   return body;
 }
 
+/**
+ * A server added from the catalog carries the entry's `catalogSlug`; rows created before the API
+ * derived `source: 'catalog'` from it were stored as `user_added`, so accept either signal.
+ */
+function isFromCatalog(server: Pick<McpServerConfig, 'source' | 'catalogSlug'>): boolean {
+  return server.source === 'catalog' || Boolean(server.catalogSlug);
+}
+
 function connectionIcon(status: McpConnectionStatus) {
   switch (status) {
     case 'connected':
@@ -502,7 +511,7 @@ function EnvRowsEditor({ rows, onChange }: EnvRowsEditorProps) {
                 placeholder="KEY"
                 value={row.key}
                 onChange={(e) => updateRow(index, { key: e.target.value })}
-                className="font-mono text-sm"
+                className="font-mono text-base md:text-sm"
               />
               {showMasked ? (
                 <div className="flex items-center gap-2">
@@ -900,10 +909,10 @@ export function McpSection() {
             body: JSON.stringify(buildServerPayload(form, { includeCatalogSlug: false })),
           });
 
-      setDialogTestResult(result ?? { ok: false, error: 'No response from server' });
+      setDialogTestResult(result ?? { success: false, error: 'No response from server' });
     } catch (err) {
       setDialogTestResult({
-        ok: false,
+        success: false,
         error: err instanceof Error ? err.message : 'Test connection failed',
       });
     } finally {
@@ -1186,7 +1195,7 @@ export function McpSection() {
                             <Badge variant="outline" className="text-xs ">
                               {server.transport}
                             </Badge>
-                            {server.source === 'catalog' && (
+                            {isFromCatalog(server) && (
                               <Badge variant="outline" className="text-xs">
                                 From catalog
                               </Badge>
@@ -1475,7 +1484,7 @@ export function McpSection() {
                     placeholder="uvx some-mcp-server@latest"
                     value={form.command}
                     onChange={(e) => setForm({ ...form, command: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1485,7 +1494,7 @@ export function McpSection() {
                     rows={3}
                     value={form.argsText}
                     onChange={(e) => setForm({ ...form, argsText: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1539,12 +1548,12 @@ export function McpSection() {
               {dialogTestResult && (
                 <div
                   className={`rounded-md border p-3 text-sm ${
-                    dialogTestResult.ok
+                    dialogTestResult.success
                       ? 'border-teal-300 bg-teal-50 text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-300'
                       : 'border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
                   }`}
                 >
-                  {dialogTestResult.ok ? (
+                  {dialogTestResult.success ? (
                     <>
                       <p className="font-medium">
                         Connected

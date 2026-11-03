@@ -24,13 +24,16 @@ const CTX = { userId: 'owner-1' } as unknown as RequestContext;
 const NOW = new Date('2026-08-20T00:00:00Z');
 const USER_GID = GlobalUID.encode('user', 'asker-1');
 const GRANT_GID = GlobalUID.encode('ask-grant', 'grant-1');
+// A real `ci.peer_links.id` shape: the resolver only takes a uuid or a peer-link global id.
+const LINK_ADA = '01a17eb9-0e0a-77bd-9da2-0ae6586f661c';
+const LINK_ADA_GID = GlobalUID.encode('peer-link', LINK_ADA);
 
 function fakeGrant(overrides: Partial<AskGrant> = {}): AskGrant {
   return {
     id: 'grant-2',
     ownerUserId: 'owner-1',
     granteeUserId: null,
-    granteePeerLinkId: 'link-ada',
+    granteePeerLinkId: LINK_ADA,
     queryType: 'photos',
     dataClass: null,
     scope: null,
@@ -49,7 +52,7 @@ function fakeGrant(overrides: Partial<AskGrant> = {}): AskGrant {
 
 function makeResolver(options: { links?: Record<string, unknown>[] } = {}) {
   const links = options.links ?? [
-    { id: 'link-ada', ownerUserId: 'owner-1', peerHandle: 'ada', trustTier: 'trusted' },
+    { id: LINK_ADA, ownerUserId: 'owner-1', peerHandle: 'ada', trustTier: 'trusted' },
   ];
 
   const grantService = {
@@ -102,16 +105,16 @@ describe('createAskGrant can address a peer link', () => {
     const { resolver, grantService } = makeResolver();
 
     const result = await resolver.createAskGrant(CTX, {
-      granteePeerLinkId: 'link-ada',
+      granteePeerLinkId: LINK_ADA,
       queryType: 'content',
       mode: 'auto',
     } as never);
 
     expect(grantService.create).toHaveBeenCalledWith(
       { userId: 'owner-1' },
-      expect.objectContaining({ granteeUserId: null, granteePeerLinkId: 'link-ada' }),
+      expect.objectContaining({ granteeUserId: null, granteePeerLinkId: LINK_ADA }),
     );
-    expect(result.grant?.granteePeerLinkId).toBe('link-ada');
+    expect(result.grant?.granteePeerLinkId).toBe(LINK_ADA);
     expect(result.grant?.granteeId).toBeNull();
   });
 
@@ -136,7 +139,7 @@ describe('createAskGrant can address a peer link', () => {
     const { resolver, grantService } = makeResolver();
 
     await resolver.createAskGrant(CTX, {
-      granteePeerLinkId: 'link-ada',
+      granteePeerLinkId: LINK_ADA,
       queryType: 'content',
       dataClasses: ['beach'],
       maxDisclosure: 'count',
@@ -150,6 +153,51 @@ describe('createAskGrant can address a peer link', () => {
   });
 });
 
+/**
+ * `createPeerLink` and `peerLinks` hand out the link's `peer-link` GLOBAL id
+ * (`PeerLinkType.id`), and the resolver sent it straight to the uuid column:
+ * a 500 (`invalid input syntax for type uuid`), so the id the API returns for a
+ * new link could not be used to grant it anything (RC2 QA, D6).
+ */
+describe('createAskGrant takes the peer link id the API hands out', () => {
+  it('accepts the peer-link global id createPeerLink returns, and stores the raw link id', async () => {
+    const { resolver, grantService, peerLinkService } = makeResolver();
+
+    await resolver.createAskGrant(CTX, {
+      granteePeerLinkId: LINK_ADA_GID,
+      queryType: 'content',
+      mode: 'block',
+    } as never);
+
+    expect(peerLinkService.findById).toHaveBeenCalledWith({ userId: 'owner-1' }, LINK_ADA);
+    expect(grantService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ granteePeerLinkId: LINK_ADA, granteeUserId: null }),
+    );
+  });
+
+  it.each([
+    ['a string that is neither', 'not-a-uuid'],
+    ['a global id of another type', GlobalUID.encode('person', LINK_ADA)],
+    ['a peer-link global id around a non-uuid', GlobalUID.encode('peer-link', 'link-ada')],
+  ])('answers a 400 for %s, before any database read', async (_name, value) => {
+    const { resolver, grantService, peerLinkService } = makeResolver();
+
+    await expect(
+      resolver.createAskGrant(CTX, {
+        granteePeerLinkId: value,
+        queryType: 'content',
+        mode: 'block',
+      } as never),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'granteePeerLinkId is not a peer link id: pass the id createPeerLink or peerLinks returns',
+    });
+    expect(peerLinkService.findById).not.toHaveBeenCalled();
+    expect(grantService.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('exactly one grantee, refused at the input layer', () => {
   it('rejects BOTH with a 400 naming the two fields, not a CHECK violation', async () => {
     const { resolver, grantService } = makeResolver();
@@ -157,7 +205,7 @@ describe('exactly one grantee, refused at the input layer', () => {
     await expect(
       resolver.createAskGrant(CTX, {
         granteeId: USER_GID,
-        granteePeerLinkId: 'link-ada',
+        granteePeerLinkId: LINK_ADA,
         queryType: 'photos',
         mode: 'auto',
       } as never),
@@ -181,16 +229,16 @@ describe('exactly one grantee, refused at the input layer', () => {
     // id would be storable, letting an owner write consent against a
     // relationship that is not theirs. The owner-scoped read makes both a 404.
     const { resolver, grantService } = makeResolver({
-      links: [{ id: 'link-ada', ownerUserId: 'someone-else', peerHandle: 'ada' }],
+      links: [{ id: LINK_ADA, ownerUserId: 'someone-else', peerHandle: 'ada' }],
     });
 
     await expect(
       resolver.createAskGrant(CTX, {
-        granteePeerLinkId: 'link-ada',
+        granteePeerLinkId: LINK_ADA,
         queryType: 'photos',
         mode: 'auto',
       } as never),
-    ).rejects.toThrow(/Peer link link-ada not found/);
+    ).rejects.toThrow(new RegExp(`Peer link ${LINK_ADA} not found`));
     expect(grantService.create).not.toHaveBeenCalled();
   });
 
@@ -246,7 +294,7 @@ describe('updateAskGrant is coherent on a peer grant', () => {
     const [, , changes] = grantService.supersede.mock.calls[0];
     expect(changes).not.toHaveProperty('granteeUserId');
     expect(changes).not.toHaveProperty('granteePeerLinkId');
-    expect(result.grant?.granteePeerLinkId).toBe('link-ada');
+    expect(result.grant?.granteePeerLinkId).toBe(LINK_ADA);
     expect(result.grant?.granteeId).toBeNull();
   });
 });

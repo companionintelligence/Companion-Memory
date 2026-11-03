@@ -1,10 +1,17 @@
 import { useState } from 'react';
 
 import { useLazyQuery, useQuery } from '@apollo/client';
+import { GlobalUID } from '@ci/common';
 import { Button, Input, Popover, cn } from '@ci/shadcn';
 import { ChevronDown, FolderSearch2 } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
+import {
+  getLocalSavedSearch,
+  toResolvedSavedSearch,
+  useLocalSavedSearches,
+} from '@/api/powersync/localSavedSearches';
 import { MenuShield } from '@/components/MenuShield';
 import { gql } from '@/graphql';
 
@@ -33,11 +40,15 @@ const GET_SAVED_SEARCHES_FOR_PICKER = gql(`
  * opens with, so opening the list after reading the count costs no request.
  */
 export function useOwnSavedSearchCount(): number | undefined {
+  // A phone with a replica counts its own table (see localSavedSearches.ts).
+  const replica = useReplicaDatabase();
   const { data } = useQuery(GET_SAVED_SEARCHES_FOR_PICKER, {
     variables: { first: PICKER_PAGE_SIZE, query: undefined },
+    skip: replica != null,
   });
+  const local = useLocalSavedSearches({ isSeed: false });
 
-  return data?.savedSearches.totalCount;
+  return replica ? local.searches.length : data?.savedSearches.totalCount;
 }
 
 interface SavedSearchListProps {
@@ -75,17 +86,40 @@ export function SavedSearchList({
 }: SavedSearchListProps) {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const { data, loading } = useQuery(GET_SAVED_SEARCHES_FOR_PICKER, {
+  // A phone with a replica lists and loads from its own table, online or off (see
+  // localSavedSearches.ts); everywhere else the appliance answers.
+  const replica = useReplicaDatabase();
+  const { data, loading: remoteLoading } = useQuery(GET_SAVED_SEARCHES_FOR_PICKER, {
     variables: { first: PICKER_PAGE_SIZE, query: filterText.trim() || undefined },
+    skip: replica != null,
   });
+  const local = useLocalSavedSearches({ query: filterText, isSeed: false });
 
   const [loadSavedSearch] = useLazyQuery(GET_SAVED_SEARCH);
 
-  const results = data?.savedSearches.edges.map((edge) => edge.node) ?? [];
+  const results = replica
+    ? local.searches.slice(0, PICKER_PAGE_SIZE).map((search) => ({
+        id: GlobalUID.encode('saved-search', search.id),
+        name: search.name,
+        description: search.description,
+      }))
+    : (data?.savedSearches.edges.map((edge) => edge.node) ?? []);
+  const loading = replica ? local.isLoading : remoteLoading;
 
   const applySearch = async (id: string) => {
-    const result = await loadSavedSearch({ variables: { id } });
-    const savedSearch = result.data?.savedSearch;
+    let savedSearch: Parameters<typeof applySavedSearchToParams>[1] | null | undefined;
+
+    if (replica) {
+      const found = await getLocalSavedSearch(replica, GlobalUID.parse('saved-search', id));
+
+      savedSearch = found
+        ? (toResolvedSavedSearch(found) as Parameters<typeof applySavedSearchToParams>[1])
+        : null;
+    } else {
+      const result = await loadSavedSearch({ variables: { id } });
+
+      savedSearch = result.data?.savedSearch;
+    }
 
     if (savedSearch) {
       if (onOpen) {

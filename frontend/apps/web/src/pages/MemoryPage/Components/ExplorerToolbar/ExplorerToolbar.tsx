@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
-import { GlobalUID, useDeviceLayout } from '@ci/common';
+import { useMutation } from '@apollo/client';
+import { GlobalUID, useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {
   Activity,
@@ -26,9 +26,17 @@ import {
   Image as ImageIcon,
 } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
+import { v7 as uuid7 } from 'uuid';
 
+import { useAnswersFromDevice, useReplicaDatabase } from '@/api/powersync/deviceFallback';
+import {
+  createLocalSavedSearch,
+  toResolvedSavedSearch,
+  updateLocalSavedSearch,
+} from '@/api/powersync/localSavedSearches';
 import { useFeatures } from '@/common/feature';
 import { MenuShield } from '@/components/MenuShield';
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
 import { ActivityFilter } from '@/components/SearchBox/ActivityFilter';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { MESSAGE_DIRECTION_LABELS, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
@@ -55,7 +63,7 @@ import { ShareSavedSearchModal } from '../../../SavedSearchesPage/ShareSavedSear
 import { AREAS_PARAM, LEGACY_BBOX_PARAM, readAreasParam } from '../../bbox';
 import { fileKindLabel } from '../../fileKinds';
 import { buildSavedSearchFilters } from '../../savedSearchFilters';
-import { GET_SAVED_SEARCH } from '../../useSavedSearchResolution';
+import { useSavedSearchById } from '../../useSavedSearchResolution';
 
 import {
   WHEN_PRESET_GRID,
@@ -368,6 +376,7 @@ function FilterDropArea() {
   // horizontally scrolling line; see the drop area's class note below.
   const { isMobile } = useDeviceLayout();
   const phone = isMobile === true;
+  const [chipsRef, chipsMore] = useScrollOverflow<HTMLDivElement>();
   const selections = useMemo(
     () => ({
       person: readListParam(searchParams, 'people'),
@@ -602,168 +611,173 @@ function FilterDropArea() {
           )}
         >
           {hasSelections ? (
-            <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain">
-              {phone && saveControls}
-              {selectedTypes !== null && (
-                <FilterChip
-                  icon={Shapes}
-                  label={
-                    selectedTypes.length === 1
-                      ? selectedTypes[0]
-                      : `${selectedTypes.length} of ${AVAILABLE_ENTITY_TYPES.length} types`
-                  }
-                  removeLabel="Remove entity types"
-                  inactiveReason={reasonFor('entityTypes')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete('includedEntityTypes');
-                      params.delete('excludedEntityTypes');
-
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {(Object.keys(DROP_FILTER_ICONS) as FilterDragKind[]).flatMap((kind) =>
-                selections[kind].map((name) => (
+            <ScrollMoreArrows more={chipsMore} className="flex min-w-0 flex-1">
+              <div
+                ref={chipsRef}
+                className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain"
+              >
+                {phone && saveControls}
+                {selectedTypes !== null && (
                   <FilterChip
-                    key={`${kind}:${name}`}
-                    icon={DROP_FILTER_ICONS[kind]}
-                    label={kind === 'tag' ? `#${name}` : name}
-                    removeLabel={`Remove ${name}`}
-                    inactiveReason={reasonFor(
-                      kind === 'person' ? 'people' : kind === 'place' ? 'places' : 'tags',
-                    )}
-                    onRemove={() => remove(kind, name)}
+                    icon={Shapes}
+                    label={
+                      selectedTypes.length === 1
+                        ? selectedTypes[0]
+                        : `${selectedTypes.length} of ${AVAILABLE_ENTITY_TYPES.length} types`
+                    }
+                    removeLabel="Remove entity types"
+                    inactiveReason={reasonFor('entityTypes')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('includedEntityTypes');
+                        params.delete('excludedEntityTypes');
+
+                        return params;
+                      })
+                    }
                   />
-                )),
-              )}
-              {sources.map((name) => (
-                <FilterChip
-                  key={`source:${name}`}
-                  icon={Database}
-                  label={sourceFilterLabel(name)}
-                  removeLabel={`Remove source ${sourceFilterLabel(name)}`}
-                  inactiveReason={reasonFor('connectors')}
-                  onRemove={() => removeCsvValue('connectors', name)}
-                />
-              ))}
-              {activities.map((name) => (
-                <FilterChip
-                  key={`activity:${name}`}
-                  icon={Activity}
-                  label={filterValueLabel(name)}
-                  removeLabel={`Remove activity ${filterValueLabel(name)}`}
-                  inactiveReason={reasonFor('eventTypes')}
-                  onRemove={() => removeCsvValue('eventTypes', name)}
-                />
-              ))}
-              {/* Which kind of file — set by a saved search (Recent Images) rather
+                )}
+                {(Object.keys(DROP_FILTER_ICONS) as FilterDragKind[]).flatMap((kind) =>
+                  selections[kind].map((name) => (
+                    <FilterChip
+                      key={`${kind}:${name}`}
+                      icon={DROP_FILTER_ICONS[kind]}
+                      label={kind === 'tag' ? `#${name}` : name}
+                      removeLabel={`Remove ${name}`}
+                      inactiveReason={reasonFor(
+                        kind === 'person' ? 'people' : kind === 'place' ? 'places' : 'tags',
+                      )}
+                      onRemove={() => remove(kind, name)}
+                    />
+                  )),
+                )}
+                {sources.map((name) => (
+                  <FilterChip
+                    key={`source:${name}`}
+                    icon={Database}
+                    label={sourceFilterLabel(name)}
+                    removeLabel={`Remove source ${sourceFilterLabel(name)}`}
+                    inactiveReason={reasonFor('connectors')}
+                    onRemove={() => removeCsvValue('connectors', name)}
+                  />
+                ))}
+                {activities.map((name) => (
+                  <FilterChip
+                    key={`activity:${name}`}
+                    icon={Activity}
+                    label={filterValueLabel(name)}
+                    removeLabel={`Remove activity ${filterValueLabel(name)}`}
+                    inactiveReason={reasonFor('eventTypes')}
+                    onRemove={() => removeCsvValue('eventTypes', name)}
+                  />
+                ))}
+                {/* Which kind of file — set by a saved search (Recent Images) rather
                   than a picker, but a chip all the same so it can be seen and removed. */}
-              {fileKinds.map((name) => (
-                <FilterChip
-                  key={`file-kind:${name}`}
-                  icon={ImageIcon}
-                  label={fileKindLabel(name)}
-                  removeLabel={`Remove file kind ${fileKindLabel(name)}`}
-                  inactiveReason={reasonFor('fileKinds')}
-                  onRemove={() => removeCsvValue('fileKinds', name)}
-                />
-              ))}
-              {direction != null && (
-                <FilterChip
-                  icon={MessageSquare}
-                  // Beside a Who person the direction fixes that person's role, so
-                  // "From only" reads. On its own it is the bare row direction —
-                  // messages you received, or sent, from or to anyone — and "From
-                  // only" with nothing next to it read as a leftover of a removed
-                  // person (QA MEM-16). Name what it still filters, as the phone
-                  // filter sheet's Who row already does ("To anyone").
-                  label={
-                    selections.person.length > 0
-                      ? `${MESSAGE_DIRECTION_LABELS[direction]} only`
-                      : `${MESSAGE_DIRECTION_LABELS[direction]} anyone`
-                  }
-                  removeLabel="Remove message direction"
-                  inactiveReason={reasonFor('direction')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete('direction');
+                {fileKinds.map((name) => (
+                  <FilterChip
+                    key={`file-kind:${name}`}
+                    icon={ImageIcon}
+                    label={fileKindLabel(name)}
+                    removeLabel={`Remove file kind ${fileKindLabel(name)}`}
+                    inactiveReason={reasonFor('fileKinds')}
+                    onRemove={() => removeCsvValue('fileKinds', name)}
+                  />
+                ))}
+                {direction != null && (
+                  <FilterChip
+                    icon={MessageSquare}
+                    // Beside a Who person the direction fixes that person's role, so
+                    // "From only" reads. On its own it is the bare row direction —
+                    // messages you received, or sent, from or to anyone — and "From
+                    // only" with nothing next to it read as a leftover of a removed
+                    // person (QA MEM-16). Name what it still filters, as the phone
+                    // filter sheet's Who row already does ("To anyone").
+                    label={
+                      selections.person.length > 0
+                        ? `${MESSAGE_DIRECTION_LABELS[direction]} only`
+                        : `${MESSAGE_DIRECTION_LABELS[direction]} anyone`
+                    }
+                    removeLabel="Remove message direction"
+                    inactiveReason={reasonFor('direction')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('direction');
 
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {hasDateRange && (
-                <FilterChip
-                  icon={CalendarIcon}
-                  label={
-                    isRollingDatePreset(whenPreset)
-                      ? (datePresetLabel(whenPreset) ?? 'When')
-                      : formatDateLabel(dateFrom, dateTo, dateTimeFormat)
-                  }
-                  removeLabel="Remove date range"
-                  inactiveReason={reasonFor('date')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete('from');
-                      params.delete('to');
-                      params.delete('when');
+                        return params;
+                      })
+                    }
+                  />
+                )}
+                {hasDateRange && (
+                  <FilterChip
+                    icon={CalendarIcon}
+                    label={
+                      isRollingDatePreset(whenPreset)
+                        ? (datePresetLabel(whenPreset) ?? 'When')
+                        : formatDateLabel(dateFrom, dateTo, dateTimeFormat)
+                    }
+                    removeLabel="Remove date range"
+                    inactiveReason={reasonFor('date')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('from');
+                        params.delete('to');
+                        params.delete('when');
 
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {hasLocation && (
-                <FilterChip
-                  icon={MapPin}
-                  label="Has a location"
-                  removeLabel="Remove has a location"
-                  inactiveReason={reasonFor('hasLocation')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete('hasLocation');
+                        return params;
+                      })
+                    }
+                  />
+                )}
+                {hasLocation && (
+                  <FilterChip
+                    icon={MapPin}
+                    label="Has a location"
+                    removeLabel="Remove has a location"
+                    inactiveReason={reasonFor('hasLocation')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('hasLocation');
 
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {semantic && (
-                <FilterChip
-                  icon={Sparkles}
-                  label="Semantic"
-                  removeLabel="Remove semantic"
-                  inactiveReason={reasonFor('semantic')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete('semantic');
+                        return params;
+                      })
+                    }
+                  />
+                )}
+                {semantic && (
+                  <FilterChip
+                    icon={Sparkles}
+                    label="Semantic"
+                    removeLabel="Remove semantic"
+                    inactiveReason={reasonFor('semantic')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('semantic');
 
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {mapAreaCount > 0 && (
-                <FilterChip
-                  icon={MapIcon}
-                  label={mapAreaCount === 1 ? 'Map area' : `Map areas (${mapAreaCount})`}
-                  removeLabel={mapAreaCount === 1 ? 'Remove map area' : 'Remove map areas'}
-                  inactiveReason={reasonFor('areas')}
-                  onRemove={() =>
-                    setSearchParams((params) => {
-                      params.delete(AREAS_PARAM);
-                      params.delete(LEGACY_BBOX_PARAM);
+                        return params;
+                      })
+                    }
+                  />
+                )}
+                {mapAreaCount > 0 && (
+                  <FilterChip
+                    icon={MapIcon}
+                    label={mapAreaCount === 1 ? 'Map area' : `Map areas (${mapAreaCount})`}
+                    removeLabel={mapAreaCount === 1 ? 'Remove map area' : 'Remove map areas'}
+                    inactiveReason={reasonFor('areas')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete(AREAS_PARAM);
+                        params.delete(LEGACY_BBOX_PARAM);
 
-                      return params;
-                    })
-                  }
-                />
-              )}
-              {phone && clearButton}
-            </div>
+                        return params;
+                      })
+                    }
+                  />
+                )}
+                {phone && clearButton}
+              </div>
+            </ScrollMoreArrows>
           ) : (
             // pointer-events-none keeps the icon swap from firing its own
             // dragenter/dragleave and corrupting the depth counter mid-drag.
@@ -1425,49 +1439,55 @@ function FilterControlsRow({
   // bar (or a `/memory/<kind>` page) has pointed away from all of them.
   const showEventDimensions = eventsInPlay(searchParams, pathname);
   const showWho = peopleInPlay(searchParams, pathname);
+  const [rowRef, rowMore] = useScrollOverflow<HTMLDivElement>();
 
   return (
-    <div
-      // On a phone this is one line that scrolls sideways, like the What strip
-      // above it: wrapped, When / How / Who / Where / the toggles / sort ran
-      // two to a row and ate half the screen. From `device:` up it wraps as
-      // before. The vertical padding is cancelled by the negative margin, so
-      // the line costs no height; it only keeps the focus ring inside the
-      // scroller's clip.
-      className="scrollbar-none flex min-w-0 items-center gap-2 overscroll-x-contain max-device:-my-0.5 max-device:overflow-x-auto max-device:py-0.5 device:flex-wrap"
-    >
-      {includeEntityTypeFilter && <EntityTypeFilter modal={modal} label="What" />}
-      <DateControl modal={modal} />
+    // On a phone the row scrolls sideways; from `device:` up it wraps, never
+    // overflows, and so never shows an arrow.
+    <ScrollMoreArrows more={rowMore} className="min-w-0">
+      <div
+        ref={rowRef}
+        // On a phone this is one line that scrolls sideways, like the What strip
+        // above it: wrapped, When / How / Who / Where / the toggles / sort ran
+        // two to a row and ate half the screen. From `device:` up it wraps as
+        // before. The vertical padding is cancelled by the negative margin, so
+        // the line costs no height; it only keeps the focus ring inside the
+        // scroller's clip.
+        className="scrollbar-none flex min-w-0 items-center gap-2 overscroll-x-contain max-device:-my-0.5 max-device:overflow-x-auto max-device:py-0.5 device:flex-wrap"
+      >
+        {includeEntityTypeFilter && <EntityTypeFilter modal={modal} label="What" />}
+        <DateControl modal={modal} />
 
-      <ConnectorFilter modal={modal} label="How" />
-      <FileKindFilter modal={modal} label="Kind" />
-      {showEventDimensions && <ActivityFilter modal={modal} label="Activity" />}
-      {showWho && <EntityNameFilter kind="person" modal={modal} />}
-      {showEventDimensions && <EntityNameFilter kind="place" modal={modal} />}
+        <ConnectorFilter modal={modal} label="How" />
+        <FileKindFilter modal={modal} label="Kind" />
+        {showEventDimensions && <ActivityFilter modal={modal} label="Activity" />}
+        {showWho && <EntityNameFilter kind="person" modal={modal} />}
+        {showEventDimensions && <EntityNameFilter kind="place" modal={modal} />}
 
-      <ToggleChip
-        param="hasLocation"
-        label="Has a location"
-        icon={<MapPin className="h-4 w-4" />}
-        dimension="hasLocation"
-      />
-      <ToggleChip
-        param="semantic"
-        label="Semantic"
-        icon={<Sparkles className="h-4 w-4" />}
-        dimension="semantic"
-      />
+        <ToggleChip
+          param="hasLocation"
+          label="Has a location"
+          icon={<MapPin className="h-4 w-4" />}
+          dimension="hasLocation"
+        />
+        <ToggleChip
+          param="semantic"
+          label="Semantic"
+          icon={<Sparkles className="h-4 w-4" />}
+          dimension="semantic"
+        />
 
-      <SortControl />
+        <SortControl />
 
-      {showSave && (
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <SaveSearchButton />
-          <SavedSearchPicker onOpen={onOpenSavedSearch} />
-          <FilterCountLabel />
-        </div>
-      )}
-    </div>
+        {showSave && (
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <SaveSearchButton />
+            <SavedSearchPicker onOpen={onOpenSavedSearch} />
+            <FilterCountLabel />
+          </div>
+        )}
+      </div>
+    </ScrollMoreArrows>
   );
 }
 
@@ -1570,18 +1590,21 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
   const { toast } = useToast();
 
   // The saved search these filters were loaded from, when there is one: Save
-  // then offers to update it in place as well as to save a new one. The
-  // resolver that loaded it put the same query in the cache, so this is a
-  // cache read, not a round trip.
+  // then offers to update it in place as well as to save a new one. Online the
+  // resolver that loaded it put the same query in the cache, so this is a cache
+  // read, not a round trip; on a phone with a replica it is the phone's row.
   const loadedId = searchParams.get(LOADED_SEARCH_PARAM);
-  const { data: loadedData } = useQuery(GET_SAVED_SEARCH, {
-    variables: { id: GlobalUID.encode('saved-search', loadedId ?? '') },
-    skip: !loadedId,
-  });
-  const loaded = loadedId ? (loadedData?.savedSearch ?? null) : null;
-  // Sharing (the "make public" control) is gated while the access model is hardened.
+  const loaded = useSavedSearchById(loadedId);
+  // A phone with a replica saves into its own `saved_searches` table, online or
+  // off, and PowerSync carries the row up (localSavedSearches.ts); everywhere
+  // else the mutations below run.
+  const replica = useReplicaDatabase();
+  const answersFromDevice = useAnswersFromDevice();
+  // Sharing (the "make public" control) is gated while the access model is hardened,
+  // and needs the server to mint the link, so it is not offered while the phone is
+  // answering for itself.
   const { isFeatureEnabled } = useFeatures();
-  const sharingEnabled = isFeatureEnabled('shared.search');
+  const sharingEnabled = isFeatureEnabled('shared.search') && !answersFromDevice;
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -1627,6 +1650,49 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
     }
 
     const { query, tags, entityTypes, filters } = currentDefinition();
+
+    if (replica) {
+      try {
+        const id = uuid7();
+
+        await createLocalSavedSearch(replica, { id, name: trimmed, query, entityTypes, tags, filters });
+        toast.success(`Saved search “${trimmed}”`);
+        setName('');
+        setOpen(false);
+        setSearchParams(
+          (params) => {
+            params.set(LOADED_SEARCH_PARAM, id);
+
+            return params;
+          },
+          { replace: true },
+        );
+
+        if (share) {
+          setSavedSearchToShare(
+            toResolvedSavedSearch({
+              id,
+              name: trimmed,
+              description: null,
+              query: query ?? null,
+              entityTypes: [...entityTypes],
+              tags: [...tags],
+              filters: filters ?? null,
+              isPublic: false,
+              shareToken: null,
+              isSeed: false,
+              createdAt: null,
+              updatedAt: null,
+            }) as unknown as FragmentType<typeof SavedSearchGridItemFragment>,
+          );
+        }
+      } catch (error) {
+        console.warn('[memory] Could not save the search on this phone', error);
+        toast.error('Failed to save search');
+      }
+
+      return;
+    }
 
     try {
       const result = await createSavedSearch({
@@ -1682,6 +1748,28 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
     }
 
     const { query, tags, entityTypes, filters } = currentDefinition();
+
+    if (replica) {
+      try {
+        await updateLocalSavedSearch(replica, {
+          id: GlobalUID.parse('saved-search', loaded.id),
+          name: loaded.name ?? '',
+          description: loaded.description,
+          query: query ?? null,
+          entityTypes,
+          tags,
+          filters: filters ?? null,
+        });
+        toast.success(`Updated “${loaded.name}”`);
+        setName('');
+        setOpen(false);
+      } catch (error) {
+        console.warn('[memory] Could not update the search on this phone', error);
+        toast.error(`Failed to update “${loaded.name}”`);
+      }
+
+      return;
+    }
 
     try {
       const result = await updateSavedSearch({

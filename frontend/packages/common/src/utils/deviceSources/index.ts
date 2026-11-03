@@ -43,13 +43,13 @@ export {
   captureLocationFix,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
   haversineMeters,
   positionSourceId,
 } from './location';
 export type {
-  BackgroundGeolocationLocation,
+  NativeLocationEvent,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,

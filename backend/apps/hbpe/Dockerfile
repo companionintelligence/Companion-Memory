@@ -9,7 +9,7 @@
 ARG UV_VERSION
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM python:3.11-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # System dependencies — cmake required for the llama-cpp-python build
 RUN apt-get update && apt-get install -y --no-install-recommends \

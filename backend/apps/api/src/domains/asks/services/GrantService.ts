@@ -95,10 +95,9 @@ export class GrantService {
    * Revoke every live grant this owner addressed to one peer link, as
    * {@link revoke} does for one. Returns how many it revoked.
    *
-   * For a link the owner ended and then added back: the link keeps its id, so
-   * without this its old grants (an `auto` one included) would answer the next
-   * ask from that peer with no review, although a re-added link is meant to
-   * start over like a new one.
+   * For a link the owner ended and then added back. The new link has a new id,
+   * so these grants can no longer answer for it, but until they are revoked the
+   * Grants tab lists them as live consent for that peer.
    */
   async revokeForPeerLink(context: UserServiceContext, peerLinkId: string): Promise<number> {
     const live = await this.grantRepository.find({

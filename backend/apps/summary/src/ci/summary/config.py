@@ -244,7 +244,7 @@ def _llm_model_from_env() -> str:
     # configured — there is deliberately NO hardcoded model fallback here:
     # a baked-in tag can name a model the endpoint doesn't serve (this is how
     # "gemma4:latest" 404'd every summary in production). When unset, the
-    # model is discovered from the endpoint at startup (see resolve_llm_model).
+    # model is discovered from the endpoint on first use (see resolve_llm_model).
     return (
         os.getenv("SUMMARY_LLM_MODEL")
         or os.getenv("LLM_DEFAULT_CHAT_MODEL")
@@ -508,6 +508,10 @@ def resolve_output_mode() -> str:
     return _resolved_output_mode
 
 
+class NoChatModelError(RuntimeError):
+    """Nothing is configured and the endpoint offers no chat model, so far."""
+
+
 @lru_cache(maxsize=1)
 def resolve_llm_model() -> str:
     """
@@ -518,6 +522,11 @@ def resolve_llm_model() -> str:
     it. Otherwise the model is discovered from the endpoint's /models listing,
     so the service always names a model that actually exists — never a
     hardcoded default.
+
+    Raises NoChatModelError when nothing is configured on a Hub with no AI engine
+    or with no chat model pulled yet. Call this when work needs a model, never at
+    import. lru_cache does not store a raise, so the next caller asks the endpoint
+    again, which is how the service finds a model that appears after it started.
     """
     configured = settings.llm_model
 
@@ -534,7 +543,7 @@ def resolve_llm_model() -> str:
                 configured,
             )
             return configured
-        raise RuntimeError(
+        raise NoChatModelError(
             f"No LLM model configured and model discovery at {settings.llm_api_base} failed ({exc}). "
             "Set LLM_DEFAULT_CHAT_MODEL (normally injected by CI Hub) or make the endpoint reachable."
         ) from exc
@@ -562,7 +571,7 @@ def resolve_llm_model() -> str:
 
     discovered = _pick_chat_model(rows)
     if not discovered:
-        raise RuntimeError(
+        raise NoChatModelError(
             f"No LLM model configured and {settings.llm_api_base} serves no chat model. "
             "Pull a model via CI Hub or set LLM_DEFAULT_CHAT_MODEL."
         )

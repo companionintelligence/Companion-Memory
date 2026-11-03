@@ -28,7 +28,7 @@ Pod::Spec.new do |s|
   s.dependency 'Capacitor'
   # Sign-in sheet (`ASWebAuthenticationSession`). A system framework, so this only
   # tells CocoaPods to link it into the pod — it is not a third-party dependency.
-  s.framework = 'AuthenticationServices'
+  s.frameworks = 'AuthenticationServices', 'BackgroundTasks'
   # swisspol/GCDWebServer -- embedded HTTP server. Only the default 'Core' subspec is
   # needed (plain routing + JSON responses); we don't use the WebDAV/WebUploader
   # subspecs. Pinned to the 3.5.x line (latest tagged release at the time of writing is
@@ -50,5 +50,9 @@ Pod::Spec.new do |s|
   # artifacts version independently and do not need to match). Re-verify at build time:
   # this environment has no Mac and cannot run `pod install`.
   s.dependency 'SQLCipher', '~> 4.9'
+  # PowerSync's core, for the background replica sync (ReplicaBackgroundSync.swift), which
+  # registers it with SQLCipher itself (CiPowerSyncCore.c) because a background launch runs no
+  # JavaScript. Same pod and range as @powersync/capacitor, so CocoaPods resolves one copy.
+  s.dependency 'powersync-sqlite-core', '~> 0.4.12'
   s.swift_version = '5.1'
 end

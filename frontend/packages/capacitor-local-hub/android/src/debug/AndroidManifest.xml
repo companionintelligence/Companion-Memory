@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: an adb trigger for one background replica sync (ReplicaSyncNowReceiver).
+     src/debug is not a release source set, so this never reaches a store build. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".replica.ReplicaSyncNowReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.companionintelligence.localhub.debug.REPLICA_SYNC_NOW" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

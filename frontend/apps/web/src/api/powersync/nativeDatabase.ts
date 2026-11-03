@@ -27,9 +27,10 @@
  * The passphrase is 32 random bytes, minted once in JS and handed to the plugin's
  * `setEncryptionSecret`, which stores it natively; JS never reads it back and
  * every later open resolves it on the native side. On Android the file is also
- * kept out of backups (`allowBackup="false"`); on iOS the plugin's keychain item
- * carries no `ThisDeviceOnly` accessibility, so it can travel with an encrypted
- * backup — see `frontend/apps/ios/SECURITY_ARCHITECTURE.md` §2.3.
+ * kept out of backups (`allowBackup="false"`). On iOS the plugin writes its keychain
+ * item with the default accessibility; the Local Hub plugin's `ReplicaKeychain`
+ * reseals it `AfterFirstUnlockThisDeviceOnly` and keeps the file's directory out of
+ * backups -- see `frontend/apps/ios/SECURITY_ARCHITECTURE.md` §2.3.
  *
  * A key that is gone while the file is still encrypted (a Keystore reset, app data
  * cleared selectively) makes the replica unreadable. That is reported, not

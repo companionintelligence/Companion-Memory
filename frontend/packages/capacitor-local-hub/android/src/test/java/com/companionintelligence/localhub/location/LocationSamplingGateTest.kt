@@ -12,6 +12,7 @@ class LocationSamplingGateTest {
         minDistanceMeters = 150.0,
         minIntervalMs = 5 * 60 * 1000L,
         maxAccuracyMeters = 200.0,
+        geofenceRadiusMeters = 100f,
         notificationTitle = "t",
         notificationText = "x",
     )

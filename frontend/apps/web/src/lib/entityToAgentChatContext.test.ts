@@ -194,3 +194,19 @@ describe('entityToAgentChatContext', () => {
     expect(whenLine('h12')).toMatch(/\b3:43\sPM$/i);
   });
 });
+
+describe('entityToAgentChatContext, untitled chat', () => {
+  it('names an untitled chat as Chat does, not by its kind', () => {
+    const context = entityToAgentChatContext(
+      {
+        __typename: 'ThreadType',
+        id: btoa('thread:01a17e07-73a0-7abc-8def-0123456789ab'),
+        name: null,
+        description: 'Plans for next spring',
+      } as unknown as MemoryEntity,
+      createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' }),
+    );
+
+    expect(context.title).toBe('Chat · Oct 27, 15:43');
+  });
+});

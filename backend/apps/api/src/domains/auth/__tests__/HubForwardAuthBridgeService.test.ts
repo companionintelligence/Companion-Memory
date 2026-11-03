@@ -662,6 +662,84 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: null,
+        refused: null,
+      });
+    });
+
+    describe('for a Hub that sends no stable id, says what alignSession would refuse', () => {
+      it('several case-insensitive matches', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_ambiguous' });
+      });
+
+      it('an account whose address nobody proved, with the same answer alignSession gives', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(
+          unprovenAccount('user-planted', 'hello@lifescope.io'),
+        );
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_unproven' });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+        ).resolves.toMatchObject({ refused: 'account_unproven' });
+      });
+
+      it('not for a browser already signed in to that address, which alignSession keeps', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(own);
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'))),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: null,
+        });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('hello@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      });
+
+      it('not for several matches when this browser is signed in to one of them, which alignSession keeps', async () => {
+        const { service, userService, authService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(account('user-a', 'Hello@lifescope.io'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('HELLO@lifescope.io'))),
+        ).resolves.toEqual({ username: 'HELLO@lifescope.io', accountId: null, refused: null });
+        await expect(
+          service.alignSession(requestWith(signedHeaders('HELLO@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'HELLO@lifescope.io', replaced: false });
+      });
+
+      it('not for a proven account', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+      });
+
+      it('still names the Hub person when the account lookup fails, so the SPA can compare addresses', async () => {
+        const { service, userService, logger } = makeService();
+        userService.findAccountByEmail.mockRejectedValue(new Error('connection terminated'));
+
+        await expect(
+          service.describeIdentity(requestWith(signedHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection terminated'));
       });
     });
 
@@ -675,6 +753,7 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'new@lifescope.io',
         accountId: 'user-a',
+        refused: null,
       });
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
@@ -688,18 +767,134 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: 'user-a',
+        refused: null,
       });
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
 
-    it('reports no account for someone not created yet, or refused', async () => {
-      const { service } = makeService();
+    it('reports no account and no refusal for someone not created yet, creating nothing', async () => {
+      const { service, userService } = makeService();
 
       await expect(
         service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
       ).resolves.toEqual({
         username: 'hello@lifescope.io',
         accountId: null,
+        refused: null,
+      });
+      expect(userService.create).not.toHaveBeenCalled();
+    });
+
+    it('still names the Hub person when the link lookup fails, so the SPA can compare addresses', async () => {
+      const { service, federatedIdentityService, logger } = makeService();
+      federatedIdentityService.findUserId.mockRejectedValue(new Error('connection terminated'));
+
+      await expect(
+        service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: null });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection terminated'));
+    });
+
+    describe('says why it withholds the account of a person alignSession would refuse', () => {
+      it('several case-insensitive matches', async () => {
+        const { service, userService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_ambiguous' });
+      });
+
+      it('an account another person of this Hub holds', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'x@lifescope.io'));
+        federatedIdentityService.findForUserFromIssuer.mockResolvedValue({
+          userId: 'user-a',
+          issuer: DIRECTORY,
+          subject: OTHER_HUB_ID,
+        });
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('x@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'x@lifescope.io',
+          accountId: null,
+          refused: 'account_linked_elsewhere',
+        });
+      });
+
+      it('an account whose address nobody proved', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(
+          unprovenAccount('user-planted', 'hello@lifescope.io'),
+        );
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', accountId: null, refused: 'account_unproven' });
+        expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      });
+
+      it('a linked account that was deleted', async () => {
+        const { service, federatedIdentityService } = makeService();
+        federatedIdentityService.findUserId.mockResolvedValue('user-gone');
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: 'account_unavailable',
+        });
+      });
+
+      it('but not an unproven account this browser is signed in to, as alignSession adopts it', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        userService.findById.mockResolvedValue(own);
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'))),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: 'user-a',
+          refused: null,
+        });
+        await expect(
+          service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+        ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      });
+
+      it('the same reason alignSession answers with, for a signed-out session on an unproven account', async () => {
+        const { service, userService, authService } = makeService();
+        const own = unprovenAccount('user-a', 'hello@lifescope.io');
+        userService.findAccountByEmail.mockResolvedValue(own);
+        authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+        authService.resolveLiveSession.mockResolvedValue(null);
+        userService.findById.mockResolvedValue(own);
+        const headers = stableHeaders('hello@lifescope.io');
+
+        const described = await service.describeIdentity(requestWith(headers));
+        const aligned = await service.alignSession(requestWith(headers), response());
+
+        expect(described.refused).toBe('account_unproven');
+        expect(aligned.refused).toBe(described.refused);
+      });
+
+      it('an address an account awaiting its purge still holds', async () => {
+        const { service, userService } = makeService();
+        userService.checkEmailAvailability.mockResolvedValue(true);
+
+        await expect(
+          service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
+        ).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: null,
+          refused: 'account_unavailable',
+        });
+        expect(userService.create).not.toHaveBeenCalled();
       });
     });
 
@@ -709,6 +904,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(service.describeIdentity(requestWith({}, null))).resolves.toEqual({
         username: null,
         accountId: null,
+        refused: null,
       });
     });
   });
@@ -916,6 +1112,117 @@ describe('HubForwardAuthBridgeService', () => {
       const headers = boundHeaders('hello@lifescope.io', { audience: 'importer:ci-marketplace' });
 
       expect(service.verifyIdentity(requestWith(headers, null))).toBeNull();
+    });
+
+    describe('the KERI headers, which no signature covers', () => {
+      // 44 base64url characters after `did:keri:`, the only form kept.
+      const VICTIM_AID = 'did:keri:EVictimAid_000000000000000000000000000000000';
+      const HUB_AID = 'did:keri:EHubAid_000000000000000000000000000000000000';
+      const KEL_DIGEST = 'EKelDigest_000000000000000000000000000000000';
+
+      /** Signed in as the Hub person DIRECTORY#HUB_ID, plus whatever KERI headers the browser added. */
+      function withKeri(username: string, keri: Record<string, string>) {
+        return { ...boundHeaders(username), ...keri };
+      }
+
+      it('keeps the well-formed ones beside the signed stable id, marked unsigned', () => {
+        const { service } = makeService();
+        const headers = withKeri('hello@lifescope.io', {
+          'x-ci-hub-user-aid': VICTIM_AID,
+          'x-ci-hub-aid': HUB_AID,
+          'x-ci-hub-kel-digest': KEL_DIGEST,
+        });
+
+        expect(service.verifyIdentity(requestWith(headers, null))).toEqual({
+          username: 'hello@lifescope.io',
+          stableId: {
+            issuer: DIRECTORY,
+            subject: HUB_ID,
+            unsignedKeri: { userAid: VICTIM_AID, hubAid: HUB_AID, kelDigest: KEL_DIGEST },
+          },
+        });
+      });
+
+      it('drops malformed ones', () => {
+        const { service } = makeService();
+        const headers = withKeri('hello@lifescope.io', {
+          'x-ci-hub-user-aid': 'did:keri:Duser-aid-12345',
+          'x-ci-hub-aid': `${HUB_AID}\nx`,
+          'x-ci-hub-kel-digest': 'not a digest',
+        });
+
+        expect(service.verifyIdentity(requestWith(headers, null))).toEqual({
+          username: 'hello@lifescope.io',
+          stableId: { issuer: DIRECTORY, subject: HUB_ID },
+        });
+      });
+
+      it('SECURITY: signs in as the signed identity, never as the account an AID header names', async () => {
+        // An AID is public. Were the header an identity, anyone signed in to the Hub could name
+        // someone else's and be signed in as them.
+        const { service, userService, authService, federatedIdentityService } = makeService();
+        federatedIdentityService.findUserId.mockImplementation(async (issuer: string, subject: string) => {
+          if (issuer === 'did:keri' && subject === VICTIM_AID) {
+            return 'user-victim';
+          }
+
+          return issuer === DIRECTORY && subject === HUB_ID ? 'user-a' : null;
+        });
+        userService.findById.mockImplementation(async (_ctx: unknown, id: string) =>
+          account(id, id === 'user-a' ? 'hello@lifescope.io' : 'victim@lifescope.io'),
+        );
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await expect(service.alignSession(requestWith(headers, null), response())).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          replaced: true,
+          accessToken: 'access-hello',
+        });
+        expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
+        expect(authService.issueSessionToken).not.toHaveBeenCalledWith('user-victim', expect.anything());
+        expect(federatedIdentityService.findUserId).not.toHaveBeenCalledWith('did:keri', expect.anything());
+        expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+        await expect(service.describeIdentity(requestWith(headers, null))).resolves.toEqual({
+          username: 'hello@lifescope.io',
+          accountId: 'user-a',
+          refused: null,
+        });
+      });
+
+      it("SECURITY: never binds an AID header to the account, so nobody can squat someone else's", async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        // First sight, adopted by address.
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await service.alignSession(requestWith(headers, null), response());
+
+        expect(federatedIdentityService.bind).toHaveBeenCalledTimes(1);
+        expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user-a', issuer: DIRECTORY, subject: HUB_ID }),
+        );
+      });
+
+      it('never binds an AID header to an account it creates either', async () => {
+        const { service, userService, federatedIdentityService } = makeService();
+        const created = account('user-new', 'hello@lifescope.io');
+        userService.create.mockImplementation(
+          async (_ctx: unknown, _dto: unknown, alongside: (m: unknown, u: unknown) => Promise<unknown>) => {
+            await alongside({ marker: 'txn' }, created);
+
+            return created;
+          },
+        );
+        const headers = withKeri('hello@lifescope.io', { 'x-ci-hub-user-aid': VICTIM_AID });
+
+        await service.alignSession(requestWith(headers, null), response());
+
+        expect(federatedIdentityService.bind).toHaveBeenCalledTimes(1);
+        expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user-new', issuer: DIRECTORY, subject: HUB_ID }),
+          expect.anything(),
+        );
+      });
     });
   });
 });

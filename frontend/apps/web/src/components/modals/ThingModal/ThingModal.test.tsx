@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { CREATE_THING, ThingModal, type ThingModalItem } from './ThingModal';
+import { CREATE_THING, ThingModal, UPDATE_THING, type ThingModalItem } from './ThingModal';
 
 const CAMERA: ThingModalItem = {
   id: 'item-1',
@@ -181,9 +181,11 @@ describe('ThingModal', () => {
 });
 
 /**
- * Acquired, Made and Expires are days, stored as instants. The form sent a
- * picked 2026-10-01 as UTC midnight, which in California is still September 30,
- * and the thing's page (`toLocaleDateString`) showed the day before.
+ * Acquired, Made and Expires are days, stored as instants. A picked 2026-10-01
+ * is stored as UTC midnight and read back as the day it names in every zone
+ * (`lib/thingDate`). The start of the picked day where the person was named the
+ * day before to anyone further west: Oct 1 picked in Tokyo read as Sep 30 in
+ * Los Angeles, and the server's daily stats counted it on Sep 30.
  */
 describe('ThingModal dates', () => {
   const ORIGINAL_TZ = process.env.TZ;
@@ -217,40 +219,81 @@ describe('ThingModal dates', () => {
     quantity: null,
   };
 
-  it('sends the start of the picked day where the person is', async () => {
-    process.env.TZ = 'America/Los_Angeles';
-    const onClose = vi.fn();
-    // Midnight in Los Angeles on Oct 1, not UTC midnight (5 pm on Sep 30 there).
-    const acquiredAt = '2026-10-01T07:00:00.000Z';
-    const created = mockQuery(
-      CREATE_THING,
-      { input: { ...input, acquiredAt } },
-      {
-        createItem: {
-          __typename: 'CreateItemPayload',
-          success: true,
-          item: {
-            __typename: 'ItemType',
-            id: 'item-10',
-            ...input,
-            acquiredAt,
-            lifecycleState: 'ACTIVE' as const,
-            quantity: 1,
-            colors: [],
-            composition: {},
-            tags: [],
+  it.each(['America/Los_Angeles', 'Asia/Tokyo'])(
+    'sends the picked day as UTC midnight in %s',
+    async (zone) => {
+      process.env.TZ = zone;
+      const onClose = vi.fn();
+      // Not the start of Oct 1 where the person is (07:00Z from Los Angeles, 15:00Z on
+      // Sep 30 from Tokyo), which every other zone reads as a different day.
+      const acquiredAt = '2026-10-01T00:00:00.000Z';
+      const created = mockQuery(
+        CREATE_THING,
+        { input: { ...input, acquiredAt } },
+        {
+          createItem: {
+            __typename: 'CreateItemPayload',
+            success: true,
+            item: {
+              __typename: 'ItemType',
+              id: 'item-10',
+              ...input,
+              acquiredAt,
+              lifecycleState: 'ACTIVE' as const,
+              quantity: 1,
+              colors: [],
+              composition: {},
+              tags: [],
+            },
           },
         },
-      },
+      );
+
+      renderWithProviders(<ThingModal open onClose={onClose} item={null} create />, { mocks: [created] });
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Grinder' } });
+      fireEvent.change(screen.getByLabelText('Acquired'), { target: { value: '2026-10-01' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    },
+  );
+
+  it('keeps a date nobody touched as stored when something else is edited', async () => {
+    process.env.TZ = 'America/Los_Angeles';
+    const onClose = vi.fn();
+    const saved: Array<Record<string, unknown>> = [];
+    // An importer's order time (8 pm on Sep 30 in Los Angeles) and a day the form picked.
+    const item = { ...CAMERA, acquiredAt: '2026-10-01T03:00:00.000Z', expiresAt: '2030-01-01T00:00:00.000Z' };
+
+    renderWithProviders(<ThingModal open onClose={onClose} item={item} create={false} />, {
+      mocks: [
+        {
+          request: { query: UPDATE_THING },
+          variableMatcher: () => true,
+          result: (variables: Record<string, unknown>) => {
+            saved.push(variables.input as Record<string, unknown>);
+
+            return { data: { updateItem: { __typename: 'UpdateItemPayload', success: true, item: null } } };
+          },
+        },
+      ],
+    });
+
+    fireEvent.change(screen.getByLabelText('Brand'), { target: { value: 'Billingham' } });
+    fireEvent.change(screen.getByLabelText('Made'), { target: { value: '2023-05-04' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual(
+      expect.objectContaining({
+        brand: 'Billingham',
+        // Not cut to 2026-09-30T00:00:00.000Z, the day the input shows here.
+        acquiredAt: '2026-10-01T03:00:00.000Z',
+        manufacturedAt: '2023-05-04T00:00:00.000Z',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      }),
     );
-
-    renderWithProviders(<ThingModal open onClose={onClose} item={null} create />, { mocks: [created] });
-
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Grinder' } });
-    fireEvent.change(screen.getByLabelText('Acquired'), { target: { value: '2026-10-01' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it('shows a stored date on the same day the thing page shows it', () => {
@@ -272,12 +315,12 @@ describe('ThingModal dates', () => {
   // CI runs in UTC, where a UTC midnight and a local midnight are the same
   // instant, so the zone is chosen here rather than inherited.
   it.each(['UTC', 'Pacific/Honolulu', 'America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Kiritimati'])(
-    'shows the day a legacy UTC-midnight date names in %s',
+    'shows the day a UTC-midnight date names in %s',
     (zone) => {
       process.env.TZ = zone;
 
-      // What the app stored before it wrote the start of the picked day: the picked
-      // day as UTC midnight. West of UTC that instant is still the day before.
+      // What the form stores: the picked day as UTC midnight. West of UTC that
+      // instant is still the day before.
       renderWithProviders(
         <ThingModal
           open
@@ -299,11 +342,11 @@ describe('ThingModal dates', () => {
   );
 
   it.each(['UTC', 'Pacific/Honolulu', 'America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Kiritimati'])(
-    'shows the day a new start-of-local-day date names in %s',
+    'shows the day a start-of-local-day date names in %s',
     (zone) => {
       process.env.TZ = zone;
 
-      // What the form stores now: midnight where the person is.
+      // What the form stored for a while: midnight where the person was.
       renderWithProviders(
         <ThingModal
           open

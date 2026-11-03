@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
+import { AGENT_TURN_MESSAGE_CATEGORY } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -347,8 +348,15 @@ export class TodoScanService {
                 left(coalesce(description, ''), 400) AS snippet
            FROM ci.entities
           WHERE entity_id = ANY($1::uuid[])
-            AND owner_user_id = $2::uuid`,
-        [ids, context.userId],
+            AND owner_user_id = $2::uuid
+            -- An agent's reply (stored inbound by POST /memory/turn) is the
+            -- agent's words, not the owner's: a task proposed from one would
+            -- be the agent's echo. What the owner said to the agent stays.
+            AND NOT EXISTS (
+                  SELECT 1 FROM ci.communications c
+                   WHERE c.id = ci.entities.entity_id AND c.category = $3 AND c.direction = 'inbound'
+                )`,
+        [ids, context.userId, AGENT_TURN_MESSAGE_CATEGORY],
       )) as Array<{ id: string; entity_type: string; name: string | null; snippet: string | null }>;
 
       const byId = new Map(rows.map((row) => [row.id, row]));

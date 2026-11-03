@@ -60,7 +60,7 @@ export PGPASSWORD="$ADMIN_PASSWORD"
 # left this list too. create_publication drops a table that is no longer listed,
 # so an existing install stops decoding their WAL for the replicator; the stale
 # SELECT grants are harmless and left alone.
-: "${POWERSYNC_TABLES:=ci.notes ci_search.tags ci_search.entity_tag ci_search.mobile_search_documents}"
+: "${POWERSYNC_TABLES:=ci.notes ci.saved_searches ci_search.tags ci_search.entity_tag ci_search.mobile_search_documents}"
 : "${POWERSYNC_PUBLICATION:=powersync}"
 
 # ── Validation ───────────────────────────────────

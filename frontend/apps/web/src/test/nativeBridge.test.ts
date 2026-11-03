@@ -770,8 +770,9 @@ describe('nativeBridge — startSignificantLocationUpdates (Always-mode backgrou
     minDistanceMeters: 150,
     minIntervalMs: 300_000,
     maxAccuracyMeters: 200,
+    geofenceRadiusMeters: 100,
     notificationTitle: 'Recording location',
-    notificationText: 'recording',
+    notificationText: 'moving',
   };
 
   function installHub(platform: 'android' | 'ios') {
@@ -813,9 +814,10 @@ describe('nativeBridge — startSignificantLocationUpdates (Always-mode backgrou
     expect(hub.addListener).toHaveBeenCalledWith('significantLocationError', expect.any(Function));
   });
 
-  it('a stop superseded by a newer start drops its listeners but leaves the native service running', async () => {
+  it('a stop superseded by a newer start drops its listeners but leaves the native monitor running', async () => {
     // The sequence a React effect re-run produces: start, start, then the FIRST session's
     // cleanup reaching the one-per-process plugin -- which must not stop the second session.
+    // Seen on a device: that sequence within 200 ms left Android's tracker disarmed.
     const { hub, removes } = installHub('android');
 
     const first = await startSignificantLocationUpdates(options, vi.fn(), vi.fn());

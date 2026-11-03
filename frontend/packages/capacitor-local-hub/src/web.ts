@@ -1,6 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  BackgroundUploadState,
   DiscoverLanAppliancesResult,
   LocalHubPlugin,
   LocalHubSecureGetResult,
@@ -80,6 +81,26 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
   async stopSignificantLocationUpdates(): Promise<void> {
     // Nothing started on web.
   }
+
+  async getBackgroundUpload(): Promise<BackgroundUploadState> {
+    return { enabled: false, supported: false };
+  }
+
+  async setBackgroundUpload(): Promise<BackgroundUploadState> {
+    // No queue of native fixes to upload in a browser.
+    return { enabled: false, supported: false };
+  }
+
+  // A browser keeps no replica, so there is nothing to sync in the background.
+  async configureBackgroundSync(): Promise<void> {}
+
+  async claimReplica(): Promise<{ free: boolean }> {
+    return { free: true };
+  }
+
+  async releaseReplica(): Promise<void> {}
+
+  async clearBackgroundSync(): Promise<void> {}
 
   async discoverLanAppliances(): Promise<DiscoverLanAppliancesResult> {
     // Browsers cannot perform raw UDP mDNS discovery; callers fall back to manual URL entry.

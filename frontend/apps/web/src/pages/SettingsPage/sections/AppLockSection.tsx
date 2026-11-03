@@ -115,22 +115,26 @@ export function AppLockSection() {
           <p className="text-sm text-muted-foreground">{APP_LOCK_GRACE_LABELS[status.grace].hint}</p>
         </div>
 
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="app-lock-secure">Hide in the app switcher</Label>
-            <p className="text-sm text-muted-foreground">
-              {isAndroidPlatform()
-                ? 'Shows a blank card in recent apps and blocks screenshots and screen recording, including your own.'
-                : 'Blurs the app in the switcher. iOS has no screenshot block; this is always on while the lock is.'}
-            </p>
+        {/* Android only: FLAG_SECURE is a real choice there. iOS always blurs the app in
+            the switcher while the lock is on and has no screenshot block, so a switch
+            would do nothing and is not shown. */}
+        {isAndroidPlatform() && (
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="app-lock-secure">Hide in app switcher and prevent screenshots</Label>
+              <p className="text-sm text-muted-foreground">
+                Shows a blank card in recent apps and blocks screenshots and screen recording, including your
+                own.
+              </p>
+            </div>
+            <Switch
+              id="app-lock-secure"
+              checked={status.secureScreen}
+              disabled={busy || !status.enabled}
+              onCheckedChange={(checked) => void run(() => configure({ secureScreen: checked }))}
+            />
           </div>
-          <Switch
-            id="app-lock-secure"
-            checked={status.secureScreen}
-            disabled={busy || !status.enabled || !isAndroidPlatform()}
-            onCheckedChange={(checked) => void run(() => configure({ secureScreen: checked }))}
-          />
-        </div>
+        )}
 
         <Button variant="outline" disabled={busy || !status.enabled} onClick={() => void run(lock)}>
           Lock now

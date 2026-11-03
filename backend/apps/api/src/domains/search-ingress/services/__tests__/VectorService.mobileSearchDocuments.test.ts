@@ -58,7 +58,7 @@ describe('buildVectorUpsertStatement', () => {
 
     expect(sql).toContain('INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)');
     expect(sql).toMatch(
-      /INSERT INTO ci_search\.mobile_search_documents\s+\(id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version\)/,
+      /INSERT INTO ci_search\.mobile_search_documents AS doc\s+\(id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version\)/,
     );
     expect(sql).toContain('FROM vector_row v');
     // The vectors upsert keeps the existing row's id on conflict and the
@@ -89,6 +89,15 @@ describe('buildVectorUpsertStatement', () => {
     ]);
   });
 
+  it('rewrites the document only when a stored column would change', () => {
+    // PowerSync sends every written row to every phone, changed or not.
+    const { sql } = buildVectorUpsertStatement([{ text: 'Lunch?', weight: 10 }], row);
+
+    expect(sql).toMatch(
+      /WHERE \(doc\.title, doc\.body, doc\.occurred_at, doc\.related_id, doc\.detail, doc\.detail_version\)\s+IS DISTINCT FROM\s+\(EXCLUDED\.title, EXCLUDED\.body, EXCLUDED\.occurred_at, EXCLUDED\.related_id,\s+EXCLUDED\.detail, EXCLUDED\.detail_version\)/,
+    );
+  });
+
   it('derives the device record from the source row and stamps the current recipe version', () => {
     const { sql, params } = buildVectorUpsertStatement([{ text: 'Lunch?', weight: 10 }], row);
 
@@ -104,6 +113,19 @@ describe('buildVectorUpsertStatement', () => {
     // still id, type, entity id, the one A group, user, title, body, types.
     expect(params).toHaveLength(8);
     expect(params[3]).toBe('Lunch?');
+  });
+
+  it('indexing an event moves its place’s document to that visit, only forward', () => {
+    const { sql } = buildVectorUpsertStatement([{ text: 'Dinner', weight: 10 }], {
+      ...row,
+      entityType: 'event',
+    });
+
+    expect(sql).toMatch(
+      /place_visit AS \(\s+UPDATE ci_search\.mobile_search_documents d\s+SET occurred_at = e\.start_time/,
+    );
+    expect(sql).toContain("WHERE v.entity_type = 'event'");
+    expect(sql).toContain('AND (d.occurred_at IS NULL OR d.occurred_at < e.start_time)');
   });
 
   it('a type outside the device list still gets its tsvector; the document half simply matches no row', () => {

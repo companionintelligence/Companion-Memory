@@ -204,6 +204,10 @@ function OverlayRail({
       aria-label="Main navigation drawer"
       data-state={expanded ? 'expanded' : 'collapsed'}
       aria-hidden={!expanded}
+      // Shut, the drawer is only translated off-canvas: still `visibility:
+      // visible`, so without `inert` its links and buttons stayed in the Tab
+      // order while hidden from the a11y tree. `inert` takes them out of both.
+      inert={!expanded}
       onClick={(event) => {
         if ((event.target as HTMLElement).closest('a')) {
           closeOverlay();

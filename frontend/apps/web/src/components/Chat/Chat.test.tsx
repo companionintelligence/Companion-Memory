@@ -331,6 +331,37 @@ describe('Chat', () => {
       await waitFor(() => expect(textbox).toHaveFocus());
     });
 
+    it('leaves the box alone on a touch screen, where focus opens the keyboard over the reply', async () => {
+      const matchMedia = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        ...matchMedia(query),
+        matches: query === '(hover: none) and (pointer: coarse)',
+      })) as typeof window.matchMedia;
+
+      try {
+        const { rerender } = renderWithProviders(<Chat autoFocus loading />);
+        const textbox = screen.getByRole('textbox');
+        await nextFrame();
+
+        rerender(<Chat autoFocus streaming messages={reply} />);
+        await nextFrame();
+        rerender(<Chat autoFocus messages={reply} />);
+
+        await nextFrame();
+        await nextFrame();
+        expect(textbox).toBeEnabled();
+        expect(textbox).not.toHaveFocus();
+
+        // A thread that updates while the person reads (a dispatch does, on every step) hands Chat new messages.
+        rerender(<Chat autoFocus messages={[...reply, { role: 'assistant', content: 'one more step' }]} />);
+        await nextFrame();
+        await nextFrame();
+        expect(textbox).not.toHaveFocus();
+      } finally {
+        window.matchMedia = matchMedia;
+      }
+    });
+
     it('does nothing without autoFocus', async () => {
       const { rerender } = renderWithProviders(<Chat streaming />);
       const textbox = screen.getByRole('textbox');

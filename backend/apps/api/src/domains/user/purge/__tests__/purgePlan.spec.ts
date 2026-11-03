@@ -191,9 +191,90 @@ describe('buildPurgePlan', () => {
         ],
       });
 
-      expect(indexOf(plan, 'detach:ci.users:entity_id')).toBeLessThan(
+      expect(indexOf(plan, 'detach:ci.users:entity_id->ci.entities:owner_user_id')).toBeLessThan(
         indexOf(plan, 'delete:ci.entities:owner_user_id'),
       );
+    });
+
+    it('breaks that reference on every account pointing into the doomed rows, not only its own', () => {
+      // Scoped by "points at one of this account's entities", not by `id = $1`:
+      // another account whose `entity_id` names one of them would otherwise fail
+      // the entities delete on the foreign key on every retry, and the purge
+      // would never finish. Nulling is what ON DELETE SET NULL would do.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.entities', 'owner_user_id', 'n')],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.users', 'entity_id', 'ci.entities', 'a', 'entity_id'),
+        ],
+      });
+
+      const detach = plan.steps.find((step) => step.id.startsWith('detach:ci.users:entity_id'));
+
+      expect(detach).toMatchObject({
+        kind: 'null',
+        target: USERS,
+        column: 'entity_id',
+        scope: {
+          kind: 'referencesPurged',
+          column: 'entity_id',
+          parent: { schema: 'ci', table: 'entities', column: 'entity_id' },
+          parentScope: { kind: 'owned', column: 'owner_user_id' },
+        },
+      });
+    });
+
+    it('never deletes another account row through such a reference', () => {
+      // The blocking walk used to follow ci.users.entity_id like any blocking
+      // child, adding a step that deleted every account whose `entity_id` named
+      // one of this account's entities.
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.entities', 'owner_user_id', 'n')],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.users', 'entity_id', 'ci.entities', 'a'),
+        ],
+      });
+
+      expect(stepIds(plan).filter((id) => id.startsWith('delete:ci.users'))).toEqual(['delete:ci.users']);
+    });
+
+    it('deletes a SET NULL child before its parent, so its rows are not rewritten first', () => {
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [
+          userColumn('ci.entities', 'owner_user_id', 'n'),
+          userColumn('ci.position', 'user_id', 'c'),
+        ],
+        edges: [
+          fk('ci.entities', 'owner_user_id', 'ci.users', 'n'),
+          fk('ci.position', 'user_id', 'ci.users', 'c'),
+          fk('ci.position', 'location_entity_id', 'ci.entities', 'n'),
+        ],
+      });
+
+      expect(indexOf(plan, 'delete:ci.position:user_id')).toBeLessThan(
+        indexOf(plan, 'delete:ci.entities:owner_user_id'),
+      );
+      expect(plan.warnings).toEqual([]);
+    });
+
+    it('drops a SET NULL ordering hint silently when it closes a cycle', () => {
+      const plan = buildPurgePlan({
+        usersTable: USERS,
+        userColumns: [userColumn('ci.a', 'user_id', 'a'), userColumn('ci.b', 'user_id', 'a')],
+        edges: [
+          fk('ci.a', 'user_id', 'ci.users', 'a'),
+          fk('ci.b', 'user_id', 'ci.users', 'a'),
+          fk('ci.a', 'b_id', 'ci.b', 'a'),
+          fk('ci.b', 'a_id', 'ci.a', 'n'),
+        ],
+      });
+
+      expect(indexOf(plan, 'delete:ci.a:user_id')).toBeLessThan(indexOf(plan, 'delete:ci.b:user_id'));
+      expect(plan.warnings).toEqual([]);
     });
   });
 

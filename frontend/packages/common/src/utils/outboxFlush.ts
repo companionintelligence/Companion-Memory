@@ -670,6 +670,8 @@ export interface OutboxQueueState {
   /** False on web / without a sidecar: there is no queue to show at all. */
   available: boolean;
   pending: number;
+  /** The pending rows by `kind` (`positions`, `note`, …), for a note that names what waits. */
+  pendingByKind: Record<string, number>;
   needsAttention: number;
   total: number;
   capacity: OutboxCapacity | null;
@@ -680,6 +682,7 @@ export interface OutboxQueueState {
 const EMPTY_QUEUE = {
   available: false,
   pending: 0,
+  pendingByKind: {},
   needsAttention: 0,
   total: 0,
   capacity: null,
@@ -727,11 +730,19 @@ function useOutboxQueueState(): OutboxQueueState {
       }
 
       if (result.ok) {
-        const { counts, capacity } = result.value;
+        const { counts, capacity, items } = result.value;
+        const pendingByKind: Record<string, number> = {};
+
+        for (const item of items) {
+          if (item.status === 'pending') {
+            pendingByKind[item.kind] = (pendingByKind[item.kind] ?? 0) + 1;
+          }
+        }
 
         setSnapshot({
           available: true,
           pending: counts.pending,
+          pendingByKind,
           needsAttention: counts.needsAttention,
           total: counts.total,
           capacity,

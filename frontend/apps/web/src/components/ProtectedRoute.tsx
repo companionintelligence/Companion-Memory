@@ -1,9 +1,9 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
-import { Button, Card } from '@ci/shadcn';
 import { Navigate, useLocation } from 'react-router-dom';
 
+import { MemoryUnreachable } from '@/components/MemoryUnreachable';
 import { useAuth, useCurrentUser } from '@/hooks';
 
 export function ProtectedRoute({
@@ -20,8 +20,10 @@ export function ProtectedRoute({
   fallback?: ReactNode;
 }) {
   const location = useLocation();
-  const [{ expired, loading: authLoading, authToken, unreachable: sessionUnreachable }, { refresh }] =
-    useAuth();
+  const [
+    { expired, loading: authLoading, authToken, authenticated, unreachable: sessionUnreachable },
+    { refresh },
+  ] = useAuth();
   const { user, loading: userLoading, unreachable: profileUnreachable, refetch } = useCurrentUser();
   const [triedRecover, setTriedRecover] = useState(false);
   // Once the signed-in app has been shown, a later `me` refetch must not swap
@@ -84,6 +86,8 @@ export function ProtectedRoute({
     if (sessionUnreachable || (profileUnreachable && !user)) {
       return (
         <MemoryUnreachable
+          // `authenticated` is a token or, on a phone, the API key that leaves `authToken` empty.
+          signedIn={authenticated || user != null}
           onRetry={() => {
             // The session first: a profile asked for with an expired token fails again.
             if (sessionUnreachable) {
@@ -108,24 +112,4 @@ export function ProtectedRoute({
   }
 
   return <Suspense fallback={fallback}>{children}</Suspense>;
-}
-
-function MemoryUnreachable({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="flex h-lvh w-full items-center justify-center p-6 md:p-10">
-      <Card className="w-full max-w-md rounded-2xl border">
-        <Card.Header>
-          <Card.Title className="text-center">Can't reach Memory</Card.Title>
-        </Card.Header>
-        <Card.Content className="space-y-4 text-center">
-          <p className="text-muted-foreground">
-            You're still signed in. This page opens as soon as Memory answers again.
-          </p>
-          <Button variant="outline" onClick={onRetry}>
-            Try again
-          </Button>
-        </Card.Content>
-      </Card>
-    </div>
-  );
 }

@@ -333,6 +333,51 @@ describe('useFeatures', () => {
     expect(headers.Authorization ?? headers.authorization).toBeUndefined();
   });
 
+  it('on the phone, asks for the public flags only once the stored key has been read, and with it', async () => {
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    setApiBaseUrl('https://memory.example.com');
+    h.auth = { authToken: null, subject: null, initializing: true, authenticated: false };
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+
+      return Promise.resolve(ok(isGlobal(input) ? { 'require.signup.codes': true } : {}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(() => useFeatures(), { wrapper });
+
+    // The origin is known, the key is still being read: nothing goes out yet.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.some(([url]) => isGlobal(url))).toBe(false);
+
+    setApiKey('native-key');
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: true };
+    rerender();
+
+    await waitFor(() => expect(result.current.isFeatureEnabled('require.signup.codes')).toBe(true));
+    const globalCall = fetchMock.mock.calls.find(([url]) => isGlobal(url));
+    expect(((globalCall?.[1]?.headers ?? {}) as Record<string, string>)['x-api-key']).toBe('native-key');
+  });
+
+  it('on a signed-out phone, still asks for the public flags once the key read finds nothing', async () => {
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    setApiBaseUrl('https://memory.example.com');
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: false };
+    const fetchMock = setFetch();
+
+    const { result } = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(result.current.isFeatureEnabled('files.page')).toBe(true));
+    expect(fetchMock.mock.calls.some(([url]) => isGlobal(url))).toBe(true);
+  });
+
   it("remembers a phone's flags under its API key, which has no session subject, and recalls them offline", async () => {
     (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
       isNativePlatform: () => true,

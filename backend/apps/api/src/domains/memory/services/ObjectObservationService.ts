@@ -2,11 +2,27 @@ import { createHash } from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { Between, DataSource, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm';
+import {
+  Between,
+  DataSource,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Not,
+  Raw,
+  Repository,
+} from 'typeorm';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { appendRecordSources, computeChunkSize } from '@ci/common/persistence';
+import {
+  appendRecordSources,
+  computeChunkSize,
+  OWNED_TABLES,
+  type OwnedLink,
+  refuseForeignLinks,
+} from '@ci/common/persistence';
 
 import {
   type ObjectObservation,
@@ -18,6 +34,18 @@ import type {
   FindObjectObservationsFilter,
   ResolveObjectObservationDto,
 } from '../types';
+
+/**
+ * The `metadata` key that puts a sighting a person unlinked back in the review
+ * queue ({@link ObjectObservationService.sendBackToReview}). Any later answer
+ * from a person ({@link ObjectObservationService.confirm}) takes it off.
+ */
+const SENT_BACK_TO_REVIEW = 'sentBackToReview';
+
+/** Whether a person sent this sighting back to the review queue to say which thing it is. */
+export function isSentBackToReview(observation: Pick<ObjectObservation, 'metadata'>): boolean {
+  return observation.metadata?.[SENT_BACK_TO_REVIEW] === true;
+}
 
 /**
  * Decimal places a bbox is rounded to before it enters a detection key.
@@ -203,6 +231,38 @@ export function detectionKeyFor(dto: CreateObjectObservationDto): string | null 
   return `obs:v${DETECTION_KEY_VERSION}:label:${sha256Hex([anchor, detector, label].join('\0'))}`;
 }
 
+/** A sighting's links that name another row: what a write or a resolution carries. */
+interface ObservationLinkFields {
+  contentId?: string | null;
+  fileId?: string | null;
+  eventId?: string | null;
+  placeEntityId?: string | null;
+  cropContentId?: string | null;
+  resolvedObjectId?: string | null;
+  resolvedProductId?: string | null;
+}
+
+/**
+ * What a sighting links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. The keys on `event_id`, `place_entity_id` and the two resolution columns only
+ * ask that the row exists, and the file and content columns have none.
+ */
+function observationLinks(rows: readonly ObservationLinkFields[]): OwnedLink[] {
+  return [
+    { field: 'content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.contentId) },
+    { field: 'crop_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.cropContentId) },
+    { field: 'file_id', ...OWNED_TABLES.files, ids: rows.map((row) => row.fileId) },
+    { field: 'event_id', ...OWNED_TABLES.events, ids: rows.map((row) => row.eventId) },
+    { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.placeEntityId) },
+    { field: 'resolved_object_id', ...OWNED_TABLES.objects, ids: rows.map((row) => row.resolvedObjectId) },
+    {
+      field: 'resolved_product_id',
+      ...OWNED_TABLES.productModels,
+      ids: rows.map((row) => row.resolvedProductId),
+    },
+  ];
+}
+
 /**
  * The only writer of `ci.object_observations` — the SIGHTING half of object
  * identity.
@@ -314,6 +374,8 @@ export class ObjectObservationService {
     if (dtos.length === 0) {
       return empty;
     }
+
+    await refuseForeignLinks(this.dataSource, context.userId, observationLinks(dtos), 'sighting');
 
     // Partition by arbiter, folding within-batch repeats as we go. Two maps
     // rather than one because the arbiters live in different index spaces: a
@@ -463,6 +525,10 @@ export class ObjectObservationService {
       return existing;
     }
 
+    // `user_id`, the account the sighting belongs to and the column the import scopes it by.
+    // `owner_user_id` is an attribution that may name no one.
+    await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([dto]), 'sighting');
+
     await this.observationRepository.update(
       { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
       {
@@ -487,12 +553,23 @@ export class ObjectObservationService {
    * in place under method `'user'`: "I am no longer certain" is not "this was
    * never linked", and throwing the link away would lose the only record of
    * what the human thought.
+   *
+   * Every answer takes the {@link SENT_BACK_TO_REVIEW} mark off, except the one
+   * that sets it ({@link sendBackToReview}, through `sendBackToReview: true`).
+   *
+   * A thing named without a product brings its own product along when it has
+   * one, so the sighting's product link agrees with the thing it is linked to.
+   * A sighting sent back from another thing keeps its product link (see
+   * {@link sendBackToReview}), and picking a thing of another product in
+   * review must replace it rather than leave the two links disagreeing. A thing
+   * whose product is not known leaves the sighting's product link as it is.
    */
   async confirm(
     context: ServiceContext,
     id: string,
     confirmed = true,
     resolution?: Pick<ResolveObjectObservationDto, 'resolvedObjectId' | 'resolvedProductId'>,
+    options: { sendBackToReview?: boolean; whileLinkedTo?: string } = {},
   ): Promise<ObjectObservation | null> {
     const existing = await this.findById(context, id);
 
@@ -500,24 +577,104 @@ export class ObjectObservationService {
       return null;
     }
 
+    if (resolution != null) {
+      await refuseForeignLinks(this.dataSource, existing.userId, observationLinks([resolution]), 'sighting');
+    }
+
+    const thingProductId =
+      resolution?.resolvedObjectId != null && resolution.resolvedProductId === undefined
+        ? await this.productOfThing(existing.userId, resolution.resolvedObjectId)
+        : null;
+
     await this.observationRepository.update(
-      { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        // Only while the row is still linked to that thing: a merge or another
+        // answer between the read above and this write leaves it alone.
+        ...(options.whileLinkedTo !== undefined && { resolvedObjectId: options.whileLinkedTo }),
+      },
       {
         confirmedByUser: confirmed,
         resolutionMethod: 'user',
         // A human's answer has no meaningful sub-1 confidence: they either said
         // it or they did not.
         resolutionConfidence: confirmed ? 1 : null,
+        // An answer, so the sighting no longer waits in the review queue for
+        // one, unless the answer is "ask me again".
+        metadata: () =>
+          options.sendBackToReview
+            ? `metadata || '{"${SENT_BACK_TO_REVIEW}": true}'::jsonb`
+            : `metadata - '${SENT_BACK_TO_REVIEW}'`,
         ...(resolution?.resolvedObjectId !== undefined && {
           resolvedObjectId: resolution.resolvedObjectId,
         }),
         ...(resolution?.resolvedProductId !== undefined && {
           resolvedProductId: resolution.resolvedProductId,
         }),
+        ...(thingProductId != null && { resolvedProductId: thingProductId }),
       },
     );
 
     return this.findById(context, id);
+  }
+
+  /** The catalog product of one of this user's things, or `null` when it has none or is not theirs. */
+  private async productOfThing(userId: string, objectId: string): Promise<string | null> {
+    const rows: Array<{ product_id: string | null }> = await this.dataSource.query(
+      `SELECT product_id FROM ci.objects WHERE object_id = $1::uuid AND user_id::text = $2::text`,
+      [objectId, userId],
+    );
+
+    return rows[0]?.product_id ?? null;
+  }
+
+  /**
+   * Record that a HUMAN said this sighting is not the thing it was linked to,
+   * and put it back in the review queue so they can say which thing it is.
+   *
+   * Not the same answer as "not a thing" (`confirm(id, false)` with the link
+   * cleared), which takes the sighting out of the queue for good. "That is not
+   * my mug" still leaves a thing in the photo that may be another of theirs.
+   * It is still a person's answer (method `user`), so neither the resolution
+   * ladder nor the vision listener links it to anything again; the
+   * {@link SENT_BACK_TO_REVIEW} mark is what puts it in front of the person.
+   *
+   * Only the thing link goes. The product link stays, because "not my mug" is
+   * not "not a mug of this kind", and the review queue reads the thing link
+   * alone. Picking the right thing there replaces the product with that
+   * thing's, when it has one ({@link confirm}). A sighting linked to a product
+   * and no thing loses the product link instead: that is the only link the
+   * answer can be about.
+   *
+   * A sighting linked to nothing is returned unchanged: "not this thing" says
+   * nothing about one that was already answered "not a thing". So is one that
+   * is no longer linked to `fromObjectId`, the thing the person was looking at:
+   * a page opened before a merge or another answer must not unlink a sighting
+   * from the thing it is linked to now.
+   */
+  async sendBackToReview(
+    context: ServiceContext,
+    id: string,
+    fromObjectId?: string,
+  ): Promise<ObjectObservation | null> {
+    const existing = await this.findById(context, id);
+
+    if (existing == null || (existing.resolvedObjectId == null && existing.resolvedProductId == null)) {
+      return existing;
+    }
+
+    if (fromObjectId !== undefined && existing.resolvedObjectId !== fromObjectId) {
+      return existing;
+    }
+
+    return this.confirm(
+      context,
+      id,
+      false,
+      existing.resolvedObjectId != null ? { resolvedObjectId: null } : { resolvedProductId: null },
+      { sendBackToReview: true, ...(fromObjectId !== undefined && { whileLinkedTo: fromObjectId }) },
+    );
   }
 
   async findById(context: ServiceContext, id: string): Promise<ObjectObservation | null> {
@@ -578,14 +735,41 @@ export class ObjectObservationService {
    * reads this queue could link them again. The index does not carry that
    * extra predicate, so rejected rows are still in it and get filtered out on
    * read.
+   *
+   * A sighting a person unlinked from a thing ("No" on the thing's page,
+   * {@link sendBackToReview}) is answered too, but it carries the
+   * {@link SENT_BACK_TO_REVIEW} mark and is the one answered row the queue
+   * shows: the person still has to say which thing it is. `sentBack: false`
+   * leaves those out, for a machine sweep that could only skip them.
    */
-  async findForReview(context: ServiceContext, limit = 100, offset = 0): Promise<ObjectObservation[]> {
-    return this.find(context, {
+  async findForReview(
+    context: ServiceContext,
+    limit = 100,
+    offset = 0,
+    { sentBack = true }: { sentBack?: boolean } = {},
+  ): Promise<ObjectObservation[]> {
+    const waiting = {
+      ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
       confirmedByUser: false,
-      resolved: false,
-      reviewedByUser: false,
-      limit,
-      offset,
+      resolvedObjectId: IsNull(),
+    };
+
+    return this.observationRepository.find({
+      where: [
+        { ...waiting, resolutionMethod: Not('user' as const) },
+        ...(sentBack
+          ? [
+              {
+                ...waiting,
+                resolutionMethod: 'user' as const,
+                metadata: Raw((column) => `(${column} ->> '${SENT_BACK_TO_REVIEW}') = 'true'`),
+              },
+            ]
+          : []),
+      ],
+      order: { observedAt: 'DESC' },
+      take: limit,
+      skip: offset,
     });
   }
 

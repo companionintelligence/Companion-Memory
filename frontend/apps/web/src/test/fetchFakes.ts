@@ -20,6 +20,13 @@ export function okResponse(body: unknown = { status: 'ok' }): Response {
   return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
 }
 
+/** Models both endpoints required for a healthy Companion Memory connection. */
+export function memoryApiResponse(input: RequestInfo): Response {
+  const path = new URL(urlOf(input), 'http://localhost').pathname;
+
+  return okResponse(path.endsWith('/api/graphql') ? { data: { __typename: 'Query' } } : { status: 'ok' });
+}
+
 /**
  * A healthy server that takes `latencyMs` to answer, and that honours an abort
  * the way real `fetch` does. Honouring it is the whole point: fetchJson's
@@ -32,6 +39,23 @@ export function slowServer(latencyMs: number, body?: unknown) {
     (_input: RequestInfo, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
         const timer = setTimeout(() => resolve(okResponse(body)), latencyMs);
+
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          const err = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }),
+  );
+}
+
+/** A delayed health + GraphQL pair that respects the probe's abort signal. */
+export function slowMemoryServer(latencyMs: number) {
+  return vi.fn(
+    (input: RequestInfo, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(memoryApiResponse(input)), latencyMs);
 
         init?.signal?.addEventListener('abort', () => {
           clearTimeout(timer);

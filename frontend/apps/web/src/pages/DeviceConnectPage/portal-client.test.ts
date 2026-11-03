@@ -16,6 +16,7 @@ describe('device-connect portal-client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.removeItem('ci.deviceConnect.portalUrl');
+    localStorage.removeItem('ci.deviceConnect.portalUrl.v2');
   });
 
   it('signs in with email and returns a session token', async () => {
@@ -277,8 +278,21 @@ describe('device-connect portal-client', () => {
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
   });
 
-  it('does not restore the internal dev cloud host as the Companion URL', () => {
+  it('does not restore an internal dev cloud host left by an older build', () => {
     localStorage.setItem('ci.deviceConnect.portalUrl', 'https://hub.companionintelligence.com');
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
+  });
+
+  it('keeps an internal host the person saved', () => {
+    localStorage.setItem('ci.deviceConnect.portalUrl', 'https://hub.ci.computer');
+    persistPortalUrl('https://hub.companionintelligence.com');
+
+    expect(readPersistedPortalUrl()).toBe('https://hub.companionintelligence.com');
+    expect(localStorage.getItem('ci.deviceConnect.portalUrl')).toBeNull();
+  });
+
+  it('still honours a non-internal host saved by an older build', () => {
+    localStorage.setItem('ci.deviceConnect.portalUrl', 'https://other.example.com/');
+    expect(readPersistedPortalUrl()).toBe('https://other.example.com');
   });
 });

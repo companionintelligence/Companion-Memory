@@ -69,7 +69,7 @@ make test-desktop   # cargo test in frontend/apps/desktop/src-tauri
 make build
 make build IMAGE=api    # just one image, not the whole ENV-appropriate set. Valid:
                         # api gateway setup-database database object-store
-                        # setup-secrets summary hbpe
+                        # setup-secrets powersync summary hbpe
 make build DRY_RUN=1    # print the exact docker build commands — every --build-arg
                         # and, on a cuda/rocm host, the wheel-image tags — without running Docker
 ```

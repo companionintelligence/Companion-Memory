@@ -135,6 +135,19 @@ export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
  * `MobileSearchDocumentDetailCron` knows it is current. Derived in SQL rather
  * than passed in, so none of the listeners or pipeline stages had to change.
  *
+ * A re-index that would leave the document as it is writes nothing: the
+ * `DO UPDATE ... WHERE` compares every stored column. PowerSync replicates this
+ * table, and it sends a phone a fresh copy of any row that is written, changed
+ * or not (measured 2026-10-30), so a no-op rewrite used to cost every phone a
+ * download -- one per entity on a full re-index. `updated_at` moves only when
+ * the document did.
+ *
+ * Indexing an EVENT also moves its place's document forward: a place's time is its latest
+ * visit (`entityTimeSql`), and the place itself is not re-indexed when a new event is held
+ * there. The `place_visit` CTE writes only when the event is later than what the place
+ * document carries, so a re-index of an old event is free. Postgres runs a data-modifying
+ * CTE whether or not anything reads it.
+ *
  * Positional params: $1 id, $2 entity_type, $3 entity_id, $4..$(3+k) the k
  * tsvector weight groups, then user_id, title, body, and the device-type list.
  */
@@ -158,7 +171,7 @@ export function buildVectorUpsertStatement(
       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at
     ),
     document_row AS (
-      INSERT INTO ci_search.mobile_search_documents
+      INSERT INTO ci_search.mobile_search_documents AS doc
              (id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version)
       SELECT v.id, v.entity_type, v.entity_id, v.user_id, $${titleIndex}, $${bodyIndex},
              ${entityTimeSql('v')},
@@ -174,6 +187,22 @@ export function buildVectorUpsertStatement(
                     detail = EXCLUDED.detail,
                     detail_version = EXCLUDED.detail_version,
                     updated_at = now()
+              WHERE (doc.title, doc.body, doc.occurred_at, doc.related_id, doc.detail, doc.detail_version)
+                    IS DISTINCT FROM
+                    (EXCLUDED.title, EXCLUDED.body, EXCLUDED.occurred_at, EXCLUDED.related_id,
+                     EXCLUDED.detail, EXCLUDED.detail_version)
+    ),
+    place_visit AS (
+      UPDATE ci_search.mobile_search_documents d
+         SET occurred_at = e.start_time,
+             updated_at = now()
+        FROM vector_row v
+        JOIN ci.events e ON e.event_id = v.entity_id
+       WHERE v.entity_type = 'event'
+         AND d.entity_type = 'place'
+         AND d.entity_id = e.location_entity_id
+         AND e.start_time IS NOT NULL
+         AND (d.occurred_at IS NULL OR d.occurred_at < e.start_time)
     )
     SELECT id, entity_type, entity_id, user_id, created_at, updated_at FROM vector_row`;
 

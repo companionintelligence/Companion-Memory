@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
-import { RECENT_THREAD_LIMIT, threadLabel, useRecentThreads } from './useRecentThreads';
+import {
+  RECENT_THREAD_LIMIT,
+  threadIdOf,
+  threadLabel,
+  useRecentThreads,
+  uuidV7Time,
+} from './useRecentThreads';
 
 const h = vi.hoisted(() => ({
   auth: {
@@ -69,10 +75,51 @@ describe('threadLabel', () => {
     expect(first).not.toContain('01a0fd3b');
   });
 
+  // The explorer's search results and the device's records carry no `createdAt` for a thread, and every thread
+  // id is a UUIDv7, which opens with the time it was minted.
+  it('reads the start time from a UUIDv7 id when there is no createdAt', () => {
+    expect(threadLabel({ id: '01a17e07-73a0-7abc-8def-0123456789ab', name: null }, fmt)).toBe(
+      'Chat · Oct 27, 15:43',
+    );
+  });
+
+  it('prefers createdAt to the id, and the id to an unreadable createdAt', () => {
+    const id = '01a17e07-73a0-7abc-8def-0123456789ab';
+
+    expect(threadLabel({ id, name: null, createdAt: '2026-10-02T16:24:00Z' }, fmt)).toBe(
+      'Chat · Oct 2, 16:24',
+    );
+    expect(threadLabel({ id, name: null, createdAt: 'not a date' }, fmt)).toBe('Chat · Oct 27, 15:43');
+  });
+
   it('writes the time the way the person chose to read times', () => {
     const h12 = createDateTimeFormatter({ timeFormat: 'h12', timeZone: 'UTC' });
 
     expect(threadLabel(thread('t1', null, '2026-10-02T16:24:00Z'), h12)).toMatch(/4:24\s?PM/);
+  });
+});
+
+describe('uuidV7Time', () => {
+  it('reads the millisecond timestamp a UUIDv7 opens with', () => {
+    expect(uuidV7Time('01a17e07-73a0-7abc-8def-0123456789ab')?.toISOString()).toBe(
+      '2026-10-27T15:43:00.000Z',
+    );
+  });
+
+  it('answers null for an id of any other version or shape', () => {
+    expect(uuidV7Time('01a17e07-73a0-4abc-8def-0123456789ab')).toBeNull();
+    expect(uuidV7Time('abcdef1234567890')).toBeNull();
+    expect(uuidV7Time('')).toBeNull();
+  });
+});
+
+describe('threadIdOf', () => {
+  it('unwraps a thread global id and leaves anything else as it came', () => {
+    expect(threadIdOf(btoa('thread:01a17e07-73a0-7abc-8def-0123456789ab'))).toBe(
+      '01a17e07-73a0-7abc-8def-0123456789ab',
+    );
+    expect(threadIdOf(btoa('note:n1'))).toBe(btoa('note:n1'));
+    expect(threadIdOf('01a17e07-73a0-7abc-8def-0123456789ab')).toBe('01a17e07-73a0-7abc-8def-0123456789ab');
   });
 });
 

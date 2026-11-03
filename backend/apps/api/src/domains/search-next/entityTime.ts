@@ -6,6 +6,14 @@
  * rows the lexical predicate already matched, so a page over thousands of matches stays cheap.
  * Types with no meaningful time of their own (a position's key is its time; an item has no
  * table) give NULL, which sorts last and is excluded by any window.
+ *
+ * A place's time is its most recent visit: the start of the latest event held there. The
+ * place row's own `created_at` is when the pipeline promoted it, and places are promoted in
+ * bursts, so under that rule every promotion run pushed a wall of addresses to the top of
+ * "most recent" (seen on the phone, 2026-10-26). A place nobody has been to yet has no time.
+ * `events_location_entity_idx` makes the lookup an index probe; the shared index statement
+ * also advances the stored time whenever an event at the place is indexed, so it keeps up
+ * with new visits without re-indexing the place.
  */
 export function entityTimeSql(alias?: string): string {
   const type = alias ? `${alias}.entity_type` : 'entity_type';
@@ -26,7 +34,7 @@ export function entityTimeSql(alias?: string): string {
     WHEN 'task' THEN (SELECT tk.created_at FROM ci.tasks tk WHERE tk.id = ${id})
     WHEN 'product' THEN (SELECT pm.created_at FROM ci.product_models pm WHERE pm.product_id = ${id})
     WHEN 'person' THEN (SELECT en.created_at FROM ci.entities en WHERE en.entity_id = ${id})
-    WHEN 'place' THEN (SELECT en.created_at FROM ci.entities en WHERE en.entity_id = ${id})
+    WHEN 'place' THEN (SELECT max(e.start_time) FROM ci.events e WHERE e.location_entity_id = ${id})
     WHEN 'concept' THEN (SELECT en.created_at FROM ci.entities en WHERE en.entity_id = ${id})
     ELSE NULL
   END)`;

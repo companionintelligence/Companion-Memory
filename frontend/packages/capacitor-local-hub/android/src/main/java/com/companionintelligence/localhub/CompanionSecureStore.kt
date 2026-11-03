@@ -99,6 +99,16 @@ interface SecureValueStore {
  * The flag is a constructor parameter rather than a constant so the decision is one edit and
  * one test away if a future slice removes the background-write requirement.
  *
+ * ### Transient keystore failures are retried, and never read as a lost key
+ *
+ * keystore2 prunes in-flight operations under load, and a pruned decrypt fails with the same
+ * exception family as a genuine key mismatch (see [KeystoreTransience] for the device log that
+ * found this). Each encrypt and decrypt is retried through [KeystoreTransience.retrying]; one
+ * that still fails transiently throws [SecureStoreUnavailableException] -- the keystore could
+ * not be used *right now* -- and only a failure that is not transient is reported as
+ * [SecureStoreDecryptionException]. The distinction is what keeps [OutboxDatabaseKey] from
+ * declaring queued captures lost over a hiccup.
+ *
  * ### Threading
  *
  * SharedPreferences is thread-safe and `Cipher` instances are created per call, so instances
@@ -122,7 +132,8 @@ class CompanionSecureStore(
     /**
      * Decrypted value, or `null` when nothing is stored under [key].
      *
-     * Throws [SecureStoreUnavailableException] if the keystore cannot be used at all and
+     * Throws [SecureStoreUnavailableException] if the keystore cannot be used at all (including
+     * a transient failure that outlasted the retries -- the value is intact) and
      * [SecureStoreDecryptionException] if a blob exists but no longer decrypts. Neither is
      * ever converted into "no value" here -- callers that want that leniency (the JS
      * `secureStorageGet`, which treats any failure as "signed out") opt into it themselves.
@@ -150,11 +161,22 @@ class CompanionSecureStore(
         val ciphertext = decoded.copyOfRange(HEADER_SIZE + ivLength, decoded.size)
 
         return try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_BITS, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            KeystoreTransience.retrying {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_BITS, iv))
+                String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            }
         } catch (e: GeneralSecurityException) {
-            // AEADBadTagException lands here too: the key changed under us, so the value is
+            if (KeystoreTransience.isTransient(e)) {
+                // The operation failed, not the key: a pruned keystore operation that stayed
+                // pruned through the retries. The blob is intact; say the keystore is busy.
+                throw SecureStoreUnavailableException(
+                    "Could not decrypt '$key' right now: the keystore failed transiently " +
+                        "${KeystoreTransience.BACKOFF_MS.size + 1} times; the value is intact",
+                    e,
+                )
+            }
+            // AEADBadTagException lands here: the key changed under us, so the value is
             // unrecoverable. Say so instead of returning a plausible-looking null.
             throw SecureStoreDecryptionException("Could not decrypt '$key'; the keystore key no longer matches", e)
         }
@@ -168,19 +190,21 @@ class CompanionSecureStore(
         val secretKey = loadOrCreateKey()
 
         val encoded = try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            // No IV is supplied: AndroidKeyStore requires the provider to generate it for
-            // AES-GCM (supplying one throws), which also removes any chance of us reusing an
-            // IV under the same key -- the one mistake that would break GCM outright.
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-            val blob = ByteArray(HEADER_SIZE + iv.size + ciphertext.size)
-            blob[0] = FORMAT_VERSION
-            blob[1] = iv.size.toByte()
-            iv.copyInto(blob, HEADER_SIZE)
-            ciphertext.copyInto(blob, HEADER_SIZE + iv.size)
-            Base64.encodeToString(blob, Base64.NO_WRAP)
+            KeystoreTransience.retrying {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                // No IV is supplied: AndroidKeyStore requires the provider to generate it for
+                // AES-GCM (supplying one throws), which also removes any chance of us reusing an
+                // IV under the same key -- the one mistake that would break GCM outright.
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+                val iv = cipher.iv
+                val ciphertext = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+                val blob = ByteArray(HEADER_SIZE + iv.size + ciphertext.size)
+                blob[0] = FORMAT_VERSION
+                blob[1] = iv.size.toByte()
+                iv.copyInto(blob, HEADER_SIZE)
+                ciphertext.copyInto(blob, HEADER_SIZE + iv.size)
+                Base64.encodeToString(blob, Base64.NO_WRAP)
+            }
         } catch (e: GeneralSecurityException) {
             throw SecureStoreUnavailableException("Could not encrypt '$key'; refusing to store it unprotected", e)
         } catch (e: ProviderException) {

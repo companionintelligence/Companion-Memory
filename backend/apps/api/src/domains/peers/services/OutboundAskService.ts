@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -23,6 +23,7 @@ import type { AskerVisiblePeerReply, PeerAskBody, PeerAskRequest } from '../prot
 import { PeerAskClient } from './PeerAskClient';
 import { PeerAskCorrelationService, requestDigest } from './PeerAskCorrelationService';
 import { PeerLinkService } from './PeerLinkService';
+import { PeerSignatureService } from './PeerSignatureService';
 
 export interface SendAskDto {
   /** Portal handle of the peer to ask. */
@@ -78,6 +79,8 @@ export class OutboundAskService {
     @InjectRepository(AskEntity)
     private readonly askRepository: Repository<AskEntity>,
     private readonly logger: LoggerService,
+    @Optional()
+    private readonly signatureService?: PeerSignatureService,
   ) {
     this.logger.setContext(OutboundAskService.name);
   }
@@ -88,12 +91,14 @@ export class OutboundAskService {
    * `accessToken` must be a Portal-issued token whose audience is the PEER box
    * (the peer verifies that binding on receipt). Until Portal token exchange
    * lands, the caller supplies it; this service never mints or caches one.
+   * For sovereign KERI peers, an outbound signature satisfies authentication.
    */
-  async send(context: UserServiceContext, dto: SendAskDto, accessToken: string): Promise<SendAskResult> {
+  async send(context: UserServiceContext, dto: SendAskDto, accessToken?: string): Promise<SendAskResult> {
     const link = await this.activeLink(context, dto.handle);
 
-    if (!accessToken.trim()) {
-      throw new BadRequestException('A peer access token is required');
+    const effectiveToken = accessToken?.trim() ?? '';
+    if (!effectiveToken && !this.signatureService?.hasSigningKey) {
+      throw new BadRequestException('A peer access token or signing key is required');
     }
 
     const ask = await this.askService.create(context, {
@@ -123,7 +128,7 @@ export class OutboundAskService {
       requestDigest: requestDigest(body),
     });
 
-    const response = await this.client.send(link, body, accessToken);
+    const response = await this.client.send(link, body, effectiveToken);
 
     await this.absorb(ask, link, response);
 
@@ -147,7 +152,7 @@ export class OutboundAskService {
   async pollForAnswer(
     context: UserServiceContext,
     askId: string,
-    accessToken: string,
+    accessToken?: string,
   ): Promise<SendAskResult> {
     const ask = await this.askService.findById(context, askId);
 
@@ -157,8 +162,9 @@ export class OutboundAskService {
       throw new NotFoundException('No outbound ask with that id');
     }
 
-    if (!accessToken.trim()) {
-      throw new BadRequestException('A peer access token is required');
+    const effectiveToken = accessToken?.trim() ?? '';
+    if (!effectiveToken && !this.signatureService?.hasSigningKey) {
+      throw new BadRequestException('A peer access token or signing key is required');
     }
 
     if (ask.status === 'answered') {
@@ -200,7 +206,7 @@ export class OutboundAskService {
       return { ask, response: { askId: ask.id, status: 'delivered', reason: 'No active peer link' } };
     }
 
-    const response = await this.client.poll(link, correlation.correlationId, accessToken);
+    const response = await this.client.poll(link, correlation.correlationId, effectiveToken);
 
     await this.absorb(ask, link, response);
 

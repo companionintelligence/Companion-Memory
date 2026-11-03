@@ -1,13 +1,14 @@
 import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { useDeviceLayout } from '@ci/common';
+import { useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { Button, DropdownMenu, cn } from '@ci/shadcn';
 import { ChevronDown, Shapes, Tag as TagIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { MenuShield } from '@/components/MenuShield';
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
 import { gql } from '@/graphql';
@@ -546,6 +547,7 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
   } = useWhatSelection();
   const [searchParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [stripRef, stripMore] = useScrollOverflow<HTMLDivElement>();
   const activeFilterCount = countActiveFilters(searchParams);
   // The What menus are modal on a phone: a modal menu swallows the tap that
   // closes it, so tapping away cannot also open whatever was under the finger.
@@ -626,59 +628,62 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
           strip was left a 57 px sliver — one What button and part of the next,
           scrolling behind the controls — and below ~1,350 px the controls
           dropped to a second line and ran off the right edge. */}
-        <div
-          className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-(--what-strip-floor) xl:max-w-max"
+        <ScrollMoreArrows
+          more={stripMore}
+          className="flex min-w-0 flex-1 basis-0 xl:min-w-(--what-strip-floor) xl:max-w-max"
           style={{ '--what-strip-floor': restingStripWidth(categories) } as CSSProperties}
         >
-          <div className="flex w-max items-center gap-1 md:gap-1.5">
-            {categories.map((category) => {
-              if (category.kind === 'standalone') {
-                const types = entityTypesForCategory(category);
+          <div ref={stripRef} className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
+            <div className="flex w-max items-center gap-1 md:gap-1.5">
+              {categories.map((category) => {
+                if (category.kind === 'standalone') {
+                  const types = entityTypesForCategory(category);
 
-                return (
-                  <StandaloneWhatButton
-                    key={category.id}
-                    category={category}
-                    onSelect={() => selectOnlyEntityType(category.entityType)}
-                    selected={isEntityTypeSelected(category.entityType)}
-                    active={isGroupActive(types)}
-                  />
-                );
-              }
+                  return (
+                    <StandaloneWhatButton
+                      key={category.id}
+                      category={category}
+                      onSelect={() => selectOnlyEntityType(category.entityType)}
+                      selected={isEntityTypeSelected(category.entityType)}
+                      active={isGroupActive(types)}
+                    />
+                  );
+                }
 
-              if (category.kind === 'group') {
-                return (
-                  <GroupWhatDropdown
-                    key={category.id}
-                    category={category}
-                    selectedEntityTypes={selectedEntityTypes}
-                    isFiltered={isFiltered}
-                    isGroupSelected={isGroupSelected}
-                    isGroupActive={isGroupActive}
-                    onSelectOnly={selectOnlyEntityType}
-                    onToggleType={toggleEntityType}
-                    modal={modal}
-                  />
-                );
-              }
+                if (category.kind === 'group') {
+                  return (
+                    <GroupWhatDropdown
+                      key={category.id}
+                      category={category}
+                      selectedEntityTypes={selectedEntityTypes}
+                      isFiltered={isFiltered}
+                      isGroupSelected={isGroupSelected}
+                      isGroupActive={isGroupActive}
+                      onSelectOnly={selectOnlyEntityType}
+                      onToggleType={toggleEntityType}
+                      modal={modal}
+                    />
+                  );
+                }
 
-              if (category.kind === 'events') {
-                return (
-                  <EventsWhatDropdown
-                    key={category.id}
-                    category={category}
-                    selected={isEntityTypeSelected(category.entityType)}
-                    active={isGroupActive(entityTypesForCategory(category))}
-                    onSelectOnly={() => selectOnlyEntityType(category.entityType)}
-                    modal={modal}
-                  />
-                );
-              }
+                if (category.kind === 'events') {
+                  return (
+                    <EventsWhatDropdown
+                      key={category.id}
+                      category={category}
+                      selected={isEntityTypeSelected(category.entityType)}
+                      active={isGroupActive(entityTypesForCategory(category))}
+                      onSelectOnly={() => selectOnlyEntityType(category.entityType)}
+                      modal={modal}
+                    />
+                  );
+                }
 
-              return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} modal={modal} />;
-            })}
+                return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} modal={modal} />;
+              })}
+            </div>
           </div>
-        </div>
+        </ScrollMoreArrows>
 
         {/* Outside the scrolling strip so the create action stays reachable when
           the What categories overflow. */}

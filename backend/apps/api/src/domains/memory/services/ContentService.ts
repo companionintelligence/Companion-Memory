@@ -22,6 +22,8 @@ import {
   keysetSeek,
   type KeysetPageArgs,
   type KeysetPage,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileRemovedEvent } from '@ci/domains/files/events';
@@ -95,6 +97,23 @@ export interface HourlyContentCount {
   userId: string;
   bucketStart: Date;
   count: number;
+}
+
+/**
+ * The events a write names explicitly, for {@link refuseForeignLinks}. `ci.content.event_id`'s key
+ * only asks that the event exists. The link made from a matching triple needs no check: it is
+ * looked up among the caller's own events.
+ */
+function contentLinks(rows: readonly CreateContentDto[]): OwnedLink[] {
+  return [
+    {
+      field: 'event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.event?.id),
+    },
+  ];
 }
 
 /**
@@ -240,6 +259,13 @@ export class ContentService {
     // indexing for bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Interactive create() still emits.
     const emitCreated = options?.emitCreated ?? true;
+
+    await refuseForeignLinks(
+      this.contentRepository.manager,
+      context.userId,
+      contentLinks(dataArray),
+      'content',
+    );
 
     // TODO: Some of these can fail, we need to return partial success here?
     return Promise.all(
@@ -418,6 +444,8 @@ export class ContentService {
     }
 
     const emitCreated = options?.emitCreated ?? false;
+
+    await refuseForeignLinks(this.contentRepository.manager, context.userId, contentLinks(data), 'content');
 
     // Set-based event auto-link: resolve every triple-carrying row's event in ONE
     // query up front, so the per-entity `event` relation can be stamped before the

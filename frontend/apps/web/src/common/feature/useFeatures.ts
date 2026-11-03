@@ -143,6 +143,14 @@ function useFeatures(): ReturnValue {
         return;
       }
 
+      // On the phone, not before useAuth has read the stored API key back (or found none).
+      // The route needs no key, but behind a Companion Hub only a request carrying one gets
+      // past the Hub's edge: sent a few milliseconds early it was redirected to the Hub login
+      // and answered with HTML. A signed-out phone still asks once the read comes back empty.
+      if (isNativePlatform() && initializing) {
+        return;
+      }
+
       if (hasFetchedGlobal.current && !force) {
         return;
       }
@@ -171,7 +179,7 @@ function useFeatures(): ReturnValue {
         setGlobalSettled(true);
       }
     },
-    [nativeOriginReady, origin],
+    [initializing, nativeOriginReady, origin],
   );
 
   // Per-user flags belong to the session that fetched them, and this provider

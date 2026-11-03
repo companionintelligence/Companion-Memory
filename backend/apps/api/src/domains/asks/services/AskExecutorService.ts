@@ -14,7 +14,8 @@ import {
 
 import { type Ask } from '../entities/AskEntity';
 import { canonicalDataClass } from '../grantMatch';
-import type { AskQuery } from '../types';
+import { photoAskMayMatchPlaces } from '../policy';
+import type { AskQuery, TrustTier } from '../types';
 
 /**
  * Ask types whose subject is a PERSON, not a topic.
@@ -98,10 +99,7 @@ export class AskExecutorService {
    * The matched identifiers, for callers that only turn them into a count or a
    * yes/no. Prefer {@link executeWithMeta} where truncation can be surfaced.
    */
-  async execute(
-    ask: Ask,
-    options: { maxResults?: number } = {},
-  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+  async execute(ask: Ask, options: AskExecutionOptions = {}): Promise<EntityIdentifier<IndexableEntity>[]> {
     const { items } = await this.executeWithMeta(ask, options);
 
     return items;
@@ -116,7 +114,7 @@ export class AskExecutorService {
    * `count` rung should read {@link PromptSearchResult.truncated} and say "at
    * least" — the executor cannot say it for them, so it says it in the log.
    */
-  async executeWithMeta(ask: Ask, options: { maxResults?: number } = {}): Promise<AskExecution> {
+  async executeWithMeta(ask: Ask, options: AskExecutionOptions = {}): Promise<AskExecution> {
     // Only an ask with a LOCAL responder has memory here to search. An outbound
     // ask is answered by the peer's box, so reaching the executor with one is a
     // programming error, not a runtime condition to paper over.
@@ -132,13 +130,24 @@ export class AskExecutorService {
     const subjectIsName =
       NAME_SUBJECT_QUERY_TYPES.has(ask.query.queryType.toLowerCase()) ||
       hasNameSubjectFrame(ask.query.prompt);
-    const includeTypes = toIncludeTypes(ask.query, subjectIsName);
+    const canonical = askedClass(ask.query, subjectIsName);
+    const includeTypes = toIncludeTypes(canonical);
+    // A photo's place and capture date live on its event, so a photo ask also
+    // searches photo events. Only the photo (and video) ones: see
+    // `SearchService.searchPrompt`'s `mediaEvents`.
+    const mediaEvents =
+      includeTypes && (canonical === 'photos' || canonical === 'media') ? canonical : undefined;
+    // The place on those events counts only for a tier allowed to learn it, and
+    // never when the caller didn't say who is asking.
+    const mediaEventPlaces =
+      options.tier != null && photoAskMayMatchPlaces(options.tier, ask.query.dataClass);
 
     const result = await this.searchService.searchPrompt(responderContext, {
       prompt: ask.query.prompt,
       subjectIsName,
       maxResults: options.maxResults ?? DEFAULT_MAX_RESULTS,
       ...(includeTypes ? { includeTypes } : {}),
+      ...(mediaEvents ? { mediaEvents, mediaEventPlaces } : {}),
     });
 
     if (result.truncated) {
@@ -155,6 +164,16 @@ export class AskExecutorService {
   }
 }
 
+export interface AskExecutionOptions {
+  maxResults?: number;
+  /**
+   * The asker's trust tier. A photo ask matches a photo by the place on its
+   * event only when this tier may learn places (`photoAskMayMatchPlaces`).
+   * Absent, it never does.
+   */
+  tier?: TrustTier;
+}
+
 /**
  * What one ask actually matched. Structurally the search result — re-exported
  * under the ask domain's own name so callers here do not have to reach into the
@@ -162,17 +181,25 @@ export class AskExecutorService {
  */
 export type AskExecution = PromptSearchResult;
 
-function toIncludeTypes(query: AskQuery, subjectIsName: boolean): IndexableEntity[] | undefined {
-  // Same canonical form the grant evaluator matched on — if these diverged, a
-  // peer could satisfy one and evade the other.
-  //
-  // With no class named, "photos of …" (or "videos of …") in the prompt stands
-  // in for the class. `buildPromptQuery` no longer lets those words count as a
-  // match (they matched every photo or video event), so the kind is carried
-  // here, as a filter, instead. Only ever narrows: an ask with no class
-  // searched every type. A class that canonicalizes to nothing is "no class
-  // named" here exactly as it is to the grant evaluator.
-  const canonical = canonicalDataClass(query.dataClass) ?? promptMediaClass(query.prompt, { subjectIsName });
+/**
+ * The data class an ask is about: the one it names, or for none the kind its
+ * prompt names.
+ *
+ * Same canonical form the grant evaluator matched on — if these diverged, a
+ * peer could satisfy one and evade the other.
+ *
+ * With no class named, "photos of …" (or "videos of …") in the prompt stands in
+ * for the class. `buildPromptQuery` no longer lets those words count as a match
+ * (they matched every photo or video event), so the kind is carried here, as a
+ * filter, instead. Only ever narrows: an ask with no class searched every type.
+ * A class that canonicalizes to nothing is "no class named" here exactly as it
+ * is to the grant evaluator.
+ */
+function askedClass(query: AskQuery, subjectIsName: boolean): string | null {
+  return canonicalDataClass(query.dataClass) ?? promptMediaClass(query.prompt, { subjectIsName });
+}
+
+function toIncludeTypes(canonical: string | null): IndexableEntity[] | undefined {
   if (canonical == null) {
     return undefined;
   }

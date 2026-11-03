@@ -13,10 +13,14 @@ const emptySummary: PurgeRunSummary = {
   purged: 0,
   failed: 0,
   unpinned: 0,
+  stalled: 0,
   outcomes: [],
 };
 
-function build(purgeDueAccounts: jest.Mock) {
+function build(
+  purgeDueAccounts: jest.Mock,
+  reportStalledPurges = jest.fn().mockResolvedValue({ count: 0, oldest: [] }),
+) {
   const logger = {
     setContext: jest.fn(),
     log: jest.fn(),
@@ -24,9 +28,9 @@ function build(purgeDueAccounts: jest.Mock) {
     error: jest.fn(),
   } as unknown as LoggerService;
 
-  const service = { purgeDueAccounts } as unknown as AccountPurgeService;
+  const service = { purgeDueAccounts, reportStalledPurges } as unknown as AccountPurgeService;
 
-  return { cron: new AccountPurgeCron(service, logger), logger };
+  return { cron: new AccountPurgeCron(service, logger), logger, reportStalledPurges };
 }
 
 describe('AccountPurgeCron', () => {
@@ -54,6 +58,18 @@ describe('AccountPurgeCron', () => {
     await cron.purgeDueAccounts();
 
     expect(purgeDueAccounts).not.toHaveBeenCalled();
+  });
+
+  it('still reports accounts left unpurged while the purge is switched off', async () => {
+    // An off switch forgotten after an incident would otherwise keep every
+    // ended account's data with nothing in the logs to say so.
+    config.accountDeletion.purge.enabled = false;
+
+    const { cron, reportStalledPurges } = build(jest.fn().mockResolvedValue(emptySummary));
+
+    await cron.purgeDueAccounts();
+
+    expect(reportStalledPurges).toHaveBeenCalledTimes(1);
   });
 
   it('does not start a second run while one is still going', async () => {

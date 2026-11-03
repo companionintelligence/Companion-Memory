@@ -64,7 +64,7 @@ jobs:
             label: Windows (x64)
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -72,13 +72,13 @@ jobs:
       - name: Rust toolchain
         # A master commit with the toolchain named explicitly; see the same step
         # in desktop-release.yml for why not a commit on the `stable` branch.
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust build cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: frontend/apps/desktop/src-tauri -> target
 
@@ -92,7 +92,7 @@ jobs:
             librsvg2-dev patchelf libfuse2 rpm xdg-utils
 
       - name: Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -159,7 +159,7 @@ jobs:
       # only — on a green run it is the same text the step above already printed.
       - name: Upload test log
         if: failure() && matrix.target != 'x86_64-apple-darwin'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: ci-server-desktop-test-log-${{ matrix.target }}
@@ -182,7 +182,7 @@ jobs:
 
       - name: Upload artifacts (macOS)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}
@@ -193,7 +193,7 @@ jobs:
 
       - name: Upload artifacts (Linux)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}
@@ -205,7 +205,7 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}

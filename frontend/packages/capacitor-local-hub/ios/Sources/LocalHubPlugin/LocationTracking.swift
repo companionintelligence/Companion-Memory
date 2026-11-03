@@ -81,7 +81,7 @@ final class TrackingStateStore {
 /// (`PositionRecordJson`). When the plugin *is* alive it is told as well
 /// (`significantLocation`), and the web side's own enqueue of the same fix collapses on the
 /// shared `source_id`. Fixes recorded while the WebView is gone sit in the outbox until the
-/// next app open drains it, as on Android.
+/// next app open drains it. (Android also uploads them in the background; iOS does not yet.)
 ///
 /// The geofence is the reboot insurance. Significant-change monitoring is documented to
 /// relaunch the app, but a region exit is the event iOS is most reliable about after a
@@ -134,6 +134,11 @@ public final class LocationTracking: NSObject {
 
     var isArmed: Bool {
         return current() != nil
+    }
+
+    /// Where the background uploader sends queued fixes: the origin the web side armed with.
+    var apiBaseUrl: String? {
+        return current()?.config.apiBaseUrl
     }
 
     /// Every launch of the app, from the app delegate: a tap, a relaunch for a location or
@@ -214,6 +219,7 @@ public final class LocationTracking: NSObject {
             persist(TrackingState(config: now.config, lastAccepted: sample))
             monitor.recenterGeofence(latitude: sample.latitude, longitude: sample.longitude, radiusMeters: now.config.minDistanceMeters)
             listener?(PositionRecordJson.eventBody(fix))
+            OutboxBackgroundUpload.requestUpload()
             return .queued(sourceId)
         case .atCapacity:
             return .failed("outbox at capacity")

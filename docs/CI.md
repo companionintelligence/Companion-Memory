@@ -145,6 +145,7 @@ section below the second `---`; this is what a trigger alone doesn't tell you):
 | `codeql.yml` | Added in [#2261](https://github.com/companionintelligence/CI-Server/pull/2261) as push/PR/cron; that failed every run because this private repo has no GitHub Code Security (`SARIF` upload 403). Dispatch with `gh workflow run codeql.yml --ref <branch>`. Restore PR/push only after Code Security is enabled. |
 | `benchmark-unit.yml` | Runs `pytest`, then a pinned `ruff==0.16.1` `check` + `format --check` — the pin matches what the root `uv.lock` resolves, so this lane and `ci.yml`'s `python` lane agree on what a violation is. |
 | `mobile-release.yml` | Signed TestFlight / Play internal lane. See the dispatch command above — `dry_run` defaults `true`. |
+| `testflight-distribute.yml` | Dispatch with an uploaded iOS build number to wait for App Store Connect processing and add that build to existing internal TestFlight groups; external groups are left untouched. |
 | `desktop-release.yml` | **Gated by a test gate inside the workflow since 2026-09-07**, independent of today's change: its first job `verify-desktop-build-passed` refuses to build or publish unless a successful `desktop-build.yml` run exists for the same commit SHA (that is the only place `cargo test` runs). So the order is `gh workflow run desktop-build.yml --ref <branch>`, wait for green, *then* dispatch `desktop-release.yml` on the tag. Emergency bypass is `skip_test_gate=true` plus a non-blank `bypass_reason`. Signed macOS/Windows lanes still skip (not fail) until their signing secrets are provisioned — see that workflow's header comment. |
 | `consent-path-gate.yml` | The merge gate for the federated-ask consent path. `gh workflow run "Consent path gate" --ref <branch>`. Ships dispatch-only on purpose - see [`asks-system-guide.md` §7.3](asks-system-guide.md). |
 | `mobile-build.yml` | Debug APK + iOS Simulator `.app`. The Android job also runs the Android JVM unit tests (`./gradlew testDebugUnitTest` — `:app` plus the three `:ci-capacitor-*` plugin modules; Robolectric, no emulator) straight after `assembleDebug`, and uploads the HTML/XML reports as `android-unit-test-reports` on failure only. Locally: `make test-android`. |
@@ -156,6 +157,24 @@ section below the second `---`; this is what a trigger alone doesn't tell you):
 point here instead of each carrying their own copy — a count restated in
 five files went stale in four of them once already. Before quoting a number
 from this section, re-derive it.
+
+### Playwright under Yarn PnP
+
+Since `@playwright/test` 1.63 (#2865), Playwright loads its TypeScript config through a
+synchronous module hook that calls `require()` with a `conditions` option. Yarn PnP does not
+support that option, so on every Node version tried (22.15.1, 22.21.1, 24.22.1) any
+`playwright test` dies before it lists a test:
+
+```
+Error: Some options passed to require() aren't supported by PnP yet (conditions)
+```
+
+`PLAYWRIGHT_FORCE_ASYNC_LOADER=1` switches Playwright to its async loader, which PnP handles. The
+root `package.json` sets it on `e2e`, `e2e:desktop`, `e2e:ui` and `e2e:headed`, so `yarn e2e`
+(which `e2e.yml` runs) and `yarn e2e:desktop` (which `desktop-e2e.yml` runs) work as written.
+Check it without a stack: `yarn e2e --list` should end with `Total: N tests in M files`. Anything
+that calls `yarn playwright test` directly has to set the variable itself. Drop it once a
+Playwright release or a Yarn PnP release supports `conditions`.
 
 ### Native suites are not in `make test`
 

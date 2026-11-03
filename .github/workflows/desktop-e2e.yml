@@ -159,13 +159,13 @@ jobs:
       # that script treats as a hard failure under CI rather than baking in an
       # unpullable dev-<sha>.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -351,7 +351,7 @@ jobs:
       # screenshots, videos and traces it keeps on failure.
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-desktop
           path: |
@@ -377,7 +377,7 @@ jobs:
 
       - name: Upload stack log artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-stack-logs
           path: desktop-stack.log

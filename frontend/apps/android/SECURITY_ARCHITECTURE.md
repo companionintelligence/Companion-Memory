@@ -256,9 +256,12 @@ connections through the SQLite plugin's SQLCipher `secret` mode (the
 lines are the whole difference). The key is 32 random bytes minted once and
 stored by the plugin: EncryptedSharedPreferences behind an AndroidKeyStore key
 on Android, the Keychain on iOS. A replica from before the change is converted
-in place on its first open. The IndexedDB placeholder the provider opens on
-native is never connected any more (`storageDecided` in `PowerSyncProvider`),
-so no rows reach IndexedDB on a phone.
+in place on its first open. The IndexedDB placeholder the provider used to open
+on native while the file loaded is gone as of 2026-10-26: `PowerSyncProvider`
+opens no web database on any platform, hands consumers `null` until the
+encrypted file is open, and deletes the `ci-powersync.db` IndexedDB database
+earlier builds left behind (`legacyIndexedDb.ts`). No rows reach IndexedDB on a
+phone, and no IndexedDB database exists for them to reach.
 
 What this does and does not close:
 
@@ -273,10 +276,11 @@ What this does and does not close:
   exactly as described above, and `ci_search.mobile_search_documents` had
   joined it. `PowerSyncProvider` now connects only the SQLCipher file: a
   database that is not the encrypted one (a desktop browser, or a phone whose
-  native adapter failed to load) is wiped with `disconnectAndClear()` on load
+  native adapter failed to load) was wiped with `disconnectAndClear()` on load
   and never connected, so a browser profile holds no copy and the appliance's
-  GraphQL API is its only source. The gate's reasoning about the JS heap is
-  why this is a removal, not an encryption.
+  GraphQL API is its only source. Since 2026-10-26 no such database is opened
+  at all (see above). The gate's reasoning about the JS heap is why this is a
+  removal, not an encryption.
 
 With the file encrypted, the sync-rules freeze above no longer applies to
 **server-derived** text: `ci_search.mobile_search_documents` (names, subjects, snippets, for
@@ -1076,7 +1080,7 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
 | Gate | Rule |
 |---|---|
 | **G-1** | **No device source of any kind** — not motion, not location, not health — lands in the outbox before **S1** (Android) / **S2** (iOS). ⚠️ **S1 and S2 have since landed, so this gate is *close to* lifted but is NOT automatically lifted — that call is the owner's, not this document's.** What changed: the outbox is SQLCipher on both platforms. What has not: the iOS ciphertext assertion is unrun, so on iOS the premise of this gate is still unproven rather than disproven. Recommended reading: **lift for Android, hold for iOS until that check passes.** G-5 (health) is unaffected — it also requires S4 and S5, which have not landed. |
-| **G-2** | **No device-sourced table enters `sync-rules.yaml`** while the local copy is plaintext IndexedDB (§2.3). The current sync set is the ceiling until the sidecar-owns-storage pivot lands. |
+| **G-2** | **No device-sourced table enters `sync-rules.yaml`** — health, location, contacts, motion, app usage — until the replica's key custody is settled (§2.3a: the iOS keychain item still lacks a `ThisDeviceOnly` accessibility class, so the SQLCipher key travels with an encrypted backup). The original wording, "while the local copy is plaintext IndexedDB", is met: the phone's copy is SQLCipher (2026-10-19) and the browser holds no copy and opens no IndexedDB database (2026-10-20, 2026-10-26). Server-derived text (`ci_search.mobile_search_documents`) syncs; the device-sourced tables wait on the custody point, not on IndexedDB. |
 | **G-3** | **No source ships without S7.** A source with no per-source toggle and no consent receipt cannot be disclosed accurately on either store's privacy form, and cannot be turned off by the user. |
 | **G-4** | **Do not ship or market remote wipe before S1+S2.** Without crypto-shredding, "wipe" is `File.delete()` on recoverable plaintext pages — a false security claim, which is worse than no feature (§5.6). ✅ **S1+S2 have landed**, so this gate no longer blocks building the feature. It still blocks *marketing* it on iOS until the ciphertext assertion runs — a wipe claim resting on an unverified encryption claim is the same false-security failure one level up. |
 | **G-5** | **Health data requires S1, S2, S4, and S5 all landed.** Art. 9 special-category data, on a device that today has no app-lock and talks cleartext to a LAN host. |

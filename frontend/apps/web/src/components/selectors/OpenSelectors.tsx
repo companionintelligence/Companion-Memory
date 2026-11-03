@@ -17,7 +17,7 @@ export function OneLineSelector({ value, onChange }: Props) {
   return (
     <textarea
       rows={2}
-      className="min-h-14 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm"
+      className="min-h-14 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-base md:text-sm"
       value={asText(value)}
       onChange={(event) => onChange(event.target.value)}
       placeholder="Type a short answer"
@@ -28,7 +28,7 @@ export function OneLineSelector({ value, onChange }: Props) {
 export function ParagraphSelector({ value, onChange }: Props) {
   return (
     <textarea
-      className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+      className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-base md:text-sm"
       value={asText(value)}
       onChange={(event) => onChange(event.target.value)}
       placeholder="Write a bit more…"

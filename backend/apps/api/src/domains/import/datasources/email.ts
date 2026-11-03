@@ -9,7 +9,7 @@ import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
-import { emailDirection, emailDirectionBasis, isDraft } from './email_direction';
+import { emailDirection, emailDirectionBasis, isDraft, keepTrustedGmailLabels } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import { emailThreadId } from './email_thread';
 import {
@@ -223,6 +223,9 @@ export class EmailFileImporter implements FileImporter {
     const headersRaw = parts[0].replace(/\n[ \t]+/g, ' '); // unfold
     const bodyRaw = parts.slice(1).join('\n\n');
     const headers = parseHeaders(headersRaw);
+    // Only Google's own X-Gmail-Labels counts: a sender can write one too, and
+    // the map above joins duplicates (email_direction.ts#trustedGmailLabels).
+    const gmailLabels = keepTrustedGmailLabels(headers, headersRaw, decodeHeaderField);
     if (!headers.Date && !headers.Subject) {
       params.pipeline.drop?.('non_message');
 
@@ -386,6 +389,9 @@ export class EmailFileImporter implements FileImporter {
         Cc: headers.Cc,
         Direction: direction,
         DirectionBasis: directionBasis,
+        // A Sent label a sender could have written was refused: the push never
+        // takes this mail's From for one of the owner's addresses (push/self.ts).
+        SentLabelRefused: gmailLabels.sentLabelRefused || undefined,
         MessageID: cleanMsgID,
         InReplyTo: headers['In-Reply-To']?.replace(/[<>]/g, ''),
         References: headers.References?.replace(/[<>]/g, ' '),

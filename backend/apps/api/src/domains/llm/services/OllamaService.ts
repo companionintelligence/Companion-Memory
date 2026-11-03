@@ -17,8 +17,8 @@ import {
   guardToolResultRound,
   unguardToolResult,
 } from '@ci/common/prompt/untrustedBlock';
+import { stableJson } from '@ci/common/stableJson';
 import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
-import { stableJson } from '@ci/domains/graph/utils/ingestedProperties';
 import { ModelTierRouter, TIER_PROFILES, type RoutingDecision } from '@ci/domains/model-routing';
 import {
   ToolRegistry,
@@ -67,6 +67,16 @@ const FORCED_PROSE_NUDGE: OllamaMessage = {
     'Tool use for this turn is over — do not call any more tools. Answer the user now in plain prose, ' +
     'grounded in the tool results above. If the results do not fully answer the question, summarize ' +
     'what was found and say what is missing.',
+};
+
+/**
+ * The same instruction for a turn that has no tool results to point at: chat with tools off, or no
+ * tool registered, where the native engine still parsed a call and the round has to be asked again.
+ * Telling the model to ground its answer in results that are not there invites it to make some up.
+ */
+const FORCED_PROSE_NUDGE_NO_RESULTS: OllamaMessage = {
+  role: 'system',
+  content: 'Do not call any tools. Answer the user now in plain prose.',
 };
 
 /**
@@ -924,11 +934,10 @@ export class OllamaService implements OnModuleInit {
     // 2-slot vLLM, and a model repeating a call is going round in circles.
     // Tool XML the model writes into its text is salvaged only in a round that
     // offered tools (salvageTools); any other round's markup is stripped, never
-    // run.
+    // run. Calls the engine parsed out of such a round are dropped too.
     const maxToolRounds = TOOL_OFFER_ROUNDS + 1;
     let generateRounds = 0;
     let toolsStillOffered = true;
-    let previousRoundOfferedTools = true;
     const callsMade = new Set<string>();
     // When the follow-up round ALSO comes back as tool calls (the native
     // engine parses its tool-call tokens even with no tools advertised), the
@@ -964,15 +973,25 @@ export class OllamaService implements OnModuleInit {
         let stopLoop = false;
 
         let deadline: FirstResponseFetch | undefined;
+        // Calls the engine parsed out of a round that offered no tools: never
+        // run, never streamed (see the finally block).
+        const discardedCalls: ToolCall[] = [];
 
         textChunks.splice(0, textChunks.length);
         thinkChunks.splice(0, thinkChunks.length);
 
         const iterationToolCalls = toolCalls.splice(0, toolCalls.length);
+        // Calls from a round after one whose calls already ran: a later round
+        // is offered tools only after lookups, so these may act on what a
+        // lookup returned. Under a dial that asks before a delete, every write
+        // among them asks too. So does every read from a third-party service,
+        // though not one from the owner's own server (see
+        // ToolGateOptions.followsLookup).
         const { messages: toolEvaluations, failed: failedCalls } = await self.runToolCalls(
           context,
           iterationToolCalls,
           toolResultByteBudget(numCtx),
+          { followsLookup: callsMade.size > 0 },
         );
 
         accumulatedMessages.push(...toolEvaluations);
@@ -1003,11 +1022,12 @@ export class OllamaService implements OnModuleInit {
           forcedProseRound = true;
           scheduleForcedProse = false;
         } else if (
+          // A backstop: calls survive only from rounds that offered tools, which
+          // end at TOOL_OFFER_ROUNDS, so this cap is not reached today.
           generateRounds >= maxToolRounds ||
-          // Calls from a round that offered no tools (the native engine
-          // parses tool tokens regardless) ran, or the model repeated a call
-          // it already made: it is looping, so the next round answers.
-          (iterationToolCalls.length > 0 && (!previousRoundOfferedTools || repeatedCall))
+          // The model repeated a call it already made: it is looping, so the
+          // next round answers.
+          (iterationToolCalls.length > 0 && repeatedCall)
         ) {
           if (iterationToolCalls.length === 0 || forcedProseRound) {
             break;
@@ -1024,7 +1044,6 @@ export class OllamaService implements OnModuleInit {
           toolsStillOffered &&
           !forcedProseRound;
 
-        previousRoundOfferedTools = iterationWillCallTools;
         // Withholding the tools is not enough to end the tool loop on the
         // native path: Ollama parses the model's tool-call template tokens
         // whether or not tools were advertised, so an eager model just keeps
@@ -1033,7 +1052,11 @@ export class OllamaService implements OnModuleInit {
         // accumulatedMessages — persistTurn writes those as thread rows and a
         // stored system row would replay into every later turn.
         const requestMessages = forcedProseRound
-          ? inputMessages.concat(accumulatedMessages, [FORCED_PROSE_NUDGE])
+          ? inputMessages.concat(accumulatedMessages, [
+              accumulatedMessages.some((message) => message.role === 'tool')
+                ? FORCED_PROSE_NUDGE
+                : FORCED_PROSE_NUDGE_NO_RESULTS,
+            ])
           : inputMessages.concat(accumulatedMessages);
 
         try {
@@ -1060,7 +1083,10 @@ export class OllamaService implements OnModuleInit {
               maxTokens: maxOutputTokens,
             });
 
-            for await (const chunk of iterator) {
+            for await (const { discardedToolCalls, ...chunk } of iterator) {
+              // The driver drops a discarding round's calls itself and names them here, so they
+              // count as discarded below just as the native engine's do.
+              discardedCalls.push(...(discardedToolCalls ?? []));
               lastChunk = chunk;
 
               if (chunk.message.content) {
@@ -1071,11 +1097,7 @@ export class OllamaService implements OnModuleInit {
                 thinkChunks.push(chunk.message.thinking);
               }
 
-              if (chunk.message.tool_calls) {
-                toolCalls.push(...chunk.message.tool_calls);
-              }
-
-              yield chunk;
+              yield keepOfferedToolCalls(chunk, iterationWillCallTools, toolCalls, discardedCalls);
             }
           } else {
             const bounded = self.boundedClient(model, signal);
@@ -1126,11 +1148,7 @@ export class OllamaService implements OnModuleInit {
                 thinkChunks.push(chunk.message.thinking);
               }
 
-              if (chunk.message.tool_calls) {
-                toolCalls.push(...chunk.message.tool_calls);
-              }
-
-              yield chunk;
+              yield keepOfferedToolCalls(chunk, iterationWillCallTools, toolCalls, discardedCalls);
             }
           }
 
@@ -1164,37 +1182,47 @@ export class OllamaService implements OnModuleInit {
             stopLoop = true;
           }
         } finally {
-          // The forced round's answer is final whatever the model wanted:
-          // executing yet another tool call here would hand the turn back to
-          // the loop this round exists to end, so any calls it emitted are
-          // dropped — from the loop condition below AND from the stored
-          // message, where they would misrepresent the turn as still open.
-          if (forcedProseRound && toolCalls.length > 0) {
-            self.logger.log('Discarding tool calls emitted in the forced prose round', {
+          // A round that offered no tools runs no calls, whatever the model
+          // wanted. The native engine parses tool-call tokens whether or not
+          // tools were advertised. These calls used to run at the top of the
+          // next pass (only the round after was then forced to prose): a write
+          // the model was never offered, made with the owner's authority after
+          // the turn had already written or looked up all it was allowed to.
+          // The forced round's answer is final for the same reason. They are
+          // kept out of the stream (a tool block for a call that never runs),
+          // out of the loop condition below and out of the stored message.
+          if (discardedCalls.length > 0) {
+            self.logger.log('Discarding tool calls from a round that offered no tools', {
               model: lastChunk?.model ?? model,
-              discarded: toolCalls.map((call) => call.function.name),
+              forcedProseRound,
+              discarded: discardedCalls.map((call) => call.function.name),
             });
-            toolCalls.splice(0, toolCalls.length);
           }
 
           const think = thinkChunks.join('');
           const content = textChunks.join('');
           const visible = content.trim().length > 0 || think.trim().length > 0;
-          // Tools ran and the model neither answered nor asked for another
-          // lookup. Drop the blank row and ask once more, in prose. A second
-          // blank (the forced round itself) is stored, so this cannot loop.
-          const retryBlankFollowUp =
+          // Ask once more, tools off, when the round after tools came back
+          // blank, or when this round (which did not fail) wanted a call it
+          // was not offered: its text is then a preamble ("let me check one
+          // more place") or only thinking, not the answer. A blank row is
+          // dropped and a visible one kept. The forced round itself never asks
+          // again, so this cannot loop.
+          const askAgainInProse =
             !signal?.aborted &&
             !forcedProseRound &&
-            iterationToolCalls.length > 0 &&
             toolCalls.length === 0 &&
-            !visible;
+            ((iterationToolCalls.length > 0 && !visible) ||
+              (discardedCalls.length > 0 && streamError === undefined));
 
-          if (retryBlankFollowUp) {
+          if (askAgainInProse) {
             scheduleForcedProse = true;
             stopLoop = false;
             streamError = undefined;
-          } else {
+          }
+
+          // A blank row is not stored: the forced round answers instead.
+          if (!askAgainInProse || visible) {
             const message = {
               role: 'assistant',
               content: (think ? `<think>${think}</think>` : '') + content,
@@ -1923,6 +1951,7 @@ export class OllamaService implements OnModuleInit {
     context: ChatRequestContext,
     toolCalls: ToolCall[],
     resultByteBudget: number,
+    { followsLookup = false }: { followsLookup?: boolean } = {},
   ): Promise<{ messages: OllamaMessage[]; failed: number }> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
@@ -1944,6 +1973,7 @@ export class OllamaService implements OnModuleInit {
     const invocationContext: ToolInvocationContext = {
       ...context,
       capability: resolveInvocationCapability(context),
+      ...(followsLookup && { followsLookup }),
     };
 
     const toolResults = await Promise.all(
@@ -2103,6 +2133,36 @@ function parameterBillionsFrom(raw: string | undefined): number | null {
   }
 
   return match[2]?.toLowerCase() === 'm' ? value / 1_000 : value;
+}
+
+/**
+ * A streamed chunk with its tool calls sorted: collected into `kept` when the
+ * round offered tools. Otherwise they go into `discarded` and are left out of
+ * the chunk that is yielded, so the viewer is not shown a call that never runs.
+ */
+function keepOfferedToolCalls(
+  chunk: ChatResponse,
+  offered: boolean,
+  kept: ToolCall[],
+  discarded: ToolCall[],
+): ChatResponse {
+  const calls = chunk.message.tool_calls;
+
+  if (!calls?.length) {
+    return chunk;
+  }
+
+  if (offered) {
+    kept.push(...calls);
+
+    return chunk;
+  }
+
+  discarded.push(...calls);
+  const message = { ...chunk.message };
+  delete message.tool_calls;
+
+  return { ...chunk, message };
 }
 
 /**

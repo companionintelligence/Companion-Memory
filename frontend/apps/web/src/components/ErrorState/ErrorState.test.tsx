@@ -32,6 +32,22 @@ describe('ErrorState', () => {
     expect(screen.getByText(/What this phone has synced is still here/)).toBeInTheDocument();
   });
 
+  it('a notice is amber with an information mark and a status role, not a red alert', () => {
+    h.offline = true;
+    renderWithProviders(
+      <ErrorState
+        tone="notice"
+        title="Local chat only"
+        description="A new chat can still run on this phone."
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Local chat only');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('error-state-notice-icon')).toHaveClass('text-amber-600');
+    expect(screen.queryByText('Needs the Memory server')).not.toBeInTheDocument();
+  });
+
   it("blames the phone's own copy, not the server, when that copy could not be opened", () => {
     h.offline = false;
     h.replica = { opening: false, failed: true, locked: false };

@@ -23,6 +23,8 @@ const CARD_MIN_WIDTH = 180;
 const CARD_GAP_PX = 12;
 const MAX_VISIBLE_CARDS = 10;
 const DEFAULT_VISIBLE_CARDS = 5;
+/** Collapsed, never fewer than this: one card per row on a phone was one connection. */
+const MIN_VISIBLE_CARDS = 3;
 /** Grid items default to min-width:auto, so a nowrap tag or long subject
  *  expands the track and paints off the rounded card. min-w-0 + clip keeps
  *  every child inside the tile. */
@@ -162,7 +164,11 @@ function getVisibleCardCount(width: number): number {
     return Math.min(MAX_VISIBLE_CARDS, Math.max(DEFAULT_VISIBLE_CARDS, cardsPerRow));
   }
 
-  return Math.min(MAX_VISIBLE_CARDS, cardsPerRow);
+  // At least MIN_VISIBLE_CARDS, in whole rows, so the grid wraps onto a second
+  // row without leaving it half empty: three on a phone, four two across.
+  const rows = Math.ceil(MIN_VISIBLE_CARDS / cardsPerRow);
+
+  return Math.min(MAX_VISIBLE_CARDS, rows * cardsPerRow);
 }
 
 export function getEntityDetailPath(entityType: string, entityId: string): string | null {

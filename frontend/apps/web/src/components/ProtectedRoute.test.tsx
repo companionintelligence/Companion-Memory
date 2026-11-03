@@ -2,7 +2,7 @@ import { lazy } from 'react';
 
 import { FetchJsonError } from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProtectedRoute } from './ProtectedRoute';
@@ -67,6 +67,10 @@ function renderProtected() {
   return render(routeTree());
 }
 
+function LoginStateProbe() {
+  return <div data-testid="login-state">{JSON.stringify(useLocation().state)}</div>;
+}
+
 describe('ProtectedRoute', () => {
   beforeEach(() => {
     h.isNative = false;
@@ -104,6 +108,36 @@ describe('ProtectedRoute', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Log In on the card, which comes back to this page after signing in', async () => {
+    h.auth = { authToken: null, expired: true, loading: false, error: null, unreachable: true };
+    h.user = { user: null, loading: false, unreachable: false, refetch: undefined };
+
+    render(
+      <MemoryRouter initialEntries={['/secret?tab=2']}>
+        <Routes>
+          <Route
+            path="/secret"
+            element={
+              <ProtectedRoute>
+                <div>secret content</div>
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/login" element={<LoginStateProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // No token and no profile: nothing says this visitor has a session.
+    expect(screen.queryByText(/You're still signed in/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'Log In' }));
+
+    expect(JSON.parse((await screen.findByTestId('login-state')).textContent ?? 'null')).toEqual({
+      pastOutage: true,
+      from: '/secret?tab=2',
+    });
   });
 
   it('says Memory cannot be reached when the session check itself goes unanswered', () => {

@@ -7,7 +7,7 @@
  * elsewhere" — verified against every Dockerfile involved). With no
  * `[image]`, builds the same ENV-appropriate ordered set the Makefile did:
  * api+gateway (if `env != local`) -> setup-database -> database ->
- * object-store -> setup-secrets (if `env == production`) -> summary -> hbpe.
+ * object-store -> setup-secrets + powersync (if `env == production`) -> summary -> hbpe.
  *
  * `computeBuildPlan` does no Docker/yarn I/O — it only reads local files and
  * runs cheap `git` lookups — so `--dry-run` can print the exact plan without
@@ -26,6 +26,7 @@ import {
   GATEWAY_REPO,
   HBPE_REPO,
   OBJECT_STORE_REPO,
+  POWERSYNC_REPO,
   SETUP_DATABASE_REPO,
   SETUP_SECRETS_REPO,
   SUMMARY_REPO,
@@ -40,7 +41,15 @@ export type Env = 'local' | 'staging' | 'production';
 export const VALID_ENVS: Env[] = ['local', 'staging', 'production'];
 
 export type ImageKey =
-  'api' | 'gateway' | 'setup-database' | 'database' | 'object-store' | 'setup-secrets' | 'summary' | 'hbpe';
+  | 'api'
+  | 'gateway'
+  | 'setup-database'
+  | 'database'
+  | 'object-store'
+  | 'setup-secrets'
+  | 'powersync'
+  | 'summary'
+  | 'hbpe';
 
 /** Build order — matches the pre-port Makefile exactly. */
 export const IMAGE_ORDER: ImageKey[] = [
@@ -50,6 +59,7 @@ export const IMAGE_ORDER: ImageKey[] = [
   'database',
   'object-store',
   'setup-secrets',
+  'powersync',
   'summary',
   'hbpe',
 ];
@@ -103,7 +113,9 @@ function defaultImageKeys(env: Env): ImageKey[] {
   }
 
   if (env === 'production') {
-    keys.push('setup-secrets');
+    // powersync: the sync engine with its config baked in, for Hub installs, which
+    // cannot mount infrastructure/powersync the way compose installs do.
+    keys.push('setup-secrets', 'powersync');
   }
 
   return keys;
@@ -155,6 +167,8 @@ function buildStepFor(root: string, key: ImageKey, gpu: Gpu, uvVersion: string):
         'infrastructure/setup-secrets',
         SETUP_SECRETS_REPO(),
       );
+    case 'powersync':
+      return contextOnlyStep(root, key, 'PowerSync image', 'infrastructure/powersync', POWERSYNC_REPO());
     case 'summary':
       return {
         key,
@@ -330,7 +344,7 @@ const HELP = `Usage: xtask build [image] [--env local|staging|production] [--gpu
 Build images. With no [image], builds the ENV-appropriate set:
   local:       setup-database database object-store summary hbpe
   staging:     + api gateway
-  production:  + setup-secrets
+  production:  + setup-secrets powersync
 
 [image] builds just one image (${IMAGE_ORDER.join(', ')}), regardless of ENV.
 --dry-run prints the computed plan without touching Docker.`;

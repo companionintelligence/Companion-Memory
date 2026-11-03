@@ -20,6 +20,7 @@ const EMPTY_CONNECTION: SearchResultConnection = {
   pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
   totalCount: 0,
   matchingTags: [],
+  nameSortCutShort: false,
 };
 
 function makeResolver() {
@@ -410,6 +411,35 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     const [, input] = execSpy.mock.calls[0];
     expect(input.after).toBe('cur-2');
   });
+
+  it.each([
+    ['a redacted ceiling', 'redacted', false],
+    ['a full ceiling', 'full', true],
+    ['no ceiling', undefined, true],
+  ] as const)(
+    'says a name sort was cut short only to a reader who may page the whole list (%s)',
+    async (_label, ceiling, told) => {
+      const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();
+      savedSearchService.findByShareToken.mockResolvedValue({
+        id: 'saved-7',
+        userId: 'owner-9',
+        query: null,
+        entityTypes: [],
+        tags: [],
+      });
+      sharedSearchConsentService.authorize.mockResolvedValue({ grantId: 'grant-1', ceiling });
+      execSpy.mockResolvedValue({
+        ...EMPTY_CONNECTION,
+        edges: [{ cursor: 'c1', node: { id: 'note-1' } }],
+        totalCount: 501,
+        nameSortCutShort: true,
+      } as unknown as SearchResultConnection);
+
+      const result = await resolver.search(viewerCtx, { shareToken: 'tok', sortBy: 'name' } as SearchInput);
+
+      expect(result.nameSortCutShort).toBe(told);
+    },
+  );
 
   it('audits what CROSSED separately from what the answer was computed over', async () => {
     const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();

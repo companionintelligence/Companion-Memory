@@ -2,7 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 // The graph domain's public barrel, imported by the SPEC only: the service
 // cannot import it (graph already imports memory), which is exactly why it
 // restates the pattern and why this file pins the two together.
-import { PHONE_EXTENSION_PATTERN } from '@ci/domains/graph';
+import { PHONE_EXTENSION_PATTERN } from '@ci/common/normalizeIdentifier';
 
 import { pairKey } from '../entities/EntityMergeBlockEntity';
 import { PersonEntity } from '../entities/PersonEntity';

@@ -288,6 +288,37 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
     });
   });
 
+  describe('GET /keys/check — the Hub edge asking whether a key is real', () => {
+    beforeEach(() => {
+      mockApiKeyService.validateKey.mockImplementation(
+        async (raw: string) =>
+          [DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY].find((key) => key.raw === raw)?.validated ?? null,
+      );
+    });
+
+    it('answers 204 for any usable key, a scope-limited one included', async () => {
+      for (const key of [DEVICE_KEY, READ_KEY, APP_KEY]) {
+        await request(app.getHttpServer()).get('/keys/check').set('x-api-key', key.raw).expect(204);
+      }
+
+      // The bearer form the strategy also takes.
+      await request(app.getHttpServer())
+        .get('/keys/check')
+        .set('Authorization', `Bearer ${DEVICE_KEY.raw}`)
+        .expect(204);
+    });
+
+    it('answers 401 for an unknown key, or none', async () => {
+      await request(app.getHttpServer()).get('/keys/check').set('x-api-key', 'f'.repeat(64)).expect(401);
+      await request(app.getHttpServer()).get('/keys/check').expect(401);
+    });
+
+    it('is not read as a key id by the `:id` route', async () => {
+      await request(app.getHttpServer()).get('/keys/check').set('x-api-key', DEVICE_KEY.raw).expect(204);
+      expect(mockApiKeyService.findOneByUser).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a sign-in key and the self-revoke route', () => {
     beforeEach(() => {
       mockApiKeyService.validateKey.mockImplementation(

@@ -15,6 +15,7 @@ import {
   GraphUtilityService,
   type ItemService,
   RelationshipEntity,
+  type ProductModelService,
 } from '@ci/domains/memory';
 import { ConceptRemovedEvent } from '@ci/domains/memory/events';
 import { UserEntity } from '@ci/domains/user';
@@ -159,6 +160,8 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
       graphEntities.people,
       graphEntities.places,
       graphEntities.concepts,
+      // No case here names a product, so the tool never reaches for it.
+      {} as unknown as ProductModelService,
       logger(),
     );
   });
@@ -348,6 +351,15 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
     };
   }
 
+  /**
+   * What `memory.forget` in archive mode did to a node of this kind before archive refused them: the
+   * `ci.entities` half goes inactive and nothing else changes. Appliances still hold nodes archived
+   * that way, and deleting one has to work.
+   */
+  async function archivedBeforeTheRefusal(id: string): Promise<void> {
+    await dataSource.query('UPDATE ci.entities SET is_active = false WHERE entity_id = $1', [id]);
+  }
+
   async function nodeExists(id: string): Promise<boolean> {
     return (await dataSource.query('SELECT 1 FROM ci.entities WHERE entity_id = $1', [id])).length === 1;
   }
@@ -415,16 +427,21 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
     expect(publishedOf(ConceptRemovedEvent)).toEqual([{ conceptId: concept }]);
   });
 
-  it('does not purge a file in archive mode, which only deactivates its node', async () => {
+  it('refuses to archive a file, which archive cannot hide, and leaves it as it was', async () => {
     const file = await seedFile('Trip photo');
 
     await seedTrail(file, 'Trip photo');
 
     const result = await forget([file.nodeId], 'archive');
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatchObject({ code: 'ARCHIVE_REFUSED', retryable: false });
+    // Not even its graph node was touched.
+    expect(
+      await dataSource.query('SELECT is_active FROM ci.entities WHERE entity_id = $1', [file.nodeId]),
+    ).toEqual([{ is_active: true }]);
     // The stored file, its objects, its chunks and its search rows are as they were, and nobody is told that
-    // anything was deleted: archiving a file's node does not make the file go away.
+    // anything was deleted.
     expect(await remains(file)).toMatchObject({ nodes: 1, files: 2, chunks: 1, vectors: 1, embeddings: 1 });
     expect(storage.deleteObjects).not.toHaveBeenCalled();
     expect(publishedOf(FileRemovedEvent)).toEqual([]);
@@ -434,7 +451,7 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
     const file = await seedFile('Trip photo');
 
     await seedTrail(file, 'Trip photo');
-    expect((await forget([file.nodeId], 'archive')).success).toBe(true);
+    await archivedBeforeTheRefusal(file.nodeId);
 
     const result = await forget([file.nodeId]);
 

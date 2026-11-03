@@ -19,6 +19,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // must be running again before this returns for the fix to be delivered. A plain tap
         // launch goes through here too and gets the same restart. See `LocationTracking`.
         LocationTracking.handleAppLaunch(launchOptions: launchOptions)
+        // Background replica sync. iOS requires the task handler to be registered before launch
+        // ends, including on the background launches it makes to run the task itself.
+        ReplicaBackgroundSync.register()
         return true
     }
 

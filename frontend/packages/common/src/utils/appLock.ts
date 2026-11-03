@@ -79,11 +79,44 @@ export function describeBiometry(biometry: AppLockBiometry): string {
   }
 }
 
-/** The note the native lock screen shows about the capture queue: a count, never content. */
-export function lockScreenQueueNote(pending: number): string {
-  if (pending <= 0) {
+/**
+ * What is waiting to reach the Memory server, by kind: position fixes from the capture
+ * outbox, notes and saved searches from PowerSync's upload queue (and a note the outbox
+ * holds on a phone with no replica), and anything the outbox carries under a kind this
+ * list does not name.
+ */
+export interface LockScreenQueueCounts {
+  locations?: number;
+  notes?: number;
+  savedSearches?: number;
+  other?: number;
+}
+
+const QUEUE_NOUNS: Array<[key: keyof LockScreenQueueCounts, one: string, many: string]> = [
+  ['locations', 'location', 'locations'],
+  ['notes', 'note', 'notes'],
+  ['savedSearches', 'saved search', 'saved searches'],
+  ['other', 'capture', 'captures'],
+];
+
+/**
+ * The note the native lock screen shows about what is waiting to sync: counts by kind,
+ * never content -- "17 locations, 1 note and 2 saved searches waiting to sync". Kinds at
+ * zero are left out; nothing waiting is an empty note.
+ */
+export function lockScreenQueueNote(counts: LockScreenQueueCounts): string {
+  const parts = QUEUE_NOUNS.flatMap(([key, one, many]) => {
+    const n = Math.max(0, Math.trunc(counts[key] ?? 0));
+
+    return n === 0 ? [] : [`${n} ${n === 1 ? one : many}`];
+  });
+
+  if (parts.length === 0) {
     return '';
   }
 
-  return pending === 1 ? '1 capture waiting to sync' : `${pending} captures waiting to sync`;
+  const list =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+
+  return `${list} waiting to sync`;
 }

@@ -10,15 +10,20 @@ import {
   bulkInsertIdempotent,
   computeChunkSize,
   keysetSeek,
+  OWNED_TABLES,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normalizeObjectIdentifier';
-import { ProductUpdatedEvent } from '@ci/domains/memory/events';
+import { ItemUpdatedEvent, ProductRemovedEvent, ProductUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { type ProductModel, ProductModelEntity } from '../entities/ProductModelEntity';
 import type { CreateProductModelDto, FindProductModelsFilter, UpdateProductModelDto } from '../types';
+
+import { purgeProductAggregates, type PurgedProducts } from './productPurge';
 
 /**
  * The `product_models_brand_model_uniq` predicate, VERBATIM.
@@ -92,6 +97,30 @@ const MAX_LIMIT = 500;
 /** The row shape written by the raw-SQL find-or-create. */
 interface ProductIdRow {
   product_id: string;
+}
+
+/** A product's links that name another row. */
+interface ProductLinkFields {
+  imageContentId?: string | null;
+  manualContentIds?: readonly string[] | null;
+  productEntityId?: string | null;
+}
+
+/**
+ * What a product links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. `product_entity_id`'s key only asks that the entity exists, and the picture and
+ * manual columns have none.
+ */
+function productLinks(rows: readonly ProductLinkFields[]): OwnedLink[] {
+  return [
+    { field: 'image_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.imageContentId) },
+    {
+      field: 'manual_content_ids',
+      ...OWNED_TABLES.content,
+      ids: rows.flatMap((row) => row.manualContentIds ?? []),
+    },
+    { field: 'product_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.productEntityId) },
+  ];
 }
 
 /**
@@ -191,6 +220,8 @@ export class ProductModelService {
   }
 
   async create(context: UserServiceContext, dto: CreateProductModelDto): Promise<ProductModel> {
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks([dto]), 'product');
+
     return this.repository.save(this.toEntity(context, dto));
   }
 
@@ -213,6 +244,8 @@ export class ProductModelService {
       return [];
     }
 
+    await refuseForeignLinks(this.repository.manager, context.userId, productLinks(dtos), 'product');
+
     return bulkInsertIdempotent({
       repository: this.repository,
       entities: dtos.map((dto) => this.toEntity(context, dto)),
@@ -231,6 +264,44 @@ export class ProductModelService {
         importRunId: context.importRunId ?? null,
       },
     });
+  }
+
+  /**
+   * Permanently deletes the catalog models behind these `Product` nodes, with the nodes and the
+   * models merged into them. This is `memory.forget`'s `archive_and_delete` for a product: see
+   * {@link purgeProductAggregates} for what goes and what is only unlinked.
+   *
+   * One transaction. Search is told afterwards, once for every model that went, and once for every
+   * thing that was an instance of one: its own search rows were written with the model's title,
+   * brand and model number, and the key that unlinked it does not re-index it. Nodes that are not
+   * the caller's, or have no model behind them, are left out of the result.
+   */
+  async purge(context: UserServiceContext, nodeIds: string[]): Promise<PurgedProducts> {
+    const requested = Array.from(new Set(nodeIds));
+
+    if (requested.length === 0) {
+      return {
+        nodeIds: [],
+        productIds: [],
+        duplicateIds: [],
+        unlinked: { things: 0, sightings: 0, receiptLines: 0 },
+        unlinkedThingIds: [],
+      };
+    }
+
+    const purged = await this.repository.manager.transaction((manager) =>
+      purgeProductAggregates(manager, context.userId, requested),
+    );
+
+    for (const productId of purged.productIds) {
+      await this.eventService.send(ProductRemovedEvent, { productId });
+    }
+
+    for (const itemId of purged.unlinkedThingIds) {
+      await this.eventService.send(ItemUpdatedEvent, { itemId });
+    }
+
+    return purged;
   }
 
   async findById(context: ServiceContext, id: string, manager?: EntityManager): Promise<ProductModel | null> {
@@ -485,6 +556,9 @@ export class ProductModelService {
     if (Object.keys(patch).length === 0) {
       return existing;
     }
+
+    // `user_id`, the account the model belongs to and the column the import scopes it by.
+    await refuseForeignLinks(this.repository.manager, existing.userId, productLinks([patch]), 'product');
 
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.

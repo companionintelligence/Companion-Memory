@@ -415,10 +415,13 @@ function ChatPageContent() {
     // The shared error state, not the raw error: on a phone whose Memory server is away
     // this used to print "Fetch failed: 500 Internal Server Error" (the dev proxy's answer
     // for a server that is down) under "Error loading threads", which reads as a bug in
-    // the app. ErrorState knows the connection mode and says, offline, that this view
-    // needs the Memory server; online, the caller's words below apply.
+    // the app. Offline it is a notice, not an error: chat still works on the phone's own
+    // model, and a red triangle under "Needs the Memory server" read as if it did not.
+    // Online, the caller's words below apply.
     emptyState = answersFromDevice ? (
       <ErrorState
+        tone="notice"
+        title="Local chat only"
         description="The Memory server is not answering, so your past chats cannot be shown. A new chat can still run on this phone's own model."
         onRetry={refetchThreads}
       />

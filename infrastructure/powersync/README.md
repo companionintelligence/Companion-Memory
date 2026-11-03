@@ -29,6 +29,22 @@ client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 | Client token endpoint | `GET /api/powersync/token` (`backend/.../domains/powersync`) |
 | Client SDK integration | `frontend/apps/web/src/api/powersync/` — `PowerSyncProvider` (mounted in `App.tsx`), `connector.ts`, `schema.ts`, `webDatabase.ts` (WASQLite/IndexedDB), `nativeDatabase.ts` (Capacitor SQLite) |
 
+## Hub / Marketplace installs
+
+A Hub install cannot bind-mount this directory, so it runs `companion/powersync`, built
+from the `Dockerfile` here: the upstream image with `powersync.yaml` and
+`sync-rules.yaml` baked into `/config` and `entrypoint.sh` as its entrypoint (the same
+secrets-to-URI steps as the compose wrapper). It reads setup-secrets' `powersync`
+projection at `${APP_DATA_DIR}/data/secrets/services/powersync`; setup-database already
+creates the replication role and publication from the same secrets. The api gets
+`POWERSYNC_URL=${APP_BASE_URL}/powersync`, and the gateway image already proxies
+`/powersync/`. `make build ENV=production` builds it; `scripts/publish/images.sh`
+publishes it; `scripts/publish/publish.sh` puts it in the store bundle.
+
+`POWERSYNC_URL` may also be a bare path (`/powersync`): the token endpoint then joins it
+to the origin each request arrived on, which is right for an appliance reached through
+several addresses.
+
 ## How it fits together
 
 ```
@@ -57,7 +73,8 @@ the search documents are a raw table the sync client writes directly.
 
 Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
 `POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
-both list `ci.notes`, `ci_search.tags`, `ci_search.entity_tag` and
+both list `ci.notes`, `ci.saved_searches` (both written on the device and replayed up by
+the connector), `ci_search.tags`, `ci_search.entity_tag` and
 `ci_search.mobile_search_documents` — the device record (one row per indexed entity of
 a device-shown type: title, snippet, own time, plus `related_id` and a small `detail`
 JSON of display fields), over which the device builds an FTS5 index and answers the

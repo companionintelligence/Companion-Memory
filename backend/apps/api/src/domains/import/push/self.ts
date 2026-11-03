@@ -169,27 +169,36 @@ const SELF_IDENTITY_SQL = `
  * reads that sender as a stranger who shares the owner's name and files the
  * owner's own mail under them. PushStage adds these to the owner's addresses
  * for the run.
+ *
+ * The label is only Google's word when the importer read it from the header
+ * Google wrote (email_direction.ts#trustedGmailLabels): a sender can put an
+ * `X-Gmail-Labels: Sent` in any mail, and this list makes every contact with
+ * that From address the owner for the whole run. A From address that also sent
+ * this run a mail whose Sent label was refused (`SentLabelRefused`) is somebody
+ * forging the label, so it is left out even if one of its mails got through.
  */
 export async function readSentLabelSenders(db: SelfIdentityReader, runId: string): Promise<string[]> {
-  const rows = await db.query<Array<{ sender: string | null }>>(
-    `SELECT DISTINCT metadata ->> 'From' AS sender
+  const rows = await db.query<Array<{ sender: string | null; refused: boolean | null }>>(
+    `SELECT DISTINCT metadata ->> 'From' AS sender,
+            metadata ->> 'DirectionBasis' IS DISTINCT FROM 'sent_label' AS refused
        FROM ci_import.staged_items
       WHERE run_id = $1::uuid
-        AND metadata ->> 'DirectionBasis' = 'sent_label'
+        AND (metadata ->> 'DirectionBasis' = 'sent_label' OR metadata ->> 'SentLabelRefused' = 'true')
         AND jsonb_typeof(metadata -> 'From') = 'string'`,
     [runId],
   );
   const out = new Set<string>();
+  const refused = new Set<string>();
 
   for (const row of Array.isArray(rows) ? rows : []) {
     const address = normalizeEmail(row.sender);
 
     if (address && address.includes('@')) {
-      out.add(address);
+      (row.refused ? refused : out).add(address);
     }
   }
 
-  return [...out];
+  return [...out].filter((address) => !refused.has(address));
 }
 
 /** Read the owner's names. Callers decide what a failure means — see PushStage. */

@@ -77,11 +77,13 @@ export class SessionController {
   }
 
   /**
-   * Verified Hub identity for this request, or `{ username: null, accountId: null }`
+   * Verified Hub identity for this request, or `{ username: null, accountId: null, refused: null }`
    * when forward-auth is off / headers are missing. The SPA uses this to refuse a
    * stale Memory home when Traefik already named a different person: by
    * `accountId` — the account the Hub person signs in as — when the Hub sends a
    * stable id, and by `username` against the account's email when it does not.
+   * `refused` is set when the bridge would not sign the Hub person in at all; no
+   * session in this browser is theirs then.
    */
   @Get('hub-identity')
   @HttpCode(200)

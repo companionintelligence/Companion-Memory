@@ -8,6 +8,7 @@ import {
   DateGroupHeader,
   ErrorState,
   ListSkeleton,
+  NameSortCutShortNote,
   formatLoadedCount,
   formatRowTime,
   getEntityTimestamp,
@@ -51,7 +52,7 @@ const scrollTopByHistoryEntry = new Map<string, number>();
  */
 export function EntityResultList({ grouped, emptyState }: { grouped: boolean; emptyState: ReactNode }) {
   const [
-    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount },
+    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount, nameSortCutShort },
     { setActiveEntity },
   ] = useEntityService();
   const fmt = useDateTimeFormat();
@@ -238,6 +239,8 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
   return scrollBox(
     <>
+      {nameSortCutShort && <NameSortCutShortNote />}
+
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (

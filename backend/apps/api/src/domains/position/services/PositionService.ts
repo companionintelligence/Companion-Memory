@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { type OwnedLink, refuseForeignLinks } from '@ci/common/persistence';
 import { DeviceService } from '@ci/domains/devices';
 import { EventService } from '@ci/domains/events';
 import {
@@ -92,6 +93,32 @@ export interface TrackOptions {
   maxPoints?: number;
 }
 
+/**
+ * What a fix links to, for {@link refuseForeignLinks}: the links an import of the account's export
+ * checks. Each key only asks that the device or the place exists.
+ */
+function positionLinks(rows: readonly CreatePositionDto[]): OwnedLink[] {
+  const entity = (field: string, pick: (row: CreatePositionDto) => string | undefined): OwnedLink => ({
+    field,
+    table: 'ci.entities',
+    key: 'entity_id',
+    ownerColumn: 'owner_user_id',
+    ids: rows.map(pick),
+  });
+
+  return [
+    {
+      field: 'device_id',
+      table: 'ci.devices',
+      key: 'device_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.device_id),
+    },
+    entity('location_entity_id', (row) => row.location_entity_id),
+    entity('reference_entity_id', (row) => row.reference_entity_id),
+  ];
+}
+
 /** Shape of one raw/bucketed row as Postgres hands it back. */
 interface TrackRow {
   started_at: Date;
@@ -158,6 +185,13 @@ export class PositionService {
       userId: context.userId,
       count: data.length,
     });
+
+    await refuseForeignLinks(
+      this.positionRepository.manager,
+      context.userId,
+      positionLinks(data),
+      'position',
+    );
 
     const uniquePositions = this.deduplicateByTime(data);
 

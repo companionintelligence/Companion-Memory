@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 
 export const NORMATIVE_DOCS = [
   'CLAUDE.md',
-  'AGENTS.md',
   'ARCHITECTURE.md',
   'docs/CI.md',
   'docs/README.md',

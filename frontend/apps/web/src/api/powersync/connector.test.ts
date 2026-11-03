@@ -267,6 +267,88 @@ describe('GraphQLBackendConnector.uploadData', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  it('replays a saved-search PUT as createSavedSearch with its arrays and filters parsed back from JSON text', async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ data: { createSavedSearch: { success: true, savedSearch: { id: 'gid' } } } }),
+    );
+    const op = fakeCrudEntry({
+      op: UpdateType.PUT,
+      table: 'saved_searches',
+      id: 'ss-1',
+      opData: {
+        name: 'Work emails',
+        description: null,
+        query: 'quarterly',
+        entity_types: '["communication"]',
+        tags: '["work"]',
+        filters: '{"direction":"inbound"}',
+        is_public: 0,
+        share_token: null,
+        is_seed: 0,
+        created_at: '2026-10-26T10:00:00.000Z',
+        updated_at: '2026-10-26T10:00:00.000Z',
+      },
+    });
+    const { database, complete } = fakeDatabase([op]);
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+
+    await connector.uploadData(database);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+
+    expect(body.query).toContain('createSavedSearch');
+    expect(body.variables).toEqual({
+      input: {
+        id: GlobalUID.encode('saved-search', 'ss-1'),
+        name: 'Work emails',
+        description: null,
+        query: 'quarterly',
+        entityTypes: ['communication'],
+        tags: ['work'],
+        filters: { direction: 'inbound' },
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays a saved-search PATCH with only the changed columns, never the sharing or timestamp ones', async () => {
+    const fetchMock = stubFetch(jsonResponse({ data: { updateSavedSearch: { success: true } } }));
+    const op = fakeCrudEntry({
+      op: UpdateType.PATCH,
+      table: 'saved_searches',
+      id: 'ss-1',
+      opData: { name: 'Renamed', filters: null, updated_at: '2026-10-26T11:00:00.000Z' },
+    });
+    const { database, complete } = fakeDatabase([op]);
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+
+    await connector.uploadData(database);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+
+    expect(body.query).toContain('updateSavedSearch');
+    expect(body.variables.input).toEqual({ id: btoa('saved-search:ss-1'), name: 'Renamed', filters: null });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays a saved-search DELETE as deleteSavedSearch', async () => {
+    const fetchMock = stubFetch(jsonResponse({ data: { deleteSavedSearch: { success: true } } }));
+    const op = fakeCrudEntry({ op: UpdateType.DELETE, table: 'saved_searches', id: 'ss-1' });
+    const { database, complete } = fakeDatabase([op]);
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+
+    await connector.uploadData(database);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+
+    expect(body.query).toContain('deleteSavedSearch');
+    expect(body.variables.input.id).toBe(btoa('saved-search:ss-1'));
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores writes against read-only tables without calling the network', async () => {
     const fetchMock = stubFetch();
     const op = fakeCrudEntry({ op: UpdateType.PUT, table: 'tags', id: 'tag-1', opData: { label: 'x' } });

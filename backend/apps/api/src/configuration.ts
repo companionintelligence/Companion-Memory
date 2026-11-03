@@ -531,7 +531,11 @@ export const ConfigSchema = z.object({
   // url/jwtSecret = feature scaffolded but not enabled (the endpoint returns 503).
   // See infrastructure/powersync/README.md.
   powersync: z.object({
-    /** Public URL of the PowerSync service the client connects to. */
+    /**
+     * Where clients reach the PowerSync service. An absolute URL is handed out as is; a
+     * path (`/powersync`) is joined to the origin each token request arrived on, for an
+     * appliance reached through more than one address (Hub installs).
+     */
     url: z.string().default(''),
     /** Shared HS256 secret the PowerSync service's client_auth trusts. */
     jwtSecret: z.string().default(''),
@@ -869,7 +873,10 @@ export const ConfigSchema = z.object({
        * Off leaves `purge_after` unenforced — deletion revokes access and keeps
        * the data. Any deployment that tells its users their data is deleted must
        * leave this on; it exists so an operator mid-incident can stop an
-       * irreversible job without editing code.
+       * irreversible job without editing code. It stops every purge: the hourly
+       * run and the one `POST /users/me/delete` starts inline. Deletion requests
+       * still end accounts (access, share links and peer links are closed); their
+       * rows wait until it is switched back on.
        */
       enabled: booleanStringSchema.default(true),
       /**
@@ -1311,7 +1318,10 @@ export const ConfigSchema = z.object({
      * a plain read (every connected-MCP tool is labelled this way), from the
      * owner's own chat is queued as an approval card under the `balanced` and
      * `cautious` dials and runs unattended only under `hands_off`; an external
-     * read (`messaging.listMessages`) asks only under `cautious`. See
+     * read asks only under `cautious`, unless it reaches a third party
+     * (`media.streamingAvailability`) and chat makes it after a lookup in the
+     * same turn, when `balanced` asks too. A read from the owner's own server
+     * (`messaging.listMessages`) does not. See
      * `PendingActionService.trustForToolCall` for the mapping and for why the
      * dial is read directly rather than through the inference scorer.
      * `?tier=local` execute calls are queued rather than run.

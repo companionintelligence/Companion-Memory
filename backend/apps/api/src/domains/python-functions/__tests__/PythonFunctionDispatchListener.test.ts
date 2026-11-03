@@ -4,6 +4,7 @@ import type { Acknowledgement } from '@ci/domains/events';
 
 import { PythonFunctionDispatchListener } from '../listeners/PythonFunctionDispatchListener';
 import type { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
+import type { SummaryServiceYieldGate } from '../services/SummaryServiceYieldGate';
 import { PYTHON_FUNCTIONS } from '../types';
 
 function makeLogger() {
@@ -24,6 +25,10 @@ const tokens = {
       `run-token:${claims.userId}:${claims.jobId}:${claims.queue}`,
   ),
 } as unknown as PythonFunctionTokenService;
+
+const summaryGate = { handoverFailed: jest.fn() } as unknown as SummaryServiceYieldGate & {
+  handoverFailed: jest.Mock;
+};
 
 // No `jobId` here any more. It was never the domain's field — the event bus
 // used to merge pg-boss's id into every delivered payload, and this listener
@@ -71,7 +76,7 @@ describe('PythonFunctionDispatchListener', () => {
 
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -108,7 +113,7 @@ describe('PythonFunctionDispatchListener', () => {
     const ack = makeAck();
     ack.jobId = 'pgboss-job-2';
 
-    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(
       { ...payload, jobId: 'a-domain-id-that-must-not-win' } as never,
       ack,
     );
@@ -131,7 +136,7 @@ describe('PythonFunctionDispatchListener', () => {
         ),
       ) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -143,13 +148,32 @@ describe('PythonFunctionDispatchListener', () => {
   it('fails the job when the runner is unreachable', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
 
     expect(ack.fail).toHaveBeenCalledTimes(1);
     expect(ack.defer).not.toHaveBeenCalled();
+  });
+
+  it('closes the summary gate when a summary dispatch fails, so a backlog stops spending retries', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(payload, makeAck());
+
+    expect(summaryGate.handoverFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the summary gate alone when an HBPE dispatch fails', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchHbpe(
+      { ...payload, target: 'hbpe', function: 'nightly' },
+      makeAck(),
+    );
+
+    expect(summaryGate.handoverFailed).not.toHaveBeenCalled();
   });
 
   describe('function-catalog preflight', () => {
@@ -167,7 +191,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
       const ack = makeAck();
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
@@ -204,7 +228,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, makeAck());
 
@@ -226,7 +250,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
 
       await Promise.all([
         listener.dispatchSummary(payload, makeAck()),
@@ -252,7 +276,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
       const ack = makeAck();
 
       await listener.dispatchSummary(payload, ack);
@@ -279,7 +303,7 @@ describe('PythonFunctionDispatchListener — what the sidecar is handed', () => 
       .mockResolvedValueOnce({ ok: true, status: 202, text: () => Promise.resolve('') });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(payload, makeAck());
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(payload, makeAck());
 
     // Every call to the sidecar — the catalog preflight included — carries the shared bearer, so
     // a sidecar that refuses unauthenticated requests still lets the dispatcher through.

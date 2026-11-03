@@ -1,7 +1,11 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
 
 export type DeletionScope = 'connection' | 'account';
-export type DeletionStatus = 'completed' | 'failed';
+/**
+ * `started`: an account delete ended the account and handed its rows to the
+ * purge; the `completed` row that follows carries the counts.
+ */
+export type DeletionStatus = 'started' | 'completed' | 'failed';
 
 /**
  * Append-only audit record of a privacy deletion action (per-connection

@@ -13,10 +13,9 @@ import { EntityMergeBlockService } from './EntityMergeBlockService';
 export type DuplicateReason = 'email' | 'phone' | 'name';
 
 /**
- * `PHONE_EXTENSION_PATTERN` from `domains/graph/utils/normalizeIdentifier.ts`,
- * restated because this domain cannot import that one: `graph` already imports
- * `memory`, so the barrel import would be a cycle. `PersonDuplicateService.spec`
- * pins the two strings equal.
+ * `PHONE_EXTENSION_PATTERN` from `common/normalizeIdentifier.ts`, restated in
+ * SQL because Postgres needs the same rule. `PersonDuplicateService.spec` pins
+ * the two strings equal.
  *
  * The phone key below is a SQL copy of `normalizePhone`, and a copy that kept
  * the last ten digits of a value like `(212) 555-0147 x229` would group two

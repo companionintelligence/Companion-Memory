@@ -6,6 +6,8 @@ import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
 import config from '@ci/configuration';
 
+import { type AskAuditRemoval, removeFromAskAudit } from '../purge/askAudit';
+import { completeImmediateDeletionAudit } from '../purge/deletionAudit';
 import { deleteSoleOwnedObjects, PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
 import { expandToPhysicalTables, readFkEdges, readUserRefColumns } from '../purge/purgeCatalog';
 import { buildPurgePlan } from '../purge/purgePlan';
@@ -63,6 +65,49 @@ const UNPINNED_ACCOUNTS_SQL = `
   WHERE deleted_at IS NOT NULL AND purge_after IS NULL
 `;
 
+/**
+ * How long past its deadline an unfinished purge has to be before it is reported
+ * as stalled. A day: long past the 30 s an immediate delete waits and the hourly
+ * retries, short enough that nobody finds out from a person asking why their
+ * address is still taken.
+ */
+export const STALLED_PURGE_AFTER_HOURS = 24;
+
+/** Ended accounts whose purge is due and still unfinished well past its deadline. */
+const STALLED_ACCOUNTS_SQL = `
+  SELECT u.id                 AS user_id,
+         u.purge_after        AS purge_after,
+         p.attempts           AS attempts,
+         p.last_error         AS last_error,
+         p.next_attempt_after AS next_attempt_after,
+         count(*) OVER ()::int AS total
+  FROM ci.users u
+  LEFT JOIN ci.account_purges p ON p.user_id = u.id
+  WHERE u.deleted_at IS NOT NULL
+    AND u.purge_after IS NOT NULL
+    AND u.purge_after <= $1::timestamptz - make_interval(hours => $2::int)
+    AND p.completed_at IS NULL
+  ORDER BY u.purge_after ASC
+  LIMIT 10
+`;
+
+/** An ended account whose purge has not finished long after it was due. */
+export interface StalledPurge {
+  userId: string;
+  purgeAfter: Date;
+  /** Runs that have tried it; 0 when none has started. */
+  attempts: number;
+  /** Why the last run failed, when one did and could record it. */
+  lastError: string | null;
+  nextAttemptAfter: Date | null;
+}
+
+/** {@link AccountPurgeService.findStalledPurges}: how many, and the oldest few. */
+export interface StalledPurgeReport {
+  count: number;
+  oldest: StalledPurge[];
+}
+
 export interface AccountPurgeOutcome {
   userId: string;
   status: 'purged' | 'failed' | 'locked';
@@ -75,6 +120,11 @@ export interface AccountPurgeOutcome {
    */
   detachedRows: Record<string, number>;
   deletedObjects: number;
+  /**
+   * The `completed` row this run appended to `ci.data_deletion_audit`, when it
+   * finished an immediate delete (see `completeImmediateDeletionAudit`).
+   */
+  auditId?: string | null;
   error?: string;
 }
 
@@ -85,6 +135,8 @@ export interface PurgeRunSummary {
   failed: number;
   /** Soft-deleted accounts with no `purge_after`; see {@link UNPINNED_ACCOUNTS_SQL}. */
   unpinned: number;
+  /** Accounts still unpurged {@link STALLED_PURGE_AFTER_HOURS} after their deadline, after this run. */
+  stalled: number;
   outcomes: AccountPurgeOutcome[];
 }
 
@@ -177,13 +229,67 @@ export class AccountPurgeService {
       outcomes.push(await this.purgeAccount(account.id, account.deleted_at, account.purge_after));
     }
 
+    const stalled = await this.reportStalledPurges(now);
+
     return {
       considered: due.length,
       purged: outcomes.filter((outcome) => outcome.status === 'purged').length,
       failed: outcomes.filter((outcome) => outcome.status === 'failed').length,
       unpinned,
+      stalled: stalled.count,
       outcomes,
     };
+  }
+
+  /**
+   * Ended accounts whose purge is still unfinished {@link STALLED_PURGE_AFTER_HOURS} after it was
+   * due: the oldest ten, and how many there are.
+   *
+   * A purge that keeps failing retries quietly forever otherwise (an object store that is down, a
+   * foreign key from a row the plan does not reach), and the person's data stays, their address
+   * stays taken, and nothing but `ci.account_purges.last_error` says so.
+   */
+  async findStalledPurges(now: Date = new Date()): Promise<StalledPurgeReport> {
+    const rows = (await this.dataSource.query(STALLED_ACCOUNTS_SQL, [
+      now,
+      STALLED_PURGE_AFTER_HOURS,
+    ])) as Array<{
+      user_id: string;
+      purge_after: Date;
+      attempts: number | null;
+      last_error: string | null;
+      next_attempt_after: Date | null;
+      total: number;
+    }>;
+
+    return {
+      count: rows[0]?.total ?? 0,
+      oldest: rows.map((row) => ({
+        userId: row.user_id,
+        purgeAfter: row.purge_after,
+        attempts: row.attempts ?? 0,
+        lastError: row.last_error,
+        nextAttemptAfter: row.next_attempt_after,
+      })),
+    };
+  }
+
+  /**
+   * {@link findStalledPurges}, logged as an error on every run while any exist, so a stuck
+   * deletion reaches whoever reads the logs instead of waiting to be found in the database.
+   */
+  async reportStalledPurges(now: Date = new Date()): Promise<StalledPurgeReport> {
+    const report = await this.findStalledPurges(now);
+
+    if (report.count > 0) {
+      this.logger.error('Ended accounts are still not purged long after their deadline', {
+        count: report.count,
+        stalledAfterHours: STALLED_PURGE_AFTER_HOURS,
+        oldest: report.oldest,
+      });
+    }
+
+    return report;
   }
 
   /**
@@ -237,6 +343,19 @@ export class AccountPurgeService {
         // loses the pointer and strands the bytes forever.
         deletedObjects = await this.purgeObjects(runner, userId);
 
+        // Not in the plan: ci.ask_audit names the account in columns the catalog
+        // walk does not read, and is the other party's record as much as this
+        // one's, so the account is taken out of it rather than its rows purged.
+        const askAudit = await this.purgeAskAudit(runner, userId);
+
+        if (askAudit.deleted > 0) {
+          deletedRows['ci.ask_audit'] = askAudit.deleted;
+        }
+
+        if (askAudit.detached > 0) {
+          detachedRows['ci.ask_audit'] = askAudit.detached;
+        }
+
         for (const step of plan.steps) {
           const affected = await this.executeStep(runner, step, userId);
 
@@ -251,7 +370,13 @@ export class AccountPurgeService {
           }
         }
 
-        await this.markCompleted(runner, userId, deletedRows, detachedRows, deletedObjects);
+        const auditId = await this.recordCompletion(
+          runner,
+          userId,
+          deletedRows,
+          detachedRows,
+          deletedObjects,
+        );
 
         this.logger.log('Account data purged', {
           userId,
@@ -259,7 +384,7 @@ export class AccountPurgeService {
           totalRows: Object.values(deletedRows).reduce((sum, count) => sum + count, 0),
         });
 
-        return { userId, status: 'purged', deletedRows, detachedRows, deletedObjects };
+        return { userId, status: 'purged', deletedRows, detachedRows, deletedObjects, auditId };
       } finally {
         await runner.query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, [
           ADVISORY_LOCK_NAMESPACE,
@@ -279,9 +404,13 @@ export class AccountPurgeService {
         deletedObjects,
       });
 
-      // Best-effort: if the failure was the database itself, this fails too, and
-      // the account is simply picked up again on the next run.
-      await this.markFailed(runner, userId, error).catch(() => undefined);
+      // Best-effort. The purge's own connection is the first choice, and a pooled
+      // one the second: a purge whose backend was terminated has a dead runner,
+      // and recording on it alone left `last_error` empty. If the database itself
+      // is down this fails too, and the account is picked up again on the next run.
+      await this.markFailed(runner, userId, error)
+        .catch(() => this.markFailed(this.dataSource, userId, error))
+        .catch(() => undefined);
 
       return { userId, status: 'failed', deletedRows, detachedRows, deletedObjects, error: error.message };
     } finally {
@@ -399,6 +528,15 @@ export class AccountPurgeService {
     return Number(rows[0]?.count ?? 0);
   }
 
+  /** {@link removeFromAskAudit}, on a deployment that has the table. */
+  private async purgeAskAudit(runner: QueryRunner, userId: string): Promise<AskAuditRemoval> {
+    const [{ present }] = (await runner.query(
+      `SELECT (to_regclass('ci.ask_audit') IS NOT NULL) AS present`,
+    )) as Array<{ present: boolean }>;
+
+    return present ? removeFromAskAudit(runner, userId) : { deleted: 0, detached: 0 };
+  }
+
   /** Delete the account's objects from the object store ({@link deleteSoleOwnedObjects}). */
   private async purgeObjects(runner: QueryRunner, userId: string): Promise<number> {
     const [{ present }] = (await runner.query(
@@ -447,6 +585,37 @@ export class AccountPurgeService {
     );
   }
 
+  /**
+   * {@link markCompleted}, and the `completed` row of an immediate delete's
+   * audit when this run finished one, in one transaction: the two records of the
+   * same fact never disagree.
+   */
+  private async recordCompletion(
+    runner: QueryRunner,
+    userId: string,
+    deletedRows: Record<string, number>,
+    detachedRows: Record<string, number>,
+    deletedObjects: number,
+  ): Promise<string | null> {
+    await runner.startTransaction();
+
+    try {
+      await this.markCompleted(runner, userId, deletedRows, detachedRows, deletedObjects);
+
+      const auditId = await completeImmediateDeletionAudit(runner, userId, deletedRows);
+
+      await runner.commitTransaction();
+
+      return auditId;
+    } catch (err) {
+      if (runner.isTransactionActive) {
+        await runner.rollbackTransaction();
+      }
+
+      throw err;
+    }
+  }
+
   private async markCompleted(
     runner: QueryRunner,
     userId: string,
@@ -487,10 +656,14 @@ export class AccountPurgeService {
     }
   }
 
-  private async markFailed(runner: QueryRunner, userId: string, error: Error): Promise<void> {
+  private async markFailed(
+    executor: { query(sql: string, parameters?: unknown[]): Promise<unknown> },
+    userId: string,
+    error: Error,
+  ): Promise<void> {
     const { retryBackoffMinutes } = config.accountDeletion.purge;
 
-    await runner.query(
+    await executor.query(
       `UPDATE ci.account_purges
           SET last_error = $2,
               next_attempt_after = NOW() + ($3 || ' minutes')::interval,
