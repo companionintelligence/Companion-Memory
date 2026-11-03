@@ -33,8 +33,8 @@ client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 
 A Hub install cannot bind-mount this directory, so it runs `companion/powersync`, built
 from the `Dockerfile` here: the upstream image with `powersync.yaml` and
-`sync-rules.yaml` baked into `/config` and `entrypoint.sh` as its entrypoint (the same
-secrets-to-URI steps as the compose wrapper). It reads setup-secrets' `powersync`
+`sync-rules.yaml` baked into `/config` and `entrypoint.sh` as its entrypoint (the file
+the compose service runs from its mount). It reads setup-secrets' `powersync`
 projection at `${APP_DATA_DIR}/data/secrets/services/powersync`; setup-database already
 creates the replication role and publication from the same secrets. The api gets
 `POWERSYNC_URL=${APP_BASE_URL}/powersync`, and the gateway image already proxies
@@ -112,8 +112,8 @@ make dev
   `https://<project>.localhost` can connect too.
 
 Host 8080 is taken by the shared dev Caddy, which is why the default is 18080. There is
-no `setup-secrets` in local, so `docker-compose.local.yml` passes the names the wrapper
-command normally sources from `/run/secrets` (`POWERSYNC_DATABASE_PASSWORD`,
+no `setup-secrets` in local, so `docker-compose.local.yml` passes the names `entrypoint.sh`
+normally sources from `/run/secrets` (`POWERSYNC_DATABASE_PASSWORD`,
 `POWERSYNC_JWT_SECRET`, the app role) straight from `.env`; `setup-database` creates the
 replication role and the publication on every `up`.
 
@@ -147,21 +147,23 @@ Server env (read by `config.powersync`, see `backend/apps/api/config/`):
 `POWERSYNC_JWT_SECRET` (a throwaway dev value the service needs a matching JWKS key
 for), so the endpoint stays dormant until you also set `POWERSYNC_URL`.
 
-PowerSync service env (in `docker-compose.yml`):
+PowerSync service env (`entrypoint.sh` derives the first three):
 
 | Env | Example |
 |-----|---------|
 | `PS_REPLICATION_URI` | `postgresql://powersync:<POWERSYNC_DATABASE_PASSWORD>@database:5432/companion` |
 | `PS_STORAGE_URI` | `postgresql://companion:<DATABASE_PASSWORD>@database:5432/companion` (Postgres bucket storage, image ≥ 1.3.8) |
 | `PS_JWT_SECRET_B64URL` | `base64url(POWERSYNC_JWT_SECRET)` — the symmetric JWKS key |
+| `POWERSYNC_COMPACT_INTERVAL_SECONDS` | `3600`, the default. See "Compacting" |
 
 > ⚠️ The `PS_` prefix is **required**, not stylistic. `powersync.yaml`'s `!env` tag
 > refuses to substitute any variable whose name does not start with `PS_`, and the
-> service treats that as a fatal startup error (exit 150, crash-loop). All three
-> default in `docker-compose.yml` to the local `database` container, so only
-> `PS_JWT_SECRET_B64URL` and `POWERSYNC_DATABASE_PASSWORD` must be supplied, and
-> `.env.default` ships dev values for both. Note `POWERSYNC_CONFIG_PATH` is *not*
-> substituted — the service reads it directly — so it keeps its name.
+> service treats that as a fatal startup error (exit 150, crash-loop). `entrypoint.sh`
+> builds all three from the generated secrets, pointing at the local `database`
+> container. To point the URIs elsewhere set them in `.env` (compose) or in the
+> container's environment. `POWERSYNC_CONFIG_PATH` is *not* substituted (the service
+> reads it directly) so it keeps its name. Neither is
+> `POWERSYNC_COMPACT_INTERVAL_SECONDS`, which only `entrypoint.sh` reads.
 
 ### The two URIs are different roles
 
@@ -198,9 +200,7 @@ in `infrastructure/setup-database/entrypoint.sh`.
 The password comes from `POWERSYNC_DATABASE_PASSWORD`: `setup-secrets` generates one
 per deployment (and appends it to a pre-existing secrets file on upgrade), `.env.default`
 ships a dev value. Unset, `setup-database` logs that it is skipping the role and
-`powersync` cannot authenticate. Note that only `setup-database` reads the secrets
-file — the third-party PowerSync image cannot — so a **production** deployment has to
-supply the `PS_*` values through the environment itself.
+`powersync` cannot authenticate.
 
 Derive the JWKS key from the shared secret (`-w 0` matters — `basenc` otherwise wraps
 the output at 76 columns and the wrapped value is not a usable key):
@@ -213,6 +213,91 @@ The server signs HS256 with `POWERSYNC_JWT_SECRET` and `kid=ci-powersync-hs256`;
 service's `client_auth.jwks` trusts the matching symmetric key. **For production,
 switch to asymmetric keys (RS256/EdDSA) via a JWKS endpoint** — see the commented
 `jwks_uri` in `powersync.yaml`.
+
+## Compacting
+
+`entrypoint.sh` runs PowerSync's `compact` command beside the service: 5 minutes after
+the service starts, then an hour after each run ends. Nothing in the service schedules
+it and no HTTP route asks for it (the admin routes are `execute-sql`, `diagnostics`,
+`schema`, `reprocess` and `validate`), so it has to run in this container.
+
+Bucket storage only appends. An edit or a delete adds an op to `powersync.bucket_data`
+and leaves the old op with the row's old text in its `data`. A new device downloads
+every op. `compact` turns each superseded op into a `MOVE` with no data and folds a run of
+them at the start of a bucket into one `CLEAR`. Checksums are preserved, which is why a
+connected device does not notice. It does not give the rows back: a `MOVE` in the middle
+of a bucket stays, without its text, so a new device still downloads it and the table's
+disk size holds rather than shrinks.
+
+### Why hourly
+
+Measured on 1.23.0 with one account holding 600,000 search documents, the size
+`sync-rules.yaml` records for a real account:
+
+| Run | Wall | Peak memory | WAL |
+|---|---|---|---|
+| One small bucket, for what starting the process costs | 4 s | 430 MB | |
+| 600k rows, nothing to do | 18 to 22 s | 430 MB | 296 bytes |
+| 1,000 rows updated and 50 deleted since the last run | 19 s | 430 MB | 11 MB |
+| 100,000 rows updated and 10,000 deleted | 50 s | 630 MB | 1 GB |
+
+Most of a run is reading every op in every bucket, so it costs about the same with
+nothing to do. Running it every hour is 20 s of one core an hour on an account that
+size. A connected device saw no difference while it ran: over 13 minutes with `compact`
+every 60 s, a write reached it in a median of 243 ms during a run and 221 ms outside
+one. Every 15 minutes would cost four times that, for a shorter wait on text only its
+owner's devices can fetch. Daily would leave deleted text for a day. PowerSync's docs
+also suggest hourly for self-hosted installs. `POWERSYNC_COMPACT_INTERVAL_SECONDS`
+changes it. A Hub install runs the default.
+
+The 5-minute start-up run is there because the wait restarts with the container: a box
+restarted more often than the interval would otherwise never compact.
+
+### How long text can stay
+
+About an hour after an edit, a delete or an account purge. A little over at worst: a
+row deleted just after a run starts waits for the next run to finish. While the service
+is stopped nothing replicates or compacts, so the wait starts when it is running again.
+The start-up run comes after 5 minutes.
+
+This is the view through SQL and through sync. Postgres keeps the old bytes in its files
+until vacuum and WAL recycling reach them, as it does for every deleted row in this
+database, including the source tables.
+
+### Account purge has no step of its own
+
+`AccountPurgeService` deletes the synced rows with ordinary `DELETE`s. Replication
+records them as `REMOVE` ops and removes the rows from `current_data`. The next `compact`
+clears the text. The purge cannot do better:
+
+- The api cannot run `compact`. It is another container with no route to this one.
+- Clearing `powersync.bucket_data` from the purge cannot be relied on. The rows may not
+  have replicated yet: purge while the service is down, delete from that table and the
+  text arrives when replication catches up. It would also tie the purge to a schema
+  PowerSync owns, whose bucket names already carry a storage-version prefix (`1#...`).
+- `reprocess` would clear it but makes every device download everything again.
+
+An ended account gets no new sync token. One issued before it ended can still download
+the text for up to 5 minutes (`powersync.tokenTtl`). After that nobody can. See
+[`docs/architecture/account-deletion.md`](../../docs/architecture/account-deletion.md).
+
+### When it fails
+
+A failed run logs its own error and
+`[ci/powersync] compact failed (exit N); trying again in 3600s`. The service carries on.
+A run that takes longer than six intervals is killed and logged the same way, so one
+stuck run cannot end compaction. Nothing raises these beyond the container's log.
+
+The loop ends with the container: `docker stop` takes as long as the service alone. A run
+cut off part way loses at most its last batch, because each batch commits on its own and
+leaves the bucket valid.
+
+If the database goes away the service itself exits and restarts until it is back, with or
+without this loop. That was already so.
+
+One limit, read in PowerSync's source and not run: a run tracks each bucket's rows up to
+1 GB of memory, about 240 bytes a row, so roughly 4 million rows in one bucket. Past that
+the older ops of the rows it could not track keep their text.
 
 ## Verify before relying on it
 

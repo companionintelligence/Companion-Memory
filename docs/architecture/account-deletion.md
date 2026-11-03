@@ -256,6 +256,21 @@ And the residue, which they must not paper over:
   to or from a peer, or to itself) are deleted.
 - **`ci.account_purges` retains the account's uuid** indefinitely, as proof of
   deletion. A pseudonymous identifier and counts — no name, address or content.
+- **The text in PowerSync's bucket storage outlives the rows by up to about an hour.**
+  The purge deletes the synced rows like any others and replication records the
+  deletes, but `powersync.bucket_data` keeps the old text until PowerSync's `compact`
+  runs, which `infrastructure/powersync/entrypoint.sh` does hourly and 5 minutes after
+  the service starts. While the service is stopped nothing replicates or compacts, so
+  the hour starts when it is running again. The ended account gets no new sync token,
+  but one issued before it ended can still download the text for up to 5 minutes. After
+  that nobody can. The purge has no step of its own for this: the api has no supported
+  way to run `compact`. Writing to that schema cannot work either, because the rows it
+  would clear may not have replicated yet. `infrastructure/powersync/README.md`,
+  "Compacting", has the evidence. What stays after `compact` is the account's uuid (in
+  one bucket's name and, once a device has uploaded a change, in
+  `powersync.write_checkpoints`) and its tags' ids: no name, address or content. A
+  failing `compact` is logged only by the `powersync` container. The text stays until a
+  run succeeds.
 - **Backups are out of scope.** Nothing here reaches a snapshot taken before the
   purge. Any disclosure claiming otherwise would be false; state the backup
   retention window separately.

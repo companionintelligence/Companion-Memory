@@ -148,6 +148,7 @@ test('buildSteps: one step per testable workspace, then desktop, pytest and the 
       'python (pytest)',
       'gateway (sh)',
       'setup-secrets (sh)',
+      'powersync (sh)',
     ],
   );
 });
