@@ -903,6 +903,11 @@ per-owner dispatch gate it shares with `AnswerInferenceCron` (see
 | `20 15 * * * *` | `ConsumptionSweepCron.sweepOnSchedule` | Hourly reaper for `ci.consumption_windows` / `ci.consumed_nonces` — deletes rows idle past the rate-limit/nonce windows they serve (60× the 60 s rate-limit window, 12× the 5 min signature lifetime). In-process re-entrancy guard |
 | `20 40 3 * * *` | `SyncWindowSweepCron.sweepOnSchedule` | Daily PowerSync retention: clears `sync_period` on `ci.events` / `ci.entities` rows older than the 30-day device window. Ages rows out of sync, does not delete them. In-process re-entrancy guard |
 
+One recurring task is not a job at all: `compact` on PowerSync's bucket storage runs
+hourly from `infrastructure/powersync/entrypoint.sh`, inside that container, so no job
+control or registry name reaches it. See `infrastructure/powersync/README.md`,
+"Compacting".
+
 ### Everything else — web role
 
 | Schedule | Registry name | Gate | What it does |

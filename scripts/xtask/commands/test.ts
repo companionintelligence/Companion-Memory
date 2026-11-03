@@ -267,6 +267,13 @@ export function buildSteps(root: string, workspaces: Workspace[]): Step[] {
     run: () => run('sh', ['infrastructure/setup-secrets/test.sh'], { cwd: root }),
   });
 
+  // The PowerSync entrypoint is plain sh with no Docker in its test, so it runs
+  // here rather than in any workspace. Its own file says what it covers.
+  steps.push({
+    name: 'powersync (sh)',
+    run: () => run('sh', ['infrastructure/powersync/test.sh'], { cwd: root }),
+  });
+
   return steps;
 }
 

@@ -73,9 +73,9 @@ project() {
 }
 
 # THE map: which service reads which key. Derived from each image's
-# entrypoint (`get_secret NAME` calls) and the powersync/dbconnstr compose
-# wrappers. A new key or a new reader is an edit here, on purpose — the
-# alternative was every service seeing everything.
+# entrypoint (`get_secret NAME` calls, infrastructure/powersync/entrypoint.sh)
+# and the dbconnstr compose wrapper. A new key or a new reader is an edit here,
+# on purpose: the alternative was every service seeing everything.
 project_all() {
   # api, worker and migrate-database share the ci/api image and entrypoint.
   project api \
