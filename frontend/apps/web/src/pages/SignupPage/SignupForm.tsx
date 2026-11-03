@@ -178,7 +178,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
             <Form.Item>
               <Form.Label>Name</Form.Label>
               <Form.Control>
-                <Input {...field} />
+                <Input {...field} autoComplete="name" />
               </Form.Control>
               <Form.Message />
             </Form.Item>
@@ -219,7 +219,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
             name="signup_code"
             render={({ field }) => (
               <Form.Item>
-                <Form.Label>Signup Code</Form.Label>
+                <Form.Label>Signup code</Form.Label>
                 <Form.Control>
                   <Input {...field} />
                 </Form.Control>

@@ -231,7 +231,7 @@ function RemoteSavedSearchesPage() {
         message={
           <div className="flex max-w-md flex-col items-center gap-4 text-center">
             <div>
-              <div className="font-medium">You don't have any Saved Searches yet.</div>
+              <div className="font-medium">You don’t have any saved searches yet.</div>
               <div className="mt-1 text-sm text-muted-foreground">
                 Save a search you are running from Memory's advanced filters, or define one from scratch right
                 here.
@@ -247,7 +247,7 @@ function RemoteSavedSearchesPage() {
               <Button variant="outline" asChild>
                 <Link to="/memory">
                   <Search className="mr-2 h-4 w-4" />
-                  Search Memory
+                  Search memory
                 </Link>
               </Button>
             </div>
@@ -340,7 +340,7 @@ function RemoteSavedSearchesPage() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
+              className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground max-device:h-11"
             >
               <ChevronRight
                 className={

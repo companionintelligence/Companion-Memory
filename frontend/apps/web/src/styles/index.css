@@ -56,6 +56,8 @@
   /* Keyboard overlap. `usePreventOverscroll` updates these from visualViewport. */
   --keyboard-inset: 0px;
   --vv-height: 100dvh;
+  /* The pointer light on AnimatedBackground: neutral, never a hue. */
+  --server-ambient-light: #ffffff;
 
   /* Activity palette — categorical identity for the schedule surface. Seven
      hues in a fixed, validated order (see HorizonGrid/activityPalette.ts);
@@ -75,6 +77,7 @@
 
 .dark {
   color-scheme: dark;
+  --server-ambient-light: #d6e4e2;
   /* Pre-rendered fallback — see color-mix upgrade below. */
   --input-fill: #0a2e38;
 
@@ -226,22 +229,29 @@ html.ci-native #root {
   max-height: 100%;
 }
 
+/*
+ * Primary fills are one flat phthalo ink. The canon gradient ran from one teal
+ * to a darker teal and glowed on hover; a flat fill with a one-step hover tone
+ * and a top hairline reads as printed ink instead.
+ */
 .ci-primary-surface {
   background-color: var(--phthalo);
-  background-image: var(--gradient-button);
+  background-image: none;
   border-color: transparent;
   color: var(--ci-button-foreground);
-  box-shadow: var(--ci-button-shadow);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .ci-primary-surface:hover {
-  background-image: var(--server-gradient-button-hover);
+  background-color: var(--phthalo-hover);
+  background-image: none;
   color: var(--ci-button-foreground);
-  box-shadow: var(--ci-button-shadow-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
+/* No coloured glow under any control. Depth comes from the hairline above. */
 .shadow-glow-ci {
-  box-shadow: var(--ci-button-shadow);
+  box-shadow: none;
 }
 
 [data-slot='checkbox'] {
@@ -252,10 +262,10 @@ html.ci-native #root {
 [data-slot='checkbox'][data-state='checked'],
 [data-slot='switch'][data-state='checked'] {
   background-color: var(--phthalo);
-  background-image: var(--gradient-button);
+  background-image: none;
   border-color: transparent;
   color: var(--ci-button-foreground);
-  box-shadow: var(--ci-button-shadow);
+  box-shadow: none;
 }
 
 
@@ -289,13 +299,14 @@ html.ci-native #root {
   /* `color-mix`, not `hsl(var(--primary) / …)`: these tokens are hex literals
      (`--primary: #c5e8dc`), so the hsl() form parses as invalid and drops the
      whole gradient to `none` — silently, since an invalid background-image is
-     simply not painted. */
+     simply not painted. The light is neutral and faint: the page is quiet, and
+     the one bright thing on a screen is the content itself. */
   background: radial-gradient(
     900px circle at var(--glow-x, -9999px) var(--glow-y, -9999px),
-    color-mix(in srgb, var(--primary) 8%, transparent) 0%,
-    color-mix(in srgb, var(--primary) 5.5%, transparent) 18%,
-    color-mix(in srgb, var(--primary) 3%, transparent) 38%,
-    color-mix(in srgb, var(--primary) 1.25%, transparent) 60%,
+    color-mix(in srgb, var(--server-ambient-light) 5%, transparent) 0%,
+    color-mix(in srgb, var(--server-ambient-light) 3.5%, transparent) 18%,
+    color-mix(in srgb, var(--server-ambient-light) 2%, transparent) 38%,
+    color-mix(in srgb, var(--server-ambient-light) 0.8%, transparent) 60%,
     transparent 80%
   );
 }
@@ -368,41 +379,17 @@ html.ci-native #root {
   animation: force-dot-arrive 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes constellation-mist-drift {
-  from {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.85;
-    transform: scale(1.04);
-  }
-  to {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-}
-
 .constellation-mist {
   pointer-events: none;
   background:
     radial-gradient(ellipse 75% 60% at 50% 45%, transparent 55%, hsl(var(--background) / 0.28) 100%),
     radial-gradient(circle at 30% 40%, hsl(var(--primary) / 0.03), transparent 45%);
-  animation: constellation-mist-drift 4.5s ease-in-out infinite;
   opacity: 0.65;
 }
 
-@keyframes constellation-grain {
-  from {
-    opacity: 0.2;
-  }
-  to {
-    opacity: 0.45;
-  }
-}
-
+/* Still while the graph hydrates: the label says what is happening, the chip need not blink. */
 .constellation-hydrating-chip {
-  animation: constellation-grain 1.6s ease-in-out infinite alternate;
+  opacity: 0.45;
 }
 
 /*
@@ -429,4 +416,10 @@ html.ci-native #root {
   );
   background-size: 100% 220%;
   animation: rhythm-strip-shimmer 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rhythm-cell-waiting {
+    animation: none;
+  }
 }

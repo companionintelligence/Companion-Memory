@@ -267,7 +267,7 @@ function StatTile({ label, value, detail }: StatTileProps) {
   return (
     <Card>
       <Card.Content className="flex flex-col gap-1">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
         <span className="text-lg font-semibold">{value}</span>
         <span className="text-xs text-muted-foreground">{detail}</span>
       </Card.Content>
@@ -343,9 +343,7 @@ function BarListCard({
           {resolvedSections.map((section) => (
             <div key={section.key} className="flex flex-col">
               {section.label && (
-                <h3 className="px-2 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {section.label}
-                </h3>
+                <h3 className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">{section.label}</h3>
               )}
               {section.rows.map((row) => {
                 const share = total > 0 ? (row.count / total) * 100 : 0;

@@ -64,7 +64,7 @@ export function Reveal({
 
   return (
     <div
-      className={`${className ?? ''} animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards duration-700`}
+      className={`${className ?? ''} animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards duration-500`}
       style={{ animationDelay: `${delay}ms` }}
     >
       {children}
@@ -77,17 +77,6 @@ export function SplashShell({ children }: { children: ReactNode }) {
   return (
     <div className="relative h-lvh overflow-hidden bg-background text-foreground">
       <AnimatedBackground />
-
-      {/* Two low, wide washes of brand light so the mark reads as lit rather than
-          pasted onto a flat ground. Both sit under the content. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -top-1/3 -left-1/4 h-[80vmax] w-[80vmax] rounded-full bg-[radial-gradient(circle,var(--aqua)_0%,transparent_62%)] opacity-[0.13] blur-3xl"
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-1/4 -bottom-1/3 h-[70vmax] w-[70vmax] rounded-full bg-[radial-gradient(circle,var(--info)_0%,transparent_62%)] opacity-[0.10] blur-3xl"
-      />
 
       {/* Above the page's content layer, which is `relative z-10` and fills the screen:
           at the same z-index the later content won and swallowed every click here.

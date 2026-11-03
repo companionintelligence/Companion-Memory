@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { Archive } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
@@ -241,7 +242,7 @@ function OnlineStoryTimelineView() {
         <Empty
           title="No dated memories match this search"
           description="These results aren't time-based. Switch to List to see them."
-          icon="🗂️"
+          icon={Archive}
         />
       </div>
     );

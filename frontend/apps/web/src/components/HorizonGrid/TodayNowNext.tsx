@@ -147,7 +147,7 @@ export function WeekDayChips({
                   : 'text-muted-foreground active:bg-accent/30',
             )}
           >
-            <span className="text-[10px] font-medium uppercase leading-none tracking-wide">
+            <span className="text-[10px] font-medium leading-none">
               {day.toLocaleDateString([], { weekday: 'short', timeZone: zone })}
             </span>
             <span className="mt-1 text-sm font-semibold tabular-nums leading-none">

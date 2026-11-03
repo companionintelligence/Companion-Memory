@@ -108,7 +108,7 @@ export function RailSubmenuShell({
         // Same height as the expanded head, so pinning the rail open never
         // moves an icon; the group you are in is a filled cell.
         className={cn(
-          'relative flex items-center justify-center rounded-md transition',
+          'relative flex items-center justify-center rounded-md transition motion-reduce:transition-none',
           accountHead ? RAIL_ACCOUNT_HEIGHT : RAIL_SECTION_HEIGHT,
           railRowTone(routeOpen),
         )}
@@ -130,7 +130,7 @@ export function RailSubmenuShell({
             </Tooltip>
           )}
 
-          <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+          <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down motion-reduce:data-[state=closed]:animate-none motion-reduce:data-[state=open]:animate-none">
             <div className="flex min-w-0 flex-col gap-0.5">
               {children}
               {footer}
@@ -160,7 +160,7 @@ export function RailSubmenuShell({
             aria-current={rootActive ? 'page' : undefined}
             onClick={onHeadClick}
             className={cn(
-              'flex min-w-0 flex-1 items-center rounded-l-md transition',
+              'flex min-w-0 flex-1 items-center rounded-l-md transition motion-reduce:transition-none',
               // The avatar is wider than an icon, so the account row centres it
               // on the icon column and closes the gap: the name then starts on
               // the same label column as every section above it.
@@ -172,16 +172,16 @@ export function RailSubmenuShell({
           </Link>
           <Collapsible.Trigger
             className={cn(
-              'flex shrink-0 items-center rounded-r-md px-2 transition [&[data-state=open]>svg]:rotate-90',
+              'flex shrink-0 items-center rounded-r-md px-2 transition motion-reduce:transition-none [&[data-state=open]>svg]:rotate-90',
               headHover,
             )}
             aria-label={open ? `Collapse ${chevronLabel} sections` : `Expand ${chevronLabel} sections`}
           >
-            <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200" />
+            <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200 motion-reduce:transition-none" />
           </Collapsible.Trigger>
         </div>
 
-        <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+        <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down motion-reduce:data-[state=closed]:animate-none motion-reduce:data-[state=open]:animate-none">
           <RailChildren>
             {children}
             {footer}
@@ -244,7 +244,7 @@ export function RailSubmenuRow({
           aria-label={label}
           aria-current={active ? 'page' : undefined}
           className={cn(
-            'flex min-w-0 items-center gap-2 rounded-md text-sm transition',
+            'flex min-w-0 items-center gap-2 rounded-md text-sm transition motion-reduce:transition-none',
             RAIL_CHILD_HEIGHT,
             RAIL_CHILD_INSET,
             railRowTone(active),
@@ -272,7 +272,7 @@ export function RailSubmenuRow({
           aria-label={label}
           aria-current={active ? 'page' : undefined}
           className={cn(
-            'relative flex min-w-0 items-center justify-center rounded-md transition',
+            'relative flex min-w-0 items-center justify-center rounded-md transition motion-reduce:transition-none',
             RAIL_CHILD_HEIGHT,
             railRowTone(active),
           )}
@@ -306,7 +306,7 @@ export function RailSubmenuLeaf({ to, label, active }: { to: string; label: stri
         aria-label={label}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'flex min-w-0 items-center rounded-md text-xs transition',
+          'flex min-w-0 items-center rounded-md text-xs transition motion-reduce:transition-none',
           RAIL_LEAF_HEIGHT,
           RAIL_LEAF_INSET,
           !active && 'text-muted-foreground',

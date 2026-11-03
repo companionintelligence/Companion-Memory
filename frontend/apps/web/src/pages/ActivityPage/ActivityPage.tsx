@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { Button } from '@ci/shadcn';
 
+import { PageContent } from '@/components/layout';
 import { WebSignInRequired } from '@/components/WebSignInRequired';
 
 import { ActivityRow } from './ActivityRow';
@@ -51,7 +52,7 @@ export function ActivityPage() {
 
   if (needsWebSignIn) {
     return (
-      <div className="flex flex-col gap-4 p-4">
+      <PageContent className="p-4 gap-4">
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold">Activity</h1>
           <p className="text-sm text-muted-foreground">
@@ -64,12 +65,12 @@ export function ActivityPage() {
           device key — which is all this app signs in with — is never allowed to read it. Open Companion
           Memory in a web browser and sign in to see it.
         </WebSignInRequired>
-      </div>
+      </PageContent>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <PageContent className="p-4 gap-4">
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold">Activity</h1>
         <p className="text-sm text-muted-foreground">
@@ -135,6 +136,6 @@ export function ActivityPage() {
           </Button>
         </div>
       )}
-    </div>
+    </PageContent>
   );
 }

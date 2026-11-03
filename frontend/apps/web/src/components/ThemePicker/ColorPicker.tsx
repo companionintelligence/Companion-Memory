@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useId, useState, useMemo, useEffect, useRef } from 'react';
 
 import { Button, Tabs, ScrollArea, Input, Label, Popover, IconButton, Tooltip } from '@ci/shadcn';
 import { Palette, Settings2, Sliders, RotateCcw, X, Download, Upload, Copy, Check } from '@ci/shadcn/icons';
@@ -33,6 +33,7 @@ function ColorSwatchEditor({
   const [localColor, setLocalColor] = useState(currentColor ?? '');
   const [isOpen, setIsOpen] = useState(false);
   const { t } = useTranslation();
+  const customColorId = useId();
 
   const handleInputChange = (value: string) => {
     setLocalColor(value);
@@ -61,7 +62,7 @@ function ColorSwatchEditor({
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <Popover.Trigger asChild>
-        <button className="group relative flex items-center gap-2 p-2 rounded-md border transition-all text-left w-full">
+        <button className="group relative flex items-center gap-2 p-2 rounded-md border transition-[color,background-color,border-color,box-shadow,opacity,transform] text-left w-full">
           <div
             className="w-6 h-6 rounded border border-border shrink-0"
             style={{ backgroundColor: currentColor ?? 'transparent' }}
@@ -106,8 +107,11 @@ function ColorSwatchEditor({
           </div>
 
           <div className="space-y-2">
-            <Label className="text-xs">Custom color (oklch, hsl, rgb, hex)</Label>
+            <Label htmlFor={customColorId} className="text-xs">
+              Custom color (oklch, hsl, rgb, hex)
+            </Label>
             <Input
+              id={customColorId}
               type="text"
               placeholder="oklch(0.5 0.1 250) or #ff0000"
               value={localColor}
@@ -257,7 +261,7 @@ export function ColorPicker() {
                   <button
                     onClick={() => handlePresetSelect(preset)}
                     className={`
-                        group relative aspect-square rounded-md border-2 transition-all
+                        group relative aspect-square rounded-md border-2 transition-[color,background-color,border-color,box-shadow,opacity,transform]
                         ${
                           isPresetSelected(preset)
                             ? 'border-primary ring-2 ring-primary/20'
@@ -415,9 +419,7 @@ export function ColorPicker() {
               <div className="space-y-4 pb-4">
                 {Object.entries(COLOR_VARIABLE_CATEGORIES).map(([category, variables]) => (
                   <div key={category} className="space-y-2">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      {category}
-                    </h4>
+                    <h4 className="text-xs font-medium text-muted-foreground">{category}</h4>
                     <div className="grid grid-cols-2 gap-2">
                       {variables.map((variable) => {
                         const typedVariable = variable as ThemeColorVariable;

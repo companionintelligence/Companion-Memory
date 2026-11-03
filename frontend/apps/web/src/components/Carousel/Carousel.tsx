@@ -145,7 +145,7 @@ export function Carousel({
             >
               <div
                 className={cn(
-                  'h-2 w-2 rounded-full transition-all duration-200',
+                  'h-2 w-2 rounded-full transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200',
                   index === selectedIndex ? 'bg-slate-800 scale-115' : 'bg-slate-300',
                 )}
               ></div>

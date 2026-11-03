@@ -34,7 +34,7 @@ export function Note({ note: noteMasked, onDelete }: Props) {
       >
         <div className="flex min-w-0 flex-1 flex-col gap-0.5 device:min-h-0 device:gap-2">
           <div className="truncate text-sm font-semibold device:text-base">
-            {note.title ?? 'Untitled Note'}
+            {note.title ?? 'Untitled note'}
           </div>
           <div className="line-clamp-1 text-sm leading-tight text-muted-foreground device:line-clamp-3 device:text-base device:text-foreground">
             {note.content ? parse(DOMPurify.sanitize(note.content)) : null}

@@ -372,7 +372,7 @@ export function OnboardingPage() {
                   <div
                     key={key}
                     className={cn(
-                      'h-1.5 w-1.5 rounded-full transition-all duration-500',
+                      'h-1.5 w-1.5 rounded-full transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-500',
                       i === stepIndex ? 'bg-foreground scale-125' : 'bg-muted-foreground/35',
                     )}
                   />

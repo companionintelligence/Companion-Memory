@@ -110,7 +110,7 @@ describe('NotesPage', () => {
       expect(
         screen.getByText('Your notes are still here — this device could not reach them just now.'),
       ).toBeInTheDocument();
-      expect(screen.queryByText("You don't have any notes yet.")).not.toBeInTheDocument();
+      expect(screen.queryByText('You don’t have any notes yet.')).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
@@ -122,7 +122,7 @@ describe('NotesPage', () => {
         mocks: [mockQuery(GET_NOTES, { first: PAGE_SIZE }, notesResult([]))],
       });
 
-      expect(await screen.findByText("You don't have any notes yet.")).toBeInTheDocument();
+      expect(await screen.findByText('You don’t have any notes yet.')).toBeInTheDocument();
       expect(screen.queryByText('Could not load notes')).not.toBeInTheDocument();
     });
   });
@@ -190,7 +190,7 @@ describe('NotesPage', () => {
         mocks: [mockQuery(GET_NOTES, { first: PAGE_SIZE }, notesResult([]))],
       });
 
-      expect(await screen.findByText("You don't have any notes yet.")).toBeInTheDocument();
+      expect(await screen.findByText('You don’t have any notes yet.')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /New note/ })).toBeInTheDocument();
     });
   });

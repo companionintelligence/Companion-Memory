@@ -45,7 +45,7 @@ function ThinkBlock({ content, renderEmptyContent = false, defaultExpanded = tru
       {/* Content */}
       <div
         className={cn(
-          'transition-all duration-200 ease-in-out overflow-hidden',
+          'transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200 ease-in-out overflow-hidden',
           isExpanded ? 'max-h-none opacity-100' : 'max-h-0 opacity-0',
         )}
       >

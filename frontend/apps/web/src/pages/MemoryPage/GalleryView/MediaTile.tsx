@@ -53,9 +53,7 @@ export function MediaTile({ media, onClick }: Props) {
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4">
               <Music className="h-10 w-10 text-muted-foreground" />
               <span className="line-clamp-2 text-center text-xs text-muted-foreground">{media.title}</span>
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                {providerLabel(embed.provider)}
-              </span>
+              <span className="text-[10px] text-muted-foreground/80">{providerLabel(embed.provider)}</span>
             </div>
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4">

@@ -500,7 +500,7 @@ export function OAuthSection() {
   return (
     <>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">OAuth Credentials</h2>
+        <h2 className="text-xl font-semibold">OAuth credentials</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Use your own OAuth app credentials for connecting to external providers.
         </p>

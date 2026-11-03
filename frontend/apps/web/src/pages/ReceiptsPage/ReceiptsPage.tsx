@@ -258,7 +258,7 @@ function RemoteReceiptsPage() {
                 data-testid="receipts-toolbar"
               >
                 <Input
-                  placeholder="Search by merchant..."
+                  placeholder="Search by merchant…"
                   value={merchantQuery}
                   onChange={(e) => {
                     setMerchantQuery(e.target.value);

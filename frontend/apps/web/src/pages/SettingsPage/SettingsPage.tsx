@@ -78,9 +78,7 @@ export function SettingsPage() {
 
           <ScrollArea className="w-60 flex-shrink-0 border-r border-border">
             <aside className="flex flex-col gap-1 p-4">
-              <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Settings
-              </p>
+              <p className="mb-2 px-3 text-xs font-semibold text-muted-foreground">Settings</p>
 
               {visibleSettingsSections().map((section) => {
                 const Icon = section.icon;
@@ -100,7 +98,7 @@ export function SettingsPage() {
 
               {/* GraphiQL is a full-page IDE served by the API, so it opens in a
                   new tab rather than inside the settings modal. Authenticate it
-                  with a key from the API Keys section above. The API serves it
+                  with a key from the API keys section above. The API serves it
                   only when `graphql.ide` is on (off in production by default),
                   so the link follows the flag rather than pointing at a 404. */}
               {isFeatureEnabled('graphql.ide') ? (

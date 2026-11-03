@@ -45,10 +45,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'location', label: 'Location', icon: MapPin },
   { id: 'safari', label: 'Safari', icon: Compass, iosOnly: true },
   { id: 'bluebubbles', label: 'BlueBubbles', icon: MessageCircle },
-  { id: 'mcp', label: 'MCP Servers', icon: Plug },
+  { id: 'mcp', label: 'MCP servers', icon: Plug },
   { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'api-keys', label: 'API Keys', icon: KeyRound },
-  { id: 'oauth', label: 'OAuth Credentials', icon: Key },
+  { id: 'api-keys', label: 'API keys', icon: KeyRound },
+  { id: 'oauth', label: 'OAuth credentials', icon: Key },
   { id: 'privacy', label: 'Privacy', icon: Lock },
   { id: 'data', label: 'Your data', icon: HardDrive },
 ];

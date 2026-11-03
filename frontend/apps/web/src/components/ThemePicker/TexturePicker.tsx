@@ -65,7 +65,7 @@ export function TexturePicker() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium">Surface Texture</h3>
+          <h3 className="text-sm font-medium">Surface texture</h3>
           <p className="text-xs text-muted-foreground">Hero-inspired SVG patterns</p>
         </div>
         <Button
@@ -93,7 +93,7 @@ export function TexturePicker() {
                 <button
                   onClick={() => setTexture(pattern.id)}
                   className={`
-                  group relative rounded-lg border p-2 text-left transition-all focus-visible:outline-none
+                  group relative rounded-lg border p-2 text-left transition-[color,background-color,border-color,box-shadow,opacity,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
                   ${
                     isSelected
                       ? 'border-primary ring-2 ring-primary/30'

@@ -531,7 +531,7 @@ function RawDataDetails({ data }: { data: unknown }) {
 
   return (
     <details className="rounded-xl border border-border/60 bg-card/45 shadow-sm backdrop-blur">
-      <summary className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-muted-foreground">
         Raw data
       </summary>
       <pre className="max-h-72 overflow-auto px-4 pb-4 text-xs leading-relaxed text-foreground/85">
@@ -777,7 +777,7 @@ export function EntityDetailScaffold({
             className={cn(
               'col-start-1 row-start-2 min-w-0 self-center text-xs text-muted-foreground sm:col-span-2',
               subtitleKind === 'label'
-                ? 'truncate font-medium uppercase tracking-wide'
+                ? 'truncate font-medium'
                 : 'line-clamp-2 break-words sm:line-clamp-none',
             )}
           >

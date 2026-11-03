@@ -132,7 +132,7 @@ function DetailSection({ title, items }: { title: string; items: DetailItem[] })
             key={item.label}
             className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0"
           >
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">{item.label}</span>
+            <span className="text-xs text-muted-foreground">{item.label}</span>
             <span className="min-w-0 break-words text-sm text-foreground/90">{item.value}</span>
           </div>
         ))}

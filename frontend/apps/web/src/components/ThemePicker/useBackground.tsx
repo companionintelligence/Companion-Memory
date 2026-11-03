@@ -102,7 +102,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'micro-dots',
-    name: 'Micro Dots',
+    name: 'Micro dots',
     description: 'Polka Dots',
     size: '48px 48px',
     build: ({ accent }, opacity) => {
@@ -123,7 +123,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'cross-hatch',
-    name: 'Cross Hatch',
+    name: 'Cross hatch',
     description: 'Tight grid.',
     size: '64px 64px',
     build: ({ contrast }, opacity) =>
@@ -136,7 +136,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'diagonal-lines',
-    name: 'Diagonal Lines',
+    name: 'Diagonal lines',
     description: 'Classic diagonal stripes.',
     size: '56px 56px',
     build: ({ accent }, opacity) =>
@@ -148,7 +148,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'overlapping-circles',
-    name: 'Overlapping Circles',
+    name: 'Overlapping circles',
     description: 'Concentric arcs',
     size: '96px 96px',
     build: ({ accent, muted }, opacity) =>
@@ -164,7 +164,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'isometric-cubes',
-    name: 'Isometric Cubes',
+    name: 'Isometric cubes',
     description: 'Geometric tessellation',
     size: '96px 96px',
     build: ({ contrast, accent }, opacity) =>
@@ -182,7 +182,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'contour-lines',
-    name: 'Contour Lines',
+    name: 'Contour lines',
     description: 'Organic waves',
     size: '160px 160px',
     build: ({ contrast }, opacity) =>
@@ -197,7 +197,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'corner-crosses',
-    name: 'Corner Crosses',
+    name: 'Corner crosses',
     description: 'Cross motifs',
     size: '40px 40px',
     build: ({ accent }, opacity) =>
@@ -215,7 +215,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: CONWAY_TEXTURE_ID,
-    name: "Conway's Life",
+    name: "Conway's life",
     description: 'Animated Game of Life seeded per page refresh.',
     size: `${CONWAY_PATTERN_PX}px ${CONWAY_PATTERN_PX}px`,
     repeat: 'repeat',

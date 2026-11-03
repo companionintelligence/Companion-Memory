@@ -47,7 +47,7 @@ const GET_EVENT_TYPES = gql(`
 `);
 
 const EXPAND_LABEL_BASE_CLASS =
-  'overflow-hidden text-ellipsis whitespace-nowrap transition-all duration-200 ease-out';
+  'overflow-hidden text-ellipsis whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200 ease-out';
 
 /** Collapsed to nothing until the pointer (or keyboard focus, or the open menu) asks for it. */
 const EXPAND_LABEL_HOVER_CLASS =

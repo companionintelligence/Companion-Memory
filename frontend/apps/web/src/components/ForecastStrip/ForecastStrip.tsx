@@ -266,7 +266,7 @@ function ForecastSlot({
       <Tooltip.Trigger asChild>
         <div
           className={cn(
-            'flex-1 h-8 cursor-default transition-all duration-100',
+            'flex-1 h-8 cursor-default transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-100',
             showClasses && 'hover:scale-y-[1.3] hover:z-10 relative',
             // Before the engine is READY there is no class to name, so the strip
             // stays on the theme colour rather than picking a hue at random.

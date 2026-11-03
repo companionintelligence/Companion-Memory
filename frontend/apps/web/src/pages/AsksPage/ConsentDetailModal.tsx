@@ -195,7 +195,7 @@ export function ConsentDetailModal({ record, onClose }: Props) {
 }
 
 function SectionHeading({ children }: { children: ReactNode }) {
-  return <h3 className="text-xs font-semibold tracking-wide uppercase">{children}</h3>;
+  return <h3 className="text-xs font-semibold ">{children}</h3>;
 }
 
 function Row({

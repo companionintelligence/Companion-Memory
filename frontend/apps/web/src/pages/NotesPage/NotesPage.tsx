@@ -130,7 +130,7 @@ export function RemoteNotesPage() {
         icon={<NoteIcon size={48} colorized={false} />}
         message={
           <>
-            <div>You don't have any notes yet.</div>
+            <div>You don’t have any notes yet.</div>
             <Link to="/notes/new">
               <Button>Create note</Button>
             </Link>

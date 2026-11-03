@@ -232,9 +232,7 @@ export function EntityMetaList({ items }: MetaListProps) {
     <div className="flex flex-col divide-y divide-border/50">
       {visible.map((item) => (
         <div key={item.label} className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0">
-          <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-            {item.label}
-          </span>
+          <span className="w-28 shrink-0 text-xs text-muted-foreground">{item.label}</span>
           <span className="min-w-0 break-words text-sm">{item.value}</span>
         </div>
       ))}

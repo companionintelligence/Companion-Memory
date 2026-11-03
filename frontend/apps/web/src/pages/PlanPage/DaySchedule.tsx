@@ -27,9 +27,7 @@ export function DaySchedule({ events, onEdit }: Props) {
   if (events.length === 0) {
     return (
       <section className="rounded-lg border border-dashed border-border px-4 py-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          On the calendar
-        </h2>
+        <h2 className="text-sm font-semibold text-muted-foreground">On the calendar</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Nothing on the calendar yet. Schedule a task below.
         </p>
@@ -41,7 +39,7 @@ export function DaySchedule({ events, onEdit }: Props) {
 
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+      <h2 className="text-sm font-semibold text-muted-foreground">
         On the calendar
         <span className="ml-2 font-normal">{sorted.length}</span>
       </h2>

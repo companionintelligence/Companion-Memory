@@ -200,7 +200,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
                 setError(null);
               }}
               disabled={loading}
-              className={`min-h-24 transition-all ${
+              className={`min-h-24 transition-[color,background-color,border-color,box-shadow,opacity,transform] ${
                 error
                   ? 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20'
                   : ''

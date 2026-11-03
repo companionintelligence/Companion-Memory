@@ -97,19 +97,19 @@ export function OccupancyHonestyPanel() {
         </p>
         <dl className="grid gap-2 sm:grid-cols-2">
           <div>
-            <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Counted</dt>
+            <dt className="text-[10px] text-muted-foreground">Counted</dt>
             <dd>The salient L0 + L1 in each 15-minute bucket</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Not counted</dt>
+            <dt className="text-[10px] text-muted-foreground">Not counted</dt>
             <dd>Ambient names on the week forecast; song titles as life labels</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Day kernel</dt>
+            <dt className="text-[10px] text-muted-foreground">Day kernel</dt>
             <dd>Recency × weekday × month × coverage — weights days, not labels</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Summary fill</dt>
+            <dt className="text-[10px] text-muted-foreground">Summary fill</dt>
             <dd>Gap tokens at 0.7, only where no event already sits</dd>
           </div>
         </dl>
@@ -140,7 +140,7 @@ export function BranchTexturePanel({ buckets, nowMs }: { buckets: ForecastBucket
       </Card.Header>
       <Card.Content className="flex flex-col gap-4">
         <div>
-          <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="mb-2 text-[10px] text-muted-foreground">
             Branch · L0
             {pick.ready ? ` · committed ${pick.branch}` : ' · not ready'}
           </div>
@@ -166,7 +166,7 @@ export function BranchTexturePanel({ buckets, nowMs }: { buckets: ForecastBucket
         </div>
         {pick.permutations.length > 0 && (
           <div>
-            <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <div className="mb-2 text-[10px] text-muted-foreground">
               Permutations · L1
               {pick.texture ? ` · ${pick.texture}` : ' · still mixed'}
             </div>
@@ -555,9 +555,9 @@ export function DivergenceHeatmapPanel({
                 <>
                   <div />
                   <div className="flex items-center gap-2 py-0.5" role="separator">
-                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground">observed</span>
+                    <span className="text-[9px] text-muted-foreground">observed</span>
                     <div className="flex-1 border-t border-dashed border-border" />
-                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground">forecast</span>
+                    <span className="text-[9px] text-muted-foreground">forecast</span>
                   </div>
                 </>
               )}

@@ -62,7 +62,7 @@ describe('ForecastPage — off vs unreachable', () => {
 
     renderWithProviders(<ForecastPage />);
 
-    expect(screen.getByText(/Couldn't reach the forecasting service/)).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t reach the forecasting service/)).toBeInTheDocument();
     expect(screen.queryByText('Forecast is off for this workspace.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Add → Predict/)).not.toBeInTheDocument();
   });

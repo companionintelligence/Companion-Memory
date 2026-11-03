@@ -1045,7 +1045,7 @@ function RemotePlacesPage() {
                     {isMobile && (
                       <div
                         data-testid="mobile-map-attribution"
-                        className="px-1 pt-1 text-[10px] leading-tight text-muted-foreground/60"
+                        className="px-1 pt-1 text-[10px] leading-tight text-muted-foreground"
                       >
                         <a
                           href="https://leafletjs.com"

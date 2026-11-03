@@ -45,7 +45,12 @@ export function ThemeToggle() {
   };
 
   return (
-    <IconButton variant="ghost" onClick={handleToggle} label={getTooltipText()}>
+    <IconButton
+      variant="ghost"
+      onClick={handleToggle}
+      label={getTooltipText()}
+      className="max-device:size-11"
+    >
       {getIcon()}
     </IconButton>
   );

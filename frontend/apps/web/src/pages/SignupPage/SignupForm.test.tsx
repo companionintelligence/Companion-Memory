@@ -157,7 +157,7 @@ describe('SignupForm signup code requirement', () => {
 
     render(<SignupForm />);
 
-    expect(screen.getByLabelText('Signup Code')).toBeInTheDocument();
+    expect(screen.getByLabelText('Signup code')).toBeInTheDocument();
   });
 
   it('hides the signup code field when the appliance does not require one', () => {
@@ -166,7 +166,7 @@ describe('SignupForm signup code requirement', () => {
 
     render(<SignupForm />);
 
-    expect(screen.queryByLabelText('Signup Code')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Signup code')).not.toBeInTheDocument();
   });
 
   it('maps a signup_code issue onto its own field once the field exists, instead of the alert', async () => {

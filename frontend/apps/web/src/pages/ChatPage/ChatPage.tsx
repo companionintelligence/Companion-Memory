@@ -439,12 +439,12 @@ function ChatPageContent() {
       // The ten starters overflow a phone viewport, so this column scrolls on
       // its own rather than pushing the composer off screen. `min-h-0` lets it
       // shrink below its content height inside Chat's centred flex column.
-      <div className="flex min-h-0 w-full max-w-xl flex-col items-center overflow-y-auto px-2 text-gray-500">
-        <div className="mb-4 mx-auto flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-stone-100">
-          <Send className="relative -left-0.5 top-0.5 h-8 w-8 text-zinc-400" />
+      <div className="flex min-h-0 w-full max-w-xl flex-col items-center overflow-y-auto px-2 text-muted-foreground">
+        <div className="mb-4 mx-auto flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-muted">
+          <Send className="relative -left-0.5 top-0.5 h-8 w-8 text-muted-foreground" />
         </div>
         <p className="mb-1 text-sm">Start a conversation with your Companion</p>
-        <p className="mb-4 text-xs text-gray-400">Ask about {topics} — or attach a file</p>
+        <p className="mb-4 text-xs text-muted-foreground">Ask about {topics} — or attach a file</p>
 
         <ul aria-label="Suggested asks" className="w-full space-y-1.5 pb-1 text-left">
           {starterPrompts.map((prompt) => (

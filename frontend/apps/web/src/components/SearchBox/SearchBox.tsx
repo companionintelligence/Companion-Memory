@@ -888,6 +888,7 @@ function SearchBox(
                       }
                     }}
                     placeholder={placeholder}
+                    aria-label={placeholder}
                     disabled={disabled}
                     onKeyDown={handleKeyDown}
                     onFocus={() => {

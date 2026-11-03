@@ -226,7 +226,7 @@ export function DeadLettersCard({ groups, total, loading, error, onReplay }: Pro
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] border-collapse text-sm">
                 <thead>
-                  <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
+                  <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
                     <th scope="col" className="w-8 py-1.5" />
                     <th scope="col" className="py-1.5 pr-3 font-medium">
                       Error

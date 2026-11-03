@@ -33,7 +33,7 @@ export function InsightCard({ insight, onClick, onDismiss, isSeen = false, class
 
   const description = (
     <div className="flex flex-col gap-3">
-      <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+      <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
         <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">Insight</span>
         {data.relevanceScore > 0.8 && (
           <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">
@@ -51,7 +51,7 @@ export function InsightCard({ insight, onClick, onDismiss, isSeen = false, class
 
       {data.keyActions && data.keyActions.length > 0 && (
         <div className="mt-1">
-          <div className="text-xs font-medium text-muted-foreground mb-1.5 uppercase">Suggested Actions</div>
+          <div className="text-xs font-medium text-muted-foreground mb-1.5 ">Suggested Actions</div>
           <ul className="space-y-2">
             {data.keyActions.map((action, idx) => (
               <li key={idx} className="flex items-start gap-2 text-sm text-foreground/90">

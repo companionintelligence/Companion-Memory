@@ -489,7 +489,7 @@ export function ServiceIntegrationsSection({
             <li>
               With the OAuth app&apos;s ID/Client ID and Secret in hand, go to{' '}
               <a href="/settings/oauth" className="underline text-blue-600 hover:text-blue-800">
-                Settings → OAuth Credentials
+                Settings → OAuth credentials
               </a>{' '}
               in this app, and copy the app&apos;s ID/Client ID to the &apos;Client ID&apos; field for that
               provider, and the app&apos;s secret to &apos;Client Secret&apos; field. Make sure to save. Then

@@ -100,7 +100,7 @@ describe('ServiceIntegrationsSection', () => {
  * talks to a signal-cli REST API on the appliance's own network, so there is no
  * cloud proxy to use — and it authenticates with an API key, which the provider
  * page asks for. Tapping it opened "Signal — OAuth Setup" with a callback URL and
- * a Settings → OAuth Credentials step for a service that has no OAuth at all.
+ * a Settings → OAuth credentials step for a service that has no OAuth at all.
  */
 describe('ServiceIntegrationsSection provider cards', () => {
   const SIGNAL_ID = '019e3d77-c6e3-8f14-da06-2b5f7c0e1d19';

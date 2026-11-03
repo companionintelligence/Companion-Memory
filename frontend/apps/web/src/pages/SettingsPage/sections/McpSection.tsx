@@ -1101,7 +1101,7 @@ export function McpSection() {
     return (
       <>
         <div className="mb-6">
-          <h2 className="text-xl font-semibold">MCP Servers</h2>
+          <h2 className="text-xl font-semibold">MCP servers</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Connect Model Context Protocol servers to give the assistant more tools.
           </p>
@@ -1119,7 +1119,7 @@ export function McpSection() {
   return (
     <>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">MCP Servers</h2>
+        <h2 className="text-xl font-semibold">MCP servers</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Connect Model Context Protocol servers to give the assistant more tools.
         </p>
@@ -1192,7 +1192,7 @@ export function McpSection() {
                         <div className="min-w-0 flex-1 space-y-1.5">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium truncate">{server.name}</span>
-                            <Badge variant="outline" className="text-xs uppercase">
+                            <Badge variant="outline" className="text-xs ">
                               {server.transport}
                             </Badge>
                             {isFromCatalog(server) && (

@@ -258,9 +258,7 @@ export function JobHealthCard({
                     value === 0 && 'text-muted-foreground',
                   )}
                 >
-                  <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
-                    {tile.label}
-                  </span>
+                  <span className="block text-[11px] text-muted-foreground">{tile.label}</span>
                   <span className="mt-0.5 block text-base font-semibold tabular-nums">
                     {value.toLocaleString()}
                   </span>

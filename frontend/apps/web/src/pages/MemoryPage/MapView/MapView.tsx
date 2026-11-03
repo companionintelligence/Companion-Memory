@@ -1124,7 +1124,7 @@ function MapStatusOverlay({
                 ? 'The map only shows memories that carry coordinates. Try widening the dates, clearing a filter, or clearing the searched area.'
                 : 'Memories appear here once something you import carries a location — a photo with GPS, a place visit, a calendar entry with an address.'
             }
-            icon={filtered ? '🔍' : '🗺️'}
+            icon={filtered ? SearchIcon : MapPin}
           />
         )}
       </div>

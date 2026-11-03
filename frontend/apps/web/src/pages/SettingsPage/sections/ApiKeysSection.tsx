@@ -427,7 +427,7 @@ export function ApiKeysSection() {
     return (
       <>
         <div className="mb-6">
-          <h2 className="text-xl font-semibold">API Keys</h2>
+          <h2 className="text-xl font-semibold">API keys</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Create keys to grant other applications access to your account.
           </p>
@@ -446,7 +446,7 @@ export function ApiKeysSection() {
     <>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold">API Keys</h2>
+          <h2 className="text-xl font-semibold">API keys</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Create keys to grant other applications access to your account.
           </p>
