@@ -17,12 +17,11 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-deep-link = "2"
-# UNMERGED DEPENDENCY. tauri-plugin-ci-auth lives on CI-Common branch
-# feat/native-tauri-auth-plugin (commit a1eb3c6f), which is not merged or pushed. This path
-# points at that branch's worktree on this machine and only resolves there. Repoint it at the
-# merged CI-Common location (or a git dependency pinned to the merged commit) once it lands.
-# Its exact `tauri = "=2.12.4"` pin also moves this crate's tauri from 2.12.5 to 2.12.4.
-tauri-plugin-ci-auth = { path = "../../../../../CI-Common-tauri-auth/packages/tauri-plugin-ci-auth" }
+# VENDORED, UNMERGED. tauri-plugin-ci-auth is a copy of CI-Common branch
+# feat/native-tauri-auth-plugin at commit 4c6a9877, which is not merged. Provenance and the
+# re-vendor rule are in vendor/README.md. Its exact pins (`tauri = "=2.12.5"`,
+# `tauri-build = "=2.7.4"`) match this crate's, so the desktop lock keeps the same Tauri.
+tauri-plugin-ci-auth = { path = "vendor/tauri-plugin-ci-auth" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "stream"] }

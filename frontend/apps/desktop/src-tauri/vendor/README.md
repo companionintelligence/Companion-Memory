@@ -11,3 +11,19 @@ the original `Cargo.lock` checksum. The sole source change is the upstream
 
 Remove this patch and vendor copy when the GTK/Tauri dependency chain can use
 glib 0.20 or later.
+
+## tauri-plugin-ci-auth
+
+`tauri-plugin-ci-auth/` is vendored, unmerged, from the CI-Common branch
+`feat/native-tauri-auth-plugin` at commit `4c6a9877`, tree
+`18993424128caee9777b107bc73a216c2b50e967` (`packages/tauri-plugin-ci-auth`). The copy is the
+committed tree with no local edits, so it stays byte-identical to CI-Common at that commit. The
+desktop device key uses its `secure_get`, `secure_set` and `secure_remove` commands (see
+`frontend/packages/common/src/utils/nativeBridge.ts`).
+
+Its pins are `tauri = "=2.12.5"` and `tauri-build = "=2.7.4"`, the versions this app already
+resolves. Move them together with the Companion Hub's pins: bump `tauri` and `tauri-build` in the
+plugin and in this crate's `Cargo.toml` in the same change.
+
+Re-vendor from the merged CI-Common commit (or a tag) when the branch lands, and remove this copy
+at that point.
