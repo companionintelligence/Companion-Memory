@@ -28,10 +28,10 @@
     "offline"
   ],
   "peerDependencies": {
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^8.6.0"
   },
   "devDependencies": {
-    "@capacitor/core": "^7.0.0",
+    "@capacitor/core": "^8.6.0",
     "typescript": "^5.8.3"
   },
   "capacitor": {
