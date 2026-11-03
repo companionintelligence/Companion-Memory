@@ -772,8 +772,8 @@ function useAuth(): ReturnValue {
     await disconnectAndClearPowerSyncForLogout();
 
     if (isTauriPlatform()) {
-      // The desktop keeps its key in this page's storage; a revoked key left there
-      // would only be read back as a credential that no longer works.
+      // The desktop keeps its key in the OS keychain (tauri-plugin-ci-auth); a revoked key
+      // left there would only be read back as a credential that no longer works.
       await removeStoredDeviceKey();
     }
 
