@@ -42,7 +42,7 @@ class SqliteReplicaDriftTest {
         val theirs = RepoFiles.read("frontend/apps/android/node_modules/@capacitor-community/sqlite/android/build.gradle")
         val ours = RepoFiles.read("frontend/packages/capacitor-local-llm/android/build.gradle")
 
-        for (pin in listOf("net.zetetic:sqlcipher-android:4.10.0@aar", "androidx.sqlite:sqlite:2.4.0", "androidx.security:security-crypto:1.1.0-alpha06")) {
+        for (pin in listOf("net.zetetic:sqlcipher-android:4.17.0@aar", "androidx.sqlite:sqlite:2.4.0", "androidx.security:security-crypto:1.1.0-alpha06")) {
             assertTrue("the SQLite plugin no longer pins $pin", theirs.contains(pin))
             assertTrue("this module does not pin $pin", ours.contains(pin))
         }
