@@ -40,6 +40,32 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Tailwind 4.3 calls module.registerHooks. Node then passes `conditions` on
+      # every require() and Yarn 4.9.1's PnP refuses it, so the web app can't
+      # build at all. Lift this with a Yarn upgrade or by preloading
+      # scripts/pnp-tsx-compat.cjs for vite.
+      - dependency-name: "tailwindcss"
+        versions: [">=4.3.0"]
+      - dependency-name: "@tailwindcss/vite"
+        versions: [">=4.3.0"]
+      # 0.6 and 0.7 need Capacitor 8 on the web app. 0.8+ also need @powersync/web
+      # 2.x. frontend/apps/web/src/api/powersync/nativeDatabase.ts carries a copy of
+      # 0.5.3's init(), so that upgrade has to be done on purpose, with that copy
+      # re-read (nativeDatabase.drift.node.test.ts).
+      - dependency-name: "@powersync/capacitor"
+        versions: [">=0.6.0"]
+      # The PowerSync 2.x line. @powersync/capacitor 0.5.3 declares @powersync/web
+      # ^1.38.0 and attachments 3.x declares @powersync/common ^2.0.0, so these
+      # move together with the upgrade above.
+      - dependency-name: "@powersync/web"
+        versions: [">=2.0.0"]
+      - dependency-name: "@powersync/common"
+        versions: [">=2.0.0"]
+      - dependency-name: "@powersync/react"
+        versions: [">=2.0.0"]
+      - dependency-name: "@powersync/attachments"
+        versions: [">=3.0.0"]
     groups:
       minor-patch:
         update-types:
@@ -59,6 +85,11 @@ updates:
     directory: "/frontend/apps/ios"
     schedule:
       interval: "weekly"
+    ignore:
+      # The web bundle runs @powersync/capacitor 0.5.3's JS on this native plugin.
+      # That pairing was only compared against 0.9.4's native code.
+      - dependency-name: "@powersync/capacitor"
+        versions: [">=0.10.0"]
     groups:
       minor-patch:
         update-types:
@@ -77,6 +108,11 @@ updates:
     directory: "/frontend/apps/android"
     schedule:
       interval: "weekly"
+    ignore:
+      # The web bundle runs @powersync/capacitor 0.5.3's JS on this native plugin.
+      # That pairing was only compared against 0.9.4's native code.
+      - dependency-name: "@powersync/capacitor"
+        versions: [">=0.10.0"]
     groups:
       minor-patch:
         update-types:
