@@ -445,7 +445,12 @@ describe('EmbeddingGenerationService', () => {
         const inputs = JSON.parse(String(init.body)).input as string[];
 
         return inputs.some((text) => text.length > 4000)
-          ? { status: 400, body: { error: 'input (2286 tokens) is larger than the max context size (2048 tokens). skipping' } }
+          ? {
+              status: 400,
+              body: {
+                error: 'input (2286 tokens) is larger than the max context size (2048 tokens). skipping',
+              },
+            }
           : { status: 200, body: { data: [{ index: 0, embedding: [1] }] } };
       });
 
