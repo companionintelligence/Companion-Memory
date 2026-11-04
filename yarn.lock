@@ -2416,38 +2416,38 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@capacitor-community/sqlite@npm:^7.0.1":
-  version: 7.0.3
-  resolution: "@capacitor-community/sqlite@npm:7.0.3"
+"@capacitor-community/sqlite@npm:^8.1.1":
+  version: 8.1.1
+  resolution: "@capacitor-community/sqlite@npm:8.1.1"
   dependencies:
     jeep-sqlite: "npm:^2.7.2"
   peerDependencies:
-    "@capacitor/core": ">=7.0.0"
-  checksum: 10c0/fb81677d80a53e6c3e283c09f3d5d4442f8d1988adf1b5bf7a6066cc34bb8c4151ab34c529549d7124ecc1c750867a663bef8b4e70d846943d9f4ead53219e33
+    "@capacitor/core": ">=8.0.0"
+  checksum: 10c0/9f1cf3afb6d23b8a24ab5702e318e6f94d72e9cc8d4f297482670396047227f1c7af40b344724ab2f5b6e41eb3756bc6111a9a83620597186adc1da44d16072b
   languageName: node
   linkType: hard
 
-"@capacitor/core@npm:^7.0.0":
-  version: 7.6.8
-  resolution: "@capacitor/core@npm:7.6.8"
+"@capacitor/core@npm:^8.6.0":
+  version: 8.6.0
+  resolution: "@capacitor/core@npm:8.6.0"
   dependencies:
     tslib: "npm:^2.1.0"
-  checksum: 10c0/d3567623eff2288415473d4204b193f6774cfd56d19e75db967c71044b6574ca8e40d61d6605be393cf4e7619bae44a7ae19f83c42f0ee7bdd86bfb62fe54118
+  checksum: 10c0/3ebe05bb0e7b32111ac549c97b583a253127794094fc10179940c6abb01a0e4ca03e6ab909e0f35eeedf9efa2e9f4f80d8179da4efce245845748716a638a21d
   languageName: node
   linkType: hard
 
-"@capacitor/filesystem@npm:7.1.9":
-  version: 7.1.9
-  resolution: "@capacitor/filesystem@npm:7.1.9"
+"@capacitor/filesystem@npm:8.1.5":
+  version: 8.1.5
+  resolution: "@capacitor/filesystem@npm:8.1.5"
   dependencies:
-    "@capacitor/synapse": "npm:^1.0.3"
+    "@capacitor/synapse": "npm:^1.0.4"
   peerDependencies:
-    "@capacitor/core": ">=7.0.0"
-  checksum: 10c0/96fa2480b6b3b2d875bb8155fbdf3ffb2587a1b3475f7c4660029268692f8b9ff23457351638ca8d44295df62c252cb227d2cbd05979fc708598ef8e2d5cb1d9
+    "@capacitor/core": ">=8.0.0"
+  checksum: 10c0/27853ac5bdc32d5d1b15e75b6b4adafc299d9f7999be2fc3a736f520d199b3b5716ebcf9ea329ded4616b1da60b31c85713eff8ea534caa833f693688d366954
   languageName: node
   linkType: hard
 
-"@capacitor/synapse@npm:^1.0.3":
+"@capacitor/synapse@npm:^1.0.4":
   version: 1.0.4
   resolution: "@capacitor/synapse@npm:1.0.4"
   checksum: 10c0/83f37d06ebdb4234596f123417043aae8b0fd3b5905d399fe8bb7f1d7c3352c8449bef093793b01a0b3c4a59208ac27aec5b1ed7cf5e399c5c3004cc0ca74646
@@ -2577,10 +2577,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-app-lock@workspace:frontend/packages/capacitor-app-lock"
   dependencies:
-    "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/core": "npm:^8.6.0"
     typescript: "npm:^5.8.3"
   peerDependencies:
-    "@capacitor/core": ^7.0.0
+    "@capacitor/core": ^8.6.0
   languageName: unknown
   linkType: soft
 
@@ -2588,10 +2588,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-hub@workspace:frontend/packages/capacitor-local-hub"
   dependencies:
-    "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/core": "npm:^8.6.0"
     typescript: "npm:^5.8.3"
   peerDependencies:
-    "@capacitor/core": ^7.0.0
+    "@capacitor/core": ^8.6.0
   languageName: unknown
   linkType: soft
 
@@ -2599,10 +2599,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-llm@workspace:frontend/packages/capacitor-local-llm"
   dependencies:
-    "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/core": "npm:^8.6.0"
     typescript: "npm:^5.8.3"
   peerDependencies:
-    "@capacitor/core": ^7.0.0
+    "@capacitor/core": ^8.6.0
   languageName: unknown
   linkType: soft
 
@@ -2610,10 +2610,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-speech@workspace:frontend/packages/capacitor-speech"
   dependencies:
-    "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/core": "npm:^8.6.0"
     typescript: "npm:^5.8.3"
   peerDependencies:
-    "@capacitor/core": ^7.0.0
+    "@capacitor/core": ^8.6.0
   languageName: unknown
   linkType: soft
 
@@ -2734,9 +2734,9 @@ __metadata:
   resolution: "@ci/fe-web@workspace:frontend/apps/web"
   dependencies:
     "@apollo/client": "npm:^3.11.0"
-    "@capacitor-community/sqlite": "npm:^7.0.1"
-    "@capacitor/core": "npm:^7.0.0"
-    "@capacitor/filesystem": "npm:7.1.9"
+    "@capacitor-community/sqlite": "npm:^8.1.1"
+    "@capacitor/core": "npm:^8.6.0"
+    "@capacitor/filesystem": "npm:8.1.5"
     "@ci/capture": "workspace:*"
     "@ci/common": "workspace:*"
     "@ci/editor": "workspace:*"

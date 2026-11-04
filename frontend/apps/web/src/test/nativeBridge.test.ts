@@ -72,6 +72,146 @@ describe('nativeBridge — web (no Capacitor) falls back to localStorage', () =>
   });
 });
 
+describe('nativeBridge — desktop (Tauri) keeps secure values in the OS keychain', () => {
+  /**
+   * A fake Tauri window. `keychain` stands in for the plugin's store, which the `secure_*`
+   * commands read and write; `store` is the webview's localStorage. `refuse` names commands the
+   * keychain rejects, the way a locked or missing Secret Service does.
+   */
+  function fakeTauriWindow(refuse: string[] = []) {
+    const keychain = new Map<string, string>();
+    const store = new Map<string, string>();
+
+    const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+      if (refuse.includes(command)) {
+        throw new Error('secure_store_unavailable');
+      }
+
+      const key = args?.key as string;
+
+      switch (command) {
+        case 'plugin:ci-auth|secure_get':
+          return { value: keychain.get(key) ?? null };
+        case 'plugin:ci-auth|secure_set':
+          keychain.set(key, args?.value as string);
+
+          return null;
+        case 'plugin:ci-auth|secure_remove':
+          keychain.delete(key);
+
+          return null;
+        default:
+          throw new Error(`unexpected command ${command}`);
+      }
+    });
+
+    const win = {
+      __TAURI_INTERNALS__: { invoke },
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+        removeItem: (key: string) => {
+          store.delete(key);
+        },
+      },
+    };
+
+    return { win, keychain, store, invoke };
+  }
+
+  it('set writes the keychain under the Memory namespace and never to localStorage', async () => {
+    const { win, keychain, store, invoke } = fakeTauriWindow();
+    setWindow(win);
+
+    await secureStorageSet('ci.apiKey', 'device-key');
+
+    expect(keychain.get('memory:ci.apiKey')).toBe('device-key');
+    expect(keychain.has('ci.apiKey')).toBe(false);
+    expect(store.has('ci.apiKey')).toBe(false);
+    expect(invoke).toHaveBeenCalledWith('plugin:ci-auth|secure_set', {
+      key: 'memory:ci.apiKey',
+      value: 'device-key',
+    });
+  });
+
+  it('get reads the keychain copy back', async () => {
+    const { win, keychain } = fakeTauriWindow();
+    keychain.set('memory:ci.apiKey', 'device-key');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKey')).toBe('device-key');
+  });
+
+  it('remove clears the keychain copy and any legacy localStorage copy', async () => {
+    const { win, keychain, store } = fakeTauriWindow();
+    keychain.set('memory:ci.apiKey', 'device-key');
+    store.set('ci.apiKey', 'old-key');
+    setWindow(win);
+
+    await secureStorageRemove('ci.apiKey');
+
+    expect(keychain.has('memory:ci.apiKey')).toBe(false);
+    expect(store.has('ci.apiKey')).toBe(false);
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+  });
+
+  it('moves a localStorage value from an earlier build into the keychain on first read', async () => {
+    const { win, keychain, store } = fakeTauriWindow();
+    store.set('ci.apiKey', 'legacy-key');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKey')).toBe('legacy-key');
+
+    expect(keychain.get('memory:ci.apiKey')).toBe('legacy-key');
+    expect(store.has('ci.apiKey')).toBe(false);
+  });
+
+  it('a keychain that refuses the read reads as no value and never hands back the legacy copy', async () => {
+    const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_get']);
+    store.set('ci.apiKey', 'legacy-key');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+
+    expect(keychain.size).toBe(0);
+    expect(store.get('ci.apiKey')).toBe('legacy-key');
+  });
+
+  it('a failed migration write returns no value and leaves the legacy copy for the next launch', async () => {
+    const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_set']);
+    store.set('ci.apiKey', 'legacy-key');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+
+    expect(keychain.size).toBe(0);
+    expect(store.get('ci.apiKey')).toBe('legacy-key');
+  });
+
+  it('a refused write rejects and stores the value nowhere else', async () => {
+    const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_set']);
+    setWindow(win);
+
+    await expect(secureStorageSet('ci.apiKey', 'device-key')).rejects.toThrow('secure_store_unavailable');
+
+    expect(keychain.size).toBe(0);
+    expect(store.size).toBe(0);
+  });
+
+  it('a refused delete does not throw, and the legacy localStorage copy is still cleared', async () => {
+    const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_remove']);
+    keychain.set('memory:ci.apiKey', 'device-key');
+    store.set('ci.apiKey', 'old-key');
+    setWindow(win);
+
+    await expect(secureStorageRemove('ci.apiKey')).resolves.toBeUndefined();
+
+    expect(store.has('ci.apiKey')).toBe(false);
+  });
+});
+
 describe('nativeBridge — native uses the Capacitor plugins', () => {
   function fakeNativeWindow() {
     const secureStore = new Map<string, string>();

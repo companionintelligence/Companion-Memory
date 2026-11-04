@@ -1864,10 +1864,27 @@ describe('useAuth', () => {
   });
 
   it('desktop logout revokes the stored key even though it was never loaded back into memory', async () => {
-    // The desktop app keeps its key in this page's storage and does not load it on start, so
-    // after a restart only the stored copy knows which key this device holds.
+    // The desktop app keeps its key in the OS keychain and does not load it on start, so after a
+    // restart only the stored copy knows which key this device holds. An earlier build left that
+    // copy in localStorage: signing out moves it into the keychain, then revokes it.
+    const keychain = new Map<string, string>();
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: vi.fn(async () => null),
+      invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+        switch (command) {
+          case 'plugin:ci-auth|secure_get':
+            return { value: keychain.get(args?.key ?? '') ?? null };
+          case 'plugin:ci-auth|secure_set':
+            keychain.set(args?.key ?? '', args?.value ?? '');
+
+            return null;
+          case 'plugin:ci-auth|secure_remove':
+            keychain.delete(args?.key ?? '');
+
+            return null;
+          default:
+            return null;
+        }
+      }),
     };
     localStorage.setItem('ci.apiKey', 'desktop-stored-key');
     const fetchMock = setFetch(() => emptyResponse(true, 204));
@@ -1884,6 +1901,7 @@ describe('useAuth', () => {
       expect(revoke?.[1]?.method).toBe('DELETE');
       expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'desktop-stored-key' });
       expect(localStorage.getItem('ci.apiKey')).toBeNull();
+      expect(keychain.has('memory:ci.apiKey')).toBe(false);
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       localStorage.removeItem('ci.apiKey');

@@ -325,6 +325,9 @@ fn main() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        // OS keychain for the web app's device key (`secure_get` / `secure_set` /
+        // `secure_remove`, granted to the remote origin in capabilities/remote-device-key.json).
+        .plugin(tauri_plugin_ci_auth::init())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
             let data_dir = app.path().app_data_dir()?;

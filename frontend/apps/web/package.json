@@ -23,9 +23,9 @@
   "packageManager": "yarn@4.9.1",
   "dependencies": {
     "@apollo/client": "^3.11.0",
-    "@capacitor-community/sqlite": "^7.0.1",
-    "@capacitor/core": "^7.0.0",
-    "@capacitor/filesystem": "7.1.9",
+    "@capacitor-community/sqlite": "^8.1.1",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/filesystem": "8.1.5",
     "@ci/capture": "workspace:*",
     "@ci/common": "workspace:*",
     "@ci/editor": "workspace:*",

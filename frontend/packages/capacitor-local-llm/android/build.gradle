@@ -115,7 +115,7 @@ dependencies {
     // SQLCipher-encrypted by @capacitor-community/sqlite, whose key sits in an AndroidX
     // EncryptedSharedPreferences file. Both pins match that plugin's android/build.gradle exactly,
     // so the two modules share one copy of each library in the app.
-    implementation 'net.zetetic:sqlcipher-android:4.10.0@aar'
+    implementation 'net.zetetic:sqlcipher-android:4.17.0@aar'
     implementation 'androidx.sqlite:sqlite:2.4.0'
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
