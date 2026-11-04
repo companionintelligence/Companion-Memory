@@ -16,12 +16,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@capacitor-mlkit/barcode-scanning@npm:^8.2.1":
-  version: 8.2.1
-  resolution: "@capacitor-mlkit/barcode-scanning@npm:8.2.1"
+"@capacitor-mlkit/barcode-scanning@npm:^8.2.2":
+  version: 8.2.2
+  resolution: "@capacitor-mlkit/barcode-scanning@npm:8.2.2"
   peerDependencies:
     "@capacitor/core": ">=8.0.0"
-  checksum: 10c0/23098288f83ff0f6724ce1fce53a5adf49f5cc263626764f694189f94da4a91b50eb40e48ad23c4c29b86a24ccccb5a5618e2cd42362b0a4a3609f25792a14a6
+  checksum: 10c0/6963e53a347bfdde1ef7863b0ffa52a370c78ea328a792f576941803c5027f909e74104b05108385b84e17ba1c005c141a9f5d40ae93afee520ddbdb4eb11fdf
   languageName: node
   linkType: hard
 
@@ -199,7 +199,7 @@ __metadata:
   resolution: "@ci/fe-android@workspace:."
   dependencies:
     "@capacitor-community/sqlite": "npm:^8.1.1"
-    "@capacitor-mlkit/barcode-scanning": "npm:^8.2.1"
+    "@capacitor-mlkit/barcode-scanning": "npm:^8.2.2"
     "@capacitor/android": "npm:^8.6.0"
     "@capacitor/app": "npm:^8.1.2"
     "@capacitor/browser": "npm:^8.0.5"
