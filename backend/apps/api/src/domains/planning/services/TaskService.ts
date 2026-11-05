@@ -177,6 +177,10 @@ export class TaskService {
   }
 
   async findByIds(context: UserServiceContext, ids: string[]): Promise<(Task | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const results = await this.taskRepository.find({
       where: { id: In(ids), userId: context.userId },
     });

@@ -617,6 +617,10 @@ export class CommunicationService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Communication | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.communicationRepository.find({
       where: {
         id: In(ids),

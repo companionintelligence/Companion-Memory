@@ -1389,6 +1389,10 @@ export class PlaceService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Place | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.placeRepository.find({
       where: {
         id: In(ids),

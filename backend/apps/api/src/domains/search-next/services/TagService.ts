@@ -128,6 +128,10 @@ export class TagService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Tag | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const entities = await this.tagRepository.find({
       where: {
         id: In(ids),

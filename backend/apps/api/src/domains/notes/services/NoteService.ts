@@ -328,6 +328,10 @@ export class NoteService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Note | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const results = await this.noteRepository.find({
       where: {
         id: In(ids),

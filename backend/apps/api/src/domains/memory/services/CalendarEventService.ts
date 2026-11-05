@@ -2336,6 +2336,10 @@ export class CalendarEventService {
    * disappears immediately rather than waiting on the async un-index.
    */
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Event | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.eventRepository.find({
       where: {
         id: In(ids),
