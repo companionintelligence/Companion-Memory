@@ -29,7 +29,9 @@ from ci.hbpe.tokenizer.vocab_registry import (
     get_or_create_l2,
     normalise_l0,
     write_content_label,
+    write_content_labels,
     write_event_label,
+    write_event_labels,
 )
 
 log = logging.getLogger(__name__)
@@ -247,16 +249,30 @@ class QwenLabeler:
         ]
         l1_raws = get_qwen().batch_generate(l1_prompts, max_new_tokens=256)
 
+        # Each distinct (l0, label) the batch produced is resolved against the
+        # vocabulary ONCE — a batch of forty events holds a handful of labels,
+        # and resolving is up to four reads and a mint each — and the batch's
+        # assignments are written together. `is_new_l1` stays what it was per
+        # event: true for the event whose label was minted, false for the rest
+        # that share it, which is what the nightly runner counts.
+        resolved: dict[tuple[str, str], str] = {}
         results = []
+        assignments: list[tuple[str, str]] = []
         for item, l0, raw in zip(items, l0_results, l1_raws, strict=True):
             l1_raw = _clean_label(_parse_json(raw).get("l1", "General"))
-            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
-            if is_new_l1:
-                self._l1_cache.pop((user_id, l0), None)
-            write_event_label(item["event_id"], user_id, l0, l1_id)
+            key = (l0, l1_raw)
+            is_new_l1 = False
+            if key not in resolved:
+                resolved[key], is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+                if is_new_l1:
+                    self._l1_cache.pop((user_id, l0), None)
+            l1_id = resolved[key]
+            assignments.append((item["event_id"], l1_id))
             results.append(
                 {"l0": l0, "l1": l1_raw, "l1_id": l1_id, "is_new_l1": is_new_l1}
             )
+
+        write_event_labels(assignments)
 
         return results
 
@@ -310,18 +326,33 @@ class QwenLabeler:
         ]
         l1l2_raws = get_qwen().batch_generate(l1l2_prompts, max_new_tokens=256)
 
+        # As in label_events_batch: each distinct label resolved once, the
+        # batch's assignments written together, the mint flags kept per item.
+        resolved_l1: dict[tuple[str, str], str] = {}
+        resolved_l2: dict[tuple[str, str, str], str] = {}
         results = []
+        assignments: list[tuple[str, str, str, str, str]] = []
         for item, l0, raw in zip(items, l0_results, l1l2_raws, strict=True):
             parsed = _parse_json(raw)
             l1_raw = _clean_label(parsed.get("l1", "General"))
             l2_raw = _clean_label(parsed.get("l2", "General"))
-            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
-            l2_id, is_new_l2 = get_or_create_l2(user_id, l0, l1_id, l2_raw)
-            if is_new_l1:
-                self._l1_cache.pop((user_id, l0), None)
-            if is_new_l2:
-                self._l2_cache.pop((user_id, l0, l1_id), None)
-            write_content_label(item["content_id"], user_id, l0, l1_id, l2_id)
+            l1_key = (l0, l1_raw)
+            is_new_l1 = False
+            if l1_key not in resolved_l1:
+                resolved_l1[l1_key], is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+                if is_new_l1:
+                    self._l1_cache.pop((user_id, l0), None)
+            l1_id = resolved_l1[l1_key]
+            l2_key = (l0, l1_id, l2_raw)
+            is_new_l2 = False
+            if l2_key not in resolved_l2:
+                resolved_l2[l2_key], is_new_l2 = get_or_create_l2(
+                    user_id, l0, l1_id, l2_raw
+                )
+                if is_new_l2:
+                    self._l2_cache.pop((user_id, l0, l1_id), None)
+            l2_id = resolved_l2[l2_key]
+            assignments.append((item["content_id"], user_id, l0, l1_id, l2_id))
             results.append(
                 {
                     "l0": l0,
@@ -333,6 +364,8 @@ class QwenLabeler:
                     "is_new_l2": is_new_l2,
                 }
             )
+
+        write_content_labels(assignments)
 
         return results
 
