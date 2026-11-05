@@ -9,17 +9,22 @@ import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/me
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
+  collapseDuplicateProposed,
+  proposedTitles,
+  sweepStaleProposed,
+} from '../engine/proposedHousekeeping';
+import {
   MAX_SCAN_CALLS_PER_TICK,
   SCAN_PAGE_SIZE,
   cognitiveCap,
   inputTokenBudget,
   operatingKey,
-  outputTokenCap,
   packBatch,
   scanOperatingPoints,
   sourceLoad,
   startingItems,
 } from '../engine/scanBatchPolicy';
+import { completeScan, consolidateScan, resolveScanProfile } from '../engine/scanCompletion';
 import {
   confidenceForScan,
   formatInboxMessage,
@@ -32,12 +37,8 @@ import {
   type ScanCandidate,
   type ScanTodo,
   classifyPrompt,
-  consolidatePrompt,
   decisionResponseSchema,
   interpretClassify,
-  interpretConsolidate,
-  isScanContextOverflow,
-  todoResponseSchema,
 } from '../engine/scanTurn';
 import {
   SCAN_DEDUP_LIMIT,
@@ -45,7 +46,6 @@ import {
   claimedSourceIds,
   findSimilarTitle,
   formatAlreadyTracked,
-  newerDuplicateIds,
 } from '../engine/taskTitleSimilarity';
 import type { Task } from '../entities/TaskEntity';
 
@@ -57,16 +57,9 @@ import { TaskService } from './TaskService';
  * One model call. 60s, not 20: a large local model can spend most of that
  * producing a first token, and a tighter budget made this scan propose nothing.
  */
-export const SCAN_TIMEOUT_MS = 60_000;
-const SCAN_KEEP_ALIVE = '1h';
+export { SCAN_TIMEOUT_MS } from '../engine/scanCompletion';
 const INBOX_TYPES = ['email', 'sms', 'chat'];
 const SCAN_GENERATORS = new Set(['planning.inbox_scan', 'planning.todo_scan']);
-
-interface ScanProfile {
-  model: string;
-  contextTokens: number;
-  parameterBillions: number | null;
-}
 
 /**
  * Triage inbound communications into tasks. The candidate set is every
@@ -102,7 +95,8 @@ export class InboxScanService {
     const context = { userId } as UserServiceContext;
     const tallies = { created: 0, proposed: 0, placed: 0, redated: 0, archived: 0 };
 
-    const tracked = await this.collapseDuplicateProposed(
+    const tracked = await collapseDuplicateProposed(
+      { taskService: this.taskService, logger: this.logger },
       context,
       await this.taskService.findAll(context, {
         status: [...SCAN_DEDUP_STATUSES],
@@ -115,14 +109,17 @@ export class InboxScanService {
 
     if (anchor == null) {
       this.logger.debug('Inbox scan found no inbound messages', { userId });
-      const sweep = await this.sweepStale(context, []);
+      const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+        sourceKind: 'inbox',
+        titles: [],
+      });
 
       return { ...tallies, ...sweep };
     }
 
     const claimedComms = claimedSourceIds(live, 'sourceCommunicationId');
     const reviewed = this.reviewedIds.get(userId) ?? new Set<string>();
-    const profile = await this.scanProfile();
+    const profile = await resolveScanProfile(this.ollamaService);
     const cap = cognitiveCap(profile.parameterBillions);
     const key = operatingKey(profile.model, 'inbox');
     let maxItems = scanOperatingPoints.recommend(key, startingItems(profile.contextTokens, cap));
@@ -250,7 +247,10 @@ export class InboxScanService {
 
     if (!attempted) {
       this.logger.debug('Inbox scan found no unprocessed inbound messages', { userId });
-      const sweep = await this.sweepStale(context, proposedTitles(live, 'inbox'));
+      const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+        sourceKind: 'inbox',
+        titles: proposedTitles(live, 'inbox'),
+      });
 
       return { ...tallies, ...sweep };
     }
@@ -271,7 +271,10 @@ export class InboxScanService {
       }
 
       calls += 1;
-      const consolidated = await this.consolidate(context, candidates);
+      const consolidated = await consolidateScan(this.ollamaService, context, candidates, {
+        label: 'Inbox scan',
+        logger: this.logger,
+      });
 
       if (consolidated == null) {
         this.remember(userId, classifiedIds);
@@ -283,10 +286,10 @@ export class InboxScanService {
       todos = consolidated;
     }
 
-    const sweep = await this.sweepStale(
-      context,
-      todos.length > 0 ? todos.map((item) => item.title) : proposedTitles(live, 'inbox'),
-    );
+    const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+      sourceKind: 'inbox',
+      titles: todos.length > 0 ? todos.map((item) => item.title) : proposedTitles(live, 'inbox'),
+    });
     tallies.redated = sweep.redated;
     tallies.archived += sweep.archived;
     this.remember(
@@ -454,27 +457,6 @@ export class InboxScanService {
     return Number.isNaN(anchor.getTime()) ? null : anchor;
   }
 
-  private async collapseDuplicateProposed(context: UserServiceContext, tracked: Task[]): Promise<Task[]> {
-    const dropIds = newerDuplicateIds(tracked);
-
-    if (dropIds.length === 0) {
-      return tracked;
-    }
-
-    for (const id of dropIds) {
-      await this.taskService.declineProposed(context, id);
-    }
-
-    this.logger.log('Collapsed duplicate proposed tasks', {
-      userId: context.userId,
-      archived: dropIds.length,
-    });
-
-    const dropped = new Set(dropIds);
-
-    return tracked.filter((task) => !dropped.has(task.id));
-  }
-
   private async archiveEchoTasks(context: UserServiceContext, tracked: readonly Task[]): Promise<number> {
     let archived = 0;
 
@@ -502,29 +484,19 @@ export class InboxScanService {
     return archived;
   }
 
-  private async sweepStale(
-    context: UserServiceContext,
-    titles: readonly string[],
-  ): Promise<{ redated: number; archived: number }> {
-    return this.proposedReconcile.reconcileStaleProposed(context, {
-      sourceKind: 'inbox',
-      relevantTitles: titles,
-      relevantSourceRefs: titles.map((title) => TaskService.memoryScanSourceRef(title.trim(), 'inbox')),
-    });
-  }
-
   private async classify(
     context: UserServiceContext,
     batch: readonly CommunicationEntity[],
     alreadyTracked: string,
   ): Promise<{ candidates: ScanCandidate[] } | null> {
     const block = batch.map((message, index) => formatInboxMessage(message, index + 1)).join('\n---\n');
-    const content = await this.complete(
-      context,
-      classifyPrompt(block, alreadyTracked),
-      decisionResponseSchema(batch.length),
-      batch.length,
-    );
+    const content = await completeScan(this.ollamaService, context, {
+      logger: this.logger,
+      label: 'Inbox scan',
+      prompt: classifyPrompt(block, alreadyTracked),
+      schema: decisionResponseSchema(batch.length),
+      items: batch.length,
+    });
 
     if (content == null) {
       return null;
@@ -535,82 +507,6 @@ export class InboxScanService {
     );
 
     return outcome.ok ? { candidates: outcome.candidates } : null;
-  }
-
-  private async consolidate(
-    context: UserServiceContext,
-    candidates: readonly ScanCandidate[],
-  ): Promise<ScanTodo[] | null> {
-    const content = await this.complete(
-      context,
-      consolidatePrompt(candidates),
-      todoResponseSchema(candidates.length),
-      candidates.length,
-    );
-
-    if (content == null) {
-      return null;
-    }
-
-    return interpretConsolidate(content, candidates);
-  }
-
-  private async complete(
-    context: UserServiceContext,
-    prompt: string,
-    schema: Record<string, unknown>,
-    items: number,
-  ): Promise<string | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-
-    try {
-      const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        tier: 'utility',
-        enableTools: false,
-        format: schema,
-        signal: controller.signal,
-        maxOutputTokens: outputTokenCap(items),
-        keepAlive: SCAN_KEEP_ALIVE,
-      });
-
-      if (response.done_reason === 'length') {
-        this.logger.warn('Inbox scan generation hit its output cap; shrinking the batch', {
-          maxOutputTokens: outputTokenCap(items),
-        });
-
-        return null;
-      }
-
-      return response.message.content || '{}';
-    } catch (err) {
-      this.logger.warn(
-        isScanContextOverflow(err)
-          ? 'Inbox scan overflowed the context window; shrinking the batch'
-          : 'Inbox scan LLM failed; shrinking the batch',
-        { error: err instanceof Error ? err.message : String(err) },
-      );
-
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  private async scanProfile(): Promise<ScanProfile> {
-    const service = this.ollamaService as OllamaService & {
-      resolveUtilityScanProfile?: () => Promise<ScanProfile>;
-    };
-
-    if (typeof service.resolveUtilityScanProfile !== 'function') {
-      return { model: 'utility', contextTokens: 8_192, parameterBillions: null };
-    }
-
-    try {
-      return await service.resolveUtilityScanProfile();
-    } catch {
-      return { model: 'utility', contextTokens: 8_192, parameterBillions: null };
-    }
   }
 
   private remember(userId: string, ids: readonly string[]): void {
@@ -644,12 +540,6 @@ function isScanEcho(task: Task): boolean {
     SCAN_GENERATORS.has(generator) &&
     isEchoTitle(task.title)
   );
-}
-
-function proposedTitles(tasks: readonly Task[], sourceKind: string): string[] {
-  return tasks
-    .filter((task) => task.status === 'proposed' && task.sourceKind === sourceKind)
-    .map((task) => task.title);
 }
 
 function sourceIdFor(candidates: readonly ScanCandidate[], sourceIndex: number): string | undefined {
