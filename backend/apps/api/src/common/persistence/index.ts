@@ -26,7 +26,7 @@ export {
 } from './ingestRefreshColumns';
 export type { IngestEntityKind } from './ingestRefreshColumns';
 export { keysetPaginate, resolvePageShape, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './keysetPaginate';
-export type { KeysetPageArgs, KeysetPage } from './keysetPaginate';
+export type { KeysetCountOptions, KeysetPageArgs, KeysetPage } from './keysetPaginate';
 export { keysetOrderOf, keysetSeek } from './keysetSeek';
 export type { KeysetOrder, KeysetSeekParams } from './keysetSeek';
 export { withoutUndefined } from './withoutUndefined';
