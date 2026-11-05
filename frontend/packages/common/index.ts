@@ -12,6 +12,9 @@ export {
   useOverflowsRight,
   usePageTitle,
   useScrollOverflow,
+  prefersReducedMotion,
+  useDebounced,
+  useReducedMotion,
 } from './src/hooks';
 export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';

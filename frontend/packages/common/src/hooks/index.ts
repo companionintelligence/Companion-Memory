@@ -8,6 +8,8 @@ export {
 } from './useDeviceLayout';
 export type { DeviceSizeClass } from './useDeviceLayout';
 export { usePageTitle } from './usePageTitle';
+export { useDebounced } from './useDebounced';
+export { prefersReducedMotion, useReducedMotion } from './useReducedMotion';
 export { useOverflowsRight } from './useOverflowsRight';
 export { useScrollOverflow } from './useScrollOverflow';
 export type { ScrollOverflow } from './useScrollOverflow';
