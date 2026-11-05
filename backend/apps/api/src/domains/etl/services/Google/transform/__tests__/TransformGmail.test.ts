@@ -6,9 +6,54 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
 }
 
+/**
+ * The transform writes a page at a time (one `promoteParticipantGroups`, one
+ * `createManyDetailed`), so the doubles fan those out to per-row spies the
+ * assertions below read: `create` sees every DTO the page carried, in order,
+ * and `processParticipants` sees every group with the same positional
+ * arguments the per-message path used to pass.
+ */
 function build() {
-  const communicationService = { create: jest.fn(async () => ({ id: 'comm-1' })) };
-  const promoteService = { processParticipants: jest.fn(async () => ['entity-1']) };
+  const create = jest.fn(async (_ctx: unknown, _dto: unknown) => ({ id: 'comm-1' }));
+  const communicationService = {
+    create,
+    createManyDetailed: jest.fn(
+      async (ctx: unknown, dtos: unknown[], _options: unknown) =>
+        await Promise.all(dtos.map(async (dto) => ({ entity: await create(ctx, dto), inserted: true }))),
+    ),
+  };
+  const processParticipants = jest.fn(async (..._args: unknown[]) => ['entity-1']);
+  const promoteService = {
+    processParticipants,
+    promoteParticipantGroups: jest.fn(
+      async (
+        ctx: { userId: string },
+        input: {
+          connectionId: string;
+          source: string;
+          groups: Array<{
+            participants: unknown[];
+            relationshipType: string;
+            startDate?: Date;
+            endDate?: Date;
+          }>;
+        },
+      ) =>
+        await Promise.all(
+          input.groups.map((group) =>
+            processParticipants(
+              group.participants,
+              ctx.userId,
+              input.connectionId,
+              input.source,
+              group.relationshipType,
+              group.startDate,
+              group.endDate,
+            ),
+          ),
+        ),
+    ),
+  };
   const tagService = { tagEntities: jest.fn(async () => undefined) };
 
   const service = new GmailTransformService(
@@ -169,20 +214,82 @@ describe('GmailTransformService.transformGmail', () => {
     expect(communicationService.create).not.toHaveBeenCalled();
   });
 
-  it('keeps going past one message whose create fails (the dedup unique-violation path)', async () => {
+  it('keeps going past one message it cannot read, and writes the rest of the page', async () => {
+    // A re-synced duplicate is no longer an error at all — the page write is
+    // an upsert on the identity triple — so the failure that must not cost the
+    // page is a message the parser cannot read: headers that are not a list.
     const { service, communicationService, tagService } = build();
-    communicationService.create.mockRejectedValueOnce(
-      new Error('duplicate key value violates unique constraint'),
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({ id: 'broken', payload: { headers: 'not-a-list' } }),
+        gmailMessage(),
+      ]),
+    });
+
+    expect(communicationService.createManyDetailed).toHaveBeenCalledTimes(1);
+    expect(communicationService.create).toHaveBeenCalledTimes(1);
+    expect(communicationService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ source_id: 'msg-1-rfc@mail.gmail.com' }),
     );
+    // Only the surviving message gets tagged.
+    expect(tagService.tagEntities).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the page write to raise CommunicationCreatedEvent for the rows it inserts', async () => {
+    // Nothing else schedules search indexing or people-linking for a
+    // connection sync, so the bulk write must emit as create() did.
+    const { service, communicationService } = build();
+
+    await service.transformGmail({ connection, syncJob: syncJobWith([gmailMessage()]) });
+
+    expect(communicationService.createManyDetailed).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      [expect.objectContaining({ source_id: 'msg-1-rfc@mail.gmail.com' })],
+      { emitCreated: true },
+    );
+  });
+
+  it('resolves every participant of the page in ONE PromoteService call', async () => {
+    const { service, promoteService } = build();
 
     await service.transformGmail({
       connection,
       syncJob: syncJobWith([gmailMessage(), gmailMessage({ id: 'msg-2' })]),
     });
 
-    expect(communicationService.create).toHaveBeenCalledTimes(2);
-    // Only the surviving message gets tagged.
-    expect(tagService.tagEntities).toHaveBeenCalledTimes(1);
+    expect(promoteService.promoteParticipantGroups).toHaveBeenCalledTimes(1);
+    // Four groups per message — from, to, cc, bcc — in message order.
+    const [, input] = promoteService.promoteParticipantGroups.mock.calls[0];
+    expect(input.groups).toHaveLength(8);
+    expect(input.source).toBe('email');
+  });
+
+  it('tags once per distinct label set, not once per message', async () => {
+    const { service, tagService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage(),
+        gmailMessage({ id: 'msg-2' }),
+        gmailMessage({ id: 'msg-3', labelIds: ['INBOX', 'IMPORTANT'] }),
+      ]),
+    });
+
+    expect(tagService.tagEntities).toHaveBeenCalledTimes(2);
+    expect(tagService.tagEntities).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      {
+        labels: ['INBOX'],
+        entities: [
+          { type: 'communication', id: 'comm-1' },
+          { type: 'communication', id: 'comm-1' },
+        ],
+      },
+    );
   });
 });
 
