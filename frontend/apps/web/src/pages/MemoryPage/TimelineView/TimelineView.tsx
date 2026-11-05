@@ -5,6 +5,8 @@ import { Archive, Brain, Search as SearchIcon } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import { formatEnumLabel } from '@/lib/utils';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
@@ -54,7 +56,6 @@ export function TimelineView({
   typeFilter,
   groupByEventType = false,
 }: TimelineViewProps = {}) {
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new globalThis.Map<string, HTMLDivElement>());
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }] = useEntityService();
@@ -93,26 +94,9 @@ export function TimelineView({
 
   // Load the next server page when the sentinel nears the viewport. Using the
   // viewport as root keeps this working regardless of which ancestor scrolls.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // A failed page unwatches it and the retry below is the only way to ask again.
+  const pageFailed = error != null && timelineData.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore });
 
   useEffect(() => {
     if (!activeEntityId) {
@@ -250,7 +234,11 @@ export function TimelineView({
 
         {loadingMore && <TimelineSkeleton count={2} className="pl-8 pt-2" />}
 
-        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+        {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+        {pageFailed && (
+          <LoadMoreFailed noun="events" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+        )}
       </div>
     </div>
   );

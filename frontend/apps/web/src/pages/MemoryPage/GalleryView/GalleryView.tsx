@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
@@ -22,6 +22,8 @@ import {
   ReceiptGridItem,
   ThreadGridItem,
 } from '@/components/entities';
+import { LoadMoreFailed } from '@/components/InfiniteList';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 
 import {
   ErrorState,
@@ -88,29 +90,17 @@ function OnlineGalleryView() {
     return map;
   }, [mediaEntries]);
 
-  // Infinite scroll (cursor-based) — mirrors ListView.
+  // Infinite scroll (cursor-based) — mirrors ListView, asking a little
+  // earlier because tiles are taller than rows. A failed page unwatches the
+  // sentinel and the retry below is the only way to ask again.
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { root: scrollRef.current, rootMargin: '600px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  const pageFailed = error != null && data.length > 0;
+  const sentinelRef = useLoadMoreSentinel({
+    enabled: hasNextPage && !pageFailed,
+    loadMore,
+    root: scrollRef,
+    rootMargin: '600px',
+  });
 
   if (loading && data.length === 0) {
     return (
@@ -260,7 +250,11 @@ function OnlineGalleryView() {
             ))}
         </EntityGrid>
 
-        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+        {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+        {pageFailed && (
+          <LoadMoreFailed noun="items" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+        )}
 
         <div className="py-3 text-center text-xs text-muted-foreground">
           {formatLoadedCount({ loaded: data.length, totalCount, loadingMore, hasNextPage })}

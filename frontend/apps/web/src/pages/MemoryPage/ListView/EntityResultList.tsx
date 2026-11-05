@@ -3,7 +3,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'rea
 import { useLocation } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import {
   DateGroupHeader,
   ErrorState,
@@ -58,7 +60,6 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
   const fmt = useDateTimeFormat();
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
   // Remember the scroll position under the history entry it belongs to. Give it
   // back when that entry is shown again (Back from a full page). The position
@@ -120,27 +121,11 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
     </div>
   );
 
-  // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { root: scrollRef.current, rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // Fetch the next server page (cursor-based) when the sentinel scrolls into
+  // view. A failed page unwatches it — `error` carries a rejected loadMore —
+  // and the retry below is the only way to ask again.
+  const pageFailed = error != null && data.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore, root: scrollRef });
 
   // groupEntitiesByBucket already collects undated entities into one trailing
   // group; the flat branch keeps the server's order.
@@ -254,7 +239,11 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
       {loadingMore && <ListSkeleton count={3} showHeader={false} />}
 
-      {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+      {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+      {pageFailed && (
+        <LoadMoreFailed noun="results" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+      )}
 
       <div className="py-3 text-center text-xs text-muted-foreground">
         {formatLoadedCount({ loaded: data.length, totalCount, loadingMore, hasNextPage })}
