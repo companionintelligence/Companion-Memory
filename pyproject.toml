@@ -154,6 +154,7 @@ warn_unused_configs = true
 # all of them — so every member is named here.
 packages = [
     "ci.hbpe",
+    "ci.sidecar",
     "ci.summary",
     "ci.telemetry",
 ]

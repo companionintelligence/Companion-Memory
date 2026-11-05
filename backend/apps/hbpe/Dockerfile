@@ -1,5 +1,5 @@
 # Built from the repository root, not this directory: ci-hbpe installs
-# ci-telemetry from backend/packages/telemetry, which a context rooted here
+# ci-telemetry and ci-sidecar-core from backend/packages/, which a context rooted here
 # could not reach. See the `build` target in the Makefile for the context.
 
 # The uv version comes from required-version in the root pyproject.toml;
@@ -56,6 +56,7 @@ USER hbpe
 COPY --chown=hbpe:hbpe pyproject.toml uv.lock .python-version ./
 COPY --chown=hbpe:hbpe backend/apps/hbpe/pyproject.toml ./backend/apps/hbpe/pyproject.toml
 COPY --chown=hbpe:hbpe backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
+COPY --chown=hbpe:hbpe backend/packages/sidecar-core/pyproject.toml ./backend/packages/sidecar-core/pyproject.toml
 
 # --frozen installs exactly what uv.lock records without validating the
 # lock against the manifests, which is what allows the partial copy above:
@@ -76,7 +77,8 @@ COPY --chown=hbpe:hbpe backend/packages/telemetry/pyproject.toml ./backend/packa
 # that used to rewrite the manifest mid-build.
 #
 # --no-install-workspace, not --no-install-project: this service depends on
-# the ci-telemetry workspace member, whose source has not been copied yet.
+# the ci-telemetry and ci-sidecar-core workspace members, whose sources have
+# not been copied yet.
 # Skipping only the project would make uv try to build it from an empty
 # directory.
 RUN uv sync --frozen --package ci-hbpe --no-install-workspace --no-dev
@@ -117,13 +119,14 @@ COPY LICENSE.md /LICENSE.md
 # ── Application code ──────────────────────────────────────────────────────────
 COPY --chown=hbpe:hbpe backend/apps/hbpe/src ./backend/apps/hbpe/src
 COPY --chown=hbpe:hbpe backend/packages/telemetry/src ./backend/packages/telemetry/src
+COPY --chown=hbpe:hbpe backend/packages/sidecar-core/src ./backend/packages/sidecar-core/src
 COPY --chown=hbpe:hbpe backend/apps/hbpe/scripts ./scripts
 COPY --chown=hbpe:hbpe --chmod=755 backend/apps/hbpe/entrypoint.sh ./entrypoint.sh
 
 # `uv pip install`, not a second `uv sync`, because sync would prune the
 # hardware-specific packages installed above. --no-deps because the
 # dependencies are already installed from the lock.
-RUN uv pip install --no-cache --no-deps ./backend/packages/telemetry ./backend/apps/hbpe
+RUN uv pip install --no-cache --no-deps ./backend/packages/telemetry ./backend/packages/sidecar-core ./backend/apps/hbpe
 
 # Persistent volumes for model artifacts and token corpus
 RUN mkdir -p /app/models/qwen \

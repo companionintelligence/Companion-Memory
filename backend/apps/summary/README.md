@@ -74,7 +74,7 @@ Key environment variables:
 # Database (assembled by entrypoint.sh from DATABASE_* when unset)
 DATABASE_URL=postgresql://user:pass@database:5432/companion
 
-# LLM (Ollama default). The hostname is advisory: llm_host.py corrects it for
+# LLM (Ollama default). The hostname is advisory: ci.sidecar.llm_host corrects it for
 # the namespace this process is in — a loopback host becomes the docker gateway
 # inside a container, and the gateway becomes loopback outside one — and logs
 # whenever it does. CI_LLM_HOST_REWRITE=off to use the URL exactly as written.
@@ -454,7 +454,7 @@ external scheduler for this service: see the cron table under
 backend/apps/summary/
 ├── src/ci/summary/
 │   ├── api.py                  # FastAPI app (manual triggers + function runner)
-│   ├── runner.py               # /functions/run worker pool + pg-boss callbacks
+│   ├── runner.py               # /functions/run worker pool + pg-boss callbacks (ci.sidecar.runner)
 │   ├── functions.py            # Named background functions (summaries, insights, ...)
 │   ├── activities.py           # Step functions the named functions compose
 │   ├── summary_functions.py    # Window resolution + rollup helpers

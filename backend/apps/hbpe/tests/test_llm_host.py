@@ -1,9 +1,9 @@
 """
-HBPE's copy of the namespace-correcting resolver.
+HBPE's use of the namespace-correcting resolver.
 
-The full behavioural suite lives with the summary copy
-(backend/apps/summary/tests/test_llm_host.py), which also asserts the two files
-are byte-identical. What is tested here is the part that is HBPE's own: that the
+The full behavioural suite lives with the resolver itself
+(backend/packages/sidecar-core/tests/test_llm_host.py). What is tested here is
+the part that is HBPE's own: that the
 labeler's endpoint is corrected before #2484's reachability probe judges it, so
 a container holding `LLM_API_BASE=http://localhost:11434/v1` uses the chat model
 on the host instead of quietly demoting itself to the 0.8B GGUF.
@@ -11,7 +11,7 @@ on the host instead of quietly demoting itself to the 0.8B GGUF.
 
 from __future__ import annotations
 
-from ci.hbpe import llm_host
+from ci.sidecar import llm_host
 
 
 def test_loopback_becomes_the_gateway_inside_a_container():
