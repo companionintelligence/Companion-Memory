@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
 import { BACKFILL_JOB_PRIORITY, EventService } from '@ci/domains/events';
+import { listOnboardedUserIds } from '@ci/domains/user';
 
 import { DERIVATION_RUN_QUEUE, DerivationRunRequestEvent } from '../events';
 
@@ -113,11 +114,7 @@ export class DerivationCron {
   }
 
   /** The same population every other fan-out on this appliance covers. */
-  private async listOnboardedUserIds(): Promise<string[]> {
-    const rows = (await this.dataSource.query('SELECT id FROM ci.users WHERE onboarded = true')) as Array<{
-      id: string;
-    }>;
-
-    return rows.map((row) => String(row.id));
+  private listOnboardedUserIds(): Promise<string[]> {
+    return listOnboardedUserIds(this.dataSource);
   }
 }

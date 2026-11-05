@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { useUploadFile, useTriggerHbpe } from '@/api';
 import { MenuShield } from '@/components/MenuShield';
-import { AddEventModal, AddPersonModal, AddPlaceModal } from '@/components/modals/AddItemModal';
+import { AddEventModal, AddPersonModal } from '@/components/modals/AddItemModal';
 import { AddConceptModal } from '@/components/modals/AddItemModal/AddConceptModal.tsx';
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { ScanBarcodeModal } from '@/components/modals/ScanBarcodeModal';
@@ -32,6 +32,16 @@ import { useModalControls } from '@/hooks';
 /** Loaded when the dialog is first opened — see the mount site below. */
 const UploadModal = lazy(() =>
   import('@/components/modals/UploadModal').then((m) => ({ default: m.UploadModal })),
+);
+
+/**
+ * Same treatment, for a bigger reason: AddPlaceModal renders PlaceForm, whose
+ * CurrentLocationField mounts the Leaflet map. A static import here put
+ * leaflet + react-leaflet + their CSS into the entry chunk for every
+ * authenticated page load, to serve a dialog that opens from one menu item.
+ */
+const AddPlaceModal = lazy(() =>
+  import('@/components/modals/AddItemModal/AddPlaceModal.tsx').then((m) => ({ default: m.AddPlaceModal })),
 );
 
 /**
@@ -390,7 +400,11 @@ export function AddMenu() {
           })
         }
       />
-      <AddPlaceModal open={isAddPlaceModalOpen} onClose={closeAddPlaceModal} />
+      {isAddPlaceModalOpen && (
+        <Suspense fallback={null}>
+          <AddPlaceModal open onClose={closeAddPlaceModal} />
+        </Suspense>
+      )}
 
       <AddConceptModal open={isAddConceptModalOpen} onClose={closeAddConceptModal} />
 

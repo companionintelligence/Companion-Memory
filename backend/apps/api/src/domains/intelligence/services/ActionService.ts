@@ -68,7 +68,17 @@ export class ActionService {
     return entities.filter((row) => localCalendarDay(row.createdAt, timezone) === localDayIso).length;
   }
 
-  async findAll(context: ServiceContext, options: { source?: string | string[] } = {}): Promise<Action[]> {
+  /**
+   * @param options.dismissed keep only rows whose `dismissed` flag matches;
+   *   omitted, both are returned (the Brief surface shows dismissed ones greyed).
+   * @param options.limit cap the rows read, in priority order. The chat
+   *   prompt's Brief block wants the top eight and used to hydrate the user's
+   *   entire action history to slice them off in memory, every turn.
+   */
+  async findAll(
+    context: ServiceContext,
+    options: { source?: string | string[]; dismissed?: boolean; limit?: number } = {},
+  ): Promise<Action[]> {
     const sources =
       options.source === undefined
         ? undefined
@@ -84,10 +94,12 @@ export class ActionService {
           },
         }),
         ...(sources ? { source: In(sources) } : {}),
+        ...(options.dismissed === undefined ? {} : { dismissed: options.dismissed }),
       },
       order: {
         priority: 'asc',
       },
+      ...(options.limit === undefined ? {} : { take: options.limit }),
     });
 
     return entities.map((entity) => ActionEntity.toEgressType(entity));

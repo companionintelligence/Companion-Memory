@@ -46,6 +46,13 @@ export const DISPATCH_QUEUED_STALE_MS = 2 * 60 * 1000;
 /** Running this long with no terminal checkpoint: treat as hung. */
 export const DISPATCH_RUNNING_STALE_MS = 15 * 60 * 1000;
 
+/**
+ * Most stale jobs one `AgentDispatchService.failStale` tick closes. The sweep
+ * runs every minute, so a backlog larger than this drains over a few ticks
+ * rather than holding one tick open for all of it.
+ */
+export const STALE_SWEEP_BATCH = 100;
+
 export const AGENT_MEMORY_QUEUE = 'agent-memory';
 
 export const AGENT_MEMORY_QUEUE_OPTIONS: QueueOptions = {

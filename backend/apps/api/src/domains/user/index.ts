@@ -69,6 +69,7 @@ export { UserEntity };
 
 // Services
 export { UserService, AccountPurgeService };
+export { listOnboardedUserIds } from './services/onboardedUserIds';
 
 // The header clients send their IANA zone in; exported so a client-facing
 // surface (CORS `allowedHeaders`, an HTTP client's default headers) names the

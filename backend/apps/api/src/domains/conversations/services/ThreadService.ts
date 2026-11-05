@@ -56,7 +56,11 @@ export class ThreadService {
       order: {
         updatedAt: 'DESC',
       },
-      relations: ['user'],
+      // No `relations: ['user']`: the list is read by `GET /api/threads` (every
+      // chat-page open) and the GraphQL `threads` query, and neither reads the
+      // owner off a thread — `Thread.user` is optional on the egress type for
+      // exactly that. The join hydrated a full `users` row per thread for
+      // nothing. `where.user.id` still scopes without selecting it.
     });
 
     return entities.map((entity) => ThreadEntity.toEgressType(entity));

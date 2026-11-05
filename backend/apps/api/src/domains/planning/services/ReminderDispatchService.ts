@@ -58,6 +58,37 @@ const BLOCK_TERMINAL_SQL = TERMINAL_BLOCK_STATUSES.map((status) => `'${status}'`
  * ("planning services never see SYSTEM_USER; only the cron fan-out enqueuer
  * does").
  */
+/**
+ * The users with at least one pending reminder due by `now` — the audience
+ * `PlanningJobsCron.enqueueFireReminders` fans out to each minute.
+ *
+ * Appliance-wide by design: the cron used to enqueue one `fire_reminders` job
+ * per onboarded user every minute, and each job ran {@link claimDueReminders}
+ * for a user who almost never had anything due (1,440 × N pg-boss inserts a
+ * day for a few deliveries). This asks the one set-based question first and
+ * fans out only to the users it names. The `reminders_due_idx (fire_at) WHERE
+ * status = 'pending'` partial index serves it; `idx_reminders_user_due` leads
+ * with `user_id` and cannot.
+ *
+ * Joined to `ci.users` so the audience stays the same population every other
+ * planning fan-out uses (onboarded, not deleted): the per-user job still runs
+ * under a real `userId`, never SYSTEM_USER (roadmap invariant 7).
+ */
+export async function listUsersWithDueReminders(dataSource: DataSource, now: Date): Promise<string[]> {
+  const rows = (await dataSource.query(
+    `SELECT DISTINCT r.user_id AS "userId"
+       FROM ci.reminders r
+       JOIN ci.users u ON u.id = r.user_id
+      WHERE r.status = 'pending'
+        AND r.fire_at <= $1
+        AND u.onboarded = true
+        AND u.deleted_at IS NULL`,
+    [now],
+  )) as Array<{ userId: string }>;
+
+  return rows.map((row) => String(row.userId));
+}
+
 export async function claimDueReminders(
   dataSource: DataSource,
   userId: string,

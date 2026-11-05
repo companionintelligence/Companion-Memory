@@ -152,6 +152,27 @@ const OPENAI_MODE_CAPABILITIES = ['completion', 'tools', 'thinking'];
 const PREFLIGHT_TIMEOUT_MS = 5_000;
 
 /**
+ * How long one `/api/tags` answer is reused. `resolveModel` lists the served
+ * models, then `chatStream` lists them again to validate the one it was handed,
+ * so every chat turn asked Ollama to stat every blob on disk twice. The list
+ * changes only on a pull or a delete, and ten seconds is short enough that a
+ * model pulled through the Hub is selectable before the user has found it in
+ * the picker. Shorter than `ResidencyPlannerService.CATALOG_TTL_MS` on purpose:
+ * that cache feeds residency planning; this one gates "is this model served",
+ * where a stale miss is a visible error.
+ */
+const MODEL_LIST_TTL_MS = 10_000;
+
+/**
+ * How long one `/api/show` answer is reused, per model. `show` parses the GGUF
+ * manifest (tens to hundreds of milliseconds on a large model) and reports
+ * capabilities that change only when the tag is re-pulled.
+ */
+const MODEL_SHOW_TTL_MS = 60_000;
+
+type Memo<T> = { key: string; at: number; value: Promise<T> };
+
+/**
  * Bound a promise. The timer is cleared on settle and unref'd meanwhile, so a
  * preflight can never be the reason a process refuses to exit.
  */
@@ -480,6 +501,11 @@ export class OllamaService implements OnModuleInit {
 
   private lastPreflight: ChatModelPreflight | null = null;
 
+  /** See MODEL_LIST_TTL_MS / MODEL_SHOW_TTL_MS. Keyed by host so an endpoint change never serves the old catalog. */
+  private modelListMemo: Memo<Awaited<ReturnType<Ollama['list']>>> | null = null;
+
+  private readonly modelShowMemo = new Map<string, Memo<Awaited<ReturnType<Ollama['show']>>>>();
+
   private readonly priorityQueue = new OllamaPriorityQueue();
 
   getQueueSnapshot(): OllamaQueueSnapshot {
@@ -625,6 +651,56 @@ export class OllamaService implements OnModuleInit {
 
   private get ollama(): Ollama {
     return new Ollama({ host: this.llmEndpointService.getOllamaHost() });
+  }
+
+  /**
+   * `/api/tags`, memoised for MODEL_LIST_TTL_MS per host. A rejected call is
+   * dropped from the memo at once so the next caller retries rather than
+   * inheriting the failure for the rest of the window.
+   */
+  private listModels(): Promise<Awaited<ReturnType<Ollama['list']>>> {
+    const key = this.llmEndpointService.getOllamaHost();
+    const now = Date.now();
+    const memo = this.modelListMemo;
+
+    if (memo && memo.key === key && now - memo.at < MODEL_LIST_TTL_MS) {
+      return memo.value;
+    }
+
+    const value = this.ollama.list();
+    const entry: Memo<Awaited<ReturnType<Ollama['list']>>> = { key, at: now, value };
+
+    this.modelListMemo = entry;
+    value.catch(() => {
+      if (this.modelListMemo === entry) {
+        this.modelListMemo = null;
+      }
+    });
+
+    return value;
+  }
+
+  /** `/api/show` for one model, memoised for MODEL_SHOW_TTL_MS per host; same failure rule as {@link listModels}. */
+  private showModel(model: string): Promise<Awaited<ReturnType<Ollama['show']>>> {
+    const key = `${this.llmEndpointService.getOllamaHost()}\n${model}`;
+    const now = Date.now();
+    const memo = this.modelShowMemo.get(key);
+
+    if (memo && now - memo.at < MODEL_SHOW_TTL_MS) {
+      return memo.value;
+    }
+
+    const value = this.ollama.show({ model });
+    const entry: Memo<Awaited<ReturnType<Ollama['show']>>> = { key, at: now, value };
+
+    this.modelShowMemo.set(key, entry);
+    value.catch(() => {
+      if (this.modelShowMemo.get(key) === entry) {
+        this.modelShowMemo.delete(key);
+      }
+    });
+
+    return value;
   }
 
   /**
@@ -786,7 +862,7 @@ export class OllamaService implements OnModuleInit {
         }));
     }
 
-    const result = await this.ollama.list();
+    const result = await this.listModels();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
     const visibleModels = models.filter((model) => isChatModel({ id: model.model }, model.name));
 
@@ -1463,7 +1539,7 @@ export class OllamaService implements OnModuleInit {
 
     try {
       if (!this.llmEndpointService.usesOpenAiDriver()) {
-        const response = (await this.ollama.show({ model: selection.model })) as {
+        const response = (await this.showModel(selection.model)) as {
           details?: { parameter_size?: string };
         };
         parameterBillions = parameterBillionsFrom(response.details?.parameter_size);
@@ -1888,7 +1964,7 @@ export class OllamaService implements OnModuleInit {
         .map((row) => row.id);
     }
 
-    const result = await this.ollama.list();
+    const result = await this.listModels();
 
     return result.models
       .map((model: { name: string }) => model.name)
@@ -2070,7 +2146,7 @@ export class OllamaService implements OnModuleInit {
       return;
     }
 
-    const result = await this.ollama.list();
+    const result = await this.listModels();
     const validModel = result.models.find((model) => model.name === requestedModel);
 
     if (!validModel) {
@@ -2089,7 +2165,7 @@ export class OllamaService implements OnModuleInit {
     }
 
     try {
-      const response = (await this.ollama.show({ model: requestedModel })) as {
+      const response = (await this.showModel(requestedModel)) as {
         capabilities?: unknown;
       };
 
