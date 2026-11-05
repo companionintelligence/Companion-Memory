@@ -351,6 +351,31 @@ function searchCursorOf({ result, sortTime }: OrderedResult): string {
 }
 
 /**
+ * The same cursor with the browse's total appended: base64(`<iso-time>::<id>::<total>`).
+ *
+ * The timed browse's `totalCount` is up to fourteen `COUNT(*)`s over the whole
+ * corpus (countTimedEntities). It is counted on the first page and then carried
+ * on every cursor that page mints, so a "load more" never re-runs it: the next
+ * request reads the total back out of `after` (decodeSearchCursor). The id is a
+ * GlobalUID — base64, so it never contains `:` — which is what makes the third
+ * segment unambiguous.
+ */
+function withCarriedTotal(cursor: string, total: number): string {
+  return Buffer.from(`${Buffer.from(cursor, 'base64').toString('utf8')}::${total}`).toString('base64');
+}
+
+/**
+ * The cursor as {@link searchCursorOf} minted it, without a carried total. The
+ * Paginator finds the cursor row by comparing against `searchCursorOf`, so it
+ * must see the two-segment form.
+ */
+function withoutCarriedTotal(cursor: string): string {
+  const [iso, globalId] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
+
+  return Buffer.from(globalId == null ? iso : `${iso}::${globalId}`).toString('base64');
+}
+
+/**
  * Decode a cursor back to the (time, id) keyset used to window the next DB page.
  * The id portion is the result's GlobalUID (`type:uuid`, base64); we decode it to
  * the raw uuid so the timed path can break same-timestamp ties on the underlying
@@ -359,19 +384,19 @@ function searchCursorOf({ result, sortTime }: OrderedResult): string {
  * cursor predates this format or its GlobalUID can't be decoded — callers then
  * fall back to the legacy time-only window. `globalId` is the id portion as it
  * was minted (null when absent or undecodable), for matching a result's own id.
+ * `total` is the browse total the first page carried forward ({@link withCarriedTotal});
+ * null when the cursor has none, which tells the timed path to count afresh.
  */
 function decodeSearchCursor(
   cursor?: string | null,
-): { time: Date; id: string | null; globalId: string | null } | null {
+): { time: Date; id: string | null; globalId: string | null; total: number | null } | null {
   if (!cursor) {
     return null;
   }
 
   try {
-    const decoded = Buffer.from(cursor, 'base64').toString('utf8');
-    const separator = decoded.indexOf('::');
-    const iso = separator >= 0 ? decoded.slice(0, separator) : decoded;
-    const globalId = separator >= 0 ? decoded.slice(separator + 2) : '';
+    const [iso, globalId = '', carried] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
+    const total = carried != null && /^\d+$/.test(carried) ? Number(carried) : null;
     const time = new Date(iso);
 
     if (Number.isNaN(time.getTime())) {
@@ -387,7 +412,7 @@ function decodeSearchCursor(
       }
     }
 
-    return { time, id, globalId: id != null ? globalId : null };
+    return { time, id, globalId: id != null ? globalId : null, total };
   } catch {
     return null;
   }
@@ -819,7 +844,16 @@ export class SearchResolver {
           // A name sort reads one row past its pool, to know whether a kind had more.
           limit: byName ? NAME_SORT_CANDIDATE_LIMIT + 1 : first * FETCH_MULTIPLIER,
         }),
-        this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
+        // Counted ONCE per browse. These are up to fourteen COUNT(*)s over the
+        // whole corpus, and every "load more" used to re-run all of them to
+        // reproduce the number the first page had already shown. The first page
+        // counts; every cursor it mints carries the result (withCarriedTotal),
+        // and a later page reads it back. That also makes the total what the
+        // comment above asks for — one number for the whole page series — where
+        // a per-page recount drifted as rows arrived. A cursor without a total
+        // (minted before this, or hand-built) counts afresh.
+        afterCursor?.total ??
+          this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
       ]);
 
       if (byName) {
@@ -986,6 +1020,8 @@ export class SearchResolver {
       sortTime: SearchResolver.getEntityTimestamp(entry) ?? new Date(0),
     }));
 
+    // The Paginator matches cursors against `searchCursorOf`, which never carries a total.
+    const pageAfter = input.after == null ? undefined : withoutCarriedTotal(input.after);
     const {
       slice,
       pageInfo,
@@ -994,13 +1030,20 @@ export class SearchResolver {
       getId: searchCursorOf,
       first,
       after: seeksPastCursor
-        ? (input.after ?? undefined)
-        : SearchResolver.reanchorCursor(ordered, input.after ?? undefined, afterCursor?.globalId ?? null),
+        ? pageAfter
+        : SearchResolver.reanchorCursor(ordered, pageAfter, afterCursor?.globalId ?? null),
     });
+
+    // A timed browse's cursors carry its total forward — see the timed branch.
+    const carriedTotal = candidateSource === 'timed' ? timedTotalCount : undefined;
+    const mint =
+      carriedTotal == null
+        ? (cursor: string) => cursor
+        : (cursor: string) => withCarriedTotal(cursor, carriedTotal);
 
     const edges = slice.map((item) => ({
       node: item.result,
-      cursor: searchCursorOf(item),
+      cursor: mint(searchCursorOf(item)),
     }));
 
     // Tag suggestions ride alongside the entity results (the header search box
@@ -1011,7 +1054,11 @@ export class SearchResolver {
 
     return {
       edges,
-      pageInfo,
+      pageInfo: {
+        ...pageInfo,
+        startCursor: pageInfo.startCursor == null ? pageInfo.startCursor : mint(pageInfo.startCursor),
+        endCursor: pageInfo.endCursor == null ? pageInfo.endCursor : mint(pageInfo.endCursor),
+      },
       // For the 'timed' source, `timedTotalCount` is a real per-type `COUNT(*)`
       // (see `countTimedEntities`) — not `candidateCount`, which is only the size
       // of the `first * FETCH_MULTIPLIER`-bounded window fetched for this one page.

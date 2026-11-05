@@ -224,12 +224,22 @@ export class MediaStage implements ImportStageRunner {
     let deduped = 0;
     let failed = 0;
 
+    // Keyset over `id`: every row this pass touches is stamped (FileId or
+    // FileMediaError) and so leaves the predicate, but a page that always
+    // started from the top of the run still had to read and JSONB-filter every
+    // row the earlier pages had stamped before it found its 200 — O(n²/200)
+    // over a 100k-photo library. Carrying the last id forward makes each page
+    // read only what is left. `remaining` still bounds the loop.
+    let after: string | null = null;
+
     while (remaining > 0) {
-      const batch = await this.nextBatch(context.runId);
+      const batch = await this.nextBatch(context.runId, after);
 
       if (batch.length === 0) {
         break;
       }
+
+      after = batch[batch.length - 1].id;
 
       // Concurrent, because this stage is LATENCY-bound, not throughput-bound.
       // Each file is a stat, a read, an object-store PUT, a thumbnail and an
@@ -417,12 +427,19 @@ export class MediaStage implements ImportStageRunner {
     let contents = 0;
     let declined = 0;
 
+    // Same keyset as the media pass, for the same reason — and here it is also
+    // what guarantees the loop ends: a row `settleAttachments` left unstamped
+    // used to be re-selected forever.
+    let after: string | null = null;
+
     for (;;) {
-      const batch = await this.nextAttachmentBatch(context.runId);
+      const batch = await this.nextAttachmentBatch(context.runId, after);
 
       if (batch.length === 0) {
         break;
       }
+
+      after = batch[batch.length - 1].id;
 
       // Concurrency is bounded at the ROW here, and a row's own descriptors are
       // uploaded one after another inside it. Nesting `limit()` again per
@@ -674,15 +691,17 @@ export class MediaStage implements ImportStageRunner {
         AND metadata->'AttachmentFileIds' IS NULL`;
   }
 
-  private async nextAttachmentBatch(runId: string): Promise<AttachmentRow[]> {
+  /** @param after the last id of the previous page, or null for the first. */
+  private async nextAttachmentBatch(runId: string, after: string | null): Promise<AttachmentRow[]> {
     return this.dataSource.query<AttachmentRow[]>(
       `SELECT id, data_source AS "dataSource", classification, media_type AS "mediaType",
               content_hash AS "contentHash", metadata
          FROM ci_import.staged_items
         WHERE ${this.attachmentPredicate()}
+          AND ($2::uuid IS NULL OR id > $2::uuid)
         ORDER BY id
         LIMIT ${ATTACHMENT_BATCH}`,
-      [runId],
+      [runId, after],
     );
   }
 
@@ -1092,15 +1111,17 @@ export class MediaStage implements ImportStageRunner {
     return [...FILE_CLASSIFICATIONS];
   }
 
-  private async nextBatch(runId: string): Promise<MediaRow[]> {
+  /** @param after the last id of the previous page, or null for the first. */
+  private async nextBatch(runId: string, after: string | null): Promise<MediaRow[]> {
     return this.dataSource.query<MediaRow[]>(
       `SELECT id, filename, media_type AS "mediaType", size_bytes AS "sizeBytes",
               COALESCE(intermediate_location, original_location) AS "localPath"
          FROM ci_import.staged_items
         WHERE ${this.mediaPredicate()}
+          AND ($3::uuid IS NULL OR id > $3::uuid)
         ORDER BY id
         LIMIT ${MEDIA_BATCH}`,
-      [runId, this.classifications],
+      [runId, this.classifications, after],
     );
   }
 

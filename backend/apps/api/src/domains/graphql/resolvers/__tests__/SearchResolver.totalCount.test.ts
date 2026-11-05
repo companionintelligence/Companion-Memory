@@ -154,16 +154,58 @@ describe('SearchResolver — timed-path totalCount', () => {
   it('scopes the count query by the same filters as the fetch, but never by its pagination window', async () => {
     const { resolver, countCalls } = makeResolver();
 
-    const first = await resolver.search(context, { first: 5 } as SearchInput);
+    await resolver.search(context, { first: 5 } as SearchInput);
 
-    await resolver.search(context, { first: 5, after: first.pageInfo.endCursor } as SearchInput);
-
-    expect(countCalls).toHaveLength(2);
+    expect(countCalls).toHaveLength(1);
 
     for (const call of countCalls) {
       expect(call.limit).toBeUndefined();
       expect(call.afterTime).toBeUndefined();
       expect(call.afterId).toBeUndefined();
     }
+  });
+
+  // The count is up to fourteen COUNT(*)s over the whole corpus. The first page
+  // runs it and every cursor it mints carries the result, so a "load more" reads
+  // the total back out of `after` instead of recounting — and the number the
+  // viewer sees cannot drift mid-scroll as rows arrive.
+  it("counts once and carries the first page's total on every later page", async () => {
+    const { resolver, eventService, countCalls } = makeResolver();
+
+    const first = await resolver.search(context, { first: 5 } as SearchInput);
+
+    // Rows arrive between pages: a recount WOULD now say something else.
+    (eventService.countEntitiesForEvents as jest.Mock).mockResolvedValue(REAL_EVENT_TOTAL + 17);
+
+    const second = await resolver.search(context, {
+      first: 5,
+      after: first.pageInfo.endCursor,
+    } as SearchInput);
+    const third = await resolver.search(context, {
+      first: 5,
+      after: second.pageInfo.endCursor,
+    } as SearchInput);
+
+    expect(countCalls).toHaveLength(1);
+    expect(second.totalCount).toBe(REAL_EVENT_TOTAL);
+    expect(third.totalCount).toBe(REAL_EVENT_TOTAL);
+    // The carried total rides on the edge cursors too, not only on endCursor.
+    expect(second.edges[0].cursor).toBe(second.pageInfo.startCursor);
+  });
+
+  it('counts afresh for a cursor minted before totals were carried', async () => {
+    const { resolver, countCalls } = makeResolver();
+
+    const first = await resolver.search(context, { first: 5 } as SearchInput);
+    // The two-segment form (`<iso>::<id>`) an older server minted.
+    const legacy = Buffer.from(
+      Buffer.from(first.pageInfo.endCursor!, 'base64').toString('utf8').split('::').slice(0, 2).join('::'),
+    ).toString('base64');
+
+    const second = await resolver.search(context, { first: 5, after: legacy } as SearchInput);
+
+    expect(countCalls).toHaveLength(2);
+    expect(second.totalCount).toBe(REAL_EVENT_TOTAL);
+    expect(second.edges).toHaveLength(5);
   });
 });
