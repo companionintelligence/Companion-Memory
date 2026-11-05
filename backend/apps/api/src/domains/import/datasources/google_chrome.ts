@@ -22,6 +22,7 @@ import path from 'node:path';
 
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
+import { parseFlexibleDate } from './dates';
 import { walkFiles } from './fsWalk';
 import { decodeEntities } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -35,13 +36,7 @@ const BOOKMARKS_FILE = 'bookmarks.html';
 
 // Bookmark ADD_DATE is whole seconds since the Unix epoch.
 function secToDate(sec: number | undefined): Date | undefined {
-  if (typeof sec !== 'number' || sec <= 0) {
-    return undefined;
-  }
-
-  const d = new Date(sec * 1000);
-
-  return isNaN(d.getTime()) ? undefined : d;
+  return parseFlexibleDate(sec, { epoch: 's' });
 }
 
 // Read up to ~64KB of a file to sniff for a signature without slurping a

@@ -7,6 +7,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
+import { parseFlexibleDate } from './dates';
 import { childDir } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -51,14 +52,7 @@ function looksLikeMessagesJSON(text: string): boolean {
 // Timestamps in JSON packages are UTC but zone-less ("2022-08-03 17:55:02");
 // pin them to UTC instead of letting Date parse them as local time.
 function parseTimestamp(s: string | undefined): Date | undefined {
-  if (!s) {
-    return undefined;
-  }
-
-  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(s.trim());
-  const d = new Date(m ? `${m[1]}T${m[2]}Z` : s);
-
-  return isNaN(d.getTime()) ? undefined : d;
+  return parseFlexibleDate(s, { naiveUtc: true });
 }
 
 async function findMessageFile(channelDir: string): Promise<string | null> {

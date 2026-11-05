@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseFlexibleDate } from './dates';
 import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -51,17 +52,6 @@ function numVal(v: unknown): number | undefined {
   }
 
   return undefined;
-}
-
-function parseDate(s: unknown): Date | undefined {
-  const v = str(s);
-  if (!v) {
-    return undefined;
-  }
-
-  const d = new Date(v);
-
-  return isNaN(d.getTime()) ? undefined : d;
 }
 
 function obj(v: unknown): Record<string, unknown> | undefined {
@@ -165,7 +155,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
     // filename's action_<id> stem so a malformed record still keeps a distinct
     // id (constant-filename items otherwise collapse in hashItem).
     const uid = str(d.uniqueId) || base.replace(/\.json$/i, '');
-    const lastModified = parseDate(d.lastModifiedTime);
+    const lastModified = parseFlexibleDate(d.lastModifiedTime);
 
     const reservation = obj(d.booking) || obj(d.waitlist);
     if (reservation) {
@@ -190,7 +180,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
     waitlist: boolean,
   ): void {
     // Waitlists carry createdTime instead of startTime.
-    const ts = parseDate(b.startTime) || parseDate(b.createdTime) || lastModified;
+    const ts = parseFlexibleDate(b.startTime) || parseFlexibleDate(b.createdTime) || lastModified;
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
@@ -210,7 +200,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
         id: `gpurchase:${uid}`,
         classification: 'event',
         timestamp: ts,
-        timespanEnd: parseDate(b.endTime),
+        timespanEnd: parseFlexibleDate(b.endTime),
         content: textContent('reservation.txt', title),
         metadata: {
           Title: title,
@@ -236,11 +226,11 @@ export class GooglePurchasesFileImporter implements FileImporter {
     params: ImportParams,
   ): void {
     const ts =
-      parseDate(p.orderDate) ||
-      parseDate(p.purchaseDate) ||
-      parseDate(p.time) ||
-      parseDate(p.date) ||
-      parseDate(p.creationTime) ||
+      parseFlexibleDate(p.orderDate) ||
+      parseFlexibleDate(p.purchaseDate) ||
+      parseFlexibleDate(p.time) ||
+      parseFlexibleDate(p.date) ||
+      parseFlexibleDate(p.creationTime) ||
       lastModified;
     if (!timeframeContains(params.timeframe, ts)) {
       return;

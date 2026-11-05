@@ -9,6 +9,7 @@
    this module only answers "what memories does this JSON contain?" plus a few
    shape hints the datasources use to disambiguate a shared filename. */
 
+import { parseFlexibleDate } from './dates';
 import crypto from 'node:crypto';
 
 import { readJsonFile } from './readers';
@@ -115,31 +116,11 @@ export function unwrapMemoryList(parsed: unknown): unknown[] | undefined {
 
 /** Epoch seconds, epoch millis, numeric strings, and ISO strings → Date. */
 function toDate(v: unknown): Date | undefined {
-  if (v == null) {
-    return undefined;
-  }
+  // A decimal string ("1716393600.5") is a fractional epoch here, which the
+  // shared rule (integers only) does not read; the number path does.
+  const numeric = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
 
-  if (typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim())) {
-    v = Number(v);
-  }
-
-  if (typeof v === 'number') {
-    if (!isFinite(v) || v <= 0) {
-      return undefined;
-    }
-
-    const d = new Date(v > 1e12 ? v : v * 1000);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  if (typeof v === 'string' && v) {
-    const d = new Date(v);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  return undefined;
+  return parseFlexibleDate(numeric, { epoch: 'auto' });
 }
 
 function firstString(obj: Record<string, unknown>, keys: string[]): string | undefined {

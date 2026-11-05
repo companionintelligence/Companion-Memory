@@ -34,6 +34,9 @@ import path from 'node:path';
 
 import type { ResolvedAsset } from './_ai_media';
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
+import type { MemoryEntry } from './_ai_memory';
+import { parseMemoryEntries, memoryShapeHints, memoryTitle } from './_ai_memory';
+import { parseFlexibleDate } from './dates';
 import {
   CHATGPT_SIBLINGS,
   CLAUDE_SIBLINGS,
@@ -154,16 +157,6 @@ function firstText(...candidates: (string | undefined)[]): string | undefined {
   }
 
   return undefined;
-}
-
-function toDate(v: string | undefined): Date | undefined {
-  if (!v) {
-    return undefined;
-  }
-
-  const d = new Date(v);
-
-  return isNaN(d.getTime()) ? undefined : d;
 }
 
 export class ClaudeFileImporter implements FileImporter {
@@ -439,7 +432,7 @@ export class ClaudeFileImporter implements FileImporter {
   private pushProject(p: ClaudeProject, sourceFile: string, params: ImportParams): void {
     const rawName = firstText(p.name);
     const name = rawName || 'Untitled project';
-    const ts = toDate(p.updated_at) ?? toDate(p.created_at);
+    const ts = parseFlexibleDate(p.updated_at) ?? parseFlexibleDate(p.created_at);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }

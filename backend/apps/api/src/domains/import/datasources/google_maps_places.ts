@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseFlexibleDate } from './dates';
 import { listFiles } from './fsWalk';
 import { asRecord, asString, type JsonRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -32,16 +33,6 @@ async function findSupportedFiles(root: string): Promise<string[]> {
   return (
     await listFiles(root, { maxDepth: 6, match: (name) => SUPPORTED_FILES.has(name.toLowerCase()) })
   ).sort();
-}
-
-function parseDate(s: unknown): Date | undefined {
-  if (!s || typeof s !== 'string') {
-    return undefined;
-  }
-
-  const d = new Date(s);
-
-  return isNaN(d.getTime()) ? undefined : d;
 }
 
 function coords(feat: Feature): { lat: number; lon: number } | undefined {
@@ -259,7 +250,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
 
   private pushPlace(feat: Feature, params: ImportParams, labeled = false): void {
     const props = feat.properties || {};
-    const ts = parseDate(props.date);
+    const ts = parseFlexibleDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
@@ -321,7 +312,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
 
   private pushReview(feat: Feature, params: ImportParams): void {
     const props = feat.properties || {};
-    const ts = parseDate(props.date);
+    const ts = parseFlexibleDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }

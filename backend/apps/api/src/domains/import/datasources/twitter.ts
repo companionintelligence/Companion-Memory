@@ -31,6 +31,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readStore, readManifest, importGrokChats } from './_x_archive';
+import { parseFlexibleDate } from './dates';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Item, MediaAttachment } from './timeline';
@@ -378,17 +379,6 @@ function clientName(source: string | undefined): string | undefined {
   return text || undefined;
 }
 
-/** A parsed date, or undefined when the archive's value isn't one. */
-function parseDate(raw: string | undefined): Date | undefined {
-  if (!raw) {
-    return undefined;
-  }
-
-  const d = new Date(raw);
-
-  return isNaN(d.getTime()) ? undefined : d;
-}
-
 // A retweet's text is the shared post verbatim behind an `RT @author:` marker;
 // the archive stores no separate record of the original.
 const RETWEET_PREFIX = /^RT @([A-Za-z0-9_]{1,15}):\s*/;
@@ -579,7 +569,7 @@ function dmEventTime(e: DmEvent): number {
     e.joinConversation?.createdAt ??
     e.participantsJoin?.createdAt ??
     e.participantsLeave?.createdAt;
-  const d = parseDate(raw);
+  const d = parseFlexibleDate(raw);
 
   return d ? d.getTime() : 0;
 }
@@ -889,7 +879,7 @@ export class TwitterFileImporter implements FileImporter {
         continue;
       }
 
-      const created = parseDate(t.created_at);
+      const created = parseFlexibleDate(t.created_at);
       if (!timeframeContains(params.timeframe, created)) {
         params.pipeline.drop?.('outside_timeframe');
 
@@ -1138,7 +1128,7 @@ export class TwitterFileImporter implements FileImporter {
             continue;
           }
 
-          const created = parseDate(dm.createdAt);
+          const created = parseFlexibleDate(dm.createdAt);
           if (!timeframeContains(params.timeframe, created)) {
             params.pipeline.drop?.('outside_timeframe');
 
