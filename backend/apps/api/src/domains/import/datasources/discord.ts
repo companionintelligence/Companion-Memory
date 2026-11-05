@@ -7,6 +7,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
+import { childDir } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
@@ -78,29 +79,7 @@ async function findMessageFile(channelDir: string): Promise<string | null> {
 // Package folder casing differs across export eras ("messages" vs "Messages",
 // "account" vs "Account") — look children up case-insensitively.
 async function findChildDir(dir: string, name: string): Promise<string | null> {
-  let names: string[];
-  try {
-    names = await readdir(dir);
-  } catch {
-    return null;
-  }
-
-  for (const n of names) {
-    if (n.toLowerCase() !== name.toLowerCase()) {
-      continue;
-    }
-
-    const p = path.join(dir, n);
-    try {
-      if ((await stat(p)).isDirectory()) {
-        return p;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return null;
+  return (await childDir(dir, name)) ?? null;
 }
 
 async function findMessagesDir(root: string): Promise<string | null> {

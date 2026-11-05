@@ -25,9 +25,11 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isYouTubeProduct, parseActivityCell, youtubeActivityGraph } from './_youtube_activity';
+import { walkFiles } from './fsWalk';
 import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -118,26 +120,12 @@ function headerProductBefore(raw: string, at: number): string | undefined {
   return name || undefined;
 }
 
-async function* walkActivityFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 4) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkActivityFiles(p, depth + 1);
-    } else if (e.isFile() && e.name.toLowerCase() === 'myactivity.html') {
-      yield p;
-    }
-  }
+function walkActivityFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, {
+    maxDepth: 4,
+    sorted: true,
+    match: (name) => name.toLowerCase() === 'myactivity.html',
+  });
 }
 
 export class GoogleMyActivityFileImporter implements FileImporter {

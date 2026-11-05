@@ -17,10 +17,12 @@
 */
 import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
+import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead, stripBom } from './sniff';
@@ -67,32 +69,18 @@ async function looksLikeChromeBookmarks(fpath: string): Promise<boolean> {
 // a dropped Google Takeout, is the archive ROOT, where Chrome/ is one of dozens
 // of subfolders. So we walk (bounded depth) and match Takeout's fixed filenames,
 // content-sniffing only those two names rather than every JSON/HTML in the tree.
-async function findChromeFiles(root: string, depth = 0): Promise<{ history: string[]; bookmarks: string[] }> {
+async function findChromeFiles(root: string): Promise<{ history: string[]; bookmarks: string[] }> {
   const out = { history: [] as string[], bookmarks: [] as string[] };
-  if (depth > 6) {
-    return out;
-  }
+  const named = (name: string) =>
+    name.toLowerCase() === HISTORY_FILE || name.toLowerCase() === BOOKMARKS_FILE;
 
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return out;
-  }
+  for await (const p of walkFiles(root, { maxDepth: 6, sorted: true, match: named })) {
+    const base = path.basename(p).toLowerCase();
 
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      const sub = await findChromeFiles(p, depth + 1);
-      out.history.push(...sub.history);
-      out.bookmarks.push(...sub.bookmarks);
-    } else if (e.isFile()) {
-      const base = e.name.toLowerCase();
-      if (base === HISTORY_FILE && (await looksLikeChromeHistory(p))) {
-        out.history.push(p);
-      } else if (base === BOOKMARKS_FILE && (await looksLikeChromeBookmarks(p))) {
-        out.bookmarks.push(p);
-      }
+    if (base === HISTORY_FILE && (await looksLikeChromeHistory(p))) {
+      out.history.push(p);
+    } else if (base === BOOKMARKS_FILE && (await looksLikeChromeBookmarks(p))) {
+      out.bookmarks.push(p);
     }
   }
 

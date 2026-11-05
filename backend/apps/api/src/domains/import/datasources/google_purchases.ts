@@ -4,9 +4,10 @@
    tolerantly since Google's shapes vary across accounts. Every field is guarded.
 */
 import fs from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportedEventStatus, ImportParams, Graph, LineItemRecord } from './timeline';
@@ -20,26 +21,8 @@ function isPurchasesDir(name: string): boolean {
   return /purchases?\s*&?\s*reservations?/i.test(name) || /reservations?/i.test(name);
 }
 
-async function* walkActionFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 5) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkActionFiles(p, depth + 1);
-    } else if (e.isFile() && ACTION_FILE.test(e.name)) {
-      yield p;
-    }
-  }
+function walkActionFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, { maxDepth: 5, sorted: true, match: (name) => ACTION_FILE.test(name) });
 }
 
 function str(v: unknown): string | undefined {

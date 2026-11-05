@@ -1,11 +1,12 @@
 import fs from 'fs';
-import { readdir, stat } from 'fs/promises';
+import { stat } from 'fs/promises';
 import path from 'path';
 
 import Database from 'better-sqlite3';
 
 import { browserBookmarkIdentity, browserVisitIdentity } from '@ci/domains/memory';
 
+import { listFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
@@ -14,46 +15,23 @@ import { textContent, timeframeContains } from './timeline';
 // Find places.sqlite within a path: the file itself, or anywhere a few levels
 // deep when handed a folder (the importer is dispatched once on the job root, so
 // dropping a whole `browser/` or `Firefox Profile/` folder must still resolve).
-async function findPlacesDbs(root: string, depth = 0, out: string[] = []): Promise<string[]> {
-  if (depth > 4) {
-    return out;
-  }
-
+async function findPlacesDbs(root: string): Promise<string[]> {
   let st: fs.Stats;
   try {
     st = await stat(root);
   } catch {
-    return out;
+    return [];
   }
 
   if (st.isFile()) {
-    if (path.basename(root) === 'places.sqlite') {
-      out.push(root);
-    }
-
-    return out;
+    return path.basename(root) === 'places.sqlite' ? [root] : [];
   }
 
   if (!st.isDirectory()) {
-    return out;
+    return [];
   }
 
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch {
-    return out;
-  }
-
-  for (const name of names) {
-    if (name === 'places.sqlite') {
-      out.push(path.join(root, name));
-    } else if (!name.startsWith('.')) {
-      await findPlacesDbs(path.join(root, name), depth + 1, out);
-    }
-  }
-
-  return out;
+  return listFiles(root, { maxDepth: 4, skipHidden: true, match: (name) => name === 'places.sqlite' });
 }
 
 /** A joined moz_places × moz_historyvisits row. */

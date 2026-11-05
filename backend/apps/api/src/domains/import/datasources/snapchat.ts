@@ -12,9 +12,10 @@
        "Sent Chat History":     [ { "To": "user",   "Created": "...", "Text": "yo" } ] }
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { filesIn } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -78,18 +79,7 @@ async function findSignatureFiles(root: string): Promise<string[]> {
   const found: string[] = [];
   const candidates = [root, path.join(root, 'json'), path.join(root, 'json_data')];
   for (const dir of candidates) {
-    let names: string[];
-    try {
-      names = await readdir(dir);
-    } catch {
-      continue;
-    }
-
-    for (const name of names) {
-      if (SIGNATURE_FILES.includes(name.toLowerCase())) {
-        found.push(path.join(dir, name));
-      }
-    }
+    found.push(...(await filesIn(dir, (name) => SIGNATURE_FILES.includes(name.toLowerCase()))));
   }
 
   return found;

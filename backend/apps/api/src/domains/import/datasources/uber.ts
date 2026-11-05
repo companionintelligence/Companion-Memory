@@ -18,6 +18,11 @@ import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readCsvFile } from './readers';
+import { open, stat as fsStat } from 'node:fs/promises';
+import path from 'node:path';
+
+import { parseCSV } from './csv';
+import { listFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
@@ -89,32 +94,7 @@ const EATS_FILE_RE = /^user_orders(-\d+)?\.csv$/i;
 // Recursively collect every CSV matching `re` under a directory (bounded depth;
 // Uber exports are small and nest files at Uber Data/<Rider|Eats>/<file>).
 async function findCsvFiles(root: string, re: RegExp, maxDepth = 6): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth) {
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        await walk(full, depth + 1);
-      } else if (e.isFile() && re.test(e.name)) {
-        out.push(full);
-      }
-    }
-  };
-
-  await walk(root, 0);
-
-  return out.sort();
+  return (await listFiles(root, { maxDepth, match: (name) => re.test(name) })).sort();
 }
 
 export class UberFileImporter implements FileImporter {
