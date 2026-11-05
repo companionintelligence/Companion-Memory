@@ -19,6 +19,7 @@ import {
   CommunicationDirection,
   CommunicationService,
   CommunicationType,
+  type CreateCommunicationDto,
   canonicalSystem,
   emailFallbackIdentity,
   emailIdentity,
@@ -28,7 +29,22 @@ import { TagService } from '@ci/domains/search-next';
 
 import { ConnectionSyncJob } from '../../../types';
 import { parseDate } from '../../../util';
-import { PromoteService } from '../../PromoteService';
+import { type ParticipantGroup, PromoteService } from '../../PromoteService';
+
+/** The participant groups one message contributes to the page's PromoteService call: from, to, cc, bcc. */
+const GROUPS_PER_MESSAGE = 4;
+
+/** A message that passed the gates, with everything the page-level write needs from it. */
+interface PreparedMessage {
+  message: GmailMessage;
+  details: ReturnType<GmailTransformService['extractMessageDetails']>;
+  isOutbound: boolean;
+  fromParticipants: EmailParticipant[];
+  toParticipants: EmailParticipant[];
+  ccParticipants: EmailParticipant[];
+  bccParticipants: EmailParticipant[];
+  groups: ParticipantGroup[];
+}
 
 @Injectable()
 export class GmailTransformService {
@@ -57,20 +73,12 @@ export class GmailTransformService {
       });
 
       const messages = (data.messages as GmailMessage[]) || [];
-      await Promise.all(
-        messages.map(
-          async (message) =>
-            await this.processMessage({
-              message,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const outcome = await this.processPage(messages, userId, connection.id);
 
       this.logger.log('Gmail message promotion completed', {
         userId,
         processedCount: messages.length,
+        ...outcome,
       });
     } catch (error: unknown) {
       this.logger.error('Error promoting Gmail messages', {
@@ -84,42 +92,117 @@ export class GmailTransformService {
     }
   }
 
-  private async processMessage({
-    message,
-    userId,
-    connectionId,
-  }: {
-    message: GmailMessage;
-    userId: string;
-    connectionId: string;
-  }): Promise<void> {
+  /**
+   * One sync page, written in a fixed number of round trips.
+   *
+   * This used to run every message of the page in parallel, each one calling
+   * PromoteService four times (from / to / cc / bcc) and then create(): per
+   * message, two owner lookups per call, one entity search per participant,
+   * two endpoint SELECTs plus a save per edge, then a find-or-insert and two
+   * queued jobs — fifteen to twenty-five statements, and two messages naming
+   * the same new contact raced their searches and minted it twice.
+   *
+   * Now: parse and gate each message on its own (a malformed one is skipped
+   * and logged, as before, not the page), resolve and link EVERY participant
+   * of the page in one PromoteService call, write the page with one idempotent
+   * createManyDetailed, and tag by distinct label set. `emitCreated` keeps the
+   * per-row CommunicationCreatedEvent for the rows this sync inserted: the
+   * search index and the people-linker consume it, and nothing else schedules
+   * either for a connection sync (the arrival sweep covers content only).
+   */
+  private async processPage(
+    messages: GmailMessage[],
+    userId: string,
+    connectionId: string,
+  ): Promise<{ written: number; inserted: number }> {
+    const context = { userId };
+    const prepared = messages
+      .map((message) => this.prepareMessage(message, userId, connectionId))
+      .filter((entry): entry is PreparedMessage => entry != null);
+
+    if (prepared.length === 0) {
+      return { written: 0, inserted: 0 };
+    }
+
+    const groupIds = await this.promoteService.promoteParticipantGroups(context, {
+      connectionId,
+      source: 'email',
+      groups: prepared.flatMap((entry) => entry.groups),
+    });
+
+    const dtos = prepared.map((entry, index) =>
+      this.toCommunicationDto(
+        entry,
+        connectionId,
+        groupIds.slice(index * GROUPS_PER_MESSAGE, (index + 1) * GROUPS_PER_MESSAGE),
+      ),
+    );
+    const results = await this.communicationService.createManyDetailed(context, dtos, { emitCreated: true });
+
+    // Labels become tags. One call per distinct label set, not one per
+    // message: a page of inbox mail is mostly the same two or three labels.
+    const byLabels = new Map<
+      string,
+      { labels: string[]; entities: Array<{ type: 'communication'; id: string }> }
+    >();
+
+    results.forEach(({ entity }, index) => {
+      const labels = prepared[index].details.labels;
+
+      if (labels.length === 0) {
+        return;
+      }
+
+      const key = [...labels].sort().join('\u0000');
+      const bucket = byLabels.get(key) ?? { labels, entities: [] };
+
+      bucket.entities.push({ type: 'communication', id: entity.id });
+      byLabels.set(key, bucket);
+    });
+
+    for (const { labels, entities } of byLabels.values()) {
+      await this.tagService.tagEntities(context, { labels, entities });
+    }
+
+    return { written: results.length, inserted: results.filter(({ inserted }) => inserted).length };
+  }
+
+  /**
+   * Parse and gate one message. Null for a message the sync should not write
+   * (a drop) or could not read (logged, so one bad message never costs the page).
+   */
+  private prepareMessage(
+    message: GmailMessage,
+    userId: string,
+    connectionId: string,
+  ): PreparedMessage | null {
     try {
-      const messageDetails = this.extractMessageDetails(message);
+      const details = this.extractMessageDetails(message);
       const headers = headersFromGmailApi({
         headers: message.payload?.headers,
         labelIds: message.labelIds,
       });
       const drop = liveMailDropReason({
         headers,
-        bodyText: messageDetails.body || messageDetails.snippet,
+        bodyText: details.body || details.snippet,
         isExplicitDraft: message.labelIds?.includes('DRAFT'),
         includeBulk: mailIncludeBulkEnabled(),
       });
       if (drop) {
         this.logger.log('Skipping Gmail message', {
-          messageId: messageDetails.id,
-          subject: messageDetails.subject,
+          messageId: details.id,
+          subject: details.subject,
           drop,
         });
 
-        return;
+        return null;
       }
 
       this.logger.log('Processing Gmail message', {
-        messageId: messageDetails.id,
-        subject: messageDetails.subject,
-        from: messageDetails.from,
-        participantCount: messageDetails.participants.length,
+        messageId: details.id,
+        subject: details.subject,
+        from: details.from,
+        participantCount: details.participants.length,
       });
 
       // Direction comes from the message's OWN headers, never a constant.
@@ -131,139 +214,35 @@ export class GmailTransformService {
       // Same function the mbox/eml importers use, so an API sync and a Takeout
       // import of one message agree on direction.
       const isOutbound = emailDirection(headers) === 'outbound';
-      const direction = isOutbound ? CommunicationDirection.OUTBOUND : CommunicationDirection.INBOUND;
+      const date = details.date ? new Date(details.date) : undefined;
+      const byType = (type: EmailParticipant['type']) => details.participants.filter((p) => p.type === type);
+      const fromParticipants = byType('from');
+      const toParticipants = byType('to');
+      const ccParticipants = byType('cc');
+      const bccParticipants = byType('bcc');
 
-      // Process participants and create entities with relationships
-      const fromParticipants = messageDetails.participants.filter((p) => p.type === 'from');
-      const toParticipants = messageDetails.participants.filter((p) => p.type === 'to');
-      const ccParticipants = messageDetails.participants.filter((p) => p.type === 'cc');
-      const bccParticipants = messageDetails.participants.filter((p) => p.type === 'bcc');
-
-      // On an OUTBOUND message the From address is the owner, not someone the
-      // owner received mail from — RECEIVED_EMAIL_FROM would be a false edge.
-      const fromEntityIds = await this.promoteService.processParticipants(
+      return {
+        message,
+        details,
+        isOutbound,
         fromParticipants,
-        userId,
-        connectionId,
-        'email',
-        isOutbound ? 'EMAILED' : 'RECEIVED_EMAIL_FROM',
-        messageDetails.date ? new Date(messageDetails.date) : undefined,
-      );
-
-      // Create person entities for recipients (with EMAILED relationship)
-      const toEntityIds = await this.promoteService.processParticipants(
         toParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        messageDetails.date ? new Date(messageDetails.date) : undefined,
-      );
-
-      // Create person entities for recipients (with EMAILED relationship)
-      const ccEntityIds = await this.promoteService.processParticipants(
         ccParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        messageDetails.date ? new Date(messageDetails.date) : undefined,
-      );
-
-      // Create person entities for recipients (with EMAILED relationship)
-      const bccEntityIds = await this.promoteService.processParticipants(
         bccParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        messageDetails.date ? new Date(messageDetails.date) : undefined,
-      );
-
-      let toEntityIdsCombined = toEntityIds.length > 0 ? toEntityIds : [];
-      if (ccEntityIds.length > 0) {
-        toEntityIdsCombined = toEntityIdsCombined.concat(ccEntityIds);
-      }
-
-      if (bccEntityIds.length > 0) {
-        toEntityIdsCombined = toEntityIdsCombined.concat(bccEntityIds);
-      }
-
-      const communication = await this.communicationService.create(
-        { userId },
-        {
-          time: messageDetails.date ? new Date(messageDetails.date) : new Date(),
-          communication_type: CommunicationType.EMAIL,
-          direction,
-          // The API's hex threadId, normalized to the registry's one spelling
-          // so a Takeout mbox import of the same message (X-GM-THRID, the same
-          // number in decimal) lands the same thread_id. A non-hex value —
-          // nothing the API sends, but a replayed fixture might — is dropped
-          // rather than stored as a key nothing else can produce.
-          thread_id: gmailThreadKeyFromApi(message.threadId),
-          from_entity_id: fromEntityIds[0] || undefined,
-          to_entity_ids: toEntityIdsCombined,
-          participants_metadata: {
-            from: fromParticipants,
-            to: toParticipants,
-            cc: ccParticipants,
-            bcc: bccParticipants,
+        // In GROUPS_PER_MESSAGE order: from, to, cc, bcc. On an OUTBOUND
+        // message the From address is the owner, not someone the owner
+        // received mail from — RECEIVED_EMAIL_FROM would be a false edge.
+        groups: [
+          {
+            participants: fromParticipants,
+            relationshipType: isOutbound ? 'EMAILED' : 'RECEIVED_EMAIL_FROM',
+            startDate: date,
           },
-          subject: messageDetails.subject,
-          // The body, or nothing. `snippet` is Gmail's ~200-char teaser and is
-          // already stored below as `preview`; falling back to it here wrote a
-          // truncated preview into `content`, where search and embeddings then
-          // treat it as the whole message. An empty body is honest; a preview
-          // masquerading as the body is not.
-          content: messageDetails.body,
-          category: 'personal', // TODO: Classify emails
-          connection_id: connectionId,
-          preview: messageDetails.snippet || null,
-          // Identity: the RFC Message-ID under the federated `email` system,
-          // so the same message converges with a Takeout mbox import (or an
-          // Outlook fetch of the same mail) — docs/design/
-          // cross-pipeline-identity.md. Message-ID-less mail falls back to a
-          // gmail-scoped id derived from the API message id (stable across
-          // re-syncs, not expected to converge cross-pipeline). A message
-          // with neither leaves source_id NULL — uncovered by the partial
-          // index — rather than collapsing onto one 'unknown' row.
-          // communications_source_identity_uniq still rejects a re-synced
-          // message either way (the sent/inbox sweeps overlap, and history
-          // replays re-send whole pages). source_type stays 'ETL': provenance,
-          // not identity.
-          source_type: 'ETL',
-          // Ledger platform: the Gmail connection delivered it (the row's
-          // system is the federated `email`, which says nothing about where).
-          source_platform: canonicalSystem('gmail'),
-          ...(() => {
-            const identity =
-              emailIdentity(messageDetails.rfcMessageId) ??
-              (message.id ? emailFallbackIdentity('gmail', `gmail-api:${message.id}`) : null);
-
-            return identity
-              ? { source_system: identity.system, source_id: identity.id }
-              : { source_system: canonicalSystem('gmail'), source_id: undefined };
-          })(),
-        },
-      );
-
-      await this.tagService.tagEntities(
-        { userId },
-        {
-          labels: messageDetails.labels,
-          entities: [
-            {
-              type: 'communication',
-              id: communication.id,
-            },
-          ],
-        },
-      );
-
-      this.logger.log('Gmail message saved successfully', {
-        messageId: messageDetails.id,
-        subject: messageDetails.subject,
-      });
+          { participants: toParticipants, relationshipType: 'EMAILED', startDate: date },
+          { participants: ccParticipants, relationshipType: 'EMAILED', startDate: date },
+          { participants: bccParticipants, relationshipType: 'EMAILED', startDate: date },
+        ],
+      };
     } catch (error) {
       this.logger.error('Error processing individual Gmail message', {
         userId,
@@ -271,8 +250,73 @@ export class GmailTransformService {
         messageId: message.id,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other messages
+
+      return null;
     }
+  }
+
+  /** @param entityIds the resolved Person ids of `entry.groups`, in the same order (from, to, cc, bcc). */
+  private toCommunicationDto(
+    entry: PreparedMessage,
+    connectionId: string,
+    [fromEntityIds = [], toEntityIds = [], ccEntityIds = [], bccEntityIds = []]: string[][],
+  ): CreateCommunicationDto {
+    const { message, details } = entry;
+
+    return {
+      time: details.date ? new Date(details.date) : new Date(),
+      communication_type: CommunicationType.EMAIL,
+      direction: entry.isOutbound ? CommunicationDirection.OUTBOUND : CommunicationDirection.INBOUND,
+      // The API's hex threadId, normalized to the registry's one spelling
+      // so a Takeout mbox import of the same message (X-GM-THRID, the same
+      // number in decimal) lands the same thread_id. A non-hex value —
+      // nothing the API sends, but a replayed fixture might — is dropped
+      // rather than stored as a key nothing else can produce.
+      thread_id: gmailThreadKeyFromApi(message.threadId),
+      from_entity_id: fromEntityIds[0] || undefined,
+      to_entity_ids: [...toEntityIds, ...ccEntityIds, ...bccEntityIds],
+      participants_metadata: {
+        from: entry.fromParticipants,
+        to: entry.toParticipants,
+        cc: entry.ccParticipants,
+        bcc: entry.bccParticipants,
+      },
+      subject: details.subject,
+      // The body, or nothing. `snippet` is Gmail's ~200-char teaser and is
+      // already stored below as `preview`; falling back to it here wrote a
+      // truncated preview into `content`, where search and embeddings then
+      // treat it as the whole message. An empty body is honest; a preview
+      // masquerading as the body is not.
+      content: details.body,
+      category: 'personal', // TODO: Classify emails
+      connection_id: connectionId,
+      preview: details.snippet || null,
+      // Identity: the RFC Message-ID under the federated `email` system,
+      // so the same message converges with a Takeout mbox import (or an
+      // Outlook fetch of the same mail) — docs/design/
+      // cross-pipeline-identity.md. Message-ID-less mail falls back to a
+      // gmail-scoped id derived from the API message id (stable across
+      // re-syncs, not expected to converge cross-pipeline). A message
+      // with neither leaves source_id NULL — uncovered by the partial
+      // index — rather than collapsing onto one 'unknown' row.
+      // communications_source_identity_uniq makes a re-synced message an
+      // upsert either way (the sent/inbox sweeps overlap, and history
+      // replays re-send whole pages). source_type stays 'ETL': provenance,
+      // not identity.
+      source_type: 'ETL',
+      // Ledger platform: the Gmail connection delivered it (the row's
+      // system is the federated `email`, which says nothing about where).
+      source_platform: canonicalSystem('gmail'),
+      ...(() => {
+        const identity =
+          emailIdentity(details.rfcMessageId) ??
+          (message.id ? emailFallbackIdentity('gmail', `gmail-api:${message.id}`) : null);
+
+        return identity
+          ? { source_system: identity.system, source_id: identity.id }
+          : { source_system: canonicalSystem('gmail'), source_id: undefined };
+      })(),
+    };
   }
 
   private extractMessageDetails(message: GmailMessage) {

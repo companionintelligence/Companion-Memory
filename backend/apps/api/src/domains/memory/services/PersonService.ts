@@ -1033,6 +1033,34 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     return purged;
   }
 
+  /**
+   * The people whose `properties.email` is one of `emails`, in ONE query.
+   *
+   * Exact match on the stored value, as {@link search} compares it — callers
+   * normalise (lower-case) before asking, and store the same spelling. Served
+   * by `entities_owner_email_idx` (owner_user_id, properties->>'email').
+   *
+   * This is the batch twin of `search({ properties: { email } })` for the ETL
+   * connection syncs, which used to run that search once per participant per
+   * message — a page of fifty messages with three participants each was 150
+   * scans of every entity the user owns.
+   */
+  async findByEmails(context: ServiceContext, emails: readonly string[]): Promise<Person[]> {
+    if (emails.length === 0) {
+      return [];
+    }
+
+    const entities = await this.repository
+      .createQueryBuilder('entity')
+      .where('entity.owner_user_id = :userId', { userId: context.userId })
+      .andWhere(`entity.properties->>'email' IN (:...emails)`, { emails: [...new Set(emails)] })
+      // Oldest row first, so a duplicate address resolves to the same person on every page.
+      .orderBy('entity.id', 'ASC')
+      .getMany();
+
+    return entities.map((entity) => PersonEntity.toEgressType(entity));
+  }
+
   async search(context: ServiceContext, query: UpdatePersonDto): Promise<Person[]> {
     let executable = this.repository
       .createQueryBuilder('entity')

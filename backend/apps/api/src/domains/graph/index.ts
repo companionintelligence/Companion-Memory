@@ -155,6 +155,7 @@ export type {
   BulkItemRelationshipResult,
 } from './services/ItemRelationshipService';
 export { RelationshipMap, RelationshipType } from './types';
+export type { CreateRelationshipDto } from './types';
 export {
   SINGLE_VALUED_RELATIONSHIP_TYPES,
   SYMMETRIC_RELATIONSHIP_TYPES,
