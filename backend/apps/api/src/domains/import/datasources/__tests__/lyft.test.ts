@@ -279,21 +279,25 @@ describe('Lyft datasource', () => {
     });
 
     // A real export has rows whose pickup_address is blank while the coordinates
-    // are fine. The fix is still worth having; it just goes out unnamed.
-    it('falls back to the trip title when an address is blank', async () => {
+    // are fine. The fix is still worth having; it just goes out unnamed — on
+    // BOTH keys. `Title` used to fall back to the ride narration, which the
+    // place-name mapping then stamped on the fix (see uber.test's request-leg
+    // case for the corpus damage); the narration stays on `Trip`.
+    it('leaves a leg whose address is blank unnamed rather than titling it with the narration', async () => {
       const row = CURRENT_ROW.replace(',"111 E 210th St, Bronx, NY, United States",', ',,');
       const pickup = legOf((await importRows([row])).items, 'Pickup')!.item;
       expect(pickup.location).toEqual({ latitude: 40.87982, longitude: -73.87999 });
       expect(pickup.metadata.Name).toBeUndefined();
-      expect(pickup.metadata.Title).toBe(
-        'Lyft ride to 4525 Henry Hudson Pkwy W, Bronx, NY, United States (pickup)',
-      );
+      expect(pickup.metadata.Title).toBeUndefined();
+      expect(pickup.metadata.Trip).toBe('Lyft ride to 4525 Henry Hudson Pkwy W, Bronx, NY, United States');
+      expect(pickup.metadata.Leg).toBe('Pickup');
     });
 
     // Lyft records coordinates for the request but never an address for it.
     it('leaves the request fix unnamed rather than borrowing the pickup address', async () => {
       const request = legOf((await importRows([CURRENT_ROW])).items, 'Request')!.item;
       expect(request.metadata.Name).toBeUndefined();
+      expect(request.metadata.Title).toBeUndefined();
       expect(request.metadata.Trip).toBe(
         'Lyft ride from 111 E 210th St, Bronx, NY, United States' +
           ' to 4525 Henry Hudson Pkwy W, Bronx, NY, United States',
