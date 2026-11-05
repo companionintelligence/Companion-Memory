@@ -23,6 +23,7 @@ import path from 'node:path';
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
 import { walkFiles } from './fsWalk';
+import { decodeEntities } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead, stripBom } from './sniff';
@@ -107,15 +108,6 @@ function attr(attrs: string, name: string): string | undefined {
   }
 
   return m[2] !== undefined ? m[2] : m[3];
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;|&apos;/g, "'");
 }
 
 // Locate each <H3> folder heading by byte offset so an anchor can be attributed

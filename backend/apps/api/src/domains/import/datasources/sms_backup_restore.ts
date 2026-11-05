@@ -8,6 +8,7 @@ import path from 'node:path';
 
 import { extension } from 'mime-types';
 
+import { decodeEntities } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -132,16 +133,9 @@ class Base64StreamDecoder {
   }
 }
 
-// Decode the XML/HTML entities that SMS Backup & Restore emits in attribute values.
+// Decode the XML entities that SMS Backup & Restore emits in attribute values.
 function unescapeXml(s: string): string {
-  return s
-    .replace(/&#10;/g, '\n')
-    .replace(/&#13;/g, '\r')
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
+  return decodeEntities(s, { xml: true });
 }
 
 // Pull the key="value" attributes out of a single tag's text.

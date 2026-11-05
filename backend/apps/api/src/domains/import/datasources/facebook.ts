@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { facebookPageLikeId } from '@ci/domains/memory';
 
-import { htmlToText as sharedHtmlToText } from './htmlToText';
+import { decodeEntities, htmlToText as sharedHtmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -179,17 +179,6 @@ function parseFacebookJson<T>(raw: string): T | null {
 }
 
 /* ---- HTML-format helpers (Meta "Download Your Information" HTML export) ---- */
-
-// Decode the handful of HTML entities Meta emits in DYI exports.
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&#x27;/gi, "'");
-}
 
 // Strip tags via the shared parser-based flattener (real tag nesting, the
 // full HTML5 entity table — see its own doc comment), then collapse to ONE

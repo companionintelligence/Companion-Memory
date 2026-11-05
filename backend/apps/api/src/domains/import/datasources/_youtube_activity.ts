@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 
 import { youtubeLikeIdentity, youtubeSubscriptionIdentity, youtubeVideoIdFromUrl } from '@ci/domains/memory';
 
+import { decodeEntities } from './htmlToText';
 import type { Graph } from './timeline';
 import { textContent } from './timeline';
 
@@ -31,18 +32,6 @@ export function isYouTubeProduct(product: string | undefined): boolean {
 
 export function sha1(s: string): string {
   return crypto.createHash('sha1').update(s).digest('hex');
-}
-
-// Minimal HTML-entity decode for the few entities MyActivity emits.
-export function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&emsp;/g, ' ');
 }
 
 // Google writes the timestamp with a narrow no-break space (U+202F) and a

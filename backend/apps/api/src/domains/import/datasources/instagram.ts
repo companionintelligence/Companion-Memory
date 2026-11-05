@@ -15,7 +15,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { listFiles } from './fsWalk';
-import { htmlToText } from './htmlToText';
+import { decodeEntities, htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -49,24 +49,11 @@ interface IGPost {
 // pulled out of a larger document by a regex capture group; body-flattening
 // goes through the shared htmlToText instead (see its own doc comment).
 
-function decodeHtml(h: string): string {
-  return h
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, d) => String.fromCharCode(parseInt(d, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-}
-
 // Per-entry date div used across Meta HTML activity logs.
 const DATE_DIV_RE = /<div class="_3-94 _a6-o">([^<]*)<\/div>/g;
 
 function parseMetaDate(s: string): Date | undefined {
-  const t = decodeHtml(s)
+  const t = decodeEntities(s)
     .replace(/\u202F/g, ' ')
     .trim();
   if (!t) {
@@ -114,7 +101,7 @@ function fieldRows(html: string): FieldRow[] {
   const rows: FieldRow[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    rows.push({ label: decodeHtml(m[1]).trim(), value: htmlToText(m[2]) });
+    rows.push({ label: decodeEntities(m[1]).trim(), value: htmlToText(m[2]) });
   }
 
   return rows;
@@ -169,7 +156,7 @@ function firstWebLink(html: string): string | undefined {
   const re = /<a\b[^>]*\bhref="([^"]+)"/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const href = decodeHtml(m[1]).trim();
+    const href = decodeEntities(m[1]).trim();
     if (/^https?:\/\//i.test(href)) {
       return href;
     }
@@ -266,13 +253,13 @@ function exportBaseDir(fpath: string, html: string): string {
   const dir = path.dirname(fpath);
   const m = /<base[^>]*\bhref="([^"]+)"/i.exec(html);
 
-  return m ? path.resolve(dir, decodeHtml(m[1]).trim()) : dir;
+  return m ? path.resolve(dir, decodeEntities(m[1]).trim()) : dir;
 }
 
 /** Resolve one export-relative href to an absolute path inside the export, or
  *  null for an absolute URL, a fragment, or anything that escapes the export. */
 function resolveLocalRef(baseDir: string, ref: string): string | null {
-  const href = decodeHtml(ref).trim();
+  const href = decodeEntities(ref).trim();
   if (!href || href.startsWith('#') || href.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(href)) {
     return null;
   }
@@ -351,7 +338,7 @@ function parseHtmlEntries(html: string): HtmlEntry[] {
     let sender: string | undefined;
     const h2 = chunk.match(/<h2[^>]*>([^<]*)<\/h2>/);
     if (h2) {
-      const s = decodeHtml(h2[1]).trim();
+      const s = decodeEntities(h2[1]).trim();
       if (s) {
         sender = s;
       }
@@ -372,7 +359,7 @@ function readTitle(html: string): string | undefined {
     return undefined;
   }
 
-  const t = decodeHtml(m[1]).trim();
+  const t = decodeEntities(m[1]).trim();
 
   return t || undefined;
 }
