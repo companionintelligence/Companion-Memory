@@ -3,9 +3,10 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { FeatureService } from '@ci/common/feature';
+import { utcDay } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
 import { listOnboardedUserIds } from '@ci/domains/user';
 
 import { PythonFunctionService } from '../services/PythonFunctionService';
@@ -134,17 +135,23 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
 
   @Cron('0 10 0 * * *', { name: 'PythonFunctionCrons.dailySummaries' })
   async dailySummaries(): Promise<void> {
-    await this.fanOut('summary', 'daily_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'daily_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 15 0 * * 1', { name: 'PythonFunctionCrons.weeklySummaries' })
   async weeklySummaries(): Promise<void> {
-    await this.fanOut('summary', 'weekly_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'weekly_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 20 0 1 * *', { name: 'PythonFunctionCrons.monthlySummaries' })
   async monthlySummaries(): Promise<void> {
-    await this.fanOut('summary', 'monthly_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'monthly_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 12 * * * *', { name: 'PythonFunctionCrons.dossierRefresh' })
@@ -185,7 +192,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
 
   @Cron('0 30 2 * * *', { name: 'PythonFunctionCrons.hbpeNightly' })
   async hbpeNightly(): Promise<void> {
-    await this.fanOut('hbpe', 'nightly', dayKey());
+    await this.fanOut('hbpe', 'nightly', utcDay(new Date()));
   }
 
   @Cron('0 0 3 * * *', { name: 'PythonFunctionCrons.hbpeBootstrapSweep' })
@@ -194,7 +201,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
   }
 
   private async ensureHbpeBootstrap(): Promise<void> {
-    await this.fanOut('hbpe', 'ensure_bootstrap', dayKey());
+    await this.fanOut('hbpe', 'ensure_bootstrap', utcDay(new Date()));
   }
 
   private async fanOut(
@@ -213,24 +220,14 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    let enqueued = 0;
-
-    for (const userId of userIds) {
-      try {
-        const didEnqueue = await this.pythonFunctionService.dispatch(target, functionName, userId, args, {
+    const { enqueued } = await fanOutPerUser(
+      userIds,
+      (userId) =>
+        this.pythonFunctionService.dispatch(target, functionName, userId, args, {
           singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey),
-        });
-
-        if (didEnqueue) {
-          enqueued += 1;
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed to enqueue ${functionName} for user ${userId}`,
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
+        }),
+      { logger: this.logger, label: functionName },
+    );
 
     this.logger.log('Python function fan-out enqueued', {
       target,
@@ -369,9 +366,4 @@ function previousHourWindow(now = new Date()): { start_time: string; end_time: s
   const start = new Date(end.getTime() - 60 * 60 * 1000);
 
   return { start_time: start.toISOString(), end_time: end.toISOString() };
-}
-
-/** Window key for daily-cadence work: dedupes within the current UTC day. */
-function dayKey(now = new Date()): string {
-  return now.toISOString().slice(0, 10);
 }

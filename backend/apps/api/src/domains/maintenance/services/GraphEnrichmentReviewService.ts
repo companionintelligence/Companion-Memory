@@ -7,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { stableJson } from '@ci/common/stableJson';
 import {
   type GraphEntityInputDto,
   type GraphIngestResult,
@@ -40,26 +41,6 @@ export interface GraphEnrichmentProposalPage {
   totalCount: number;
   hasNextPage: boolean;
   endCursor: string | null;
-}
-
-/**
- * JSON with object keys in sorted order, so the same batch hashes identically
- * regardless of the source order its fields were built in. Mirrors
- * GraphIngestService's own `stableJson`.
- */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-
-      return sorted;
-    }
-
-    return v;
-  });
 }
 
 function hashBatch(batch: GraphEnrichmentProposalBatch): string {

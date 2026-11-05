@@ -60,8 +60,6 @@ export interface SyncWindowSweepSummary {
  */
 @Injectable()
 export class SyncWindowSweepCron {
-  private running = false;
-
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
@@ -70,28 +68,19 @@ export class SyncWindowSweepCron {
     this.logger.setContext(SyncWindowSweepCron.name);
   }
 
-  @Cron(SYNC_WINDOW_SWEEP_CRON, { name: 'SyncWindowSweepCron.sweepOnSchedule', role: 'worker' })
+  // `exclusive`: a slow sweep must not stack — two overlapping runs would
+  // contend on the same rows and buy nothing, since whatever this run leaves
+  // behind is still outside the window tomorrow. The decorator holds that
+  // guard and logs the skip and any failure.
+  @Cron(SYNC_WINDOW_SWEEP_CRON, {
+    name: 'SyncWindowSweepCron.sweepOnSchedule',
+    role: 'worker',
+    exclusive: true,
+  })
   async sweepOnSchedule(): Promise<void> {
-    // A slow sweep must not stack: two overlapping runs would contend on the
-    // same rows and buy nothing, since whatever this run leaves behind is still
-    // outside the window tomorrow.
-    if (this.running) {
-      this.logger.warn('Skipping sync-window sweep; previous run still in progress');
+    const swept = await this.sweepOnce();
 
-      return;
-    }
-
-    this.running = true;
-
-    try {
-      const swept = await this.sweepOnce();
-
-      this.logger.log('Sync-window sweep complete', { events: swept.events, entities: swept.entities });
-    } catch (err) {
-      this.logger.error('Sync-window sweep failed', err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      this.running = false;
-    }
+    this.logger.log('Sync-window sweep complete', { events: swept.events, entities: swept.entities });
   }
 
   /** Public so a test — or an operator — can sweep without waiting a day. */
