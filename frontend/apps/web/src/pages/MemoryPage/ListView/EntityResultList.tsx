@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { useLocation } from 'react-router-dom';
 
@@ -6,6 +6,7 @@ import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import { LoadMoreFailed } from '@/components/InfiniteList';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import {
   DateGroupHeader,
   ErrorState,
@@ -42,6 +43,95 @@ import { ThreadRow } from './rows/ThreadRow';
  * unmounts it. Back to the same entry puts the list where it was.
  */
 const scrollTopByHistoryEntry = new Map<string, number>();
+
+/**
+ * One row, memoised. The list re-renders whenever its own state moves — a page
+ * arriving, a failed page, the scroll bookkeeping — and without this every
+ * loaded row re-ran its time formatting and rebuilt its chat context each
+ * time. `item` is the node Apollo's cache hands back, which keeps its identity
+ * until the record itself changes; `fmt` is the one formatter from context;
+ * `open` is the service's setter, which never changes.
+ */
+const ResultRow = memo(function ResultRow({
+  item,
+  fmt,
+  open,
+}: {
+  item: EntityItem;
+  fmt: DateTimeFormatter;
+  open: (item: EntityItem) => void;
+}) {
+  const time = formatRowTime(getEntityTimestamp(item), fmt);
+  const onClick = () => open(item);
+  let row: ReactNode;
+
+  switch (item.__typename) {
+    case 'AnswerType':
+      row = <AnswerRow answer={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'BrowserActivityType':
+      row = <BrowserActivityRow browserActivity={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'CommunicationType':
+      row = <CommunicationRow communication={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ConceptType':
+      row = <ConceptRow concept={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ContentType':
+      row = <ContentRow content={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'EventType':
+      row = <EventRow event={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'FileChunkType':
+      row = <FileChunkRow fileChunk={item} onClick={onClick} />;
+      break;
+
+    case 'FileType':
+      row = <FileRow file={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ItemType':
+      row = <ItemRow item={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'NoteType':
+      row = <NoteRow note={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PersonType':
+      row = <PersonRow person={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PlaceType':
+      row = <PlaceRow place={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ProductModelType':
+      row = <ProductRow product={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ReceiptType':
+      row = <ReceiptRow receipt={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ThreadType':
+      row = <ThreadRow thread={item} time={time} onClick={onClick} />;
+      break;
+
+    default:
+      return null;
+  }
+
+  return <MemoryChatAbout entity={item}>{row}</MemoryChatAbout>;
+});
 
 /**
  * The scrolling result list every list-shaped explorer view is built on: the
@@ -132,81 +222,9 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
   const groups = useMemo(() => (grouped ? groupEntitiesByBucket(data) : null), [grouped, data]);
 
   // Every row opens the same shared details drawer (incl. File/Item media).
-  const renderRow = (item: EntityItem) => {
-    const time = formatRowTime(getEntityTimestamp(item), fmt);
-    let row: ReactNode;
-
-    switch (item.__typename) {
-      case 'AnswerType':
-        row = <AnswerRow answer={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'BrowserActivityType':
-        row = <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'CommunicationType':
-        row = <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ConceptType':
-        row = <ConceptRow concept={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ContentType':
-        row = <ContentRow content={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'EventType':
-        row = <EventRow event={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileChunkType':
-        row = <FileChunkRow fileChunk={item} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileType':
-        row = <FileRow file={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ItemType':
-        row = <ItemRow item={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'NoteType':
-        row = <NoteRow note={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PersonType':
-        row = <PersonRow person={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PlaceType':
-        row = <PlaceRow place={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ProductModelType':
-        row = <ProductRow product={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ReceiptType':
-        row = <ReceiptRow receipt={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ThreadType':
-        row = <ThreadRow thread={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      default:
-        return null;
-    }
-
-    return (
-      <MemoryChatAbout key={item.id} entity={item}>
-        {row}
-      </MemoryChatAbout>
-    );
-  };
+  const renderRow = (item: EntityItem) => (
+    <ResultRow key={item.id} item={item} fmt={fmt} open={setActiveEntity} />
+  );
 
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {

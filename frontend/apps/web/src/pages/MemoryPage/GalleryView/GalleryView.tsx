@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
@@ -34,12 +34,128 @@ import {
   orderDatedFirst,
 } from '../Components';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
-import { useEntityService } from '../useEntityService';
+import { useEntityService, type EntityItem } from '../useEntityService';
 
 import { LocalGalleryView } from './LocalGalleryView';
 import { getEntityMedia, type EntityMedia } from './media';
 import { MediaLightbox } from './MediaLightbox';
 import { MediaTile } from './MediaTile';
+
+/**
+ * One tile, memoised: the grid re-renders whenever its own state moves (a page
+ * arriving, the lightbox opening) and without this every loaded tile was
+ * rebuilt each time. Media-bearing entities (image/video) render as real
+ * thumbnails and open the lightbox; everything else keeps its clean text tile
+ * and opens the shared details drawer (incl. non-media File/Item).
+ */
+const GalleryTile = memo(function GalleryTile({
+  item,
+  media,
+  mediaIndex,
+  open,
+  openLightbox,
+}: {
+  item: EntityItem;
+  media: EntityMedia | undefined;
+  mediaIndex: number | undefined;
+  open: (item: EntityItem) => void;
+  openLightbox: (index: number) => void;
+}) {
+  if (media != null && mediaIndex != null) {
+    // FileType (incl. Capture screenshots): open the details sheet so the
+    // sidebar shows EntityMedia + metadata. Other media (e.g. Event photos)
+    // keep the cross-item lightbox.
+    const openMedia = () => {
+      if (item.__typename === 'FileType') {
+        open(item);
+
+        return;
+      }
+
+      openLightbox(mediaIndex);
+    };
+
+    return (
+      <MemoryChatAbout entity={item} className="h-full min-w-0">
+        <MediaTile media={media} onClick={openMedia} />
+      </MemoryChatAbout>
+    );
+  }
+
+  const onClick = () => open(item);
+  let tile: ReactNode;
+
+  switch (item.__typename) {
+    case 'AnswerType':
+      tile = <AnswerGridItem answer={item} onClick={onClick} />;
+      break;
+
+    case 'BrowserActivityType':
+      tile = <BrowserActivityGridItem browserActivity={item} onClick={onClick} />;
+      break;
+
+    case 'CommunicationType':
+      tile = <CommunicationGridItem communication={item} onClick={onClick} />;
+      break;
+
+    case 'ConceptType':
+      tile = <ConceptGridItem concept={item} onClick={onClick} />;
+      break;
+
+    case 'ContentType':
+      tile = <ContentGridItem content={item} onClick={onClick} />;
+      break;
+
+    case 'EventType':
+      tile = <EventGridItem event={item} onClick={onClick} />;
+      break;
+
+    case 'FileChunkType':
+      tile = <FileChunkGridItem fileChunk={item} onClick={onClick} />;
+      break;
+
+    case 'FileType':
+      tile = <FileGridItem file={item} onClick={onClick} />;
+      break;
+
+    case 'ItemType':
+      tile = <ItemGridItem item={item} onClick={onClick} />;
+      break;
+
+    case 'NoteType':
+      tile = <NoteGridItem note={item} onClick={onClick} />;
+      break;
+
+    case 'PersonType':
+      tile = <PersonGridItem person={item} onClick={onClick} />;
+      break;
+
+    case 'PlaceType':
+      tile = <PlaceGridItem place={item} onClick={onClick} />;
+      break;
+
+    case 'ProductModelType':
+      tile = <ProductGridItem product={item} onClick={onClick} />;
+      break;
+
+    case 'ReceiptType':
+      tile = <ReceiptGridItem receipt={item} onClick={onClick} />;
+      break;
+
+    case 'ThreadType':
+      tile = <ThreadGridItem thread={item} onClick={onClick} />;
+      break;
+
+    default:
+      return null;
+  }
+
+  return (
+    <MemoryChatAbout entity={item} className="h-full min-w-0">
+      {tile}
+    </MemoryChatAbout>
+  );
+});
 
 /**
  * The gallery tab. While the Memory server does not answer and this phone
@@ -139,104 +255,17 @@ function OnlineGalleryView() {
 
         <EntityGrid>
           {ordered.map((item) => {
-            // Media-bearing entities (image/video) render as real thumbnails and
-            // open the lightbox; everything else keeps its clean text tile and
-            // opens the shared details drawer (incl. non-media File/Item).
-            const mediaIdx = mediaIndexById.get(item.id);
-            if (mediaIdx != null) {
-              // FileType (incl. Capture screenshots): open the details sheet so
-              // the sidebar shows EntityMedia + metadata. Other media (e.g.
-              // Event photos) keep the cross-item lightbox.
-              const openMedia = () => {
-                if (item.__typename === 'FileType') {
-                  setActiveEntity(item);
-
-                  return;
-                }
-
-                setLightboxIndex(mediaIdx);
-              };
-
-              return (
-                <MemoryChatAbout key={item.id} entity={item} className="h-full min-w-0">
-                  <MediaTile media={mediaEntries[mediaIdx]} onClick={openMedia} />
-                </MemoryChatAbout>
-              );
-            }
-
-            let tile: ReactNode;
-
-            switch (item.__typename) {
-              case 'AnswerType':
-                tile = <AnswerGridItem answer={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'BrowserActivityType':
-                tile = (
-                  <BrowserActivityGridItem browserActivity={item} onClick={() => setActiveEntity(item)} />
-                );
-                break;
-
-              case 'CommunicationType':
-                tile = <CommunicationGridItem communication={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ConceptType':
-                tile = <ConceptGridItem concept={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ContentType':
-                tile = <ContentGridItem content={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'EventType':
-                tile = <EventGridItem event={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'FileChunkType':
-                tile = <FileChunkGridItem fileChunk={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'FileType':
-                tile = <FileGridItem file={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ItemType':
-                tile = <ItemGridItem item={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'NoteType':
-                tile = <NoteGridItem note={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'PersonType':
-                tile = <PersonGridItem person={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'PlaceType':
-                tile = <PlaceGridItem place={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ProductModelType':
-                tile = <ProductGridItem product={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ReceiptType':
-                tile = <ReceiptGridItem receipt={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              case 'ThreadType':
-                tile = <ThreadGridItem thread={item} onClick={() => setActiveEntity(item)} />;
-                break;
-
-              default:
-                return null;
-            }
+            const mediaIndex = mediaIndexById.get(item.id);
 
             return (
-              <MemoryChatAbout key={item.id} entity={item} className="h-full min-w-0">
-                {tile}
-              </MemoryChatAbout>
+              <GalleryTile
+                key={item.id}
+                item={item}
+                media={mediaIndex == null ? undefined : mediaEntries[mediaIndex]}
+                mediaIndex={mediaIndex}
+                open={setActiveEntity}
+                openLightbox={setLightboxIndex}
+              />
             );
           })}
 
