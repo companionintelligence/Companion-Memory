@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
   browserActivityWeightedTexts,
-  buildVectorUpsertStatement,
+  buildVectorUpsertBatchStatement,
   communicationWeightedTexts,
   contentWeightedTexts,
   eventWeightedTexts,
@@ -110,25 +110,39 @@ export abstract class VectorStageBase implements Stage {
       }
     }
 
+    const writable: VectorTextRow[] = [];
+
     for (const row of rows) {
       if (row.texts.length === 0) {
         results.set(row.id, { outcome: 'skipped', reason: 'empty' });
-
-        continue;
+      } else {
+        writable.push(row);
       }
+    }
 
-      try {
-        await this.writeVector(ctx.userId, row);
+    if (writable.length === 0) {
+      return results;
+    }
+
+    try {
+      await this.writeVectors(ctx.userId, writable);
+
+      for (const row of writable) {
         results.set(row.id, { outcome: 'done' });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-
-        results.set(row.id, { outcome: 'failed', reason: 'vector_write_failed', detail: { message } });
-        this.logger.error(
-          `tsvector upsert failed for ${this.entityType} ${row.id}`,
-          err instanceof Error ? err : new Error(message),
-        );
       }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      // One statement means one outcome: it committed or it did not, so every
+      // row in it shares the verdict (as the dense-embed sibling's write does).
+      for (const row of writable) {
+        results.set(row.id, { outcome: 'failed', reason: 'vector_write_failed', detail: { message } });
+      }
+
+      this.logger.error(
+        `tsvector upsert failed for ${writable.length} ${this.entityType} rows`,
+        err instanceof Error ? err : new Error(message),
+      );
     }
 
     return results;
@@ -136,17 +150,16 @@ export abstract class VectorStageBase implements Stage {
 
   /**
    * The SAME statement as `SearchIngress.VectorService.upsert`, from the same
-   * builder: the tsvector, and the device document beside it. Sharing the
-   * builder is what keeps the two paths' index rows identical for identical
-   * texts; the RETURNING a listener reads is simply ignored here.
+   * builder — the tsvector, and the device document beside it — for the whole
+   * slice at once where a listener writes one row. Sharing the builder is what
+   * keeps the two paths' index rows identical for identical texts; the
+   * RETURNING a listener reads is simply ignored here.
    */
-  private async writeVector(userId: string, row: VectorTextRow): Promise<void> {
-    const { sql, params } = buildVectorUpsertStatement(row.texts, {
-      id: uuidv7(),
-      entityType: this.entityType,
-      entityId: row.id,
-      userId,
-    });
+  private async writeVectors(userId: string, rows: VectorTextRow[]): Promise<void> {
+    const { sql, params } = buildVectorUpsertBatchStatement(
+      rows.map((row) => ({ id: uuidv7(), entityId: row.id, texts: row.texts })),
+      { entityType: this.entityType, userId },
+    );
 
     await this.dataSource.query(sql, params);
   }

@@ -109,6 +109,7 @@ export type {
 export { ENTITY_SOURCE_MAP } from './entitySourceMap';
 export * from './searchTexts';
 export {
+  buildVectorUpsertBatchStatement,
   buildVectorUpsertStatement,
   buildWeightedVectorSql,
   type SearchDocumentText,

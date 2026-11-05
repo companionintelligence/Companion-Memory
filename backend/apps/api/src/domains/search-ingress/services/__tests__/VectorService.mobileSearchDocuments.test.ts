@@ -1,7 +1,11 @@
 import { DEVICE_INDEXED_ENTITIES, DEVICE_RECORD_VERSION } from '@ci/domains/search-next';
 
 import { DOCUMENT_BODY_MAX_CHARS } from '../../entities/MobileSearchDocumentEntity';
-import { buildVectorUpsertStatement, searchDocumentText } from '../VectorService';
+import {
+  buildVectorUpsertBatchStatement,
+  buildVectorUpsertStatement,
+  searchDocumentText,
+} from '../VectorService';
 
 describe('searchDocumentText', () => {
   it('takes the first weight-A text as the title and the rest, in order, as the body', () => {
@@ -70,21 +74,25 @@ describe('buildVectorUpsertStatement', () => {
       "WHEN 'communication' THEN (SELECT c.time FROM ci.communications c WHERE c.id = v.entity_id)",
     );
 
-    // $1..$3 identity, $4 the A group, $5 the B group, then user, title, body, types.
-    expect(sql).toContain("setweight(to_tsvector('english', $4), 'A')");
-    expect(sql).toContain("setweight(to_tsvector('english', $5), 'B')");
-    expect(sql).toContain('$6)'); // user_id closes the VALUES list
-    expect(sql).toContain('SELECT v.id, v.entity_type, v.entity_id, v.user_id, $7, $8,');
-    expect(sql).toContain('WHERE v.entity_type = ANY($9::text[])');
+    // Batch-shaped: $1 ids, $2 entity ids, $3..$6 the A..D groups, $7 titles,
+    // $8 bodies — one entry per row — then type, user, and the device types.
+    expect(sql).toContain("setweight(to_tsvector('english', i.text_a), 'A')");
+    expect(sql).toContain("setweight(to_tsvector('english', i.text_b), 'B')");
+    expect(sql).toContain('SELECT i.id, $9, i.entity_id,');
+    expect(sql).toContain('SELECT v.id, v.entity_type, v.entity_id, v.user_id, i.title, i.body,');
+    expect(sql).toContain('JOIN input i ON i.entity_id = v.entity_id');
+    expect(sql).toContain('WHERE v.entity_type = ANY($11::text[])');
     expect(params).toEqual([
-      row.id,
+      [row.id],
+      [row.entityId],
+      ['Lunch?'],
+      ['are you free at noon'],
+      [''],
+      [''],
+      ['Lunch?'],
+      ['are you free at noon'],
       row.entityType,
-      row.entityId,
-      'Lunch?',
-      'are you free at noon',
       row.userId,
-      'Lunch?',
-      'are you free at noon',
       [...DEVICE_INDEXED_ENTITIES],
     ]);
   });
@@ -110,9 +118,9 @@ describe('buildVectorUpsertStatement', () => {
     }
 
     // Derived in SQL: no new positional parameters for the listeners to supply —
-    // still id, type, entity id, the one A group, user, title, body, types.
-    expect(params).toHaveLength(8);
-    expect(params[3]).toBe('Lunch?');
+    // still the row arrays, the four groups, titles, bodies, type, user, types.
+    expect(params).toHaveLength(11);
+    expect(params[2]).toEqual(['Lunch?']);
   });
 
   it('indexing an event moves its place’s document to that visit, only forward', () => {
@@ -148,5 +156,37 @@ describe('buildVectorUpsertStatement', () => {
     expect(sql).toContain("WHERE v.entity_type = 'browser-activity' AND b.id = v.entity_id");
     expect(sql).toContain("WHERE v.entity_type = 'file-chunk' AND fc.id = v.entity_id");
     expect(sql).toContain('SELECT fc.file_id,');
+  });
+
+  it('writes a slice as one statement: one entry per row in every array, the scope once', () => {
+    const { sql, params } = buildVectorUpsertBatchStatement(
+      [
+        { id: 'v-1', entityId: 'e-1', texts: [{ text: 'Lunch?', weight: 10 }] },
+        {
+          id: 'v-2',
+          entityId: 'e-2',
+          texts: [
+            { text: 'Dinner', weight: 10 },
+            { text: 'at eight', weight: 5 },
+          ],
+        },
+      ],
+      { entityType: 'communication', userId: row.userId },
+    );
+
+    expect(sql).toContain(
+      'FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])',
+    );
+    expect(params.slice(0, 8)).toEqual([
+      ['v-1', 'v-2'],
+      ['e-1', 'e-2'],
+      ['Lunch?', 'Dinner'],
+      ['', 'at eight'],
+      ['', ''],
+      ['', ''],
+      ['Lunch?', 'Dinner'],
+      ['', 'at eight'],
+    ]);
+    expect(params.slice(8)).toEqual(['communication', row.userId, [...DEVICE_INDEXED_ENTITIES]]);
   });
 });
