@@ -20,6 +20,7 @@ import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { type HourlyActivityOptions, touchedHourlyBucketsSql } from '@ci/common/persistence';
 import { keysetSeek } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import config from '@ci/configuration';
@@ -1070,16 +1071,39 @@ export class FileService implements OnModuleInit {
    * the query builder (FileEntity has a @DeleteDateColumn); ownerless rows are
    * skipped.
    */
-  async aggregateHourlyActivity(): Promise<HourlyFileCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.fileRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyFileCount[]> {
+    const query = this.fileRepository
       .createQueryBuilder('file')
       .select('file.userId', 'user_id')
       .addSelect(`date_trunc('hour', file.createdAt, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
+      // Incrementally the builder's soft-delete filter is lifted and the count
+      // made over live rows only, so a bucket whose files were all deleted comes
+      // back as 0 and is pruned; in full the builder leaves deleted files out itself.
+      .addSelect(
+        options.changedSince ? 'COUNT(*) FILTER (WHERE file.deletedAt IS NULL)::int' : 'COUNT(*)::int',
+        'count',
+      )
       .where('file.userId IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.withDeleted().andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'file.userId', bucket: 'file.createdAt' },
+          // A soft delete stamps deleted_at; whether it moves updated_at is the ORM's business.
+          {
+            table: 'ci.files',
+            userColumn: 'user_id',
+            bucketColumn: 'created_at',
+            changed: 'GREATEST(src.updated_at, src.deleted_at)',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { type HourlyActivityOptions, touchedHourlyBucketsSql } from '@ci/common/persistence';
 import { computeChunkSize, keysetSeek } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { AnswerCreatedEvent, AnswerUpdatedEvent, AnswerRemovedEvent } from '@ci/domains/intelligence/events';
@@ -477,15 +478,31 @@ export class AnswerService {
    * `answeredAt`, per user. AnswerEntity models the user only as a relation,
    * so the FK column is referenced directly.
    */
-  async aggregateHourlyActivity(): Promise<HourlyAnswerCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.answerRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyAnswerCount[]> {
+    const query = this.answerRepository
       .createQueryBuilder('answer')
       .select('answer.user_id', 'user_id')
       .addSelect(`date_trunc('hour', answer.answeredAt, 'UTC')`, 'bucket_start')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.where(
+        touchedHourlyBucketsSql(
+          { user: 'answer.user_id', bucket: 'answer.answeredAt' },
+          {
+            table: 'ci.answers',
+            userColumn: 'user_id',
+            bucketColumn: 'answered_at',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

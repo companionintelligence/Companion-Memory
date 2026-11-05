@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
+import { type HourlyActivityOptions, touchedHourlyBucketsSql } from '@ci/common/persistence';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
@@ -1882,18 +1883,38 @@ export class GraphUtilityService {
    * counted by creation time, per owner. Follows this domain's counting
    * convention (see getEntityCountsBySource): only active entities count.
    */
-  async aggregateHourlyActivity(): Promise<HourlyEntityCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.entityRepo
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyEntityCount[]> {
+    const live = 'entity.is_active = true';
+    const query = this.entityRepo
       .createQueryBuilder('entity')
       .select('entity.owner_user_id', 'user_id')
       .addSelect(`date_trunc('hour', entity.created_at, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
-      .where('entity.is_active = true')
-      .andWhere('entity.owner_user_id IS NOT NULL')
+      // Incrementally, a bucket is recounted over every row it holds, active or
+      // not, so one whose entities were all deactivated comes back as 0 and is pruned.
+      .addSelect(options.changedSince ? `COUNT(*) FILTER (WHERE ${live})::int` : 'COUNT(*)::int', 'count')
+      .where('entity.owner_user_id IS NOT NULL')
       .andWhere('entity.created_at IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'entity.owner_user_id', bucket: 'entity.created_at' },
+          {
+            table: 'ci.entities',
+            userColumn: 'owner_user_id',
+            bucketColumn: 'created_at',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    } else {
+      query.andWhere(live);
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

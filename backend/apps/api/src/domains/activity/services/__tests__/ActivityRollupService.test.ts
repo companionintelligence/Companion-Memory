@@ -99,6 +99,37 @@ describe('ActivityRollupService.refreshAll', () => {
     expect(params).toEqual(['communications', [], [], []]);
   });
 
+  it('passes an incremental window to every source and writes only the touched buckets', async () => {
+    const { service, dataSource, aggregates } = makeService();
+    const changedSince = new Date('2026-07-01T12:00:00Z');
+    aggregates.get('notes')!.mockResolvedValue([
+      { userId: 'user-1', bucketStart: new Date('2026-07-01T13:00:00Z'), count: 3 },
+      // Every row of this bucket stopped counting: pruned, not upserted.
+      { userId: 'user-1', bucketStart: new Date('2026-07-01T14:00:00Z'), count: 0 },
+    ]);
+
+    await service.refreshAll({ changedSince });
+
+    for (const aggregate of aggregates.values()) {
+      expect(aggregate).toHaveBeenCalledWith({ changedSince });
+    }
+
+    // A source with nothing changed writes nothing at all: an empty aggregate
+    // means "nothing changed" here, where in a full pass it means "nothing exists".
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = dataSource.query.mock.calls[0];
+    expect(sql).toContain('USING agg a');
+    expect(sql).toContain('a.count = 0');
+    expect(sql).toContain('FROM agg WHERE count > 0');
+    expect(sql).not.toContain('NOT EXISTS');
+    expect(params).toEqual([
+      'notes',
+      ['user-1', 'user-1'],
+      [new Date('2026-07-01T13:00:00Z'), new Date('2026-07-01T14:00:00Z')],
+      [3, 0],
+    ]);
+  });
+
   it('continues with the remaining sources when one aggregate fails', async () => {
     const { service, dataSource, logger, aggregates } = makeService();
 
