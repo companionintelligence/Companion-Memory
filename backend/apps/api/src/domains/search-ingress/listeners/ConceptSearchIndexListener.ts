@@ -149,17 +149,10 @@ export class ConceptSearchIndexListener {
         entityId: concept.id,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: concept.userId,
-        },
-        {
-          entityType: 'concept',
-          entityId: concept.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: concept.userId },
+        { entityType: 'concept', entityId: concept.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated concept that became embeddable is no longer skipped.

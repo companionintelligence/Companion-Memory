@@ -280,6 +280,13 @@ function makeFullListener(event: Record<string, unknown> | null = null, embedded
   const eventService = { findById: jest.fn().mockResolvedValue(event) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
     existingEntityIds: jest.fn().mockResolvedValue(new Set<string>(embeddedIds)),
@@ -324,7 +331,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.indexEvent({ eventId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -337,7 +344,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.indexEvent({ eventId: 'event-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 
   it('skips planned_block so auto-plan does not feed the search/embed pipeline', async () => {
@@ -350,7 +357,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.indexEvent({ eventId: 'event-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
@@ -365,9 +372,10 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.updateEvent({ eventId: 'event-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'event', entityId: 'event-1', embedding: [0.1, 0.2] },
+      { entityType: 'event', entityId: 'event-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -391,7 +399,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
       'event-1',
     ]);
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'event', entityId: 'event-1' }),
@@ -409,9 +417,10 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
     await listener.indexEvent({ eventId: 'event-1' } as never);
 
     expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'event', entityId: 'event-1', embedding: [0.1, 0.2] },
+      { entityType: 'event', entityId: 'event-1', text: expect.any(String) },
+      expect.any(Function),
     );
   });
 
@@ -424,7 +433,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
     await listener.updateEvent({ eventId: 'event-1' } as never);
 
     expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
-    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsertDocument).toHaveBeenCalledTimes(1);
   });
 
   it('skips both embedding and vectorization for an event with no searchable content', async () => {
@@ -440,7 +449,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.indexEvent({ eventId: 'event-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
@@ -466,7 +475,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
     await listener.indexEvent({ eventId: 'event-3' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     // Constructor takes exactly 5 args (no IndexSkipService slot) — this is the
     // structural half of the same fact, kept next to the behavioral half above.
     expect(EventSearchIndexListener).toHaveLength(5);

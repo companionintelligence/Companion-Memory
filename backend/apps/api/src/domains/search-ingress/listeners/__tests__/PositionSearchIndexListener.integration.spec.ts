@@ -88,7 +88,17 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
   function makeListener() {
     const positionService = { findById: jest.fn() };
     const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
-    const embeddingService = { upsert: jest.fn().mockResolvedValue(null), remove: jest.fn() };
+    const embeddingService = {
+      upsertDocument: jest.fn(
+        async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+          await generate(data.text);
+
+          return 'embedded';
+        },
+      ),
+      upsert: jest.fn().mockResolvedValue(null),
+      remove: jest.fn(),
+    };
     const indexSkipService = {
       recordSkip: jest.fn().mockResolvedValue(undefined),
       clearSkip: jest.fn().mockResolvedValue(true),
@@ -166,9 +176,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
       await listener.indexPosition({ positionId: ping.id } as never);
 
       if (ping.id === early.id) {
-        expect(embeddingService.upsert).toHaveBeenCalledWith(
+        expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
           { userId },
           expect.objectContaining({ entityType: 'position', entityId: early.id }),
+          expect.any(Function),
         );
         expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
           entityType: 'position',
@@ -178,7 +189,7 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
           expect.objectContaining({ reason: 'downsampled' }),
         );
       } else {
-        expect(embeddingService.upsert).not.toHaveBeenCalled();
+        expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
         expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
           entityType: 'position',
           entityId: ping.id,
@@ -198,9 +209,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
 
       await listener.indexPosition({ positionId: ping.id } as never);
 
-      expect(embeddingService.upsert).toHaveBeenCalledWith(
+      expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
         { userId },
         expect.objectContaining({ entityType: 'position', entityId: ping.id }),
+        expect.any(Function),
       );
     }
   });
@@ -215,9 +227,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
 
       await listener.indexPosition({ positionId: ping.id } as never);
 
-      expect(embeddingService.upsert).toHaveBeenCalledWith(
+      expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
         { userId },
         expect.objectContaining({ entityType: 'position', entityId: ping.id }),
+        expect.any(Function),
       );
     }
   });

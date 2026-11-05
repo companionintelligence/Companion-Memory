@@ -136,17 +136,10 @@ export class ContentSearchIndexListener {
         contentId: content.id,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
-
-      await this.embeddingService.upsert(
-        {
-          userId: ownerId,
-        },
-        {
-          entityType: 'content',
-          entityId: content.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: ownerId },
+        { entityType: 'content', entityId: content.id, text: searchDocument! },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated content row that became embeddable is no longer skipped.

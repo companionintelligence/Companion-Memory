@@ -12,6 +12,13 @@ function makeListener(
   };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -68,7 +75,7 @@ describe('ReceiptSearchIndexListener.indexReceipt / updateReceipt', () => {
 
     await listener.indexReceipt({ receiptId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -114,9 +121,10 @@ describe('ReceiptSearchIndexListener.indexReceipt / updateReceipt', () => {
 
     await listener.updateReceipt({ receiptId: 'receipt-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'receipt', entityId: 'receipt-1', embedding: [0.1, 0.2] },
+      { entityType: 'receipt', entityId: 'receipt-1', text: expect.any(String) },
+      expect.any(Function),
     );
   });
 
@@ -136,7 +144,7 @@ describe('ReceiptSearchIndexListener.indexReceipt / updateReceipt', () => {
 
     await listener.indexReceipt({ receiptId: 'receipt-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'receipt',
@@ -168,7 +176,7 @@ describe('ReceiptSearchIndexListener.indexReceipt / updateReceipt', () => {
 
     await listener.indexReceipt({ receiptId: 'receipt-3' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -192,7 +200,7 @@ describe('ReceiptSearchIndexListener CI_EMBED_TYPES allowlist', () => {
 
     await listener.indexReceipt({ receiptId: 'receipt-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalled();
   });
 });

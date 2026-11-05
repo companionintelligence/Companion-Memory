@@ -6,13 +6,19 @@ type Payload = EventPayloads[Events.GRAPH_NODE_UPSERTED];
 
 function makeListener() {
   const generateEmbedding = jest.fn(async () => [0.1, 0.2, 0.3]);
-  const embeddingUpsert = jest.fn(async () => null);
+  const embeddingUpsert = jest.fn(
+    async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+      await generate(data.text);
+
+      return 'embedded';
+    },
+  );
   const vectorUpsert = jest.fn(async () => null);
   const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), warn: jest.fn() };
 
   const listener = new GraphNodeSearchIndexListener(
     { generateEmbedding } as never,
-    { upsert: embeddingUpsert } as never,
+    { upsertDocument: embeddingUpsert } as never,
     { upsert: vectorUpsert } as never,
     logger as never,
   );

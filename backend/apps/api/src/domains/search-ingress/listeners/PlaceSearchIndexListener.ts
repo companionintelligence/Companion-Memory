@@ -112,17 +112,10 @@ export class PlaceSearchIndexListener {
     } else if (searchDocument == null) {
       this.logger.log('Place has no search document, skipping embedding');
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: place.user.id,
-        },
-        {
-          entityType: 'place',
-          entityId: place.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: place.user.id },
+        { entityType: 'place', entityId: place.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       this.logger.log('Generated embedding for place');

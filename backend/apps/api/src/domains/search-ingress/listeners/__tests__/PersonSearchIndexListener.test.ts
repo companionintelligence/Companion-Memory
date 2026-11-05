@@ -16,7 +16,17 @@ import { PersonSearchIndexListener } from '../PersonSearchIndexListener';
 function makeListener(person: Partial<Person> | null) {
   const personService = { findById: jest.fn(async () => person as Person | null) };
   const embeddingGenerationService = { generateEmbedding: jest.fn(async () => [0.1, 0.2]) };
-  const embeddingService = { upsert: jest.fn(async () => undefined), remove: jest.fn(async () => undefined) };
+  const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
+    upsert: jest.fn(async () => undefined),
+    remove: jest.fn(async () => undefined),
+  };
   const indexSkipService = {
     recordSkip: jest.fn(async () => undefined),
     clearSkip: jest.fn(async () => undefined),
@@ -54,7 +64,7 @@ describe('PersonSearchIndexListener skip markers', () => {
 
     await listener.indexPerson({ personId: 'p1' });
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'person',
       entityId: 'p1',
@@ -74,9 +84,10 @@ describe('PersonSearchIndexListener skip markers', () => {
     await listener.indexPerson({ personId: 'p2' });
 
     expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'u1' },
       expect.objectContaining({ entityType: 'person', entityId: 'p2' }),
+      expect.any(Function),
     );
     expect(indexSkipService.clearSkip).toHaveBeenCalledWith({ entityType: 'person', entityId: 'p2' });
   });
@@ -86,7 +97,7 @@ describe('PersonSearchIndexListener skip markers', () => {
 
     await listener.indexPerson({ personId: 'missing' });
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
   });
 });
@@ -120,9 +131,10 @@ describe('PersonSearchIndexListener.updatePerson', () => {
 
     await listener.updatePerson({ personId: 'p3' });
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'u1' },
       expect.objectContaining({ entityType: 'person', entityId: 'p3' }),
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'u1' },
@@ -146,7 +158,7 @@ describe('PersonSearchIndexListener merge tombstones', () => {
     await listener.updatePerson({ personId: 'p4' });
 
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(embeddingService.remove).toHaveBeenCalledWith(
       { userId: SYSTEM_USER },
@@ -178,7 +190,7 @@ describe('PersonSearchIndexListener archived (forgotten) people', () => {
     await listener.updatePerson({ personId: 'p7' });
 
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(embeddingService.remove).toHaveBeenCalledWith(
       { userId: SYSTEM_USER },
@@ -206,7 +218,7 @@ describe('PersonSearchIndexListener userId guard', () => {
 
     await listener.indexPerson({ personId: 'p5' });
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no associated user'));
   });
@@ -232,7 +244,7 @@ describe('PersonSearchIndexListener CI_EMBED_TYPES allowlist', () => {
 
     await listener.indexPerson({ personId: 'p6' });
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalled();
   });
 });

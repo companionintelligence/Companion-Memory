@@ -92,17 +92,10 @@ export class NoteSearchIndexListener {
     } else if (searchDocument == null) {
       this.logger.log('Note has no search document, skipping embedding');
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: note.userId,
-        },
-        {
-          entityType: 'note',
-          entityId: note.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: note.userId },
+        { entityType: 'note', entityId: note.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       this.logger.log('Upserted embedding for note');

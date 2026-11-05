@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
-import { embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
+import { embedSkipReason, searchDocumentHash, shouldEmbedType } from '@ci/common/embeddings';
 import type { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
@@ -195,7 +195,7 @@ export abstract class DenseEmbedStageBase implements Stage {
     // mis-dimensioned vector would abort the whole bulk upsert — pgvector
     // rejects the cast — so one bad slot would cost every other row in the slice
     // an attempt. Screened out here, it costs only itself.
-    const writable: Array<{ id: string; vector: number[] }> = [];
+    const writable: Array<{ id: string; vector: number[]; document: string }> = [];
 
     embeddable.forEach((item, index) => {
       const embedding = vectors[index];
@@ -227,7 +227,7 @@ export abstract class DenseEmbedStageBase implements Stage {
         return;
       }
 
-      writable.push({ id: item.id, vector: embedding });
+      writable.push({ id: item.id, vector: embedding, document: item.document });
     });
 
     if (writable.length === 0) {
@@ -274,14 +274,14 @@ export abstract class DenseEmbedStageBase implements Stage {
    */
   private async writeEmbeddings(
     userId: string,
-    items: Array<{ id: string; vector: number[] }>,
+    items: Array<{ id: string; vector: number[]; document: string }>,
   ): Promise<void> {
     await this.dataSource.query(
-      `INSERT INTO ci_search.embeddings AS e (id, entity_type, entity_id, embedding, user_id)
-       SELECT t.id, $1, t.entity_id, t.embedding::vector, $2::uuid
-         FROM unnest($3::uuid[], $4::uuid[], $5::text[]) AS t(id, entity_id, embedding)
+      `INSERT INTO ci_search.embeddings AS e (id, entity_type, entity_id, embedding, user_id, source_hash)
+       SELECT t.id, $1, t.entity_id, t.embedding::vector, $2::uuid, t.source_hash
+         FROM unnest($3::uuid[], $4::uuid[], $5::text[], $6::text[]) AS t(id, entity_id, embedding, source_hash)
        ON CONFLICT (entity_type, entity_id) DO UPDATE
-          SET embedding = EXCLUDED.embedding, updated_at = now()`,
+          SET embedding = EXCLUDED.embedding, source_hash = EXCLUDED.source_hash, updated_at = now()`,
       [
         this.entityType,
         userId,
@@ -290,6 +290,9 @@ export abstract class DenseEmbedStageBase implements Stage {
         // The pgvector text literal `[a,b,c]`, mirroring the entity's column
         // transformer and `EmbeddingService.upsert`.
         items.map((item) => `[${item.vector.join(',')}]`),
+        // What each vector was made from, so the live listeners' unchanged-document
+        // gate (`EmbeddingService.upsertDocument`) holds for rows this stage wrote.
+        items.map((item) => searchDocumentHash(item.document)),
       ],
     );
   }

@@ -137,17 +137,10 @@ export class PersonSearchIndexListener {
         reason: 'empty',
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: person.userId,
-        },
-        {
-          entityType: 'person',
-          entityId: person.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: person.userId },
+        { entityType: 'person', entityId: person.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated person that gained a name/description is no longer skipped.

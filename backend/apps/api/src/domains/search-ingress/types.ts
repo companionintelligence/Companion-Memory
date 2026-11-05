@@ -4,6 +4,15 @@ export interface UpsertEmbeddingDto {
   entityType: IndexableEntity;
   entityId: string;
   embedding: number[];
+  /** `searchDocumentHash` of what `embedding` was made from, when the caller knows it. */
+  sourceHash?: string | null;
+}
+
+/** A row's search document, for {@link EmbeddingService.upsertDocument} to embed if it changed. */
+export interface UpsertEmbeddingDocumentDto {
+  entityType: IndexableEntity;
+  entityId: string;
+  text: string;
 }
 
 /**

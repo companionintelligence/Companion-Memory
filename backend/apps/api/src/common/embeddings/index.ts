@@ -25,3 +25,4 @@ export {
   type EmbeddableOptions,
   type SkipReason,
 } from './embeddable';
+export { searchDocumentHash } from './searchDocumentHash';

@@ -62,7 +62,17 @@ function makeDataSource(timezoneRef: { value: string | null }) {
 function makeListener(dataSource: { query: jest.Mock }) {
   const positionService = { findById: jest.fn().mockResolvedValue(makePosition()) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
-  const embeddingService = { upsert: jest.fn().mockResolvedValue(null), remove: jest.fn() };
+  const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
+    upsert: jest.fn().mockResolvedValue(null),
+    remove: jest.fn(),
+  };
   const indexSkipService = {
     recordSkip: jest.fn().mockResolvedValue(undefined),
     clearSkip: jest.fn().mockResolvedValue(true),
@@ -97,9 +107,10 @@ describe('PositionSearchIndexListener', () => {
 
     await listener.updatePosition({ positionId: POSITION_ID } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: USER_ID },
       expect.objectContaining({ entityType: 'position', entityId: POSITION_ID }),
+      expect.any(Function),
     );
     expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
       entityType: 'position',
