@@ -621,14 +621,20 @@ const CASES: readonly LoaderCase[] = [
     build: (present) => {
       const loader = new ThreadMessagesLoader(
         stub({
-          findByThreadIds: async (_ctx: unknown, ids: string[]) => plannerMap(ids, present, (id) => [{ id }]),
+          findFirstPageByThreadIds: async (_ctx: unknown, ids: string[]) =>
+            plannerMap(ids, present, (id) => ({
+              messages: [{ id }],
+              hasNextPage: false,
+              hasPreviousPage: false,
+              totalCount: 1,
+            })),
         }),
         stub(LOGGER),
       );
 
-      return (id) => loader.load(CTX, id);
+      return (id) => loader.loadFor(CTX, id, 50);
     },
-    probe: probeIds,
+    probe: (value) => probeIds((value as { messages: { id: string }[] }).messages),
     empty: null,
   },
   {

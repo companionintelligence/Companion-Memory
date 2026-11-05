@@ -4,6 +4,7 @@ import { Repository, In } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { type KeysetPageArgs, resolvePageShape } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 
@@ -20,6 +21,14 @@ export interface HourlyMessageCount {
   userId: string;
   bucketStart: Date;
   count: number;
+}
+
+/** One page of a thread's messages, oldest first. `totalCount` is `null` when it was not counted. */
+export interface ThreadMessagesPage {
+  messages: Message[];
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  totalCount: number | null;
 }
 
 @Injectable()
@@ -173,50 +182,137 @@ export class MessageService {
   }
 
   /**
-   * Yields a collection of Message arrays each associated with a provided
-   * Thread id.
+   * The first `limit` messages of each thread, oldest first — `message_id` is
+   * a v7 UUID, so id order is time order, the same order {@link findByThreadId}
+   * serves REST — with whether more follow and the thread's total, in ONE read
+   * for a page of threads. `ROW_NUMBER()` and `COUNT(*)` over each thread's
+   * messages rank them; the rows within the limit (+1 sentinel) are hydrated.
    *
-   * This method assumes the context user has access to the corresponding
-   * Threads. This access must be ensured before safely calling this method.
+   * What `Thread.messages` used to do was read EVERY message of every thread
+   * on the page and slice in memory. Assumes the caller may see the threads,
+   * like {@link findByThreadId}; a thread with no visible messages is absent
+   * from the map.
    */
-  async findByThreadIds(context: ServiceContext, threadIds: string[]): Promise<Map<string, Message[]>> {
-    if (threadIds.length === 0) {
-      return new Map();
+  async findFirstPageByThreadIds(
+    context: ServiceContext,
+    threadIds: string[],
+    limit: number,
+  ): Promise<Map<string, ThreadMessagesPage>> {
+    const pages = new Map<string, ThreadMessagesPage>();
+
+    if (threadIds.length === 0 || limit <= 0) {
+      return pages;
+    }
+
+    const ranked = await this.messageRepository.manager
+      .createQueryBuilder()
+      .select('ranked.message_id', 'message_id')
+      .addSelect('ranked.thread_id', 'thread_id')
+      .addSelect('ranked.rn', 'rn')
+      .addSelect('ranked.total', 'total')
+      .from((qb) => {
+        const inner = qb
+          .select('m.message_id', 'message_id')
+          .addSelect('m.thread_id', 'thread_id')
+          .addSelect('ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY m.message_id ASC)', 'rn')
+          .addSelect('COUNT(*) OVER (PARTITION BY m.thread_id)', 'total')
+          .from(MessageEntity, 'm')
+          .where('m.thread_id IN (:...threadIds)', { threadIds })
+          .andWhere('m.is_deleted = false');
+
+        return context.userId !== SYSTEM_USER
+          ? inner.andWhere('m.user_id = :userId', { userId: context.userId })
+          : inner;
+      }, 'ranked')
+      .where('ranked.rn <= :sentinel', { sentinel: limit + 1 })
+      .orderBy('ranked.thread_id', 'ASC')
+      .addOrderBy('ranked.rn', 'ASC')
+      .getRawMany<{ message_id: string; thread_id: string; rn: string; total: string }>();
+
+    if (ranked.length === 0) {
+      return pages;
     }
 
     const entities = await this.messageRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-        thread: {
-          id: In(threadIds),
-        },
-        canceled: false,
-      },
+      where: { id: In(ranked.filter((row) => Number(row.rn) <= limit).map((row) => row.message_id)) },
     });
+    const byId = new Map(entities.map((entity) => [entity.id, MessageEntity.toEgressType(entity)]));
 
-    const messagesByThread = new Map<string, Message[]>();
+    for (const row of ranked) {
+      const page = pages.get(row.thread_id) ?? {
+        messages: [],
+        hasNextPage: false,
+        hasPreviousPage: false,
+        totalCount: Number(row.total),
+      };
 
-    threadIds.forEach((threadId) => {
-      messagesByThread.set(threadId, []);
-    });
+      if (Number(row.rn) > limit) {
+        page.hasNextPage = true;
+      } else {
+        const message = byId.get(row.message_id);
 
-    entities.forEach((entity) => {
-      const threadId = entity.threadId;
-
-      if (threadId) {
-        const messages = messagesByThread.get(threadId) || [];
-
-        messages.push(MessageEntity.toEgressType(entity));
-
-        messagesByThread.set(threadId, messages);
+        if (message) {
+          page.messages.push(message);
+        }
       }
-    });
 
-    return messagesByThread;
+      pages.set(row.thread_id, page);
+    }
+
+    return pages;
+  }
+
+  /**
+   * One page of a thread's messages past a cursor, in the same id order as
+   * {@link findFirstPageByThreadIds}: `afterId` reads forward from the cursor
+   * message, `beforeId` / `last` read backward (and are returned in forward
+   * order). The total is counted only when asked for.
+   */
+  async findPageByThread(
+    context: ServiceContext,
+    threadId: string,
+    args: KeysetPageArgs,
+    options: { countTotal?: boolean } = {},
+  ): Promise<ThreadMessagesPage> {
+    const { limit, isBackward } = resolvePageShape(args);
+    const base = () => {
+      const query = this.messageRepository
+        .createQueryBuilder('m')
+        .where('m.thread_id = :threadId', { threadId })
+        .andWhere('m.is_deleted = false');
+
+      return context.userId !== SYSTEM_USER
+        ? query.andWhere('m.user_id = :userId', { userId: context.userId })
+        : query;
+    };
+
+    const counting: Promise<number | null> =
+      (options.countTotal ?? true) ? base().getCount() : Promise.resolve(null);
+    counting.catch(() => undefined);
+
+    const query = base()
+      .orderBy('m.id', isBackward ? 'DESC' : 'ASC')
+      .limit(limit + 1);
+
+    if (isBackward && args.beforeId) {
+      query.andWhere('m.id < :beforeId', { beforeId: args.beforeId });
+    } else if (!isBackward && args.afterId) {
+      query.andWhere('m.id > :afterId', { afterId: args.afterId });
+    }
+
+    const [rows, totalCount] = await Promise.all([query.getMany(), counting]);
+    const hasExtra = rows.length > limit;
+    const messages = (hasExtra ? rows.slice(0, limit) : rows).map((entity) =>
+      MessageEntity.toEgressType(entity),
+    );
+
+    if (isBackward) {
+      messages.reverse();
+
+      return { messages, hasNextPage: args.beforeId != null, hasPreviousPage: hasExtra, totalCount };
+    }
+
+    return { messages, hasNextPage: hasExtra, hasPreviousPage: args.afterId != null, totalCount };
   }
 
   async update(context: ServiceContext, id: string, data: UpdateMessageDto): Promise<Message | null> {
