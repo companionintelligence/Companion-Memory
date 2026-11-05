@@ -30,14 +30,15 @@
 */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { hasGrokChats, importGrokChats, GROK_CHAT_STORE } from './_x_archive';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface GrokMessage {
   role?: unknown;
@@ -57,25 +58,6 @@ interface GrokConversation {
   messages?: unknown;
   responses?: unknown;
   conversation?: unknown;
-}
-
-async function readJSON(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  if (raw.charCodeAt(0) === 0xfeff) {
-    raw = raw.slice(1);
-  } // strip UTF-8 BOM
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -256,7 +238,7 @@ export class GrokFileImporter implements FileImporter {
         return { confidence: 0 };
       }
 
-      const parsed = await readJSON(root);
+      const parsed = await readJsonFile(root);
       if (!isGrokExport(parsed)) {
         return { confidence: 0 };
       }
@@ -411,7 +393,7 @@ export class GrokFileImporter implements FileImporter {
           id: `grok:${convKey}:${i}:${contentHash}`,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: role,
             Direction: role === 'user' ? 'outgoing' : 'incoming',
@@ -439,7 +421,7 @@ export class GrokFileImporter implements FileImporter {
     for (const name of names) {
       if (name.toLowerCase().startsWith('grok') && name.toLowerCase().endsWith('.json')) {
         const full = path.join(dir, name);
-        if (isGrokExport(await readJSON(full))) {
+        if (isGrokExport(await readJsonFile(full))) {
           return full;
         }
       }
@@ -452,7 +434,7 @@ export class GrokFileImporter implements FileImporter {
       }
 
       const full = path.join(dir, name);
-      if (isGrokExport(await readJSON(full))) {
+      if (isGrokExport(await readJsonFile(full))) {
         return full;
       }
     }

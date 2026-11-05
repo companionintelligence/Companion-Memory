@@ -9,7 +9,7 @@ import { browserBookmarkIdentity, browserVisitIdentity } from '@ci/domains/memor
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Find places.sqlite within a path: the file itself, or anywhere a few levels
 // deep when handed a folder (the importer is dispatched once on the job root, so
@@ -309,11 +309,7 @@ class FirefoxFileImporter implements FileImporter {
             classification: 'bookmark',
             timestamp: ts,
             intermediateLocation: dbPath,
-            content: {
-              filename: 'bookmark.txt',
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(`${title}\n${url}`),
-            },
+            content: textContent('bookmark.txt', `${title}\n${url}`),
             metadata: {
               Title: title || undefined,
               URL: url,

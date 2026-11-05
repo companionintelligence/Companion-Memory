@@ -10,7 +10,7 @@ import { asRecord, asString, type JsonRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface Feature {
   type?: string;
@@ -323,11 +323,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
         classification: 'place',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),
-        content: {
-          filename: 'saved-place.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(title),
-        },
+        content: textContent('saved-place.txt', title),
         metadata: {
           Title: title,
           Name: name || undefined,
@@ -391,11 +387,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
         classification: 'annotation',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),
-        content: {
-          filename: 'review.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text || title),
-        },
+        content: textContent('review.txt', text || title),
         metadata: {
           Title: title,
           Name: name || undefined,

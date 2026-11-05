@@ -12,7 +12,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains, timeframeIsEmpty } from './timeline';
+import { textContent, timeframeContains, timeframeIsEmpty } from './timeline';
 
 // Extract the header line from raw CSV text (BOM already stripped by caller).
 function headerLine(text: string): string {
@@ -297,11 +297,7 @@ export class WithingsFileImporter implements FileImporter {
         id: `withings:${base}:${(row['Date'] || '').trim()}:${index}`,
         classification: 'observation',
         timestamp: ts,
-        content: {
-          filename: 'observation.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent('observation.txt', text),
         metadata,
       },
     });

@@ -12,7 +12,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Extract the header line from raw CSV text (BOM already stripped by caller).
 function headerLine(text: string): string {
@@ -259,11 +259,7 @@ export class OuraFileImporter implements FileImporter {
         id: `oura:${base}:${(row[dateKey] || '').trim()}:${index}`,
         classification: 'observation',
         timestamp: ts,
-        content: {
-          filename: 'observation.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent('observation.txt', text),
         metadata,
       },
     });

@@ -23,7 +23,7 @@ import { htmlToText as sharedHtmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
-import { mimeForFile, timeframeContains } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 // A media attachment in a Messenger message or a post. The `uri` is a path
 // RELATIVE to the export root (e.g. "messages/inbox/<thread>/photos/x.jpg").
@@ -758,11 +758,7 @@ export class FacebookFileImporter implements FileImporter {
           id: n === 0 ? base : `${base}#${n}`,
           classification: 'like',
           timestamp: ts,
-          content: {
-            filename: 'reaction.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(url ? `${title}\n${url}` : title),
-          },
+          content: textContent('reaction.txt', url ? `${title}\n${url}` : title),
           metadata: {
             Title: title,
             Type: 'Facebook reaction',
@@ -829,11 +825,7 @@ export class FacebookFileImporter implements FileImporter {
                 .digest('hex')}`,
           classification: 'like',
           timestamp: ts,
-          content: {
-            filename: 'page_like.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(title),
-          },
+          content: textContent('page_like.txt', title),
           metadata: {
             Title: title,
             Kind: 'page_like',
@@ -905,11 +897,7 @@ export class FacebookFileImporter implements FileImporter {
             id: `facebook:comment:${seconds}:${textHash}`,
             classification: 'comment',
             timestamp: ts,
-            content: {
-              filename: 'comment.txt',
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(text),
-            },
+            content: textContent('comment.txt', text),
             metadata: {
               Title: title,
               Text: text,
@@ -972,7 +960,7 @@ export class FacebookFileImporter implements FileImporter {
           id: contentId('post', 'groups', [ts?.getTime(), text], seen) ?? `facebook:grouppost:${rel}#${i}`,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('post.txt', text),
           // Attached to the post as well as imported as media — see processPosts.
           metadata: {
             Text: text,
@@ -1049,7 +1037,7 @@ export class FacebookFileImporter implements FileImporter {
           classification: 'sale',
           timestamp: ts,
           location: latitude != null && longitude != null ? { latitude, longitude } : undefined,
-          content: { filename: 'listing.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('listing.txt', text),
           metadata: {
             Title: price ? `Listed on Marketplace: ${title} — ${price}` : `Listed on Marketplace: ${title}`,
             Product: title,
@@ -1167,7 +1155,7 @@ export class FacebookFileImporter implements FileImporter {
           timestamp: start,
           timespanEnd: end,
           location: latitude != null && longitude != null ? { latitude, longitude } : undefined,
-          content: { filename: 'event.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('event.txt', text),
           metadata: {
             Title: name,
             Description: event.description || undefined,
@@ -1417,11 +1405,7 @@ export class FacebookFileImporter implements FileImporter {
               ) ?? `facebook:msg:${rel}#${i}`,
             classification: 'message',
             timestamp: ts,
-            content: {
-              filename: path.basename(fpath),
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(text),
-            },
+            content: textContent(path.basename(fpath), text),
             metadata: {
               ...context,
               Source: 'Facebook',
@@ -1487,7 +1471,7 @@ export class FacebookFileImporter implements FileImporter {
             id: contentId('post', 'posts', [ts?.getTime(), text], seen) ?? `facebook:post:${rel}#${i}`,
             classification: 'social',
             timestamp: ts,
-            content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+            content: textContent('post.txt', text),
             // Attached to the post as well as imported as media — see processPosts.
             metadata: { Text: text || undefined, Source: 'Facebook', ...attachmentMetadata(root, mediaUris) },
           },
@@ -1569,11 +1553,7 @@ export class FacebookFileImporter implements FileImporter {
           timestamp: ts,
           // Media-only messages persist with empty content — the message IS its
           // attachments, and the communication's content field is blank.
-          content: {
-            filename: path.basename(fpath),
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(text),
-          },
+          content: textContent(path.basename(fpath), text),
           metadata: {
             ...context,
             Source: 'Facebook',
@@ -1641,7 +1621,7 @@ export class FacebookFileImporter implements FileImporter {
           id: contentId('post', 'posts', [ts?.getTime(), text], seen) ?? `facebook:post:${rel}#${i}`,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('post.txt', text),
           // The photos/videos also ride on the post as attachments (same lane
           // as a Messenger message's), so the post itself shows them — the
           // standalone media items above are how each photo is a photo of its

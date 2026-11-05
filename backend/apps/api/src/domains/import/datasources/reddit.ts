@@ -10,7 +10,7 @@ import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { csvHeaderHas } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // "2021-01-01 12:00:00 UTC" → Date
 function parseRedditDate(s: string): Date | undefined {
@@ -275,11 +275,7 @@ export class RedditFileImporter implements FileImporter {
         id: key ? redditRecordId(kind, key) : undefined,
         classification: 'social',
         timestamp: ts,
-        content: {
-          filename: 'post.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent('post.txt', text),
         metadata: {
           Title: title,
           Body: snippet(row.body, 4000),
@@ -324,11 +320,7 @@ export class RedditFileImporter implements FileImporter {
         id: key ? redditRecordId(kind, key) : undefined,
         classification: 'social',
         timestamp: ts,
-        content: {
-          filename: 'comment.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent('comment.txt', text),
         metadata: {
           Body: snippet(row.body, 4000),
           URL: row.permalink || undefined,
@@ -359,11 +351,7 @@ export class RedditFileImporter implements FileImporter {
         id: `reddit:${kind}:${sub.toLowerCase()}`,
         classification: 'social',
         timestamp: undefined,
-        content: {
-          filename: 'subreddit.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(`r/${sub}`),
-        },
+        content: textContent('subreddit.txt', `r/${sub}`),
         metadata: {
           Title: `r/${sub}`,
           Subreddit: sub,
@@ -388,11 +376,7 @@ export class RedditFileImporter implements FileImporter {
         id: `reddit:purchase:${key}`,
         classification: 'purchase',
         timestamp: ts,
-        content: {
-          filename: 'purchase.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(product),
-        },
+        content: textContent('purchase.txt', product),
         metadata: {
           Product: product,
           // CANONICAL key (push/commerceKeys.ts). This used to be `Cost`, which
@@ -475,11 +459,7 @@ export class RedditFileImporter implements FileImporter {
         id: `reddit:message:${key}`,
         classification: 'message',
         timestamp: ts,
-        content: {
-          filename: 'message.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(body || title),
-        },
+        content: textContent('message.txt', body || title),
         metadata: {
           Title: title,
           Subject: subject || undefined,

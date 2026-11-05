@@ -22,7 +22,7 @@ import {
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Entity, EntityAttribute, Metadata, Relationship } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Read whole-file only for archives comfortably below Node's max string length
 // (~512MB). Larger .mbox files are streamed line-by-line so we never hold the
@@ -496,11 +496,7 @@ export class GmailFileImporter implements FileImporter {
       classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: fpath,
-      content: {
-        filename: path.basename(fpath),
-        mediaType: 'text/plain',
-        data: async () => Buffer.from(bodyText || ''),
-      },
+      content: textContent(path.basename(fpath), bodyText || ''),
       metadata: itemMetadata,
     };
     const g: Graph = { item, edges: edges.length ? edges : undefined };

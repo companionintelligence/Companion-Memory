@@ -39,7 +39,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { Entity, ImportParams, Metadata, Relationship } from './timeline';
-import { mimeForFile } from './timeline';
+import { mimeForFile, textContent } from './timeline';
 
 type MusicFileKind = 'followed' | 'playlists' | 'saved';
 
@@ -492,7 +492,7 @@ export class AmazonMusicFileImporter implements FileImporter {
       item: {
         id: `amazonmusic:album:${album.asin}`,
         classification: 'saved_media',
-        content: { filename: 'album.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('album.txt', text),
         metadata: {
           Title: album.title,
           Artist: album.artist,

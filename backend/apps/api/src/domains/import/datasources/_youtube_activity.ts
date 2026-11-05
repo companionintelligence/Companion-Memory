@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import { youtubeLikeIdentity, youtubeSubscriptionIdentity, youtubeVideoIdFromUrl } from '@ci/domains/memory';
 
 import type { Graph } from './timeline';
+import { textContent } from './timeline';
 
 const ANCHOR_RE = /<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
 
@@ -156,7 +157,7 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         id: activityId(url, ts, opts.index),
         classification: 'search',
         timestamp: ts,
-        content: { filename: 'search.txt', mediaType: 'text/plain', data: async () => Buffer.from(query) },
+        content: textContent('search.txt', query),
         metadata: {
           Title: query || undefined,
           Text: query || undefined,
@@ -229,11 +230,7 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         id: channelId ? youtubeSubscriptionIdentity(channelId).id : activityId(channel.url, ts, opts.index),
         classification: 'subscription',
         timestamp: ts,
-        content: {
-          filename: 'subscription.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(name || channel.url),
-        },
+        content: textContent('subscription.txt', name || channel.url),
         metadata: {
           Title: name || channel.url || undefined,
           Channel: name || undefined,

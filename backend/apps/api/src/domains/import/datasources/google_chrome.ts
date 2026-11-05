@@ -24,7 +24,7 @@ import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const HISTORY_FILE = 'history.json';
 const BOOKMARKS_FILE = 'bookmarks.html';
@@ -334,7 +334,7 @@ export class GoogleChromeFileImporter implements FileImporter {
           id,
           classification: 'page_view',
           timestamp: ts,
-          content: { filename: 'url.txt', mediaType: 'text/plain', data: async () => Buffer.from(url) },
+          content: textContent('url.txt', url),
           metadata: {
             Title: typeof v.title === 'string' && v.title ? v.title : undefined,
             URL: url,
@@ -387,11 +387,7 @@ export class GoogleChromeFileImporter implements FileImporter {
           id,
           classification: 'bookmark',
           timestamp: ts,
-          content: {
-            filename: 'bookmark.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(`${b.title}\n${b.url}`),
-          },
+          content: textContent('bookmark.txt', `${b.title}\n${b.url}`),
           metadata: {
             Title: b.title || undefined,
             URL: b.url,
