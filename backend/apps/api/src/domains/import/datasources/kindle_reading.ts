@@ -26,11 +26,13 @@
    secondary title map above. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { kindleUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -85,66 +87,16 @@ function parseTs(raw: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-export class KindleReadingFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      if (path.extname(root).toLowerCase() !== '.csv' || !(await sniffHeader(root))) {
-        return { confidence: 0 };
-      }
-
-      return { confidence: FILENAME_RE.test(path.basename(root)) ? 0.95 : 0.85 };
-    }
-
-    if (st.isDirectory()) {
-      if ((await this.findSessionFiles(root)).length) {
-        return { confidence: 0.95 };
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  // The export nests the file as Additional Data/Kindle.Devices.ReadingSession_v0/…,
-  // and a drag-and-drop staging adds an "All Data Categories" wrapper above
-  // that — recurse deep enough to survive a couple of wrapper directories.
-  private async findSessionFiles(dir: string, depth = 0): Promise<string[]> {
-    const out: string[] = [];
-    let names: fs.Dirent[];
-    try {
-      names = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return out;
-    }
-
-    for (const dirent of names) {
-      const full = path.join(dir, dirent.name);
-      if (dirent.isDirectory()) {
-        if (depth < 4) {
-          out.push(...(await this.findSessionFiles(full, depth + 1)));
-        }
-      } else if (dirent.isFile()) {
-        if (path.extname(dirent.name).toLowerCase() === '.csv' && (await sniffHeader(full))) {
-          out.push(full);
-        }
-      }
-    }
-
-    return out;
-  }
+export class KindleReadingFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => FILENAME_RE.test(name),
+    headerMatches: (fpath) => sniffHeader(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0.85 },
+    dirConfidence: { named: 0.95, sniffed: 0.95 },
+    scanDepth: 4,
+    importInDir: 'all-matches',
+  };
 
   /**
    * ASIN → title map from the rest of the archive. Digital Items.csv is
@@ -213,32 +165,22 @@ export class KindleReadingFileImporter implements FileImporter {
     return primary;
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    const files = stat.isFile() ? [root] : stat.isDirectory() ? await this.findSessionFiles(root) : [];
+  protected override async importFiles(files: string[], root: string, params: ImportParams): Promise<void> {
     if (!files.length) {
       return;
     }
 
-    // A bare-file drop still gets a title map from whatever sits around it.
-    const titles = this.loadTitles(stat.isDirectory() ? root : path.dirname(root), params);
+    const titles = this.loadTitles(fs.statSync(root).isDirectory() ? root : path.dirname(root), params);
     for (const fpath of files) {
-      await this.processFile(fpath, titles, params);
+      await this.processFile(fpath, params, titles);
     }
   }
 
-  private async processFile(fpath: string, titles: Map<string, string>, params: ImportParams): Promise<void> {
+  protected async processFile(
+    fpath: string,
+    params: ImportParams,
+    titles: Map<string, string> = new Map(),
+  ): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {

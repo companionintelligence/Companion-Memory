@@ -2,11 +2,13 @@
    The "Apple Music Play Activity.csv" file (also exported as
    "Apple Music - Play Activity.csv") holds one play event per row. */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
@@ -24,73 +26,16 @@ function headerHasPlayCols(text: string): boolean {
   return header.includes('Song Name') && header.includes('Event Start Timestamp');
 }
 
-export class AppleMusicFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root);
-      if (filenameMatches(base)) {
-        return { confidence: 0.95 };
-      }
-
-      if (path.extname(base).toLowerCase() === '.csv' && (await this.headerMatches(root))) {
-        return { confidence: 0.85 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      for await (const f of this.walkCsvFiles(root)) {
-        if (filenameMatches(path.basename(f))) {
-          return { confidence: 0.95 };
-        }
-
-        if (await this.headerMatches(f)) {
-          return { confidence: 0.85 };
-        }
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  // Yield .csv files within root, recursing up to two levels (Apple nests the
-  // CSV under "Apple Media Services information/Apple Music Activity/").
-  private async *walkCsvFiles(root: string, depth = 0): AsyncGenerator<string> {
-    if (depth > 2) {
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await readdir(root, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const p = path.join(root, e.name);
-      if (e.isDirectory()) {
-        yield* this.walkCsvFiles(p, depth + 1);
-      } else if (e.isFile() && path.extname(e.name).toLowerCase() === '.csv') {
-        yield p;
-      }
-    }
-  }
+export class AppleMusicFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => filenameMatches(name),
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0.95, sniffed: 0.85 },
+    scanDepth: 2,
+    sortedScan: true,
+    scanOrder: 'walk-order',
+    importInDir: 'all-matches',
+  };
 
   // Read only the first ~8KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
@@ -99,31 +44,7 @@ export class AppleMusicFileImporter implements FileImporter {
     return head != null && headerHasPlayCols(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (st.isFile()) {
-      await this.processFile(root, params);
-    } else if (st.isDirectory()) {
-      for await (const f of this.walkCsvFiles(root)) {
-        if (filenameMatches(path.basename(f)) || (await this.headerMatches(f))) {
-          await this.processFile(f, params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {

@@ -1,10 +1,11 @@
 /* PayPal — CSV download (Activity → Statements → Download). */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
 import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams, LineItemRecord } from './timeline';
@@ -49,60 +50,12 @@ function sniffPayPalHeader(text: string): boolean {
   return sample.includes('"Date"') && sample.includes('"Transaction ID"');
 }
 
-export class PayPalFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = await fsStat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (stat.isFile()) {
-      const base = path.basename(root).toLowerCase();
-      if (path.extname(base) !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      // "download.csv" used to get a moderate confidence bump on the filename
-      // alone, no header read at all — but it's a very common browser default
-      // filename for ANY CSV saved via a download button, completely
-      // unrelated to PayPal. Require the same header check (a "Date" and
-      // "Transaction ID" column) every recognized file needs; a same-named
-      // file that fails it now correctly returns 0.
-      if (await this.headerMatches(root)) {
-        return { confidence: 0.9 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (stat.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.9 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class PayPalFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0, sniffed: 0.9 },
+    importInDir: 'all-matches',
+  };
 
   private async headerMatches(fpath: string): Promise<boolean> {
     const head = await readHead(fpath, 2048);
@@ -110,47 +63,7 @@ export class PayPalFileImporter implements FileImporter {
     return head != null && sniffPayPalHeader(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-
-      return;
-    }
-
-    if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      for (const name of names) {
-        if (path.extname(name).toLowerCase() !== '.csv') {
-          continue;
-        }
-
-        const fpath = path.join(root, name);
-        if (await this.headerMatches(fpath)) {
-          await this.processFile(fpath, params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {

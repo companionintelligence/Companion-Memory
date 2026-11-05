@@ -1,5 +1,10 @@
 /* Netflix — privacy / "Download all" export (ViewingActivity.csv). */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
+import path from 'node:path';
+
+import { parseCSV } from './csv';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -77,73 +82,15 @@ function parseSimpleDate(s: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-export class NetflixFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root).toLowerCase();
-      const isKnownFilename = base === 'viewingactivity.csv' || base === 'netflixviewinghistory.csv';
-
-      // The canonical filenames used to be worth 0.9 on their own, no header
-      // read at all. Require the same header check the renamed-file fallback
-      // below already does, so a same-named file with unrelated content is no
-      // longer claimed outright.
-      if (isKnownFilename && (await this.headerMatches(root))) {
-        return { confidence: 0.9 };
-      }
-
-      // The full "Get my info" export's header (Start Time + Title + Profile
-      // Name together) is distinctive enough to stand alone under any
-      // filename. The quick export's header is just "Title,Date" — that's
-      // indistinguishable from any other minimal watchlist/to-do CSV, so on
-      // its own it must not grant recognition; it only counts when paired
-      // with one of the known filenames above.
-      if (path.extname(base) === '.csv' && (await this.headerMatchesFullExport(root))) {
-        return { confidence: 0.85 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        const known = names.find((n) =>
-          ['viewingactivity.csv', 'netflixviewinghistory.csv'].includes(n.toLowerCase()),
-        );
-        if (known && (await this.headerMatches(path.join(root, known)))) {
-          return { confidence: 0.9 };
-        }
-
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatchesFullExport(path.join(root, name))) {
-            return { confidence: 0.85 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class NetflixFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => name === 'viewingactivity.csv' || name === 'netflixviewinghistory.csv',
+    // A known file may be either shape; an unnamed CSV must be the full export.
+    headerMatches: (fpath) => this.headerMatchesFullExport(fpath),
+    namedHeaderMatches: (fpath) => this.headerMatches(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.9, sniffed: 0.85 },
+  };
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async readHead(fpath: string): Promise<string | undefined> {
@@ -166,50 +113,7 @@ export class NetflixFileImporter implements FileImporter {
     return head !== undefined && headerHasViewingCols(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      const exact = names.find((n) =>
-        ['viewingactivity.csv', 'netflixviewinghistory.csv'].includes(n.toLowerCase()),
-      );
-      if (exact) {
-        await this.processFile(path.join(root, exact), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await this.headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {

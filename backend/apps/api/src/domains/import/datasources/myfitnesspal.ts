@@ -5,11 +5,12 @@
    column rather than matching an exact filename.
 */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
@@ -49,116 +50,15 @@ function toNumber(v: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-export class MyfitnesspalFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
+export class MyfitnesspalFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => looksLikeNutritionName(name),
+    headerMatches: (fpath) => headerMatches(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0.85 },
+  };
 
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root);
-      if (path.extname(base).toLowerCase() !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      if (!(await headerMatches(root))) {
-        return { confidence: 0 };
-      }
-
-      return { confidence: looksLikeNutritionName(base) ? 0.95 : 0.85 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        // Prefer an obviously named Nutrition-Summary csv whose header also matches.
-        for (const name of names) {
-          if (!looksLikeNutritionName(name)) {
-            continue;
-          }
-
-          if (await headerMatches(path.join(root, name))) {
-            return { confidence: 0.95 };
-          }
-        }
-
-        // Otherwise accept any csv whose header carries the nutrition columns.
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await headerMatches(path.join(root, name))) {
-            return { confidence: 0.85 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      let named: string | undefined;
-      for (const n of names) {
-        if (looksLikeNutritionName(n) && (await headerMatches(path.join(root, n)))) {
-          named = n;
-          break;
-        }
-      }
-
-      if (named) {
-        await this.processFile(path.join(root, named), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {

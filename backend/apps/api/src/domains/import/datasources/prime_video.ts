@@ -11,11 +11,12 @@
    and importing both would double-count everything they share. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
@@ -82,94 +83,17 @@ function titleUri(title: string): string {
   return `primevideo:title:${crypto.createHash('sha1').update(norm).digest('hex').slice(0, 16)}`;
 }
 
-export class PrimeVideoFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
+export class PrimeVideoFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => filenameMatches(name),
+    headerMatches: (fpath) => sniffHeader(fpath),
+    confidence: { named: 0.95, sniffed: 0.85 },
+    dirConfidence: { named: 0.95, sniffed: 0.95 },
+    scanDepth: 4,
+    importInDir: 'all-matches',
+  };
 
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root);
-      if (filenameMatches(base)) {
-        return { confidence: 0.95 };
-      }
-
-      if (path.extname(base).toLowerCase() === '.csv' && (await sniffHeader(root))) {
-        return { confidence: 0.85 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      if ((await this.findFiles(root)).length) {
-        return { confidence: 0.95 };
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  // The export nests the file as Additional Data/PrimeVideo.ViewingHistory/…,
-  // and a drag-and-drop staging adds an "All Data Categories" wrapper above
-  // that — recurse deep enough to survive a couple of wrapper directories.
-  private async findFiles(dir: string, depth = 0): Promise<string[]> {
-    const out: string[] = [];
-    let names: fs.Dirent[];
-    try {
-      names = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return out;
-    }
-
-    for (const dirent of names) {
-      const full = path.join(dir, dirent.name);
-      if (dirent.isDirectory()) {
-        if (depth < 4) {
-          out.push(...(await this.findFiles(full, depth + 1)));
-        }
-      } else if (dirent.isFile()) {
-        if (filenameMatches(dirent.name)) {
-          out.push(full);
-        } else if (path.extname(dirent.name).toLowerCase() === '.csv' && (await sniffHeader(full))) {
-          out.push(full);
-        }
-      }
-    }
-
-    return out;
-  }
-
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    const files = stat.isFile() ? [root] : stat.isDirectory() ? await this.findFiles(root) : [];
-    for (const fpath of files) {
-      await this.processFile(fpath, params);
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {

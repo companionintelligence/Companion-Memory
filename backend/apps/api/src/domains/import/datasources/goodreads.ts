@@ -1,5 +1,10 @@
 /* Goodreads — library CSV export (goodreads_library_export.csv). */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
+import path from 'node:path';
+
+import { parseCSV } from './csv';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -61,58 +66,12 @@ function parseGoodreadsDate(s: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-export class GoodreadsFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root).toLowerCase();
-      if (base === GOODREADS_FILENAME) {
-        return { confidence: 0.97 };
-      }
-
-      if (path.extname(base) === '.csv' && (await this.headerMatches(root))) {
-        return { confidence: 0.7 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        if (names.some((n) => n.toLowerCase() === GOODREADS_FILENAME)) {
-          return { confidence: 0.97 };
-        }
-
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.7 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class GoodreadsFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => name === GOODREADS_FILENAME,
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0.97, sniffed: 0.7 },
+  };
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
@@ -121,48 +80,7 @@ export class GoodreadsFileImporter implements FileImporter {
     return head != null && headerHasGoodreadsCols(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      const exact = names.find((n) => n.toLowerCase() === GOODREADS_FILENAME);
-      if (exact) {
-        await this.processFile(path.join(root, exact), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await this.headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {

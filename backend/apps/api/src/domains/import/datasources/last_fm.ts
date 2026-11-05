@@ -1,5 +1,10 @@
 /* Last.fm — scrobble CSV export (scrobbles.csv). */
 import fs from 'node:fs';
+import { open } from 'node:fs/promises';
+import path from 'node:path';
+
+import { parseCSV } from './csv';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -17,58 +22,12 @@ function headerHasScrobbleCols(text: string): boolean {
   return header.includes('uts') && header.includes('utc_time');
 }
 
-export class LastFmFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = await fsStat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (stat.isFile()) {
-      const base = path.basename(root).toLowerCase();
-      if (/^scrobbles.*\.csv$/.test(base)) {
-        return { confidence: 0.9 };
-      }
-
-      if (path.extname(base) === '.csv' && (await this.headerMatches(root))) {
-        return { confidence: 0.85 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (stat.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        if (names.some((n) => /^scrobbles.*\.csv$/i.test(n))) {
-          return { confidence: 0.9 };
-        }
-
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.85 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class LastFmFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => /^scrobbles.*\.csv$/.test(name),
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0.9, sniffed: 0.85 },
+  };
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
@@ -77,48 +36,7 @@ export class LastFmFileImporter implements FileImporter {
     return head != null && headerHasScrobbleCols(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      const scrobble = names.find((n) => /^scrobbles.*\.csv$/i.test(n));
-      if (scrobble) {
-        await this.processFile(path.join(root, scrobble), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await this.headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {
