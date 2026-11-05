@@ -52,7 +52,10 @@ export class PositionController {
       return await this.positionService.create(serviceContext, input);
     } catch (error) {
       if (this.isUniqueViolation(error)) {
-        throw new ConflictException('One or more position records already exist for this time and user');
+        // Not the (time, user_id) key any more — a fix for an instant already
+        // stored is kept as it is and returned. What is left to collide on is
+        // the import provenance (source_type, source_system, source_id).
+        throw new ConflictException('One or more position records already exist for this source');
       }
 
       throw error;
