@@ -1,5 +1,6 @@
 import { BadRequestException, UseGuards } from '@nestjs/common';
-import { Args, Float, ID, Int, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, Float, ID, Info, Int, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -17,6 +18,7 @@ import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { CreatePlaceInput } from '../types/CreatePlaceInput';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
@@ -24,6 +26,7 @@ import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
 import { MergePlacesInput } from '../types/MergePlacesInput';
 import { MergePlacesPayload, PlaceMergeCountsType } from '../types/MergePlacesPayload';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PlaceConnection } from '../types/PlaceConnection';
 import { PlaceDuplicatesPayload } from '../types/PlaceDuplicatesPayload';
@@ -34,7 +37,6 @@ import { PlaceVisitStatsType } from '../types/PlaceVisitStatsType';
 import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
-import { Paginator } from '../utils/Paginator';
 
 const PLACE_KINDS: PlaceKind[] = [
   'room',
@@ -409,17 +411,24 @@ export class PlaceResolver {
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
     @Args('query', { type: () => String, nullable: true }) query?: string,
-  ): Promise<PlaceConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<PlaceConnection>> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.placeService.findAll(serviceContext, { query: query ?? undefined });
+    // One page from SQL, in the list's own order; the cursors stay
+    // GlobalUID-encoded row ids, so the wire contract is unchanged.
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.placeService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+      { query: query ?? undefined, countTotal: selectsField(info, 'totalCount') },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('place', entity.id),
-    });
-
-    const edges: PlaceEdge[] = slice.map((entity) => {
+    const edges: PlaceEdge[] = entities.map((entity) => {
       const node = PlaceType.toType(entity);
 
       return {
@@ -430,8 +439,13 @@ export class PlaceResolver {
 
     return {
       edges,
-      pageInfo,
-      totalCount,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
