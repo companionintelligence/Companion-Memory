@@ -17,6 +17,9 @@ function makeResolver(enabled = true) {
     reopen: jest.fn(),
     defer: jest.fn(),
     findAll: jest.fn().mockResolvedValue([]),
+    findPage: jest
+      .fn()
+      .mockResolvedValue({ entities: [], hasNextPage: false, hasPreviousPage: false, totalCount: 0 }),
     findById: jest.fn(),
     acceptProposed: jest.fn(),
     acceptPendingChange: jest.fn(),
@@ -69,7 +72,7 @@ describe('TaskResolver feature gating', () => {
       pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
       totalCount: 0,
     });
-    expect(taskService.findAll).not.toHaveBeenCalled();
+    expect(taskService.findPage).not.toHaveBeenCalled();
   });
 
   it('refuses writes when the flag is off', async () => {

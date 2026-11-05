@@ -1,11 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize, keysetSeek, withoutUndefined } from '@ci/common/persistence';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  computeChunkSize,
+  keysetPaginateBy,
+  keysetSeek,
+  withoutUndefined,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -23,6 +31,16 @@ export interface HourlyNoteCount {
   bucketStart: Date;
   count: number;
 }
+
+/**
+ * The notes list's order — what {@link NoteService.findAll} sorts by and
+ * {@link NoteService.findPage} seeks on: last edited first, the id breaking
+ * ties so the order is total and a page boundary falls in one place.
+ */
+const NOTE_LIST_ORDER: readonly SeekKey[] = [
+  { expr: 'note.updated_at', order: 'DESC', read: 'CAST(note.updated_at AS text)' },
+  { expr: 'note.id', order: 'DESC' },
+];
 
 @Injectable()
 export class NoteService {
@@ -420,19 +438,51 @@ export class NoteService {
     return query.getCount();
   }
 
+  /** Every note of the caller, last edited first ({@link NOTE_LIST_ORDER}); {@link findPage} reads the same list a page at a time. */
   async findAll(context: ServiceContext): Promise<Note[]> {
-    const results = await this.noteRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && {
-          userId: context.userId,
-        }),
-      },
-      order: {
-        updatedAt: 'DESC',
-      },
+    let qb = this.listScope(this.noteRepository.createQueryBuilder('note'), context);
+
+    NOTE_LIST_ORDER.forEach((key, i) => {
+      qb = i === 0 ? qb.orderBy(key.expr, key.order) : qb.addOrderBy(key.expr, key.order);
     });
 
+    const results = await qb.getMany();
+
     return results.map((entity) => NoteEntity.toEgressType(entity));
+  }
+
+  /**
+   * One page of {@link findAll}'s list — last edited first — read with a
+   * `LIMIT` and a seek past the cursor row instead of every note the user has.
+   * The cursor is the row id; one that matches no row yields an empty page.
+   * The `COUNT(*)` behind `totalCount` runs only when `countTotal` is set.
+   */
+  async findPage(
+    context: ServiceContext,
+    args: KeysetPageArgs,
+    options: { countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Note>> {
+    const page = await keysetPaginateBy(this.noteRepository, args, {
+      alias: 'note',
+      keys: NOTE_LIST_ORDER,
+      idExpr: 'note.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => NoteEntity.toEgressType(entity)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: the caller's notes, or everyone's for the system user. */
+  private listScope(
+    qb: SelectQueryBuilder<NoteEntity>,
+    context: ServiceContext,
+  ): SelectQueryBuilder<NoteEntity> {
+    if (context.userId === SYSTEM_USER) {
+      return qb;
+    }
+
+    return qb.where('note.user_id = :userId', { userId: context.userId });
   }
 
   async update(context: ServiceContext, id: string, data: UpdateNoteDto): Promise<Note | null> {

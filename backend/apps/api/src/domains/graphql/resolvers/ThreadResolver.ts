@@ -1,5 +1,5 @@
 import { UseGuards } from '@nestjs/common';
-import { Query, Resolver, Args, Parent, ResolveField, ID, Info } from '@nestjs/graphql';
+import { Query, Resolver, Args, Info, Parent, ResolveField, ID } from '@nestjs/graphql';
 import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -20,6 +20,7 @@ import { PaginationArgs } from '../types/PaginationArgs';
 import { ThreadConnection } from '../types/ThreadConnection';
 import { ThreadEdge } from '../types/ThreadEdge';
 import { ThreadType } from '../types/ThreadType';
+import { keysetArgs, keysetPageInfo } from '../utils/keysetConnection';
 import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -36,17 +37,16 @@ export class ThreadResolver {
   async threads(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<ThreadConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<ThreadConnection>> {
     const serviceContext = toServiceContext(context);
 
-    const threads = await this.threadService.findAll(serviceContext);
-
-    const { slice, pageInfo, totalCount } = Paginator.paginate(threads, {
-      ...pagination,
-      getId: (thread) => GlobalUID.encode('thread', thread.id),
+    // One page from SQL, most recently updated first; the count only when it is asked for.
+    const page = await this.threadService.findPage(serviceContext, keysetArgs(pagination), {
+      countTotal: selectsField(info, 'totalCount'),
     });
 
-    const edges: ThreadEdge[] = slice.map((thread) => {
+    const edges: ThreadEdge[] = page.entities.map((thread) => {
       const node = ThreadType.toType(thread);
 
       return {
@@ -57,8 +57,8 @@ export class ThreadResolver {
 
     return {
       edges,
-      pageInfo,
-      totalCount,
+      pageInfo: keysetPageInfo(edges, page),
+      ...(page.totalCount != null ? { totalCount: page.totalCount } : {}),
     };
   }
 
