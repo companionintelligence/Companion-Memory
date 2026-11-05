@@ -7,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
 import { stableJson } from '@ci/common/stableJson';
 import {
   type GraphEntityInputDto,
@@ -48,17 +49,19 @@ function hashBatch(batch: GraphEnrichmentProposalBatch): string {
 }
 
 export function encodeGraphEnrichmentProposalCursor(proposal: { createdAt: Date; id: string }): string {
-  return Buffer.from(`${proposal.createdAt.toISOString()}::${proposal.id}`).toString('base64');
+  return encodeKeysetCursor([proposal.createdAt.toISOString(), proposal.id], { separator: '::' });
 }
 
 function decodeCursor(cursor: string): { createdAt: string; id: string } | null {
-  try {
-    const [createdAt, id] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
+  const parts = decodeKeysetCursor(cursor, 2, { separator: '::' });
 
-    return createdAt && id ? { createdAt, id } : null;
-  } catch {
+  if (parts == null) {
     return null;
   }
+
+  const [createdAt, id] = parts;
+
+  return createdAt && id ? { createdAt, id } : null;
 }
 
 /**
