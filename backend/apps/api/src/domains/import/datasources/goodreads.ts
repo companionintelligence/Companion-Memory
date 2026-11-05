@@ -1,11 +1,12 @@
 /* Goodreads — library CSV export (goodreads_library_export.csv). */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, ObjectIdentifierRef } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -115,18 +116,9 @@ export class GoodreadsFileImporter implements FileImporter {
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(4096);
-      const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-      return headerHasGoodreadsCols(buf.toString('utf8', 0, n));
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return head != null && headerHasGoodreadsCols(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

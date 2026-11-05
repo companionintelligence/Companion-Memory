@@ -3,12 +3,13 @@
  * Current packages: Messages/<channel>/messages.json (array of {ID,Timestamp,Contents,Attachments}),
  * plus Messages/index.json mapping channel ids to display names. */
 import fs from 'node:fs';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -279,19 +280,7 @@ async function messageFileIsDiscord(fpath: string): Promise<boolean> {
 
 /** The first 4KB of a file as text, or '' when it cannot be read. */
 async function readPrefix(fpath: string): Promise<string> {
-  try {
-    const fh = await open(fpath, 'r');
-    try {
-      const buf = Buffer.alloc(4096);
-      const { bytesRead: n } = await fh.read(buf, 0, 4096, 0);
-
-      return buf.toString('utf8', 0, n);
-    } finally {
-      await fh.close().catch(() => {});
-    }
-  } catch {
-    return '';
-  }
+  return (await readHead(fpath)) ?? '';
 }
 
 // True when this directory directly contains channel-id subfolders each with a

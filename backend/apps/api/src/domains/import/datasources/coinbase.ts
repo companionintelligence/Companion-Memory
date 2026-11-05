@@ -4,12 +4,13 @@
    other sections (identity, devices, subscriptions, linked wallets, …) are
    account metadata with no timeline placement and are deliberately skipped. */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -231,19 +232,7 @@ export class CoinbaseFileImporter implements FileImporter {
   }
 
   private async readHead(fpath: string, bytes: number): Promise<string | undefined> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(bytes);
-        const { bytesRead } = await fh.read(buf, 0, bytes, 0);
-
-        return buf.toString('utf8', 0, bytesRead);
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return undefined;
-    }
+    return (await readHead(fpath, bytes)) ?? undefined;
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

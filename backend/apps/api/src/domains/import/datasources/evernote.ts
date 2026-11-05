@@ -4,7 +4,7 @@
    of ENML/HTML. One 'note' event per <note>. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseStringPromise } from 'xml2js';
@@ -12,6 +12,7 @@ import { parseStringPromise } from 'xml2js';
 import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -73,20 +74,9 @@ function looksLikeEnex(text: string): boolean {
 }
 
 async function sniffFile(fpath: string): Promise<boolean> {
-  let fh: FileHandle | undefined;
-  try {
-    fh = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead } = await fh.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return looksLikeEnex(buf.toString('utf8', 0, bytesRead));
-  } catch {
-    return false;
-  } finally {
-    if (fh !== undefined) {
-      await fh.close().catch(() => {});
-    }
-  }
+  return head != null && looksLikeEnex(head);
 }
 
 export class EvernoteFileImporter implements FileImporter {

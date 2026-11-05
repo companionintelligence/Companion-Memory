@@ -24,13 +24,14 @@
    Dismissed a shelf) keep the generic handling below. */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isYouTubeProduct, parseActivityCell, youtubeActivityGraph } from './_youtube_activity';
 import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, Metadata } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -159,22 +160,11 @@ export class GoogleMyActivityFileImporter implements FileImporter {
       }
 
       // Confirm the body-cell signature so we don't claim arbitrary HTML.
-      let fh: FileHandle | undefined;
-      try {
-        fh = await open(root, 'r');
-        const buf = Buffer.alloc(65536);
-        const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const head = await readHead(root, 65536);
 
-        return buf.subarray(0, bytesRead).includes('mdl-typography--body-1')
-          ? { confidence: 0.95 }
-          : { confidence: 0 };
-      } catch {
-        return { confidence: 0 };
-      } finally {
-        if (fh !== undefined) {
-          await fh.close().catch(() => {});
-        }
-      }
+      return head != null && head.includes('mdl-typography--body-1')
+        ? { confidence: 0.95 }
+        : { confidence: 0 };
     }
 
     if (st.isDirectory()) {

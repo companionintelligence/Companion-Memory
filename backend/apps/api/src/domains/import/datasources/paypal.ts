@@ -1,11 +1,12 @@
 /* PayPal — CSV download (Activity → Statements → Download). */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, LineItemRecord } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -104,19 +105,9 @@ export class PayPalFileImporter implements FileImporter {
   }
 
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(2048);
-        const { bytesRead } = await fh.read(buf, 0, 2048, 0);
+    const head = await readHead(fpath, 2048);
 
-        return sniffPayPalHeader(buf.toString('utf8', 0, bytesRead));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && sniffPayPalHeader(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

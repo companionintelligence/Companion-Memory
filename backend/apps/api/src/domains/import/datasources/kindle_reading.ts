@@ -26,7 +26,7 @@
    secondary title map above. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { kindleUrl } from './_amazon_urls';
@@ -34,6 +34,7 @@ import { parseCSV } from './csv';
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -57,18 +58,9 @@ function headerMatches(text: string): boolean {
 }
 
 async function sniffHeader(fpath: string): Promise<boolean> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return headerMatches(buf.toString('utf8', 0, n));
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head != null && headerMatches(head);
 }
 
 /** A field's value, with Amazon's "Not Available" filler read as no value. */

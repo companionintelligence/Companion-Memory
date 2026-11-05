@@ -59,12 +59,13 @@
    transactions export") — only the consolidated transaction-history CSV
    documented above, which is what this source's guide entry points at. */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -226,19 +227,9 @@ export class RobinhoodFileImporter implements FileImporter {
   // signature columns as distinct header cells) rather than a bare filename
   // guess, matching paypal.ts/venmo.ts/coinbase.ts's own recognizers.
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(8192);
-        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+    const head = await readHead(fpath, 8192);
 
-        return textHasRobinhoodHeader(buf.toString('utf8', 0, bytesRead));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && textHasRobinhoodHeader(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

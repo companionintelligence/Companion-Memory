@@ -1,12 +1,13 @@
 /* Netflix — privacy / "Download all" export (ViewingActivity.csv). */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { titleUri } from './_watch';
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -146,18 +147,7 @@ export class NetflixFileImporter implements FileImporter {
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async readHead(fpath: string): Promise<string | undefined> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(4096);
-      const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
-
-      return buf.toString('utf8', 0, n);
-    } catch {
-      return undefined;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return (await readHead(fpath)) ?? undefined;
   }
 
   // Matches either the full "Get my info" export or the quick "Download all"

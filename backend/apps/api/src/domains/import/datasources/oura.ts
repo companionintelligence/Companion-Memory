@@ -5,12 +5,13 @@
    every non-empty metric column as metadata. The signature is generic (*.csv)
    so recognition sniffs the header to avoid false-matching other CSV importers. */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -34,22 +35,9 @@ function headerLooksLikeOura(header: string): boolean {
 
 // Read the first ~4KB and inspect the CSV header row.
 async function sniffHeader(fpath: string): Promise<string | undefined> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead } = await handle.read(buf, 0, 4096, 0);
-    let text = buf.toString('utf8', 0, bytesRead);
-    if (text.charCodeAt(0) === 0xfeff) {
-      text = text.slice(1);
-    }
+  const head = await readHead(fpath);
 
-    return headerLine(text);
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head == null ? undefined : headerLine(stripBom(head));
 }
 
 async function csvMatches(fpath: string): Promise<boolean> {

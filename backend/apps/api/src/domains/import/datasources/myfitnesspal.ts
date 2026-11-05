@@ -5,12 +5,13 @@
    column rather than matching an exact filename.
 */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -27,18 +28,9 @@ function headerHasNutritionCols(text: string): boolean {
 
 // Read only the first ~4KB to inspect the CSV header row.
 async function headerMatches(fpath: string): Promise<boolean> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead } = await handle.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return headerHasNutritionCols(buf.toString('utf8', 0, bytesRead));
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head != null && headerHasNutritionCols(head);
 }
 
 function looksLikeNutritionName(name: string): boolean {

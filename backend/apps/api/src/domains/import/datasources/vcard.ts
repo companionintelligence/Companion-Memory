@@ -58,6 +58,7 @@ import { FAX_ATTRIBUTE_NAME, markSharedContactHandles, normalizeHandle } from '.
 import { unescapeIcsText as unescapeVCardText } from './calendar';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams, Entity, EntityAttribute, Item, Metadata } from './timeline';
 // RFC 6350 §3.4 vCard TEXT values use the same backslash escaping
 // (\\ \; \, \n) as RFC 5545 §3.3.11 iCalendar TEXT values, so the two
@@ -110,20 +111,12 @@ export class VCardFileImporter implements FileImporter {
     if (st.isFile()) {
       const ext = path.extname(full).toLowerCase();
       if (ext === '.vcf' || ext === '.vcard') {
-        try {
-          const fd = await fs.promises.open(full, 'r');
-          // 14 bytes, not 11: a real export may open with a UTF-8 BOM, and an
-          // exact match on 'BEGIN:VCARD' then failed and downgraded a perfectly
-          // good file to the 0.8 extension-only guess.
-          const buf = Buffer.alloc(14);
-          await fd.read(buf, 0, 14, 0);
-          await fd.close();
-          const head = stripBom(buf.toString('utf8')).toUpperCase();
-          if (head.startsWith('BEGIN:VCARD')) {
-            return { confidence: 1.0 };
-          }
-        } catch {
-          /* ignore */
+        // 14 bytes, not 11: a real export may open with a UTF-8 BOM, and an
+        // exact match on 'BEGIN:VCARD' then failed and downgraded a perfectly
+        // good file to the 0.8 extension-only guess.
+        const head = stripBom((await readHead(full, 14)) ?? '').toUpperCase();
+        if (head.startsWith('BEGIN:VCARD')) {
+          return { confidence: 1.0 };
         }
 
         return { confidence: 0.8 };
@@ -328,10 +321,6 @@ function fileExportFaxes<T extends { metadata?: Metadata }>(record: T, faxHandle
 }
 
 // ── Tokenizer ────────────────────────────────────────────────────────────────
-
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
-}
 
 /** A property whose value is a base64 blob we deliberately do not retain. */
 const BINARY_PROPERTY_HEAD = /^[A-Za-z0-9.-]+;[^:]*ENCODING=(?:b|base64)(?:[;:])/i;

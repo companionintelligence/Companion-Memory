@@ -16,13 +16,14 @@
    same ci.browser_activity row, and Takeout is just a third arrival of it.
 */
 import fs from 'node:fs';
-import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -40,28 +41,11 @@ function secToDate(sec: number | undefined): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
-}
-
 // Read up to ~64KB of a file to sniff for a signature without slurping a
 // potentially huge export (History.json runs to hundreds of thousands of rows)
 // into memory just to recognize it.
 async function sniff(fpath: string): Promise<string> {
-  let fh: FileHandle | undefined;
-  try {
-    fh = await open(fpath, 'r');
-    const buf = Buffer.alloc(65536);
-    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-
-    return stripBom(buf.toString('utf8', 0, bytesRead));
-  } catch {
-    return '';
-  } finally {
-    if (fh !== undefined) {
-      await fh.close().catch(() => {});
-    }
-  }
+  return stripBom((await readHead(fpath, 65536)) ?? '');
 }
 
 async function looksLikeChromeHistory(fpath: string): Promise<boolean> {

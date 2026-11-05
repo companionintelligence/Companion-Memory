@@ -2,13 +2,13 @@
    The "Apple Music Play Activity.csv" file (also exported as
    "Apple Music - Play Activity.csv") holds one play event per row. */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -94,20 +94,9 @@ export class AppleMusicFileImporter implements FileImporter {
 
   // Read only the first ~8KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    let handle: FileHandle | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(8192);
-      const { bytesRead } = await handle.read(buf, 0, 8192, 0);
+    const head = await readHead(fpath, 8192);
 
-      return headerHasPlayCols(buf.toString('utf8', 0, bytesRead));
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => {
-        /* ignore */
-      });
-    }
+    return head != null && headerHasPlayCols(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

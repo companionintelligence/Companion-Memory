@@ -4,12 +4,13 @@
    header with an empty ID are running-balance/summary rows and are skipped.
 */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSVRows } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams, LineItemRecord, Relationship } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -29,10 +30,6 @@ function textHasVenmoHeader(text: string): boolean {
   }
 
   return false;
-}
-
-function stripBOM(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
 }
 
 interface VenmoTxn {
@@ -150,19 +147,9 @@ export class VenmoFileImporter implements FileImporter {
   // Read only the first ~8KB to inspect for the Venmo header line (it lives
   // after a few preamble lines, so a single header line check is not enough).
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(8192);
-        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+    const head = await readHead(fpath, 8192);
 
-        return textHasVenmoHeader(stripBOM(buf.toString('utf8', 0, bytesRead)));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && textHasVenmoHeader(stripBom(head));
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

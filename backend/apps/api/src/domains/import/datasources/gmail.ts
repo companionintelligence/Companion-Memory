@@ -21,6 +21,7 @@ import {
 } from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, Entity, EntityAttribute, Metadata, Relationship } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -57,16 +58,8 @@ export class GmailFileImporter implements FileImporter {
         return { confidence: 0.9 };
       }
 
-      try {
-        const fd = await fs.promises.open(full, 'r');
-        const buf = Buffer.alloc(5);
-        await fd.read(buf, 0, 5, 0);
-        await fd.close();
-        if (buf.toString() === 'From ') {
-          return { confidence: 0.7 };
-        }
-      } catch {
-        /* ignore */
+      if ((await readHead(full, 5)) === 'From ') {
+        return { confidence: 0.7 };
       }
     }
 

@@ -8,12 +8,13 @@
    columns — we additionally require a Garmin-distinctive column.
 */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -98,18 +99,9 @@ export class GarminFileImporter implements FileImporter {
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(4096);
-      const { bytesRead } = await handle.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-      return headerIsGarmin(buf.toString('utf8', 0, bytesRead));
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return head != null && headerIsGarmin(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
