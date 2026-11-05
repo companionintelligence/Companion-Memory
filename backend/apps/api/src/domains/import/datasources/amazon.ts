@@ -21,7 +21,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item, LineItemRecord, ObjectIdentifierRef } from './timeline';
-import { mimeForFile, timeframeContains } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 // Filename signature: modern Retail.OrderHistory.* or legacy "Order History".
 const FILENAME_RE = /Retail\.OrderHistory|Order.?History/i;
@@ -1228,7 +1228,7 @@ export class AmazonFileImporter implements FileImporter {
           id: orderRollupId(oid),
           classification: 'order',
           timestamp: agg.ts,
-          content: { filename: 'order.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+          content: textContent('order.txt', summary),
           metadata: {
             Title: `Amazon order — ${count} item${count === 1 ? '' : 's'}`,
             // The product list rides in Description so the event embeds and

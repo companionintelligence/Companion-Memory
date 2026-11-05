@@ -21,7 +21,7 @@ import {
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, EntityAttribute, Relationship } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Marker type: this importer takes no options yet (future: skip labels,
 // preferHTML, …). Record<string, never> rather than {} so it means "no
@@ -374,11 +374,7 @@ export class EmailFileImporter implements FileImporter {
       classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: location,
-      content: {
-        filename: path.basename(location),
-        mediaType: 'text/plain',
-        data: async () => Buffer.from(bodyText || ''),
-      },
+      content: textContent(path.basename(location), bodyText || ''),
       // Body snippet so the canonical mapping carries text to CI-Server; capped
       // to keep metadata/embeddings sane (full body still lives in content.data).
       // From/To ride along so the comms mapping can fill participants_metadata.

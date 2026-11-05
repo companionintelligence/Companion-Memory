@@ -10,7 +10,7 @@ import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportedEventStatus, ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface CalendarOptions {
   ownerEntityId?: number;
@@ -405,11 +405,7 @@ export class CalendarFileImporter implements FileImporter {
         timestamp: ev.dtStart,
         timespanEnd: ev.dtEnd,
         intermediateLocation: fpath,
-        content: {
-          filename: path.basename(fpath),
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(content),
-        },
+        content: textContent(path.basename(fpath), content),
         metadata: {
           Source: 'ICS',
           Summary: ev.summary || undefined,

@@ -12,7 +12,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface KeepListItem {
   text?: string;
@@ -262,11 +262,7 @@ export class GoogleKeepFileImporter implements FileImporter {
         id: 'keep:' + path.basename(fpath),
         classification: 'note',
         timestamp: ts,
-        content: {
-          filename: 'note.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(body || title),
-        },
+        content: textContent('note.txt', body || title),
         metadata: {
           Title: title,
           Body: body || undefined,

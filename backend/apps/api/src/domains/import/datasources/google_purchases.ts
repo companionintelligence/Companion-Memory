@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportedEventStatus, ImportParams, Graph, LineItemRecord } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // action_<digits>.json — the per-record file Google Takeout emits under
 // "Purchases & Reservations".
@@ -228,11 +228,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
         classification: 'event',
         timestamp: ts,
         timespanEnd: parseDate(b.endTime),
-        content: {
-          filename: 'reservation.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(title),
-        },
+        content: textContent('reservation.txt', title),
         metadata: {
           Title: title,
           Name: name,
@@ -290,7 +286,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
         id: `gpurchase:${uid}`,
         classification: 'purchase',
         timestamp: ts,
-        content: { filename: 'purchase.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('purchase.txt', title),
         metadata: {
           Title: title,
           Product: product,

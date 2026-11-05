@@ -12,7 +12,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // A MyFitnessPal Nutrition-Summary header carries a Date column plus the core
 // macro columns. Match these rather than the exact filename so slightly varying
@@ -247,11 +247,7 @@ export class MyfitnesspalFileImporter implements FileImporter {
         id,
         classification: 'observation',
         timestamp: ts,
-        content: {
-          filename: 'nutrition.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(summary),
-        },
+        content: textContent('nutrition.txt', summary),
         metadata: {
           Title: `${dateStr} ${meal ?? 'Meal'}${calories != null ? ` — ${calories} kcal` : ''}`,
           Meal: meal,

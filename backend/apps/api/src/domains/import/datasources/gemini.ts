@@ -20,12 +20,12 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryTitle } from './_ai_memory';
+import { parseMemoryEntries, pushMemoryEntry } from './_ai_memory';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface ActivityRecord {
   header?: string;
@@ -251,7 +251,7 @@ export class GeminiFileImporter implements FileImporter {
           id,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'prompt.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+          content: textContent('prompt.txt', title),
           metadata: {
             Prompt: title || undefined,
             // My Activity records are always the user's own prompts.
@@ -312,50 +312,15 @@ export class GeminiFileImporter implements FileImporter {
   }
 
   private async importSavedInfo(savedInfoPath: string, params: ImportParams): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(savedInfoPath, 'utf8');
-    } catch (e) {
-      params.log?.('error', 'Failed to read Gemini Saved Info', { error: (e as Error).message });
+    const parsed = await readJsonFile(savedInfoPath, { log: params.log, label: 'Gemini Saved Info' });
 
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
+    if (parsed === undefined) {
       return;
     }
 
     for (const m of parseMemoryEntries(parsed)) {
-      this.pushMemory(m, params);
+      pushMemoryEntry(m, params, { idPrefix: 'gemini', source: 'Gemini' });
     }
-  }
-
-  private pushMemory(m: MemoryEntry, params: ImportParams): void {
-    const ts = m.created ?? m.updated;
-    if (!timeframeContains(params.timeframe, ts)) {
-      return;
-    }
-
-    const key = m.idHint || crypto.createHash('sha1').update(m.text).digest('hex').slice(0, 24);
-    params.pipeline.push({
-      item: {
-        id: `gemini:memory:${key}`,
-        classification: 'note',
-        timestamp: ts,
-        content: { filename: 'memory.txt', mediaType: 'text/plain', data: async () => Buffer.from(m.text) },
-        metadata: {
-          Kind: 'memory',
-          Title: memoryTitle(m.text),
-          Category: m.category || undefined,
-          Updated: m.updated || undefined,
-          Source: 'Gemini',
-          Text: m.text,
-        },
-      },
-    });
   }
 
   private async findFile(dir: string, wanted: (name: string) => boolean): Promise<string | undefined> {

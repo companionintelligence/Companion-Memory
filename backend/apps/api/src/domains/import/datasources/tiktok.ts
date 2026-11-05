@@ -7,7 +7,7 @@ import { asArray, asRecord, asString, dig, type JsonRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const TIKTOK_FILES = ['user_data_tiktok.json', 'user_data.json', 'tiktok.json'];
 
@@ -183,7 +183,7 @@ export class TikTokFileImporter implements FileImporter {
           id: `tiktok:watch:${id || link || 'unknown'}:${iso}:${index}`,
           classification: 'watch',
           timestamp: ts,
-          content: { filename: 'watch.txt', mediaType: 'text/plain', data: async () => Buffer.from(link) },
+          content: textContent('watch.txt', link),
           metadata: {
             Title: id ? `TikTok video ${id}` : 'TikTok video',
             URL: link || undefined,
@@ -226,7 +226,7 @@ export class TikTokFileImporter implements FileImporter {
           id: `tiktok:like:${id || link || 'unknown'}:${iso}:${index}`,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'like.txt', mediaType: 'text/plain', data: async () => Buffer.from(link) },
+          content: textContent('like.txt', link),
           metadata: {
             Title: id ? `TikTok video ${id}` : 'TikTok video',
             URL: link || undefined,
@@ -269,7 +269,7 @@ export class TikTokFileImporter implements FileImporter {
           id: `tiktok:favorite:${id || link || 'unknown'}:${iso}:${index}`,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'favorite.txt', mediaType: 'text/plain', data: async () => Buffer.from(link) },
+          content: textContent('favorite.txt', link),
           metadata: {
             Title: id ? `TikTok video ${id}` : 'TikTok video',
             URL: link || undefined,
@@ -311,7 +311,7 @@ export class TikTokFileImporter implements FileImporter {
           id: `tiktok:search:${term || 'unknown'}:${iso}:${index}`,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'search.txt', mediaType: 'text/plain', data: async () => Buffer.from(term) },
+          content: textContent('search.txt', term),
           metadata: { Text: term || undefined, Query: term || undefined, Kind: 'search', Source: 'TikTok' },
         },
       });
@@ -348,11 +348,7 @@ export class TikTokFileImporter implements FileImporter {
           id: `tiktok:comment:${iso}:${index}`,
           classification: 'social',
           timestamp: ts,
-          content: {
-            filename: 'comment.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(comment),
-          },
+          content: textContent('comment.txt', comment),
           metadata: {
             Text: comment || undefined,
             Comment: comment || undefined,
@@ -406,7 +402,7 @@ export class TikTokFileImporter implements FileImporter {
             id: `tiktok:dm:${conversation}:${iso}:${index}`,
             classification: 'message',
             timestamp: ts,
-            content: { filename: 'dm.txt', mediaType: 'text/plain', data: async () => Buffer.from(content) },
+            content: textContent('dm.txt', content),
             metadata: {
               Sender: sender,
               To: to,

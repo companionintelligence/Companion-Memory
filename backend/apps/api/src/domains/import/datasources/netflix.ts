@@ -1,10 +1,10 @@
 /* Netflix — privacy / "Download all" export (ViewingActivity.csv). */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { parseCSV } from './csv';
+import { titleUri } from './_watch';
+import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -42,12 +42,6 @@ function headerHasSimpleCols(text: string): boolean {
  * legacy per-viewing rows need collapsing onto it by hand (the dev database
  * that had them was fixed that way; nothing shipped with the old identity).
  */
-function titleUri(title: string): string {
-  const norm = title.replace(/\s+/g, ' ').trim().toLowerCase();
-
-  return `netflix:title:${crypto.createHash('sha256').update(norm).digest('hex').slice(0, 16)}`;
-}
-
 // Parse the full export's Duration ("hh:mm:ss") into milliseconds. Hours can
 // exceed 24 for long binge sessions, so don't cap them.
 function parseDurationMs(s: string): number | undefined {
@@ -227,21 +221,8 @@ export class NetflixFileImporter implements FileImporter {
 
   private async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', `Failed to read ${base}`, { error: (e as Error).message });
-
-      return;
-    }
-
-    let rows: Record<string, string>[];
-    try {
-      rows = parseCSV(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${base}`, { error: (e as Error).message });
-
+    const rows = await readCsvFile(fpath, { log: params.log });
+    if (rows == null) {
       return;
     }
 
@@ -325,7 +306,7 @@ export class NetflixFileImporter implements FileImporter {
           Title: row['Title'] || undefined,
           // One content row per TITLE: the URI replaces the per-viewing item id
           // as the content row's triple identity (mapping.toContentInput).
-          URI: title ? titleUri(title) : undefined,
+          URI: title ? titleUri('netflix', title) : undefined,
           Profile: row['Profile Name'] || undefined,
           Device: row['Device Type'] || undefined,
           Duration: row['Duration'] || undefined,

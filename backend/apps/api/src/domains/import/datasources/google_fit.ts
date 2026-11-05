@@ -25,7 +25,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const DAILY_DIR = 'daily activity metrics';
 const SESSIONS_DIR = 'all sessions';
@@ -551,7 +551,7 @@ export class GoogleFitFileImporter implements FileImporter {
         id: `google_fit:${date}`,
         classification: 'observation',
         timestamp: ts,
-        content: { filename: 'activity.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('activity.txt', title),
         metadata: {
           Title: title,
           Source: 'Google Fit',
@@ -629,7 +629,7 @@ export class GoogleFitFileImporter implements FileImporter {
         classification: 'workout',
         timestamp: ts,
         timespanEnd: end,
-        content: { filename: 'workout.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('workout.txt', title),
         metadata: {
           Title: title,
           'Activity Type': activity,
@@ -703,7 +703,7 @@ export class GoogleFitFileImporter implements FileImporter {
         id: `google_fit:session:${key}`,
         classification: 'workout',
         timestamp: ts,
-        content: { filename: 'workout.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('workout.txt', title),
         metadata: {
           Title: title,
           'Activity Type': activity || undefined,
@@ -761,7 +761,7 @@ export class GoogleFitFileImporter implements FileImporter {
         classification: 'location',
         timestamp: ts,
         location: { latitude: fix.lat, longitude: fix.lon },
-        content: { filename: 'position.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('position.txt', title),
         metadata: {
           Title: title,
           Source: 'Google Fit',
