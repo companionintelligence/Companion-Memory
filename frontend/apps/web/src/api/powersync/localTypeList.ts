@@ -1,8 +1,8 @@
 /**
  * One entity type's list answered from this phone: the records of that type among the
  * synced `mobile_search_documents`, in a browse order, or ranked by the FTS index for a
- * query. The per-type pages (places, things, receipts, content) read it while the Memory
- * server does not answer; `localPeople.ts` is the same shape for people.
+ * query. The per-type pages (places, things, receipts, content) and the people page read
+ * it while the Memory server does not answer.
  *
  * Two browse orders, chosen per type by the caller:
  *

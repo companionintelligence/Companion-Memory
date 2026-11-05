@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { usePageTitle } from '@ci/common';
 import { Button } from '@ci/shadcn';
@@ -36,6 +36,15 @@ export interface LocalTypeListProps {
    * `search` on these pages; the receipts page also has its own `q`.
    */
   searchParams?: readonly string[];
+  /** What the empty list says when nothing of the type matches; the generic line by default. */
+  emptyTitle?: string;
+  /**
+   * The row for one record, given the record and what opens it. The default is
+   * `LocalDocumentRow`, the explorer's own; the people page draws an avatar row.
+   */
+  renderRow?: (document: LocalDocument, open: () => void) => ReactNode;
+  /** Classes of the box the rows stack in. */
+  rowsClassName?: string;
 }
 
 interface ListState {
@@ -61,6 +70,9 @@ export function LocalTypeList({
   pageTitle,
   order,
   searchParams: queryParams = ['search'],
+  emptyTitle,
+  renderRow,
+  rowsClassName = 'flex flex-col',
 }: LocalTypeListProps) {
   usePageTitle(pageTitle);
 
@@ -185,22 +197,28 @@ export function LocalTypeList({
   } else if (state.documents.length === 0) {
     body = (
       <Empty
-        title={t('MEMORY_LOCAL_LIST_EMPTY_TITLE')}
+        title={emptyTitle ?? t('MEMORY_LOCAL_LIST_EMPTY_TITLE')}
         description={t('MEMORY_LOCAL_LIST_EMPTY_DESCRIPTION')}
       />
     );
   } else {
     body = (
       <>
-        <div className="flex flex-col">
-          {state.documents.map((document) => (
-            <LocalDocumentRow
-              key={document.id}
-              document={document}
-              time={formatRowTime(document.occurredAt ? new Date(document.occurredAt) : null, fmt)}
-              onClick={() => navigate(savedRecordRoute(document.entityType, document.entityId))}
-            />
-          ))}
+        <div className={rowsClassName}>
+          {state.documents.map((document) => {
+            const open = () => navigate(savedRecordRoute(document.entityType, document.entityId));
+
+            return renderRow ? (
+              <Fragment key={document.id}>{renderRow(document, open)}</Fragment>
+            ) : (
+              <LocalDocumentRow
+                key={document.id}
+                document={document}
+                time={formatRowTime(document.occurredAt ? new Date(document.occurredAt) : null, fmt)}
+                onClick={open}
+              />
+            );
+          })}
         </div>
 
         {!state.exhausted && (
