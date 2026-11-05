@@ -915,6 +915,24 @@ export const PIPELINE_TURNS_TABLE = 'ci.pipeline_turns';
 export const MAX_BUDGET_CHARGE_PER_TICK_MS = 10 * 60_000;
 
 /**
+ * How long the control tick trusts "nothing stale here" about a leg.
+ *
+ * A converged leg never starts a sweep, so its `last_started_at` never moves
+ * and the clock never excuses its probe: every tick re-proved convergence with
+ * a `LIMIT 1` anti-join over the leg's whole source, ~7 ms and ~7,800 blocks
+ * per leg on a 324k-row corpus, for thirty-odd legs, every two minutes. Now a
+ * leg found converged is stamped (`ci.pipeline_schedule.converged_at`, at the
+ * stage version) and left alone for this long.
+ *
+ * Ten minutes, five tick periods: what it costs is that a row landing on a
+ * converged leg through a path with no arrival signal waits up to this long
+ * for the SWEEP to find it — the live search-index listeners and the arrival
+ * listener's own slices are not gated by it, and a sweep start or a version
+ * bump drops the stamp at once.
+ */
+export const CONVERGED_REPROBE_SECONDS = 10 * 60;
+
+/**
  * Module-load sanity check over the two declarations above, in the style of
  * `BackpressureService`'s cap guard — and, like `assertStagePolicy`, it names
  * the consequence rather than merely rejecting a number.
