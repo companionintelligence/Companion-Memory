@@ -95,18 +95,7 @@ function formatDateTime(value: string | null | undefined, fmt: DateTimeFormatter
     return null;
   }
 
-  const date = new Date(value);
-
-  return isNaN(date.getTime())
-    ? value
-    : fmt.dateTime(
-        date,
-        {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        },
-        'en-US',
-      );
+  return fmt.tryDateTime(value, { dateStyle: 'medium', timeStyle: 'short' }, 'en-US') ?? value;
 }
 
 function formatDuration(start?: string | null, end?: string | null): string | null {

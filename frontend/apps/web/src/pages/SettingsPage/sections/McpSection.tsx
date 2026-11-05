@@ -475,9 +475,7 @@ function formatDateTime(value: string | undefined | null, fmt: DateTimeFormatter
     return null;
   }
 
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? value : fmt.dateTime(date);
+  return fmt.tryDateTime(value) ?? value;
 }
 
 interface EnvRowsEditorProps {

@@ -809,21 +809,13 @@ function formatDuration(ms: number | null): string {
 }
 
 function formatTimestamp(value: string | null | undefined, fmt: DateTimeFormatter): string {
-  if (!value) {
-    return '—';
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return '—';
-  }
-
-  return fmt.dateTime(date, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  return (
+    fmt.tryDateTime(value, {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }) ?? '—'
+  );
 }

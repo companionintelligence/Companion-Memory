@@ -68,6 +68,8 @@ export {
 } from './src/utils/connectionMode';
 export type { CachedDataProbe, ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
+export { BINARY_UNITS, DECIMAL_UNITS, IEC_UNITS, formatBytes } from './src/utils/formatBytes';
+export type { FormatBytesOptions } from './src/utils/formatBytes';
 export {
   BACKGROUND_MAX_ACCURACY_METERS,
   HOME_GEOFENCE_RADIUS_METERS,
@@ -180,7 +182,7 @@ export {
   evaluateModelFit,
   findLocalLlmModel,
   gpuAllowedOn,
-  formatBytes,
+  formatModelBytes,
   localLlmModelsFor,
 } from './src/utils/localLlmCatalog';
 export type {
