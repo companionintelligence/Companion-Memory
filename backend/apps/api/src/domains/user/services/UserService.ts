@@ -348,10 +348,13 @@ export class UserService {
 
   /**
    * The audience for recurring per-user background work — the same population
-   * `PythonFunctionCrons` selects with `SELECT id FROM ci.users WHERE onboarded
-   * = true`. An account that never finished FTUE has no connections, no corpus
-   * and no timezone the user chose, so every job fanned out to it can only
-   * no-op; `findAll()` includes those rows and is the wrong list to fan out on.
+   * the id-only `listOnboardedUserIds()` (services/onboardedUserIds.ts) selects
+   * for the crons that hold a `DataSource`. An account that never finished FTUE
+   * has no connections, no corpus and no timezone the user chose, so every job
+   * fanned out to it can only no-op; `findAll()` includes those rows and is the
+   * wrong list to fan out on. Soft-deleted accounts are excluded by the
+   * `@DeleteDateColumn` on `UserEntity`; keep the raw twin's `deleted_at IS NULL`
+   * in step with that.
    */
   async findAllOnboarded(): Promise<User[]> {
     // Ordered, oldest first. `BlueBubblesSyncService` used to attribute the

@@ -7,7 +7,7 @@ import { AlertCircle, Check, Circle, Loader2, Sparkles, X } from '@ci/shadcn/ico
 import { Link, useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
-import { GET_CONNECTIONS } from '@/components/connect/ConnectedAccountsSection';
+import { gql } from '@/graphql';
 import { useCurrentUser, useModel } from '@/hooks';
 import { settingsSectionTarget } from '@/layouts/Main/SecondaryNavigation/selfSections';
 import { dismissGettingStarted, isGettingStartedActive } from '@/lib/gettingStarted';
@@ -15,6 +15,20 @@ import { useActiveImports, useImportApi } from '@/pages/ImportPage/useImportApi'
 
 import { deriveChecklist, type ChecklistStep, type StepStatus } from './firstSync';
 import { useFirstSyncStatus } from './useFirstSyncStatus';
+
+/**
+ * The checklist reads ONE number off the connections list. It used to poll
+ * `GET_CONNECTIONS` — every edge, its provider and every endpoint description —
+ * twice a minute on every page for the whole getting-started window, to read
+ * `totalCount`. This asks for the count alone.
+ */
+export const GET_CONNECTION_COUNT = gql(`
+  query GetConnectionCount {
+    connections {
+      totalCount
+    }
+  }
+`);
 
 const STATUS_ICON: Record<StepStatus, { Icon: typeof Check; className: string; spin?: boolean }> = {
   done: { Icon: Check, className: 'text-primary' },
@@ -66,7 +80,7 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
   const importsEnabled = isFeatureEnabled('import.page');
 
   const [{ activeModels, loading: modelsLoading }] = useModel();
-  const { data: connectionData } = useQuery(GET_CONNECTIONS, { pollInterval: 30_000 });
+  const { data: connectionData } = useQuery(GET_CONNECTION_COUNT, { pollInterval: 30_000 });
   const { snapshot, refresh: refreshImports } = useActiveImports(2_000, 30_000, importsEnabled);
   const status = useFirstSyncStatus(true, importsEnabled);
   const { startPush } = useImportApi();

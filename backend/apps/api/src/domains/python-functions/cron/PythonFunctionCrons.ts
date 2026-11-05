@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
 import { Cron } from '@ci/common/schedule';
+import { listOnboardedUserIds } from '@ci/domains/user';
 
 import { PythonFunctionService } from '../services/PythonFunctionService';
 import type { PythonFunctionTarget } from '../types';
@@ -239,13 +240,9 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     });
   }
 
-  /** Same population the Temporal system workflows fanned out over. */
-  private async listOnboardedUserIds(): Promise<string[]> {
-    type Row = { id: string };
-
-    const rows = (await this.dataSource.query('SELECT id FROM ci.users WHERE onboarded = true')) as Row[];
-
-    return rows.map((row) => String(row.id));
+  /** The same population every other fan-out on this appliance covers. */
+  private listOnboardedUserIds(): Promise<string[]> {
+    return listOnboardedUserIds(this.dataSource);
   }
 
   /**
