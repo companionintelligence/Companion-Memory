@@ -22,7 +22,6 @@ import {
   DETERMINISTIC_MERGE_CRON,
   encodeMergeCandidateCursor,
   EntityMergeBlockService,
-  GraphQueryService,
   isMergeCandidateStatus,
   MergeCandidateService,
   PersonDuplicateService,
@@ -37,6 +36,7 @@ import {
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
+import { RelationshipsLoader } from '../loaders/RelationshipsLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { selectsField } from '../selectsField';
 import { CreatePersonInput } from '../types/CreatePersonInput';
@@ -330,7 +330,7 @@ export class PersonResolver {
     private readonly personIdentifiersLoader: PersonIdentifiersLoader,
     private readonly personInteractionStatsLoader: PersonInteractionStatsLoader,
     private readonly tagLoader: TagLoader,
-    private readonly graphQuery: GraphQueryService,
+    private readonly relationshipsLoader: RelationshipsLoader,
   ) {}
 
   @Mutation(() => CreatePersonPayload)
@@ -969,12 +969,14 @@ export class PersonResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'outbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'outbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 
   /** Inbound life-graph edges to this person. */
@@ -989,12 +991,14 @@ export class PersonResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'inbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'inbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 
   private async entityIdentifiersFor(

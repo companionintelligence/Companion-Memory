@@ -7,7 +7,6 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import {
   EntityMergeBlockService,
-  GraphQueryService,
   type PlaceKind,
   PlaceDuplicateService,
   PlaceMergeService,
@@ -17,6 +16,7 @@ import {
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
+import { RelationshipsLoader } from '../loaders/RelationshipsLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { selectsField } from '../selectsField';
 import { CreatePlaceInput } from '../types/CreatePlaceInput';
@@ -102,7 +102,7 @@ export class PlaceResolver {
     private readonly placeLoader: PlaceLoader,
     private readonly placeVisitStatsLoader: PlaceVisitStatsLoader,
     private readonly tagLoader: TagLoader,
-    private readonly graphQuery: GraphQueryService,
+    private readonly relationshipsLoader: RelationshipsLoader,
     private readonly placeDuplicateService: PlaceDuplicateService,
     private readonly placeMergeService: PlaceMergeService,
     private readonly entityMergeBlockService: EntityMergeBlockService,
@@ -568,12 +568,14 @@ export class PlaceResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'outbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'outbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 
   /** Inbound life-graph edges to this place (visits, located_at, …). */
@@ -588,11 +590,13 @@ export class PlaceResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'inbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'inbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 }

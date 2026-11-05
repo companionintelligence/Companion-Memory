@@ -1,6 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type EntityManager } from 'typeorm';
+import {
+  DataSource,
+  In,
+  Repository,
+  type EntityManager,
+  type EntityTarget,
+  type ObjectLiteral,
+} from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -779,20 +786,21 @@ export class TagService {
 
   /** The direction tags an intention tag belongs to (empty = Unsorted). */
   async getTagDirections(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
-    const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(TagDirectionEntity, 'td', 'td.direction_tag_id = t.id')
-      .where('td.intention_tag_id = :intentionTagId', { intentionTagId })
-      .orderBy('t.label', 'ASC');
+    return (await this.getTagDirectionsForTags(context, [intentionTagId])).get(intentionTagId) ?? [];
+  }
 
-    if (context.userId !== SYSTEM_USER) {
-      query.andWhere('t.user_id = :userId', { userId: context.userId });
-    }
-
-    const entities = await query.getMany();
-
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+  /** {@link getTagDirections} for a page of intention tags in one read, keyed by intention tag id. */
+  async getTagDirectionsForTags(
+    context: ServiceContext,
+    intentionTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      TagDirectionEntity,
+      'intention_tag_id',
+      'direction_tag_id',
+      intentionTagIds,
+    );
   }
 
   /**
@@ -848,20 +856,21 @@ export class TagService {
 
   /** The category tags an intention tag belongs to (empty = Unsorted). */
   async getTagCategories(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
-    const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(TagCategoryEntity, 'tc', 'tc.category_tag_id = t.id')
-      .where('tc.intention_tag_id = :intentionTagId', { intentionTagId })
-      .orderBy('t.label', 'ASC');
+    return (await this.getTagCategoriesForTags(context, [intentionTagId])).get(intentionTagId) ?? [];
+  }
 
-    if (context.userId !== SYSTEM_USER) {
-      query.andWhere('t.user_id = :userId', { userId: context.userId });
-    }
-
-    const entities = await query.getMany();
-
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+  /** {@link getTagCategories} for a page of intention tags in one read, keyed by intention tag id. */
+  async getTagCategoriesForTags(
+    context: ServiceContext,
+    intentionTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      TagCategoryEntity,
+      'intention_tag_id',
+      'category_tag_id',
+      intentionTagIds,
+    );
   }
 
   /**
@@ -915,20 +924,68 @@ export class TagService {
    * `category_direction_optouts`).
    */
   async getCategoryDirectionOptouts(context: ServiceContext, categoryTagId: string): Promise<Tag[]> {
+    return (await this.getCategoryDirectionOptoutsForTags(context, [categoryTagId])).get(categoryTagId) ?? [];
+  }
+
+  /** {@link getCategoryDirectionOptouts} for a page of category tags in one read, keyed by category tag id. */
+  async getCategoryDirectionOptoutsForTags(
+    context: ServiceContext,
+    categoryTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      CategoryDirectionOptoutEntity,
+      'category_tag_id',
+      'direction_tag_id',
+      categoryTagIds,
+    );
+  }
+
+  /**
+   * The caller's tags linked from each of `ids` through a membership table
+   * (`keyColumn` → `tagColumn`), by label, keyed by the id they are linked
+   * from. One read of the links in label order, one hydration of the distinct
+   * tags; a key with no links is absent from the map.
+   */
+  private async linkedTags(
+    context: ServiceContext,
+    link: EntityTarget<ObjectLiteral>,
+    keyColumn: string,
+    tagColumn: string,
+    ids: string[],
+  ): Promise<Map<string, Tag[]>> {
+    const byKey = new Map<string, Tag[]>();
+
+    if (ids.length === 0) {
+      return byKey;
+    }
+
     const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(CategoryDirectionOptoutEntity, 'cdo', 'cdo.direction_tag_id = t.id')
-      .where('cdo.category_tag_id = :categoryTagId', { categoryTagId })
+      .getRepository(link)
+      .createQueryBuilder('link')
+      .select(`link.${keyColumn}`, 'key')
+      .addSelect('t.id', 'tag_id')
+      .innerJoin(TagEntity, 't', `t.id = link.${tagColumn}`)
+      .where(`link.${keyColumn} IN (:...ids)`, { ids })
       .orderBy('t.label', 'ASC');
 
     if (context.userId !== SYSTEM_USER) {
       query.andWhere('t.user_id = :userId', { userId: context.userId });
     }
 
-    const entities = await query.getMany();
+    const links = await query.getRawMany<{ key: string; tag_id: string }>();
+    const tags = await this.findByIds(context, [...new Set(links.map((row) => row.tag_id))]);
+    const tagById = new Map(tags.flatMap((tag) => (tag ? [[tag.id, tag] as const] : [])));
 
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+    for (const { key, tag_id } of links) {
+      const tag = tagById.get(tag_id);
+
+      if (tag) {
+        byKey.set(key, [...(byKey.get(key) ?? []), tag]);
+      }
+    }
+
+    return byKey;
   }
 
   /**

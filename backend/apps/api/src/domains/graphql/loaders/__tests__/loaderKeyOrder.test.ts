@@ -26,8 +26,11 @@ import { PreviewLoader } from '../PreviewLoader';
 import { ProviderKeyLoader } from '../ProviderKeyLoader';
 import { ProviderLoader } from '../ProviderLoader';
 import { QuestionLoader } from '../QuestionLoader';
+import { RelationshipsLoader } from '../RelationshipsLoader';
 import { TagAssignmentCountLoader } from '../TagAssignmentCountLoader';
 import { TagLoader } from '../TagLoader';
+import { TagTaxonomyLoader } from '../TagTaxonomyLoader';
+import { TaskChildrenLoader } from '../TaskChildrenLoader';
 import { ThreadLoader } from '../ThreadLoader';
 import { ThreadMessagesLoader } from '../ThreadMessagesLoader';
 import { UnfurlLoader } from '../UnfurlLoader';
@@ -619,6 +622,53 @@ const CASES: readonly LoaderCase[] = [
       const loader = new ThreadMessagesLoader(
         stub({
           findByThreadIds: async (_ctx: unknown, ids: string[]) => plannerMap(ids, present, (id) => [{ id }]),
+        }),
+        stub(LOGGER),
+      );
+
+      return (id) => loader.load(CTX, id);
+    },
+    probe: probeIds,
+    empty: null,
+  },
+  {
+    name: 'RelationshipsLoader',
+    build: (present) => {
+      const loader = new RelationshipsLoader(
+        stub({
+          getRelationshipsPerEntity: async (_owner: string, { entityIds }: { entityIds: string[] }) =>
+            plannerMap(entityIds, present, (id) => [{ id }]),
+        }),
+        stub(LOGGER),
+      );
+
+      return (id) => loader.loadFor(CTX, id, 'outbound', 50);
+    },
+    probe: probeIds,
+    empty: null,
+  },
+  {
+    name: 'TagTaxonomyLoader',
+    build: (present) => {
+      const loader = new TagTaxonomyLoader(
+        stub({
+          getTagDirectionsForTags: async (_ctx: unknown, ids: string[]) =>
+            plannerMap(ids, present, (id) => [{ id }]),
+        }),
+        stub(LOGGER),
+      );
+
+      return (id) => loader.loadFor(CTX, 'directions', id);
+    },
+    probe: probeIds,
+    empty: null,
+  },
+  {
+    name: 'TaskChildrenLoader',
+    build: (present) => {
+      const loader = new TaskChildrenLoader(
+        stub({
+          findChildrenOf: async (_ctx: unknown, ids: string[]) => plannerMap(ids, present, (id) => [{ id }]),
         }),
         stub(LOGGER),
       );

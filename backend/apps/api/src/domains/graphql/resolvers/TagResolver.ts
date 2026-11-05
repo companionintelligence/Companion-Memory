@@ -28,6 +28,7 @@ import {
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagAssignmentCountLoader } from '../loaders/TagAssignmentCountLoader';
+import { TagTaxonomyLoader } from '../loaders/TagTaxonomyLoader';
 import { selectsField } from '../selectsField';
 import { ActionType } from '../types/ActionType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
@@ -85,6 +86,7 @@ export class TagResolver {
     private readonly tagService: TagService,
     private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
+    private readonly tagTaxonomyLoader: TagTaxonomyLoader,
   ) {}
 
   @Query(() => TagConnection)
@@ -245,7 +247,7 @@ export class TagResolver {
   async directions(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getTagDirections(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'directions', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }
@@ -258,7 +260,7 @@ export class TagResolver {
   async categories(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getTagCategories(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'categories', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }
@@ -272,7 +274,7 @@ export class TagResolver {
   async directionOptOuts(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getCategoryDirectionOptouts(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'directionOptOuts', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }

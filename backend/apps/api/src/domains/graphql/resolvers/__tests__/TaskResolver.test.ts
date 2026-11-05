@@ -43,6 +43,7 @@ function makeResolver(enabled = true) {
       plannedBlockService as never,
       featureService as never,
       tagLoader as never,
+      {} as never,
     ),
     taskService,
     plannedBlockService,

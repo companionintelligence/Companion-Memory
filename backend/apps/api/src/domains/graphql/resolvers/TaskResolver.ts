@@ -8,6 +8,7 @@ import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@c
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
+import { TaskChildrenLoader } from '../loaders/TaskChildrenLoader';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
@@ -34,6 +35,7 @@ export class TaskResolver {
     private readonly plannedBlockService: PlannedBlockService,
     private readonly featureService: FeatureService,
     private readonly tagLoader: TagLoader,
+    private readonly taskChildrenLoader: TaskChildrenLoader,
   ) {}
 
   /**
@@ -131,7 +133,7 @@ export class TaskResolver {
 
     const serviceContext = toServiceContext(context);
     const parentId = GlobalUID.parse('task', parent.id);
-    const children = await this.taskService.findChildren(serviceContext, parentId);
+    const children = await this.taskChildrenLoader.load(serviceContext, parentId);
 
     return children.map((task) => TaskType.toType(task));
   }

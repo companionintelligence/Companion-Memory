@@ -249,6 +249,10 @@ export class TaskService {
           : query.andWhere('task.parent_id = :parentId', { parentId: options.parentId });
     }
 
+    if (options.parentIds) {
+      query = query.andWhere('task.parent_id IN (:...parentIds)', { parentIds: options.parentIds });
+    }
+
     query = query
       .orderBy('task.due_at', 'ASC', 'NULLS LAST')
       .addOrderBy('task.priority', 'ASC')
@@ -265,6 +269,23 @@ export class TaskService {
 
   async findChildren(context: UserServiceContext, parentId: string): Promise<Task[]> {
     return this.findAll(context, { parentId });
+  }
+
+  /** {@link findChildren} for a page of parents in one read, keyed by parent id, in `findAll`'s order. */
+  async findChildrenOf(context: UserServiceContext, parentIds: string[]): Promise<Map<string, Task[]>> {
+    const byParent = new Map<string, Task[]>();
+
+    if (parentIds.length === 0) {
+      return byParent;
+    }
+
+    for (const task of await this.findAll(context, { parentIds })) {
+      if (task.parentId != null) {
+        byParent.set(task.parentId, [...(byParent.get(task.parentId) ?? []), task]);
+      }
+    }
+
+    return byParent;
   }
 
   async update(context: UserServiceContext, id: string, data: UpdateTaskDto): Promise<Task | null> {
