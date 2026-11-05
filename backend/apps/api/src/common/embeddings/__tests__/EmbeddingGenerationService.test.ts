@@ -5,6 +5,7 @@ import {
   EMBED_TIMEOUT_MESSAGE,
   EMBED_TIMEOUT_MS,
   EmbeddingGenerationService,
+  RECENT_VECTORS_MAX,
 } from '../services/EmbeddingGenerationService';
 
 // Capture the embed mock so each test can assert how many HTTP calls were made
@@ -559,6 +560,24 @@ describe('EmbeddingGenerationService', () => {
     });
   });
 
+  describe('generateEmbeddings dedupe', () => {
+    it('sends a duplicated input once and answers it in every place', async () => {
+      const service = makeService();
+
+      const vectors = await service.generateEmbeddings(['a', 'bb', 'a', 'ccc', 'bb']);
+
+      expect(embedMock).toHaveBeenCalledTimes(1);
+      expect(embedMock.mock.calls[0][0].input).toEqual(['a', 'bb', 'ccc']);
+      expect(vectors).toEqual([
+        [1, 1],
+        [2, 1],
+        [1, 1],
+        [3, 1],
+        [2, 1],
+      ]);
+    });
+  });
+
   describe('generateEmbedding (coalesced single-text path)', () => {
     it('coalesces concurrent single-text calls into ONE batched Ollama call', async () => {
       const service = makeService();
@@ -575,6 +594,48 @@ describe('EmbeddingGenerationService', () => {
       expect(v1).toEqual([5, 1]);
       expect(v2).toEqual([5, 1]);
       expect(v3).toEqual([7, 1]);
+    });
+
+    it('sends a text asked for twice in one window once, and answers both askers', async () => {
+      const service = makeService();
+
+      const [v1, v2, v3] = await Promise.all([
+        service.generateEmbedding('where do I live'),
+        service.generateEmbedding('where do I live'),
+        service.generateEmbedding('other'),
+      ]);
+
+      expect(embedMock).toHaveBeenCalledTimes(1);
+      expect(embedMock.mock.calls[0][0].input).toEqual(['where do I live', 'other']);
+      expect(v1).toEqual([15, 1]);
+      expect(v2).toEqual([15, 1]);
+      expect(v3).toEqual([5, 1]);
+    });
+
+    it('answers a text embedded a moment ago from memory, with no model call', async () => {
+      const service = makeService();
+
+      await service.generateEmbedding('where do I live');
+      const again = await service.generateEmbedding('where do I live');
+
+      expect(embedMock).toHaveBeenCalledTimes(1);
+      expect(again).toEqual([15, 1]);
+    });
+
+    it('remembers the most recent texts only', async () => {
+      const service = makeService();
+
+      await service.generateEmbedding('first');
+
+      for (let n = 0; n < RECENT_VECTORS_MAX; n += 1) {
+        await service.generateEmbedding(`text-${n}`);
+      }
+
+      const calls = embedMock.mock.calls.length;
+      await service.generateEmbedding('first'); // evicted: embedded again
+      await service.generateEmbedding(`text-${RECENT_VECTORS_MAX - 1}`); // still remembered
+
+      expect(embedMock).toHaveBeenCalledTimes(calls + 1);
     });
 
     it('rejects empty text without hitting Ollama', async () => {
