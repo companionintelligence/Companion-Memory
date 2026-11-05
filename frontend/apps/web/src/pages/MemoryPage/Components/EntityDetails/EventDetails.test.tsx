@@ -2,10 +2,13 @@ import { Sheet } from '@ci/shadcn';
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { makeFragmentData } from '@/graphql';
+import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { EntityDrawerHostProvider } from './drawerHost';
-import { EventDetails } from './EventDetails';
+import { EventDetails, GET_EVENT_DRAWER_EXTRAS } from './EventDetails';
+import { RICH_MEDIA_FRAGMENT } from './RichMediaCard';
 
 vi.mock('@/components/ChatWithAgent', () => ({
   ChatWithAgentMenu: () => null,
@@ -33,7 +36,6 @@ function photoAtPlace() {
     eventType: 'media',
     sourceSystem: 'generic',
     tags: [],
-    contents: { edges: [] },
     mapCoordinates: { type: 'Point', coordinates: [-122.393617, 37.795353] },
     location: {
       __typename: 'PlaceType' as const,
@@ -130,5 +132,69 @@ describe('EventDetails location', () => {
 
     expect(location.queryByText('Address', { exact: true })).not.toBeInTheDocument();
     expect(location.getByText('37.795353, -122.393617')).toBeInTheDocument();
+  });
+});
+
+describe('EventDetails drawer-only fields', () => {
+  // `metadata` and the linked `contents` left the shared card fragment that
+  // every list, grid, timeline and map reads per row; the drawer asks for them
+  // by id when it opens, and nothing else in the explorer carries them.
+  it('reads the page link and the linked content from its own query, not from the row', async () => {
+    const entity = photoAtPlace();
+    const extras = mockQuery(
+      GET_EVENT_DRAWER_EXTRAS,
+      { id: entity.id },
+      {
+        node: {
+          __typename: 'EventType' as const,
+          id: entity.id,
+          metadata: { page_url: 'https://www.example.com/pages/ferry' },
+          contents: {
+            __typename: 'ContentConnection' as const,
+            edges: [
+              {
+                __typename: 'ContentEdge' as const,
+                node: {
+                  __typename: 'ContentType' as const,
+                  id: btoa('content:01a17686-4703-735d-9dc7-000000000001'),
+                  title: 'Ferry Building walkthrough',
+                  contentUrl: 'https://www.youtube.com/watch?v=abc',
+                  ...makeFragmentData(
+                    {
+                      player: {
+                        __typename: 'EmbedPlayerType' as const,
+                        provider: 'youtube',
+                        playerUrl: 'https://www.youtube.com/embed/abc',
+                        posterUrl: null,
+                        aspectRatio: 1.78,
+                        mediaKind: 'video',
+                      },
+                      unfurl: null,
+                    },
+                    RICH_MEDIA_FRAGMENT,
+                  ),
+                },
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    renderWithProviders(
+      <EntityDrawerHostProvider value={host}>
+        <Sheet open>
+          <EventDetails entity={entity as never} />
+        </Sheet>
+      </EntityDrawerHostProvider>,
+      { mocks: [extras] },
+    );
+
+    expect(await screen.findByRole('link', { name: 'https://www.example.com/pages/ferry' })).toHaveAttribute(
+      'href',
+      'https://www.example.com/pages/ferry',
+    );
+    expect(screen.getByRole('button', { name: /Play on/ })).toBeInTheDocument();
+    expect(screen.getByText('Ferry Building walkthrough')).toBeInTheDocument();
   });
 });
