@@ -4,6 +4,7 @@ import { DataSource, In, Repository, type EntityManager } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { resolvePageShape } from '@ci/common/persistence';
 
 import { CategoryDirectionOptoutEntity } from '../entities/CategoryDirectionOptoutEntity';
 import { EntityCategoryEntity } from '../entities/EntityCategoryEntity';
@@ -25,6 +26,21 @@ import {
 type FindOpts = {
   includeEntities?: boolean;
 };
+
+/** Relay args for {@link TagService.findEntityRefsPage}; the cursors are the tagged entities themselves. */
+export interface TagEntityRefsPageArgs {
+  first?: number;
+  after?: EntityIdentifier<TaggableEntity> | null;
+  last?: number;
+  before?: EntityIdentifier<TaggableEntity> | null;
+}
+
+export interface TagEntityRefsPage {
+  /** Newest assignment first. */
+  entities: EntityTag[];
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
 
 /**
  * The most categories a single entity may carry (CI-Planning's `entity_categories`
@@ -133,6 +149,71 @@ export class TagService {
     });
 
     return entity ? TagEntity.toEgressType(entity) : null;
+  }
+
+  /**
+   * One page of the entities carrying `tagId`, newest assignment first — read
+   * from `entity_tag` with a `LIMIT` rather than through
+   * `relations: ['entities']`, which hydrated every assignment the tag has (a
+   * tag on ten thousand photos was ten thousand rows for a page of fifty).
+   *
+   * `null` when the tag is not the caller's. The cursor is the tagged entity
+   * `(type, id)` — unique under the tag — resolved to its assignment's position;
+   * one that matches no assignment yields an empty page, never the first one.
+   */
+  async findEntityRefsPage(
+    context: ServiceContext,
+    tagId: string,
+    args: TagEntityRefsPageArgs,
+  ): Promise<TagEntityRefsPage | null> {
+    const tag = await this.findById(context, tagId);
+
+    if (tag == null) {
+      return null;
+    }
+
+    const isBackward = args.last != null || args.before != null;
+    const { limit } = resolvePageShape({ first: args.first, last: args.last });
+    const repository = this.dataSource.getRepository(EntityTagEntity);
+    const cursorRef = isBackward ? args.before : args.after;
+    let cursorRowId: string | null = null;
+
+    if (cursorRef) {
+      const cursorRow = await repository.findOne({
+        select: { id: true },
+        where: { tagId, entityType: cursorRef.type, entityId: cursorRef.id },
+      });
+
+      if (cursorRow == null) {
+        return { entities: [], hasNextPage: false, hasPreviousPage: isBackward };
+      }
+
+      cursorRowId = cursorRow.id;
+    }
+
+    // The assignment id is the order: an identity column, so newest first is
+    // `id DESC`, and a page is one index range under the tag.
+    const query = repository
+      .createQueryBuilder('et')
+      .where('et.tagId = :tagId', { tagId })
+      .orderBy('et.id', isBackward ? 'ASC' : 'DESC')
+      .limit(limit + 1);
+
+    if (cursorRowId != null) {
+      query.andWhere(isBackward ? 'et.id > :cursorRowId' : 'et.id < :cursorRowId', { cursorRowId });
+    }
+
+    const rows = await query.getMany();
+    const hasExtra = rows.length > limit;
+    const page = (hasExtra ? rows.slice(0, limit) : rows).map((row) => EntityTagEntity.toEgressType(row));
+
+    if (isBackward) {
+      page.reverse();
+
+      return { entities: page, hasNextPage: args.before != null, hasPreviousPage: hasExtra };
+    }
+
+    return { entities: page, hasNextPage: hasExtra, hasPreviousPage: args.after != null };
   }
 
   async findByLabel(context: UserServiceContext, label: string, opts: FindOpts = {}): Promise<Tag | null> {
