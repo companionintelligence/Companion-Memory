@@ -116,6 +116,12 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
   cumulative disclosure, and the default tier. Read before changing a ceiling. Companion to
   [asks-system-guide.md](asks-system-guide.md): that one is how the feature works, this one
   is what it does not defend.
+- [identikey.md](identikey.md) — the IdentiKey protocol tier, Phase 1 of 5: a challenge/response
+  authentication library (Ed25519 or P-256, optional ML-DSA co-signature) that is **not wired to
+  anything yet**. What `verifyResponse` checks and in what order, where it is deliberately stricter
+  than the Rust reference, what a caller must still supply (post-quantum key pins, a shared nonce
+  store), and what was and was not cross-checked. Sits beside, and replaces nothing in,
+  [peer-federation.md](peer-federation.md).
 
 ## Import & ETL — [`docs/import/`](import/)
 
