@@ -20,7 +20,7 @@ import { MEDIA_TYPE, mediaTypeMatches } from './message';
  * | -------- | --------- | ---------------------------------------------- |
  * | `EdDSA`  | Ed25519   | the default                                    |
  * | `ES256`  | P-256     | deprecated by the specification, still verified |
- * | `ES256K` | secp256k1 | verified and produced                          |
+ * | `ES256K` | secp256k1 | verified and produced, always low-S            |
  *
  * Verification here is only the cryptographic half. Whether the signing key is *authorized* (listed
  * under `authentication` in the signer's DID document, for the DID in `from`) is checked by the
@@ -45,8 +45,40 @@ export function signatureAlgorithmFor(curve: KeyCurve): SignatureAlgorithm | und
   return (Object.keys(ALGORITHM_CURVE) as SignatureAlgorithm[]).find((alg) => ALGORITHM_CURVE[alg] === curve);
 }
 
+/** The order n of the secp256k1 group. */
+const SECP256K1_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+/**
+ * Rewrites an ES256K signature (`r || s`, 64 bytes) into its low-S form, `s <= n/2`.
+ *
+ * `(r, s)` and `(r, n - s)` verify under exactly the same conditions, and OpenSSL picks one at random,
+ * so about half of the raw signatures are "high-S". The DIDComm reference implementation (Rust,
+ * `k256`) refuses those, as does libsecp256k1; every verifier accepts the low form. Found by running
+ * this library against the reference: it rejected every high-S ES256K signature it was given and
+ * accepted every low-S one. P-256 is not affected (the reference accepts both forms there), so ES256
+ * is left as OpenSSL writes it.
+ */
+function toLowS(signature: Buffer): Buffer {
+  const s = BigInt(`0x${signature.subarray(32).toString('hex')}`);
+
+  if (s <= SECP256K1_ORDER >> 1n) {
+    return signature;
+  }
+
+  return Buffer.concat([
+    signature.subarray(0, 32),
+    Buffer.from((SECP256K1_ORDER - s).toString(16).padStart(64, '0'), 'hex'),
+  ]);
+}
+
 function signBytes(alg: SignatureAlgorithm, key: KeyObject, data: Buffer): Buffer {
-  return alg === 'EdDSA' ? sign(null, data, key) : sign('sha256', data, { key, dsaEncoding: 'ieee-p1363' });
+  if (alg === 'EdDSA') {
+    return sign(null, data, key);
+  }
+
+  const signature = sign('sha256', data, { key, dsaEncoding: 'ieee-p1363' });
+
+  return alg === 'ES256K' ? toLowS(signature) : signature;
 }
 
 function verifyBytes(alg: SignatureAlgorithm, key: KeyObject, data: Buffer, signature: Buffer): boolean {

@@ -48,7 +48,7 @@ new key material. It is a statement about the key and not about KERI.
 | `contentEncryption.ts` | `A256CBC-HS512`, `A256GCM`, `XC20P` (HChaCha20 written here) | RFC 7518 §B.3; draft-irtf-cfrg-xchacha-03 §2.2.1 and A.3.1 |
 | `keyAgreement.ts` | ECDH, Concat KDF, AES Key Wrap; ES and 1PU derivation | RFC 7518 Appendix C; RFC 3394 §4.6; the 1PU layout by Appendix C.3 |
 | `jwe.ts` | General JSON JWE: anoncrypt (`ECDH-ES+A256KW`) and authcrypt (`ECDH-1PU+A256KW`) | all six Appendix C.3 messages; four Rust-reference messages |
-| `jws.ts` | `EdDSA`, `ES256`, `ES256K`; compact JWS for `from_prior` | Appendix C.2: the Ed25519 vector is reproduced byte for byte |
+| `jws.ts` | `EdDSA`, `ES256`, `ES256K` (written low-S); compact JWS for `from_prior` | Appendix C.2: the Ed25519 vector is reproduced byte for byte |
 | `multikey.ts`, `didKey.ts`, `didPeer.ts`, `didWeb.ts` | `did:key`, `did:peer:2`, `did:web` URL rules | the `did:peer:2` specification example is reproduced character for character |
 | `didDocument.ts`, `resolver.ts` | Keys by relationship, `DIDCommMessaging` endpoints, method routing | the specification's Alice and Bob documents |
 | `message.ts` | Plaintext message validation and builder | the Rust reference's valid and invalid plaintext vectors |
@@ -59,8 +59,8 @@ new key material. It is a statement about the key and not about KERI.
 | `agent.ts`, `replayGuard.ts` | One DID, a handler table, replay protection | tests |
 | `identity.ts`, `secrets.ts` | `did:key` and `did:peer` identities with their keys; the `SecretsResolver` seam | tests |
 
-`yarn jest src/domains/didcomm` runs 606 tests in 22 suites in about two seconds. **No new dependency
-was added**: everything uses `node:crypto`. Statement coverage is 97% and branch coverage 95% (the
+`yarn jest src/domains/didcomm` runs 609 tests in 22 suites in about two seconds. **No new dependency
+was added**: everything uses `node:crypto`. Statement coverage is 98% and branch coverage 96% (the
 barrel, which only re-exports, excluded). A mutation check planted twenty defects in the security
 checks, one at a time (apv, the 1PU tag, the small-order secret, the on-curve check, the authentication
 relationship, `from`/`to`/signer consistency, expiry, nesting, the replay guard, cross-DID references,
@@ -151,6 +151,8 @@ const { message, metadata } = await unpack(packed, { resolver, secrets, require:
 | Message `id` is printable ASCII up to 256 characters | The specification asks for URI-unreserved characters up to 32 bytes and also recommends UUIDs, which are 36 |
 | `body` may be absent on receipt, always present on send | v2.1 allows the first; v2.0 receivers require the second |
 | `from_prior` temporal claims are returned, not enforced | The specification defines none, and the reference's own vector carries an `exp` long past |
+| A body that is not a JSON object, an `id` outside printable ASCII, a message already past its `expires_time` and a `from_prior` without `iat` are **refused**, although the reference implementation will pack all four | DIDComm defines the body as an object; the rest are this domain's bounds. Five rows of the interop run pin this strictness |
+| ES256K signatures are written in low-S form (`s` ≤ n/2); either form is accepted | OpenSSL writes `s` or `n - s` at random, and the Rust reference implementation refuses the high form, as libsecp256k1 does. Found by running this domain against it |
 
 ## What is not built
 
@@ -173,14 +175,29 @@ cover ECDH-ES over X25519, P-256, P-384 and P-521; ECDH-1PU over X25519 and P-25
 XC20P, A256GCM and A256CBC-HS512; EdDSA, ES256 and ES256K; sign-then-encrypt; and the protected-sender
 nesting.
 
-**Not verified:** the other direction. No message produced by this domain has been unpacked by the
-reference implementation or by an OpenVTC mediator or VTA, and no live exchange has taken place. The
-ECDH-1PU key derivation in particular was found by testing candidate encodings against the
-specification's vector, so a second implementation reading *our* output is the check that matters.
-That is gate 1 below. The live OpenVTC test community advertises DIDComm and a mediator (its public
-profile, read 2026-11-05 and recorded in CI-Engineering's `OPENVTC-VTC.md`, open as CI-Engineering#452
-and unmerged on 2026-11-05), but its DID is a `did:webvh`, which this domain refuses: a live check needs
-that method built, or the fetched DID document supplied by hand.
+**Verified, both directions, against the reference implementation itself.** On 2026-11-06 this domain
+was run against the `didcomm` npm package (0.4.1, the Rust crate compiled to WebAssembly): 109 rows, each a
+message packed by one side and unpacked by the other, compared field by field and against what the
+reference reports it opened (cipher, curve, signer, flags). They cover authcrypt and anoncrypt
+(A256CBC-HS512, A256GCM, XC20P) over X25519 and P-256, signed messages and sign-then-encrypt (EdDSA,
+ES256, ES256K), a protected sender, `from_prior`, one and two mediator hops, a `did:key` identity and a
+range of message shapes; 32 of the rows are negative controls that must be refused for the right
+reason. Sixteen defects planted in the compiled library were all caught by it. That settles what the
+ECDH-1PU key derivation raised (it was found by testing candidate encodings against the specification's
+vector): the reference accepts what this domain writes. The harness and the steps to repeat the run are
+in CI-Engineering, `projects/decentralized-trust-graphs/didcomm-interop/`.
+
+It found one bug, fixed here: the reference refused about half of the ES256K signatures (OpenSSL writes
+`s` or `n - s` at random, and Rust's `k256` accepts only the low form), so the domain now writes low-S.
+It also found what the reference cannot do: P-384 and P-521 key agreement (those two curves rest on the
+published vectors alone), `from_prior` without `sub`, and exact 17-digit floats (`123456789.123456789`
+comes back one unit in the last place off). Its default anoncrypt cipher is XC20P, so `XC20P` stays.
+
+**Not verified:** an OpenVTC mediator or VTA (`vti-didcomm-js`), and any live exchange: the rest of gate 1
+below. The live OpenVTC test community advertises DIDComm and a mediator (its public profile, read
+2026-11-05 and recorded in CI-Engineering's `OPENVTC-VTC.md`, CI-Engineering#452), but its DID is a
+`did:webvh`, which this domain refuses: a live check needs that method built, or the fetched DID document
+supplied by hand.
 
 ## How it is meant to be wired
 
@@ -191,9 +208,8 @@ a rate limit, a body cap and a feature flag.
 
 Gate, in this order, before anything is connected:
 
-1. **Cross-implementation checks in both directions**: this domain against the reference
-   implementation (the `didcomm` npm package is the Rust crate compiled to WASM) and against an
-   OpenVTC mediator or `vti-didcomm-js`.
+1. **Cross-implementation checks in both directions**: done against the reference implementation
+   (above); still to do against an OpenVTC mediator or `vti-didcomm-js`.
 2. **Egress.** `fetchJson` for `did:web` and the delivery POST built on the existing no-redirect,
    connect-time-pinned peer egress with a size cap. The DIDComm HTTP binding allows following `307`;
    peer egress does not follow redirects, and that difference is a decision, not an oversight.
