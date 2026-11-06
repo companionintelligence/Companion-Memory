@@ -1787,6 +1787,24 @@ export type LinkItemToProductInput = {
   productId?: InputMaybe<Scalars['ID']['input']>;
 };
 
+export type LocalPubPeerCandidateType = {
+  __typename?: 'LocalPubPeerCandidateType';
+  actorId: Scalars['String']['output'];
+  claimedDids: Array<Scalars['String']['output']>;
+  companionDidKey?: Maybe<Scalars['String']['output']>;
+  companionEndpoint?: Maybe<Scalars['String']['output']>;
+  displayName?: Maybe<Scalars['String']['output']>;
+  handle: Scalars['String']['output'];
+  profileUrl?: Maybe<Scalars['String']['output']>;
+};
+
+export type LocalPubPeerLookupPayload = {
+  __typename?: 'LocalPubPeerLookupPayload';
+  candidate?: Maybe<LocalPubPeerCandidateType>;
+  found: Scalars['Boolean']['output'];
+  reason?: Maybe<Scalars['String']['output']>;
+};
+
 export type MapPinType = {
   __typename?: 'MapPinType';
   endTime?: Maybe<Scalars['DateTime']['output']>;
@@ -3506,6 +3524,8 @@ export type Query = {
   items: ItemConnection;
   knownPlaceCandidates: Array<KnownPlaceCandidateType>;
   knownPlaces: Array<KnownPlaceType>;
+  /** What a Local.Pub profile claims about a person (name@host): display name, DIDs, and the Companion address and did:key if the profile names them. Creates no link; link with createPeerLink. */
+  localPubPeerLookup: LocalPubPeerLookupPayload;
   /** Located events as map markers for the given filters. Events-only and located-only; returns the whole matching set in one read (capped at 20000 pins), not a page. */
   mapPins: MapPinsType;
   me?: Maybe<UserType>;
@@ -3851,6 +3871,11 @@ export type QueryItemsArgs = {
 
 export type QueryKnownPlacesArgs = {
   kind?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryLocalPubPeerLookupArgs = {
+  handle: Scalars['String']['input'];
 };
 
 

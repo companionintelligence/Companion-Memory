@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import config, { isGeocodingConfigured, resolveGeocodingPortalBaseUrl } from './configuration';
+import config, { ConfigSchema, isGeocodingConfigured, resolveGeocodingPortalBaseUrl } from './configuration';
 
 /**
  * Covers the geocoding portalBaseUrl fallback (previously an inline `if` at
@@ -149,5 +149,49 @@ describe('media.videoPlayback.maxEdge', () => {
       __name: 'CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE',
       __format: 'json',
     });
+  });
+});
+
+/**
+ * `peers.localPubEnabled` decides whether this box opens connections to a host somebody typed, so
+ * its three moving parts are pinned together: the shipped default is OFF, the env var that sets it
+ * is the documented one, and the schema reads the STRING an env var carries correctly. The last is
+ * why it is a `booleanStringSchema` and not `z.coerce.boolean()`, which reads the string "false" as
+ * true; every other test of the lookup sets the flag by hand on a mocked config and would not notice.
+ */
+describe('peers.localPubEnabled', () => {
+  function peersIn(file: string): Record<string, unknown> {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      peers?: Record<string, unknown>;
+    };
+
+    return contents.peers ?? {};
+  }
+
+  const field = ConfigSchema.shape.peers.shape.localPubEnabled;
+
+  it('ships off, and the real parsed configuration is off unless the environment says otherwise', () => {
+    expect(peersIn('default.json').localPubEnabled).toBe(false);
+    if (process.env.CI_PEER_LOCAL_PUB_ENABLED === undefined) {
+      expect(config.peers.localPubEnabled).toBe(false);
+    }
+  });
+
+  it('is set through CI_PEER_LOCAL_PUB_ENABLED', () => {
+    expect(peersIn('custom-environment-variables.json').localPubEnabled).toBe('CI_PEER_LOCAL_PUB_ENABLED');
+  });
+
+  it('reads the strings an environment variable carries', () => {
+    expect(field.parse(undefined)).toBe(false);
+    expect(field.parse('true')).toBe(true);
+    expect(field.parse('false')).toBe(false);
+    expect(field.parse(true)).toBe(true);
+    expect(field.parse(false)).toBe(false);
+  });
+
+  it('refuses anything else rather than guessing, so a typo cannot switch it on', () => {
+    for (const value of ['yes', '1', 'TRUE', 'on', '', ' true']) {
+      expect(field.safeParse(value).success).toBe(false);
+    }
   });
 });

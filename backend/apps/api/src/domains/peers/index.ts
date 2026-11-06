@@ -16,6 +16,7 @@ import { MemoryModule, EventEntity } from '@ci/domains/memory';
 import { PeerAskController } from './controllers/PeerAskController';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
+import { LocalPubDiscoveryService } from './services/LocalPubDiscoveryService';
 import { OutboundAskService } from './services/OutboundAskService';
 import { PeerAskClient } from './services/PeerAskClient';
 import { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
@@ -40,6 +41,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
   providers: [
     PeerLinkService,
     PeerDirectoryService,
+    LocalPubDiscoveryService,
     PeerAskClient,
     PeerAskCorrelationService,
     PeerAskService,
@@ -50,6 +52,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
   exports: [
     PeerLinkService,
     PeerDirectoryService,
+    LocalPubDiscoveryService,
     PeerAskClient,
     PeerAskCorrelationService,
     PeerAskService,
@@ -74,6 +77,10 @@ export {
 export { OutboundAskService } from './services/OutboundAskService';
 export type { SendAskDto, SendAskResult } from './services/OutboundAskService';
 export { PeerLinkService, PeerDirectoryService, PeerAskClient, PeerAskService };
+export { LocalPubDiscoveryService };
+export type { LocalPubLookupFailure, LocalPubLookupResult } from './services/LocalPubDiscoveryService';
+export type { LocalPubCandidate } from './localPubProfile';
+export { didKeyIdFor, didKeyPublicJwk, isDidKeyId } from './didKeyId';
 export { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
 export type { PeerAskCorrelation } from './entities/PeerAskCorrelationEntity';
 export {

@@ -178,7 +178,7 @@ export class CreatePeerLinkInput {
    * Not "what this peer is called" — WHICH REMOTE IDENTITY MAY ACT AS THIS
    * PEER. A token bearing this `(iss, sub)` inherits the link's `trustTier`,
    * and with it the ceiling on everything this box will ever disclose. That
-   * puts three constraints on the write path, all enforced below the resolver:
+   * puts these constraints on the write path, all enforced below the resolver:
    *
    *   1. **Owner-scoped, like every other field here.** `createPeerLink` keys
    *      `upsert` on the CALLER's `userId`, and `updatePeerLink` reads the link
@@ -193,6 +193,11 @@ export class CreatePeerLinkInput {
    *   3. **One LIVE link per (owner, identity).** Enforced by
    *      `peer_links_owner_identity_live_uniq`, not by a read-time check —
    *      see the migration and `PeerLinkService.upsert` for the full argument.
+   *   4. **A self-certifying subject (`did:key`, `did:keri:D<x>`) is bound
+   *      under its own issuer, and a `did:key` link names a valid `did:key`**,
+   *      and an owner holds one live link per KEY across the two spellings
+   *      (a check made in front of the write, not by the database; see
+   *      `PeerLinkService.upsert`). They run when a write changes the binding.
    */
   @Field(() => String, { nullable: true })
   peerIssuer?: string | null;
