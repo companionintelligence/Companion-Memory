@@ -6,7 +6,7 @@ import {
   type KeyObject,
 } from 'node:crypto';
 
-import { isSovereignKeyId } from './sovereignKeyId';
+import { selfCertifyingIssuerOf } from './selfCertifyingKeyId';
 
 /**
  * RFC 9421 HTTP Message Signatures, profiled for the peer-ask surface — plus
@@ -77,7 +77,10 @@ export interface SignatureParams {
   created: number;
   /** Unix seconds. */
   expires: number;
-  /** RFC 7638 JWK thumbprint of the signing key. */
+  /**
+   * RFC 7638 JWK thumbprint of the signing key, or a self-certifying DID that spells the key out
+   * (`did:keri:D<x>`, `did:key:z6Mk…`; see `selfCertifyingKeyId.ts`).
+   */
   keyid: string;
   alg: string;
   nonce: string;
@@ -296,9 +299,10 @@ function parseParams(raw: string): SignatureParams {
   const alg = params.get('alg') ?? '';
   const nonce = params.get('nonce') ?? '';
 
-  // A JWK thumbprint, or the one KERI-shaped form this box understands (`did:keri:D<x>`, see
-  // `sovereignKeyId.ts`). Any other `did:` keyid is refused here rather than half-understood later.
-  if (!KEYID_PATTERN.test(keyid) && !isSovereignKeyId(keyid)) {
+  // A JWK thumbprint, or one of the two self-certifying forms this box understands: the KERI-shaped
+  // `did:keri:D<x>` (see `sovereignKeyId.ts`) or the W3C `did:key:z6Mk…` (see `didKeyId.ts`). Any
+  // other `did:` keyid is refused here rather than half-understood later.
+  if (!KEYID_PATTERN.test(keyid) && selfCertifyingIssuerOf(keyid) == null) {
     throw new SignatureFormatError('bad keyid');
   }
 

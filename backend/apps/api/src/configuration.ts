@@ -1435,6 +1435,18 @@ export const ConfigSchema = z.object({
      * actually parses `"true"`/`"false"` strings correctly.
      */
     allowCgnatEndpoints: booleanStringSchema.default(false),
+    /**
+     * Let an owner look a person up by `name@host` on Local.Pub (WebFinger and the ActivityPub
+     * actor, read for a display name, the DIDs it lists, and the Companion address and `did:key` a
+     * profile field names), through the `localPubPeerLookup` query.
+     *
+     * OFF by default, and off means this box never makes that call: the host in a handle is
+     * chosen by whoever typed it, so unlike `directoryUrl` it is not operator config. A lookup
+     * returns what a profile CLAIMS and creates no link; see `LocalPubDiscoveryService`.
+     * `booleanStringSchema` for the same reason as `allowCgnatEndpoints`: it is set from an env
+     * var, and `z.coerce.boolean()` would read the string `"false"` as `true`.
+     */
+    localPubEnabled: booleanStringSchema.default(false),
   }),
   /**
    * Where the abuse-control counters live -- the rate-limit windows and the

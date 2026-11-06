@@ -21,11 +21,15 @@ import type { AskChannelProvenance } from '@ci/domains/asks';
 
 import { SignatureFormatError, parseSignatureHeaders } from '../httpSignature';
 import { PEER_ASK_ID_PATTERN, peerAskBodySchema, type PeerAskResponse } from '../protocol';
+import {
+  isSelfCertifyingIssuer,
+  selfCertifyingIssuerOf,
+  selfCertifyingPublicJwk,
+} from '../selfCertifyingKeyId';
 import { PeerAskService } from '../services/PeerAskService';
 import { PeerLinkService } from '../services/PeerLinkService';
 import { PeerRateLimitService } from '../services/PeerRateLimitService';
 import { PeerSignatureService } from '../services/PeerSignatureService';
-import { isSovereignKeyId, sovereignPublicJwk } from '../sovereignKeyId';
 
 /**
  * `/agent/v1` — the peer-facing surface, and the ONLY route another Companion
@@ -40,8 +44,12 @@ import { isSovereignKeyId, sovereignPublicJwk } from '../sovereignKeyId';
  * ADR-0005 designates a dedicated `ci-mcp` adapter as the long-term external
  * boundary; until that lands this controller is the narrow, single-purpose
  * stand-in, gated by the `ask` feature flag (on by default since 2026-08-17).
- * The flag alone does not open this route: it also requires `peers.audience`,
- * and refuses every request until an operator binds one.
+ * The flag alone does not open the Portal-token path: it also requires
+ * `peers.audience`, and refuses every request until an operator binds one. A
+ * request signed under a self-certifying key (`did:keri:D<x>` or `did:key`) has
+ * no token and needs no audience; it needs `peers.memoryEndpoint` (what the
+ * signed `@target-uri` is rebuilt from) and a link the owner made for exactly
+ * that identifier, and is refused with a 401 without one.
  */
 @Controller('agent/v1')
 export class PeerAskController {
@@ -152,14 +160,16 @@ export class PeerAskController {
 
     const token = extractBearer(authorization);
     if (!token || token.toLowerCase() === 'keri') {
-      // A SOVEREIGN peer: no Portal token, only a signature whose keyid is the
-      // self-certifying `did:keri:D<x>` (see `sovereignKeyId.ts`). This returns
-      // the CLAIMED identity and proves nothing yet: `assertSignature` must then
-      // find a `did:keri` link the owner made for exactly that AID and verify the
-      // signature, and every caller runs it before using the identity.
+      // A SOVEREIGN peer: no Portal token, only a signature whose keyid is a
+      // self-certifying `did:keri:D<x>` (see `sovereignKeyId.ts`) or `did:key:z6Mk…`
+      // (see `didKeyId.ts`). This returns the CLAIMED identity and proves nothing
+      // yet: `assertSignature` must then find a link the owner made for exactly
+      // that identifier, under its own issuer, and verify the signature, and every
+      // caller runs it before using the identity.
       const keyid = request ? claimedKeyId(request) : null;
-      if (keyid != null && isSovereignKeyId(keyid)) {
-        return { issuer: SOVEREIGN_ISSUER, subject: keyid };
+      const selfCertifying = keyid != null ? selfCertifyingIssuerOf(keyid) : null;
+      if (keyid != null && selfCertifying != null) {
+        return { issuer: selfCertifying, subject: keyid };
       }
 
       throw new UnauthorizedException('Missing bearer token');
@@ -271,11 +281,12 @@ export class PeerAskController {
     // that merely holds the key would let peer A's signature authorize a
     // request carrying peer B's token — two halves of two different identities
     // combining into one that neither party holds. A sovereign peer has no
-    // token, so its identity is `did:keri` + the AID it signed with, and the
-    // same exact match applies: only a `did:keri` link naming that very AID
-    // (the full `did:keri:` form `PeerAskService` resolves it by) answers. A
-    // link the owner made for a Portal identity never answers a bare signature.
-    const sovereign = identity.issuer === SOVEREIGN_ISSUER;
+    // token, so its identity is `did:keri` or `did:key` + the identifier it signed
+    // with, and the same exact match applies: only a link under that issuer naming
+    // that very identifier (the full `did:…:` form `PeerAskService` resolves it
+    // by) answers. A link the owner made for a Portal identity never answers a
+    // bare signature, and a `did:key` link never answers a `did:keri` one.
+    const sovereign = isSelfCertifyingIssuer(identity.issuer);
     const link = links.find(
       (candidate) => candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject,
     );
@@ -284,8 +295,9 @@ export class PeerAskController {
     // key is refused, never verified against the key the AID spells out. Only a
     // sovereign link with no key recorded falls back to that spelled-out key,
     // which is the whole point of a self-certifying identifier — and only for
-    // the documented `did:keri:D<x>` form, never a CESR prefix or an `E` AID.
-    const peerKeyJwk = link?.peerKeyJwk ?? (sovereign && link ? sovereignPublicJwk(keyid) : null);
+    // the documented `did:keri:D<x>` and `did:key:z6Mk…` forms, never a CESR
+    // prefix, an `E` AID, or a DID whose key can rotate.
+    const peerKeyJwk = link?.peerKeyJwk ?? (sovereign && link ? selfCertifyingPublicJwk(keyid) : null);
 
     if (link == null || peerKeyJwk == null) {
       this.logger.warn(`peer ask refused: no link binds key ${keyid} to ${identity.issuer}`);
@@ -352,9 +364,6 @@ function originOf(endpoint: string | undefined): string | null {
     return null;
   }
 }
-
-/** The issuer a sovereign peer link carries: its subject is the peer's `did:keri:` AID. */
-const SOVEREIGN_ISSUER = 'did:keri';
 
 /** The keyid a request's signature names, unverified; null when there is none to read. */
 function claimedKeyId(request: RawBodyRequest): string | null {

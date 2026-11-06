@@ -1,4 +1,10 @@
-import { canonicalDataClass, canonicalQueryType, hasInvisibleCharacters, normalizeText } from './canonical';
+import {
+  canonicalDataClass,
+  canonicalQueryType,
+  hasInvisibleCharacters,
+  normalizeText,
+  stripInvisible,
+} from './canonical';
 
 /**
  * The shared normalizer for the two asker-supplied strings the consent gate
@@ -155,6 +161,83 @@ describe('hasInvisibleCharacters', () => {
   it('is false for anything that is not a string', () => {
     for (const value of [42, null, undefined, { toString: () => '\u200b' }]) {
       expect(hasInvisibleCharacters(value)).toBe(false);
+    }
+  });
+});
+
+/**
+ * `stripInvisible` is exported for the peers domain (a Local.Pub display name) and is what `normalizeText`
+ * runs. The pair-gluing bypass below is the reason it replaces lone surrogates BEFORE it removes anything.
+ */
+describe('stripInvisible', () => {
+  const cp = (...codePoints: number[]) => String.fromCodePoint(...codePoints);
+  const unit = (...units: number[]) => String.fromCharCode(...units);
+  const REPLACEMENT = cp(0xfffd);
+
+  it('replaces a lone surrogate half, and so cannot glue two halves into a character it never examined', () => {
+    // JSON.parse accepts "\ud800". A high half, an invisible character, a low half: removing the middle one
+    // used to leave a valid pair, here U+E0041 (a tag A), that no filter had looked at.
+    const high = unit(0xdb40);
+    const low = unit(0xdc41);
+
+    for (const between of [cp(0x200b), cp(0x202e), cp(0x2060), cp(0xfeff), cp(0x061c)]) {
+      const out = stripInvisible(`A${high}${between}${low}B`);
+
+      expect(out).toBe(`A${REPLACEMENT}${REPLACEMENT}B`);
+      expect(Array.from(out).every((char) => (char.codePointAt(0) as number) < 0xe0000)).toBe(true);
+    }
+  });
+
+  it('replaces a lone surrogate on its own, and keeps a proper pair', () => {
+    expect(stripInvisible(`x${unit(0xd800)}y`)).toBe(`x${REPLACEMENT}y`);
+    expect(stripInvisible(`x${unit(0xdc00)}y`)).toBe(`x${REPLACEMENT}y`);
+    expect(stripInvisible(`x${unit(0xd800)}`)).toBe(`x${REPLACEMENT}`);
+    expect(stripInvisible(`a${cp(0x1d11e)}b`)).toBe(`a${cp(0x1d11e)}b`);
+    expect(stripInvisible(`${cp(0x1f469, 0x200d, 0x1f4bb)}`)).toBe(cp(0x1f469, 0x200d, 0x1f4bb));
+  });
+
+  it('is idempotent: stripping what it returned changes nothing, on 3,000 hostile strings', () => {
+    // A deterministic mix of letters, invisible characters, surrogate halves, tags, a black flag and emoji parts.
+    const alphabet = [
+      'a',
+      'b',
+      ' ',
+      cp(0x200b),
+      cp(0x200d),
+      cp(0xfe0f),
+      cp(0x202e),
+      cp(0x2060),
+      cp(0x061c),
+      cp(0xfeff),
+      cp(0xe0041),
+      cp(0xe007f),
+      cp(0x1f3f4),
+      cp(0x1f469),
+      cp(0x1f4bb),
+      cp(0x1d173),
+      unit(0xd800),
+      unit(0xdb40),
+      unit(0xdc00),
+      unit(0xdc41),
+      cp(0x3164),
+      cp(0x34f),
+    ];
+    let seed = 20261105;
+    const next = (limit: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+
+      return seed % limit;
+    };
+
+    for (let i = 0; i < 3000; i += 1) {
+      let value = '';
+      for (let j = 0, length = 1 + next(12); j < length; j += 1) {
+        value += alphabet[next(alphabet.length)];
+      }
+
+      const once = stripInvisible(value);
+
+      expect([value, stripInvisible(once)]).toEqual([value, once]);
     }
   });
 });

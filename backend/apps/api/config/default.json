@@ -311,7 +311,8 @@
     "timeoutMs": 10000,
     "requireHttpSignature": false,
     "signingKeyJwk": "",
-    "allowCgnatEndpoints": false
+    "allowCgnatEndpoints": false,
+    "localPubEnabled": false
   },
   "push": {
     "vapid": {

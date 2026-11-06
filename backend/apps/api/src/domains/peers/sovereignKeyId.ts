@@ -9,12 +9,25 @@
  * rotation event can replace. An `E` prefix is a digest of the inception event and names no key
  * at all: verifying it needs the KEL. This box resolves no KEL and decodes no CESR, so it accepts
  * neither. It accepts only this self-certifying form, where the identifier IS the key: a signature
- * verifies against the key the identifier spells out, and anything else (a real CESR prefix, an
- * `E` AID, a rotated key) fails closed, as an unknown key.
+ * verifies against the key the identifier spells out, and anything else (an `E` AID, a rotated key,
+ * usually a real CESR prefix) fails closed, as an unknown key.
+ *
+ * "Usually": the CESR tail is the key shifted by two bits, so about one real `D` prefix in four ends in
+ * two zero bits and also parses as a canonical JWK `x`. It is then read as a DIFFERENT key (the shifted
+ * one), and a signature made with the real key fails to verify against it, so it still fails closed;
+ * but the two forms cannot be told apart by their shape. That is a property of this convention, not
+ * something to rely on.
+ *
+ * A key nobody can hold is refused (see `ed25519Weak.ts`, 48 encodings, for two different reasons): a
+ * small-order point, which a signature can be made for without a private key, and a non-canonical
+ * spelling of a point, which would be a second identifier for one key. This refusal is NEW with
+ * `did:key` support; this form used to check only the length and the canonical base64url spelling.
  *
  * Widening what is accepted (CESR decoding, KEL resolution) is a design change of its own; it
  * must not creep in through the patterns below.
  */
+
+import { isWeakEd25519PublicKey } from './ed25519Weak';
 
 const SOVEREIGN_KEYID_PREFIX = 'did:keri:D';
 
@@ -39,7 +52,7 @@ export function sovereignPublicJwk(keyid: string): Record<string, unknown> | nul
 
   const x = keyid.slice(SOVEREIGN_KEYID_PREFIX.length);
   const raw = Buffer.from(x, 'base64url');
-  if (raw.length !== 32 || raw.toString('base64url') !== x) {
+  if (raw.length !== 32 || raw.toString('base64url') !== x || isWeakEd25519PublicKey(raw)) {
     return null;
   }
 
@@ -48,7 +61,13 @@ export function sovereignPublicJwk(keyid: string): Record<string, unknown> | nul
 
 /** The sovereign `keyid` for an Ed25519 public JWK, or null when it is not one. */
 export function sovereignKeyIdFor(jwk: Record<string, unknown>): string | null {
-  if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || typeof jwk.x !== 'string') {
+  if (
+    typeof jwk !== 'object' ||
+    jwk === null ||
+    jwk.kty !== 'OKP' ||
+    jwk.crv !== 'Ed25519' ||
+    typeof jwk.x !== 'string'
+  ) {
     return null;
   }
 

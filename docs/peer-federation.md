@@ -3,8 +3,11 @@
 > Two Companion Memory boxes exchanging questions, discovered through CI-Portal.
 > Feature flag: **`ask`** — **on** by default since 2026-08-17 (commit `793e618c0`), so the
 > local ask/grant GraphQL surface is live out of the box. The *inbound peer* route stays
-> dark for a separate reason: it also requires `peers.audience`, and 503s until an operator
-> binds one. Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711) → epic #1712.
+> dark for Portal-token asks for a separate reason: it also requires `peers.audience`, and 503s
+> until an operator binds one. A signed ask from a linked `did:key` or `did:keri:D<x>` carries
+> no token and needs no audience (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)):
+> it is served once `ask` is on, `peers.memoryEndpoint` is set and the owner has linked that
+> key, and is a `401` without the link. Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711) → epic #1712.
 
 Most questions between people are really queries against the other person's memory — *"do you have photos of us?"*, *"do you know anyone at Acme?"*, *"free for lunch Friday?"*. Today those run over the worst possible protocol: interrupt the human, wait, hope they remember, get an unsourced answer.
 
@@ -116,9 +119,9 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **Bounded blast radius** | Every outbound call is timeout-bounded; a slow or hostile peer degrades to a non-answer rather than hanging the caller. |
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
 | **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. CGNAT specifically is opt-in-permittable ([below](#peering-over-a-private-network-tailscale--cgnat)); everything else in that list is unconditional. |
-| **Token can't be replayed at another box** | The peer surface verifies the token against **this box's own `peers.audience`**, not the broad first-party list. It refuses to accept anything until that is configured. |
+| **Token can't be replayed at another box** | The peer surface verifies a Portal token against **this box's own `peers.audience`**, not the broad first-party list. It refuses a Portal-token ask until that is configured. A signed `did:key` / `did:keri:D<x>` ask carries no token and needs `peers.memoryEndpoint` instead (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). |
 | **A leaked token is not, by itself, enough** | Requests carry an **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window. See [Message signatures](#message-signatures) — this is what a bearer token structurally cannot give: binding to *this* request, and detectable replay. |
-| **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` **before** the peer-link lookup, so an unknown caller is limited too. |
+| **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` of a Portal token **before** the peer-link lookup, so an unknown Portal caller is limited too. A signed `did:key` / `did:keri:D<x>` ask is the exception: its identity comes from the signature header, so the link is read first (one indexed read) and a signer nobody linked is refused with a `401` **before** the limiter is consulted. The limiter therefore bounds only linked signers: anyone who can reach the route can send unlimited well-formed signed requests from fresh keys, at the cost of one parse and one read each. |
 | **Timezone-independent availability** | All-day events expand on **UTC** day boundaries, so two boxes in different zones compute identical busy spans. |
 
 ## Data model
@@ -139,7 +142,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
   "directoryUrl": "",      // CI-Portal peer-discovery base; empty disables discovery
   "memoryEndpoint": "",    // this box's own /agent/v1, published to the directory
   "handle": "",            // this box's Portal handle
-  "audience": "",          // REQUIRED for inbound: the audience Portal mints for THIS box
+  "audience": "",          // REQUIRED for Portal-token inbound asks: the audience Portal mints for THIS box
   "timeoutMs": 10000       // bound on every outbound peer/directory call
 }
 ```
@@ -149,7 +152,7 @@ The inbound surface is additionally gated by the **`ask`** feature flag (`ENABLE
 now ships **`true`**. Turning it off makes `POST /agent/v1/ask` return 503 — indistinguishable
 from a box with no peer surface at all.
 
-> **`peers.audience` is not optional for inbound.** Without it, a token issued for *any* first-party client would verify here — including one minted for a different Companion. The peer route refuses every request until it is set, rather than falling back to the broad list.
+> **`peers.audience` is not optional for Portal-token asks.** Without it, a token issued for *any* first-party client would verify here — including one minted for a different Companion. The peer route refuses every Portal-token request until it is set, rather than falling back to the broad list. A signed `did:key` / `did:keri:D<x>` ask carries no token and does not consult it: it needs `ask` on, `peers.memoryEndpoint` set and a link the owner made (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)).
 
 ### Peering over a private network (Tailscale / CGNAT)
 
@@ -229,8 +232,8 @@ On the **receiver**:
 
 | | |
 |---|---|
-| `CI_PEER_AUDIENCE` | REQUIRED — without it every inbound ask is `503`, indistinguishable from no peer surface |
-| `CI_PEER_MEMORY_ENDPOINT` | the box's own `/agent/v1`; also the `@target-uri` authority if signatures are on |
+| `CI_PEER_AUDIENCE` | REQUIRED for Portal-token asks — without it every Portal-token ask is `503`, indistinguishable from no peer surface. A signed `did:key` / `did:keri:D<x>` ask does not consult it |
+| `CI_PEER_MEMORY_ENDPOINT` | the box's own `/agent/v1`; also the `@target-uri` authority if signatures are on. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
 | **`peer_links.peer_issuer` + `peer_subject`** | `createPeerLink` / `updatePeerLink`, or `ci peers add --peer-issuer … --peer-subject …` — see [below](#binding-a-link-to-the-peers-identity) |
@@ -519,11 +522,11 @@ records end to end on its own.
   which is what an inbound ask is actually matched on — see
   [Binding a link to the peer's identity](#binding-a-link-to-the-peers-identity). The web
   UI does not yet collect the pair, so that journey is API/CLI-only for now.
-  What is NOT fixed: `updatePeerLink` goes through
-  `PeerLinkService.upsert`, which sets `revokedAt: null` unconditionally — so editing a link
-  erases its revocation timestamp — a revoked link still supplies its original trust tier to
-  asks already in the inbox, and `PeerLinkResolver` is not gated by the `ask` feature flag
-  while all sixteen `AskResolver` operations are.
+  The gaps that remain in this area, including how complete peer-link revocation is, are
+  listed in [`asks-system-guide.md` §9](asks-system-guide.md) (an earlier version of this note
+  said that editing a link erases its revocation timestamp and that `PeerLinkResolver` is not
+  gated by the `ask` flag; neither is true now: `upsert` keeps `revokedAt`, and every
+  `PeerLinkResolver` operation checks the flag).
 - ~~**The ask surface is not reachable in the shipped web app.**~~ **Fixed.** `App.tsx`
   registers `/asks` behind `isFeatureEnabled('ask')` — flag-gated routes here are never
   registered rather than blocked, because with the flag off every ask mutation returns
@@ -615,6 +618,82 @@ node -e "const {generateKeyPairSync}=require('node:crypto');console.log(JSON.str
 ```
 
 The peer records the **public** half on its `ci.peer_links` row (`peer_key_jwk` + `peer_key_thumbprint`); `publicKeyFromJwk` refuses a JWK carrying `d`, so a private key cannot be stored there and then used to "verify" its own signatures.
+
+### Keyids that name themselves: `did:key` and `did:keri:D<x>`
+
+A `keyid` may be an identifier that **is** the key, so a signature verifies with no Portal token, no log and no network. Two forms are accepted (`peers/selfCertifyingKeyId.ts`); each belongs to a link under its own issuer whose subject is the keyid itself.
+
+| `keyid` | `peerIssuer` | What it is |
+|---|---|---|
+| `did:keri:D<jwk-x>` | `did:keri` | This box's own convention (`sovereignKeyId.ts`), where `<jwk-x>` is the key as a JWK `x`. **Not CESR.** A real KERI `D…` prefix is usually refused, but about one in four (those whose key ends in two zero bits) also parse as the `D<jwk-x>` form of a different key that nobody holds, so a request signed under one fails to verify; it never authenticates anyone. It also refuses the 48 weak encodings below. That refusal is **new in this change** (the form used to check only the length and the canonical base64url), it is always on, and no flag controls it. |
+| `did:key:z6Mk…` | `did:key` | The W3C CCG `did:key` method for one Ed25519 key: `z` + base58btc(`0xed 0x01` ‖ 32-byte key). A published encoding, checked against independent vectors in `didKeyId.spec.ts`. Read strictly: the key must be canonical, not a weak key, and a point on the Ed25519 curve (below). |
+
+Refused for both: a DID URL (`#fragment`, query, path); any other key type; any DID whose key **can rotate** (`did:web`, `did:webvh`, `did:scid:vh`, KERI `E…` AIDs), because reading one means resolving a log, and a verifier that skipped that would accept a key its owner had retired (adopting a log-resolving library is an open item of ADR-0016, `adr/0016-local-pub-alongside-keri.md` in the CI-Engineering repository; these patterns must not grow into it); and a **weak key**. That is 48 encodings, refused for two different reasons. The points of small order (10 encodings with a canonical `y`, counting the negative-zero spellings of two of them) let a signature be made without any private key. The 38 non-canonical spellings (`y` from the field prime up, at either sign) are second names for a key that already has one, or names for no point at all (at least 14 of the 38 spell no point), so one key would have two identifiers; four of the 38 (`y` equal to the prime or to the prime plus one, at either sign) also decode to small-order points and are forgeable, which makes 14 of the 48. A `did:key` is also refused when its 32 bytes are **not a point on the Ed25519 curve** (RFC 8032 decoding): such a key can never verify a signature. That catches **about half** of mistyped `did:key`s, not all of them: a typo changes the key bytes at random and lands on another valid point about half of the time (about 46% of single-character slips were still accepted when this was measured), and the link is then stored and matches nothing. So compare the whole key with the person, or check that their first signed ask arrives. `did:keri:D<x>` is not asked the curve question; it accepts such a string as it always has, and it can never verify a signature. **The two weak-key refusals are new for `did:keri:D<x>` in this change**: before it, that form checked only the length and the canonical base64url. They are always on, no flag controls them, and a `did:keri` link already stored on one of the 48 encodings stops matching. On the inbound path (parsing a signed request's keyid and looking its link up) a `did:key` costs only the shape check and the weak-key test; the curve check runs when a link is written and for profile claims.
+
+These keyids are understood whether or not any flag is set. They have an effect only for a link an owner created under issuer `did:key` or `did:keri`; the exception is the weak-key refusal above, which changes how `did:keri:D<x>` parses for everyone.
+
+To sign as a `did:key`, put the key's own `did:key` in `kid` of `peers.signingKeyJwk`. A `kid` is used only when it is exactly this key's `did:key` or this key's `did:keri:D<x>`; any other `kid` is ignored. This prints such a key:
+
+```bash
+node -e "const {generateKeyPairSync}=require('node:crypto');const A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';const k=generateKeyPairSync('ed25519');const pub=Buffer.from(k.publicKey.export({format:'jwk'}).x,'base64url');let n=BigInt('0x'+Buffer.concat([Buffer.from([0xed,1]),pub]).toString('hex')),s='';for(;n>0n;n/=58n)s=A[Number(n%58n)]+s;console.log(JSON.stringify({...k.privateKey.export({format:'jwk'}),kid:'did:key:z'+s}))"
+```
+
+The peer's owner links you with `createPeerLink`, passing your `did:key` as the subject:
+
+```graphql
+mutation { createPeerLink(input: {
+  peerHandle: "you@your-host"
+  memoryEndpoint: "https://your-box.example/agent/v1"
+  peerIssuer: "did:key"
+  peerSubject: "did:key:z6Mk…"       # your peers.signingKeyJwk kid
+  trustTier: stranger
+}) { success peerLink { id peerHandle trustTier } } }
+```
+
+`peerSubject` must be one canonical Ed25519 `did:key` that is not a weak key and is a point on the curve. A free-text subject would never match an inbound ask, so it is refused as a bad request when the link is written, and so is a canonical `did:key` or `did:keri:D<x>` subject under any other `peerIssuer` that is not a URL (a mistyped `DID:KEY`, `did:key:` or `did:keri`). A mistyped `did:key` is refused only when the typo lands off the curve, which is about half of the time; otherwise the link is stored and matches nothing, so confirm the whole key with the person or check that their first signed ask arrives. The rules that already govern a sovereign link apply unchanged: with no key recorded on the link the signature is checked against the key the `did:key` spells out; a key the link records **always wins**; a `did:key` link never answers a `did:keri` keyid or a Portal identity, and the reverse.
+
+One key has two spellings, so an owner is not allowed to hold a `did:key` link and a `did:keri:D<x>` link for the same key: otherwise the signer could choose which link, and so which tier, answers. A write that binds the second one is refused with a conflict error. The check is made when a write sets or changes a link's issuer and subject, and it is a read followed by a write with nothing in the database behind it (the unique indexes see the two spellings as two identities), so two writes racing from two tabs or devices can both get through. If that happens the owner can still edit or revoke each link, because an edit that leaves the binding alone is not checked.
+
+To **receive** asks signed this way, the `ask` feature must be on and `peers.memoryEndpoint` (`CI_PEER_MEMORY_ENDPOINT`) must be set; without it every signed ask is refused with a 503. `peers.audience` is not consulted, because there is no bearer token. The peer-egress policy is unchanged: two boxes can reach each other over the internet or a tailnet (`peers.allowCgnatEndpoints`), and RFC 1918 LAN ranges stay blocked. Sending a cross-box ask from the app is not available yet.
+
+### Looking a person up on Local.Pub (opt-in)
+
+[Local.Pub](https://local.pub) gives a person a profile they own with a passkey, followed from Mastodon. `localPubPeerLookup(handle: "name@their-host")` reads that public profile so the owner can see the Companion address and key the person lists on it:
+
+```graphql
+query { localPubPeerLookup(handle: "name@their-host") {
+  found reason candidate { handle displayName claimedDids companionEndpoint companionDidKey } } }
+```
+
+It sends two requests, WebFinger and then the ActivityPub actor it names, through `peerEgressFetch` (https only, no private address, no redirect followed), under one deadline (`peers.timeoutMs`) that covers both requests and the reading of both bodies. It returns what the profile **claims** and writes nothing: no link, no tier, no grant. The handle must be a plain public DNS name (the host is folded to lower case by ASCII letters only, so a Kelvin sign U+212A is refused, and anything else the URL parser would rewrite is `bad-handle`). Only handles whose host serves its own WebFinger and actor work. A Local.Pub domain in "redirect" mode, where the person's own site only forwards WebFinger to Local.Pub, is not supported; the refused redirect is reported as `redirected`. The alias form Local.Pub's own client suggests, `@you.<suffix>@local.pub`, can come back `bad-response`: for the one account examined (2026-11-05) Local.Pub answered it with the person's own-domain subject and an actor on that domain, which the checks below refuse. Use the handle on the person's own domain, as their profile shows it.
+
+What it returns: `displayName`, cleaned by the rule the ask prompts use for invisible characters (the Unicode Default_Ignorable code points and the bidi marks, kept only where an emoji needs a joiner or a variation selector), plus the control characters, the line and paragraph separators and **every tag character** (U+E0000–E007F), so the England, Scotland and Wales flags show as the plain black flag. A lone surrogate is replaced by U+FFFD before anything is stripped, and the cut at 200 characters is followed by another strip, so no joiner is left dangling. Characters that merely look blank but are not in those sets (U+2800, for one) are not removed, so a name can still look empty or misleading. `claimedDids`, the DIDs the actor lists under `alsoKnownAs` (informational: no DID is resolved, and one that can rotate is never used as a key); and `companionEndpoint` and `companionDidKey`, read from a profile field whose **name contains "companion"** (any case) and whose value contains an `https` URL (the person's Companion `/agent/v1` base, with no credentials, query or fragment: a candidate with one is skipped) and/or a canonical `did:key` (the `kid` of its `peers.signingKeyJwk`). Both come from the **same** field: the first that holds both, or failing that the first that holds either. They are never assembled from two fields, because the owner links exactly that pair and a retired field listed before the current one would otherwise lend its address to the new key. A person who lists the address and the key in separate fields therefore gives the lookup only the first field's value. That field is a convention of ours, and **the Local.Pub client we examined cannot produce it**. The actor does carry Mastodon-style `PropertyValue` attachments, but the client names them from each pasted link's host (Website, LinkedIn, GitHub, Website for the one account examined), and its link editor takes only `https` links (up to 300 characters, up to six) with no field for a name and no place for a `did:key`. Whether another route can (the Mastodon-compatible write API, another client) is unknown. Both values are claims by the profile's host.
+
+The actor's own Ed25519 key (its FEP-521a `assertionMethod`) is deliberately **not** returned. For the one public Local.Pub account checked on 2026-11-05 it is not a key of the person's DID (it appears in none of the 31 entries of that DID's `did:scid:vh` log or the 4 of its `did:webvh` log), and nothing shows that the person's Companion holds it. A link to a key that no Companion signs with could never match an ask.
+
+To link: confirm the `did:key` with the person out of band (they read it from their own Companion: it is the `kid` of `peers.signingKeyJwk`, and no screen shows it yet; no Local.Pub artefact attests it), then link them, naming the `stranger` tier (the mutation's default, written out here because a person introduced by a profile is exactly who it is for):
+
+```graphql
+mutation { createPeerLink(input: {
+  peerHandle: "name@their-host"
+  memoryEndpoint: "<companionEndpoint>"
+  peerIssuer: "did:key"
+  peerSubject: "<companionDidKey>"
+  trustTier: stranger
+}) { success peerLink { id peerHandle trustTier } } }
+```
+
+If the profile has no Companion field the lookup only found the profile; ask the person for the address and the `did:key`. Internal consistency is checked (the WebFinger subject names the handle, the actor `id` is the URL it was read from, the actor sits on the handle's host); that the person the owner has in mind runs the Companion it names is **not**.
+
+`found: false` carries a `reason`: `disabled`, `bad-handle`, `blocked` (the egress policy refused the URL or the address), `redirected`, `not-found`, `bad-response`, `unreachable`, or `busy` (two lookups already in flight, twenty started in the last minute, or any name lookup still waiting for DNS; all process-wide, and the name-lookup count is shared with outbound peer asks and Portal directory lookups, which use the same egress agent, so a stuck peer-ask lookup also makes lookups answer `busy`). A `busy` answer does not count against the minute.
+
+| | |
+|---|---|
+| `CI_PEER_LOCAL_PUB_ENABLED=true` | **Off by default.** It gates the lookup only, not the `did:key` keyids above. Off means this box never makes the call: the host in a handle is chosen by whoever typed it, so it is not operator config like `CI_PEER_DIRECTORY_URL`. Also gated by the `ask` feature flag. |
+
+Over MCP the field is labelled an **external read**. Under the default Balanced Autonomy setting and under Hands-off an AI app's call **runs immediately**, up to twenty a minute; it asks only under Cautious and for installed (managed) apps. **The handle is a data channel the caller chooses.** The host part (up to 253 characters) goes into the DNS query and, once the connection is made, into the TLS server name and the `Host` header, and the whole handle (up to about 318 characters) goes into the WebFinger URL. So the host, and whoever runs its DNS zone (an authoritative server alone is enough, even if the connection is then refused), learns more than that this box asked: an AI app steered by untrusted content, a pasted handle or anything else it read, can pass what it has read to a zone the attacker runs. The controls are the flag being off by default, the guarded egress (which limits where a lookup can go, not what the handle says) and the cap below. A box whose AI apps read untrusted content should leave the flag off or run the Cautious dial.
+
+The cap is two lookups in flight and twenty started per minute, process-wide, and none starts while any name lookup is still waiting for DNS. The last rule exists because a timeout does not cancel a stuck name lookup: it keeps one of libuv's two getaddrinfo threads until the system resolver gives up. The count is shared with outbound peer asks and Portal directory lookups (one shared egress agent). Capping at one outstanding name lookup leaves one of the two threads free; a flood of fresh unresolvable names still holds the other for as long as the flood lasts (about six admitted names a minute with the resolver's 10 s), and other lookups in the process can queue behind it only for that one thread.
 
 ### What the owner sees
 

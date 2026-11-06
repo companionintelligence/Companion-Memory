@@ -22,6 +22,12 @@
  * a cycle between them.
  */
 
+/** A surrogate code unit that is not half of a pair (with the `u` flag a proper pair is one code point). */
+const LONE_SURROGATE = /\p{Surrogate}/gu;
+
+/** U+FFFD, built from its code point so that no escape sequence has to survive an editor. */
+const REPLACEMENT_CHARACTER = String.fromCodePoint(0xfffd);
+
 /**
  * Characters that render as NOTHING and therefore let two visually identical
  * strings compare unequal. `pho<U+200B>tos` renders as `photos` in the owner's
@@ -99,8 +105,18 @@ function isEmojiSequencePart(cp: number, previous: number | undefined, next: num
  * Strip {@link INVISIBLE} except where it is part of an emoji sequence. Walks
  * code points, so a surrogate pair is never split, and reads each character
  * against the previous one KEPT, so a tag run is judged as a chain.
+ *
+ * Exported so the other text a stranger supplies that an owner reads (a Local.Pub display name, in
+ * `peers/localPubProfile.ts`) is stripped by THIS rule and not by a second hand-picked list, which is
+ * the drift this file's header warns about. Unlike {@link normalizeText} it does not apply NFKC or
+ * collapse spaces: the text keeps the characters the person wrote.
  */
-function stripInvisible(value: string): string {
+export function stripInvisible(input: string): string {
+  // A LONE surrogate half is replaced before anything else. JSON.parse accepts `"\ud800"`, and removing an
+  // invisible character that sits BETWEEN a high and a low half would otherwise glue the halves into a
+  // valid pair this function never examined: a supplementary invisible character (a tag, a variation
+  // selector, a musical formatting character) would walk through a filter that "removes" it.
+  const value = input.replace(LONE_SURROGATE, REPLACEMENT_CHARACTER);
   if (value.search(INVISIBLE) === -1) {
     return value;
   }

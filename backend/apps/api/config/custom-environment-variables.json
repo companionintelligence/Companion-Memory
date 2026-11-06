@@ -451,7 +451,8 @@
     "handle": "CI_PEER_HANDLE",
     "audience": "CI_PEER_AUDIENCE",
     "timeoutMs": "CI_PEER_TIMEOUT_MS",
-    "allowCgnatEndpoints": "CI_PEER_ALLOW_CGNAT_ENDPOINTS"
+    "allowCgnatEndpoints": "CI_PEER_ALLOW_CGNAT_ENDPOINTS",
+    "localPubEnabled": "CI_PEER_LOCAL_PUB_ENABLED"
   },
   "push": {
     "vapid": {

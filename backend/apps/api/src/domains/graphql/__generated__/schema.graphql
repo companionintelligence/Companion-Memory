@@ -1812,6 +1812,22 @@ input LinkItemToProductInput {
   productId: ID
 }
 
+type LocalPubPeerCandidateType {
+  actorId: String!
+  claimedDids: [String!]!
+  companionDidKey: String
+  companionEndpoint: String
+  displayName: String
+  handle: String!
+  profileUrl: String
+}
+
+type LocalPubPeerLookupPayload {
+  candidate: LocalPubPeerCandidateType
+  found: Boolean!
+  reason: String
+}
+
 type MapPinType {
   endTime: DateTime
   eventType: String
@@ -2999,6 +3015,11 @@ type Query {
   ): ItemConnection!
   knownPlaceCandidates: [KnownPlaceCandidateType!]!
   knownPlaces(kind: String): [KnownPlaceType!]!
+
+  """
+  What a Local.Pub profile claims about a person (name@host): display name, DIDs, and the Companion address and did:key if the profile names them. Creates no link; link with createPeerLink.
+  """
+  localPubPeerLookup(handle: String!): LocalPubPeerLookupPayload!
 
   """
   Located events as map markers for the given filters. Events-only and located-only; returns the whole matching set in one read (capped at 20000 pins), not a page.

@@ -304,7 +304,14 @@ export function isEgressUrlAllowed(raw: string, options?: EgressPolicyOptions): 
  * status gets undone one field along.
  */
 export class EgressBlockedError extends Error {
-  constructor(public readonly reason: string) {
+  /**
+   * `redirected` is true only when the refusal was a 3xx answer (see {@link peerEgressFetch}), so a caller
+   * can tell "the host redirects" from "the policy refused this address" without reading `reason`.
+   */
+  constructor(
+    public readonly reason: string,
+    public readonly redirected = false,
+  ) {
     super(`egress refused: ${reason}`);
     this.name = 'EgressBlockedError';
   }
@@ -316,6 +323,50 @@ export type AddressResolver = (
   options: dns.LookupAllOptions,
   callback: (error: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void,
 ) => void;
+
+/** Resolver calls made through {@link createEgressLookup} that have not answered yet. */
+let outstandingResolverCalls = 0;
+
+/**
+ * How many resolver calls made for peer egress are still waiting for an answer, process-wide.
+ *
+ * A fetch can be abandoned at its deadline; the `dns.lookup` underneath it cannot. It runs
+ * `getaddrinfo` on one of libuv's four pool threads (two for this kind of work) and keeps it until the
+ * system resolver gives up, which can be many seconds after the fetch was aborted. This is the only
+ * count that follows the thread, so a caller that must not fill the pool with names it chose
+ * (`LocalPubDiscoveryService`) asks this, not how many fetches it has in flight.
+ */
+export function outstandingPeerEgressLookups(): number {
+  return outstandingResolverCalls;
+}
+
+/** {@link AddressResolver}'s `resolve`, counted from the call until its callback runs (or it throws). */
+function resolveCounted(
+  resolve: AddressResolver,
+  hostname: string,
+  options: dns.LookupAllOptions,
+  callback: Parameters<AddressResolver>[2],
+): void {
+  let outstanding = true;
+  const release = (): void => {
+    if (outstanding) {
+      outstanding = false;
+      outstandingResolverCalls -= 1;
+    }
+  };
+
+  outstandingResolverCalls += 1;
+  try {
+    resolve(hostname, options, (error, addresses) => {
+      release();
+      callback(error, addresses);
+    });
+  } catch (error: unknown) {
+    release();
+
+    throw error;
+  }
+}
 
 /**
  * Build a DNS lookup that refuses blocked answers.
@@ -338,9 +389,13 @@ export type AddressResolver = (
  * or mixed answer is refused.
  */
 export function createEgressLookup(
-  resolve: AddressResolver,
+  resolver: AddressResolver,
   egressOptions?: EgressPolicyOptions,
 ): LookupFunction {
+  // Every call to the resolver below is counted until it answers; see `outstandingPeerEgressLookups`.
+  const resolve: AddressResolver = (hostname, options, callback) =>
+    resolveCounted(resolver, hostname, options, callback);
+
   return (hostname, options, callback) => {
     if (hostnameRefusal(hostname, egressOptions) != null) {
       callback(new EgressBlockedError(`${hostname} is not a permitted host`), '', 4);
@@ -504,7 +559,10 @@ export async function peerEgressFetch(rawUrl: string, init: PeerEgressInit): Pro
     // Drain, so refusing a redirect does not leak the socket.
     await response.body?.cancel().catch(() => {});
 
-    throw new EgressBlockedError(`peer answered ${response.status} with a redirect, which is not followed`);
+    throw new EgressBlockedError(
+      `peer answered ${response.status} with a redirect, which is not followed`,
+      true,
+    );
   }
 
   return response;

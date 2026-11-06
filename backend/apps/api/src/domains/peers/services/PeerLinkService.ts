@@ -7,6 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { GrantService } from '@ci/domains/asks';
 
+import { didKeyIdFor, isDidKeyId } from '../didKeyId';
 import {
   isPeerTrustTier,
   type PeerLink,
@@ -14,7 +15,13 @@ import {
   type PeerLinkStatus,
   type PeerTrustTier,
 } from '../entities/PeerLinkEntity';
-import { isSovereignKeyId } from '../sovereignKeyId';
+import {
+  DID_KEY_ISSUER,
+  SOVEREIGN_ISSUER,
+  selfCertifyingIssuerOf,
+  selfCertifyingPublicJwk,
+} from '../selfCertifyingKeyId';
+import { sovereignKeyIdFor } from '../sovereignKeyId';
 
 export interface CreatePeerLinkDto {
   peerHandle: string;
@@ -156,16 +163,24 @@ export class PeerLinkService {
    * The pair `PeerAskService.resolveLink` matches an inbound ask on. Setting it
    * is the gesture that decides WHICH REMOTE IDENTITY MAY ACT AS THIS PEER, and
    * therefore which `trustTier` ceiling a stranger's token inherits — so it is
-   * the most consequential thing this method writes. Three guards, in the order
-   * they run:
+   * the most consequential thing this method writes. Five guards; the first
+   * is inherited, the next three are checks in front of the write (the second
+   * and third only when the write CHANGES the binding, see `changesBinding`),
+   * and the last is the database's:
    *
    *   1. **Owner scoping**, inherited rather than added: the read below and the
    *      row it creates are both keyed on `context.userId`, so a caller can
    *      only ever bind THEIR OWN link. `PeerLinkResolver.updatePeerLink` adds
    *      the matching refusal for an id it cannot read.
-   *   2. **Both or neither, never blank** — a half-set pair is inert while
+   *   2. **A self-certifying subject is bound under its own issuer, and a
+   *      `did:key` link names a VALID `did:key`** (canonical, not a weak key,
+   *      a point on the curve): otherwise the link is inert while looking bound.
+   *   3. **Both or neither, never blank** — a half-set pair is inert while
    *      looking bound.
-   *   3. **One LIVE link per (owner, identity)**, enforced by a partial unique
+   *   4. **One live link per KEY across its two spellings** (`did:keri:D<x>`
+   *      and `did:key`): a read followed by a write, so two racing writes can
+   *      both pass it. Said so where it is made.
+   *   5. **One LIVE link per (owner, identity)**, enforced by a partial unique
    *      index because a read-then-write check races.
    *
    * `undefined` means "the caller said nothing", and is the only value that
@@ -246,10 +261,87 @@ export class PeerLinkService {
     // legacy inconsistency into an outage.
     const touchesIdentity = peerIssuer !== undefined || peerSubject !== undefined;
 
+    // Whether this write CHANGES the binding the row has now (none, for a new link). `updatePeerLink`
+    // always sends the stored pair back, so "was an identity supplied" is true of every edit of a bound
+    // link, and a guard keyed on it would refuse a tier change on a row it has no quarrel with. The
+    // guards below that judge the binding itself (is this a key, does another link name it) are keyed
+    // on this instead: they run for a link being bound or re-bound, not for one being renamed.
+    const changesBinding =
+      record.peerIssuer !== (existing?.peerIssuer ?? null) ||
+      record.peerSubject !== (existing?.peerSubject ?? null);
+
+    // A `did:key` link is answered by exactly the identifier it names, so a subject that is not one
+    // canonical Ed25519 `did:key` (one that is the weak or off-curve, a mistyped character) could never
+    // match an inbound ask: inert while looking bound, the same failure as half a pair. Refused by name
+    // rather than stored.
+    if (changesBinding && record.peerIssuer === DID_KEY_ISSUER && !isDidKeyId(record.peerSubject ?? '')) {
+      throw new BadRequestException(
+        'peerSubject must be a canonical Ed25519 did:key (did:key:z6Mk…) when peerIssuer is did:key',
+      );
+    }
+
+    // The same failure from the other side: a subject that IS a self-certifying identifier, bound under
+    // some other DID-looking issuer (`DID:KEY`, `did:key:`, `did:keri` for a did:key subject), is answered
+    // by nothing, because an inbound ask is matched on exactly the issuer that identifier belongs to. An
+    // http(s) issuer is a Portal identity, whose subject is whatever Portal says, and is left alone.
+    const declaredIssuer = record.peerSubject == null ? null : selfCertifyingIssuerOf(record.peerSubject);
+    if (
+      changesBinding &&
+      declaredIssuer != null &&
+      record.peerIssuer !== declaredIssuer &&
+      !/^https?:\/\//i.test(record.peerIssuer ?? '')
+    ) {
+      throw new BadRequestException(
+        `peerSubject is a self-certifying identifier and must be bound under peerIssuer ${declaredIssuer}`,
+      );
+    }
+
     if (touchesIdentity && (record.peerIssuer == null) !== (record.peerSubject == null)) {
       throw new BadRequestException(
         'peerIssuer and peerSubject must be set together — one alone can never match an inbound ask',
       );
+    }
+
+    // ═══ ONE KEY, ONE LIVE LINK — ACROSS ITS SPELLINGS ═══
+    //
+    // `did:keri:D<x>` and `did:key:z6Mk…` are two spellings of ONE Ed25519 key, under two issuers, so
+    // the unique (owner, issuer, subject) index does not see them as the same identity. Left alone, an
+    // owner could hold both live at different tiers, the SIGNER would choose which one answers by the
+    // keyid it signs under, and revoking one would not cut the key off. The check is on the row about
+    // to be written (the merged one) and only when the write changes the binding.
+    //
+    // WHAT THIS DOES NOT DO: it is a read followed by a write, with nothing in the database behind it
+    // (the unique indexes see two spellings as two identities), so two writes racing from two tabs or
+    // devices can both pass it. The owner can still edit or revoke each link, because an edit that
+    // leaves the binding alone is not checked. The race is a known residual, not a guarantee.
+    if (
+      changesBinding &&
+      record.revokedAt == null &&
+      record.peerIssuer != null &&
+      record.peerSubject != null &&
+      selfCertifyingIssuerOf(record.peerSubject) === record.peerIssuer
+    ) {
+      // ONE lookup of the one pair that could clash: the same key under the other issuer's spelling. An
+      // ended link cannot clash (it answers nothing), and the link being written is not its own twin.
+      const twin = twinSpelling(record.peerIssuer, record.peerSubject);
+      const clash =
+        twin == null
+          ? null
+          : await this.repository.findOne({
+              where: {
+                ownerUserId: context.userId,
+                peerIssuer: twin.issuer,
+                peerSubject: twin.subject,
+                revokedAt: IsNull(),
+              },
+            });
+
+      if (clash != null && clash.id !== record.id) {
+        throw new ConflictException(
+          'Another live peer link already names that key under a different spelling (did:keri and did:key spell the ' +
+            'same Ed25519 key) — revoke it first, or re-bind that link instead',
+        );
+      }
     }
 
     let revokedGrants = 0;
@@ -465,11 +557,12 @@ export class PeerLinkService {
       { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
     ];
 
-    // A sovereign keyid IS the peer's AID, so the link that names it is found by
-    // its identity, whether or not it records the key (see `sovereignKeyId.ts`).
-    if (isSovereignKeyId(thumbprint)) {
+    // A self-certifying keyid IS the peer's identifier, so the link that names it is found by its
+    // identity, whether or not it records the key (see `sovereignKeyId.ts`, `didKeyId.ts`).
+    const selfCertifying = selfCertifyingIssuerOf(thumbprint);
+    if (selfCertifying != null) {
       whereConditions.push({
-        peerIssuer: 'did:keri',
+        peerIssuer: selfCertifying,
         peerSubject: thumbprint,
         status: 'active',
         revokedAt: IsNull(),
@@ -497,4 +590,22 @@ export class PeerLinkService {
 
     return PeerLinkEntity.toEgressType(await this.repository.save(row));
   }
+}
+
+/**
+ * The other spelling of the key a self-certifying link names: the same key as `did:keri:D<x>` for a
+ * `did:key` link and as `did:key:z6Mk…` for a `did:keri` one, with the issuer that goes with it. Null
+ * when the subject is not a key this codec can spell both ways (a weak or off-curve key has no `did:key`).
+ */
+function twinSpelling(issuer: string, subject: string): { issuer: string; subject: string } | null {
+  const jwk = selfCertifyingPublicJwk(subject);
+  if (jwk == null) {
+    return null;
+  }
+
+  const twinSubject = issuer === DID_KEY_ISSUER ? sovereignKeyIdFor(jwk) : didKeyIdFor(jwk);
+
+  return twinSubject == null
+    ? null
+    : { issuer: issuer === DID_KEY_ISSUER ? SOVEREIGN_ISSUER : DID_KEY_ISSUER, subject: twinSubject };
 }

@@ -93,6 +93,7 @@ import { GraphResolver } from './resolvers/GraphResolver';
 import { ItemRelationshipResolver } from './resolvers/ItemRelationshipResolver';
 import { ItemResolver } from './resolvers/ItemResolver';
 import { KnownPlacesResolver } from './resolvers/KnownPlacesResolver';
+import { LocalPubPeerResolver } from './resolvers/LocalPubPeerResolver';
 import { NodeResolver } from './resolvers/NodeResolver';
 import { NoteResolver } from './resolvers/NoteResolver';
 import { ObjectObservationResolver } from './resolvers/ObjectObservationResolver';
@@ -228,6 +229,7 @@ import { UserResolver } from './resolvers/UserResolver';
     ItemRelationshipResolver,
     ItemResolver,
     KnownPlacesResolver,
+    LocalPubPeerResolver,
     ObjectObservationResolver,
     PersonIdentifiersLoader,
     PersonInteractionStatsLoader,
