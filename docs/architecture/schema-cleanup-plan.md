@@ -1,5 +1,3 @@
-<!-- Private & Confidential — Property of Lifescope Inc. Do not distribute. -->
-
 # CI-Server schema cleanup plan
 
 > **Status: proposal, partly overtaken by events.** This plan was never executed as a

@@ -1,7 +1,5 @@
 # CLAUDE.md — CI-Server
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 ## Platform role
 
 **CI-Server** sits in the **Appliance** layer of the Companion Intelligence platform.
@@ -252,6 +250,6 @@ See `CI-Engineering/architecture/HBPE/` for design docs.
 
 Multiple AI agents work these repos in parallel. Never use `git reset --hard`, `git clean -f`, or any destructive git command without explicit confirmation from the user.
 
-## Confidentiality
+## License
 
-Private & Confidential — Property of Lifescope Inc. Do not distribute.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Keep the Required Notice in LICENSE.md, and the attributions in NOTICE.md, with any copy you redistribute.

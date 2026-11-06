@@ -1,7 +1,5 @@
 # Third-party egress from Companion Memory
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Companion Memory's central claim is that your records stay on hardware you own. This document
 records where that is *not* currently true, so the claim can be stated accurately and the gaps
 closed deliberately.

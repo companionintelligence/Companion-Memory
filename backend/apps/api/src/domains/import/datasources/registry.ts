@@ -1,5 +1,5 @@
 // Companion Intelligence © 2019-2026 LifeScope Inc.
-// Licensed under the Companion Intelligence Commercial Standard License (CI-Commercial-1.0); see LICENSE.md.
+// Licensed under the PolyForm Noncommercial License 1.0.0; see LICENSE.md.
 // Data-source registry: the DataSource/importer types, the in-memory registry, and
 // the recognition runner. Some advanced behaviors (FS archive handling, recognition
 // algorithms, OAuth2) are simplified in this implementation.

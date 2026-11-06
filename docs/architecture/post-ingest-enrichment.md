@@ -1,6 +1,5 @@
 # Post-ingest enrichment (#51)
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Status: **implemented and merged to `main`** — `feat/3-and-4` landed on
 > 2026-08-17 as [#2032](https://github.com/companionintelligence/CI-Server/pull/2032).

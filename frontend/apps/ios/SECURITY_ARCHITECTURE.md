@@ -1,6 +1,5 @@
 # Companion Mobile — Security & Privacy Architecture
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Design for making the phone an **ETL source** for the user's own appliance without
 > making the phone the weakest link in the chain. Companion to

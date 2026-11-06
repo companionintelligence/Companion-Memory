@@ -1,7 +1,5 @@
 # The appliance as an MCP server
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 CI-Server exposes its own tools over the Model Context Protocol so an agent gets
 one memory-brain endpoint instead of a hand-written integration per harness.
 Everything here is `backend/apps/api/src/domains/mcp/`; citations are

@@ -1,6 +1,5 @@
 # Database Architecture
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Last verified against the migration set on **2026-08-19**
 > (`backend/apps/api/db/postgres/migrations/`, 282 files). The hand-written SQL migrations

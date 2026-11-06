@@ -1,7 +1,5 @@
 # Entity Identity & Merge — State of Play
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Status: **survey + design for the unbuilt parts** · Scope: `ci.entities` Person / Location / Object / Concept
 · Re-verified against `main` on **2026-08-19** (after PR [#2176](https://github.com/companionintelligence/CI-Server/pull/2176),
 merge `ead9fb425`), which shipped the Thing half this document previously listed as unbuilt.

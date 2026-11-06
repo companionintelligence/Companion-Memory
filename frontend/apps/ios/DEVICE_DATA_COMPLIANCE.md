@@ -1,6 +1,5 @@
 # Companion Mobile — Device-Data ETL: Store Compliance & Disclosure
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Per-source store-policy analysis for turning the phone into an **ETL source** for the
 > user's own CI-Server appliance. Companion to [`DELIVERY.md`](./DELIVERY.md), which owns

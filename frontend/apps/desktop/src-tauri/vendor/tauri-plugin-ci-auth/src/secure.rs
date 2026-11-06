@@ -1,5 +1,4 @@
-// Copyright (c) Lifescope Inc. All rights reserved.
-// Private & Confidential — Property of Lifescope Inc. Do not distribute.
+// Copyright (c) Lifescope Inc. Licensed under the PolyForm Noncommercial License 1.0.0; see LICENSE.md.
 
 //! Secure storage behind a trait. Production uses the OS keychain through keyring. Tests use
 //! MemoryBackend. Nothing here writes a secret to disk, and when the keychain is unavailable every
