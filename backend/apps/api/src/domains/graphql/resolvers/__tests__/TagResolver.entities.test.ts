@@ -35,6 +35,7 @@ function makeResolver(page: unknown) {
     tagService as never,
     unused,
     unused,
+    unused,
   );
   const resolveEntities = jest
     .spyOn(resolver as unknown as { resolveEntities: () => Promise<unknown[]> }, 'resolveEntities')

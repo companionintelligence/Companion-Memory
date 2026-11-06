@@ -21,7 +21,6 @@ import { ThreadConnection } from '../types/ThreadConnection';
 import { ThreadEdge } from '../types/ThreadEdge';
 import { ThreadType } from '../types/ThreadType';
 import { keysetArgs, keysetPageInfo } from '../utils/keysetConnection';
-import { Paginator } from '../utils/Paginator';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => ThreadType)
