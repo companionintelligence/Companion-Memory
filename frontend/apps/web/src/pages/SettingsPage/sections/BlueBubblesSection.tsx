@@ -66,11 +66,7 @@ function formatTimestamp(value: string | null, fmt: DateTimeFormatter): string {
     return 'never';
   }
 
-  try {
-    return fmt.dateTime(value);
-  } catch {
-    return value;
-  }
+  return fmt.tryDateTime(value) ?? value;
 }
 
 /**

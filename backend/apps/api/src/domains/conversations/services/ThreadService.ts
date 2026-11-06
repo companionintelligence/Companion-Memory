@@ -1,10 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThan, Repository } from 'typeorm';
+import { In, MoreThan, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 
 import { ThreadEntity, type Thread } from '../entities/ThreadEntity';
@@ -12,6 +18,17 @@ import { ThreadCreatedEvent, ThreadUpdatedEvent, ThreadRemovedEvent } from '../e
 import type { CreateThreadDto, UpdateThreadDto } from '../types';
 
 import { MessageService } from './MessageService';
+
+/**
+ * The threads list's order — what {@link ThreadService.findAll} sorts by and
+ * {@link ThreadService.findPage} seeks on: most recently updated first (the
+ * column is nullable in the table, and NULLs lead a descending sort), the id
+ * breaking ties so the order is total.
+ */
+const THREAD_LIST_ORDER: readonly SeekKey[] = [
+  { expr: 'thread.updated_at', order: 'DESC', nullable: true, read: 'CAST(thread.updated_at AS text)' },
+  { expr: 'thread.thread_id', order: 'DESC' },
+];
 
 @Injectable()
 export class ThreadService {
@@ -43,27 +60,62 @@ export class ThreadService {
     return ThreadEntity.toEgressType(entity);
   }
 
+  /**
+   * Every live thread of the caller, most recently updated first
+   * ({@link THREAD_LIST_ORDER}); {@link findPage} reads the same list a page
+   * at a time. The owner is not joined: `GET /api/threads` (every chat-page
+   * open) and the GraphQL `threads` query both read the list, and neither
+   * reads the owner off a thread — `Thread.user` is optional on the egress
+   * type for exactly that.
+   */
   async findAll(context: ServiceContext): Promise<Thread[]> {
-    const entities = await this.threadRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-        isArchived: false,
-      },
-      order: {
-        updatedAt: 'DESC',
-      },
-      // No `relations: ['user']`: the list is read by `GET /api/threads` (every
-      // chat-page open) and the GraphQL `threads` query, and neither reads the
-      // owner off a thread — `Thread.user` is optional on the egress type for
-      // exactly that. The join hydrated a full `users` row per thread for
-      // nothing. `where.user.id` still scopes without selecting it.
+    let qb = this.listScope(this.threadRepository.createQueryBuilder('thread'), context);
+
+    THREAD_LIST_ORDER.forEach((key, i) => {
+      qb = i === 0 ? qb.orderBy(key.expr, key.order) : qb.addOrderBy(key.expr, key.order);
     });
 
+    const entities = await qb.getMany();
+
     return entities.map((entity) => ThreadEntity.toEgressType(entity));
+  }
+
+  /**
+   * One page of {@link findAll}'s list — the caller's live threads, most
+   * recently updated first — read with a `LIMIT` and a seek past the cursor
+   * row instead of every thread. The cursor is the row id; one that matches no
+   * row yields an empty page. The `COUNT(*)` behind `totalCount` runs only when
+   * `countTotal` is set. The owner is not joined: the GraphQL type never reads
+   * it (the REST list, which does, stays on {@link findAll}).
+   */
+  async findPage(
+    context: ServiceContext,
+    args: KeysetPageArgs,
+    options: { countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Thread>> {
+    const page = await keysetPaginateBy(this.threadRepository, args, {
+      alias: 'thread',
+      keys: THREAD_LIST_ORDER,
+      idExpr: 'thread.thread_id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => ThreadEntity.toEgressType(entity)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: unarchived threads of the caller, or of everyone for the system user. */
+  private listScope(
+    qb: SelectQueryBuilder<ThreadEntity>,
+    context: ServiceContext,
+  ): SelectQueryBuilder<ThreadEntity> {
+    qb = qb.where('thread.is_archived = false');
+
+    if (context.userId === SYSTEM_USER) {
+      return qb;
+    }
+
+    return qb.andWhere('thread.user_id = :userId', { userId: context.userId });
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Thread | null)[]> {

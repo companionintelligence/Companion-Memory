@@ -191,11 +191,5 @@ function recordFor(row: DisclosureRow): ConsentRecord {
  * beats showing "Invalid Date" on the owner's own audit trail.
  */
 function formatWhen(iso: string, fmt: DateTimeFormatter): string {
-  const at = new Date(iso);
-
-  if (Number.isNaN(at.getTime())) {
-    return iso;
-  }
-
-  return fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.tryDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }) ?? iso;
 }

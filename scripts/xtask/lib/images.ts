@@ -43,7 +43,8 @@ export function versionedTagArgs(repo: string, tag: string): string[] {
  * exactly what its content depends on, so `dev` can tell a warm image was
  * built from different source than HEAD. Mirrors the pre-port Makefile's
  * `git rev-parse HEAD:<appDir> HEAD:backend/packages/telemetry HEAD:uv.lock
- * 2>/dev/null | tr '\n' '-'` — including the trailing dash `tr` leaves after
+ * 2>/dev/null | tr '\n' '-'` (with `backend/packages/sidecar-core` added to the
+ * list since) — including the trailing dash `tr` leaves after
  * the last hash, and including that a failed `git rev-parse` (e.g. a shallow
  * clone) is not specially handled: whatever stdout it produced, even none,
  * gets the same `tr` treatment, exactly as the shell version does.
@@ -51,7 +52,13 @@ export function versionedTagArgs(repo: string, tag: string): string[] {
 export function sidecarStamp(root: string, appDir: 'summary' | 'hbpe'): string {
   const res = tryRun(
     'git',
-    ['rev-parse', `HEAD:backend/apps/${appDir}`, 'HEAD:backend/packages/telemetry', 'HEAD:uv.lock'],
+    [
+      'rev-parse',
+      `HEAD:backend/apps/${appDir}`,
+      'HEAD:backend/packages/telemetry',
+      'HEAD:backend/packages/sidecar-core',
+      'HEAD:uv.lock',
+    ],
     { cwd: root },
   );
 

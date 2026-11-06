@@ -1,7 +1,7 @@
 import {
   evaluateModelFit,
   findLocalLlmModel,
-  formatBytes,
+  formatModelBytes,
   gpuAllowedOn,
   LOCAL_LLM_CATALOG,
   LOCAL_LLM_DISK_HEADROOM_BYTES,
@@ -170,11 +170,11 @@ describe('evaluateModelFit', () => {
   });
 });
 
-describe('formatBytes', () => {
+describe('formatModelBytes', () => {
   it('uses one decimal from a gigabyte up and whole megabytes below', () => {
-    expect(formatBytes(2_583_085_056)).toBe('2.4 GB');
-    expect(formatBytes(344_437_808)).toBe('328 MB');
-    expect(formatBytes(12 * GIB)).toBe('12.0 GB');
+    expect(formatModelBytes(2_583_085_056)).toBe('2.4 GB');
+    expect(formatModelBytes(344_437_808)).toBe('328 MB');
+    expect(formatModelBytes(12 * GIB)).toBe('12.0 GB');
   });
 });
 

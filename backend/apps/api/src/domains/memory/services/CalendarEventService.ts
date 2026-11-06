@@ -21,6 +21,7 @@ import {
   type HourlyActivityOptions,
   touchedHourlyBucketsSql,
   type BulkInsertResult,
+  type KeysetCountOptions,
   type KeysetPage,
   type KeysetPageArgs,
   appendRecordSources,
@@ -2262,12 +2263,17 @@ export class CalendarEventService {
    * library that is six figures of rows hydrated to serve a page of 20.
    *
    * The scope repeats findAll's two predicates rather than sharing them,
-   * because `keysetPaginate` runs its own COUNT for `totalCount`: if the count
-   * and the page disagreed on which rows exist, the connection would advertise
-   * pages that never arrive.
+   * because `keysetPaginate` runs its own COUNT for `totalCount` (when the
+   * caller wants one): if the count and the page disagreed on which rows
+   * exist, the connection would advertise pages that never arrive.
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Event>> {
     const page = await keysetPaginate(this.eventRepository, args, {
+      ...options,
       alias: 'event',
       timeProp: 'startTime',
       userId: context.userId,
@@ -2303,8 +2309,13 @@ export class CalendarEventService {
    * Same keyset pagination and the same planned_block exclusion as
    * {@link findPage}, so the two pages cannot disagree about what an event is.
    */
-  async findDeletedPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+  async findDeletedPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Event>> {
     const page = await keysetPaginate(this.eventRepository, args, {
+      ...options,
       alias: 'event',
       timeProp: 'startTime',
       userId: context.userId,
@@ -2327,6 +2338,10 @@ export class CalendarEventService {
    * disappears immediately rather than waiting on the async un-index.
    */
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Event | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.eventRepository.find({
       where: {
         id: In(ids),

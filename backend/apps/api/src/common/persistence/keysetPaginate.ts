@@ -47,10 +47,22 @@ export interface KeysetPage<E> {
   entities: E[];
   hasNextPage: boolean;
   hasPreviousPage: boolean;
-  totalCount: number;
+  /** Every row under `scope`, or `null` when the caller passed `countTotal: false`. */
+  totalCount: number | null;
 }
 
-interface KeysetOptions {
+/** The part of the paginator's options a service lets its caller decide. */
+export interface KeysetCountOptions {
+  /**
+   * Run the `COUNT(*)` behind `totalCount`. Default `true`. A GraphQL resolver
+   * passes `false` when the operation did not select `totalCount`: the count is
+   * a scan of every row the user owns under `scope` — six figures for events
+   * and browser activity — and the page itself never needs it.
+   */
+  countTotal?: boolean;
+}
+
+interface KeysetOptions extends KeysetCountOptions {
   /** Query alias used in the builder (e.g. 'c'). */
   alias: string;
   /** Entity PROPERTY name of the time-ish sort column (e.g. 'time', 'createdAt'). TypeORM maps it to the DB column. */
@@ -92,9 +104,16 @@ export async function keysetPaginate<E extends ObjectLiteral>(
   const scope = options.scope ?? ((qb) => qb);
   const { limit, isBackward } = resolvePageShape(args);
 
-  const totalCount = await scope(
-    repo.createQueryBuilder(alias).where(`${alias}.${userIdProp} = :userId`, { userId }),
-  ).getCount();
+  // Started first and collected last: the count depends on nothing below, so it
+  // runs while the cursor row is looked up and the page read — two round trips
+  // in series where there were three. The no-op handler keeps a rejection that
+  // lands while the cursor lookup is still in flight from being reported as
+  // unhandled; `await` below still sees it.
+  const counting: Promise<number | null> =
+    (options.countTotal ?? true)
+      ? scope(repo.createQueryBuilder(alias).where(`${alias}.${userIdProp} = :userId`, { userId })).getCount()
+      : Promise.resolve(null);
+  counting.catch(() => undefined);
 
   const cursorId = isBackward ? args.beforeId : args.afterId;
   let cursor: { time: string; id: string } | null = null;
@@ -130,10 +149,10 @@ export async function keysetPaginate<E extends ObjectLiteral>(
   } else if (cursorId) {
     // A cursor was supplied but no matching row exists — return an empty page
     // rather than silently falling back to the first page.
-    return { entities: [], hasNextPage: false, hasPreviousPage: isBackward, totalCount };
+    return { entities: [], hasNextPage: false, hasPreviousPage: isBackward, totalCount: await counting };
   }
 
-  const rows = await qb.getMany();
+  const [rows, totalCount] = await Promise.all([qb.getMany(), counting]);
   const hasExtra = rows.length > limit;
   const page = hasExtra ? rows.slice(0, limit) : rows;
 

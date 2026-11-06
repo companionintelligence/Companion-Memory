@@ -61,8 +61,11 @@ import { PreviewLoader } from './loaders/PreviewLoader';
 import { ProviderKeyLoader } from './loaders/ProviderKeyLoader';
 import { ProviderLoader } from './loaders/ProviderLoader';
 import { QuestionLoader } from './loaders/QuestionLoader';
+import { RelationshipsLoader } from './loaders/RelationshipsLoader';
 import { TagAssignmentCountLoader } from './loaders/TagAssignmentCountLoader';
 import { TagLoader } from './loaders/TagLoader';
+import { TagTaxonomyLoader } from './loaders/TagTaxonomyLoader';
+import { TaskChildrenLoader } from './loaders/TaskChildrenLoader';
 import { ThreadLoader } from './loaders/ThreadLoader';
 import { ThreadMessagesLoader } from './loaders/ThreadMessagesLoader';
 import { UnfurlLoader } from './loaders/UnfurlLoader';
@@ -245,6 +248,7 @@ import { UserResolver } from './resolvers/UserResolver';
     ProviderLoader,
     QuestionLoader,
     QuestionResolver,
+    RelationshipsLoader,
     ReceiptLineItemsLoader,
     ReceiptResolver,
     RelationshipResolver,
@@ -254,6 +258,8 @@ import { UserResolver } from './resolvers/UserResolver';
     SummaryResolver,
     TagAssignmentCountLoader,
     TagLoader,
+    TagTaxonomyLoader,
+    TaskChildrenLoader,
     UnfurlLoader,
     TagResolver,
     ThreadLoader,

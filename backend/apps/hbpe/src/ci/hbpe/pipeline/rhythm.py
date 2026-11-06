@@ -42,11 +42,11 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Callable, Sequence
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ci.hbpe.buckets import BUCKETS_PER_DAY
 from ci.hbpe.pipeline.baselines import _as_date
 from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES
+from ci.sidecar.timezone import zone_of
 
 _L0_SET = frozenset(L0_CLASSES)
 
@@ -102,10 +102,8 @@ def _utc_offset_minutes(tz: str | None, on: datetime.date | None) -> int:
     """
     if not tz:
         return 0
-    try:
-        zone = ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError):
-        return 0
+    # An unknown zone is UTC, whose offset is the 0 this used to answer.
+    zone = zone_of(tz)
     when = datetime.datetime.combine(
         on or datetime.date.today(), datetime.time(12, 0), tzinfo=zone
     )

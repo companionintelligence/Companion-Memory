@@ -83,14 +83,15 @@ describe('AccountPurgeCron', () => {
     });
 
     const purgeDueAccounts = jest.fn().mockReturnValue(inFlight);
-    const { cron, logger } = build(purgeDueAccounts);
+    const { cron } = build(purgeDueAccounts);
 
     const first = cron.purgeDueAccounts();
 
     await cron.purgeDueAccounts();
 
+    // The schedule's `exclusive` guard turned the second tick away (and logged
+    // it through the decorator's own logger).
     expect(purgeDueAccounts).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('previous run still in progress'));
 
     release();
     await first;
@@ -102,11 +103,10 @@ describe('AccountPurgeCron', () => {
       .mockRejectedValueOnce(new Error('database went away'))
       .mockResolvedValueOnce(emptySummary);
 
-    const { cron, logger } = build(purgeDueAccounts);
+    const { cron } = build(purgeDueAccounts);
 
+    // The decorator logs the failure and releases the guard.
     await cron.purgeDueAccounts();
-
-    expect(logger.error).toHaveBeenCalled();
 
     await cron.purgeDueAccounts();
 

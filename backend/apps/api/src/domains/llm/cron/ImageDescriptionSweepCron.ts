@@ -2,7 +2,7 @@ import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
 import { EventService } from '@ci/domains/events';
 import { FileService, ImageDescriptionBackfillRequestEvent } from '@ci/domains/files';
 
@@ -74,12 +74,11 @@ export class ImageDescriptionSweepCron implements OnApplicationBootstrap {
       return;
     }
 
-    let requested = 0;
-
-    for (const userId of candidateUserIds) {
-      try {
+    const { enqueued: requested } = await fanOutPerUser(
+      candidateUserIds,
+      async (userId) => {
         if (!(await this.imageDescriptionPreference.isEnabled(userId))) {
-          continue;
+          return false;
         }
 
         // Same singleton key `setEnabled`'s own false→true transition sends
@@ -90,14 +89,11 @@ export class ImageDescriptionSweepCron implements OnApplicationBootstrap {
           { userId },
           { singletonKey: `image-description-backfill:${userId}` },
         );
-        requested += 1;
-      } catch (err) {
-        this.logger.error(
-          `Failed to sweep image-description backfill for user ${userId}`,
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
+
+        return true;
+      },
+      { logger: this.logger, label: 'image-description backfill' },
+    );
 
     this.logger.log('Image-description sweep complete', {
       usersWithUndescribedImages: candidateUserIds.length,

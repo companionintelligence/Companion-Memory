@@ -23,6 +23,7 @@ resolution-markers = [
 members = [
     "ci-hbpe",
     "ci-server",
+    "ci-sidecar-core",
     "ci-summary",
     "ci-telemetry",
 ]
@@ -593,6 +594,7 @@ version = "0.1.0"
 source = { editable = "backend/apps/hbpe" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "ci-sidecar-core" },
     { name = "ci-telemetry" },
     { name = "fastapi" },
     { name = "huggingface-hub" },
@@ -617,6 +619,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "ci-sidecar-core", editable = "backend/packages/sidecar-core" },
     { name = "ci-telemetry", editable = "backend/packages/telemetry" },
     { name = "fastapi" },
     { name = "huggingface-hub", specifier = ">=0.22" },
@@ -663,11 +666,31 @@ dev = [
 ]
 
 [[package]]
+name = "ci-sidecar-core"
+version = "0.1.0"
+source = { editable = "backend/packages/sidecar-core" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "structlog" },
+]
+
+[[package]]
 name = "ci-summary"
 version = "0.1.0"
 source = { editable = "backend/apps/summary" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "ci-sidecar-core" },
     { name = "ci-telemetry" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -691,6 +714,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg" },
+    { name = "ci-sidecar-core", editable = "backend/packages/sidecar-core" },
     { name = "ci-telemetry", editable = "backend/packages/telemetry" },
     { name = "fastapi" },
     { name = "httpx" },

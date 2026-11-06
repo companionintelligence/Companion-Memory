@@ -23,6 +23,7 @@ import {
   keysetPaginate,
   keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
   type OwnedLink,
   refuseForeignLinks,
@@ -693,8 +694,10 @@ export class ContentService {
     context: UserServiceContext,
     args: KeysetPageArgs,
     filter: FindContentsFilter = {},
+    options: KeysetCountOptions = {},
   ): Promise<KeysetPage<Content>> {
     const page = await keysetPaginate(this.contentRepository, args, {
+      ...options,
       alias: 'content',
       timeProp: 'createdAt',
       userId: context.userId,

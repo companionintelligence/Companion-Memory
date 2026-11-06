@@ -1,5 +1,6 @@
 import { BadRequestException, UseGuards } from '@nestjs/common';
-import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, Float, ID, Info, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -13,6 +14,7 @@ import { type EventMedia, EventMediaLoader } from '../loaders/EventMediaLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { ContentConnection } from '../types/ContentConnection';
 import { ContentEdge } from '../types/ContentEdge';
 import { ContentType } from '../types/ContentType';
@@ -24,6 +26,7 @@ import { EventConnection } from '../types/EventConnection';
 import { EventEdge } from '../types/EventEdge';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
 import { PersonEdge } from '../types/PersonEdge';
@@ -268,7 +271,8 @@ export class EventResolver {
   async events(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<EventConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<EventConnection>> {
     const serviceContext = toServiceContext(context);
 
     // Keyset, not slice-in-memory: this used to `findAll` the user's entire
@@ -283,6 +287,7 @@ export class EventResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: EventEdge[] = entities.map((entity) => {
@@ -302,7 +307,7 @@ export class EventResolver {
         startCursor: edges.length > 0 ? edges[0].cursor : null,
         endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
       },
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -329,7 +334,8 @@ export class EventResolver {
   async deletedEvents(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<EventConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<EventConnection>> {
     const serviceContext = toServiceContext(context);
 
     const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findDeletedPage(
@@ -340,6 +346,7 @@ export class EventResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: EventEdge[] = entities.map((entity) => {
@@ -359,7 +366,7 @@ export class EventResolver {
         startCursor: edges.length > 0 ? edges[0].cursor : null,
         endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
       },
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 

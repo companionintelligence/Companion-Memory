@@ -10,6 +10,7 @@ import { EventEntity, CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
+import { completeScan } from '../engine/scanCompletion';
 import { ACTIVE_TASK_STATUSES, isClosedTaskStatus } from '../taskStatus';
 
 import { TaskService } from './TaskService';
@@ -475,38 +476,39 @@ export class TodoProcessService {
     title: string,
     memoryBlock: string,
   ): Promise<z.infer<typeof suggestionSchema> | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROCESS_TIMEOUT_MS);
+    const prompt = [
+      `Task: ${title}`,
+      'Given the memory below, decide one action: none | append | revise | reparent | complete.',
+      'Return JSON: {"action":"...","confidence":0-1,"notes":"...","title":"...","parentTitle":"...","rationale":"..."}',
+      '',
+      memoryBlock.slice(0, 4000),
+    ].join('\n');
+
+    const content = await completeScan(this.ollamaService, context, {
+      prompt,
+      schema: SUGGESTION_JSON_SCHEMA,
+      items: 1,
+      label: 'Todo process',
+      logger: this.logger,
+      timeoutMs: PROCESS_TIMEOUT_MS,
+      maxOutputTokens: PROCESS_MAX_OUTPUT_TOKENS,
+      keepAlive: PROCESS_KEEP_ALIVE,
+    });
+
+    if (content == null) {
+      return null;
+    }
 
     try {
-      const prompt = [
-        `Task: ${title}`,
-        'Given the memory below, decide one action: none | append | revise | reparent | complete.',
-        'Return JSON: {"action":"...","confidence":0-1,"notes":"...","title":"...","parentTitle":"...","rationale":"..."}',
-        '',
-        memoryBlock.slice(0, 4000),
-      ].join('\n');
-
-      const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        tier: 'utility',
-        enableTools: false,
-        format: SUGGESTION_JSON_SCHEMA,
-        signal: controller.signal,
-        maxOutputTokens: PROCESS_MAX_OUTPUT_TOKENS,
-        keepAlive: PROCESS_KEEP_ALIVE,
-      });
-
-      const parsed = suggestionSchema.safeParse(JSON.parse(response.message.content || '{}'));
+      const parsed = suggestionSchema.safeParse(JSON.parse(content));
 
       return parsed.success ? parsed.data : null;
     } catch (err) {
-      this.logger.warn('Todo process LLM failed', {
+      this.logger.warn('Todo process LLM returned unreadable JSON', {
         error: err instanceof Error ? err.message : String(err),
       });
 
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   }
 }

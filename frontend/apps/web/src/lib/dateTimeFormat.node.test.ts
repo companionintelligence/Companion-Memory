@@ -195,3 +195,27 @@ describe('isTimeFormat', () => {
     }
   });
 });
+
+describe('tryDateTime — the same text, or null for what cannot be read', () => {
+  it('prints a readable instant exactly as dateTime does', () => {
+    const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+    const options = { dateStyle: 'medium', timeStyle: 'short' } as const;
+
+    expect(fmt.tryDateTime('2026-03-01T13:05:00Z', options)).toBe(
+      fmt.dateTime('2026-03-01T13:05:00Z', options),
+    );
+    expect(fmt.tryDateTime(new Date('2026-03-01T13:05:00Z'), options)).toBe(
+      fmt.dateTime('2026-03-01T13:05:00Z', options),
+    );
+  });
+
+  it('is null for nothing and for a value new Date cannot parse, instead of "Invalid Date"', () => {
+    const fmt = createDateTimeFormatter({ timeFormat: 'auto' });
+
+    expect(fmt.tryDateTime(null)).toBeNull();
+    expect(fmt.tryDateTime(undefined)).toBeNull();
+    expect(fmt.tryDateTime('')).toBeNull();
+    expect(fmt.tryDateTime('not a date')).toBeNull();
+    expect(fmt.dateTime('not a date')).toBe('Invalid Date');
+  });
+});

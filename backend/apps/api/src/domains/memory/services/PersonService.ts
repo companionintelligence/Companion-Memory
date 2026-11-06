@@ -1,10 +1,16 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+} from '@ci/common/persistence';
 import { chunkedConflictInsert, keysetSeek } from '@ci/common/persistence';
 import { USER_EDITED_KEYS, userEditedKeys, userEditedListSql } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
@@ -130,6 +136,19 @@ const PERSON_NAME_LOOKS_IMPLAUSIBLE_SQL = `CASE
   WHEN person.name ~* '^\\s*(missed|placed|received|recorded|voicemail)\\y' THEN 1
   ELSE 0
 END`;
+
+/**
+ * The people list's order: plausible names first, then by trimmed name with the
+ * nameless last, newest first among equals, and the id so the order is total
+ * (a page boundary inside a run of equal names must fall in one place). What
+ * `findAll` sorts by and what `findPage` seeks on.
+ */
+const PERSON_LIST_ORDER: readonly SeekKey[] = [
+  { expr: PERSON_NAME_LOOKS_IMPLAUSIBLE_SQL, order: 'ASC' },
+  { expr: `NULLIF(btrim(COALESCE(person.name, '')), '')`, order: 'ASC', nulls: 'LAST', nullable: true },
+  { expr: 'person.created_at', order: 'DESC', read: 'CAST(person.created_at AS text)' },
+  { expr: 'person.id', order: 'DESC' },
+];
 
 /**
  * A jsonb value with the form's empties (JSON null, `""`, `[]`) read as SQL
@@ -444,35 +463,77 @@ export class PersonService extends EntityService<PersonEntity, Person> {
    * person-specific concerns.
    */
   async findAll(context: ServiceContext, options: { query?: string } = {}): Promise<Person[]> {
-    // The STI child repository scopes the query to `entity_type = 'Person'`.
-    let qb = this.repository
-      .createQueryBuilder('person')
-      .where('person.is_active IS DISTINCT FROM FALSE')
-      .andWhere('person.merged_into_entity_id IS NULL');
+    let qb = this.listScope(this.repository.createQueryBuilder('person'), context, options.query);
+
+    PERSON_LIST_ORDER.forEach((key, i) => {
+      qb =
+        i === 0
+          ? qb.orderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined)
+          : qb.addOrderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined);
+    });
+
+    const entities = await qb.getMany();
+
+    return entities.map((entity) => PersonEntity.toEgressType(entity));
+  }
+
+  /**
+   * One page of {@link findAll}'s list, in its order, read with a `LIMIT` and a
+   * seek past the cursor row instead of every person the user has. The search
+   * box's typeahead asks for eight rows on every keystroke; the people page
+   * scrolls through pages of fifty. Both used to hydrate the whole table —
+   * `properties` JSONB and all — and throw away all but the page.
+   *
+   * `totalCount` is counted only when `countTotal` is set (the typeahead never
+   * selects it). The cursor is the row id; one that matches no row yields an
+   * empty page, as `keysetPaginate` does.
+   */
+  async findPage(
+    context: ServiceContext,
+    args: KeysetPageArgs,
+    options: { query?: string; countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Person>> {
+    const page = await keysetPaginateBy(this.repository, args, {
+      alias: 'person',
+      keys: PERSON_LIST_ORDER,
+      idExpr: 'person.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context, options.query),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => PersonEntity.toEgressType(entity)) };
+  }
+
+  /**
+   * The rows {@link findAll} and {@link findPage} list: live, unmerged people of
+   * the caller (every owner's for the system user), optionally those whose
+   * display name or structured first/last name contains `query`. The STI child
+   * repository scopes the builder to `entity_type = 'Person'` already.
+   */
+  private listScope(
+    qb: SelectQueryBuilder<PersonEntity>,
+    context: ServiceContext,
+    query: string | undefined,
+  ): SelectQueryBuilder<PersonEntity> {
+    qb = qb.where('person.is_active IS DISTINCT FROM FALSE').andWhere('person.merged_into_entity_id IS NULL');
 
     if (context.userId !== SYSTEM_USER) {
       qb = qb.andWhere('person.owner_user_id = :userId', { userId: context.userId });
     }
 
-    const query = options.query?.trim();
-    if (query) {
+    const needle = query?.trim();
+    if (needle) {
       qb = qb.andWhere(
         new Brackets((outer) => {
           outer
-            .where('person.name ILIKE :q', { q: `%${query}%` })
-            .orWhere(`person.properties->>'first_name' ILIKE :q`, { q: `%${query}%` })
-            .orWhere(`person.properties->>'last_name' ILIKE :q`, { q: `%${query}%` });
+            .where('person.name ILIKE :q', { q: `%${needle}%` })
+            .orWhere(`person.properties->>'first_name' ILIKE :q`, { q: `%${needle}%` })
+            .orWhere(`person.properties->>'last_name' ILIKE :q`, { q: `%${needle}%` });
         }),
       );
     }
 
-    const entities = await qb
-      .orderBy(PERSON_NAME_LOOKS_IMPLAUSIBLE_SQL, 'ASC')
-      .addOrderBy(`NULLIF(btrim(COALESCE(person.name, '')), '')`, 'ASC', 'NULLS LAST')
-      .addOrderBy('person.created_at', 'DESC')
-      .getMany();
-
-    return entities.map((entity) => PersonEntity.toEgressType(entity));
+    return qb;
   }
 
   /**

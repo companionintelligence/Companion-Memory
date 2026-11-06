@@ -7,6 +7,8 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
+import { stableJson } from '@ci/common/stableJson';
 import {
   type GraphEntityInputDto,
   type GraphIngestResult,
@@ -42,42 +44,24 @@ export interface GraphEnrichmentProposalPage {
   endCursor: string | null;
 }
 
-/**
- * JSON with object keys in sorted order, so the same batch hashes identically
- * regardless of the source order its fields were built in. Mirrors
- * GraphIngestService's own `stableJson`.
- */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-
-      return sorted;
-    }
-
-    return v;
-  });
-}
-
 function hashBatch(batch: GraphEnrichmentProposalBatch): string {
   return createHash('sha256').update(stableJson(batch)).digest('hex');
 }
 
 export function encodeGraphEnrichmentProposalCursor(proposal: { createdAt: Date; id: string }): string {
-  return Buffer.from(`${proposal.createdAt.toISOString()}::${proposal.id}`).toString('base64');
+  return encodeKeysetCursor([proposal.createdAt.toISOString(), proposal.id], { separator: '::' });
 }
 
 function decodeCursor(cursor: string): { createdAt: string; id: string } | null {
-  try {
-    const [createdAt, id] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
+  const parts = decodeKeysetCursor(cursor, 2, { separator: '::' });
 
-    return createdAt && id ? { createdAt, id } : null;
-  } catch {
+  if (parts == null) {
     return null;
   }
+
+  const [createdAt, id] = parts;
+
+  return createdAt && id ? { createdAt, id } : null;
 }
 
 /**

@@ -51,18 +51,15 @@ function toTitleCase(value: string): string {
 }
 
 function formatDate(value: string, fmt: DateTimeFormatter): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return fmt.dateTime(date, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return (
+    fmt.tryDateTime(value, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }) ?? value
+  );
 }
 
 function formatDiffValue(value: unknown): string {
