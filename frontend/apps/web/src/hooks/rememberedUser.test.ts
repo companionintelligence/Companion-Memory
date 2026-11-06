@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { forgetUser, isApplianceOutage, recallUser, rememberUser } from './rememberedUser';
+import { graphQLFailure, httpFailure, transportFailure } from '@/test/apolloErrors';
+
+import {
+  forgetUser,
+  isApplianceOutage,
+  isProfileUnanswered,
+  recallUser,
+  rememberUser,
+} from './rememberedUser';
 
 afterEach(() => forgetUser());
 
@@ -29,36 +37,27 @@ describe('rememberedUser', () => {
   // The dev proxy's 500 while the API is down, a dead origin and a gateway timeout are
   // outages; the server rejecting the key, or answering with a GraphQL error, is not.
   it('tells an appliance outage from a rejected credential', () => {
-    expect(
-      isApplianceOutage({
-        networkError: Object.assign(new Error('500'), { statusCode: 500 }),
-        graphQLErrors: [],
-      }),
-    ).toBe(true);
-    expect(isApplianceOutage({ networkError: new TypeError('Failed to fetch'), graphQLErrors: [] })).toBe(
-      true,
-    );
-    expect(
-      isApplianceOutage({
-        networkError: Object.assign(new Error('504'), { statusCode: 504 }),
-        graphQLErrors: [],
-      }),
-    ).toBe(true);
-    expect(
-      isApplianceOutage({
-        networkError: Object.assign(new Error('401'), { statusCode: 401 }),
-        graphQLErrors: [],
-      }),
-    ).toBe(false);
-    expect(
-      isApplianceOutage({
-        networkError: Object.assign(new Error('403'), { statusCode: 403 }),
-        graphQLErrors: [],
-      }),
-    ).toBe(false);
-    expect(
-      isApplianceOutage({ networkError: null, graphQLErrors: [{ message: 'Unauthenticated' }] as never }),
-    ).toBe(false);
+    expect(isApplianceOutage(httpFailure(500))).toBe(true);
+    expect(isApplianceOutage(httpFailure(504))).toBe(true);
+    expect(isApplianceOutage(transportFailure())).toBe(true);
+    expect(isApplianceOutage(httpFailure(401))).toBe(false);
+    expect(isApplianceOutage(httpFailure(403))).toBe(false);
+    expect(isApplianceOutage(graphQLFailure([{ message: 'Unauthenticated' }]))).toBe(false);
     expect(isApplianceOutage(undefined)).toBe(false);
+  });
+
+  it('counts a GraphQL error as an unanswered profile only when it is not about the credential', () => {
+    expect(isProfileUnanswered(httpFailure(500))).toBe(true);
+    expect(isProfileUnanswered(httpFailure(401))).toBe(false);
+    expect(
+      isProfileUnanswered(
+        graphQLFailure([{ message: 'database down', extensions: { code: 'INTERNAL_SERVER_ERROR' } }]),
+      ),
+    ).toBe(true);
+    expect(
+      isProfileUnanswered(
+        graphQLFailure([{ message: 'not signed in', extensions: { code: 'UNAUTHENTICATED' } }]),
+      ),
+    ).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { Field, Float, Int, InputType } from '@nestjs/graphql';
+
 import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /**

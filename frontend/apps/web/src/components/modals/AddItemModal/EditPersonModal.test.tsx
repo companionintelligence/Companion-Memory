@@ -79,8 +79,10 @@ function updateSuccessMock(
   person: ReturnType<typeof personRecord>,
 ): MockedResponse {
   return {
-    request: { query: UPDATE_PERSON },
-    variableMatcher: (variables: { input: unknown }) => matchInput(variables.input),
+    request: {
+      query: UPDATE_PERSON,
+      variables: (variables: { input: unknown }) => matchInput(variables.input),
+    },
     result: { data: { updatePerson: { success: true, person } } },
   } as unknown as MockedResponse;
 }
@@ -158,8 +160,7 @@ describe('EditPersonModal — saving', () => {
   it('shows a real error and stays open when the resolver reports a rejected write', async () => {
     const { onSaved, onClose } = await renderModal(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         result: { data: { updatePerson: { success: false, person: null } } },
       } as unknown as MockedResponse,
     ]);
@@ -174,8 +175,7 @@ describe('EditPersonModal — saving', () => {
   it('shows a real error when the request itself fails', async () => {
     const { onSaved, onClose } = await renderModal(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);
@@ -208,9 +208,11 @@ describe('EditPersonModal — a number the server will not store', () => {
   /** What `updatePerson` answers with: a BAD_USER_INPUT naming the value, as `formatError` passes it on. */
   function refusedMock(): MockedResponse {
     return {
-      request: { query: UPDATE_PERSON },
-      variableMatcher: (variables: { input: Input }) =>
-        (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+      request: {
+        query: UPDATE_PERSON,
+        variables: (variables: { input: Input }) =>
+          (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+      },
       result: {
         errors: [
           new GraphQLError(MESSAGE, {

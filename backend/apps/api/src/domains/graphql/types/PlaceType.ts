@@ -1,6 +1,6 @@
 import { Field, ObjectType, ID } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type Place } from '@ci/domains/memory';
 
 import { EntityTagType } from './EntityTagType';

@@ -25,17 +25,23 @@ function makeService(existing: PositionEntity[] = []) {
 
       return insertBuilder;
     },
-    onConflict: () => insertBuilder,
     returning: () => insertBuilder,
-    // `ON CONFLICT ("time", "user_id") DO NOTHING RETURNING id`: a row for an
-    // instant already stored is skipped and does not come back.
-    execute: async () => {
-      const taken = new Set(stored().map((row) => row.time.getTime()));
-      const rows = inserts[inserts.length - 1].filter((row) => !taken.has(row.time.getTime()));
+    getQuery: () => 'INSERT INTO "positions" RETURNING "id"',
+    getParameters: () => ({}),
+    connection: {
+      driver: { escapeQueryWithParameters: (sql: string, params: unknown) => [sql, params] },
+    },
+    queryRunner: {
+      // `ON CONFLICT ("time", "user_id") DO NOTHING RETURNING id`: a row for an
+      // instant already stored is skipped and does not come back.
+      query: async () => {
+        const taken = new Set(stored().map((row) => row.time.getTime()));
+        const rows = inserts[inserts.length - 1].filter((row) => !taken.has(row.time.getTime()));
 
-      persisted.push(...rows);
+        persisted.push(...rows);
 
-      return { raw: rows.map((row) => ({ id: row.id })) };
+        return rows.map((row) => ({ id: row.id }));
+      },
     },
   };
   const repository = {

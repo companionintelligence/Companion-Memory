@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { graphQLFailure, transportFailure } from '@/test/apolloErrors';
+
 import { answersFromDevice } from './deviceFallback';
 
 describe('answersFromDevice', () => {
@@ -26,7 +28,7 @@ describe('answersFromDevice', () => {
       answersFromDevice({
         mode: 'connected',
         isResolved: true,
-        error: { networkError: new TypeError('Failed to fetch') },
+        error: transportFailure(),
         hasDatabase: true,
       }),
     ).toBe(true);
@@ -34,7 +36,7 @@ describe('answersFromDevice', () => {
       answersFromDevice({
         mode: 'connected',
         isResolved: true,
-        error: { graphQLErrors: [{ message: 'nope' }], networkError: null },
+        error: graphQLFailure([{ message: 'nope' }]),
         hasDatabase: true,
       }),
     ).toBe(false);

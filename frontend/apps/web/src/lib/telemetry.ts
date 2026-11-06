@@ -5,7 +5,8 @@
  * nothing initialises and the bundle makes no request to Sentry. `initTelemetry`
  * is safe to call more than once and safe to call when reporting is disabled.
  *
- * Nothing user-identifying is sent — `sendDefaultPii` is off, and `beforeSend`
+ * Nothing user-identifying is sent — `dataCollection` turns off user info, cookies
+ * and bodies, and `beforeSend`
  * strips the URL query string and any hash, both of which routinely carry the
  * user's own search terms over their memories.
  */
@@ -123,7 +124,7 @@ const MAX_STRING_LENGTH = 8000;
  * screen, routinely a tailnet hostname or a LAN IP, and both identify their
  * machine and their network. Turning reporting on for native without this would
  * ship that address to Sentry inside every fetch breadcrumb and every "Failed to
- * fetch" message; `sendDefaultPii: false` does nothing to prevent it, because
+ * fetch" message; `dataCollection` does nothing to prevent it, because
  * the SDK has no idea the string is sensitive.
  *
  * Split/join rather than a regex: the origin is user input, so a regex would
@@ -377,9 +378,20 @@ export async function initTelemetry(): Promise<void> {
     tracesSampleRate: Number(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? 0.1),
     replaysSessionSampleRate: Number(import.meta.env.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE ?? 0.1),
     replaysOnErrorSampleRate: Number(import.meta.env.VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE ?? 1),
-    enableMetrics: import.meta.env.VITE_SENTRY_ENABLE_METRICS !== 'false',
-    enableLogs: import.meta.env.VITE_SENTRY_ENABLE_LOGS !== 'false',
-    sendDefaultPii: false,
+    // Sentry 11 has no enableMetrics switch, so the env flag drops metrics before they are sent.
+    beforeSendMetric: (metric) => (import.meta.env.VITE_SENTRY_ENABLE_METRICS !== 'false' ? metric : null),
+    // Likewise for logs: the env flag drops them before they are sent.
+    beforeSendLog: (log) => (import.meta.env.VITE_SENTRY_ENABLE_LOGS !== 'false' ? log : null),
+    // Sentry 11 replaced sendDefaultPii with dataCollection, and its defaults collect user
+    // info, cookies, request bodies and query strings. Each is turned off explicitly.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      graphQL: { document: false, variables: false },
+    },
     // Read the origin per event rather than capturing it once here. Today
     // Today `/device-connect` (or Advanced `/server`) is routed when no origin is
     // set yet (App.tsx), so in

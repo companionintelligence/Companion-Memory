@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react';
 
-import { ApolloClient } from '@apollo/client';
 import { Sheet } from '@ci/shadcn';
 import { act, fireEvent, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GET_TAG_SUGGESTIONS } from '@/components/TagInput';
 import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
@@ -26,6 +25,25 @@ vi.mock('@/components/EntityRelationshipCards/EntityRelationshipCards', async (i
     await importOriginal<typeof import('@/components/EntityRelationshipCards/EntityRelationshipCards')>();
 
   return { ...actual, EntityRelationshipCards: () => null };
+});
+
+const apollo = vi.hoisted(() => ({ query: undefined as ((...args: unknown[]) => unknown) | undefined }));
+
+vi.mock('@apollo/client/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@apollo/client/react')>();
+
+  return {
+    ...actual,
+    useApolloClient: () => {
+      const client = actual.useApolloClient();
+
+      return Object.create(client, {
+        query: {
+          value: (...a: Parameters<typeof client.query>) => (apollo.query ?? client.query.bind(client))(...a),
+        },
+      }) as typeof client;
+    },
+  };
 });
 
 const host = { setActiveEntity: vi.fn(), refetch: vi.fn() };
@@ -270,14 +288,15 @@ describe('EntityDetailScaffold media refresh', () => {
   const A = '019fd7c0-641c-76dd-8ed7-a5053faff6f1';
   const B = '019fd7c0-641c-76dd-8ed7-a5053faff6f2';
 
-  let query: MockInstance;
+  const query = vi.fn();
 
   beforeEach(() => {
-    query = vi.spyOn(ApolloClient.prototype, 'query');
+    query.mockReset();
+    apollo.query = query;
   });
 
   afterEach(() => {
-    query.mockRestore();
+    apollo.query = undefined;
   });
 
   /**

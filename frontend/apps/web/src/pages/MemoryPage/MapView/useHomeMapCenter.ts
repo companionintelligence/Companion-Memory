@@ -32,6 +32,10 @@ export interface HomePlaceNode {
   longitude?: number | null;
 }
 
+interface HomePlaceData {
+  places: { edges: Array<{ node: HomePlaceNode }> };
+}
+
 function normalizeName(value: string): string {
   return value.trim().toLowerCase().replace(/[.,]/g, '');
 }
@@ -139,7 +143,7 @@ export function useHomeMapCenter(enabled = true): {
           return;
         }
 
-        const { data } = await client.query({
+        const { data } = await client.query<HomePlaceData>({
           query: HOME_PLACE_QUERY,
           variables: { query: city, first: 20 },
         });

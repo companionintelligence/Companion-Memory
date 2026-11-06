@@ -35,8 +35,8 @@ const h = vi.hoisted(() => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
 
-vi.mock('@apollo/client', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@apollo/client/react')>()),
   useQuery: () => ({ data: { connections: { totalCount: h.connections } } }),
 }));
 

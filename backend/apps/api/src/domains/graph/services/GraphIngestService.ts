@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, type WhereExpressionBuilder } from 'typeorm';
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
@@ -7,6 +6,7 @@ import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { NodeEntity } from '../entities/NodeEntity';

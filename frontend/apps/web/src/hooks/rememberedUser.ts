@@ -13,7 +13,7 @@
  * Kept per origin, so a phone re-paired to another box never answers with the previous
  * box's profile, and forgotten with the device key on sign-out.
  */
-import type { ApolloError } from '@apollo/client';
+import { graphQLErrorsOf, httpStatusOf, isNetworkFailure } from '@/api/apolloErrors';
 
 const STORAGE_KEY = 'ci.rememberedUser';
 
@@ -72,14 +72,12 @@ export function forgetUser(): void {
  * server rejecting the key, and so is any GraphQL-level error, which only an answering
  * server produces.
  */
-export function isApplianceOutage(
-  error: Pick<ApolloError, 'networkError' | 'graphQLErrors'> | undefined,
-): boolean {
-  if (!error?.networkError) {
+export function isApplianceOutage(error: unknown): boolean {
+  if (!isNetworkFailure(error)) {
     return false;
   }
 
-  const status = (error.networkError as { statusCode?: unknown }).statusCode;
+  const status = httpStatusOf(error);
 
   return status !== 401 && status !== 403;
 }
@@ -91,18 +89,16 @@ export function isApplianceOutage(
  * error that is not about the credential (the database is down, so `me` fails with
  * INTERNAL_SERVER_ERROR) has not said anyone is signed out either.
  */
-export function isProfileUnanswered(
-  error: Pick<ApolloError, 'networkError' | 'graphQLErrors'> | undefined,
-): boolean {
+export function isProfileUnanswered(error: unknown): boolean {
   if (!error) {
     return false;
   }
 
-  if (error.networkError) {
+  if (isNetworkFailure(error)) {
     return isApplianceOutage(error);
   }
 
-  const codes = (error.graphQLErrors ?? []).map((graphQLError) => graphQLError.extensions?.code);
+  const codes = graphQLErrorsOf(error).map((graphQLError) => graphQLError.extensions?.code);
 
   return codes.length > 0 && !codes.some((code) => code === 'UNAUTHENTICATED' || code === 'FORBIDDEN');
 }

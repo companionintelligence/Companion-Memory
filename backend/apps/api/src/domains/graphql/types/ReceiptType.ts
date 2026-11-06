@@ -1,6 +1,6 @@
 import { Field, Float, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import type { Receipt, ReceiptChannel, ReceiptExtractionState } from '@ci/domains/memory';
 
 import { EntityTagType } from './EntityTagType';

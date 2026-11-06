@@ -405,7 +405,7 @@ export class ImportRunService {
     }
 
     const result = await this.dataSource.transaction(async (manager) => {
-      let defaultLabel: string | null = null;
+      let defaultLabel: string | null;
 
       if (input.dropId != null) {
         const uploads = await manager.query<Array<{ original_filename: string | null; status: string }>>(

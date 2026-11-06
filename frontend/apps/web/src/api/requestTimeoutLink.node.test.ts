@@ -2,6 +2,8 @@ import { ApolloLink, Observable, execute, type FetchResult } from '@apollo/clien
 import { parse } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { executeContext } from '@/test/apolloLink';
+
 import { RequestTimeoutError, createRequestTimeoutLink } from './requestTimeoutLink';
 
 // parse(), not gql: web codegen reads every gql document under src/.
@@ -34,7 +36,7 @@ function hangingTransport() {
 
 function run(link: ApolloLink, context?: Record<string, unknown>) {
   const settled = { result: undefined as FetchResult | undefined, error: undefined as unknown };
-  const subscription = execute(link, { query: QUERY, context }).subscribe({
+  const subscription = execute(link, { query: QUERY, context }, executeContext()).subscribe({
     next: (result) => {
       settled.result = result;
     },

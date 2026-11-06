@@ -12,8 +12,10 @@ export default {
 
   transformIgnorePatterns: [
     // Ignore .yarn/cache packages EXCEPT ESM-only ones that require transformation
-    // (jose arrives via PortalAuthModule, so anything booting the whole App needs it)
-    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose)-npm-)',
+    // (jose arrives via PortalAuthModule, so anything booting the whole App needs it;
+    // uuid 14, serialize-error 13, non-error, and htmlparser2 12 with its domhandler,
+    // domutils, domelementtype and entities dependencies, are ESM-only too)
+    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose|uuid|serialize-error|non-error|htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities)-npm-)',
     '\\.pnp\\.cjs$',
   ],
 

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { gql as apolloGql } from '@apollo/client';
 import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, cn } from '@ci/shadcn';
+import { parse } from 'graphql';
 import { Link } from 'react-router-dom';
 
 import { useNodeGraphService } from '@/api/useNodeGraphService';
@@ -122,7 +122,8 @@ function buildBatchNodeTagsQuery(count: number) {
     (_, i) => `n${i}: node(id: $id${i}) { __typename ... on Taggable { tags { label } } }`,
   ).join('\n    ');
 
-  return apolloGql(`
+  // parse(), not gql: the document is assembled at run time, which codegen cannot read.
+  return parse(`
   query GetNodeTagsForRelationshipCards(${variableDefs}) {
     ${selections}
   }

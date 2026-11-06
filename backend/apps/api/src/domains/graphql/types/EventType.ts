@@ -1,6 +1,6 @@
 import { Field, Float, ID, Int, ObjectType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type Event } from '@ci/domains/memory';
 
 import { ContentConnection } from './ContentConnection';

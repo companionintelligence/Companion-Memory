@@ -35,8 +35,37 @@ const GET_FORECAST_EXTRAS = gql`
   }
 `;
 
+interface ForecastExtrasData {
+  placeForecast: Array<{
+    lat: number;
+    lng: number;
+    visits: number;
+    share: number;
+    label: string | null;
+    probability: number;
+    backoffLevel: string | null;
+  }>;
+  predictionCalibration: {
+    basis: string;
+    latest: {
+      l0Top1Acc: number | null;
+      ece: number | null;
+      driftFlag: boolean;
+      modelVersion: string | null;
+    } | null;
+  } | null;
+  forecastHistory: Array<{
+    date: string;
+    buckets: Array<{
+      bucketIndex: number;
+      predictedL0: Array<{ label: string; probability: number }>;
+      actualL0: string | null;
+    }>;
+  }>;
+}
+
 export function useForecastExtras() {
-  const { data, loading } = useQuery(GET_FORECAST_EXTRAS, { errorPolicy: 'all' });
+  const { data, loading } = useQuery<ForecastExtrasData>(GET_FORECAST_EXTRAS, { errorPolicy: 'all' });
 
   return {
     loading,

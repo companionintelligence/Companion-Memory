@@ -293,7 +293,7 @@ describe('SmartRotationListener', () => {
       expect(order).toMatch(/q\.question_id ASC LIMIT 1/);
     });
 
-    it('reads the attempt history from both the live and the archived pg-boss job rows', async () => {
+    it('reads the attempt history from the pg-boss job rows, which keep completed jobs', async () => {
       const eventService = { send: jest.fn() } as unknown as EventService;
       const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
 
@@ -304,10 +304,9 @@ describe('SmartRotationListener', () => {
       const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
       const flattened = sql.replace(/\s+/g, ' ');
 
-      // Live rows alone would forget an attempt the moment its job completed,
-      // which is most of them.
+      // pg-boss 12 has no archive table: a completed job stays in pgboss.job.
       expect(flattened).toContain('FROM pgboss.job');
-      expect(flattened).toContain('FROM pgboss.archive');
+      expect(flattened).not.toContain('pgboss.archive');
       // Bound, not interpolated: the queue name is what prunes the partition
       // and the event name is what identifies an inference dispatch.
       // The owner is bound twice — Postgres deduces one type per parameter and

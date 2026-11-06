@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { type HourlyActivityOptions, touchedHourlyBucketsSql } from '@ci/common/persistence';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';

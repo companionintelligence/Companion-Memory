@@ -97,7 +97,7 @@ export function PlacePage() {
     }
   };
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

@@ -1,6 +1,6 @@
 import { Field, Float, InputType, registerEnumType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import type { AcquisitionMethod, UnitSystem } from '@ci/domains/memory';
 
 /**

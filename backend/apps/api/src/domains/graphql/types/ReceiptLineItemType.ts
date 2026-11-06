@@ -1,6 +1,6 @@
 import { Field, Float, ID, Int, ObjectType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type ReceiptLineItem } from '@ci/domains/memory';
 
 import { GlobalUID } from './GlobalUID';

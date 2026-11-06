@@ -185,7 +185,7 @@ export function ReceiptPage() {
       : 'Receipt - Companion Memory',
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && receipt == null) {
     content = <LoadingPage />;

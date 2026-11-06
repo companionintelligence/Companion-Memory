@@ -13,7 +13,8 @@
  * native: `apiFetch` goes through CapacitorHttp there, which ignores the abort signal, so
  * the operation still fails at the deadline but the native request runs on to its own end.
  */
-import { ApolloLink, Observable, type FetchResult, type ObservableSubscription } from '@apollo/client';
+import { ApolloLink, Observable, type FetchResult } from '@apollo/client';
+import type { Subscription } from 'rxjs';
 
 /** What an operation fails with when its `timeoutMs` passes. `name` is the DOM's own name for it. */
 export class RequestTimeoutError extends Error {
@@ -32,7 +33,7 @@ export function createRequestTimeoutLink(): ApolloLink {
     }
 
     return new Observable<FetchResult>((observer) => {
-      let subscription: ObservableSubscription | null = null;
+      let subscription: Subscription | null = null;
 
       const timer = setTimeout(() => {
         subscription?.unsubscribe();

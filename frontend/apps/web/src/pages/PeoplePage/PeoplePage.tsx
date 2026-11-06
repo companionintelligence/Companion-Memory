@@ -417,7 +417,7 @@ function RemotePeoplePage() {
     [client, peopleVariables, refetchCandidates],
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && view == null) {
     content = (

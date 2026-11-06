@@ -1,5 +1,5 @@
 import { type ExecutionContext, ForbiddenException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 
 import type { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
@@ -15,7 +15,11 @@ const SID = '0198a5c2-0000-7abc-8def-0123456789ab';
 const jwtService = new JwtService({});
 
 /** Sign a session-cookie JWT with the real refresh secret. */
-function sessionJwt(payload: Record<string, unknown>, expiresIn = '7d', secret?: string): string {
+function sessionJwt(
+  payload: Record<string, unknown>,
+  expiresIn: JwtSignOptions['expiresIn'] = '7d' as JwtSignOptions['expiresIn'],
+  secret?: string,
+): string {
   return jwtService.sign(payload, {
     secret: secret ?? config.auth.jwt.refreshTokenSecret,
     expiresIn,

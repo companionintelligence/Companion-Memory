@@ -5,9 +5,9 @@ import type {
   SelectQueryBuilder,
   WhereExpressionBuilder,
 } from 'typeorm';
-import { executeInsertWithRawConflict } from './insertWithRawConflict';
 import { Brackets } from 'typeorm';
 
+import { executeInsertWithRawConflict } from './insertWithRawConflict';
 import { appendRecordSources, type RecordSourceRow } from './recordSources';
 
 /**

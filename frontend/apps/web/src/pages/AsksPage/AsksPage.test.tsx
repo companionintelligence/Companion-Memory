@@ -722,7 +722,7 @@ describe('AsksPage', () => {
       ...repeated(grantsOk([grantRow({ granteeId: 'globaluid-sam001' })])),
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
-      { request: { query: CREATE_ASK }, variableMatcher: () => true, error: new Error('send rejected') },
+      { request: { query: CREATE_ASK, variables: () => true }, error: new Error('send rejected') },
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
@@ -739,8 +739,7 @@ describe('AsksPage', () => {
 
   it('retires the green “Sent.” the moment the NEXT ask is sent, not when it lands', async () => {
     const ok = {
-      request: { query: CREATE_ASK },
-      variableMatcher: () => true,
+      request: { query: CREATE_ASK, variables: () => true },
       result: {
         data: {
           createAsk: {
@@ -772,7 +771,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       ok,
-      { request: { query: CREATE_ASK }, variableMatcher: () => true, error: new Error('send rejected') },
+      { request: { query: CREATE_ASK, variables: () => true }, error: new Error('send rejected') },
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
@@ -807,8 +806,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_ASK },
-        variableMatcher: () => true,
+        request: { query: CREATE_ASK, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 
@@ -908,8 +906,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_ASK_GRANT },
-        variableMatcher: () => true,
+        request: { query: CREATE_ASK_GRANT, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 
@@ -1509,8 +1506,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_PEER_LINK },
-        variableMatcher: () => true,
+        request: { query: CREATE_PEER_LINK, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 

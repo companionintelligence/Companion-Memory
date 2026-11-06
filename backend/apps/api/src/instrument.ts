@@ -65,6 +65,17 @@ if (telemetry.enabled && telemetry.dsn) {
     enabled: true,
     tracesSampleRate: sampleRate('SENTRY_TRACES_SAMPLE_RATE', 0.1),
     profileSessionSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
+    // Sentry 11 replaced sendDefaultPii with dataCollection, and its defaults collect
+    // user info, cookies, request bodies, query strings, GenAI content and GraphQL
+    // variables. Each is turned off explicitly so the privacy posture is unchanged.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      graphQL: { document: false, variables: false },
+    },
     // Never attach IPs, cookies or request bodies. This is deliberate and
     // differs from CI-Hub's current setting — see
     // CI-Engineering/architecture/subsystems/security-trust-and-ops.md gap #7.

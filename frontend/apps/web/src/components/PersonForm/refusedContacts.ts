@@ -1,3 +1,5 @@
+import { graphQLErrorsOf } from '@/api/apolloErrors';
+
 import type { PersonContactDraft, PersonContactKind, PersonDraft } from './personDraft';
 
 /**
@@ -41,12 +43,7 @@ function isRefusedContact(entry: unknown): entry is RefusedContact {
  * hand the result to `PersonForm`.
  */
 export function refusedContactsFrom(error: unknown): RefusedContact[] {
-  const graphQLErrors = (error as { graphQLErrors?: unknown } | null)?.graphQLErrors;
-  if (!Array.isArray(graphQLErrors)) {
-    return [];
-  }
-
-  return graphQLErrors.flatMap((graphQLError: unknown) => {
+  return graphQLErrorsOf(error).flatMap((graphQLError: unknown) => {
     const details = (graphQLError as { extensions?: { details?: { refusedContacts?: unknown } } } | null)
       ?.extensions?.details;
     const refused = details?.refusedContacts;

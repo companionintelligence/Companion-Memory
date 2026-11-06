@@ -1,7 +1,8 @@
 import { type ReactNode } from 'react';
 
 import { InMemoryCache } from '@apollo/client';
-import { MockedProvider, type MockedResponse } from '@apollo/client/testing';
+import type { MockedResponse } from '@apollo/client/testing';
+import { MockedProvider } from '@apollo/client/testing/react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { GraphQLError } from 'graphql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

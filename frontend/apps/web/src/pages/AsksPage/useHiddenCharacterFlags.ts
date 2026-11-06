@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { type ApolloError, type OperationVariables, type TypedDocumentNode } from '@apollo/client';
+import type { OperationVariables, TypedDocumentNode } from '@apollo/client';
 import { useQuery } from '@apollo/client/react';
+
+import { bodyGraphQLErrorsOf, graphQLErrorsOf } from '@/api/apolloErrors';
 
 /** One row of an `*_HIDDEN_CHARACTERS` answer. */
 export interface HiddenCharacterRow {
@@ -30,17 +32,16 @@ export interface HiddenCharacterFlags {
 
 /**
  * Whether `error` is a Memory from before `promptHiddenCharactersRemoved`
- * refusing the field. Apollo Server answers that with a 400, which Apollo
- * Client reports as a network error carrying the response's `errors`; a 200
- * with `errors` lands in `graphQLErrors`. Both are read.
+ * refusing the field. Apollo Server answers that with a 400, which carries the
+ * `errors` in its body; a 200 with `errors` is a `CombinedGraphQLErrors`. Both
+ * are read.
  */
-export function refusesHiddenCharacterField(error: ApolloError | undefined): boolean {
+export function refusesHiddenCharacterField(error: unknown): boolean {
   if (error == null) {
     return false;
   }
 
-  const fromResponse = (error.networkError as { result?: { errors?: unknown } } | null)?.result?.errors;
-  const errors: unknown[] = [...error.graphQLErrors, ...(Array.isArray(fromResponse) ? fromResponse : [])];
+  const errors: unknown[] = [...graphQLErrorsOf(error), ...bodyGraphQLErrorsOf(error)];
 
   return errors.some((entry) => {
     const message = (entry as { message?: unknown } | null)?.message;
@@ -80,7 +81,7 @@ export function useHiddenCharacterFlags<TData, TVariables extends OperationVaria
   const { ids, rowsOf, variables } = options;
   const key = ids.join(',');
   const { data, error, refetch } = useQuery(document, {
-    ...(variables ? { variables } : {}),
+    variables: variables as TVariables,
     skip: key === '',
     errorPolicy: 'all',
     fetchPolicy: 'no-cache',
@@ -108,7 +109,8 @@ export function useHiddenCharacterFlags<TData, TVariables extends OperationVaria
     askedFor.current = { key, variablesKey };
   }, [key, variablesKey, refetch]);
 
-  const rows = useMemo(() => (data ? (rowsOf(data) ?? []) : []), [data, rowsOf]);
+  // Apollo types data as partial under errorPolicy "all"; the reader is written for the full shape.
+  const rows = useMemo(() => (data ? (rowsOf(data as TData) ?? []) : []), [data, rowsOf]);
   const removed = useMemo(
     () => new Set(rows.filter((row) => row.query.promptHiddenCharactersRemoved).map((row) => row.id)),
     [rows],

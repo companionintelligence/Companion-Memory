@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, Point, In } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
@@ -8,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type OwnedLink, refuseForeignLinks } from '@ci/common/persistence';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { DeviceService } from '@ci/domains/devices';
 import { EventService } from '@ci/domains/events';
 import {

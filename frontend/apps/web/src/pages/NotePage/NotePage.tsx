@@ -22,6 +22,7 @@ import { Check, CloudOff, TriangleAlert } from '@ci/shadcn/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import TimeAgo from 'react-timeago';
 
+import { httpStatusOf } from '@/api/apolloErrors';
 import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { PageContent } from '@/components/layout';
@@ -134,7 +135,7 @@ function rememberContent(session: SaveSession, content: string | null) {
  * a gateway's 5xx, means Memory is out of reach, and the save goes again later.
  */
 function refusedStatus(error: unknown): number | null {
-  const status = (error as { networkError?: { statusCode?: unknown } } | null)?.networkError?.statusCode;
+  const status = httpStatusOf(error);
 
   return typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429
     ? status

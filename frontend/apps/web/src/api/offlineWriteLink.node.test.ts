@@ -1,11 +1,14 @@
-import { ApolloLink, Observable, execute, type FetchResult } from '@apollo/client';
+import { ApolloLink, execute, type FetchResult } from '@apollo/client';
 import {
   recordResolvedConnectionMode,
   resetRecordedConnectionMode,
 } from '@ci/common/src/utils/connectionMode';
 import { OfflineWriteError } from '@ci/common/src/utils/offlineWrites';
 import { parse, type DocumentNode } from 'graphql';
+import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { executeContext } from '@/test/apolloLink';
 
 import { createOfflineWriteLink, isGuardedMutation, isNoteOperationName } from './offlineWriteLink';
 
@@ -43,9 +46,9 @@ const SEARCH = parse(`
   }
 `);
 
-function run(link: ApolloLink, query: DocumentNode, operationName?: string): Promise<FetchResult> {
+function run(link: ApolloLink, query: DocumentNode): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
-    execute(link, { query, operationName }).subscribe({
+    execute(link, { query }, executeContext()).subscribe({
       next: resolve,
       error: reject,
       complete: () => reject(new Error('the link completed without a result')),
@@ -87,7 +90,7 @@ describe('isGuardedMutation', () => {
 
 describe('createOfflineWriteLink', () => {
   function linkWithTerminal() {
-    const terminal = vi.fn(() => Observable.of<FetchResult>({ data: { ok: true } }));
+    const terminal = vi.fn(() => of<FetchResult>({ data: { ok: true } }));
 
     return { link: createOfflineWriteLink().concat(new ApolloLink(terminal)), terminal };
   }
@@ -96,7 +99,7 @@ describe('createOfflineWriteLink', () => {
     recordResolvedConnectionMode('local');
     const { link, terminal } = linkWithTerminal();
 
-    await expect(run(link, DELETE_PERSON, 'DeleteMemoryPerson')).rejects.toBeInstanceOf(OfflineWriteError);
+    await expect(run(link, DELETE_PERSON)).rejects.toBeInstanceOf(OfflineWriteError);
     expect(terminal).not.toHaveBeenCalled();
   });
 
@@ -104,17 +107,17 @@ describe('createOfflineWriteLink', () => {
     recordResolvedConnectionMode('local');
     const { link, terminal } = linkWithTerminal();
 
-    await expect(run(link, UPDATE_NOTE, 'UpdateNoteDetail')).resolves.toEqual({ data: { ok: true } });
-    await expect(run(link, SEARCH, 'Search')).resolves.toEqual({ data: { ok: true } });
+    await expect(run(link, UPDATE_NOTE)).resolves.toEqual({ data: { ok: true } });
+    await expect(run(link, SEARCH)).resolves.toEqual({ data: { ok: true } });
     expect(terminal).toHaveBeenCalledTimes(2);
   });
 
   it('forwards every mutation while connected, and before the first probe', async () => {
     const { link, terminal } = linkWithTerminal();
 
-    await run(link, DELETE_PERSON, 'DeleteMemoryPerson');
+    await run(link, DELETE_PERSON);
     recordResolvedConnectionMode('connected');
-    await run(link, DELETE_PERSON, 'DeleteMemoryPerson');
+    await run(link, DELETE_PERSON);
     expect(terminal).toHaveBeenCalledTimes(2);
   });
 });

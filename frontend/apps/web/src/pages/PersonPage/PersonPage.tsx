@@ -122,7 +122,7 @@ export function PersonPage() {
 
   usePageTitle(person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

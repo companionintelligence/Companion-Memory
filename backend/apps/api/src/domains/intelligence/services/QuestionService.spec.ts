@@ -975,7 +975,7 @@ describe('QuestionService asks the functional questions first', () => {
     // bound parameters.
     expect(params).toStrictEqual(['llm-background', 'infer.question.answer', 6, 20]);
     expect(sql).toMatch(/pgboss\.job/);
-    expect(sql).toMatch(/pgboss\.archive/);
+    expect(sql).not.toMatch(/pgboss\.archive/);
     expect(sql).toMatch(/last_attempt_at IS NULL OR att\.last_attempt_at < NOW\(\)/);
     // Attempt recency must outrank tier: a question the model already failed
     // goes behind every never-attempted question, whatever its tier.

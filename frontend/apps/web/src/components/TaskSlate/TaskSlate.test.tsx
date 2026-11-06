@@ -65,11 +65,13 @@ const CREATE_EVENT = gql(`
 /** A create mock that records the input it was called with. */
 function createMock(capture: (input: Record<string, unknown>) => void): MockedResponse {
   return {
-    request: { query: CREATE_EVENT },
-    variableMatcher: (variables: { input: Record<string, unknown> }) => {
-      capture(variables.input);
+    request: {
+      query: CREATE_EVENT,
+      variables: (variables: { input: Record<string, unknown> }) => {
+        capture(variables.input);
 
-      return true;
+        return true;
+      },
     },
     result: {
       data: {
@@ -636,8 +638,7 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
   it('surfaces a rejected write instead of hanging on "Adding…"', async () => {
     const { onCreated } = compose([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('calendar is read only'),
       } as unknown as MockedResponse,
     ]);
@@ -663,8 +664,7 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
   it('does not re-raise the abandoned error when the composer is reopened after Cancel', async () => {
     compose([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('calendar is read only'),
       } as unknown as MockedResponse,
     ]);

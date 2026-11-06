@@ -7,8 +7,8 @@ import { usePlanBadgeCount } from './usePlanBadgeCount';
 // Same technique as usePlanTasks.test.ts: mock Apollo's hook directly so the
 // GraphQL round-trip can be skipped and the mapping into `openCount` asserted
 // against controlled data.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 

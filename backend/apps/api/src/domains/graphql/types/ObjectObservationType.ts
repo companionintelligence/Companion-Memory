@@ -1,6 +1,6 @@
 import { Field, Float, ID, ObjectType, registerEnumType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import type {
   ObjectObservation,
   ObservationLabelSource,

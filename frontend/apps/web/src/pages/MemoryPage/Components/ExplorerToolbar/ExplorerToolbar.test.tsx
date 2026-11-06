@@ -965,8 +965,7 @@ describe('Save this search with a loaded saved search', () => {
   // be in, which is why editing a saved search always made another.
   function updateMock(onSave: (variables: Record<string, unknown>) => void) {
     return {
-      request: { query: UPDATE_SAVED_SEARCH },
-      variableMatcher: () => true,
+      request: { query: UPDATE_SAVED_SEARCH, variables: () => true },
       result: (variables: Record<string, unknown>) => {
         onSave(variables);
 

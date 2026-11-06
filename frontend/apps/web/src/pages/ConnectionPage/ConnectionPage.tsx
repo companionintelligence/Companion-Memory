@@ -473,7 +473,7 @@ export function ConnectionPage() {
     }
   };
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

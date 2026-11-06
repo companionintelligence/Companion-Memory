@@ -116,7 +116,7 @@ export function ItemPage() {
 
   usePageTitle(item?.name ? `Thing - ${item.name} - Companion Memory` : 'Thing - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && item == null) {
     content = <LoadingPage />;

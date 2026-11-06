@@ -57,7 +57,7 @@ export function ConceptPage() {
 
   usePageTitle(concept?.name ? `Concept - ${concept.name} - Companion Memory` : 'Concept - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

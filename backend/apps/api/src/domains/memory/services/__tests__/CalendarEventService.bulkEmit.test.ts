@@ -13,6 +13,7 @@ import type { CreateEventDto } from '../../types';
 import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
+import { makeInsertBuilder } from './harness/insertBuilder';
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
 jest.mock('@ci/common/persistence', () => ({
@@ -42,12 +43,7 @@ describe('CalendarEventService.createMany — no per-row event emission', () => 
       entities.map((entity) => ({ entity, inserted: true })),
     );
 
-    const baseInsertQb: Record<string, unknown> = {};
-    baseInsertQb.insert = jest.fn(() => baseInsertQb);
-    baseInsertQb.into = jest.fn(() => baseInsertQb);
-    baseInsertQb.values = jest.fn(() => baseInsertQb);
-    baseInsertQb.onConflict = jest.fn(() => baseInsertQb);
-    baseInsertQb.execute = jest.fn(async () => ({ raw: [] }));
+    const baseInsertQb = makeInsertBuilder({});
 
     const baseRepo = {
       create: jest.fn((x: Partial<EventBaseEntity>) => x),

@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 
 import { ItemRelationshipEntity } from '../entities/ItemRelationshipEntity';
 

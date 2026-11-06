@@ -1,6 +1,6 @@
 import { Field, Float, GraphQLISODateTime, ID, ObjectType, registerEnumType } from '@nestjs/graphql';
-import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type TaskPendingChange } from '@ci/domains/planning';
 
 import { GlobalUID } from './GlobalUID';

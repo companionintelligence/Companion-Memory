@@ -231,7 +231,7 @@ function RemoteReceiptsPage() {
     fetchNextPage,
   });
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && view == null) {
     content = (

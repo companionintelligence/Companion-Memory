@@ -19,6 +19,8 @@ import { useSyncExternalStore } from 'react';
 
 import { useOptionalConnectionMode, type ConnectionMode } from '@ci/common';
 
+import { isNetworkFailure } from '../apolloErrors';
+
 import { isReplicaLockedError } from './replicaErrors';
 import {
   getReplicaDatabase,
@@ -46,12 +48,7 @@ export function answersFromDevice({
     return true;
   }
 
-  return Boolean(
-    error != null &&
-    typeof error === 'object' &&
-    'networkError' in error &&
-    (error as { networkError?: unknown }).networkError,
-  );
+  return isNetworkFailure(error);
 }
 
 /**

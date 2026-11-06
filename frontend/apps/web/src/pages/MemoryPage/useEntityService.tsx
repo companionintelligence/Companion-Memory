@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
 
-import type { ApolloError } from '@apollo/client';
 import { useQuery } from '@apollo/client/react';
 import { createHookContext } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
@@ -332,7 +331,7 @@ type ReturnType = [
     totalCount: number;
     /** A name sort that left out each big kind's older rows (see NameSortCutShortNote). */
     nameSortCutShort: boolean;
-    error: ApolloError | Error | undefined;
+    error: Error | undefined;
     activeEntity: MemoryEntity | null;
     /** The current filters, minus paging. See {@link SearchFilterVariables}. */
     searchVariables: SearchFilterVariables;

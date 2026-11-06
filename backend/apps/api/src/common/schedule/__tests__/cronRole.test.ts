@@ -1,6 +1,5 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import { ContextService } from '@ci/common/context';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import config from '@ci/configuration';
 
 import { Cron } from '../decorators/Cron';

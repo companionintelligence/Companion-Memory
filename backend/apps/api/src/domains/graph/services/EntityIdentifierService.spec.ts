@@ -431,7 +431,7 @@ describe('EntityIdentifierService.findEntityIdByIdentifier', () => {
     await expect(service.findEntityIdByIdentifier(OWNER, 'email', 'a@b.com')).resolves.toBe(ENTITY);
     expect(findOne).toHaveBeenCalledWith({
       where: { ownerUserId: OWNER, kind: 'email', valueNormalized: 'a@b.com' },
-      select: ['entityId'],
+      select: { entityId: true },
     });
   });
 

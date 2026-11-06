@@ -309,10 +309,10 @@ describe('PlanPage', () => {
     expect(await screen.findByText('Overdue thing')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^proposed \d/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^proposed\s*\d/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^done/i })).toBeInTheDocument();
-    // Anchored with a word boundary: "Unscheduled" contains "scheduled" too.
-    expect(screen.getByRole('heading', { name: /^scheduled\b/i })).toBeInTheDocument();
+    // Anchored at the start: "Unscheduled" contains "scheduled" too.
+    expect(screen.getByRole('heading', { name: /^scheduled\d/i })).toBeInTheDocument();
     expect(screen.getByText('Someday thing')).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.getByText('Finished thing')).toBeInTheDocument();
@@ -413,7 +413,7 @@ describe('PlanPage', () => {
     expect(schedule).toBeInTheDocument();
     expect(schedule).toHaveClass('ci-primary-surface');
     expect(screen.getByRole('button', { name: /edit write the migration/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^scheduled 0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^scheduled\s*0$/i })).toBeInTheDocument();
   });
 
   // ═══ THE PAYLOAD USED TO BE DISCARDED HERE ═══
@@ -583,7 +583,7 @@ describe('PlanPage', () => {
     });
 
     // The board is refetched after the move, and that read is what the user
-    // ends up looking at — `newData` is the refetch's answer, so the fixture
+    // ends up looking at — `result` is the refetch's answer, so the fixture
     // has to move with the task rather than answering "still overdue" forever.
     const board = (task: ReturnType<typeof node>) => ({
       data: {
@@ -602,7 +602,6 @@ describe('PlanPage', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => board(afterMove ? rescheduled : stillOverdue),
-          newData: () => board(afterMove ? rescheduled : stillOverdue),
         },
         {
           request: {
@@ -725,9 +724,6 @@ describe('PlanPage', () => {
           result: () => ({
             data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
           }),
-          newData: () => ({
-            data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
-          }),
         },
         {
           request: { query: PLAN_TASK, variables: { id: dated.id } },
@@ -789,9 +785,6 @@ describe('PlanPage', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => ({
-            data: afterPlan ? board([planned]) : board([proposed]),
-          }),
-          newData: () => ({
             data: afterPlan ? board([planned]) : board([proposed]),
           }),
         },
@@ -1026,7 +1019,7 @@ describe('PlanPage', () => {
     });
 
     expect(await screen.findByText('Child thing')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^unscheduled 2/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled\s*2/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
   });
 
@@ -1103,7 +1096,7 @@ describe('PlanPage mobile tabs', () => {
     expect(await screen.findByRole('tablist')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /unscheduled/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^scheduled\b/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled\d/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^done/i })).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
@@ -1119,7 +1112,7 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /unscheduled/i })).not.toHaveTextContent(/overdue/i);
-    expect(screen.getByRole('tab', { name: /^scheduled\b/i })).not.toHaveTextContent(/overdue/i);
+    expect(screen.getByRole('tab', { name: /^scheduled\d/i })).not.toHaveTextContent(/overdue/i);
   });
 
   // ═══ THE FOURTH TAB USED TO SIT OFF THE EDGE OF THE PHONE ═══
@@ -1161,13 +1154,13 @@ describe('PlanPage mobile tabs', () => {
     });
 
     expect(await screen.findByRole('tab', { name: /unscheduled/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^scheduled 0$/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^done 0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled\s*0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^done\s*0$/i })).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed 0$/i }), { button: 0 });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed\s*0$/i }), { button: 0 });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: /^proposed\s*0$/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -1202,7 +1195,6 @@ describe('PlanPage mobile tabs', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
-          newData: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
         },
         {
           request: { query: DECLINE_PROPOSED, variables: { id: 'p' } },
@@ -1215,15 +1207,15 @@ describe('PlanPage mobile tabs', () => {
       ],
     });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: /^proposed\s*1$/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }));
 
-    await waitFor(() => expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument());
-    expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
   });
 
@@ -1250,7 +1242,7 @@ describe('PlanPage mobile tabs', () => {
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not move that task/i)),
     );
     expect(screen.getByRole('tab', { name: /^unscheduled/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: /^proposed\s*1$/i })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('keeps edit and delete off the title row, and opens edit from the card body', async () => {

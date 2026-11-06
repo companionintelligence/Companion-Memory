@@ -290,7 +290,7 @@ describe('PGBossEventService de-duplication guard', () => {
         { singletonKey: 'batch', startAfter: 30, priority: 5 },
       );
 
-      const [inserted] = bossInsert.mock.calls[0] as [Array<Record<string, unknown>>];
+      const [, inserted] = bossInsert.mock.calls[0] as [string, Array<Record<string, unknown>>];
 
       expect(inserted).toHaveLength(2);
 

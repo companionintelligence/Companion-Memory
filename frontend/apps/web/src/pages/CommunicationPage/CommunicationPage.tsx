@@ -87,7 +87,7 @@ export function CommunicationPage() {
       : 'Communication - Companion Memory',
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

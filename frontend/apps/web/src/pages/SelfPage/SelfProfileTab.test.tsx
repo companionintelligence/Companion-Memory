@@ -8,7 +8,7 @@
  * file and its own unrelated data dependencies.
  */
 import type { MockedResponse } from '@apollo/client/testing';
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { GraphQLError } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -108,9 +108,21 @@ function getSelfProfileMock(person: ReturnType<typeof personRecord>) {
 }
 
 async function renderTab(person = personRecord(), extraMocks: MockedResponse[] = []) {
-  renderWithProviders(<SelfProfileTab />, { mocks: [getSelfProfileMock(person), ...extraMocks] });
+  let answered = false;
+  const profileMock = getSelfProfileMock(person);
+  const profileResult = profileMock.result;
+
+  profileMock.result = () => {
+    answered = true;
+
+    return profileResult as never;
+  };
+
+  renderWithProviders(<SelfProfileTab />, { mocks: [profileMock, ...extraMocks] });
 
   await screen.findByLabelText('First name');
+  await waitFor(() => expect(answered).toBe(true));
+  await act(async () => {});
 }
 
 describe('SelfProfileTab — the inline person editor', () => {
@@ -160,9 +172,11 @@ describe('SelfProfileTab — the inline person editor', () => {
   it('autosaves after a debounced pause and shows a confirmation, staying on the page', async () => {
     await renderTab(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: (variables: { input: unknown }) =>
-          (variables.input as { jobTitle?: string }).jobTitle === 'Staff Engineer',
+        request: {
+          query: UPDATE_PERSON,
+          variables: (variables: { input: unknown }) =>
+            (variables.input as { jobTitle?: string }).jobTitle === 'Staff Engineer',
+        },
         result: {
           data: { updatePerson: { success: true, person: personRecord({ jobTitle: 'Staff Engineer' }) } },
         },
@@ -179,8 +193,7 @@ describe('SelfProfileTab — the inline person editor', () => {
   it('shows a real error when the resolver reports a rejected write', async () => {
     await renderTab(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         result: { data: { updatePerson: { success: false, person: null } } },
       } as unknown as MockedResponse,
     ]);
@@ -193,8 +206,7 @@ describe('SelfProfileTab — the inline person editor', () => {
   it('shows a real error when the request itself fails', async () => {
     await renderTab(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);
@@ -218,9 +230,11 @@ describe('SelfProfileTab — a number the server will not store', () => {
 
     await renderTab(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: (variables: { input: Input }) =>
-          (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+        request: {
+          query: UPDATE_PERSON,
+          variables: (variables: { input: Input }) =>
+            (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+        },
         maxUsageCount: Number.POSITIVE_INFINITY,
         result: (variables: { input: Input }) => {
           attempts.push(variables.input);
@@ -240,10 +254,12 @@ describe('SelfProfileTab — a number the server will not store', () => {
         },
       } as unknown as MockedResponse,
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: (variables: { input: Input }) =>
-          (variables.input.contacts ?? []).length === 0 &&
-          variables.input.description === 'Phone: 212-555-0148 x31',
+        request: {
+          query: UPDATE_PERSON,
+          variables: (variables: { input: Input }) =>
+            (variables.input.contacts ?? []).length === 0 &&
+            variables.input.description === 'Phone: 212-555-0148 x31',
+        },
         result: {
           data: {
             updatePerson: { success: true, person: personRecord({ description: 'Phone: 212-555-0148 x31' }) },
@@ -276,8 +292,7 @@ describe('SelfProfileTab — a number the server will not store', () => {
 
     await renderTab(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         maxUsageCount: Number.POSITIVE_INFINITY,
         result: () => {
           calls += 1;

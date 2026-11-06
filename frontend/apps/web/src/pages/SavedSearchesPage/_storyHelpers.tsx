@@ -1,4 +1,5 @@
 import { ApolloClient, InMemoryCache } from '@apollo/client';
+import { HttpLink } from '@apollo/client/link/http';
 import { ApolloProvider } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import type { Decorator } from '@storybook/react';
@@ -11,9 +12,8 @@ import type { SavedSearchGridItemFragment } from './SavedSearch';
 // render in Storybook. Mutations only fire on interaction, so a no-op link is
 // fine for capturing the rendered UI.
 const storyClient = new ApolloClient({
-  uri: '/graphql',
+  link: new HttpLink({ uri: '/graphql' }),
   cache: new InMemoryCache(),
-  connectToDevTools: false,
 });
 
 export const withApollo: Decorator = (Story) => (

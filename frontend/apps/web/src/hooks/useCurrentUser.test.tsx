@@ -3,6 +3,8 @@ import { setApiBaseUrl } from '@ci/common';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { graphQLFailure, httpFailure, transportFailure } from '@/test/apolloErrors';
+
 import { MEMORY_ANSWER_DEADLINE_MS, forgetUser, rememberUser } from './rememberedUser';
 import { useCurrentUser } from './useCurrentUser';
 
@@ -23,8 +25,8 @@ vi.mock('./useAuth', () => ({
   ],
 }));
 
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 
@@ -84,12 +86,9 @@ describe('useCurrentUser', () => {
       mockedUseQuery.mockReturnValue({
         data: undefined,
         loading: false,
-        error: {
-          networkError: Object.assign(new Error(`No answer within ${MEMORY_ANSWER_DEADLINE_MS} ms`), {
-            name: 'TimeoutError',
-          }),
-          graphQLErrors: [],
-        },
+        error: Object.assign(new Error(`No answer within ${MEMORY_ANSWER_DEADLINE_MS} ms`), {
+          name: 'TimeoutError',
+        }),
         refetch: vi.fn(),
       } as unknown as ReturnType<typeof useQuery>);
 
@@ -100,21 +99,11 @@ describe('useCurrentUser', () => {
     });
 
     it.each([
-      [
-        'a network failure',
-        { networkError: Object.assign(new Error('Failed to fetch'), {}), graphQLErrors: [] },
-      ],
-      [
-        'a gateway 502',
-        { networkError: Object.assign(new Error('502'), { statusCode: 502 }), graphQLErrors: [] },
-      ],
+      ['a network failure', transportFailure()],
+      ['a gateway 502', httpFailure(502)],
       [
         'a server error with the database down',
-        {
-          graphQLErrors: [
-            { message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } },
-          ],
-        },
+        graphQLFailure([{ message: 'Internal server error', extensions: { code: 'INTERNAL_SERVER_ERROR' } }]),
       ],
     ])('reports unreachable rather than signed out after %s', (_label, error) => {
       mockedUseQuery.mockReturnValue({
@@ -133,9 +122,9 @@ describe('useCurrentUser', () => {
     it.each([
       [
         'an UNAUTHENTICATED answer',
-        { graphQLErrors: [{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }] },
+        graphQLFailure([{ message: 'Unauthorized', extensions: { code: 'UNAUTHENTICATED' } }]),
       ],
-      ['a 401', { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] }],
+      ['a 401', httpFailure(401)],
     ])('is not unreachable after %s, which is the server saying no', (_label, error) => {
       mockedUseQuery.mockReturnValue({
         data: { me: null },
@@ -157,7 +146,7 @@ describe('useCurrentUser', () => {
         mockedUseQuery.mockReturnValue({
           data: undefined,
           loading: false,
-          error: { networkError: new Error('Failed to fetch'), graphQLErrors: [] },
+          error: transportFailure(),
           refetch,
         } as unknown as ReturnType<typeof useQuery>);
 
@@ -211,7 +200,7 @@ describe('useCurrentUser', () => {
       mockedUseQuery.mockReturnValue({
         data: undefined,
         loading: false,
-        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+        error: httpFailure(500),
       } as unknown as ReturnType<typeof useQuery>);
       const { result } = renderHook(() => useCurrentUser());
 
@@ -226,7 +215,7 @@ describe('useCurrentUser', () => {
       mockedUseQuery.mockReturnValue({
         data: undefined,
         loading: false,
-        error: { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] },
+        error: httpFailure(401),
       } as unknown as ReturnType<typeof useQuery>);
 
       const { result } = renderHook(() => useCurrentUser());
@@ -241,7 +230,7 @@ describe('useCurrentUser', () => {
       mockedUseQuery.mockReturnValue({
         data: undefined,
         loading: false,
-        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+        error: httpFailure(500),
       } as unknown as ReturnType<typeof useQuery>);
 
       const { result } = renderHook(() => useCurrentUser());

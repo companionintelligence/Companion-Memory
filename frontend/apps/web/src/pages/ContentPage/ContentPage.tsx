@@ -82,7 +82,7 @@ export function ContentPage() {
     contentItem?.title ? `Content - ${contentItem.title} - Companion Memory` : 'Content - Companion Memory',
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

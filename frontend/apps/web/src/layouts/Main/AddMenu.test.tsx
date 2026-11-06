@@ -76,19 +76,19 @@ const THINGS_VARIABLES = {
 };
 
 /** Grabs the same client AddMenu is using, out of the shared provider. */
-function ClientProbe({ onClient }: { onClient: (client: ApolloClient<object>) => void }) {
+function ClientProbe({ onClient }: { onClient: (client: ApolloClient) => void }) {
   const client = useApolloClient();
 
-  useEffect(() => onClient(client as ApolloClient<object>), [client, onClient]);
+  useEffect(() => onClient(client as ApolloClient), [client, onClient]);
 
   return null;
 }
 
-async function renderAddMenu(): Promise<ApolloClient<object>> {
+async function renderAddMenu(): Promise<ApolloClient> {
   savedProps.length = 0;
   eventProps.length = 0;
 
-  let captured: ApolloClient<object> | null = null;
+  let captured: ApolloClient | null = null;
 
   renderWithProviders(
     <>
@@ -103,7 +103,7 @@ async function renderAddMenu(): Promise<ApolloClient<object>> {
 
   await waitFor(() => expect(captured).not.toBeNull());
 
-  return captured as unknown as ApolloClient<object>;
+  return captured as unknown as ApolloClient;
 }
 
 describe('AddMenu', () => {

@@ -42,7 +42,7 @@ export function initI18n(): typeof i18n {
       // the synchronous guarantee above merely usually-true: the first render could
       // paint raw KEYs, and tests would depend on timing. Resources are bundled, so
       // there is nothing to wait for.
-      initImmediate: false,
+      initAsync: false,
       react: { useSuspense: false },
       // React already escapes interpolated values; escaping again double-encodes
       // apostrophes and quotes in names that flow through {{...}} placeholders.

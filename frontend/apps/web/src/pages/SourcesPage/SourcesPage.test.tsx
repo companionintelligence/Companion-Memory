@@ -254,7 +254,7 @@ describe('SourcesPage on a phone', () => {
     const importLink = await screen.findByRole('link', { name: /Import/ });
 
     expect(importLink).toHaveTextContent(/2/);
-    expect(importLink).toHaveAccessibleName(/Import\s*2 imports/);
+    expect(importLink).toHaveAccessibleName(/Import\s*2\s*imports/);
     expect(screen.queryByText('2 imports')).not.toBeInTheDocument();
   });
 

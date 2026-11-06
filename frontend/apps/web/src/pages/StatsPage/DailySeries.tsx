@@ -16,6 +16,15 @@ const GET_DAILY_METRICS = gql`
   }
 `;
 
+interface DailySeriesData {
+  dailyMetrics: Array<{
+    date: string;
+    nMessages: number | null;
+    nPlaces: number | null;
+    kmTraveled: number | null;
+  }>;
+}
+
 const CHART_CONFIG = {
   nMessages: { label: 'Messages', color: 'var(--chart-1)' },
   nPlaces: { label: 'Places', color: 'var(--chart-2)' },
@@ -34,7 +43,7 @@ function isoDay(value: string | undefined, fallbackDaysBack: number): string {
 }
 
 export function DailySeries({ from, to }: { from?: string; to?: string }) {
-  const { data } = useQuery(GET_DAILY_METRICS, {
+  const { data } = useQuery<DailySeriesData>(GET_DAILY_METRICS, {
     variables: { from: isoDay(from, 730), to: isoDay(to, 0) },
     errorPolicy: 'all',
   });

@@ -450,6 +450,7 @@ export class PGBossEventService
           role,
           yieldsTo: _yieldsTo,
           lane,
+          retentionMinutes,
           ...queueOptions
         } = EventListenerRegistry.getQueueOptions(queue) ?? {};
 
@@ -471,6 +472,7 @@ export class PGBossEventService
           expireInSeconds: JOB_EXPIRE_SECONDS,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
+          ...(retentionMinutes !== undefined ? { retentionSeconds: retentionMinutes * 60 } : {}),
         };
 
         await this.boss.createQueue(queue, options);
