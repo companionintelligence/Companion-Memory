@@ -37,8 +37,9 @@ import { nothingWrapped } from '../wrappedFilePurge';
  * before the purge, in every table, so the test cannot pass because a fixture
  * quietly wrote nothing.
  *
- * `remove` shares only the part that was failing: the HBPE links. It keeps its
- * `deleted` graph delta, so its cases check that and not the rest.
+ * `remove` shares the HBPE links, the edges and the ledger rows (and, for a photo,
+ * the stored file: `WrappedFilePurge.integration.test.ts`). It keeps the node's
+ * deltas and writes its own `deleted` one, so its cases check that and not the rest.
  *
  * Opt-in like its neighbours: set `MEMORY_TEST_DATABASE_URL` to a migrated
  * database of your OWN, or run `make test-db`, which provides one.
@@ -792,6 +793,43 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
         expect.objectContaining({ change_type: 'created' }),
         { change_type: 'deleted', old_name: 'Trip notes', change_source: 'ContentService.remove' },
       ]);
+    });
+
+    it('deletes the edges, in both directions, and the ledger rows that name the content, and nobody else’s', async () => {
+      const doomed = await clusteredNote('Trip notes');
+      const control = await clusteredNote('Shopping list');
+      const controlBefore = await footprint(control);
+
+      expect(await footprint(doomed)).toMatchObject({
+        'ci.relationships': 2,
+        'ci.graph_deltas (of its edges)': 2,
+        'ci.record_sources': 1,
+      });
+
+      await expect(contents.remove(owner, doomed.contentId)).resolves.toBe(true);
+
+      expect(await footprint(doomed)).toMatchObject({
+        'ci.relationships': 0,
+        'ci.graph_deltas (of its edges)': 0,
+        'ci.record_sources': 0,
+        // Its own deltas stay: the `created` one, and the `deleted` one this wrote.
+        'ci.graph_deltas': 2,
+      });
+      expect(await footprint(control)).toEqual(controlBefore);
+    });
+
+    it('is safe to repeat: the second delete answers false and changes nothing', async () => {
+      const doomed = await clusteredNote('Trip notes');
+
+      await expect(contents.remove(owner, doomed.contentId)).resolves.toBe(true);
+
+      const after = await footprint(doomed);
+
+      published.length = 0;
+
+      await expect(contents.remove(owner, doomed.contentId)).resolves.toBe(false);
+      expect(await footprint(doomed)).toEqual(after);
+      expect(published).toEqual([]);
     });
 
     it('is refused whole when something it does not know about blocks the delete', async () => {

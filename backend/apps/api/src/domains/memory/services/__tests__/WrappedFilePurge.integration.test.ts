@@ -860,6 +860,156 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
     });
   });
 
+  // ── the app's delete (the Explorer drawer): the file goes with it too ─────
+
+  describe('deleting content that wraps a stored file from the app (remove)', () => {
+    it('removes the file, its preview, their nodes, their objects and every row keyed to them, and nothing else', async () => {
+      const doomed = await storedPhoto('Trip photo');
+      const control = await storedPhoto('Shopping list photo');
+      const doomedContent = await wrapper(doomed.fileId, 'file', { title: 'Trip photo' });
+      const controlContent = await wrapper(control.fileId, 'file', { title: 'Shopping list photo' });
+
+      const doomedBefore = await footprint(doomed);
+      const controlBefore = await footprint(control);
+
+      expectEveryTableTouched(doomedBefore);
+      expectEveryTableTouched(controlBefore);
+
+      await expect(contents.remove(owner, doomedContent)).resolves.toBe(true);
+
+      expect(await contentExists(doomedContent)).toBe(false);
+      expect(await nodeExists(doomedContent)).toBe(false);
+      // The same rows the forget path deletes: the ci.files rows, the nodes, the search rows and tags.
+      expect(await footprint(doomed)).toEqual(EMPTY);
+      expect(objectCalls).toEqual([
+        { bucket: BUCKET, keys: sorted([doomed.originalKey, doomed.variantKey]) },
+      ]);
+      // The control photo and its content are exactly as they were, row for row.
+      expect(await footprint(control)).toEqual(controlBefore);
+      expect(await contentExists(controlContent)).toBe(true);
+      expect(deletedKeys()).not.toContain(control.originalKey);
+      // Announced once it committed: the content, and every file row that went.
+      expect(announced(ContentRemovedEvent)).toEqual([doomedContent]);
+      expect(announced(FileRemovedEvent)).toEqual(sorted([doomed.fileId, doomed.variantId]));
+    });
+
+    it('agrees with the forget path: the file a message still uses is kept, and the content still goes', async () => {
+      const photo = await storedPhoto('Trip photo');
+      const photoBefore = await footprint(photo);
+      const content = await wrapper(photo.fileId, 'file');
+
+      await message(attachmentsOf(photo.fileId));
+
+      await expect(contents.remove(owner, content)).resolves.toBe(true);
+
+      expect(await contentExists(content)).toBe(false);
+      expect(await footprint(photo)).toEqual(photoBefore);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(announced(FileRemovedEvent)).toEqual([]);
+    });
+
+    it('deletes content that wraps no stored file as before, without asking the object store', async () => {
+      const photo = await storedPhoto('Trip photo');
+      const photoBefore = await footprint(photo);
+      const track = await wrapper('spotify:track:4uLU6hMCjMI75M1A2tKUQC', null);
+      const uri = await wrapper(photo.fileId, 'external_uri');
+
+      await expect(contents.remove(owner, track)).resolves.toBe(true);
+      await expect(contents.remove(owner, uri)).resolves.toBe(true);
+      // And a service built without a store still deletes content that has no stored bytes.
+      const plain = await wrapper('not-a-uuid-1234', 'file');
+
+      await expect(contentsWithoutStore.remove(owner, plain)).resolves.toBe(true);
+
+      expect(await contentExists(track)).toBe(false);
+      expect(await contentExists(uri)).toBe(false);
+      expect(await contentExists(plain)).toBe(false);
+      expect(await footprint(photo)).toEqual(photoBefore);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(announced(ContentRemovedEvent)).toEqual(sorted([track, uri, plain]));
+      expect(announced(FileRemovedEvent)).toEqual([]);
+    });
+
+    it('never touches a file that is somebody else’s, whoever the content that names it belongs to', async () => {
+      const theirs = await fileRow('Their photo', strangerId);
+      const theirNode = await fileNode(theirs.id, 'Their photo', strangerId);
+      const mine = await wrapper(theirs.id, 'file');
+
+      await expect(contents.remove(owner, mine)).resolves.toBe(true);
+
+      expect(await contentExists(mine)).toBe(false);
+      expect(await fileExists(theirs.id)).toBe(true);
+      expect(await nodeExists(theirNode)).toBe(true);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(announced(FileRemovedEvent)).toEqual([]);
+    });
+
+    it('answers false for somebody else’s content, and leaves it and its file alone', async () => {
+      const theirs = await fileRow('Their photo', strangerId);
+      const theirContent = await wrapper(theirs.id, 'file', { forUser: strangerId });
+
+      await expect(contents.remove(owner, theirContent)).resolves.toBe(false);
+
+      expect(await contentExists(theirContent)).toBe(true);
+      expect(await fileExists(theirs.id)).toBe(true);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+    });
+
+    it('is safe to repeat: the second delete answers false and touches nothing', async () => {
+      const doomed = await storedPhoto('Trip photo');
+      const control = await storedPhoto('Shopping list photo');
+      const controlBefore = await footprint(control);
+      const content = await wrapper(doomed.fileId, 'file');
+
+      await expect(contents.remove(owner, content)).resolves.toBe(true);
+
+      objectCalls.length = 0;
+      published.length = 0;
+      storage.deleteObjects.mockClear();
+
+      await expect(contents.remove(owner, content)).resolves.toBe(false);
+
+      expect(await footprint(doomed)).toEqual(EMPTY);
+      expect(await footprint(control)).toEqual(controlBefore);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+    });
+
+    it('refuses a photo whose bytes it has nowhere to delete from, before it changes anything', async () => {
+      const stored = await storedPhoto('Trip photo');
+      const storedBefore = await footprint(stored);
+      const content = await wrapper(stored.fileId, 'file');
+
+      await expect(contentsWithoutStore.remove(owner, content)).rejects.toThrow(/no object store/);
+
+      expect(await contentExists(content)).toBe(true);
+      expect(await footprint(stored)).toEqual(storedBefore);
+      expect(published).toEqual([]);
+    });
+
+    it('rolls the whole delete back when the object store fails, so deleting again can finish it', async () => {
+      const stored = await storedPhoto('Trip photo');
+      const storedBefore = await footprint(stored);
+      const content = await wrapper(stored.fileId, 'file');
+
+      deleteObjectsImpl = async () => {
+        throw new Error('object store is down');
+      };
+
+      await expect(contents.remove(owner, content)).rejects.toThrow(/object store is down/);
+
+      expect(await contentExists(content)).toBe(true);
+      expect(await footprint(stored)).toEqual(storedBefore);
+      expect(published).toEqual([]);
+
+      deleteObjectsImpl = async () => undefined;
+
+      await expect(contents.remove(owner, content)).resolves.toBe(true);
+      expect(await footprint(stored)).toEqual(EMPTY);
+    });
+  });
+
   // ── an event: its photos go with it ───────────────────────────────────────
 
   describe('purging an event', () => {

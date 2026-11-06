@@ -50,11 +50,11 @@ import {
   distinctColumnSql,
   effectiveSourceSystemPredicate,
 } from './contentFacetsSql';
-import { type PurgedContentAggregates, purgeContentAggregates } from './contentPurge';
+import { type PurgedContentAggregates, purgeContentAggregates, purgeFilesWrappedBy } from './contentPurge';
 import { CtiAggregate, detailChanged } from './CtiAggregate';
 import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
-import { clearHbpeLinks } from './purgeTeardown';
+import { clearHbpeLinks, deleteEdges, deleteLedgerRows } from './purgeTeardown';
 import { nothingWrapped } from './wrappedFilePurge';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
@@ -1450,34 +1450,94 @@ export class ContentService {
   }
 
   /**
-   * The app's delete: the content row and its `ci.entities` base row are
-   * destroyed, and nothing restores them. A `deleted` graph delta records it,
-   * which carries the title, and the edges and ledger rows that name the content
-   * are left where they are.
+   * The app's delete, which the Explorer drawer and the `deleteContent` mutation
+   * call: the content row and its `ci.entities` base row are destroyed, and
+   * nothing restores them. A `deleted` graph delta records it, which carries the
+   * title.
    *
-   * HBPE's links to the row are cleared first, in the same transaction. They
-   * reference it with no `ON DELETE` action, so deleting clustered content, which
-   * is nearly all of it, used to fail on a foreign key. That is the only thing it
-   * shares with {@link purge}, which is `memory.forget`'s delete and takes the
-   * rest with it: deltas, edges, ledger, tags, search rows.
+   * **The stored file goes with it.** A photo or a document is two rows, and the
+   * bytes are the part that IS the photo: the content row wraps a `ci.files` row
+   * through `external_id`. That file, its variants, their `File` nodes, their
+   * stored objects, and the edges, deltas, pipeline state, tags, categories and
+   * search rows keyed by any of them are deleted exactly as `memory.forget`'s
+   * {@link purge} deletes them ({@link purgeFilesWrappedBy}, the one sequence both
+   * paths run): when nothing else uses the file, and kept when something does (a
+   * message's attachment, another content row, a chat attachment, a live event;
+   * see {@link planWrappedFiles}). Only the owner's own files are taken, whoever
+   * asks. Content that wraps no file is deleted as it always was.
+   *
+   * **The edges and ledger rows that name the content go too.** An edge to a node
+   * that no longer exists points at nothing, and a ledger row for a record that is
+   * gone evidences nothing (the re-key path already has to step round them), so
+   * neither is kept. They are deleted in both directions, with the deltas that
+   * recorded the edges. What is kept is the node's own deltas, and the `deleted`
+   * one this writes, which is what separates this from a purge; the content's
+   * search rows and tags are left to the {@link ContentRemovedEvent} listeners as
+   * before. Records that merely MENTION the content (a receipt's document, an
+   * observation) are left alone, as the purge leaves them.
+   *
+   * HBPE's links to the row are cleared in the same transaction. They reference it
+   * with no `ON DELETE` action, so deleting clustered content, which is nearly all
+   * of it, used to fail on a foreign key.
+   *
+   * Deleting again is safe: the content is gone, so the second call answers
+   * `false` and changes nothing.
+   *
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the
+   *   rows then could not be. The content is still there, still wrapping a file
+   *   that no longer opens, and deleting it again finishes the job.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    const removed = await this.aggregate.remove(context, id, {
-      withinTx: async ({ manager, before }) => {
-        await clearHbpeLinks(manager, 'ci.content', [id]);
+    let objectsGoneFor: string[] = [];
+    let files = nothingWrapped();
+    let removed: boolean;
 
-        const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
-        await this.graphDeltaWriter.entityDeleted({
-          entityId: id,
-          entityType: 'Content',
-          name: base?.name ?? null,
-          ownerUserId: context.userId !== SYSTEM_USER ? context.userId : before.user?.id,
-          changeSource: 'ContentService.remove',
-          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-          manager,
-        });
-      },
-    });
+    try {
+      removed = await this.aggregate.remove(context, id, {
+        withinTx: async ({ manager, before }) => {
+          // Whose files may go is the content's owner's: the caller's, which the aggregate has already
+          // scoped the row to, or, for a system caller, the row's own. A row with no owner has no files
+          // that are anyone's to delete, and is deleted as it was.
+          const ownerId =
+            context.userId !== SYSTEM_USER ? context.userId : (before.userId ?? before.user?.id);
+          const teardown = async () => {
+            await clearHbpeLinks(manager, 'ci.content', [id]);
+            await deleteEdges(manager, [id]);
+            await deleteLedgerRows(manager, [id], 'content');
+          };
+
+          if (ownerId) {
+            files = await purgeFilesWrappedBy(
+              manager,
+              ownerId,
+              [id],
+              {
+                objects: this.storedObjects,
+                onObjectsDeleted: (named) => {
+                  objectsGoneFor = named;
+                },
+              },
+              teardown,
+            );
+          } else {
+            await teardown();
+          }
+
+          const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
+          await this.graphDeltaWriter.entityDeleted({
+            entityId: id,
+            entityType: 'Content',
+            name: base?.name ?? null,
+            ownerUserId: ownerId,
+            changeSource: 'ContentService.remove',
+            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+            manager,
+          });
+        },
+      });
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
 
     if (!removed) {
       return false;
@@ -1486,6 +1546,10 @@ export class ContentService {
     await this.eventService.send(ContentRemovedEvent, {
       contentId: id,
     });
+
+    for (const fileId of files.fileIds) {
+      await this.eventService.send(FileRemovedEvent, { fileId });
+    }
 
     return true;
   }
