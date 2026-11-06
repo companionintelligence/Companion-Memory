@@ -237,6 +237,28 @@ describe('TimelineView', () => {
     expect(mocks.groupEntitiesByBucket).not.toHaveBeenCalled();
   });
 
+  it('stops watching the sentinel after a page fails, and the retry asks again', () => {
+    const loadMore = vi.fn();
+    mocks.useEntityService.mockReturnValue(
+      baseService({
+        data: [event('a', 'visited')],
+        hasNextPage: true,
+        error: new Error('timed out'),
+        loadMore,
+      }),
+    );
+
+    renderTimeline();
+
+    // No observer was built: a visible sentinel could otherwise re-fire on
+    // every render and loop on the cursor that just failed.
+    expect(mocks.observerCallback).toBeUndefined();
+    expect(screen.getByText("Couldn't load more events: timed out")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(loadMore).toHaveBeenCalledOnce();
+  });
+
   it('loads the next page only when the sentinel intersects the viewport', () => {
     const loadMore = vi.fn();
     mocks.useEntityService.mockReturnValue(

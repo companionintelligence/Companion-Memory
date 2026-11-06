@@ -29,6 +29,7 @@ import { ThreadsController } from './controllers/ThreadsController';
 import { MessageEntity, type Message } from './entities/MessageEntity';
 import { ThreadEntity, type Thread } from './entities/ThreadEntity';
 import { MessageService } from './services/MessageService';
+export type { ThreadMessagesPage } from './services/MessageService';
 import { ThreadService } from './services/ThreadService';
 
 /**

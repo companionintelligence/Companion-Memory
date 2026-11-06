@@ -64,11 +64,11 @@ function build(
     ...overrides,
   };
 
-  // Unrelated to `PeerLinkService` above — `avatarUrl` reads through
-  // `PersonService.findById` instead. Defaults to "nothing found", same as a
+  // Unrelated to `PeerLinkService` above — `avatarUrl` reads through the
+  // batched `PersonLoader` instead. Defaults to "nothing found", same as a
   // real owner-scoped miss.
-  const personService = {
-    findById: jest.fn().mockResolvedValue(null),
+  const personLoader = {
+    load: jest.fn().mockResolvedValue(null),
     ...personOverrides,
   };
 
@@ -77,10 +77,10 @@ function build(
       ? undefined
       : { isFeatureEnabled: jest.fn().mockResolvedValue(featureEnabled) };
 
-  const resolver = new PeerLinkResolver(service as never, personService as never, featureService as never);
+  const resolver = new PeerLinkResolver(service as never, personLoader as never, featureService as never);
   const context = { userId: OWNER } as never;
 
-  return { resolver, service, personService, featureService, context };
+  return { resolver, service, personLoader, featureService, context };
 }
 
 describe('PeerLinkResolver', () => {
@@ -431,12 +431,10 @@ describe('PeerLinkResolver', () => {
   describe('avatarUrl', () => {
     it("returns the linked Person's avatarUrl when personEntityId is set", async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: 'person-ada' }));
-      const { resolver, personService, context } = build(
+      const { resolver, personLoader, context } = build(
         {},
         {
-          findById: jest
-            .fn()
-            .mockResolvedValue(makePerson({ properties: { avatar_url: 'https://x/ada.png' } })),
+          load: jest.fn().mockResolvedValue(makePerson({ properties: { avatar_url: 'https://x/ada.png' } })),
         },
       );
 
@@ -445,24 +443,24 @@ describe('PeerLinkResolver', () => {
       expect(result).toBe('https://x/ada.png');
       // The decoded raw id, not the global id on the wire — and the caller's
       // own scope, not the link's `ownerUserId` — is what goes into the lookup.
-      expect(personService.findById).toHaveBeenCalledWith({ userId: OWNER }, 'person-ada');
+      expect(personLoader.load).toHaveBeenCalledWith({ userId: OWNER }, 'person-ada');
     });
 
-    it('returns null when personEntityId is not set, without querying PersonService', async () => {
+    it('returns null when personEntityId is not set, without asking the loader', async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: null }));
-      const { resolver, personService, context } = build();
+      const { resolver, personLoader, context } = build();
 
       const result = await resolver.avatarUrl(context, link);
 
       expect(result).toBeNull();
-      expect(personService.findById).not.toHaveBeenCalled();
+      expect(personLoader.load).not.toHaveBeenCalled();
     });
 
     it('returns null cleanly when the linked Person has no avatar', async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: 'person-ada' }));
       const { resolver, context } = build(
         {},
-        { findById: jest.fn().mockResolvedValue(makePerson({ properties: {} })) },
+        { load: jest.fn().mockResolvedValue(makePerson({ properties: {} })) },
       );
 
       const result = await resolver.avatarUrl(context, link);
@@ -471,7 +469,7 @@ describe('PeerLinkResolver', () => {
     });
 
     it('SECURITY: a peer link naming a Person owned by someone else never leaks that avatar', async () => {
-      // Faithful to `PersonService.findById` (`EntityService.findById`), which
+      // Faithful to `PersonService.findById` behind the loader, which
       // is OWNER-SCOPED — the where clause is `{ id, userId }`, not `{ id }`.
       // A mock that ignored the owner would hide the one case this field has
       // to fail closed on: `personEntityId` decoding to a real Person id that
@@ -481,7 +479,7 @@ describe('PeerLinkResolver', () => {
       const { resolver, context } = build(
         {},
         {
-          findById: jest.fn(async (ctx: { userId: string }, id: string) =>
+          load: jest.fn(async (ctx: { userId: string }, id: string) =>
             id === MALLORYS_PERSON_ID && ctx.userId === 'someone-else'
               ? makePerson({ id, properties: { avatar_url: 'https://x/mallory.png' } })
               : null,
@@ -501,7 +499,7 @@ describe('PeerLinkResolver', () => {
       const { resolver, context } = build(
         {},
         {
-          findById: jest.fn().mockResolvedValue(
+          load: jest.fn().mockResolvedValue(
             makePerson({
               properties: {
                 avatar_url: 'https://x/ada.png',

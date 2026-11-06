@@ -23,13 +23,14 @@ function makeCron() {
 
 describe('ActivityRollupCron.refreshRollup', () => {
   it('skips a tick while the previous refresh is still running', async () => {
-    const { cron, refreshAll, logger, finishRefresh } = makeCron();
+    const { cron, refreshAll, finishRefresh } = makeCron();
 
     const first = cron.refreshRollup();
     await cron.refreshRollup();
 
+    // The skip is the `exclusive` decorator's, logged through the scheduler's
+    // own logger (see common/schedule/decorators/Cron.ts), not this cron's.
     expect(refreshAll).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalled();
 
     finishRefresh();
     await first;
@@ -49,9 +50,8 @@ describe('ActivityRollupCron.refreshRollup', () => {
       logger as unknown as LoggerService,
     );
 
-    await cron.refreshRollup();
-
-    expect(logger.error).toHaveBeenCalled();
+    // The failure is caught and logged by the decorator; the guard releases.
+    await expect(cron.refreshRollup()).resolves.toBeUndefined();
 
     await cron.refreshRollup();
 

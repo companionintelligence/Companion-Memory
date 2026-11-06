@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
+import { stableJson } from '@ci/common/stableJson';
 
 export type GraphDeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
 export type GraphDeltaNodeType = 'entity' | 'relationship';
@@ -32,17 +33,6 @@ export interface RecordGraphDeltaInput {
   manager?: EntityManager;
 }
 
-/** A value with its object keys sorted, so two jsonb reads of one bag compare equal. */
-function sortedJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : v,
-  );
-}
-
 /**
  * The `changedFields` of an edit: each of `keys` whose value differs between
  * `before` and `after`, as `{ old, new }`. Missing, null, '' and [] are all "empty",
@@ -61,7 +51,7 @@ export function changedFieldsBetween(
     const was = before[key];
     const now = after[key];
 
-    if ((isEmpty(was) && isEmpty(now)) || sortedJson(was) === sortedJson(now)) {
+    if ((isEmpty(was) && isEmpty(now)) || stableJson(was) === stableJson(now)) {
       continue;
     }
 

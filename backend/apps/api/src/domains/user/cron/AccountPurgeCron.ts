@@ -19,8 +19,6 @@ const ACCOUNT_PURGE_CRON = '0 20 * * * *';
 
 @Injectable()
 export class AccountPurgeCron {
-  private running = false;
-
   constructor(
     private readonly accountPurgeService: AccountPurgeService,
     private readonly logger: LoggerService,
@@ -28,7 +26,11 @@ export class AccountPurgeCron {
     this.logger.setContext(AccountPurgeCron.name);
   }
 
-  @Cron(ACCOUNT_PURGE_CRON, { name: 'AccountPurgeCron.purgeDueAccounts' })
+  // `exclusive`: the service takes a database advisory lock per account, which
+  // is what actually prevents two workers colliding; the decorator's guard is
+  // the cheaper one for the common case — one process whose previous tick is
+  // still working — and it logs the skip and any failure.
+  @Cron(ACCOUNT_PURGE_CRON, { name: 'AccountPurgeCron.purgeDueAccounts', exclusive: true })
   async purgeDueAccounts() {
     if (!config.accountDeletion.purge.enabled) {
       // Switched off, nothing is purged; but accounts left ended and unpurged
@@ -43,34 +45,17 @@ export class AccountPurgeCron {
       return;
     }
 
-    // The service takes a database advisory lock per account, which is what
-    // actually prevents two workers colliding. This flag is the cheaper guard
-    // for the common case: one process whose previous tick is still working.
-    if (this.running) {
-      this.logger.warn('Skipping account purge; previous run still in progress');
+    // A failure here is a failure to keep a deletion promise; the decorator
+    // logs it as an error, and the next tick retries.
+    const summary = await this.accountPurgeService.purgeDueAccounts();
 
-      return;
-    }
-
-    this.running = true;
-
-    try {
-      const summary = await this.accountPurgeService.purgeDueAccounts();
-
-      if (summary.considered > 0 || summary.stalled > 0) {
-        this.logger.log('Account purge run complete', {
-          considered: summary.considered,
-          purged: summary.purged,
-          failed: summary.failed,
-          stalled: summary.stalled,
-        });
-      }
-    } catch (err) {
-      // A failure here is a failure to keep a deletion promise, so it is logged
-      // as an error even though the next tick will retry.
-      this.logger.error('Account purge run failed', err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      this.running = false;
+    if (summary.considered > 0 || summary.stalled > 0) {
+      this.logger.log('Account purge run complete', {
+        considered: summary.considered,
+        purged: summary.purged,
+        failed: summary.failed,
+        stalled: summary.stalled,
+      });
     }
   }
 }

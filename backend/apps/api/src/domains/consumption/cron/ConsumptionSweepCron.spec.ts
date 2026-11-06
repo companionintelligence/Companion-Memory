@@ -58,13 +58,12 @@ describe('ConsumptionSweepCron.sweepOnSchedule', () => {
     // this run leaves behind is still idle an hour from now.
     let release: (result: { windows: number; nonces: number }) => void = () => undefined;
     const sweep = jest.fn(() => new Promise((resolve) => (release = resolve)));
-    const { cron, logger } = makeCron(sweep as unknown as jest.Mock);
+    const { cron } = makeCron(sweep as unknown as jest.Mock);
 
     const first = cron.sweepOnSchedule();
     await cron.sweepOnSchedule();
 
     expect(sweep).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalled();
 
     release({ windows: 0, nonces: 0 });
     await first;
@@ -82,10 +81,11 @@ describe('ConsumptionSweepCron.sweepOnSchedule', () => {
       .fn()
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValue({ windows: 0, nonces: 0 });
-    const { cron, logger } = makeCron(sweep);
+    const { cron } = makeCron(sweep);
 
+    // The schedule's `exclusive` guard swallows and logs the failure (through
+    // the decorator's own logger) and releases, so the next tick runs.
     await expect(cron.sweepOnSchedule()).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalled();
 
     await cron.sweepOnSchedule();
     expect(sweep).toHaveBeenCalledTimes(2);

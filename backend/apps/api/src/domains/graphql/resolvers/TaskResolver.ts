@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, UseGuards } from '@nestjs/common';
-import { Args, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, ID, Info, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -8,6 +9,8 @@ import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@c
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
+import { TaskChildrenLoader } from '../loaders/TaskChildrenLoader';
+import { selectsField } from '../selectsField';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
@@ -15,6 +18,7 @@ import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
 import { EntityTagType } from '../types/EntityTagType';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { ResolveTaskPendingChangePayload } from '../types/ResolveTaskPendingChangePayload';
 import { ScheduleTaskPayload } from '../types/ScheduleTaskPayload';
@@ -24,7 +28,7 @@ import { TaskPendingChangeType } from '../types/TaskPendingChangeType';
 import { TaskStatusEnum, TaskType } from '../types/TaskType';
 import { UpdateTaskInput } from '../types/UpdateTaskInput';
 import { UpdateTaskPayload } from '../types/UpdateTaskPayload';
-import { Paginator } from '../utils/Paginator';
+import { keysetArgs, keysetPageInfo } from '../utils/keysetConnection';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => TaskType)
@@ -34,6 +38,7 @@ export class TaskResolver {
     private readonly plannedBlockService: PlannedBlockService,
     private readonly featureService: FeatureService,
     private readonly tagLoader: TagLoader,
+    private readonly taskChildrenLoader: TaskChildrenLoader,
   ) {}
 
   /**
@@ -131,7 +136,7 @@ export class TaskResolver {
 
     const serviceContext = toServiceContext(context);
     const parentId = GlobalUID.parse('task', parent.id);
-    const children = await this.taskService.findChildren(serviceContext, parentId);
+    const children = await this.taskChildrenLoader.load(serviceContext, parentId);
 
     return children.map((task) => TaskType.toType(task));
   }
@@ -529,7 +534,8 @@ export class TaskResolver {
       description: 'Only direct children of this task. Pass null (omit) for no parent filter.',
     })
     parentId?: string | null,
-  ): Promise<TaskConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<TaskConnection>> {
     if (!(await this.isPlanningEnabled())) {
       return {
         edges: [],
@@ -539,29 +545,31 @@ export class TaskResolver {
     }
 
     const serviceContext = toServiceContext(context);
-    const entities = await this.taskService.findAll(serviceContext, {
+    // One page from SQL, in the list's order and under the same filters as
+    // the count; the count only when it is asked for.
+    const page = await this.taskService.findPage(serviceContext, keysetArgs(pagination), {
       status: status as TaskStatus[] | undefined,
       scheduledFor,
       parentId: parentId === undefined ? undefined : parentId ? GlobalUID.parse('task', parentId) : null,
-    });
-
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('task', entity.id),
+      countTotal: selectsField(info, 'totalCount'),
     });
 
     const placedIds = await this.plannedBlockService.listActiveTaskIds(
       serviceContext,
-      slice.map((entity) => entity.id),
+      page.entities.map((entity) => entity.id),
     );
 
-    const edges: TaskEdge[] = slice.map((entity) => {
+    const edges: TaskEdge[] = page.entities.map((entity) => {
       const node = this.toTaskType(entity, placedIds.has(entity.id));
 
       return { node, cursor: node.id };
     });
 
-    return { edges, pageInfo, totalCount };
+    return {
+      edges,
+      pageInfo: keysetPageInfo(edges, page),
+      ...(page.totalCount != null ? { totalCount: page.totalCount } : {}),
+    };
   }
 
   @Query(() => [TaskPendingChangeType], {

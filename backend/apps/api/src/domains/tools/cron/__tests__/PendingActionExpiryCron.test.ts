@@ -66,11 +66,11 @@ describe('PendingActionExpiryCron', () => {
     const sweep = jest.fn(async () => {
       throw new Error('boom');
     });
-    const logger = makeLogger();
-    const cron = new PendingActionExpiryCron({ sweep } as any, logger);
+    const cron = new PendingActionExpiryCron({ sweep } as any, makeLogger());
 
+    // Caught and logged by the `exclusive` decorator, through the scheduler's
+    // own logger (see common/schedule/decorators/Cron.ts), not this cron's.
     await expect(cron.sweepPendingActions()).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalled();
 
     // And the guard is released, so the next tick still runs.
     await cron.sweepPendingActions();

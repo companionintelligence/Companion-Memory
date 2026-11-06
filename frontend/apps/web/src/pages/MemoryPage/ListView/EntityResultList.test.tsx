@@ -12,15 +12,26 @@ const ROWS = Array.from({ length: 40 }, (_, index) => ({
   startTime: '2026-10-22T12:00:00.000Z',
 }));
 
-const h = vi.hoisted(() => ({ service: {} as Record<string, unknown> }));
+// `setActiveEntity` is one function for the whole file, as the real one (a `useState` setter) is.
+const h = vi.hoisted(() => ({
+  service: {} as Record<string, unknown>,
+  rowRenders: 0,
+  setActiveEntity: () => {},
+}));
 
 /** What the list's service hands back on its next render. */
-function serve({ rows = 40, loading = false, hasNextPage = false, nameSortCutShort = false } = {}) {
+function serve({
+  rows = 40,
+  loading = false,
+  hasNextPage = false,
+  loadingMore = false,
+  nameSortCutShort = false,
+} = {}) {
   h.service = {
     data: ROWS.slice(0, rows),
     loading,
     hasNextPage,
-    loadingMore: false,
+    loadingMore,
     loadMore: () => {},
     error: undefined,
     refetch: () => {},
@@ -30,11 +41,15 @@ function serve({ rows = 40, loading = false, hasNextPage = false, nameSortCutSho
 }
 
 vi.mock('../useEntityService', () => ({
-  useEntityService: () => [h.service, { setActiveEntity: () => {} }],
+  useEntityService: () => [h.service, { setActiveEntity: h.setActiveEntity }],
 }));
 
 vi.mock('./rows/EventRow', () => ({
-  EventRow: ({ event }: { event: { id: string } }) => <div data-row="">{event.id}</div>,
+  EventRow: ({ event }: { event: { id: string } }) => {
+    h.rowRenders += 1;
+
+    return <div data-row="">{event.id}</div>;
+  },
 }));
 
 vi.mock('@/components/ChatWithAgent', () => ({
@@ -228,5 +243,21 @@ describe('EntityResultList', () => {
 
     expect(screen.getByText('event-0')).toBeInTheDocument();
     expect(screen.queryByTestId('name-sort-cut-short')).not.toBeInTheDocument();
+  });
+});
+
+describe('EntityResultList rows', () => {
+  it("does not re-render the rows when only the list's own state moves", () => {
+    serve({ rows: 5, hasNextPage: true });
+    const list = renderList();
+
+    expect(screen.getAllByText(/^event-/)).toHaveLength(5);
+    h.rowRenders = 0;
+
+    // The next page's skeleton appears; the five rows are the same five nodes.
+    serve({ rows: 5, hasNextPage: true, loadingMore: true });
+    list.rerender();
+
+    expect(h.rowRenders).toBe(0);
   });
 });

@@ -398,6 +398,7 @@
     "actions": "ENABLE_ACTIONS",
     "smart.rotation": "ENABLE_SMART_ROTATION",
     "ask": "ENABLE_ASK",
+    "trust.tasks": "ENABLE_TRUST_TASKS",
     "tools.pendingActions": "ENABLE_PENDING_ACTIONS",
     "graphql.ide": "ENABLE_GRAPHQL_IDE",
     "grounded.prompts": "ENABLE_GROUNDED_PROMPTS",

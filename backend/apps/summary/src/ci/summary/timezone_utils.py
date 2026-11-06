@@ -8,7 +8,8 @@ day (their evening leaks into the next UTC day), so summaries appear shifted by
 the user's UTC offset.
 
 Source of truth: ``ci.users.timezone`` (TEXT, default ``'UTC'``) — the same
-column HBPE and the API's ForecastContextService read.  These helpers run inside
+column HBPE and the API's ForecastContextService read; what to make of the value
+is ``ci.sidecar.timezone``, shared with HBPE.  These helpers run inside
 Temporal *activities* (never the workflow sandbox), so ``zoneinfo`` disk access
 and DB reads are safe here.
 """
@@ -16,21 +17,10 @@ and DB reads are safe here.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from ci.sidecar.timezone import UTC, zone_name_or_utc, zone_of
 
 from .database import db
-
-UTC = ZoneInfo("UTC")
-
-
-def zone_of(name: str | None) -> ZoneInfo:
-    """Return a ``ZoneInfo`` for an IANA name, falling back to UTC if invalid."""
-    if not name:
-        return UTC
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        return UTC
 
 
 def get_user_timezone(user_id: str) -> str:
@@ -46,11 +36,8 @@ def get_user_timezone(user_id: str) -> str:
         )
     except Exception:
         return "UTC"
-    name = rows[0].get("timezone") if rows else None
-    if not name:
-        return "UTC"
     # Degrade an unknown stored value to UTC rather than crash downstream.
-    return name if (name == "UTC" or zone_of(name) is not UTC) else "UTC"
+    return zone_name_or_utc(rows[0].get("timezone") if rows else None)
 
 
 def local_period_window(

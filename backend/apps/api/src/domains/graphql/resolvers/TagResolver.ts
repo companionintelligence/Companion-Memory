@@ -1,5 +1,6 @@
 import { NotFoundException, UseGuards } from '@nestjs/common';
-import { Args, ID, Int, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, ID, Info, Int, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -27,6 +28,8 @@ import {
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagAssignmentCountLoader } from '../loaders/TagAssignmentCountLoader';
+import { TagTaxonomyLoader } from '../loaders/TagTaxonomyLoader';
+import { selectsField } from '../selectsField';
 import { ActionType } from '../types/ActionType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
 import { CommunicationType } from '../types/CommunicationType';
@@ -39,6 +42,7 @@ import { FileType } from '../types/FileType';
 import { GlobalUID } from '../types/GlobalUID';
 import { ItemType } from '../types/ItemType';
 import { NoteType } from '../types/NoteType';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
@@ -82,6 +86,7 @@ export class TagResolver {
     private readonly tagService: TagService,
     private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
+    private readonly tagTaxonomyLoader: TagTaxonomyLoader,
   ) {}
 
   @Query(() => TagConnection)
@@ -150,52 +155,77 @@ export class TagResolver {
     return categories.map((tag) => TagType.toType(tag));
   }
 
+  /**
+   * The entities carrying this tag, newest assignment first, one page from
+   * `entity_tag` (it used to load every assignment and slice in memory). The
+   * cursors are the nodes' own ids, which name the tagged entity; `totalCount`
+   * is the batched assignment count, taken only when the operation selects it.
+   *
+   * The page's cursors come from the assignments read, not from the edges
+   * built: an entity that no longer resolves (deleted since it was tagged) is
+   * dropped from the edges but still advances the cursor, so a page of nothing
+   * but tombstones cannot stall a client at the same `endCursor` for ever.
+   */
   @ResolveField(() => TaggableEntityConnection)
   async entities(
     @Context() context: RequestContext,
     @Parent() parent: TagType,
     @Args() pagination: PaginationArgs,
-  ): Promise<TaggableEntityConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<TaggableEntityConnection>> {
     const serviceContext = toServiceContext(context);
+    const ref = (cursor: string | undefined): EntityIdentifier<TaggableEntity> | null => {
+      if (!cursor) {
+        return null;
+      }
 
-    const tag = await this.tagService.findById(serviceContext, parent.__source.id, {
-      includeEntities: true,
+      const { type, id } = GlobalUID.decode(cursor);
+
+      return { type: type as TaggableEntity, id };
+    };
+
+    const page = await this.tagService.findEntityRefsPage(serviceContext, parent.__source.id, {
+      first: pagination.first,
+      last: pagination.last,
+      after: ref(pagination.after),
+      before: ref(pagination.before),
     });
 
-    if (tag == null || tag.entities == null) {
+    if (page == null) {
       return {
         edges: [],
-        pageInfo: {
-          hasNextPage: false,
-          hasPreviousPage: false,
-          startCursor: null,
-          endCursor: null,
-        },
+        pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
         totalCount: 0,
       };
     }
 
-    const allEntities = tag.entities.map((e) => ({
-      type: e.entityType as TaggableEntity,
-      id: e.entityId,
+    const refs = page.entities.map((assignment) => ({
+      type: assignment.entityType as TaggableEntity,
+      id: assignment.entityId,
     }));
-
-    const { slice, pageInfo, totalCount } = Paginator.paginate(allEntities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode(entity.type, entity.id),
-    });
-
-    const entities = await this.resolveEntities(serviceContext, slice);
+    const [entities, totalCount] = await Promise.all([
+      this.resolveEntities(serviceContext, refs),
+      selectsField(info, 'totalCount')
+        ? this.tagAssignmentCountLoader.load(serviceContext, parent.__source.id)
+        : Promise.resolve(null),
+    ]);
 
     const edges: TaggableEntityEdge[] = entities.map((entity) => ({
       cursor: entity.id,
       node: entity,
     }));
+    const cursorOf = (entityRef: EntityIdentifier<TaggableEntity>) =>
+      GlobalUID.encode(entityRef.type, entityRef.id);
 
     return {
       edges,
-      pageInfo,
-      totalCount,
+      pageInfo: {
+        hasNextPage: page.hasNextPage,
+        hasPreviousPage: page.hasPreviousPage,
+        startCursor: refs.length > 0 ? cursorOf(refs[0]) : null,
+        endCursor: refs.length > 0 ? cursorOf(refs[refs.length - 1]) : null,
+      },
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -217,7 +247,7 @@ export class TagResolver {
   async directions(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getTagDirections(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'directions', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }
@@ -230,7 +260,7 @@ export class TagResolver {
   async categories(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getTagCategories(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'categories', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }
@@ -244,7 +274,7 @@ export class TagResolver {
   async directionOptOuts(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
     const serviceContext = toServiceContext(context);
 
-    const tags = await this.tagService.getCategoryDirectionOptouts(serviceContext, parent.__source.id);
+    const tags = await this.tagTaxonomyLoader.loadFor(serviceContext, 'directionOptOuts', parent.__source.id);
 
     return tags.map((tag) => TagType.toType(tag));
   }

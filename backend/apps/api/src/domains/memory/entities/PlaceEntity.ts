@@ -170,6 +170,13 @@ export class PlaceEntity {
   @JoinColumn({ name: 'owner_user_id' })
   user?: UserEntity;
 
+  /**
+   * The owner's id straight off the row, so a read that does not join `user`
+   * (the lists) still reports it. Never set directly: writes go through `user`.
+   */
+  @Column({ type: 'uuid', name: 'owner_user_id', nullable: true })
+  ownerUserId?: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -197,7 +204,7 @@ export class PlaceEntity {
       isActive: entity.isActive,
       latitude: entity.latitude ?? null,
       longitude: entity.longitude ?? null,
-      userId: entity.user?.id || null,
+      userId: entity.ownerUserId ?? entity.user?.id ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,

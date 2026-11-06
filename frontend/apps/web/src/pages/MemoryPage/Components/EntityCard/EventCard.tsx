@@ -27,9 +27,6 @@ export const EVENT_FRAGMENT = gql(`
     title
     description
     sourceSystem
-    # The connector's catch-all for what has no column — for a social.like
-    # event that is the liked Page's URL, which the drawer offers as a link.
-    metadata
     startTime
     endTime
     timeSource
@@ -57,18 +54,6 @@ export const EVENT_FRAGMENT = gql(`
     mediaSize
     tags {
       label
-    }
-    # What the event is about, for events that ARE a watch/listen/read: the
-    # first linked content rows, with their resolved preview and player.
-    contents(first: 3) {
-      edges {
-        node {
-          id
-          title
-          contentUrl: url
-          ...RichMediaData
-        }
-      }
     }
   }
 `);
