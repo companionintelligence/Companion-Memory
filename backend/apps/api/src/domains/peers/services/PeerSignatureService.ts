@@ -55,6 +55,7 @@ export type SignatureFailure =
   | 'malformed'
   | 'unsupported-components'
   | 'bad-digest'
+  | 'body-not-captured'
   | 'expired'
   | 'window-too-long'
   | 'clock-skew'
@@ -109,6 +110,11 @@ export class PeerSignatureService {
    * make a signature check pass over content the sender never signed, because
    * `JSON.stringify` of a parsed object is not guaranteed to reproduce the
    * input byte for byte.
+   *
+   * `transportHasBody` is whether the request ANNOUNCED a body (see
+   * `transportHasBody` in BodyParserMiddleware), and it is required: whether
+   * bytes were captured depends on which parser ran, so it cannot answer
+   * whether there was a body. A body with no captured bytes is refused.
    */
   async verifyInbound(request: {
     method: string;
@@ -116,6 +122,7 @@ export class PeerSignatureService {
     signatureInput?: string;
     signature?: string;
     contentDigestHeader?: string;
+    transportHasBody: boolean;
     rawBody?: string;
     peerPublicJwk: unknown;
     now?: Date;
@@ -135,7 +142,14 @@ export class PeerSignatureService {
       throw error;
     }
 
-    const hasBody = request.rawBody != null && request.rawBody.length > 0;
+    // A body the transport announced but no parser kept the bytes of cannot be
+    // digested, and must never be mistaken for no body: the signature would
+    // then verify over whatever the body was changed to.
+    if (request.transportHasBody && request.rawBody == null) {
+      return { ok: false, reason: 'body-not-captured' };
+    }
+
+    const hasBody = request.transportHasBody || (request.rawBody != null && request.rawBody.length > 0);
 
     // Derived from the REQUEST, never from the signature -- a sender must not
     // be able to drop the body binding by declining to cover it.
@@ -143,7 +157,7 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unsupported-components' };
     }
 
-    if (hasBody && !verifyContentDigest(request.contentDigestHeader, request.rawBody as string)) {
+    if (hasBody && !verifyContentDigest(request.contentDigestHeader, request.rawBody ?? '')) {
       return { ok: false, reason: 'bad-digest' };
     }
 

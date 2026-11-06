@@ -1,9 +1,10 @@
+import { UnsupportedMediaTypeException } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 
 import { BODY_LIMIT_KEY } from '../../decorators';
-import { BodyParserMiddleware } from '../BodyParserMiddleware';
+import { BodyParserMiddleware, transportHasBody } from '../BodyParserMiddleware';
 
 // Stub the express parsers: capture the options they're constructed with and
 // hand back a pass-through handler so use() completes synchronously.
@@ -172,6 +173,73 @@ describe('BodyParserMiddleware per-route @BodyLimit override', () => {
     expect(runMiddlewareWithRoute('/api/account/export', undefined)).toEqual(
       expect.objectContaining({ jsonLimit: '100kb', urlencodedLimit: '100kb' }),
     );
+  });
+});
+
+describe('BodyParserMiddleware signed peer surface', () => {
+  function run(url: string, headers: Record<string, string>) {
+    jest.clearAllMocks();
+    const middleware = new BodyParserMiddleware({ get: () => undefined } as unknown as Reflector);
+    const req = { originalUrl: url, url, path: url, baseUrl: '', headers } as unknown as Request;
+    const next = jest.fn();
+
+    middleware.use(req, {} as Response, next);
+
+    return { next, jsonOptions: (json as jest.Mock).mock.calls[0]?.[0] };
+  }
+
+  it('refuses a non-JSON body with 415 before any parser runs', () => {
+    for (const url of ['/agent/v1/ask', '/Agent/V1/ask', '/agent/v1/trust-tasks']) {
+      const bodies: Record<string, string>[] = [
+        { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '12' },
+        { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' },
+        { 'content-length': '12' },
+      ];
+
+      for (const headers of bodies) {
+        expect(() => run(url, headers)).toThrow(UnsupportedMediaTypeException);
+        expect(json).not.toHaveBeenCalled();
+        expect(urlencoded).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('captures the raw bytes of a JSON body', () => {
+    const { next, jsonOptions } = run('/agent/v1/ask', {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': '12',
+    });
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(typeof jsonOptions?.verify).toBe('function');
+  });
+
+  it('lets a bodyless request through whatever its content type', () => {
+    const bodyless: Record<string, string>[] = [{}, { 'content-type': 'text/plain', 'content-length': '0' }];
+
+    for (const headers of bodyless) {
+      expect(run('/agent/v1/ask/abc12345', headers).next).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('leaves form bodies alone everywhere else', () => {
+    const { next, jsonOptions } = run('/api/agent/v1/ask', {
+      'content-type': 'application/x-www-form-urlencoded',
+      'content-length': '12',
+    });
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(jsonOptions?.verify).toBeUndefined();
+  });
+});
+
+describe('transportHasBody', () => {
+  it('reads the body from the transport headers, erring towards a body', () => {
+    expect(transportHasBody({})).toBe(false);
+    expect(transportHasBody({ 'content-length': '0' })).toBe(false);
+    expect(transportHasBody({ 'content-length': '1' })).toBe(true);
+    expect(transportHasBody({ 'transfer-encoding': 'chunked' })).toBe(true);
+    expect(transportHasBody({ 'content-length': 'nonsense' })).toBe(true);
   });
 });
 
