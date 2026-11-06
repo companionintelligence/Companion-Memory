@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
+import { useDebounced } from '@ci/common';
 
 import { gql } from '@/graphql';
 
@@ -72,18 +73,6 @@ export const noNameSuggestions: NameSuggestionHook = () => ({
   loadingMore: false,
   loadMore: () => undefined,
 });
-
-function useDebounced(value: string, delayMs = 200): string {
-  const [debounced, setDebounced] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
-
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-
-  return debounced;
-}
 
 function uniqueNames(nodes: ReadonlyArray<{ name?: string | null }>): string[] {
   const seen = new Set<string>();

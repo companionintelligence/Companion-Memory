@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { sleep } from '@ci/common/time/sleep';
 import config from '@ci/configuration';
 import { BACKFILL_JOB_PRIORITY, EventService as SignallingEventService } from '@ci/domains/events';
 import { MediaDimensionsBackfillRequestEvent, MEDIA_DIMENSIONS_QUEUE } from '@ci/domains/files';
@@ -162,10 +163,6 @@ const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
 
 /** Default cap on the post-search_index embed-drain poll. */
 const DRAIN_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * One-shot enrichment orchestrator: runs the maintenance legs (the individual

@@ -123,6 +123,10 @@ export class SavedSearchService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(SavedSearch | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const results = await this.savedSearchRepository.find({
       where: {
         id: In(ids),

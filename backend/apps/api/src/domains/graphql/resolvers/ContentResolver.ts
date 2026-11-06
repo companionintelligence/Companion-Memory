@@ -1,5 +1,6 @@
 import { BadRequestException, UseGuards } from '@nestjs/common';
-import { Args, Float, ID, Parent, Query, Mutation, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, Float, ID, Info, Parent, Query, Mutation, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -13,6 +14,7 @@ import { type ContentFileMedia, ContentFileLoader } from '../loaders/ContentFile
 import { EventLoader } from '../loaders/EventLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { UnfurlLoader } from '../loaders/UnfurlLoader';
+import { selectsField } from '../selectsField';
 import { ContentConnection } from '../types/ContentConnection';
 import { ContentEdge } from '../types/ContentEdge';
 import { ContentFacetsType } from '../types/ContentFacetsType';
@@ -23,6 +25,7 @@ import { EmbedPlayerType } from '../types/EmbedPlayerType';
 import { EntityTagType } from '../types/EntityTagType';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { UnfurlType } from '../types/UnfurlType';
 import { entityOwnerScope } from '../utils/entityOwnerScope';
@@ -262,7 +265,8 @@ export class ContentResolver {
         'Keep only rows delivered by these platforms (the values `contentFacets.sourceSystems` offers) — the same How filter the explorer takes.',
     })
     connectors?: string[],
-  ): Promise<ContentConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<ContentConnection>> {
     const serviceContext = toServiceContext(context);
 
     const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.contentService.findPage(
@@ -279,6 +283,7 @@ export class ContentResolver {
         ...(mimetypes && mimetypes.length > 0 ? { mimetypes } : {}),
         ...(connectors && connectors.length > 0 ? { sourceSystems: connectors } : {}),
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: ContentEdge[] = entities.map((entity) => {
@@ -300,7 +305,7 @@ export class ContentResolver {
     return {
       edges,
       pageInfo,
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 

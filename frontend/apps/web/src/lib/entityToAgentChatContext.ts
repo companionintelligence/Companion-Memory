@@ -57,13 +57,10 @@ function formatWhen(value: unknown, fmt: DateTimeFormatter): string | null {
     return null;
   }
 
-  const date = value instanceof Date ? value : new Date(String(value));
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return fmt.dateTime(date, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.tryDateTime(value instanceof Date ? value : String(value), {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 }
 
 function readTags(record: Record<string, unknown>): string | null {

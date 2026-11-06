@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { sleep } from '@ci/common/time/sleep';
 import { PythonFunctionService } from '@ci/domains/python-functions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
@@ -108,10 +109,6 @@ export interface SummaryBackfillResult {
   daily: SummaryBackfillPhaseResult;
   weekly: SummaryBackfillPhaseResult;
   monthly: SummaryBackfillPhaseResult;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

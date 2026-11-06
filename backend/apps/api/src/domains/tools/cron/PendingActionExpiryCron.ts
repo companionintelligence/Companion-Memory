@@ -25,8 +25,6 @@ const PENDING_ACTION_EXPIRY_CRON = '0 */5 * * * *';
  */
 @Injectable()
 export class PendingActionExpiryCron {
-  private running = false;
-
   constructor(
     private readonly pendingActions: PendingActionService,
     private readonly logger: LoggerService,
@@ -34,26 +32,13 @@ export class PendingActionExpiryCron {
     this.logger.setContext(PendingActionExpiryCron.name);
   }
 
-  @Cron(PENDING_ACTION_EXPIRY_CRON, { name: 'PendingActionExpiryCron.sweepPendingActions' })
+  // `exclusive`: a slow sweep must not stack — two overlapping runs would
+  // contend on the same rows and buy nothing, since whatever this run leaves
+  // behind is still overdue five minutes from now. The decorator holds that
+  // guard and logs the skip and any failure (see AskExpiryCron).
+  @Cron(PENDING_ACTION_EXPIRY_CRON, { name: 'PendingActionExpiryCron.sweepPendingActions', exclusive: true })
   async sweepPendingActions(): Promise<void> {
-    // A slow sweep must not stack: two overlapping runs would contend on the
-    // same rows and buy nothing, since whatever this run leaves behind is still
-    // overdue five minutes from now.
-    if (this.running) {
-      this.logger.warn('Skipping pending-action sweep; previous run still in progress');
-
-      return;
-    }
-
-    this.running = true;
-
-    try {
-      await this.pendingActions.sweep();
-    } catch (err) {
-      this.logger.error('Pending-action sweep failed', err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      this.running = false;
-    }
+    await this.pendingActions.sweep();
   }
 }
 

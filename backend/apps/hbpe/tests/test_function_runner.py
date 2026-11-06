@@ -1,9 +1,10 @@
 """
-Unit tests for the HBPE function runner (ci.hbpe.runner).
+HBPE's use of the shared function runner (ci.sidecar.runner).
 
-The HBPE runner shares the summary runner's pool/registry semantics but
-delivers callbacks through requests (in a thread) instead of httpx. These
-tests pin the registry gate and the callback retry path on that transport.
+The pool, the registry gate and the callback path are tested with the runner
+itself (backend/packages/sidecar-core/tests/test_runner.py). What is tested
+here is HBPE's own: that its registry matches the NestJS allowlist, and that a
+run's token is what the GraphQL client presents, for that run only.
 """
 
 from __future__ import annotations
@@ -12,16 +13,8 @@ import asyncio
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
 
-from ci.hbpe import runner as runner_module
 from ci.hbpe.runner import FunctionRunner, RunRequest
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, text: str = "") -> None:
-        self.status_code = status_code
-        self.text = text
 
 
 async def _wait_for(predicate) -> None:
@@ -37,15 +30,6 @@ def _stop_workers(runner: FunctionRunner) -> None:
         worker.cancel()
 
 
-def test_submit_rejects_unknown_functions():
-    runner = FunctionRunner({}, concurrency=1)
-
-    with pytest.raises(HTTPException) as exc_info:
-        runner.submit(RunRequest(function="nope"))
-
-    assert exc_info.value.status_code == 400
-
-
 def test_registry_names_match_the_nest_allowlist():
     from ci.hbpe.functions import FUNCTIONS
 
@@ -55,53 +39,7 @@ def test_registry_names_match_the_nest_allowlist():
 
 
 @pytest.mark.asyncio
-async def test_callback_retries_then_delivers(monkeypatch):
-    calls: list[dict[str, Any]] = []
-    responses: list[Any] = [_FakeResponse(503, "starting"), _FakeResponse(204)]
-
-    def fake_post(url: str, json: Any = None, headers: Any = None, timeout: Any = None):
-        calls.append({"url": url, "json": json, "headers": headers})
-        response = responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    monkeypatch.setattr(runner_module.requests, "post", fake_post)
-    monkeypatch.setattr(runner_module, "CALLBACK_RETRY_DELAYS", (0,))
-    monkeypatch.setattr(runner_module.settings, "api_url", "http://api:3030")
-
-    async def noop(**_: Any) -> dict:
-        return {"ok": True}
-
-    runner = FunctionRunner({"noop": noop}, concurrency=1)
-
-    try:
-        runner.submit(
-            RunRequest(
-                function="noop",
-                args={"user_id": "user-1"},
-                job_id="job-1",
-                queue="py-fn-hbpe",
-                access_token="run-token-from-the-api",
-            )
-        )
-
-        await _wait_for(lambda: len(calls) == 2)
-
-        assert calls[-1]["url"] == "http://api:3030/function-runs/callback"
-        assert calls[-1]["json"]["status"] == "completed"
-        assert calls[-1]["json"]["job_id"] == "job-1"
-        # The callback presents the per-run token the API attached to the request —
-        # echoed, never minted here: this service holds no signing secret any more.
-        assert calls[-1]["headers"] == {
-            "Authorization": "Bearer run-token-from-the-api"
-        }
-    finally:
-        _stop_workers(runner)
-
-
-@pytest.mark.asyncio
-async def test_run_token_is_registered_for_graphql_then_cleared(monkeypatch):
+async def test_run_token_is_registered_for_graphql_then_cleared():
     """The run's token is what data_client's GraphQL calls present — for that run only."""
     from ci.hbpe import graphql_client
 
@@ -111,10 +49,7 @@ async def test_run_token_is_registered_for_graphql_then_cleared(monkeypatch):
         seen.append(graphql_client._get_token(kwargs["user_id"]))
         return {"ok": True}
 
-    monkeypatch.setattr(
-        runner_module.requests, "post", lambda *a, **k: _FakeResponse(204)
-    )
-    monkeypatch.setattr(runner_module, "CALLBACK_RETRY_DELAYS", (0,))
+    # No job id, so no callback leaves the process.
     runner = FunctionRunner({"peek": peek}, concurrency=1)
     try:
         record = runner.submit(
@@ -138,24 +73,3 @@ def test_no_token_means_no_graphql():
 
     with pytest.raises(graphql_client.GraphQLUnavailable):
         graphql_client._get_token("nobody")
-
-
-def test_transport_errors_are_named_even_when_their_message_is_empty():
-    """A connect timeout's str() is "" in both httpx and requests; the log read `error=` for hours."""
-    from ci.hbpe.runner import callback_unreachable_hint, describe_transport_error
-
-    class ConnectTimeout(Exception):
-        pass
-
-    assert describe_transport_error(ConnectTimeout()) == "ConnectTimeout"
-    assert describe_transport_error(ValueError("bad body")) == "ValueError: bad body"
-
-    # The dev stack: API on the host, this sidecar in a container, a firewall between them.
-    hint = callback_unreachable_hint(
-        "http://host.docker.internal:3030/function-runs/callback"
-    )
-    assert "ufw allow" in hint and "port 3030" in hint
-    # A compose/Hub install reaches the API inside one network; no firewall advice there.
-    assert "ufw" not in callback_unreachable_hint(
-        "http://api:3030/function-runs/callback"
-    )

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
+import { prefersReducedMotion } from '@ci/common';
+
 /** A closed drawer can be pulled out by a touch that starts this close (px) to the left edge. */
 export const EDGE_PX = 40;
 
@@ -77,10 +79,6 @@ export function touchBelongsElsewhere(target: EventTarget | null): boolean {
   }
 
   return false;
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
 function releaseVelocity(samples: Gesture['samples']): number {

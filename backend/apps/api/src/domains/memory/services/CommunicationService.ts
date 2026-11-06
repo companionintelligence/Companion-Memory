@@ -25,6 +25,7 @@ import {
   keysetPaginate,
   keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
   type OwnedLink,
   refuseForeignLinks,
@@ -584,8 +585,13 @@ export class CommunicationService {
    * DESC, only one page (+1 sentinel) is read from Postgres via the
    * (user_id, time) index instead of loading every row into memory.
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Communication>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Communication>> {
     const page = await keysetPaginate(this.communicationRepository, args, {
+      ...options,
       alias: 'communication',
       timeProp: 'time',
       userId: context.userId,
@@ -611,6 +617,10 @@ export class CommunicationService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Communication | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.communicationRepository.find({
       where: {
         id: In(ids),

@@ -32,8 +32,13 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ci.sidecar.llm_host import (
+    DEFAULT_HOST_GATEWAY,
+    LOOPBACK_HOSTS,
+    running_in_container,
+)
+
 from .config import NoChatModelError, resolve_llm_model, settings
-from .llm_host import DEFAULT_HOST_GATEWAY, LOOPBACK_HOSTS, running_in_container
 
 logger = logging.getLogger(__name__)
 

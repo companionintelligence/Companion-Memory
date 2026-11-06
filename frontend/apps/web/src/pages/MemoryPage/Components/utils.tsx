@@ -1,3 +1,4 @@
+import { IEC_UNITS, formatBytes as formatSharedBytes } from '@ci/common';
 import { Calendar, User, MapPin, Package, FileText, Contact, Lightbulb, Target } from '@ci/shadcn/icons';
 
 import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
@@ -512,21 +513,13 @@ export function getEntityTypeIcon(type: string) {
   }
 }
 
-// Got from the top answer here: https://stackoverflow.com/questions/15900485/correct-way-to-convert-size-in-bytes-to-kb-mb-gb-in-javascript
+/** "1.5 KiB" — the explorer's binary units, a fraction only where there is one, a string taken as digits. */
 export function formatBytes(bytes: number | string, decimals = 2) {
-  if (typeof bytes === 'string') {
-    bytes = parseInt(bytes);
-  }
+  const count = typeof bytes === 'string' ? parseInt(bytes) : bytes;
 
-  if (!+bytes) {
+  if (!+count) {
     return '0 Bytes';
   }
 
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  return formatSharedBytes(count, { units: IEC_UNITS, decimals, trimZeros: true });
 }

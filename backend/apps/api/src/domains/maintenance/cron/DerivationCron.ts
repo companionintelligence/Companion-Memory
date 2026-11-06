@@ -3,7 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
 import { BACKFILL_JOB_PRIORITY, EventService } from '@ci/domains/events';
 import { listOnboardedUserIds } from '@ci/domains/user';
 
@@ -79,10 +79,11 @@ export class DerivationCron {
     }
 
     const dayKey = now.toISOString().slice(0, 10);
-    let enqueued = 0;
-
-    for (const userId of userIds) {
-      try {
+    // Per-user, exactly as the Python fan-out does: one user's send failing is
+    // not a reason for the other users to lose the night.
+    const { enqueued } = await fanOutPerUser(
+      userIds,
+      async (userId) => {
         const jobIds = await this.eventService.send(
           DerivationRunRequestEvent,
           { userId, dayKey, requestedBy: 'DerivationCron' },
@@ -95,18 +96,10 @@ export class DerivationCron {
           },
         );
 
-        if (jobIds.length > 0) {
-          enqueued += 1;
-        }
-      } catch (err) {
-        // Per-user, exactly as the Python fan-out does: one user's send failing
-        // is not a reason for the other users to lose the night.
-        this.logger.error(
-          `Failed to enqueue derivation run for user ${userId}`,
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
+        return jobIds.length > 0;
+      },
+      { logger: this.logger, label: 'derivation run' },
+    );
 
     this.logger.log('Derivation fan-out enqueued', { dayKey, users: userIds.length, enqueued });
 

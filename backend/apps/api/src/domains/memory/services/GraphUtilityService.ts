@@ -1101,6 +1101,69 @@ export class GraphUtilityService {
   }
 
   /**
+   * Each entity's newest `limit` active edges, for a page of entities in one
+   * read: `ROW_NUMBER()` over every entity's edges in the given direction, the
+   * rows ranked within the limit, hydrated through {@link getRelationships}. The
+   * `outgoingRelationships` / `incomingRelationships` GraphQL fields used to read
+   * EVERY edge of each person or place on a page, one query per row, and slice
+   * in memory.
+   */
+  async getRelationshipsPerEntity(
+    ownerUserId: string,
+    options: { entityIds: string[]; direction: 'outbound' | 'inbound'; limit: number },
+  ): Promise<Map<string, RelationshipEntity[]>> {
+    const grouped = new Map<string, RelationshipEntity[]>();
+
+    if (options.entityIds.length === 0 || options.limit <= 0) {
+      return grouped;
+    }
+
+    const column = options.direction === 'outbound' ? 'from_entity_id' : 'to_entity_id';
+    const ranked = await this.relationshipRepo.manager
+      .createQueryBuilder()
+      .select('ranked.relationship_id', 'relationship_id')
+      .addSelect('ranked.entity_id', 'entity_id')
+      .from(
+        (qb) =>
+          qb
+            .select('rel.relationship_id', 'relationship_id')
+            .addSelect(`rel.${column}`, 'entity_id')
+            .addSelect(
+              `ROW_NUMBER() OVER (PARTITION BY rel.${column} ORDER BY rel.created_at DESC, rel.relationship_id)`,
+              'rn',
+            )
+            .from(RelationshipEntity, 'rel')
+            .where('rel.owner_user_id = :ownerUserId', { ownerUserId })
+            .andWhere('rel.is_active = true')
+            .andWhere(`rel.${column} IN (:...entityIds)`, { entityIds: options.entityIds }),
+        'ranked',
+      )
+      .where('ranked.rn <= :limit', { limit: options.limit })
+      .orderBy('ranked.entity_id', 'ASC')
+      .addOrderBy('ranked.rn', 'ASC')
+      .getRawMany<{ relationship_id: string; entity_id: string }>();
+
+    if (ranked.length === 0) {
+      return grouped;
+    }
+
+    const rows = await this.getRelationships(ownerUserId, {
+      relationshipIds: ranked.map((row) => row.relationship_id),
+    });
+    const byId = new Map(rows.map((row) => [row.relationship_id, row]));
+
+    for (const { relationship_id, entity_id } of ranked) {
+      const row = byId.get(relationship_id);
+
+      if (row) {
+        grouped.set(entity_id, [...(grouped.get(entity_id) ?? []), row]);
+      }
+    }
+
+    return grouped;
+  }
+
+  /**
    * The active relationship a write of this edge lands on when no row is named
    * by id: the one on its `(from, to, type)` coordinate — the columns of
    * `relationships_unique_directed_idx`, which allows one active edge there —

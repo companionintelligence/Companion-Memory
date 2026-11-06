@@ -4,10 +4,10 @@ import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { PersonService } from '@ci/domains/memory';
 import { PeerLinkService } from '@ci/domains/peers';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
+import { PersonLoader } from '../loaders/PersonLoader';
 import { GlobalUID } from '../types/GlobalUID';
 import {
   CreatePeerLinkInput,
@@ -73,7 +73,7 @@ import {
 export class PeerLinkResolver {
   constructor(
     private readonly peerLinkService: PeerLinkService,
-    private readonly personService: PersonService,
+    private readonly personLoader: PersonLoader,
     @Optional() private readonly featureService?: FeatureService,
   ) {}
 
@@ -269,7 +269,7 @@ export class PeerLinkResolver {
     }
 
     const serviceContext = toServiceContext(context);
-    const person = await this.personService.findById(
+    const person = await this.personLoader.load(
       serviceContext,
       GlobalUID.parse('person', parent.personEntityId),
     );
