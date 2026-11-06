@@ -25,14 +25,14 @@
   },
   "packageManager": "yarn@4.9.1",
   "dependencies": {
-    "commander": "^14.0.0"
+    "commander": "^15.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.21",
+    "@types/node": "^26.6.6",
     "rimraf": "^6.0.1",
-    "tsup": "^8.5.0",
+    "tsup": "^9.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.12"
+    "vitest": "^5.0.5"
   }
 }
