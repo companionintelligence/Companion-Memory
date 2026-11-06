@@ -38,6 +38,10 @@ import { decodeMultibaseBase58btc, encodeMultibaseBase58btc, MultibaseError } fr
  * it must be identical to the document's. The specification only requires the document's to START
  * WITH the proof's and then hashes the proof's, so a proof it accepts can be refused here. That
  * fails closed, and the credentials this module reads and writes never differ.
+ *
+ * A proof with NO `@context` is verified over its options as they are, as the specification's
+ * verification does (only creation copies the document's `@context` into the proof, and
+ * `createProof` always does).
  */
 
 export const EDDSA_JCS_2022 = 'eddsa-jcs-2022';

@@ -41,6 +41,27 @@ describe('parseDateTime', () => {
     expect(parseDateTime(text)).toBeNull();
   });
 
+  it.each([
+    [1, 31],
+    [2, 28],
+    [3, 31],
+    [4, 30],
+    [5, 31],
+    [6, 30],
+    [7, 31],
+    [8, 31],
+    [9, 30],
+    [10, 31],
+    [11, 30],
+    [12, 31],
+  ])('month %i has %i days in a common year: the last is read and the next is refused', (month, days) => {
+    const stamp = (day: number) =>
+      `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00Z`;
+
+    expect(parseDateTime(stamp(days))).not.toBeNull();
+    expect(parseDateTime(stamp(days + 1))).toBeNull();
+  });
+
   it.each([undefined, null, 0, 1_700_000_000_000, {}, [], new Date(0)])(
     'refuses the non-string %p',
     (value) => {

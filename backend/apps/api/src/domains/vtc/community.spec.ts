@@ -170,7 +170,7 @@ describe('StatusSlots', () => {
 
     expect(() =>
       StatusSlots.restore({ statusList: encodeBitstring(small), allocated: encodeBitstring(small) }),
-    ).toThrow('do not describe the same list');
+    ).toThrow('entry floor');
   });
 
   describe('refuses to restore a snapshot that breaks what the allocator relies on', () => {
@@ -190,6 +190,29 @@ describe('StatusSlots', () => {
       expect(() =>
         StatusSlots.restore({ statusList: encodeBitstring(status), allocated: encodeBitstring(decoys()) }),
       ).toThrow('never handed out');
+    });
+
+    it.each([4, 1000, MIN_STATUS_LIST_ENTRIES - 1])(
+      'a revoked slot that was never handed out, at %i (first, middle and last byte)',
+      (index) => {
+        const status = decoys();
+        writeStatus(status, index, 1);
+
+        expect(() =>
+          StatusSlots.restore({ statusList: encodeBitstring(status), allocated: encodeBitstring(decoys()) }),
+        ).toThrow('never handed out');
+      },
+    );
+
+    it.each([0, 1, 2, 3])('a snapshot missing only decoy slot %i', (missing) => {
+      const status = decoys();
+      const allocated = decoys();
+      writeStatus(status, missing, 0);
+      writeStatus(allocated, missing, 0);
+
+      expect(() =>
+        StatusSlots.restore({ statusList: encodeBitstring(status), allocated: encodeBitstring(allocated) }),
+      ).toThrow('decoy slots');
     });
 
     it.each([
@@ -235,7 +258,8 @@ describe('StatusSlots', () => {
     };
 
     it('hands out exactly the free slots, once each, then reports the list full', () => {
-      const free = [4, 1000, 65_535, 131_071];
+      // 1000 to 1007 is one whole byte of free slots, with every neighbour taken.
+      const free = [4, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 65_535, 131_071];
       const slots = StatusSlots.restore(nearlyFull(free));
 
       const drawn = free.map(() => slots.allocate());
@@ -244,22 +268,44 @@ describe('StatusSlots', () => {
       expect(() => slots.allocate()).toThrow(StatusListFullError);
     });
 
+    it('counts a whole byte of free slots as eight, so each of them is as likely as the one far away', () => {
+      // 1000 to 1007 fill one byte; 90,000 is alone in another. Nine slots, so a draw is 1 in 9.
+      const free = [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 90_000];
+      const slots = StatusSlots.restore(nearlyFull(free));
+      const counts = new Map<number, number>(free.map((index) => [index, 0]));
+
+      for (let trial = 0; trial < 3_600; trial += 1) {
+        const index = slots.allocate();
+        counts.set(index, (counts.get(index) ?? 0) + 1);
+        slots.release(index);
+      }
+
+      for (const index of free) {
+        // 400 expected, standard deviation about 19: a band of 4.5 deviations. Counting the byte as
+        // seven slots would make 1007 unreachable.
+        expect(counts.get(index)).toBeGreaterThan(315);
+        expect(counts.get(index)).toBeLessThan(485);
+      }
+    });
+
     it('draws uniformly from them, not by walking on from a random start', () => {
       // 1000 and 1001 sit just after a long taken run; 90,000 sits after an even longer one. A walk
       // from a random start would pick 90,000 about nine times in ten.
       const free = [1000, 1001, 90_000];
-      const snapshot = nearlyFull(free);
+      const slots = StatusSlots.restore(nearlyFull(free));
       const counts = new Map<number, number>(free.map((index) => [index, 0]));
 
-      for (let trial = 0; trial < 900; trial += 1) {
-        const index = StatusSlots.restore(snapshot).allocate();
+      for (let trial = 0; trial < 12_000; trial += 1) {
+        const index = slots.allocate();
         counts.set(index, (counts.get(index) ?? 0) + 1);
+        slots.release(index);
       }
 
       for (const index of free) {
-        // 300 expected, standard deviation about 14: this band is almost six deviations wide.
-        expect(counts.get(index)).toBeGreaterThan(220);
-        expect(counts.get(index)).toBeLessThan(380);
+        // 4,000 expected, standard deviation about 52: a band of 4.5 deviations. A draw that favours
+        // one slot by a tenth of its share (400 draws) moves its count out of the band.
+        expect(counts.get(index)).toBeGreaterThan(3_768);
+        expect(counts.get(index)).toBeLessThan(4_232);
       }
     });
   });
@@ -384,6 +430,10 @@ describe('CommunityIssuer', () => {
     expect(await verifyProof(list, { resolveKey })).toMatchObject({ ok: true });
     expect(evaluateStatus(entry(revoked.statusIndex), list, { now: NOW })).toMatchObject({ valid: false });
     expect(evaluateStatus(entry(kept.statusIndex), list, { now: NOW })).toMatchObject({ valid: true });
+    expect(restarted.revocation.isAllocated(kept.statusIndex)).toBe(true);
+    expect(restarted.revocation.isAllocated(revoked.statusIndex)).toBe(true);
+    expect(restarted.revocation.isRevoked(revoked.statusIndex)).toBe(true);
+    expect(restarted.revocation.isRevoked(kept.statusIndex)).toBe(false);
 
     // And it never hands a persisted slot to someone new.
     const next = await Promise.all(Array.from({ length: 300 }, () => restarted.issueMembership(MEMBER)));
@@ -425,6 +475,19 @@ describe('CommunityIssuer', () => {
     await expect(issuer.issueMembership('https://example.com/member')).rejects.toThrow('SUBJECT');
 
     expect(issuer.revocation.snapshot().allocated).toBe(before);
+  });
+
+  it.each([
+    ['membershipValidityMs', 999],
+    ['membershipValidityMs', Number.NaN],
+    ['listValidityMs', 0],
+    ['listValidityMs', 500],
+    ['listValidityMs', -1000],
+    ['listValidityMs', Number.POSITIVE_INFINITY],
+    ['listTtlMs', 0],
+    ['listTtlMs', Number.NaN],
+  ])('refuses %s of %p, which would date a list to end before it starts or never end', (name, value) => {
+    expect(() => community({ [name]: value })).toThrow(RangeError);
   });
 
   it('refuses a signing key that is not under the community DID', () => {

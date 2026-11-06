@@ -104,8 +104,12 @@ export class StatusSlots {
   static restore(snapshot: StatusSlotsSnapshot): StatusSlots {
     const status = expandBitstring(snapshot.statusList);
     const allocated = expandBitstring(snapshot.allocated);
-    if (status.length !== allocated.length || status.length * 8 < MIN_STATUS_LIST_ENTRIES) {
+    if (status.length !== allocated.length) {
       throw new RangeError('the persisted status list and allocation map do not describe the same list');
+    }
+
+    if (status.length * 8 < MIN_STATUS_LIST_ENTRIES) {
+      throw new RangeError(`the persisted list is below the ${MIN_STATUS_LIST_ENTRIES}-entry floor`);
     }
 
     // The invariants the allocator relies on. A snapshot that breaks them would hand out a slot
@@ -268,6 +272,19 @@ export class CommunityIssuer {
   constructor(private readonly options: CommunityIssuerOptions) {
     if (!options.signer.verificationMethod.startsWith(`${options.did}#`)) {
       throw new Error(`${options.signer.verificationMethod} is not a key of ${options.did}`);
+    }
+
+    // A list valid for under a second would be dated to end before it begins, and every verifier
+    // would refuse it at publication.
+    const periods: Array<[string, number | undefined, number]> = [
+      ['membershipValidityMs', options.membershipValidityMs, 1000],
+      ['listValidityMs', options.listValidityMs, 1000],
+      ['listTtlMs', options.listTtlMs, 1],
+    ];
+    for (const [name, value, floor] of periods) {
+      if (value !== undefined && !(Number.isFinite(value) && value >= floor)) {
+        throw new RangeError(`${name} must be a finite number of milliseconds, ${floor} or more`);
+      }
     }
 
     this.revocation = options.revocation ?? StatusSlots.create();

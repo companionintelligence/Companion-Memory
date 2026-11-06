@@ -151,6 +151,10 @@ export function expandBitstring(encodedList: unknown): Uint8Array {
 }
 
 function checkSlot(bits: Uint8Array, index: number, size: number): number {
+  if (!Number.isInteger(size) || size < 1 || size > MAX_STATUS_SIZE) {
+    throw new StatusListError('RANGE_ERROR', `a slot is 1 to ${MAX_STATUS_SIZE} bits wide`);
+  }
+
   const first = index * size;
   if (!Number.isSafeInteger(index) || index < 0 || first + size > bits.length * 8) {
     throw new StatusListError('RANGE_ERROR', `slot ${index} is outside the list`);
@@ -241,10 +245,19 @@ export function evaluateStatus(
     throw invalid('not a BitstringStatusListCredential');
   }
 
-  // `id` is optional in the specification. When the list states one it must be the URL it was
-  // fetched from, or one list could be served in place of another.
-  if (listCredential.id !== undefined && listCredential.id !== entry.statusListCredential) {
-    throw invalid('the list credential id differs from statusListCredential');
+  if (!Number.isInteger(entry.statusSize) || entry.statusSize < 1 || entry.statusSize > MAX_STATUS_SIZE) {
+    throw invalid(`statusSize must be an integer from 1 to ${MAX_STATUS_SIZE}`);
+  }
+
+  // `id` is optional in the specification, but a list that does not say which URL it is could be
+  // any list the same issuer signed, served in place of this one. Stricter than the specification,
+  // and every list OpenVTC and this module publish states its id.
+  if (listCredential.id !== entry.statusListCredential) {
+    throw invalid(
+      listCredential.id === undefined
+        ? 'the list credential states no id'
+        : 'the list credential id differs from statusListCredential',
+    );
   }
 
   // Every time comparison below is written as "accept only if", so a clock or allowance that is not

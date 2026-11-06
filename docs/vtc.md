@@ -37,17 +37,17 @@ from `domains/peers` and `domains/peers` does not import it.
 | `jcs.ts` | RFC 8785 canonical JSON; refuses what has no JSON form | RFC 8785 §3.2.2–3.2.3 sample, sorting data, all 24 Appendix B numbers |
 | `multibase.ts` | `z` base58btc and `u` base64url, one prefix per decoder | Bitcoin Core base58 vectors (re-derived by an independent encoder) |
 | `dateTime.ts` | `xsd:dateTimeStamp` with calendar checks V8 does not make | `2026-02-30` rolls forward in `Date.parse`; here it is refused |
-| `ed25519.ts` | Ed25519 over `node:crypto`, `Signer` interface | RFC 8032 test 1; a non-canonical `S` is refused |
+| `ed25519.ts` | Ed25519 over `node:crypto`, `Signer` interface; small-order public keys (which sign anything) are refused | RFC 8032 test 1; a non-canonical `S` is refused |
 | `didKey.ts` | `did:key` for Ed25519 only | W3C published key pair |
 | `keyResolver.ts` | Which key may sign for an issuer: own `did:key`, or an operator-pinned community key | tests |
-| `dataIntegrity.ts` | `eddsa-jcs-2022` create and verify; refuses proof sets and proofs naming `previousProof`, `domain`, `challenge`, `nonce` or `expires`; requires the proof `@context` to equal the document's (stricter than W3C) | W3C `vc-di-eddsa` Appendix B.3: hashes, **signature** and `proofValue` reproduced from the published secret key |
+| `dataIntegrity.ts` | `eddsa-jcs-2022` create and verify; refuses proof sets and proofs naming `previousProof`, `domain`, `challenge`, `nonce` or `expires`; requires a proof `@context`, when there is one, to equal the document's (stricter than W3C) | W3C `vc-di-eddsa` Appendix B.3: hashes, **signature** and `proofValue` reproduced from the published secret key |
 | `dtgCredential.ts` | Strict reader for the DTG v1 envelope; deliberately stricter than the reference on `@context` (exactly the two contexts, nothing after them) | `dtg-credentials` README parse rules |
-| `statusList.ts` | Bitstring Status List: encode, expand, read, write, evaluate | the specification's own `encodedList` example and §3.2 Validate Algorithm |
+| `statusList.ts` | Bitstring Status List: encode, expand, read, write, evaluate; a list must state an `id` equal to its URL (stricter than the specification) | the specification's own `encodedList` example and §3.2 Validate Algorithm |
 | `recognition.ts` | `createMembershipRecognizer`: is this a current member of a community on my list | tests |
 | `community.ts` | `CommunityIssuer`: issue a membership credential, revoke, publish the list; `StatusSlots` | OpenVTC `docs/03-vtc/credentials.md` |
 | `auditChain.ts` | HMAC-SHA-256 chained log of decisions | tests |
 
-`cd backend/apps/api && yarn jest src/domains/vtc` runs the module's suites (534 tests in 12 suites as of
+`cd backend/apps/api && yarn jest src/domains/vtc` runs the module's suites (597 tests in 12 suites as of
 2026-11-05) in about two seconds. No new dependency was added: everything uses `node:crypto` and `node:zlib`.
 
 ## Recognising a membership
@@ -82,7 +82,7 @@ A credential is accepted only when **all** of these hold, checked in this order,
 failure: it parses as a DTG v1 membership credential and is the community's **grant** (one carrying
 `credentialSubject.digestMultibase` is a member's acknowledgement, the member speaking about the
 community, and is refused); its issuer is on the box's list; its `issuerScope` is `public`; its proof
-verifies under a key pinned for that issuer; it is inside a finite validity period no longer than the
+verifies under a key tied to that issuer (pinned for it, or the issuer's own `did:key`); it is inside a finite validity period no longer than the
 community's cap (90 days by default); it belongs to the presenter when the caller says who that is;
 and every revocation and suspension entry it carries is clear in a status list that the same
 community signed, that has not expired, and that is no older than `statusListMaxAgeMs` (24 hours by
@@ -91,9 +91,9 @@ default) counted from the list's `validFrom`.
 Properties the caller can rely on:
 
 - **Fail closed.** An unreachable, unsigned, stale (past its `validUntil`, or older than
-  `statusListMaxAgeMs`), short or wrong-purpose status list, a missing status entry, an unknown
-  purpose, and a clock or allowance that is not a finite number are all refusals. Nothing defaults
-  to valid.
+  `statusListMaxAgeMs`), short or wrong-purpose status list, a list that states no `id` of its own, a
+  credential with no status entry (unless `requireStatus` is turned off), an unknown purpose, and a
+  clock or allowance that is not a finite number are all refusals. Nothing defaults to valid.
 - **No request for an unverified credential.** The status list URL comes from the credential, so it
   is fetched only after the proof has shown a recognised community signed that URL.
 - **Never throws.** A bug comes back as `VERIFIER_ERROR`.
@@ -185,7 +185,7 @@ the date given; **manual** done once by hand and not repeatable from the reposit
 | base58btc and multikey handling is correct | Bitcoin vectors; the published public key equals the one derived from the published secret key | **[V]** |
 | Ed25519 matches RFC 8032 and refuses a malleated signature | RFC 8032 test 1 reproduced byte for byte; `S + L` and every single-bit change refused (`ed25519.spec.ts`) | **[V]** |
 | Status list reading follows the specification | The specification's `encodedList` example expands to 16,384 zero bytes; bit 0 is the left-most bit; §3.2 steps in `statusList.spec.ts` | **[V]** against the example, **[docs]** for the algorithm |
-| The specs notice a defect | 46 planted defects, each turned a suite red; none survived the final run (2026-11-06). The script is not in the repository | **manual** |
+| The specs notice a defect | 71 planted defects, each turned a suite red; none survived the final run (2026-11-05). The script is not in the repository | **manual** |
 | OpenVTC's live community "The First VTC" (`first.openvtc.net`, a test community for the Decentralized Trust Graph working groups) publishes a status list this module can read | Its revocation list has a two-member proof set (`eddsa-jcs-2022` and `mldsa44-jcs-2024`) and an `encodedList` without the multibase `u` prefix. This module refuses both. It has `validFrom` (the request time) and no `validUntil` or `ttl`, and is served `no-store` | **[obs]** 2026-11-05: **refused today** |
 | OpenVTC's status lists carry `validUntil` | No (same observation; OpenVTC's `vtc-service/src/status_list/credential.rs` sets `valid_from` only) | **[obs]** |
 | A credential issued by OpenVTC's own `vtc` verifies here | not run | **UNKNOWN** |

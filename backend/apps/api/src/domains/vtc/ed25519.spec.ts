@@ -1,6 +1,13 @@
 import { generateKeyPairSync } from 'node:crypto';
 
-import { LocalSigner, privateKeyFromSeed, publicKeyObject, rawPublicKey, verifyEd25519 } from './ed25519';
+import {
+  isSmallOrderPublicKey,
+  LocalSigner,
+  privateKeyFromSeed,
+  publicKeyObject,
+  rawPublicKey,
+  verifyEd25519,
+} from './ed25519';
 
 /**
  * RFC 8032 §7.1, "TEST 1": the empty message. The seed, public key and signature are copied from
@@ -97,5 +104,47 @@ describe('Ed25519 over node:crypto', () => {
     expect(() => privateKeyFromSeed(new Uint8Array(31))).toThrow(RangeError);
     expect(() => privateKeyFromSeed(new Uint8Array(33))).toThrow(RangeError);
     expect(() => publicKeyObject(new Uint8Array(31))).toThrow(RangeError);
+  });
+});
+
+describe('small-order public keys', () => {
+  // The eight points whose order divides 8, and their non-canonical encodings (libsodium's blocklist).
+  const SMALL_ORDER: Array<[string, string]> = [
+    ['the identity point (y = 1)', `01${'00'.repeat(31)}`],
+    ['y = 0, order 4', '00'.repeat(32)],
+    ['y = p - 1, order 2', `ec${'ff'.repeat(30)}7f`],
+    ['y = p, the non-canonical zero', `ed${'ff'.repeat(30)}7f`],
+    ['y = p + 1, the non-canonical identity', `ee${'ff'.repeat(30)}7f`],
+    ['an order-8 point', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'],
+    ['the other order-8 point', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a'],
+  ];
+
+  it.each(SMALL_ORDER)('%s is recognised, with or without the sign bit', (_name, hexKey) => {
+    const key = hex(hexKey);
+    const withSign = new Uint8Array(key);
+    withSign[31] = (withSign[31] ?? 0) | 0x80;
+
+    expect(isSmallOrderPublicKey(key)).toBe(true);
+    expect(isSmallOrderPublicKey(withSign)).toBe(true);
+  });
+
+  it('verifies nothing under the identity point: a signature made of R = identity and S = 0 is refused', () => {
+    // Without the check, OpenSSL accepts this for every message: [0]B = identity + [k]identity.
+    const signature = new Uint8Array(64);
+    signature[0] = 1;
+
+    expect(verifyEd25519(hex(SMALL_ORDER[0]?.[1] ?? ''), Buffer.from('any message'), signature)).toBe(false);
+    expect(verifyEd25519(hex(SMALL_ORDER[0]?.[1] ?? ''), Buffer.from('another one'), signature)).toBe(false);
+  });
+
+  it.each(SMALL_ORDER)('%s verifies no all-zero signature either', (_name, hexKey) => {
+    expect(verifyEd25519(hex(hexKey), Buffer.from('message'), new Uint8Array(64))).toBe(false);
+  });
+
+  it('does not mistake an honest key, or a key of the wrong length, for a small-order one', () => {
+    expect(isSmallOrderPublicKey(hex(PUBLIC))).toBe(false);
+    expect(isSmallOrderPublicKey(rawPublicKey(generateKeyPairSync('ed25519').publicKey))).toBe(false);
+    expect(isSmallOrderPublicKey(new Uint8Array(31))).toBe(false);
+    expect(isSmallOrderPublicKey(new Uint8Array(33))).toBe(false);
   });
 });

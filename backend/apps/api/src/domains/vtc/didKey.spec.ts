@@ -71,6 +71,16 @@ describe('did:key (Ed25519)', () => {
       expect(() => multikeyFromPublicKey(new Uint8Array(31))).toThrow(DidKeyError);
     });
 
+    it.each([`01${'00'.repeat(31)}`, '00'.repeat(32), `ec${'ff'.repeat(30)}7f`])(
+      'a small-order key, which signs anything (%s)',
+      (hexKey) => {
+        const did = didKeyFromPublicKey(Uint8Array.from(Buffer.from(hexKey, 'hex')));
+
+        expect(() => publicKeyFromDidKey(did)).toThrow('small-order');
+        expect(() => publicKeyFromMultikey(did.slice('did:key:'.length))).toThrow(DidKeyError);
+      },
+    );
+
     it.each([
       'did:web:example.com',
       'did:keri:DAbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdefg',

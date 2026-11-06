@@ -4,6 +4,9 @@ import { didKeyFromPublicKey, didKeyVerificationMethod, multikeyFromPublicKey } 
 import { rawPublicKey } from './ed25519';
 import { createKeyResolver, KeyResolverConfigError } from './keyResolver';
 
+/** The encoding of the identity point: a small-order key, which signs anything. */
+const identityKey = (): Uint8Array => Uint8Array.from({ length: 32 }, (_, index) => (index === 0 ? 1 : 0));
+
 const newKey = (): Uint8Array => rawPublicKey(generateKeyPairSync('ed25519').publicKey);
 
 describe('createKeyResolver', () => {
@@ -112,6 +115,15 @@ describe('createKeyResolver', () => {
     });
   });
 
+  it('resolves no key for a did:key that is a small-order point, though it names its own method', async () => {
+    const identity = identityKey();
+    const did = didKeyFromPublicKey(identity);
+
+    const key = await createKeyResolver()({ issuer: did, verificationMethod: didKeyVerificationMethod(did) });
+
+    expect(key).toBeNull();
+  });
+
   describe('rejects a bad configuration when it is built, not when it is used', () => {
     const good = multikeyFromPublicKey(newKey());
     const did = 'did:webvh:community.example.com:abc';
@@ -124,6 +136,18 @@ describe('createKeyResolver', () => {
         { did, verificationMethods: [{ id: 'did:webvh:other.example:abc#key-0', publicKeyMultibase: good }] },
       ],
       ['a method id with no fragment', { did, verificationMethods: [{ id: did, publicKeyMultibase: good }] }],
+      [
+        'a small-order key, which would sign anything for the community',
+        {
+          did,
+          verificationMethods: [
+            {
+              id: `${did}#key-0`,
+              publicKeyMultibase: multikeyFromPublicKey(identityKey()),
+            },
+          ],
+        },
+      ],
       [
         'a key that is not an Ed25519 multikey',
         {

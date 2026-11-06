@@ -921,6 +921,32 @@ describe('recognizing a membership credential', () => {
     });
   });
 
+  describe('turns whatever a callback throws into a refusal', () => {
+    const hostile = new Error('hidden');
+    Object.defineProperty(hostile, 'message', {
+      get() {
+        throw new Error('the message getter exploded');
+      },
+    });
+
+    it.each([
+      ['an error whose message cannot be read', hostile],
+      ['a string', 'boom'],
+      ['null', null],
+    ])('%s', async (_name, thrown) => {
+      const w = world({
+        resolveKey: () => {
+          throw thrown;
+        },
+      });
+      const { credential } = await w.issuer.issueMembership(MEMBER);
+
+      const result = await w.recognize(credential, { now: NOW });
+
+      expect(result).toMatchObject({ ok: false, reason: 'VERIFIER_ERROR' });
+    });
+  });
+
   describe('rejects a bad configuration when it is built', () => {
     const base = { resolveKey: createKeyResolver(), fetchStatusList: () => Promise.resolve({}) };
     const community = { did: COMMUNITY };

@@ -143,6 +143,14 @@ describe('bitstring encoding', () => {
     },
   );
 
+  it.each([0, -1, 33, 1.5, Number.NaN])(
+    'reports RANGE_ERROR for a slot width of %p, reading or writing',
+    (size) => {
+      expect(codeOf(() => readStatus(createBitstring(), 0, size))).toBe('RANGE_ERROR');
+      expect(codeOf(() => writeStatus(createBitstring(), 0, 0, size))).toBe('RANGE_ERROR');
+    },
+  );
+
   it.each([MIN_STATUS_LIST_ENTRIES - 8, MIN_STATUS_LIST_ENTRIES + 1, 0, -8, 1.5, Number.NaN, 2 ** 31])(
     'will not create a list of %p entries',
     (entries) => {
@@ -276,10 +284,21 @@ describe('evaluateStatus', () => {
     });
   });
 
-  it('accepts a list with no id, and a list that names the URL it was fetched from', () => {
-    expect(evaluate(list(createBitstring(), { id: undefined }))).toMatchObject({ valid: true });
+  it('accepts a list that names the URL it was fetched from, and refuses one that names none', () => {
     expect(evaluate(list(createBitstring(), { id: LIST_URL }))).toMatchObject({ valid: true });
+
+    // Without an id nothing ties the list to its URL: it could be any list the issuer signed.
+    expect(codeOf(() => evaluate(list(createBitstring(), { id: undefined })))).toBe(
+      'STATUS_VERIFICATION_ERROR',
+    );
   });
+
+  it.each([0, -1, 33, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a hand-built entry whose statusSize is %p instead of reading a slot or skipping the size floor',
+    (statusSize) => {
+      expect(codeOf(() => evaluate(list(), { ...entry(), statusSize }))).toBe('STATUS_VERIFICATION_ERROR');
+    },
+  );
 
   it('accepts a list with no validUntil unless one is required', () => {
     const unbounded = list(createBitstring(), { validUntil: undefined });

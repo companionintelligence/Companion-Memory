@@ -1,3 +1,4 @@
+import { isSmallOrderPublicKey } from './ed25519';
 import { decodeMultibaseBase58btc, encodeMultibaseBase58btc } from './multibase';
 
 /**
@@ -51,7 +52,12 @@ export function publicKeyFromMultikey(multikey: string): Uint8Array {
     throw new DidKeyError('not an Ed25519 multikey');
   }
 
-  return bytes.subarray(2);
+  const key = bytes.subarray(2);
+  if (isSmallOrderPublicKey(key)) {
+    throw new DidKeyError('a small-order key signs anything, so it is not a key');
+  }
+
+  return key;
 }
 
 export function didKeyFromPublicKey(publicKey: Uint8Array): string {

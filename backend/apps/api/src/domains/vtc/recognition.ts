@@ -26,10 +26,10 @@ import { evaluateStatus, StatusListError } from './statusList';
  *
  * ═══ PROPERTIES THE CALLER CAN RELY ON ═══
  *
- * - FAIL CLOSED. A refusal, a thrown error, a missing status entry, an unreachable list, a stale
- *   list (past its `validUntil`, or older than `statusListMaxAgeMs`) and an unknown status purpose
- *   are all `ok: false`, and so is a clock or an allowance that is not a finite number. Nothing
- *   defaults to valid.
+ * - FAIL CLOSED. A refusal, a thrown error, a missing status entry (unless `requireStatus` is turned
+ *   off), an unreachable list, a stale list (past its `validUntil`, or older than
+ *   `statusListMaxAgeMs`) and an unknown status purpose are all `ok: false`, and so is a clock or an
+ *   allowance that is not a finite number. Nothing defaults to valid.
  * - NO FETCH FOR AN UNVERIFIED CREDENTIAL. The status list URL comes from the credential, so a
  *   request is made only after step 4 has shown the recognised community signed that URL.
  * - NO THROW. Every outcome, including a bug, comes back as a result.
@@ -151,6 +151,15 @@ function issuerOf(document: unknown): string | null {
   }
 
   return typeof document.issuer === 'string' ? document.issuer : null;
+}
+
+/** The text of a failure. Reading `message` can itself throw (a getter on a hostile error), so it is guarded. */
+function describeFailure(error: unknown): string {
+  try {
+    return error instanceof Error && typeof error.message === 'string' ? error.message : 'unexpected failure';
+  } catch {
+    return 'unexpected failure';
+  }
 }
 
 /** Builds a recognizer. Throws if the configuration is malformed, so a typo surfaces at start-up. */
@@ -328,7 +337,7 @@ export function createMembershipRecognizer(config: RecognizerConfig): Membership
     try {
       return await recognize(presented, context);
     } catch (error) {
-      return refuse('VERIFIER_ERROR', error instanceof Error ? error.message : 'unexpected failure');
+      return refuse('VERIFIER_ERROR', describeFailure(error));
     }
   };
 }
