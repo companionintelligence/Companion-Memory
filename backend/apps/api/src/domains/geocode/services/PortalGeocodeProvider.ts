@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import plimit from 'p-limit';
 
 import { LoggerService } from '@ci/common/logging';
+import { sleep } from '@ci/common/time/sleep';
 import config, { isGeocodingConfigured } from '@ci/configuration';
 
 import type { GeocodeBounds, GeocodePoint, GeocodeProvider, GeocodeProviderResult } from './GeocodeProvider';
@@ -78,10 +79,6 @@ function transient(errorMessage: string): GeocodeProviderResult {
 
 function fill(count: number, result: GeocodeProviderResult): GeocodeProviderResult[] {
   return Array.from({ length: count }, () => ({ ...result }));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

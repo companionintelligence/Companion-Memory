@@ -10,6 +10,7 @@
  * *events* only — 121 of them), and the naive fix — "select them all" — is a
  * 63k-row payload on every pan.
  */
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
 
 /** A geographic bounding box as [minLon, minLat, maxLon, maxLat] (WGS84 / EPSG:4326). */
 export type TrackBbox = [number, number, number, number];
@@ -126,29 +127,24 @@ export function resolveBucketSeconds(spanMs: number, maxPoints: number): number 
  * cursors (SearchResolver.encodeSearchCursor).
  */
 export function encodeTrackCursor(time: Date, bucketSeconds: number | null): string {
-  return Buffer.from(`${time.toISOString()}::${bucketSeconds ?? 'raw'}`).toString('base64');
+  return encodeKeysetCursor([time.toISOString(), String(bucketSeconds ?? 'raw')], { separator: '::' });
 }
 
 /** Inverse of {@link encodeTrackCursor}; undefined for anything undecodable. */
 export function decodeTrackCursor(cursor?: string | null): TrackCursor | undefined {
-  if (cursor == null || cursor.length === 0) {
+  const parts = decodeKeysetCursor(cursor, 2, { separator: '::' });
+
+  if (parts == null) {
     return undefined;
   }
 
-  const decoded = Buffer.from(cursor, 'base64').toString('utf8');
-  const separator = decoded.lastIndexOf('::');
-
-  if (separator < 0) {
-    return undefined;
-  }
-
-  const time = new Date(decoded.slice(0, separator));
+  const [rawTime, rawBucket] = parts;
+  const time = new Date(rawTime);
 
   if (isNaN(time.getTime())) {
     return undefined;
   }
 
-  const rawBucket = decoded.slice(separator + 2);
   const bucketSeconds = rawBucket === 'raw' ? null : Number(rawBucket);
 
   if (bucketSeconds != null && (!Number.isFinite(bucketSeconds) || bucketSeconds < MIN_BUCKET_SECONDS)) {

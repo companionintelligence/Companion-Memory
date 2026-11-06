@@ -174,7 +174,7 @@ interface PageOf {
   ids: string[];
   hasNextPage: boolean;
   hasPreviousPage: boolean;
-  totalCount: number;
+  totalCount: number | null;
 }
 
 type Fetch = (args: KeysetPageArgs) => Promise<PageOf>;

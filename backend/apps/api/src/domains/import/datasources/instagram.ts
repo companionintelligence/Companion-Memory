@@ -15,6 +15,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { listFiles } from './fsWalk';
+import { parseMetaJson } from './_meta_json';
 import { decodeEntities, htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -518,11 +519,12 @@ export class InstagramFileImporter implements FileImporter {
       return;
     }
 
-    let thread: IGThread;
-    try {
-      thread = JSON.parse(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${path.basename(fpath)}`, { error: (e as Error).message });
+    // Through the Meta mojibake repair, as facebook.ts has always done: the same
+    // exporter writes both, escaping every UTF-8 byte of an emoji or accent as
+    // its own \u00XX, and a bare JSON.parse stored "😊" as "ð\u009f\u0098\u008a".
+    const thread = parseMetaJson<IGThread>(raw);
+    if (!thread) {
+      params.log?.('error', `Failed to parse ${path.basename(fpath)}`, { error: 'invalid JSON' });
 
       return;
     }
@@ -572,11 +574,9 @@ export class InstagramFileImporter implements FileImporter {
       return;
     }
 
-    let posts: IGPost[];
-    try {
-      posts = JSON.parse(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${path.basename(fpath)}`, { error: (e as Error).message });
+    const posts = parseMetaJson<IGPost[]>(raw);
+    if (!posts) {
+      params.log?.('error', `Failed to parse ${path.basename(fpath)}`, { error: 'invalid JSON' });
 
       return;
     }

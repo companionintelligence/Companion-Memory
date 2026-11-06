@@ -43,13 +43,12 @@ describe('AskExpiryCron.expireOverdueAsks', () => {
     // the next tick.
     let release: (count: number) => void = () => undefined;
     const sweep = jest.fn(() => new Promise<number>((resolve) => (release = resolve)));
-    const { cron, logger } = makeCron(sweep as unknown as jest.Mock);
+    const { cron } = makeCron(sweep as unknown as jest.Mock);
 
     const first = cron.expireOverdueAsks();
     await cron.expireOverdueAsks();
 
     expect(sweep).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalled();
 
     release(0);
     await first;
@@ -64,10 +63,11 @@ describe('AskExpiryCron.expireOverdueAsks', () => {
 
   it('survives a failing sweep and stays runnable', async () => {
     const sweep = jest.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue(0);
-    const { cron, logger } = makeCron(sweep);
+    const { cron } = makeCron(sweep);
 
+    // The schedule's `exclusive` guard swallows and logs the failure (through
+    // the decorator's own logger) and releases, so the next tick runs.
     await expect(cron.expireOverdueAsks()).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalled();
 
     await cron.expireOverdueAsks();
     expect(sweep).toHaveBeenCalledTimes(2);

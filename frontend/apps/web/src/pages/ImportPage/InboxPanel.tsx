@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { DECIMAL_UNITS, formatBytes as formatSharedBytes } from '@ci/common';
 import { Alert, Button, Card } from '@ci/shadcn';
 import { FileArchive, Folder, Inbox, Loader2, RefreshCcw } from '@ci/shadcn/icons';
 
@@ -248,19 +249,7 @@ export function InboxPanel() {
   );
 }
 
-/** "1.4 GB" — coarse, like every other number on this page. */
+/** "1.4 GB" — decimal units, coarse, like every other number on this page. */
 export function formatBytes(bytes: number): string {
-  if (bytes >= 1e9) {
-    return `${(bytes / 1e9).toFixed(1)} GB`;
-  }
-
-  if (bytes >= 1e6) {
-    return `${(bytes / 1e6).toFixed(1)} MB`;
-  }
-
-  if (bytes >= 1e3) {
-    return `${(bytes / 1e3).toFixed(1)} kB`;
-  }
-
-  return `${bytes} B`;
+  return formatSharedBytes(bytes, { base: 1000, units: DECIMAL_UNITS.slice(0, 4) });
 }

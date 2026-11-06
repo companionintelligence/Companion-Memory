@@ -40,6 +40,16 @@ export interface DateTimeFormatter {
   readonly timeZone: string | undefined;
   /** An instant's date and time — `Date#toLocaleString`, with the preferences applied. */
   dateTime(value: DateInput, options?: Intl.DateTimeFormatOptions, locales?: Locales): string;
+  /**
+   * {@link dateTime} for a value that may be missing or unreadable: null for `null`, `undefined`,
+   * `''` and anything `new Date` cannot parse, where `dateTime` would say "Invalid Date". The
+   * caller puts its own fallback after it — the raw string, a dash, nothing.
+   */
+  tryDateTime(
+    value: DateInput | null | undefined,
+    options?: Intl.DateTimeFormatOptions,
+    locales?: Locales,
+  ): string | null;
   /** An instant's time of day — `Date#toLocaleTimeString`, with the preferences applied. */
   time(value: DateInput, options?: Intl.DateTimeFormatOptions, locales?: Locales): string;
   /**
@@ -109,6 +119,15 @@ export function createDateTimeFormatter({ timeFormat, timeZone }: DateTimePrefer
     timeFormat,
     timeZone,
     dateTime: (value, options, locales) => toDate(value).toLocaleString(locales, preferred(options)),
+    tryDateTime: (value, options, locales) => {
+      if (value == null || value === '') {
+        return null;
+      }
+
+      const date = toDate(value);
+
+      return Number.isNaN(date.getTime()) ? null : date.toLocaleString(locales, preferred(options));
+    },
     time: (value, options, locales) => toDate(value).toLocaleTimeString(locales, preferred(options)),
     date: (value, options, locales) => toDate(value).toLocaleDateString(locales, preferred(options)),
     clock: (hours, minutes = 0, options = HOUR_MINUTE, locales) =>

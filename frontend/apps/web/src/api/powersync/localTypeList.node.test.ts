@@ -12,6 +12,14 @@ describe('localTypeListStatement', () => {
     expect(statement.params).toEqual(['place', 30, 60]);
   });
 
+  it('serves the people page as the same statement with the person type', () => {
+    const statement = localTypeListStatement('person', 'title', 'bri paul', { limit: 30, offset: 0 })!;
+
+    expect(statement.sql).toContain('+d.entity_type = ?');
+    expect(statement.params).toEqual(['"bri"* OR "paul"*', 'person', 30, 0]);
+    expect(localTypeListCountStatement('person', 'ana')!.params).toEqual(['"ana"*', 'person']);
+  });
+
   it('browses a bulk type newest first, so the (type, time) index walks the rows in order', () => {
     const statement = localTypeListStatement('content', 'newest', '', { limit: 30, offset: 0 })!;
 

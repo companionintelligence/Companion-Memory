@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, UseGuards } from '@nestjs/common';
-import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID, Int } from '@nestjs/graphql';
+import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID, Info, Int } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -21,7 +22,6 @@ import {
   DETERMINISTIC_MERGE_CRON,
   encodeMergeCandidateCursor,
   EntityMergeBlockService,
-  GraphQueryService,
   isMergeCandidateStatus,
   MergeCandidateService,
   PersonDuplicateService,
@@ -36,7 +36,9 @@ import {
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
+import { RelationshipsLoader } from '../loaders/RelationshipsLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { CreatePersonInput } from '../types/CreatePersonInput';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
@@ -44,6 +46,7 @@ import { MergeCandidateConnection } from '../types/MergeCandidateConnection';
 import { MergeCandidateType } from '../types/MergeCandidateType';
 import { MergePeopleInput } from '../types/MergePeopleInput';
 import { MergePeoplePayload } from '../types/MergePeoplePayload';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonAddressInput } from '../types/PersonAddressType';
 import { PersonConnection } from '../types/PersonConnection';
@@ -58,7 +61,6 @@ import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
-import { Paginator } from '../utils/Paginator';
 import {
   contactMethodsFromPersonProperties,
   contactsToReconcile,
@@ -328,7 +330,7 @@ export class PersonResolver {
     private readonly personIdentifiersLoader: PersonIdentifiersLoader,
     private readonly personInteractionStatsLoader: PersonInteractionStatsLoader,
     private readonly tagLoader: TagLoader,
-    private readonly graphQuery: GraphQueryService,
+    private readonly relationshipsLoader: RelationshipsLoader,
   ) {}
 
   @Mutation(() => CreatePersonPayload)
@@ -736,17 +738,24 @@ export class PersonResolver {
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
     @Args('query', { type: () => String, nullable: true }) query?: string,
-  ): Promise<PersonConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<PersonConnection>> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.personService.findAll(serviceContext, { query: query ?? undefined });
+    // One page from SQL, in the list's own order; the cursors stay
+    // GlobalUID-encoded row ids, so the wire contract is unchanged.
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.personService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+      { query: query ?? undefined, countTotal: selectsField(info, 'totalCount') },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('person', entity.id),
-    });
-
-    const edges: PersonEdge[] = slice.map((entity) => {
+    const edges: PersonEdge[] = entities.map((entity) => {
       const node = PersonType.toType(entity);
 
       return {
@@ -757,8 +766,13 @@ export class PersonResolver {
 
     return {
       edges,
-      pageInfo,
-      totalCount,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -955,12 +969,14 @@ export class PersonResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'outbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'outbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 
   /** Inbound life-graph edges to this person. */
@@ -975,12 +991,14 @@ export class PersonResolver {
       return [];
     }
 
-    const rows = await this.graphQuery.getRelationships(serviceContext.userId, {
-      entityIds: [parent.__source.id],
-      direction: 'inbound',
-    });
+    const rows = await this.relationshipsLoader.loadFor(
+      serviceContext,
+      parent.__source.id,
+      'inbound',
+      limit ?? 50,
+    );
 
-    return rows.slice(0, limit ?? 50).map((row) => memoryRelToGql(row));
+    return rows.map((row) => memoryRelToGql(row));
   }
 
   private async entityIdentifiersFor(

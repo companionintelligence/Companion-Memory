@@ -485,21 +485,29 @@ export class LyftFileImporter implements FileImporter {
       return;
     }
 
-    // Named by its address where the export has one. The request leg never
-    // does — Lyft records coordinates for it but no address — so it falls back
-    // to the trip's title rather than borrowing the pickup's street.
-    const title = address || `${tripTitle} (${leg.toLowerCase()})`;
+    // The body is a human sentence either way — it is read by a person, not by
+    // the place-name mapping.
+    const body = address || `${tripTitle} (${leg.toLowerCase()})`;
     params.pipeline.push({
       item: {
         id,
         classification: 'location',
         timestamp: ts,
         location: coords,
-        content: textContent('position.txt', title),
+        content: textContent('position.txt', body),
         metadata: {
-          Title: title,
-          // `Name` is what the location.fix mapping prefers for a place name, so
-          // the position arrives addressed rather than as bare coordinates.
+          // `Title` and `Name` are both read as the fix's PLACE NAME
+          // (push/inputs.ts toPositionInput, via titleFor's location.fix arm), so
+          // each is set only when the export actually recorded an address for
+          // THIS leg. The request leg never has one — Lyft records coordinates
+          // for it but no address — and until 2026-11-05 `Title` fell back to
+          // the ride narration here, the exact defect uber.ts documents: a trip
+          // narration names the TRIP, not any point along it, and
+          // `promote.place_position` turned such fixes into Location entities
+          // the Places list rendered as venues. An unnamed fix with coordinates
+          // is a reverse-geocode candidate instead, which names it properly.
+          // The narration stays on `Trip` (with `Leg`), which is provenance.
+          Title: address || undefined,
           Name: address || undefined,
           Leg: leg,
           Trip: tripTitle,

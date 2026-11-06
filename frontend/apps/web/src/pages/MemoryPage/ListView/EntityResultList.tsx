@@ -1,9 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { useLocation } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import {
   DateGroupHeader,
   ErrorState,
@@ -42,6 +45,95 @@ import { ThreadRow } from './rows/ThreadRow';
 const scrollTopByHistoryEntry = new Map<string, number>();
 
 /**
+ * One row, memoised. The list re-renders whenever its own state moves — a page
+ * arriving, a failed page, the scroll bookkeeping — and without this every
+ * loaded row re-ran its time formatting and rebuilt its chat context each
+ * time. `item` is the node Apollo's cache hands back, which keeps its identity
+ * until the record itself changes; `fmt` is the one formatter from context;
+ * `open` is the service's setter, which never changes.
+ */
+const ResultRow = memo(function ResultRow({
+  item,
+  fmt,
+  open,
+}: {
+  item: EntityItem;
+  fmt: DateTimeFormatter;
+  open: (item: EntityItem) => void;
+}) {
+  const time = formatRowTime(getEntityTimestamp(item), fmt);
+  const onClick = () => open(item);
+  let row: ReactNode;
+
+  switch (item.__typename) {
+    case 'AnswerType':
+      row = <AnswerRow answer={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'BrowserActivityType':
+      row = <BrowserActivityRow browserActivity={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'CommunicationType':
+      row = <CommunicationRow communication={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ConceptType':
+      row = <ConceptRow concept={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ContentType':
+      row = <ContentRow content={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'EventType':
+      row = <EventRow event={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'FileChunkType':
+      row = <FileChunkRow fileChunk={item} onClick={onClick} />;
+      break;
+
+    case 'FileType':
+      row = <FileRow file={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ItemType':
+      row = <ItemRow item={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'NoteType':
+      row = <NoteRow note={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PersonType':
+      row = <PersonRow person={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PlaceType':
+      row = <PlaceRow place={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ProductModelType':
+      row = <ProductRow product={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ReceiptType':
+      row = <ReceiptRow receipt={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ThreadType':
+      row = <ThreadRow thread={item} time={time} onClick={onClick} />;
+      break;
+
+    default:
+      return null;
+  }
+
+  return <MemoryChatAbout entity={item}>{row}</MemoryChatAbout>;
+});
+
+/**
  * The scrolling result list every list-shaped explorer view is built on: the
  * per-type rows, cursor paging on scroll, and the skeleton / error / empty
  * states. `grouped` puts date headings between runs of same-day rows and
@@ -58,7 +150,6 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
   const fmt = useDateTimeFormat();
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
   // Remember the scroll position under the history entry it belongs to. Give it
   // back when that entry is shown again (Back from a full page). The position
@@ -120,108 +211,20 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
     </div>
   );
 
-  // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { root: scrollRef.current, rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // Fetch the next server page (cursor-based) when the sentinel scrolls into
+  // view. A failed page unwatches it — `error` carries a rejected loadMore —
+  // and the retry below is the only way to ask again.
+  const pageFailed = error != null && data.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore, root: scrollRef });
 
   // groupEntitiesByBucket already collects undated entities into one trailing
   // group; the flat branch keeps the server's order.
   const groups = useMemo(() => (grouped ? groupEntitiesByBucket(data) : null), [grouped, data]);
 
   // Every row opens the same shared details drawer (incl. File/Item media).
-  const renderRow = (item: EntityItem) => {
-    const time = formatRowTime(getEntityTimestamp(item), fmt);
-    let row: ReactNode;
-
-    switch (item.__typename) {
-      case 'AnswerType':
-        row = <AnswerRow answer={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'BrowserActivityType':
-        row = <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'CommunicationType':
-        row = <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ConceptType':
-        row = <ConceptRow concept={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ContentType':
-        row = <ContentRow content={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'EventType':
-        row = <EventRow event={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileChunkType':
-        row = <FileChunkRow fileChunk={item} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileType':
-        row = <FileRow file={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ItemType':
-        row = <ItemRow item={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'NoteType':
-        row = <NoteRow note={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PersonType':
-        row = <PersonRow person={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PlaceType':
-        row = <PlaceRow place={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ProductModelType':
-        row = <ProductRow product={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ReceiptType':
-        row = <ReceiptRow receipt={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ThreadType':
-        row = <ThreadRow thread={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      default:
-        return null;
-    }
-
-    return (
-      <MemoryChatAbout key={item.id} entity={item}>
-        {row}
-      </MemoryChatAbout>
-    );
-  };
+  const renderRow = (item: EntityItem) => (
+    <ResultRow key={item.id} item={item} fmt={fmt} open={setActiveEntity} />
+  );
 
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {
@@ -254,7 +257,11 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
       {loadingMore && <ListSkeleton count={3} showHeader={false} />}
 
-      {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+      {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+      {pageFailed && (
+        <LoadMoreFailed noun="results" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+      )}
 
       <div className="py-3 text-center text-xs text-muted-foreground">
         {formatLoadedCount({ loaded: data.length, totalCount, loadingMore, hasNextPage })}

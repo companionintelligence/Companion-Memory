@@ -76,6 +76,7 @@ import { SmartRotationModule } from '@ci/domains/smart-rotation';
 import { SolidModule } from '@ci/domains/solid';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
+import { TrustTasksModule } from '@ci/domains/trust-tasks';
 import { UserModule } from '@ci/domains/user';
 import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
 
@@ -114,6 +115,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     AsksModule,
     ConsumptionModule,
     PeersModule,
+    TrustTasksModule,
     AuditModule,
     AuthModule,
     PortalAuthModule,

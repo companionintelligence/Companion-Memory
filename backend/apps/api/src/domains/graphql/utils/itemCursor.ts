@@ -27,6 +27,8 @@
  * to be a `Date` that `new Date()` had already vetted, so a malformed one would
  * be a 500 from the database instead.
  */
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
+
 export interface ItemCursor {
   createdAt: string;
   id: string;
@@ -52,28 +54,17 @@ function isInstant(text: string): boolean {
 }
 
 export function encodeItemCursor(cursor: ItemCursor): string {
-  return Buffer.from(`${cursor.createdAt}|${cursor.id}`).toString('base64');
+  return encodeKeysetCursor([cursor.createdAt, cursor.id]);
 }
 
 export function decodeItemCursor(raw: string | null | undefined): ItemCursor | null {
-  if (raw == null || raw === '') {
+  const parts = decodeKeysetCursor(raw, 2);
+
+  if (parts == null) {
     return null;
   }
 
-  let decoded: string;
-  try {
-    decoded = Buffer.from(raw, 'base64').toString('utf-8');
-  } catch {
-    return null;
-  }
-
-  const separator = decoded.indexOf('|');
-  if (separator < 0) {
-    return null;
-  }
-
-  const createdAt = decoded.slice(0, separator);
-  const id = decoded.slice(separator + 1);
+  const [createdAt, id] = parts;
 
   if (!isInstant(createdAt) || id === '') {
     return null;

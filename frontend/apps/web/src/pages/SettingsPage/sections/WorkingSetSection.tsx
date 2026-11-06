@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import { formatBytes, getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
+import { formatModelBytes, getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
 import { Button, Card, Dialog, Switch } from '@ci/shadcn';
 import { usePowerSync } from '@powersync/react';
 import type { AbstractPowerSyncDatabase, SyncStatus } from '@powersync/web';
@@ -183,7 +183,7 @@ function OpenWorkingSetSection({ database }: { database: AbstractPowerSyncDataba
   const syncUnavailable = unavailableFor !== null && unavailableFor === apiBaseUrl;
   // MB below a gigabyte: a working set is usually tens of MB, which the budget's
   // GB format rounded to "0.0 GB".
-  const usedLabel = usedBytes == null ? 'Measuring…' : formatBytes(usedBytes);
+  const usedLabel = usedBytes == null ? 'Measuring…' : formatModelBytes(usedBytes);
   const budgetLabel = formatCacheBudget(POWER_SYNC_CACHE_BUDGET_BYTES);
 
   return (
@@ -288,7 +288,7 @@ function PreviewStoreSettings({ database }: { database: AbstractPowerSyncDatabas
       ? measureFailed
         ? 'Could not measure just now — the phone’s database is busy; trying again.'
         : 'Measuring…'
-      : `${status.synced.toLocaleString()} previews, ${formatBytes(status.bytes)}` +
+      : `${status.synced.toLocaleString()} previews, ${formatModelBytes(status.bytes)}` +
         // Say what the switch is doing to the number. Off with work left, this read as
         // a finished store that had quietly stopped growing (Kyle, 2026-10-23).
         (status.pending > 0
@@ -332,7 +332,7 @@ function PreviewStoreSettings({ database }: { database: AbstractPowerSyncDatabas
               <Dialog.Title>Stop keeping photo previews?</Dialog.Title>
               <Dialog.Description>
                 {status != null && status.synced > 0
-                  ? `This phone holds ${status.synced.toLocaleString()} previews (${formatBytes(status.bytes)}). You can keep them and stop fetching new ones, or delete them as well.`
+                  ? `This phone holds ${status.synced.toLocaleString()} previews (${formatModelBytes(status.bytes)}). You can keep them and stop fetching new ones, or delete them as well.`
                   : 'No more previews will be fetched. You can turn this back on at any time.'}
               </Dialog.Description>
             </Dialog.Header>

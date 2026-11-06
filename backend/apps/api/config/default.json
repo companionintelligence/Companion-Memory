@@ -271,6 +271,7 @@
     "actions": true,
     "smart.rotation": false,
     "ask": true,
+    "trust.tasks": false,
     "grounded.prompts": true,
     "derivation.engines": true,
     "ingest.selfHeal": true,

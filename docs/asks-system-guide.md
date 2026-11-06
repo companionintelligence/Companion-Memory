@@ -415,8 +415,12 @@ Whatever the outcome, the asker sees `answered` or `delivered` and nothing else
 
 ### 3.3 A federated ask, step by step
 
-Two boxes, one Portal-shaped OIDC issuer. Only two routes are reachable from
-another Companion: `POST /agent/v1/ask` and `GET /agent/v1/ask/:correlation`.
+Two boxes, one Portal-shaped OIDC issuer. Two routes are reachable from
+another Companion over the OIDC door: `POST /agent/v1/ask` and
+`GET /agent/v1/ask/:correlation`. When the optional `trust.tasks` feature is on
+(off by default), `POST /agent/v1/trust-tasks` is a third, a second way to
+establish who is asking that ends in the same four gates
+([trust-tasks.md](trust-tasks.md)).
 Rate limits: **10 asks/min** and a separate **30 polls/min**, both per verified
 `(issuer, subject)` and both applied **before** the peer-link lookup, so an
 unknown caller is limited too.

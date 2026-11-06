@@ -32,6 +32,7 @@ function makeResolver(result: unknown) {
     tagService as never,
     unused,
     unused,
+    unused,
   );
 
   return { resolver, tagService };

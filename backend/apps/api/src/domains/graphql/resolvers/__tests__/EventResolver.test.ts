@@ -99,7 +99,11 @@ describe('EventResolver.events', () => {
 
     await resolver.events(viewerCtx, {});
 
-    expect(eventService.findPage).toHaveBeenCalledWith({ userId: 'viewer-1' }, expect.anything());
+    expect(eventService.findPage).toHaveBeenCalledWith(
+      { userId: 'viewer-1' },
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   // Pagination lives in the service now (keyset over (start_time, event_id)),
@@ -118,6 +122,8 @@ describe('EventResolver.events', () => {
     expect(eventService.findPage).toHaveBeenCalledWith(
       { userId: 'viewer-1' },
       { first: 2, last: undefined, afterId: 'e1', beforeId: null },
+      // No resolve info in a direct call: the resolver asks for the count.
+      { countTotal: true },
     );
   });
 

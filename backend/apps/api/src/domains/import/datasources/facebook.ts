@@ -19,6 +19,7 @@ import path from 'node:path';
 
 import { facebookPageLikeId } from '@ci/domains/memory';
 
+import { parseMetaJson } from './_meta_json';
 import { decodeEntities, htmlToText as sharedHtmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -123,60 +124,6 @@ interface FBListing {
  */
 const EVENT_RSVPS = ['joined', 'hosted', 'interested', 'declined', 'invited'] as const;
 type EventRsvp = (typeof EVENT_RSVPS)[number];
-
-/* ---- JSON-format mojibake repair -------------------------------------------
- * Facebook DYI JSON files serialise all non-ASCII text as raw UTF-8 BYTES, each
- * escaped as a separate \u00XX code point. JSON.parse therefore yields Latin-1
- * mojibake: "😊" arrives as "ð" ("ð"), "é" as "Ã©".
- * Re-encoding those code points as Latin-1 bytes and decoding them as UTF-8
- * recovers the original text. Guarded so correct text is never touched: a
- * string with any code point above 0xFF is already real Unicode, and a decode
- * that produces U+FFFD wasn't UTF-8 after all — both pass through unchanged.
- * --------------------------------------------------------------------------- */
-function fixMojibake(s: string): string {
-  if (!/[\u0080-\u00ff]/.test(s)) {
-    return s;
-  } // pure ASCII — nothing to repair
-
-  if (/[\u0100-\uffff]/.test(s)) {
-    return s;
-  } // already real Unicode (incl. emoji)
-
-  const decoded = Buffer.from(s, 'latin1').toString('utf8');
-
-  return decoded.includes('\uFFFD') ? s : decoded;
-}
-
-/** Repair every string value in a parsed Facebook JSON document (keys are ASCII). */
-function fixMojibakeDeep<T>(v: T): T {
-  if (typeof v === 'string') {
-    return fixMojibake(v) as T;
-  }
-
-  if (Array.isArray(v)) {
-    return v.map(fixMojibakeDeep) as T;
-  }
-
-  if (v && typeof v === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v)) {
-      out[k] = fixMojibakeDeep(val);
-    }
-
-    return out as T;
-  }
-
-  return v;
-}
-
-/** JSON.parse a Facebook DYI file with mojibake repair. Null on invalid JSON. */
-function parseFacebookJson<T>(raw: string): T | null {
-  try {
-    return fixMojibakeDeep(JSON.parse(raw)) as T;
-  } catch {
-    return null;
-  }
-}
 
 /* ---- HTML-format helpers (Meta "Download Your Information" HTML export) ---- */
 
@@ -634,7 +581,7 @@ export class FacebookFileImporter implements FileImporter {
       return null; // not in this export
     }
 
-    const parsed = parseFacebookJson<T>(raw);
+    const parsed = parseMetaJson<T>(raw);
     if (parsed === null) {
       params.log?.('error', `Failed to parse ${path.basename(fpath)}`);
       params.pipeline.drop?.('unreadable_file', path.basename(fpath));
@@ -1487,7 +1434,7 @@ export class FacebookFileImporter implements FileImporter {
       return;
     }
 
-    const thread = parseFacebookJson<FBThread>(raw);
+    const thread = parseMetaJson<FBThread>(raw);
     if (!thread) {
       return;
     }
@@ -1567,7 +1514,7 @@ export class FacebookFileImporter implements FileImporter {
       return;
     }
 
-    const posts = parseFacebookJson<FBPost[]>(raw);
+    const posts = parseMetaJson<FBPost[]>(raw);
     if (!Array.isArray(posts)) {
       return;
     }

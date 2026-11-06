@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
 import { countAffected } from '@ci/common/persistence';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
@@ -183,22 +184,24 @@ export function hasExactPhoneEvidence(evidence: readonly MergeCandidateEvidence[
  * an offset would silently skip the pair that moved up into the seam.
  */
 export function encodeMergeCandidateCursor(candidate: { score: number; id: string }): string {
-  return Buffer.from(`${candidate.score}::${candidate.id}`).toString('base64');
+  return encodeKeysetCursor([String(candidate.score), candidate.id], { separator: '::' });
 }
 
 export function decodeMergeCandidateCursor(cursor: string): { score: number; id: string } | null {
-  try {
-    const [score, id] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
-    const parsed = Number(score);
+  const parts = decodeKeysetCursor(cursor, 2, { separator: '::' });
 
-    if (!Number.isFinite(parsed) || !id) {
-      return null;
-    }
-
-    return { score: parsed, id };
-  } catch {
+  if (parts == null) {
     return null;
   }
+
+  const [score, id] = parts;
+  const parsed = Number(score);
+
+  if (!Number.isFinite(parsed) || !id) {
+    return null;
+  }
+
+  return { score: parsed, id };
 }
 
 function parseEvidence(raw: unknown): MergeCandidateEvidence[] {

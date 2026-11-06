@@ -16,6 +16,7 @@ import {
   keysetPaginate,
   keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -234,8 +235,13 @@ export class BrowserActivityService {
    * the whole 330k-row table, and drops the eager `user` join the in-memory path
    * carried (only user_id is needed downstream).
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<BrowserActivity>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<BrowserActivity>> {
     const page = await keysetPaginate(this.browserActivityRepository, args, {
+      ...options,
       alias: 'browserActivity',
       timeProp: 'time',
       userIdProp: 'user_id',

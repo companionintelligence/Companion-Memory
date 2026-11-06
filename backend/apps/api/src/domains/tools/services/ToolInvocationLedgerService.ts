@@ -4,6 +4,7 @@ import { LessThan, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
 
 import type { ToolPrincipal } from '../core/types';
 import { ToolInvocationEntity } from '../entities/ToolInvocationEntity';
@@ -81,7 +82,7 @@ export interface ToolInvocationPage {
  * arbitrary offset into someone's history, and the shape is ours to change.
  */
 export function encodeCursor(cursor: ToolInvocationCursor): string {
-  return Buffer.from(`${cursor.occurredAt.toISOString()}|${cursor.id}`, 'utf8').toString('base64url');
+  return encodeKeysetCursor([cursor.occurredAt.toISOString(), cursor.id], { alphabet: 'base64url' });
 }
 
 /**
@@ -90,20 +91,20 @@ export function encodeCursor(cursor: ToolInvocationCursor): string {
  * rows as if they were new ones.
  */
 export function decodeCursor(raw: string): ToolInvocationCursor {
-  const decoded = Buffer.from(raw, 'base64url').toString('utf8');
-  // The FIRST separator, because the timestamp is the half with the guaranteed
-  // format: `Date.toISOString()` can never contain a `|`, while the id is only
-  // "whatever the primary key happens to be" and is a uuid by convention rather
-  // than by contract. Splitting on the last one would let a separator in an id
-  // eat into the timestamp and turn a valid cursor into a 400.
-  const separator = decoded.indexOf('|');
+  // The shared codec splits on the FIRST separator, because the timestamp is
+  // the half with the guaranteed format: `Date.toISOString()` can never
+  // contain a `|`, while the id is only "whatever the primary key happens to
+  // be" and is a uuid by convention rather than by contract. Splitting on the
+  // last one would let a separator in an id eat into the timestamp and turn a
+  // valid cursor into a 400.
+  const parts = decodeKeysetCursor(raw, 2, { alphabet: 'base64url' });
 
-  if (separator <= 0) {
+  if (parts == null || parts[0] === '') {
     throw new Error('Malformed cursor');
   }
 
-  const occurredAt = new Date(decoded.slice(0, separator));
-  const id = decoded.slice(separator + 1);
+  const [rawTime, id] = parts;
+  const occurredAt = new Date(rawTime);
 
   if (Number.isNaN(occurredAt.getTime()) || id === '') {
     throw new Error('Malformed cursor');

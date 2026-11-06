@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+
+import { useReducedMotion } from '@ci/common';
 
 import brainMarkSvg from '@/assets/companion-memory-brain.svg';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
@@ -18,13 +19,6 @@ const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(0,169,167,0.5)]';
  */
 const MARK_ENTRANCE =
   'motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:fill-mode-backwards motion-safe:duration-1000';
-
-function usePrefersReducedMotion() {
-  return useMemo(
-    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    [],
-  );
-}
 
 /**
  * The Companion Memory mark: a solid teal brain, white node network and dark
@@ -56,7 +50,7 @@ export function Reveal({
   children: ReactNode;
   className?: string;
 }) {
-  const reducedMotion = usePrefersReducedMotion();
+  const reducedMotion = useReducedMotion();
 
   if (reducedMotion) {
     return <div className={className}>{children}</div>;

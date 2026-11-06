@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { cn } from '@ci/shadcn';
 import { Archive, Brain, Search as SearchIcon } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import { formatEnumLabel } from '@/lib/utils';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
@@ -32,6 +34,51 @@ const TIMELINE_TYPES: ReadonlySet<string> = new Set([
   'CommunicationType',
 ]);
 
+/**
+ * One row, memoised: the timeline re-renders whenever its own state moves (a
+ * page arriving, the hovered or selected entity changing) and without this
+ * every loaded card was rebuilt — and its chat context re-derived — each time.
+ * Only the row whose `active` flips re-renders on a selection.
+ */
+const TimelineRow = memo(function TimelineRow({
+  entity,
+  active,
+  registerRow,
+  onSelect,
+  onHover,
+}: {
+  entity: EntityItem;
+  active: boolean;
+  registerRow: (entityId: string) => (element: HTMLDivElement | null) => void;
+  onSelect?: (entity: EntityItem) => void;
+  onHover?: (entity: EntityItem | null) => void;
+}) {
+  const setRef = useMemo(() => registerRow(entity.id), [registerRow, entity.id]);
+
+  return (
+    <div
+      ref={setRef}
+      className={cn(
+        'relative rounded-md transition-shadow duration-150',
+        active && 'ring-2 ring-[#58ebbf]/80 ring-offset-0',
+      )}
+      onClickCapture={() => onSelect?.(entity)}
+      onMouseEnter={() => onHover?.(entity)}
+      onMouseLeave={() => onHover?.(null)}
+    >
+      <div
+        className={cn(
+          'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
+          active ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci' : 'bg-[#58ebbf] shadow-glow-ci',
+        )}
+      />
+      <MemoryChatAbout entity={entity}>
+        <EntityCard entity={entity} />
+      </MemoryChatAbout>
+    </div>
+  );
+});
+
 interface TimelineViewProps {
   activeEntityId?: string | null;
   onEntityHover?: (entity: EntityItem | null) => void;
@@ -54,7 +101,6 @@ export function TimelineView({
   typeFilter,
   groupByEventType = false,
 }: TimelineViewProps = {}) {
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new globalThis.Map<string, HTMLDivElement>());
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }] = useEntityService();
@@ -93,26 +139,9 @@ export function TimelineView({
 
   // Load the next server page when the sentinel nears the viewport. Using the
   // viewport as root keeps this working regardless of which ancestor scrolls.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // A failed page unwatches it and the retry below is the only way to ask again.
+  const pageFailed = error != null && timelineData.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore });
 
   useEffect(() => {
     if (!activeEntityId) {
@@ -198,35 +227,16 @@ export function TimelineView({
 
   const renderTimelineRows = (entities: EntityItem[]) => (
     <div className="space-y-4">
-      {entities.map((entity) => {
-        const active = activeEntityId === entity.id;
-
-        return (
-          <div
-            key={entity.id}
-            ref={setRowRef(entity.id)}
-            className={cn(
-              'relative rounded-md transition-shadow duration-150',
-              active && 'ring-2 ring-[#58ebbf]/80 ring-offset-0',
-            )}
-            onClickCapture={() => onEntitySelect?.(entity)}
-            onMouseEnter={() => onEntityHover?.(entity)}
-            onMouseLeave={() => onEntityHover?.(null)}
-          >
-            <div
-              className={cn(
-                'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
-                active
-                  ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci'
-                  : 'bg-[#58ebbf] shadow-glow-ci',
-              )}
-            />
-            <MemoryChatAbout entity={entity}>
-              <EntityCard entity={entity} />
-            </MemoryChatAbout>
-          </div>
-        );
-      })}
+      {entities.map((entity) => (
+        <TimelineRow
+          key={entity.id}
+          entity={entity}
+          active={activeEntityId === entity.id}
+          registerRow={setRowRef}
+          onSelect={onEntitySelect}
+          onHover={onEntityHover}
+        />
+      ))}
     </div>
   );
 
@@ -250,7 +260,11 @@ export function TimelineView({
 
         {loadingMore && <TimelineSkeleton count={2} className="pl-8 pt-2" />}
 
-        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+        {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+        {pageFailed && (
+          <LoadMoreFailed noun="events" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+        )}
       </div>
     </div>
   );

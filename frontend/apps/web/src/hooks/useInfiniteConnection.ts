@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+
+import { useLoadMoreSentinel } from './useLoadMoreSentinel';
 
 /**
  * Shape every Relay-style connection on this schema exposes. Pages hand the
@@ -66,7 +68,6 @@ export function useInfiniteConnection({
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const hasNextPage = connection?.pageInfo.hasNextPage ?? false;
   const endCursor = connection?.pageInfo.endCursor ?? null;
@@ -86,26 +87,13 @@ export function useInfiniteConnection({
       .finally(() => setLoadingMore(false));
   }, [endCursor, fetchNextPage, hasNextPage, loadMoreError, loadingMore]);
 
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { root: scrollRef.current, rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // Unwatched once a page fails: `showSentinel` below unmounts the sentinel
+  // then too, and the retry button is the only way to ask again.
+  const sentinelRef = useLoadMoreSentinel({
+    enabled: hasNextPage && loadMoreError == null,
+    loadMore,
+    root: scrollRef,
+  });
 
   const reset = useCallback(() => setLoadMoreError(null), []);
 

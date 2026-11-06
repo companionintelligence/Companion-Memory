@@ -174,6 +174,14 @@ export class GraphQueryService {
     return this.graphUtility.getRelationships(ownerId, options);
   }
 
+  /** {@link GraphUtilityService.getRelationshipsPerEntity}: each entity's newest `limit` edges, one read for the page. */
+  getRelationshipsPerEntity(
+    ownerId: string,
+    options: { entityIds: string[]; direction: 'outbound' | 'inbound'; limit: number },
+  ): Promise<Map<string, RelationshipEntity[]>> {
+    return this.graphUtility.getRelationshipsPerEntity(ownerId, options);
+  }
+
   /** The active edge a write of this relationship would land on — {@link GraphUtilityService.findActiveRelationship}. */
   findActiveRelationship(
     ownerId: string,

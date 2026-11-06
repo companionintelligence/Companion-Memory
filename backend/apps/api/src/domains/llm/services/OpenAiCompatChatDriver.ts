@@ -253,6 +253,8 @@ export class OpenAiCompatChatDriver {
     maxTokens?: number;
     /** Deadline for the response, in ms; absent uses `llm.firstResponseTimeoutMs`. */
     timeoutMs?: number;
+    /** OpenAI `temperature`; absent leaves the server's default alone. Extraction asks for 0. */
+    temperature?: number;
   }): Promise<ChatResponse> {
     // Converted once, since a refused attempt is sent again and the conversion base64-encodes images.
     const messages = toOpenAiMessages(request.messages);
@@ -265,6 +267,7 @@ export class OpenAiCompatChatDriver {
           ...(tools && { tools }),
           ...(format && { response_format: format }),
           ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
+          ...(request.temperature != null && { temperature: request.temperature }),
           ...thinking,
         },
         {
@@ -322,9 +325,16 @@ export class OpenAiCompatChatDriver {
     // keying the strip on salvaged calls left it in the reply as text that reads like a call.
     const content =
       toolCalls.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
+    // A reasoning model (LM Studio's, DeepSeek-R1) sends its trace as a
+    // non-standard `reasoning_content` on the message, as the streaming path
+    // sees it in deltas; it is `message.thinking` here too. A caller that got
+    // an empty `content` from such a model can find its schema-constrained
+    // output there (memory compaction does).
+    const thinking = (choice?.message as { reasoning_content?: string } | undefined)?.reasoning_content;
 
     return toChatResponse(request.model, {
       content,
+      ...(thinking && { thinking }),
       toolCalls,
       done: true,
       usage: response.usage,

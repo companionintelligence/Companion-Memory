@@ -20,7 +20,7 @@ import type { Message as OllamaMessage } from 'ollama';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { RelationshipService } from '@ci/domains/graph';
-import { OllamaService } from '@ci/domains/llm';
+import { OllamaService, OpenAiCompatChatDriver } from '@ci/domains/llm';
 import {
   ConceptService,
   ItemService,
@@ -435,6 +435,9 @@ export class MemoryCompactionService {
    */
   private readonly extractionAttempts = new Map<string, number>();
 
+  /** Built on first use; one per process, so a refused `json_schema` is remembered. */
+  private externalDriver: OpenAiCompatChatDriver | null = null;
+
   constructor(
     private readonly ollamaService: OllamaService,
     private readonly agentMemoryService: AgentMemoryService,
@@ -751,78 +754,48 @@ export class MemoryCompactionService {
   }
 
   private async callOllamaChat(messages: OllamaMessage[]): Promise<string> {
+    // The same schema the external path sends: Ollama constrains decoding to
+    // it, where bare `'json'` only promised some valid JSON and left the
+    // shape to the prompt (and, on smaller models, to luck).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await this.ollamaService.chat({} as any, messages, {
       tier: 'utility',
-      format: 'json',
+      format: EXTRACTION_JSON_SCHEMA,
     });
 
     return response.message.content;
   }
 
   /**
-   * Call any OpenAI-compatible /v1/chat/completions endpoint.  Used when the
-   * operator points compaction at LM Studio, vLLM, llama.cpp's server, etc.
-   * Stays local-first: the URL is whatever the operator configured, no
-   * default cloud fallback.
+   * The operator's own OpenAI-compatible endpoint (LM Studio, vLLM,
+   * llama.cpp's server, …), when `EXTRACTION_LLM_URL` points compaction at a
+   * beefier machine on the local network. Stays local-first: the URL is
+   * whatever was configured, no default cloud fallback.
    *
-   * Uses OpenAI structured outputs (`response_format.type = 'json_schema'`)
-   * so the server enforces the extraction shape at decode time — eliminates
-   * the truncation / wrong-type-field failures we get from prompt-only JSON
-   * mode on smaller models.  LM Studio rejects `json_object` outright and
-   * requires schema mode, so this is also the only thing that works there.
+   * Through the shared driver, not a hand-rolled fetch: the driver negotiates
+   * `response_format` (`json_schema`, degrading to `json_object` for a backend
+   * that refuses it — a second copy here never learned that), applies the
+   * first-response deadline the native path has, and surfaces a reasoning
+   * model's `reasoning_content` as `message.thinking`, which is where LM
+   * Studio's reasoning models put the schema-constrained output when
+   * `content` comes back empty.
    */
+  private extractionDriver(): OpenAiCompatChatDriver {
+    this.externalDriver ??= new OpenAiCompatChatDriver(`${EXTRACTION_LLM_URL}/v1`, EXTRACTION_LLM_API_KEY);
+
+    return this.externalDriver;
+  }
+
   private async callOpenAICompatibleChat(messages: OllamaMessage[]): Promise<string> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), EXTRACTION_LLM_TIMEOUT_MS);
+    const response = await this.extractionDriver().chat({
+      model: EXTRACTION_LLM_MODEL,
+      messages,
+      format: EXTRACTION_JSON_SCHEMA,
+      temperature: 0,
+      timeoutMs: EXTRACTION_LLM_TIMEOUT_MS,
+    });
 
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (EXTRACTION_LLM_API_KEY) {
-        headers['Authorization'] = `Bearer ${EXTRACTION_LLM_API_KEY}`;
-      }
-
-      const res = await fetch(`${EXTRACTION_LLM_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: EXTRACTION_LLM_MODEL,
-          messages,
-          temperature: 0,
-          response_format: {
-            type: 'json_schema',
-            json_schema: {
-              name: 'extraction_result',
-              strict: true,
-              schema: EXTRACTION_JSON_SCHEMA,
-            },
-          },
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`Extraction LLM HTTP ${res.status}: ${body.slice(0, 200)}`);
-      }
-
-      const data = (await res.json()) as {
-        choices?: Array<{
-          message?: {
-            content?: string;
-            // Reasoning models (e.g. ornstein-3.6-27b on LM Studio, DeepSeek-R1)
-            // emit their schema-constrained output here when `content` ends
-            // up empty.  Fall back so we don't lose perfectly good extractions.
-            reasoning_content?: string;
-          };
-        }>;
-      };
-      const msg = data.choices?.[0]?.message;
-
-      return msg?.content || msg?.reasoning_content || '';
-    } finally {
-      clearTimeout(timer);
-    }
+    return response.message.content || response.message.thinking || '';
   }
 
   private async upsertEntities(

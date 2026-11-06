@@ -20,7 +20,7 @@ load_dotenv(os.path.join(_proj_root, ".env"), override=True)
 # container's own loopback to us. Correct them for wherever this process is
 # before anything reads them — see llm_host.py. Loud on every rewrite: a
 # labeler pointed at nothing writes zero labels while reporting healthy.
-from .llm_host import resolve_env as _resolve_llm_host_env
+from ci.sidecar.llm_host import resolve_env as _resolve_llm_host_env
 
 _resolve_llm_host_env()
 

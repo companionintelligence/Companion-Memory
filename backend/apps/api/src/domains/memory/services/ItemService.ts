@@ -627,6 +627,10 @@ export class ItemService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Item | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const entities = await this.itemRepository.find({
       where: {
         id: In(ids),

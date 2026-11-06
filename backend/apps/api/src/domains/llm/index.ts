@@ -90,6 +90,7 @@ export {
   type MemoryGovernancePreferences,
 } from './chat-model-preference.module';
 export { OllamaService } from './services/OllamaService';
+export { OpenAiCompatChatDriver } from './services/OpenAiCompatChatDriver';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
 export {
   OllamaPriorityQueue,
