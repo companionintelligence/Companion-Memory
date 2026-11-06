@@ -116,6 +116,10 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 - [trust-tasks.md](trust-tasks.md) — Trust Tasks (Trust Over IP) as a second door onto the
   same ask pipeline: signed task documents with the proof inside, `POST /agent/v1/trust-tasks`,
   off by default; what is implemented, how a request is checked, and what is not here.
+- [didcomm.md](didcomm.md) — DIDComm Messaging v2.1: authcrypt/anoncrypt/signed envelopes, mediator
+  routing, trust-ping and friends, `did:key`/`did:peer`/`did:web`, pinned to the specification's and
+  the Rust reference's test vectors. A tested library kept beside the KERI design, which it does not
+  depend on and refuses to impersonate; not wired into the API yet.
 - [asks-threat-model.md](asks-threat-model.md) — the adversaries the ask feature does and
   does not defend against: coercion in a shared household, stalking via repeated free/busy,
   social engineering at the consent moment, prompt injection (traced, none today),
