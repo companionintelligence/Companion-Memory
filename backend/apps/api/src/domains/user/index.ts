@@ -86,6 +86,11 @@ export {
   type StoredObject,
 } from './purge/objectStore';
 export { type AccountPurgeOutcome } from './services/AccountPurgeService';
+export {
+  ACCOUNT_GRANT_REVOKER,
+  type AccountGrantRevoker,
+  type GrantRevocation,
+} from './services/accountGrantRevoker';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';
 

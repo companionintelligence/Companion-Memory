@@ -6,19 +6,21 @@ interface SqlExecutor {
 }
 
 /**
- * Close the `ci.data_deletion_audit` record of an immediate account delete
- * (`POST /users/me/delete`) once the purge has removed the account's last row.
+ * Close the `ci.data_deletion_audit` record of an account delete once the purge
+ * has removed the account's last row.
  *
- * That route ends the account in one short transaction and writes a `started`
- * row there; the rows themselves go through this batched purge, inline when it
- * finishes in time and otherwise on a later run (an interrupted purge is picked
- * up by the hourly cron, since its `purge_after` has passed). Whichever run gets
- * to the end appends the `completed` row, with the counts, so the record never
- * depends on the request that started it still being there.
+ * Both deletes write a `started` row in the transaction that ends the account
+ * (the immediate `POST /users/me/delete`, and `DELETE /account` when it revokes
+ * the provider grants). The rows themselves go through this batched purge:
+ * inline for the immediate delete when it finishes in time, and otherwise on a
+ * later run (the hourly cron picks up any account whose `purge_after` has
+ * passed). Whichever run gets to the end appends the `completed` row, with the
+ * counts, so the record never depends on the request that started it still
+ * being there.
  *
- * A purge that no immediate delete started (the 30-day one) finds no `started`
- * row and writes nothing: `ci.account_purges` is its record. Idempotent: a
- * `started` row already followed by a `completed` one is not completed again.
+ * A purge with no `started` row (an account ended before deletes wrote one)
+ * writes nothing: `ci.account_purges` is its record. Idempotent: a `started`
+ * row already followed by a `completed` one is not completed again.
  *
  * Raw SQL against the privacy domain's table, as `UserService` writes
  * `ci.signup_code`: that domain depends on this one, not the other way round.

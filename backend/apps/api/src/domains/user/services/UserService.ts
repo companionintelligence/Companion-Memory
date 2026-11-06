@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
 import { EntityManager, IsNull, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
@@ -14,6 +15,8 @@ import { normalizeEmail } from '../email';
 import { type User, UserEntity } from '../entities/UserEntity';
 import { UserCreatedEvent, UserUpdatedEvent, UserRemovedEvent } from '../events';
 import { CreateUserDto, UpdateUserDto } from '../types';
+
+import { resolveAccountGrantRevoker } from './accountGrantRevoker';
 
 /**
  * Grace period between "delete my account" and the irreversible purge of the data.
@@ -106,6 +109,11 @@ export class UserService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly eventService: EventService,
+    /**
+     * For `ACCOUNT_GRANT_REVOKER` (bound by PrivacyModule), resolved lazily by
+     * {@link requestDeletion}. Optional so a service built by hand still constructs.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   /**
@@ -480,7 +488,24 @@ export class UserService {
    * Raw SQL against `ci.signup_code` because that table belongs to the auth domain, which depends
    * on this one and not the other way round.
    *
-   * Idempotent: a second request finds nothing (the first one hid the row) and
+   * ── Provider grants ────────────────────────────────────────────────────────
+   *
+   * Hiding the row stops the account's own sign-ins, but not the OAuth grants its connections hold
+   * with each provider: those stayed live for the whole grace period, and a person who deleted the
+   * account to cut a provider off was not cut off. So, as the immediate delete does
+   * (`DataDeletionService.deleteAccount`), every connection's grant is revoked first, through
+   * `ACCOUNT_GRANT_REVOKER`: best-effort, with no lock held, and only once the
+   * last-administrator rule has been asked without the lock ({@link assertMayEndAccount}), so a
+   * request that will be refused revokes nothing. A provider that fails is recorded as not revoked
+   * and does not stop the delete. Then, in the transaction that ends the account, its connections
+   * are marked inactive with their tokens cleared and the `started` audit row is written; a failure
+   * there rolls the end back and is recorded as `failed`. The purge revokes whatever still holds a
+   * token when it runs (`AccountPurgeService`).
+   *
+   * A service built without that binding (by hand, in a test) ends the account as before and
+   * revokes nothing.
+   *
+   * Idempotent: a second request finds nothing (the first one hid the row), revokes nothing and
    * returns false rather than throwing.
    */
   async requestDeletion(
@@ -493,8 +518,32 @@ export class UserService {
     }
 
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
+    const revoker = resolveAccountGrantRevoker(this.moduleRef);
 
-    return (await this.endAccount(id, options, purgeAfter)) != null;
+    if (!revoker) {
+      return (await this.endAccount(id, options, purgeAfter)) != null;
+    }
+
+    if (!(await this.forecastEnd(id, options))) {
+      return false;
+    }
+
+    const revocations = await revoker.revokeGrants(id);
+
+    try {
+      const ended = await this.endAccount(id, options, purgeAfter, (manager) =>
+        revoker.recordAccountEnd(manager, id, revocations),
+      );
+
+      return ended != null;
+    } catch (error) {
+      if (!(error instanceof LastAdminDeletionRefused)) {
+        // The transaction has rolled back by now and released what it held.
+        await revoker.recordAccountEndFailed(id, revocations, error);
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -516,6 +565,15 @@ export class UserService {
       throw new UnauthorizedException();
     }
 
+    await this.forecastEnd(id, options);
+  }
+
+  /**
+   * {@link assertMayEndAccount} without the caller check.
+   *
+   * @returns whether there is a live account `id` to end.
+   */
+  private async forecastEnd(id: string, options: DeletionOptions): Promise<boolean> {
     const manager = this.userRepository.manager;
     const [target] = await manager.query<Array<{ role: string }>>(
       `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
@@ -525,6 +583,8 @@ export class UserService {
     if (target?.role === 'admin') {
       await this.successorFor(manager, id, options);
     }
+
+    return target != null;
   }
 
   /**

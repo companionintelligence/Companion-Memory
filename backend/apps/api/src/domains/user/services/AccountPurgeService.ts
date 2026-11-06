@@ -1,4 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 
@@ -19,6 +20,8 @@ import {
   renderUnbatchedNull,
 } from '../purge/purgeSql';
 import type { PurgePlan, PurgeStep, TableRef } from '../purge/types';
+
+import { resolveAccountGrantRevoker } from './accountGrantRevoker';
 
 const USERS_TABLE: TableRef = { schema: 'ci', table: 'users' };
 
@@ -122,7 +125,7 @@ export interface AccountPurgeOutcome {
   deletedObjects: number;
   /**
    * The `completed` row this run appended to `ci.data_deletion_audit`, when it
-   * finished an immediate delete (see `completeImmediateDeletionAudit`).
+   * finished an account delete that wrote a `started` row (see `completeImmediateDeletionAudit`).
    */
   auditId?: string | null;
   error?: string;
@@ -173,6 +176,8 @@ export class AccountPurgeService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
     @Optional() @Inject(PURGE_OBJECT_STORE) private readonly objectStore?: PurgeObjectStore,
+    /** For `ACCOUNT_GRANT_REVOKER` (bound by PrivacyModule), resolved lazily by {@link purgeAccount}. */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(AccountPurgeService.name);
   }
@@ -323,6 +328,13 @@ export class AccountPurgeService {
       try {
         await this.markStarted(runner, userId, requestedAt, purgeAfter);
 
+        // Grants first, while the connection rows that hold the tokens are still there. Both
+        // account deletes revoke and clear them when the account ends, so this normally finds
+        // nothing; it catches an account ended before they did, and a token written for the
+        // account after it ended. Best-effort per provider; a failure to read or clear the
+        // connections fails the run, which is retried, rather than delete tokens unrevoked.
+        await this.revokeRemainingGrants(userId);
+
         const plan = await this.buildPlan(runner);
 
         if (plan.warnings.length > 0) {
@@ -415,6 +427,25 @@ export class AccountPurgeService {
       return { userId, status: 'failed', deletedRows, detachedRows, deletedObjects, error: error.message };
     } finally {
       await runner.release();
+    }
+  }
+
+  /** `AccountGrantRevoker.revokeRemainingGrants`, when `ACCOUNT_GRANT_REVOKER` is bound. */
+  private async revokeRemainingGrants(userId: string): Promise<void> {
+    const revoker = resolveAccountGrantRevoker(this.moduleRef);
+
+    if (!revoker) {
+      return;
+    }
+
+    const revocations = await revoker.revokeRemainingGrants(userId);
+
+    if (revocations.length > 0) {
+      this.logger.log('Revoked the provider grants an ended account still held', {
+        userId,
+        connections: revocations.length,
+        revoked: revocations.filter((revocation) => revocation.tokenRevoked).length,
+      });
     }
   }
 

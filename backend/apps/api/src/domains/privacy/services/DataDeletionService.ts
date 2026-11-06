@@ -20,8 +20,10 @@ import {
   AccountPurgeService,
   LastAdminDeletionRefused,
   UserService,
+  type AccountGrantRevoker,
   type AccountPurgeOutcome,
   type DeletionOptions,
+  type GrantRevocation,
 } from '@ci/domains/user';
 
 import { CONNECTION_SCOPED_TABLES, type ConnectionScopedTable } from '../dataDeletionPlan';
@@ -83,7 +85,7 @@ export interface AccountDeletionResult {
    */
   status: 'deleted' | 'deleting';
   /** Per-connection revocation outcome, keyed by connection id. */
-  revocations: Array<{ connectionId: string; providerId: string | null; tokenRevoked: boolean }>;
+  revocations: GrantRevocation[];
   /** Per-table row counts purged. Empty while `deleting`. */
   deletedCounts: Record<string, number>;
   /**
@@ -118,9 +120,14 @@ export interface AccountDeletionResult {
  * Both are owner-scoped and audit-logged (ci.data_deletion_audit). A disconnect
  * of a connection already gone 404s; an account already ended has nothing left
  * to sign in with, and its purge finishes on its own.
+ *
+ * Also the user domain's {@link AccountGrantRevoker} (`ACCOUNT_GRANT_REVOKER`,
+ * bound in PrivacyModule): `DELETE /account` (`UserService.requestDeletion`)
+ * revokes the grants the way {@link deleteAccount} does, and the account purge
+ * revokes any that still hold a token.
  */
 @Injectable()
-export class DataDeletionService {
+export class DataDeletionService implements AccountGrantRevoker {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(ConnectionEntity)
@@ -305,32 +312,7 @@ export class DataDeletionService {
 
     await this.userService.assertMayEndAccount(context, userId, options);
 
-    const connections = await this.connectionRepository.find({
-      where: { userId },
-      relations: ['provider'],
-    });
-
-    const revocations: AccountDeletionResult['revocations'] = [];
-    for (const connection of connections) {
-      const tokenRevoked = await withDeadline(
-        this.revokeConnectionGrant(connection),
-        REVOCATION_DEADLINE_MS,
-        'The revocation',
-      ).catch((error: unknown) => {
-        this.logger.warn('Connection grant revocation timed out; continuing with the delete', {
-          connectionId: connection.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-
-        return false;
-      });
-      revocations.push({
-        connectionId: connection.id,
-        providerId: connection.providerId ?? null,
-        tokenRevoked,
-      });
-    }
-
+    const revocations = await this.revokeGrants(userId);
     const tokenRevoked = revocations.some((r) => r.tokenRevoked);
 
     let ended: { requestedAt: Date; purgeAfter: Date; result: string };
@@ -381,6 +363,122 @@ export class DataDeletionService {
   }
 
   /**
+   * Revoke every connection's grant with its provider ({@link AccountGrantRevoker.revokeGrants}),
+   * one connection at a time, each bounded by {@link REVOCATION_DEADLINE_MS}.
+   */
+  async revokeGrants(userId: string): Promise<GrantRevocation[]> {
+    const connections = await this.findAccountConnections(userId);
+
+    const revocations: GrantRevocation[] = [];
+    for (const connection of connections) {
+      revocations.push({
+        connectionId: connection.id,
+        providerId: connection.providerId ?? null,
+        tokenRevoked: await this.revokeWithinDeadline(connection),
+      });
+    }
+
+    return revocations;
+  }
+
+  /**
+   * In the transaction that ends the account (`DELETE /account`): its connections
+   * closed and the `started` audit row ({@link AccountGrantRevoker.recordAccountEnd}).
+   */
+  recordAccountEnd(manager: EntityManager, userId: string, revocations: GrantRevocation[]): Promise<string> {
+    return this.closeConnectionsAndRecordStart(
+      manager,
+      userId,
+      revocations.some((r) => r.tokenRevoked),
+    );
+  }
+
+  /** {@link AccountGrantRevoker.recordAccountEndFailed}: the `failed` audit row. */
+  recordAccountEndFailed(userId: string, revocations: GrantRevocation[], error: unknown): Promise<void> {
+    return this.writeFailedAccountAudit(
+      userId,
+      revocations.some((r) => r.tokenRevoked),
+      error,
+    );
+  }
+
+  /**
+   * For the purge ({@link AccountGrantRevoker.revokeRemainingGrants}): every connection
+   * of the account that still holds a token has its grant revoked, then is marked
+   * inactive with its tokens cleared, and gets a `connection` audit row with the
+   * outcome, the record a disconnect writes. One connection at a time, so a run
+   * that stops part way leaves the rest still holding their tokens for the next
+   * run to find; one whose tokens are cleared is never revoked again.
+   */
+  async revokeRemainingGrants(userId: string): Promise<GrantRevocation[]> {
+    const connections = await this.findAccountConnections(userId);
+
+    const revocations: GrantRevocation[] = [];
+    for (const connection of connections) {
+      if (connection.accessToken == null && connection.refreshToken == null) {
+        continue;
+      }
+
+      const revocation: GrantRevocation = {
+        connectionId: connection.id,
+        providerId: connection.providerId ?? null,
+        tokenRevoked: await this.revokeWithinDeadline(connection),
+      };
+
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query(
+          `UPDATE ci.connections
+              SET active = false, access_token = NULL, refresh_token = NULL
+            WHERE id = $1 AND user_id = $2`,
+          [connection.id, userId],
+        );
+
+        await this.writeAudit(
+          {
+            subjectUserId: userId,
+            requestedByUserId: userId,
+            scope: 'connection',
+            connectionId: connection.id,
+            providerId: revocation.providerId,
+            tokenRevoked: revocation.tokenRevoked,
+            deletedCounts: {},
+            totalDeleted: 0,
+          },
+          manager,
+        );
+      });
+
+      revocations.push(revocation);
+    }
+
+    return revocations;
+  }
+
+  /** Every connection of the account, with its provider. */
+  private findAccountConnections(userId: string): Promise<ConnectionEntity[]> {
+    return this.connectionRepository.find({ where: { userId }, relations: { provider: true } });
+  }
+
+  /**
+   * {@link revokeConnectionGrant}, counted as not revoked past
+   * {@link REVOCATION_DEADLINE_MS}. Never rejects.
+   */
+  private revokeWithinDeadline(connection: ConnectionEntity): Promise<boolean> {
+    return withDeadline(
+      this.revokeConnectionGrant(connection),
+      REVOCATION_DEADLINE_MS,
+      'The revocation',
+    ).catch((error: unknown) => {
+      this.logger.warn('Connection grant revocation timed out; continuing with the delete', {
+        connectionId: connection.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return false;
+    });
+  }
+
+  /**
    * The writes that end the account's access, in the transaction that ends the
    * account. Hiding the user row already fails every sign-in, token and key that
    * resolves through it; these go further, so nothing holding a session, a key or
@@ -399,6 +497,22 @@ export class DataDeletionService {
   ): Promise<string> {
     await manager.query(`DELETE FROM ci.sessions WHERE user_id = $1`, [userId]);
     await manager.query(`DELETE FROM ci.api_keys WHERE user_id = $1`, [userId]);
+
+    return this.closeConnectionsAndRecordStart(manager, userId, tokenRevoked);
+  }
+
+  /**
+   * Every connection of the account marked inactive with its tokens cleared, and
+   * the account's `started` audit row: the part of ending an account that both
+   * deletes share.
+   *
+   * @returns the id of the `started` audit row.
+   */
+  private async closeConnectionsAndRecordStart(
+    manager: EntityManager,
+    userId: string,
+    tokenRevoked: boolean,
+  ): Promise<string> {
     await manager.query(
       `UPDATE ci.connections
           SET active = false, access_token = NULL, refresh_token = NULL
