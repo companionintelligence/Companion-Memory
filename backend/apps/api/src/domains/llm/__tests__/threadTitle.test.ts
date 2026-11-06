@@ -1,4 +1,4 @@
-import { provisionalTitleFromMessage, sidebarTitleFromModel } from '../threadTitle';
+import { provisionalTitleFromMessage, sidebarTitleFromModel, titleExcerptFromMessage } from '../threadTitle';
 
 describe('sidebarTitleFromModel', () => {
   it('keeps about three title-case words', () => {
@@ -62,5 +62,34 @@ describe('provisionalTitleFromMessage', () => {
     expect(provisionalTitleFromMessage('   \n ')).toBe('');
     expect(provisionalTitleFromMessage(null)).toBe('');
     expect(provisionalTitleFromMessage(undefined)).toBe('');
+  });
+});
+
+describe('sidebarTitleFromModel — a reply cut off while reasoning', () => {
+  it('finds no title in a reply that is only an unclosed thinking trace', () => {
+    expect(
+      sidebarTitleFromModel(
+        '<think>The user is asking for the most recent picture of a squirrel. I should se',
+      ),
+    ).toBe('');
+  });
+});
+
+describe('titleExcerptFromMessage', () => {
+  it('keeps the answer and drops the reasoning it was stored with', () => {
+    expect(titleExcerptFromMessage('<think>Sort by date first.</think>The newest one is from January.')).toBe(
+      'The newest one is from January.',
+    );
+  });
+
+  it('leaves nothing of a step that was only reasoning, closed or not', () => {
+    expect(titleExcerptFromMessage('<think>I should search memory for squirrel photos.</think>')).toBe('');
+    expect(titleExcerptFromMessage('<think>I should search memory')).toBe('');
+  });
+
+  it('passes a message with no reasoning through, whitespace folded', () => {
+    expect(titleExcerptFromMessage('  What is the most recent\n squirrel picture? ')).toBe(
+      'What is the most recent squirrel picture?',
+    );
   });
 });

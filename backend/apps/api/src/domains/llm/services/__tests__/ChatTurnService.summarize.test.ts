@@ -71,6 +71,49 @@ describe('ChatTurnService.summarizeThread', () => {
     );
   });
 
+  it('shows the title model what was said, not the reasoning stored with each reply', async () => {
+    // A squirrel-photo thread from manual testing: each reply stored as <think>…</think>answer, two
+    // of them only reasoning (tool-calling steps). Sent as they were, the model copied the pattern,
+    // reasoned instead of naming the thread, and the job failed with no title.
+    const threadService = {
+      findById: jest.fn(async () => ({ id: 'thread-1', name: null })),
+      update: jest.fn(async () => undefined),
+    };
+    const messageService = {
+      findByThreadId: jest.fn(async () => [
+        { role: 'user', content: 'What is the most recent picture of a squirrel in my memory?' },
+        { role: 'assistant', content: '<think>I should search memory for squirrel photos.</think>' },
+        { role: 'tool', content: 'search results' },
+        { role: 'assistant', content: '<think>Not sorted by date.</think>The newest one is from January.' },
+        { role: 'assistant', content: '' },
+      ]),
+    };
+    const ollamaService = {
+      resolveModel: jest.fn(async () => ({ model: 'm', enableThinking: false, enableTools: false })),
+      chat: jest.fn(async () => ({ message: { content: 'Latest squirrel photo' } })),
+    };
+
+    await buildService({ threadService, messageService, ollamaService }).summarizeThread({
+      ownerId: 'user-1',
+      threadId: 'thread-1',
+    });
+
+    expect(ollamaService.chat).toHaveBeenCalledWith(
+      expect.anything(),
+      [
+        expect.objectContaining({ role: 'system' }),
+        { role: 'user', content: 'What is the most recent picture of a squirrel in my memory?' },
+        { role: 'assistant', content: 'The newest one is from January.' },
+      ],
+      expect.anything(),
+    );
+    expect(threadService.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'thread-1',
+      expect.objectContaining({ name: 'Latest Squirrel Photo' }),
+    );
+  });
+
   it('still names the thread when history has no stored model id', async () => {
     const threadService = {
       findById: jest.fn(async () => ({ id: 'thread-1', name: null })),
