@@ -82,6 +82,57 @@ describe('DIDComm signed messages, specification Appendix C.2', () => {
   });
 });
 
+describe('ES256K signatures are low-S', () => {
+  // OpenSSL writes s or n - s at random. The DIDComm reference implementation (Rust, k256) and
+  // libsecp256k1 refuse s > n/2, so this library only writes the low form, and still accepts the high
+  // one from other writers. n is checked indirectly: the high twin below only verifies if it is right.
+  const ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+  const kid = 'did:example:alice#key-3';
+  const sOf = (signature: Buffer) => BigInt(`0x${signature.subarray(32).toString('hex')}`);
+  const highTwin = (signature: Buffer) =>
+    Buffer.concat([
+      signature.subarray(0, 32),
+      Buffer.from((ORDER - sOf(signature)).toString(16).padStart(64, '0'), 'hex'),
+    ]);
+
+  it('writes s <= n/2 every time, and every signature verifies', () => {
+    // Without the normalization each signature is high-S with probability 1/2, so 64 in a row
+    // escaping it has probability 2^-64.
+    for (let i = 0; i < 64; i += 1) {
+      const parsed = parseJws({ ...createJws(Buffer.from(`{"id":"${i}"}`), aliceSecret(kid)) });
+
+      expect(sOf(parsed.signature) <= ORDER >> 1n).toBe(true);
+      expect(verifyJwsSignature(parsed, alicePublic(kid))).toBe(true);
+    }
+  });
+
+  it('writes low-S in the compact form (from_prior) as well', () => {
+    const key = generateKeyPair('secp256k1');
+    const signer = { ...key.privateJwk, kid: 'did:example:a#k' };
+
+    for (let i = 0; i < 64; i += 1) {
+      const token = createCompactJws(
+        { typ: 'JWT', kid: signer.kid },
+        { iss: 'did:example:a', iat: i },
+        signer,
+      );
+      const parsed = parseCompactJws(token);
+
+      expect(sOf(Buffer.from(token.split('.')[2], 'base64url')) <= ORDER >> 1n).toBe(true);
+      expect(verifyCompactJws(parsed, key.publicJwk)).toBe(true);
+    }
+  });
+
+  it('still accepts the high-S twin of a valid signature', () => {
+    const parsed = parseJws({ ...createJws(Buffer.from('{"id":"1"}'), aliceSecret(kid)) });
+    const twin = highTwin(parsed.signature);
+
+    expect(sOf(twin) > ORDER >> 1n).toBe(true);
+    expect(twin.equals(parsed.signature)).toBe(false);
+    expect(verifyJwsSignature({ ...parsed, signature: twin }, alicePublic(kid))).toBe(true);
+  });
+});
+
 describe('signature checks', () => {
   const kid = 'did:example:alice#key-1';
   const valid = () => parseJws(SIGNED_EDDSA);
