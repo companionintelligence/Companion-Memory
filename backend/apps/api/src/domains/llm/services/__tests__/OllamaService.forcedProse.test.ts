@@ -235,11 +235,13 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(driver.chatStream).toHaveBeenCalledTimes(3);
     expect(tool.execute).toHaveBeenCalledTimes(2);
 
-    // The stored final message does not claim a tool call that never ran.
-    const last = messages[messages.length - 1];
+    // No stored row claims a tool call that never ran, and the forced round's blank answer is not
+    // stored either: it used to close the thread on an empty assistant row. A turn left with no
+    // text gets ChatTurnService's empty-turn fallback instead.
+    const assistantRows = messages.filter((m: any) => m.role === 'assistant');
 
-    expect(last.role).toBe('assistant');
-    expect(last.tool_calls).toBeUndefined();
+    expect(assistantRows.filter((m: any) => m.tool_calls?.length)).toHaveLength(2);
+    expect(assistantRows.some((m: any) => !m.tool_calls?.length && !m.content?.trim())).toBe(false);
   });
 
   it('runs no call from a round that offered no tools, which the native engine parses anyway', async () => {
@@ -472,5 +474,79 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(nudge.role).toBe('system');
     expect(nudge.content).toContain('Answer the user now in plain prose');
     expect(nudge.content).not.toContain('tool results');
+  });
+
+  it('tells the model tool use is over in the round after the tool budget is spent', async () => {
+    // "Most recent squirrel picture": two searches, then a round with no tools offered and nothing
+    // saying so. The model planned a third lookup out loud and that preamble stood as the answer.
+    const searchFor = (query: string) => ({
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query } } }],
+      },
+    });
+    const { service, driver } = await setup([
+      [searchFor('squirrel')],
+      [searchFor('squirrel photo')],
+      [proseChunk('The newest one is from January.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'latest squirrel photo?' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    await drain(stream);
+
+    const closing = driver.calls[2];
+    const nudge = closing.messages[closing.messages.length - 1];
+
+    expect(closing.tools).toBeUndefined();
+    expect(nudge).toMatchObject({ role: 'system' });
+    expect(nudge.content).toContain('Tool use for this turn is over');
+
+    // The rounds that offered tools carry no such instruction.
+    for (const round of driver.calls.slice(0, 2)) {
+      expect(
+        round.messages.some(
+          (m: any) => m.role === 'system' && m.content.includes('Tool use for this turn is over'),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it('keeps the preamble and stores no blank row when the forced round still says nothing', async () => {
+    const searchFor = (query: string) => ({
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'knowledge_search', arguments: { query } } }],
+      },
+    });
+    const { service, tool } = await setup([
+      [searchFor('squirrel')],
+      [searchFor('squirrel photo')],
+      // Offered no tools, it announces another lookup and writes the call anyway (dropped)...
+      [proseChunk('Let me pull the newest one specifically.'), searchFor('newest squirrel')],
+      // ...and the round asked again in prose comes back empty.
+      [proseChunk('')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'latest squirrel photo?' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(
+      messages.filter((m: any) => m.role === 'assistant' && !m.tool_calls?.length && !m.content?.trim()),
+    ).toEqual([]);
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      content: 'Let me pull the newest one specifically.',
+    });
   });
 });

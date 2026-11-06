@@ -83,7 +83,7 @@ const DatabaseSearchInputSchema = z
  * and then, told the argument was invalid, gave up on the question. A phone's model gets one
  * attempt at a call; the spelling is not worth it.
  */
-function unwrapped<T extends z.ZodTypeAny>(schema: T) {
+export function unwrapped<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((value) => (Array.isArray(value) && value.length === 1 ? value[0] : value), schema);
 }
 

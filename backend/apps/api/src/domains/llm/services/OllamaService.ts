@@ -1127,13 +1127,22 @@ export class OllamaService implements OnModuleInit {
         // fallback shown). Request-only, never pushed onto
         // accumulatedMessages — persistTurn writes those as thread rows and a
         // stored system row would replay into every later turn.
-        const requestMessages = forcedProseRound
-          ? inputMessages.concat(accumulatedMessages, [
-              accumulatedMessages.some((message) => message.role === 'tool')
-                ? FORCED_PROSE_NUDGE
-                : FORCED_PROSE_NUDGE_NO_RESULTS,
-            ])
-          : inputMessages.concat(accumulatedMessages);
+        // The round after the tool budget is spent (or after tools were withdrawn) offers none, but
+        // used to say so nowhere: the model planned its next lookup out loud ("let me pull the newest
+        // one specifically") and that preamble became the answer. Told, it answers from the results.
+        const closingRound =
+          !iterationWillCallTools &&
+          enableTools &&
+          ollamaTools.length > 0 &&
+          accumulatedMessages.some((message) => message.role === 'tool');
+        const requestMessages =
+          forcedProseRound || closingRound
+            ? inputMessages.concat(accumulatedMessages, [
+                accumulatedMessages.some((message) => message.role === 'tool')
+                  ? FORCED_PROSE_NUDGE
+                  : FORCED_PROSE_NUDGE_NO_RESULTS,
+              ])
+            : inputMessages.concat(accumulatedMessages);
 
         try {
           if (openAiDriver) {
@@ -1297,8 +1306,10 @@ export class OllamaService implements OnModuleInit {
             streamError = undefined;
           }
 
-          // A blank row is not stored: the forced round answers instead.
-          if (!askAgainInProse || visible) {
+          // A blank row is not stored: the forced round answers instead. Nor is the forced round's own
+          // blank answer: stored, it closed the thread on an empty assistant row after the preamble it
+          // was meant to replace; dropped, a turn left with no text at all gets the empty-turn fallback.
+          if ((!askAgainInProse || visible) && !(forcedProseRound && !visible && toolCalls.length === 0)) {
             const message = {
               role: 'assistant',
               content: (think ? `<think>${think}</think>` : '') + content,
@@ -1620,7 +1631,8 @@ export class OllamaService implements OnModuleInit {
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {
     const { messages = [], requestedModel, enableThinking = false, enableTools = false } = opts ?? {};
 
-    let resolvedModel = requestedModel ?? PROMPT_MODEL;
+    // Both branches below decide it.
+    let resolvedModel: string;
     let resolvedThinking = enableThinking;
     let resolvedTools = enableTools;
 

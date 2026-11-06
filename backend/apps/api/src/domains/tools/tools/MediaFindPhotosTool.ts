@@ -9,13 +9,19 @@ import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 import { booleanish } from './booleanish';
-import { DatabaseSearchTool, requireQueryUnlessCounting, type SearchToolResult } from './DatabaseSearchTool';
+import {
+  DatabaseSearchTool,
+  requireQueryUnlessCounting,
+  unwrapped,
+  type SearchToolResult,
+} from './DatabaseSearchTool';
 
 const MediaFindPhotosInputSchema = z
   .object({
     query: z.string().max(500).optional(),
     maxResults: z.number().int().min(1).max(100).optional(),
     countOnly: booleanish().optional(),
+    sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
   })
   .superRefine(requireQueryUnlessCounting);
 
@@ -69,13 +75,18 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
     local: {
       description:
         'Find your photos and videos by what they show, where or when. For "how many" set countOnly and use one word, ' +
-        "or a place's whole name.",
+        'or a place\'s whole name. For "most recent" or "latest" set sort to recent.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'What, where or when. A place by its whole name.' },
           countOnly: { type: 'boolean', description: 'Return only the exact count, no items.' },
           maxResults: { type: 'integer', minimum: 1, maximum: 100 },
+          sort: {
+            type: 'string',
+            enum: ['recent'],
+            description: 'recent = newest first. Use for "most recent", "latest", "last".',
+          },
         },
         required: [],
       },
@@ -89,7 +100,9 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
       'an exact count with no items; omit query to count every photo and video. A multi-word ' +
       'query matches ANY of its words, so count on the single most specific word (e.g. "rabbit"). ' +
       'A query that names one of the user\'s places in full (e.g. "Blue Bottle Coffee") returns the photos ' +
-      "taken there instead, so pass a place's whole name, for a count too.",
+      "taken there instead, so pass a place's whole name, for a count too. " +
+      'For "most recent", "latest" or "last" set sort: recent; otherwise results are ordered by relevance. ' +
+      'Photos at a named place always come newest first.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
     // Photos and videos are already ON the device — this is the intent most obviously local.
     localCapable: true,
@@ -109,6 +122,13 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
           description:
             'Return only the exact number of matching photos/videos, no items. Use for "how many". ' +
             'Omit query to count all of them.',
+        },
+        sort: {
+          type: 'string',
+          enum: ['relevance', 'recent'],
+          description:
+            'recent = newest first by when each was taken, for "most recent" / "latest" / "last". ' +
+            'Default: relevance.',
         },
       },
       required: [],
@@ -144,6 +164,9 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
       maxResults: input.maxResults,
       countOnly: input.countOnly,
       entityTypes: ['file'],
+      // Asked for and not offered, the model said "let me pull the newest one" and ended its turn
+      // with nothing called: relevance order was all it could get.
+      ...(input.sort ? { sort: input.sort } : {}),
     });
   }
 
