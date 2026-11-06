@@ -241,7 +241,10 @@ API is the single scheduler — `@nestjs/schedule` crons in
 `domains/python-functions/cron/PythonFunctionCrons.ts` fan out one pg-boss job per user,
 `domains/python-functions` POSTs them to `POST /functions/run` in the sidecar, and the
 outcome returns over an authenticated callback webhook. Import paths are `ci.hbpe.*` / `ci.summary.*` (PEP 420
-namespace packages; no member may ship `src/ci/__init__.py`).
+namespace packages; no member may ship `src/ci/__init__.py`). What both share below their
+domains — the function runner and its routes, the bearer middleware, the LLM-host rewrite,
+the timezone validation — is `ci.sidecar.*` from `backend/packages/sidecar-core`, wired into
+all four sidecar Dockerfiles beside `ci-telemetry`.
 
 See `CI-Engineering/architecture/HBPE/` for design docs.
 

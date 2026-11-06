@@ -1,5 +1,5 @@
 # Built from the repository root, not this directory: ci-summary installs
-# ci-telemetry from backend/packages/telemetry, which a context rooted here
+# ci-telemetry and ci-sidecar-core from backend/packages/, which a context rooted here
 # could not reach. See the `build` target in the Makefile for the context.
 
 # The uv version comes from required-version in the root pyproject.toml;
@@ -49,6 +49,7 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock .python-version ./
 COPY backend/apps/summary/pyproject.toml ./backend/apps/summary/pyproject.toml
 COPY backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pyproject.toml
+COPY backend/packages/sidecar-core/pyproject.toml ./backend/packages/sidecar-core/pyproject.toml
 
 # --frozen installs exactly what uv.lock records without validating the
 # lock against the manifests, which is what allows the partial copy above:
@@ -58,13 +59,15 @@ COPY backend/packages/telemetry/pyproject.toml ./backend/packages/telemetry/pypr
 # `uv sync --all-packages --locked`.
 #
 # --no-install-workspace, not --no-install-project: this service depends on
-# the ci-telemetry workspace member, whose source has not been copied yet.
+# the ci-telemetry and ci-sidecar-core workspace members, whose sources have
+# not been copied yet.
 # Skipping only the project would make uv try to build it from an empty
 # directory.
 RUN uv sync --frozen --package ci-summary --no-install-workspace --no-dev
 
 COPY backend/apps/summary/src ./backend/apps/summary/src
 COPY backend/packages/telemetry/src ./backend/packages/telemetry/src
+COPY backend/packages/sidecar-core/src ./backend/packages/sidecar-core/src
 
 RUN uv sync --frozen --package ci-summary --no-dev --no-editable
 

@@ -13,9 +13,7 @@ connection, HBPE writing zero labels for a full nightly run (#2484).
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from ci.summary import llm_host
+from ci.sidecar import llm_host
 
 CONTAINER = {"in_container": True, "resolves": lambda host: True}
 HOST = {"in_container": False, "resolves": lambda host: False}
@@ -189,21 +187,3 @@ def test_resolve_env_logs_every_rewrite(monkeypatch, caplog):
 
 
 # ── The two copies of this module must not drift ────────────────────────────
-
-
-def test_the_hbpe_copy_is_identical():
-    """
-    llm_host.py is duplicated in ci.hbpe rather than shared through a package
-    under backend/packages/, which would have to be wired into four Dockerfiles
-    including the CUDA and ROCm ones. This test is what pays for that choice.
-    """
-    here = Path(llm_host.__file__).resolve()
-    twin = here.parents[4] / "hbpe" / "src" / "ci" / "hbpe" / "llm_host.py"
-
-    if not twin.is_file():
-        # Inside the built image only one service's source is present.
-        return
-
-    assert twin.read_text(encoding="utf-8") == here.read_text(encoding="utf-8"), (
-        f"{twin} has drifted from {here}; the two copies must stay identical."
-    )

@@ -12,9 +12,10 @@ import httpx
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from ci.sidecar.llm_host import resolve_env as resolve_llm_host_env
+from ci.sidecar.llm_host import resolve_url as resolve_llm_url
+
 from .llm_endpoint_env import apply_persisted_llm_endpoint
-from .llm_host import resolve_env as resolve_llm_host_env
-from .llm_host import resolve_url as resolve_llm_url
 
 apply_persisted_llm_endpoint()
 

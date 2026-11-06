@@ -38,7 +38,7 @@ import { Injectable } from '@nestjs/common';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
 import { EventService } from '@ci/domains/events';
 
 import { AGENT_MEMORY_QUEUE } from '../constants';
@@ -100,10 +100,9 @@ export class TurnFragmentCron {
     }
 
     const windowKey = turnFragmentWindowKey(window.until, TURN_FRAGMENT_SETTINGS.intervalMinutes);
-    let enqueued = 0;
-
-    for (const userId of userIds) {
-      try {
+    const { enqueued } = await fanOutPerUser(
+      userIds,
+      async (userId) => {
         await this.eventService.send(
           AgentTurnFragmentsEvent,
           {
@@ -120,14 +119,10 @@ export class TurnFragmentCron {
           },
         );
 
-        enqueued += 1;
-      } catch (err) {
-        this.logger.error(
-          `Failed to enqueue turn fragments for user ${userId}`,
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
+        return true;
+      },
+      { logger: this.logger, label: 'turn fragments' },
+    );
 
     this.logger.log('Chat-turn fragment fan-out enqueued', {
       users: userIds.length,

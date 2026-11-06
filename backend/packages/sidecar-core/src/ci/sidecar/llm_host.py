@@ -25,14 +25,10 @@ where inference goes is its own kind of trap.
 Escape hatch: ``CI_LLM_HOST_REWRITE=off`` uses every URL exactly as written.
 ``CI_LLM_HOST_GATEWAY`` overrides the gateway hostname.
 
-DUPLICATED ON PURPOSE. The identical module lives at
-``backend/apps/hbpe/src/ci/hbpe/llm_host.py`` and
-``backend/apps/summary/src/ci/summary/llm_host.py``; the two files are
-byte-identical and ``diff`` should stay silent. Sharing them would mean a new
-member under ``backend/packages/``, which has to be wired into four Dockerfiles
-— two of them (CUDA, ROCm) unbuildable outside a GPU appliance, where a wrong
-COPY surfaces as an ImportError nobody can reproduce. That is a bad trade for
-one pure function over a string.
+Shared by both sidecars from ``ci.sidecar``. It used to be two byte-identical
+copies, one per service, kept in step by a test; the shared package that made
+one copy possible had to be wired into the four sidecar Dockerfiles, which is
+where the copies came from.
 """
 
 from __future__ import annotations

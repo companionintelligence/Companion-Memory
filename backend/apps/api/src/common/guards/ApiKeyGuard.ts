@@ -1,9 +1,9 @@
-import { type ExecutionContext, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { type ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { GqlExecutionContext } from '@nestjs/graphql';
 import { AuthGuard } from '@nestjs/passport';
 
-import { enforceApiKeyCapability, enforceApiKeyScopes } from './apiKeyScopeEnforcement';
+import { enforceApiKeyAuthority } from './apiKeyScopeEnforcement';
+import { requestFromContext } from './guardRequest';
 
 @Injectable()
 export class ApiKeyGuard extends AuthGuard('api-key') {
@@ -13,41 +13,21 @@ export class ApiKeyGuard extends AuthGuard('api-key') {
 
   /**
    * Authenticate the api-key (via the passport strategy), then apply deny-by-
-   * default scope enforcement now that `req.apiKeyScopes` is populated. A
-   * scope-limited key is confined to routes that declare a scope it holds.
+   * default scope and capability enforcement now that `req.apiKeyScopes` is
+   * populated. A scope-limited key is confined to routes that declare a scope
+   * it holds.
    */
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const ok = (await super.canActivate(context)) as boolean;
 
     if (ok) {
-      const request = this.getRequest(context);
-
-      enforceApiKeyScopes(this.reflector, context, request);
-      // Second axis: scopes got the key to this route, capability decides whether it may act here.
-      enforceApiKeyCapability(this.reflector, context, request);
+      enforceApiKeyAuthority(this.reflector, context, this.getRequest(context));
     }
 
     return ok;
   }
 
   getRequest(context: ExecutionContext) {
-    if (context.getType<string>() === 'graphql') {
-      const ctx = GqlExecutionContext.create(context);
-      const { req } = ctx.getContext();
-
-      if (req == null) {
-        throw new InternalServerErrorException('Request object not found in GraphQL context');
-      }
-
-      return req;
-    }
-
-    if (context.getType<string>() === 'http') {
-      return context.switchToHttp().getRequest();
-    }
-
-    throw new InternalServerErrorException(
-      `${ApiKeyGuard.name} does not support context type: ${context.getType()}`,
-    );
+    return requestFromContext(context, ApiKeyGuard.name);
   }
 }

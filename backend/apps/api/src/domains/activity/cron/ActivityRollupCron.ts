@@ -14,8 +14,6 @@ export const ACTIVITY_ROLLUP_CRON = '25 */15 * * * *';
 
 @Injectable()
 export class ActivityRollupCron implements OnApplicationBootstrap {
-  private running = false;
-
   constructor(
     private readonly activityRollupService: ActivityRollupService,
     private readonly logger: LoggerService,
@@ -37,25 +35,11 @@ export class ActivityRollupCron implements OnApplicationBootstrap {
     void this.refreshRollup();
   }
 
-  @Cron(ACTIVITY_ROLLUP_CRON, { name: 'ActivityRollupCron.refreshRollup' })
+  // `exclusive`: the decorator keeps a refresh from stacking on a slow one
+  // and logs the skip and any failure. The boot-time call above goes through
+  // the same decorated method, so it takes the same guard.
+  @Cron(ACTIVITY_ROLLUP_CRON, { name: 'ActivityRollupCron.refreshRollup', exclusive: true })
   async refreshRollup() {
-    if (this.running) {
-      this.logger.warn('Skipping activity rollup refresh; previous run still in progress');
-
-      return;
-    }
-
-    this.running = true;
-
-    try {
-      await this.activityRollupService.refreshAll();
-    } catch (err) {
-      this.logger.error(
-        'Activity rollup refresh failed',
-        err instanceof Error ? err : new Error(String(err)),
-      );
-    } finally {
-      this.running = false;
-    }
+    await this.activityRollupService.refreshAll();
   }
 }

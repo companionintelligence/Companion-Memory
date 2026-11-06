@@ -216,3 +216,18 @@ export function enforceApiKeyCapability(
     );
   }
 }
+
+/**
+ * Both axes, in their order: scopes decide whether the key reaches this route at
+ * all, then capability decides whether it may act here. What every api-key guard
+ * runs once its principal is on the request, and what a limited Portal bearer is
+ * held to in the same way.
+ */
+export function enforceApiKeyAuthority(
+  reflector: Reflector,
+  context: ExecutionContext,
+  request: ApiKeyScopedRequest,
+): void {
+  enforceApiKeyScopes(reflector, context, request);
+  enforceApiKeyCapability(reflector, context, request);
+}
