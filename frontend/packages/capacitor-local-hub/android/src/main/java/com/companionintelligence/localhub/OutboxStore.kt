@@ -104,6 +104,14 @@ interface OutboxQueue {
     /** Removes every item, whatever its status. Only sign-out uses it. Returns how many went. */
     fun deleteAll(): Int
 
+    /**
+     * Re-stamps every row whose owner is one of [from] to [to], whatever its status, and returns
+     * how many changed. The web layer calls it when the phone signs in again as the same account
+     * on the same Memory: the new key is a new stamp, and rows queued under the old one would
+     * otherwise never be sent. The sidecar does not judge whether the stamps belong together.
+     */
+    fun reassignOwner(from: List<String>, to: String): Int
+
     fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem?
 
     fun retry(id: String): OutboxItem?
@@ -359,6 +367,15 @@ class OutboxStore(
      */
     override fun deleteAll(): Int = synchronized(writeLock) {
         database().compileStatement("DELETE FROM $TABLE_NAME").use { it.executeUpdateDelete() }
+    }
+
+    override fun reassignOwner(from: List<String>, to: String): Int = synchronized(writeLock) {
+        if (from.isEmpty()) {
+            return 0
+        }
+        val placeholders = from.joinToString(",") { "?" }
+        val values = ContentValues().apply { put(COLUMN_OWNER, to) }
+        database().update(TABLE_NAME, values, "$COLUMN_OWNER IN ($placeholders)", from.toTypedArray())
     }
 
     /**

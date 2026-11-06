@@ -89,6 +89,7 @@ class LocalHubServer(
             segments.isEmpty() && method == Method.POST -> handleEnqueue(body)
             segments.isEmpty() && method == Method.GET -> handleList(session)
             segments.isEmpty() && method == Method.DELETE -> handleClear()
+            segments.size == 1 && method == Method.POST && segments[0] == OWNER_SEGMENT -> handleReassignOwner(body)
             segments.size == 1 && method == Method.GET -> handleGetOne(segments[0])
             segments.size == 1 && method == Method.DELETE -> handleDelete(segments[0])
             segments.size == 2 && method == Method.POST && segments[1] == ATTEMPT_SEGMENT ->
@@ -209,6 +210,32 @@ class LocalHubServer(
     /** Sign-out's clear: every row goes, and the count says how many. */
     private fun handleClear(): Response =
         jsonResponse(Response.Status.OK, JSONObject().put("deleted", outbox.deleteAll()).toString())
+
+    /**
+     * `POST /api/outbox/owner` `{"from": [stamps], "to": stamp}`: re-stamp the rows queued under
+     * an earlier key of the same account, so they send under the current one. Answers
+     * `{"updated": n}`. See [OutboxQueue.reassignOwner].
+     */
+    private fun handleReassignOwner(body: JSONObject?): Response {
+        if (body == null) {
+            return badRequest("Request body must be a JSON object.")
+        }
+        val to = body.stringOrNull("to") ?: return badRequest("\"to\" must be a non-empty string.")
+        val fromArray = body.opt("from") as? JSONArray
+        val from = mutableListOf<String>()
+        if (fromArray == null || fromArray.length() == 0 || fromArray.length() > MAX_REASSIGN_FROM) {
+            return badRequest("\"from\" must be a non-empty array of at most $MAX_REASSIGN_FROM stamps.")
+        }
+        for (index in 0 until fromArray.length()) {
+            val stamp = fromArray.opt(index)
+            if (stamp !is String || stamp.isBlank()) {
+                return badRequest("\"from\" must hold only non-empty strings.")
+            }
+            from += stamp
+        }
+        val updated = outbox.reassignOwner(from.filter { it != to }.distinct(), to)
+        return jsonResponse(Response.Status.OK, JSONObject().put("updated", updated).toString())
+    }
 
     private fun handleAttempt(body: JSONObject?, id: String): Response {
         if (body == null) {
@@ -358,6 +385,10 @@ class LocalHubServer(
         private const val OUTBOX_PATH = "/api/outbox"
         private const val ATTEMPT_SEGMENT = "attempt"
         private const val RETRY_SEGMENT = "retry"
+        private const val OWNER_SEGMENT = "owner"
+
+        /** More earlier stamps than one phone could plausibly have held is a malformed request. */
+        private const val MAX_REASSIGN_FROM = 64
         private const val STATUS_PARAM = "status"
         private const val STATUS_FILTER_ALL = "all"
         private const val AUTH_HEADER = "Authorization"

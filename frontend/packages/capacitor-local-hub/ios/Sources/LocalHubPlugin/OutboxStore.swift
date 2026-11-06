@@ -419,6 +419,30 @@ final class OutboxStore {
         }
     }
 
+    /// Re-stamps every row whose owner is one of `from` to `to`, whatever its status, and
+    /// returns how many changed. The web layer calls it when the phone signs in again as the
+    /// same account on the same Memory: the new key is a new stamp, and rows queued under the
+    /// old one would otherwise never be sent. The store does not judge whether stamps belong
+    /// together.
+    func reassignOwner(from: [String], to: String) throws -> Int {
+        guard !from.isEmpty else {
+            return 0
+        }
+        return try queue.sync { () -> Int in
+            let placeholders = Array(repeating: "?", count: from.count).joined(separator: ",")
+            let statement = try prepare("UPDATE outbox SET owner = ? WHERE owner IN (\(placeholders));")
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, to)
+            for (index, stamp) in from.enumerated() {
+                bindText(statement, Int32(index + 2), stamp)
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw OutboxStoreError.sqlFailed(lastErrorMessage())
+            }
+            return Int(sqlite3_changes(database))
+        }
+    }
+
     /// Records a failed flush attempt: increments `attempts`, stores `error`, and moves the
     /// item to `needs_attention` if `permanent` is set or the retry budget (`maxAttempts`) is
     /// exhausted. Returns the updated item, or `nil` if `id` is unknown.

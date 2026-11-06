@@ -90,6 +90,7 @@ internal class FakeOutbox(
     var getResult: OutboxItem? = null
     var deleteResult: Boolean = false
     var deleteAllResult: Int = 0
+    var reassignResult: Int = 0
     var recordFailedAttemptResult: OutboxItem? = outboxItem()
     var retryResult: OutboxItem? = outboxItem()
 
@@ -106,11 +107,14 @@ internal class FakeOutbox(
     val recordedAttempts = mutableListOf<Triple<String, String, Boolean>>()
     val retriedIds = mutableListOf<String>()
 
+    /** `from` to `to` per re-stamp the router passed on. */
+    val reassignCalls = mutableListOf<Pair<List<String>, String>>()
+
     /** True when the router reached the store at all -- the assertion for "rejected first". */
     val wasTouched: Boolean
         get() = enqueueCalls.isNotEmpty() || listFilters.isNotEmpty() || fetchedIds.isNotEmpty() ||
             deletedIds.isNotEmpty() || recordedAttempts.isNotEmpty() || retriedIds.isNotEmpty() ||
-            deleteAllCalls > 0
+            deleteAllCalls > 0 || reassignCalls.isNotEmpty()
 
     override fun enqueue(
         kind: String,
@@ -147,6 +151,12 @@ internal class FakeOutbox(
         thrown?.let { throw it }
         deleteAllCalls++
         return deleteAllResult
+    }
+
+    override fun reassignOwner(from: List<String>, to: String): Int {
+        thrown?.let { throw it }
+        reassignCalls += from to to
+        return reassignResult
     }
 
     override fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem? {
