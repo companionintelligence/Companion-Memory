@@ -193,4 +193,40 @@ describe('keysetPaginate', () => {
     // Nothing was fetched to fall back on.
     expect(forward.builders.every((builder) => builder.getMany.mock.calls.length === 0)).toBe(true);
   });
+
+  it('skips the count, and reports no total, when the caller passes countTotal: false', async () => {
+    const { repo, builders } = makeRepo({ cursorRow: found });
+
+    const page = await keysetPaginate(
+      repo as never,
+      { first: 10, afterId: cursorId },
+      { ...options, countTotal: false },
+    );
+
+    expect(page.totalCount).toBeNull();
+    // Only the cursor lookup and the page: no count builder was ever made.
+    expect(builders).toHaveLength(2);
+    expect(repo.createQueryBuilder).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports the count for an unmatched cursor too, when it was asked for', async () => {
+    const { repo, builders } = makeRepo({ cursorRow: undefined });
+    const makeBuilder = repo.createQueryBuilder.getMockImplementation() as () => { getCount: jest.Mock };
+    repo.createQueryBuilder.mockImplementationOnce(() => {
+      const qb = makeBuilder();
+      qb.getCount = jest.fn(async () => 7);
+
+      return qb;
+    });
+
+    await expect(keysetPaginate(repo as never, { first: 10, afterId: cursorId }, options)).resolves.toEqual({
+      entities: [],
+      hasNextPage: false,
+      hasPreviousPage: false,
+      totalCount: 7,
+    });
+    // The page builder is made before the short-circuit, but never run.
+    expect(builders).toHaveLength(3);
+    expect(builders[2].getMany).not.toHaveBeenCalled();
+  });
 });

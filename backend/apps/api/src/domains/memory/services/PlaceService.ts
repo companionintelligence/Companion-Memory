@@ -1,10 +1,16 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+} from '@ci/common/persistence';
 import { computeChunkSize, keysetSeek } from '@ci/common/persistence';
 import { isGeocodingConfigured } from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
@@ -216,6 +222,17 @@ const COMPONENT_HIERARCHY: Array<{ componentType: string; kind: PlaceKind }> = [
   { componentType: 'locality', kind: 'city' },
   { componentType: 'administrative_area_level_1', kind: 'region' },
   { componentType: 'country', kind: 'country' },
+];
+
+/**
+ * The places list's order: by trimmed name with the nameless last, newest first
+ * among equals, and the id so the order is total. What `findAll` sorts by and
+ * what `findPage` seeks on.
+ */
+const PLACE_LIST_ORDER: readonly SeekKey[] = [
+  { expr: `NULLIF(btrim(COALESCE(place.name, '')), '')`, order: 'ASC', nulls: 'LAST', nullable: true },
+  { expr: 'place.created_at', order: 'DESC', read: 'CAST(place.created_at AS text)' },
+  { expr: 'place.id', order: 'DESC' },
 ];
 
 @Injectable()
@@ -1288,11 +1305,58 @@ export class PlaceService {
     return entities.map((entity) => PlaceEntity.toEgressType(byId.get(entity.id) ?? entity));
   }
 
-  /** List places; `query` filters by name (ILIKE substring). */
+  /**
+   * List places; `query` filters by name (ILIKE substring).
+   *
+   * No `user` join: nothing reads it off a listed place (`PlaceType` has no
+   * user field; `userId` comes from the row's own `owner_user_id`), and the
+   * join hydrated a `UserEntity` per row for nothing.
+   */
   async findAll(context: UserServiceContext, options: { query?: string } = {}): Promise<Place[]> {
-    let qb = this.placeRepository
-      .createQueryBuilder('place')
-      .leftJoinAndSelect('place.user', 'user')
+    let qb = this.listScope(this.placeRepository.createQueryBuilder('place'), context, options.query);
+
+    PLACE_LIST_ORDER.forEach((key, i) => {
+      qb =
+        i === 0
+          ? qb.orderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined)
+          : qb.addOrderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined);
+    });
+
+    const rows = await qb.getMany();
+
+    return rows.map((row) => PlaceEntity.toEgressType(row));
+  }
+
+  /**
+   * One page of {@link findAll}'s list, in its order, read with a `LIMIT` and a
+   * seek past the cursor row instead of every place the user has — the search
+   * box's typeahead asks for eight on every keystroke. `totalCount` is counted
+   * only when `countTotal` is set; a cursor that matches no row yields an empty
+   * page, as `keysetPaginate` does.
+   */
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: { query?: string; countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Place>> {
+    const page = await keysetPaginateBy(this.placeRepository, args, {
+      alias: 'place',
+      keys: PLACE_LIST_ORDER,
+      idExpr: 'place.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context, options.query),
+    });
+
+    return { ...page, entities: page.entities.map((row) => PlaceEntity.toEgressType(row)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: the caller's live, unmerged places, optionally by name. */
+  private listScope(
+    qb: SelectQueryBuilder<PlaceEntity>,
+    context: UserServiceContext,
+    query: string | undefined,
+  ): SelectQueryBuilder<PlaceEntity> {
+    qb = qb
       .where('place.entity_type = :entityType', { entityType: 'Location' })
       .andWhere('place.owner_user_id = :userId', { userId: context.userId })
       // A place merged into another stays as a tombstone row pointing at the
@@ -1300,17 +1364,12 @@ export class PlaceService {
       .andWhere('place.merged_into_entity_id IS NULL')
       .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
-    const query = options.query?.trim();
-    if (query) {
-      qb = qb.andWhere('place.name ILIKE :q', { q: `%${query}%` });
+    const needle = query?.trim();
+    if (needle) {
+      qb = qb.andWhere('place.name ILIKE :q', { q: `%${needle}%` });
     }
 
-    const rows = await qb
-      .orderBy(`NULLIF(btrim(COALESCE(place.name, '')), '')`, 'ASC', 'NULLS LAST')
-      .addOrderBy('place.created_at', 'DESC')
-      .getMany();
-
-    return rows.map((row) => PlaceEntity.toEgressType(row));
+    return qb;
   }
 
   async findById(context: ServiceContext, id: string): Promise<Place | null> {
@@ -1330,6 +1389,10 @@ export class PlaceService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Place | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.placeRepository.find({
       where: {
         id: In(ids),

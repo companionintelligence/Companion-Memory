@@ -43,6 +43,8 @@ export interface FindTasksOptions {
   /** Owner-local `YYYY-MM-DD`; matches `scheduled_for` exactly. */
   scheduledFor?: string;
   parentId?: string | null;
+  /** Children of any of these parents; the batched form of `parentId` (see `findChildrenOf`). */
+  parentIds?: string[];
   limit?: number;
 }
 

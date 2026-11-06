@@ -38,7 +38,7 @@ function makeService({
     empty() as never, // thread
   );
 
-  return { service };
+  return { service, personService, placeService, conceptService };
 }
 
 describe('EntityResolutionService forgotten entities', () => {
@@ -79,5 +79,26 @@ describe('EntityResolutionService forgotten entities', () => {
     ]);
 
     expect([...resolved.keys()].sort()).toEqual(['concept:photo', 'place:cafe']);
+  });
+});
+
+describe('EntityResolutionService fan-out', () => {
+  it('asks only the services whose type is on the page', async () => {
+    const { service, personService, placeService, conceptService } = makeService({
+      people: [{ id: 'kept', name: 'Jane Doe', isActive: true }],
+    });
+
+    await service.resolve(ctx, [{ type: 'person', id: 'kept' }]);
+
+    expect(personService.findByIds).toHaveBeenCalledWith(ctx, ['kept']);
+    expect(placeService.findByIds).not.toHaveBeenCalled();
+    expect(conceptService.findByIds).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing for an empty page', async () => {
+    const { service, personService } = makeService({});
+
+    await expect(service.resolve(ctx, [])).resolves.toEqual(new Map());
+    expect(personService.findByIds).not.toHaveBeenCalled();
   });
 });
