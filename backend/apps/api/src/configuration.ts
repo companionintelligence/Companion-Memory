@@ -1274,6 +1274,14 @@ export const ConfigSchema = z.object({
      */
     ask: booleanStringSchema,
     /**
+     * Trust Tasks (https://trusttasks.org) as a second front door to the peer-ask pipeline:
+     * `POST /agent/v1/trust-tasks`, authenticated by an in-band `eddsa-jcs-2022` proof over the whole
+     * document. OFF by default, and it opens nothing on its own: it also needs the `ask` flag, a usable
+     * `peers.signingKeyJwk` (every response is signed) and an active peer link for the sender. Off, the
+     * route answers exactly as a box without it does. See docs/trust-tasks.md.
+     */
+    'trust.tasks': booleanStringSchema,
+    /**
      * Lets context-prompt generation ask one number-grounded selector from
      * ci_derived.daily_metrics. Default on; the 14-day coverage floor refuses
      * "most days" copy for a cold series. Set ENABLE_GROUNDED_PROMPTS=false to disable.

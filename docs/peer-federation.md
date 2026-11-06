@@ -658,4 +658,5 @@ Still open: a `pollPeerAsk` mutation so a person can press the collect button, a
   privacy properties and their reasoning, how to run everything, and the current gap list.
 
 - Design: [`CI-Engineering/projects/decentralized-trust-graphs/`](https://github.com/companionintelligence/CI-Engineering/tree/main/projects/decentralized-trust-graphs) (PRD · ARCHITECTURE · ROADMAP · USE-CASES · UX)
+- A second door onto this pipeline, authenticated by an in-band proof instead of an HTTP signature: [`trust-tasks.md`](trust-tasks.md)
 - The intra-box ask this inverts: [`saved-search-sharing.md`](saved-search-sharing.md)
