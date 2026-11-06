@@ -1,4 +1,4 @@
-import { useMutation } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { gql, useFragment } from '@/graphql';
@@ -13,6 +13,40 @@ import { eventDisplayTitle, formatBytes } from '../utils';
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 import { pickPageUrl } from './GenericDetails';
 import { hasRichMedia, RichMediaCard } from './RichMediaCard';
+
+/**
+ * Fetched by the drawer alone, not folded into the shared card fragment: every
+ * list, grid, timeline and map reads that fragment for a page of rows at a
+ * time, and neither field is shown anywhere but here. `metadata` is the
+ * connector's free-form JSON bag; `contents` is a sub-connection whose nodes
+ * each resolve a player and a link preview. One event open in the drawer is
+ * the only place either is wanted (as GET_COMMUNICATION_ATTACHMENTS).
+ */
+export const GET_EVENT_DRAWER_EXTRAS = gql(`
+  query GetEventDrawerExtras($id: ID!) {
+    node(id: $id) {
+      __typename
+      id
+      ... on EventType {
+        # The connector's catch-all for what has no column — for a social.like
+        # event that is the liked Page's URL, which the drawer offers as a link.
+        metadata
+        # What the event is about, for events that ARE a watch/listen/read: the
+        # first linked content rows, with their resolved preview and player.
+        contents(first: 3) {
+          edges {
+            node {
+              id
+              title
+              contentUrl: url
+              ...RichMediaData
+            }
+          }
+        }
+      }
+    }
+  }
+`);
 
 const UPDATE_EVENT = gql(`
   mutation UpdateEventDetail($input: UpdateEventInput!) {
@@ -61,18 +95,7 @@ function formatDateTime(value: string | null | undefined, fmt: DateTimeFormatter
     return null;
   }
 
-  const date = new Date(value);
-
-  return isNaN(date.getTime())
-    ? value
-    : fmt.dateTime(
-        date,
-        {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        },
-        'en-US',
-      );
+  return fmt.tryDateTime(value, { dateStyle: 'medium', timeStyle: 'short' }, 'en-US') ?? value;
 }
 
 function formatDuration(start?: string | null, end?: string | null): string | null {
@@ -145,6 +168,11 @@ export function EventDetails({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [updateEvent] = useMutation(UPDATE_EVENT);
   const fmt = useDateTimeFormat();
+  const { data: extrasData } = useQuery(GET_EVENT_DRAWER_EXTRAS, {
+    variables: { id: entity.id },
+    fetchPolicy: 'cache-first',
+  });
+  const extras = extrasData?.node?.__typename === 'EventType' ? extrasData.node : null;
 
   const props = (data.location?.properties ?? {}) as LocationProperties;
   const eventFields = entity as EventLocationFields;
@@ -192,7 +220,7 @@ export function EventDetails({ entity }: Props) {
   // A watch / listen / read event is ABOUT its content row: when that row has
   // a resolved preview or a player, the drawer leads with it (poster, facts,
   // click-to-play) rather than with a bare title and two timestamps.
-  const richContent = (data.contents?.edges ?? [])
+  const richContent = (extras?.contents?.edges ?? [])
     .map((edge) => edge.node)
     .find((node) => hasRichMedia(node));
 
@@ -208,7 +236,7 @@ export function EventDetails({ entity }: Props) {
   // Facebook Page's `page_url`, a post's `permalink_url`). The related
   // entity's relationship card is the in-app way there; this is the way OUT,
   // and it opens a new tab like every other off-appliance link in the drawer.
-  const pageUrl = pickPageUrl((data.metadata ?? {}) as Record<string, unknown>);
+  const pageUrl = pickPageUrl((extras?.metadata ?? {}) as Record<string, unknown>);
 
   return (
     <EntityDetailScaffold

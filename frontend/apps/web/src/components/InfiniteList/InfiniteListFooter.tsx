@@ -1,6 +1,6 @@
-import { Button } from '@ci/shadcn';
-
 import type { InfiniteConnection } from '@/hooks/useInfiniteConnection';
+
+import { LoadMoreFailed } from './LoadMoreFailed';
 
 /**
  * The tail of an infinitely-scrolled list: the scroll sentinel, a retry for a
@@ -24,16 +24,7 @@ export function InfiniteListFooter({
     <div className={className}>
       {showSentinel && <div ref={sentinelRef} className="h-8" />}
 
-      {loadMoreError != null && (
-        <div className="flex flex-col items-center gap-2 py-3">
-          <div className="text-sm text-muted-foreground">
-            Couldn&apos;t load more {noun}: {loadMoreError}
-          </div>
-          <Button variant="outline" size="sm" onClick={retry}>
-            Try again
-          </Button>
-        </div>
-      )}
+      {loadMoreError != null && <LoadMoreFailed noun={noun} message={loadMoreError} onRetry={retry} />}
 
       <div className="py-3 text-center text-xs text-muted-foreground">{statusLabel}</div>
     </div>

@@ -1,3 +1,5 @@
+import { formatBytes } from './formatBytes';
+
 /**
  * The on-device model catalog the web layer offers, plus the pure decisions built on it.
  *
@@ -163,7 +165,7 @@ export function evaluateModelFit(model: LocalLlmModelSpec, device: LocalLlmDevic
   if (device.totalMemoryBytes !== undefined && device.totalMemoryBytes < model.minDeviceMemoryBytes) {
     return {
       ok: false,
-      reason: `Needs at least ${formatBytes(model.minDeviceMemoryBytes)} of RAM; this device reports ${formatBytes(device.totalMemoryBytes)}.`,
+      reason: `Needs at least ${formatModelBytes(model.minDeviceMemoryBytes)} of RAM; this device reports ${formatModelBytes(device.totalMemoryBytes)}.`,
     };
   }
 
@@ -172,21 +174,18 @@ export function evaluateModelFit(model: LocalLlmModelSpec, device: LocalLlmDevic
     const needed = remaining + LOCAL_LLM_DISK_HEADROOM_BYTES;
 
     if (device.freeDiskBytes < needed) {
-      return { ok: false, reason: `Needs ${formatBytes(needed)} of free storage.` };
+      return { ok: false, reason: `Needs ${formatModelBytes(needed)} of free storage.` };
     }
   }
 
   return { ok: true };
 }
 
-/** `1.6 GB` / `344 MB` — binary units, one decimal above a gigabyte, none below. */
-export function formatBytes(bytes: number): string {
-  const GB = 1024 * 1024 * 1024;
-  const MB = 1024 * 1024;
-
-  if (bytes >= GB) {
-    return `${(bytes / GB).toFixed(1)} GB`;
-  }
-
-  return `${Math.round(bytes / MB)} MB`;
+/** `1.6 GB` / `344 MB` — binary units, never below a megabyte, one decimal above a gigabyte, none below. */
+export function formatModelBytes(bytes: number): string {
+  return formatBytes(bytes, {
+    units: ['B', 'KB', 'MB', 'GB'],
+    minUnit: 2,
+    decimals: (unit) => (unit === 3 ? 1 : 0),
+  });
 }

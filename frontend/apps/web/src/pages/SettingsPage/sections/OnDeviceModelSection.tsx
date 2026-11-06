@@ -1,5 +1,5 @@
 import {
-  formatBytes,
+  formatModelBytes,
   gpuAllowedOn,
   type LocalLlmCapability,
   type LocalLlmMode,
@@ -160,7 +160,7 @@ export function OnDeviceModelSection() {
           <Card.Title>Models</Card.Title>
           <Card.Description>
             {probe.availability.totalMemoryBytes
-              ? `This device has ${formatBytes(probe.availability.totalMemoryBytes)} of memory. Larger models need more.`
+              ? `This device has ${formatModelBytes(probe.availability.totalMemoryBytes)} of memory. Larger models need more.`
               : 'Larger models need more memory.'}
           </Card.Description>
         </Card.Header>
@@ -212,7 +212,7 @@ export function OnDeviceModelSection() {
                         {accelerator === 'gpu'
                           ? gpuAllowed
                             ? 'GPU (faster, but can garble numbers and dates from your memory)'
-                            : `GPU (needs a ${formatBytes(selected.spec.gpuMinDeviceMemoryBytes)} phone)`
+                            : `GPU (needs a ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} phone)`
                           : 'CPU (slower, reads your memory exactly)'}
                       </Select.Item>
                     ))}
@@ -221,7 +221,7 @@ export function OnDeviceModelSection() {
                 <p className="text-muted-foreground text-xs">
                   {gpuAllowed
                     ? 'If the GPU cannot start this model, it falls back to the CPU on its own.'
-                    : `This phone has ${formatBytes(probe.availability.totalMemoryBytes ?? 0)} of memory; ${selected.spec.label} needs at least ${formatBytes(selected.spec.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU.`}
+                    : `This phone has ${formatModelBytes(probe.availability.totalMemoryBytes ?? 0)} of memory; ${selected.spec.label} needs at least ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU.`}
                 </p>
               </div>
             ) : null}
@@ -306,7 +306,7 @@ function ModelRow({
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-sm font-semibold">{spec.label}</h4>
-            <span className="text-muted-foreground text-xs">{formatBytes(spec.sizeBytes)}</span>
+            <span className="text-muted-foreground text-xs">{formatModelBytes(spec.sizeBytes)}</span>
             {selected ? <Badge variant="secondary">{loaded ? 'In use' : 'Selected'}</Badge> : null}
           </div>
           <p className="text-muted-foreground text-xs leading-snug">{spec.description}</p>
@@ -327,7 +327,7 @@ function ModelRow({
           <Progress value={percent(bytes, total)} aria-label={`Downloading ${spec.label}`} />
           <div className="flex items-center justify-between gap-2">
             <span className="text-muted-foreground text-xs">
-              {formatBytes(bytes)} of {formatBytes(total)}
+              {formatModelBytes(bytes)} of {formatModelBytes(total)}
             </span>
             <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
               Cancel
@@ -361,7 +361,7 @@ function ModelRow({
           {fit.ok ? (
             <Button type="button" size="sm" className="w-fit" onClick={onDownload} disabled={busy}>
               <Download className="h-4 w-4" />
-              {status.status === 'error' ? 'Retry download' : `Download ${formatBytes(spec.sizeBytes)}`}
+              {status.status === 'error' ? 'Retry download' : `Download ${formatModelBytes(spec.sizeBytes)}`}
             </Button>
           ) : (
             <p className="text-muted-foreground text-xs">{fit.reason}</p>
