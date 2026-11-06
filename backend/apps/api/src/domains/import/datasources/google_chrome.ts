@@ -16,13 +16,17 @@
    same ci.browser_activity row, and Takeout is just a third arrival of it.
 */
 import fs from 'node:fs';
-import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
+import { parseFlexibleDate } from './dates';
+import { walkFiles } from './fsWalk';
+import { decodeEntities } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -31,37 +35,14 @@ const BOOKMARKS_FILE = 'bookmarks.html';
 
 // Bookmark ADD_DATE is whole seconds since the Unix epoch.
 function secToDate(sec: number | undefined): Date | undefined {
-  if (typeof sec !== 'number' || sec <= 0) {
-    return undefined;
-  }
-
-  const d = new Date(sec * 1000);
-
-  return isNaN(d.getTime()) ? undefined : d;
-}
-
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+  return parseFlexibleDate(sec, { epoch: 's' });
 }
 
 // Read up to ~64KB of a file to sniff for a signature without slurping a
 // potentially huge export (History.json runs to hundreds of thousands of rows)
 // into memory just to recognize it.
 async function sniff(fpath: string): Promise<string> {
-  let fh: FileHandle | undefined;
-  try {
-    fh = await open(fpath, 'r');
-    const buf = Buffer.alloc(65536);
-    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-
-    return stripBom(buf.toString('utf8', 0, bytesRead));
-  } catch {
-    return '';
-  } finally {
-    if (fh !== undefined) {
-      await fh.close().catch(() => {});
-    }
-  }
+  return stripBom((await readHead(fpath, 65536)) ?? '');
 }
 
 async function looksLikeChromeHistory(fpath: string): Promise<boolean> {
@@ -83,32 +64,18 @@ async function looksLikeChromeBookmarks(fpath: string): Promise<boolean> {
 // a dropped Google Takeout, is the archive ROOT, where Chrome/ is one of dozens
 // of subfolders. So we walk (bounded depth) and match Takeout's fixed filenames,
 // content-sniffing only those two names rather than every JSON/HTML in the tree.
-async function findChromeFiles(root: string, depth = 0): Promise<{ history: string[]; bookmarks: string[] }> {
+async function findChromeFiles(root: string): Promise<{ history: string[]; bookmarks: string[] }> {
   const out = { history: [] as string[], bookmarks: [] as string[] };
-  if (depth > 6) {
-    return out;
-  }
+  const named = (name: string) =>
+    name.toLowerCase() === HISTORY_FILE || name.toLowerCase() === BOOKMARKS_FILE;
 
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return out;
-  }
+  for await (const p of walkFiles(root, { maxDepth: 6, sorted: true, match: named })) {
+    const base = path.basename(p).toLowerCase();
 
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      const sub = await findChromeFiles(p, depth + 1);
-      out.history.push(...sub.history);
-      out.bookmarks.push(...sub.bookmarks);
-    } else if (e.isFile()) {
-      const base = e.name.toLowerCase();
-      if (base === HISTORY_FILE && (await looksLikeChromeHistory(p))) {
-        out.history.push(p);
-      } else if (base === BOOKMARKS_FILE && (await looksLikeChromeBookmarks(p))) {
-        out.bookmarks.push(p);
-      }
+    if (base === HISTORY_FILE && (await looksLikeChromeHistory(p))) {
+      out.history.push(p);
+    } else if (base === BOOKMARKS_FILE && (await looksLikeChromeBookmarks(p))) {
+      out.bookmarks.push(p);
     }
   }
 
@@ -135,15 +102,6 @@ function attr(attrs: string, name: string): string | undefined {
   }
 
   return m[2] !== undefined ? m[2] : m[3];
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;|&apos;/g, "'");
 }
 
 // Locate each <H3> folder heading by byte offset so an anchor can be attributed

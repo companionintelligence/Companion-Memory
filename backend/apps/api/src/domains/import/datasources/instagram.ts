@@ -14,8 +14,9 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { listFiles } from './fsWalk';
 import { parseMetaJson } from './_meta_json';
-import { htmlToText } from './htmlToText';
+import { decodeEntities, htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -49,24 +50,11 @@ interface IGPost {
 // pulled out of a larger document by a regex capture group; body-flattening
 // goes through the shared htmlToText instead (see its own doc comment).
 
-function decodeHtml(h: string): string {
-  return h
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, d) => String.fromCharCode(parseInt(d, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-}
-
 // Per-entry date div used across Meta HTML activity logs.
 const DATE_DIV_RE = /<div class="_3-94 _a6-o">([^<]*)<\/div>/g;
 
 function parseMetaDate(s: string): Date | undefined {
-  const t = decodeHtml(s)
+  const t = decodeEntities(s)
     .replace(/\u202F/g, ' ')
     .trim();
   if (!t) {
@@ -114,7 +102,7 @@ function fieldRows(html: string): FieldRow[] {
   const rows: FieldRow[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    rows.push({ label: decodeHtml(m[1]).trim(), value: htmlToText(m[2]) });
+    rows.push({ label: decodeEntities(m[1]).trim(), value: htmlToText(m[2]) });
   }
 
   return rows;
@@ -169,7 +157,7 @@ function firstWebLink(html: string): string | undefined {
   const re = /<a\b[^>]*\bhref="([^"]+)"/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const href = decodeHtml(m[1]).trim();
+    const href = decodeEntities(m[1]).trim();
     if (/^https?:\/\//i.test(href)) {
       return href;
     }
@@ -266,13 +254,13 @@ function exportBaseDir(fpath: string, html: string): string {
   const dir = path.dirname(fpath);
   const m = /<base[^>]*\bhref="([^"]+)"/i.exec(html);
 
-  return m ? path.resolve(dir, decodeHtml(m[1]).trim()) : dir;
+  return m ? path.resolve(dir, decodeEntities(m[1]).trim()) : dir;
 }
 
 /** Resolve one export-relative href to an absolute path inside the export, or
  *  null for an absolute URL, a fragment, or anything that escapes the export. */
 function resolveLocalRef(baseDir: string, ref: string): string | null {
-  const href = decodeHtml(ref).trim();
+  const href = decodeEntities(ref).trim();
   if (!href || href.startsWith('#') || href.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(href)) {
     return null;
   }
@@ -351,7 +339,7 @@ function parseHtmlEntries(html: string): HtmlEntry[] {
     let sender: string | undefined;
     const h2 = chunk.match(/<h2[^>]*>([^<]*)<\/h2>/);
     if (h2) {
-      const s = decodeHtml(h2[1]).trim();
+      const s = decodeEntities(h2[1]).trim();
       if (s) {
         sender = s;
       }
@@ -372,48 +360,26 @@ function readTitle(html: string): string | undefined {
     return undefined;
   }
 
-  const t = decodeHtml(m[1]).trim();
+  const t = decodeEntities(m[1]).trim();
 
   return t || undefined;
 }
 
-// Recursively collect files matching a predicate (bounded; tolerant of bad dirs).
-function walkFiles(dir: string, match: (name: string) => boolean, out: string[], depth = 0): void {
-  if (depth > 8) {
-    return;
-  }
+// The export's own nesting never exceeds a handful of levels; 8 is the bound
+// the synchronous walk this replaced had.
+const ACTIVITY_WALK_DEPTH = 8;
 
-  let names: fs.Dirent[];
-  try {
-    names = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const d of names) {
-    const full = path.join(dir, d.name);
-    try {
-      if (d.isDirectory()) {
-        walkFiles(full, match, out, depth + 1);
-      } else if (d.isFile() && match(d.name)) {
-        out.push(full);
-      }
-    } catch {
-      /* ignore */
-    }
-  }
+async function hasHtmlActivity(actRoot: string): Promise<boolean> {
+  return (
+    (await listFiles(actRoot, { maxDepth: ACTIVITY_WALK_DEPTH, match: (n) => /\.html$/i.test(n) })).length > 0
+  );
 }
 
-function hasHtmlActivity(actRoot: string): boolean {
-  const found: string[] = [];
-  walkFiles(actRoot, (n) => /\.html$/i.test(n), found, 0);
-
-  return found.length > 0;
-}
-
-function hasJsonActivity(actRoot: string): boolean {
-  const found: string[] = [];
-  walkFiles(actRoot, (n) => /^(message_\d+|post_\d+|posts_\d+)\.json$/i.test(n), found, 0);
+async function hasJsonActivity(actRoot: string): Promise<boolean> {
+  const found = await listFiles(actRoot, {
+    maxDepth: ACTIVITY_WALK_DEPTH,
+    match: (n) => /^(message_\d+|post_\d+|posts_\d+)\.json$/i.test(n),
+  });
 
   return found.length > 0;
 }
@@ -478,14 +444,14 @@ export class InstagramFileImporter implements FileImporter {
       : root;
 
     // Decide format. Prefer JSON when present; fall back to HTML.
-    const jsonPresent = hasJsonActivity(actRoot);
+    const jsonPresent = await hasJsonActivity(actRoot);
     if (jsonPresent) {
       await this.importJson(actRoot, params);
     }
 
     // HTML may coexist (or be the only format). Only run it when there is no
     // JSON message/post data, so we never double-import.
-    if (!jsonPresent && hasHtmlActivity(actRoot)) {
+    if (!jsonPresent && (await hasHtmlActivity(actRoot))) {
       await this.importHtml(actRoot, params);
     }
   }
@@ -654,7 +620,12 @@ export class InstagramFileImporter implements FileImporter {
       }
 
       const files: string[] = [];
-      walkFiles(dir, (n) => /^message_\d+\.html$/i.test(n), files, 0);
+      files.push(
+        ...(await listFiles(dir, {
+          maxDepth: ACTIVITY_WALK_DEPTH,
+          match: (n) => /^message_\d+\.html$/i.test(n),
+        })),
+      );
       for (const f of files.sort()) {
         await this.processHtmlMessages(f, actRoot, params);
       }
@@ -679,7 +650,12 @@ export class InstagramFileImporter implements FileImporter {
     const commentsDir = path.join(actRoot, 'comments');
     if (fs.existsSync(commentsDir)) {
       const cfiles: string[] = [];
-      walkFiles(commentsDir, (n) => /\.html$/i.test(n), cfiles, 0);
+      cfiles.push(
+        ...(await listFiles(commentsDir, {
+          maxDepth: ACTIVITY_WALK_DEPTH,
+          match: (n) => /\.html$/i.test(n),
+        })),
+      );
       for (const f of cfiles.sort()) {
         await this.processHtmlActivity(f, 'comment', 'Instagram comment', params);
       }
@@ -750,13 +726,23 @@ export class InstagramFileImporter implements FileImporter {
     const connectionsDir = path.join(actRoot, 'connections', 'followers_and_following');
     if (fs.existsSync(connectionsDir)) {
       const followerFiles: string[] = [];
-      walkFiles(connectionsDir, (n) => /^followers(_\d+)?\.html$/i.test(n), followerFiles, 0);
+      followerFiles.push(
+        ...(await listFiles(connectionsDir, {
+          maxDepth: ACTIVITY_WALK_DEPTH,
+          match: (n) => /^followers(_\d+)?\.html$/i.test(n),
+        })),
+      );
       for (const f of followerFiles.sort()) {
         await this.processHtmlActivity(f, 'interaction', 'Instagram follower', params);
       }
 
       const followingFiles: string[] = [];
-      walkFiles(connectionsDir, (n) => /^following(_\d+)?\.html$/i.test(n), followingFiles, 0);
+      followingFiles.push(
+        ...(await listFiles(connectionsDir, {
+          maxDepth: ACTIVITY_WALK_DEPTH,
+          match: (n) => /^following(_\d+)?\.html$/i.test(n),
+        })),
+      );
       for (const f of followingFiles.sort()) {
         await this.processHtmlActivity(f, 'interaction', 'Instagram following', params);
       }

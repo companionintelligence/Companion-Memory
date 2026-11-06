@@ -16,11 +16,12 @@
    (_ai_media.ts), unresolved ones land in the drop ledger. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
 import { parseMemoryEntries, pushMemoryEntry } from './_ai_memory';
+import { firstFile } from './fsWalk';
 import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -324,34 +325,8 @@ export class GeminiFileImporter implements FileImporter {
   }
 
   private async findFile(dir: string, wanted: (name: string) => boolean): Promise<string | undefined> {
-    let entries: string[];
-    try {
-      entries = await readdir(dir);
-    } catch {
-      return undefined;
-    }
-
-    for (const name of entries) {
-      if (wanted(name)) {
-        return path.join(dir, name);
-      }
-    }
-
-    for (const name of entries) {
-      const full = path.join(dir, name);
-      try {
-        if ((await stat(full)).isDirectory()) {
-          const sub = await this.findFile(full, wanted);
-          if (sub) {
-            return sub;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    return undefined;
+    // Unbounded, as it always was: a Takeout nests Gemini under My Activity/.
+    return firstFile(dir, { maxDepth: Number.POSITIVE_INFINITY, match: (name) => wanted(name) });
   }
 }
 

@@ -18,6 +18,7 @@ import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
+import { findDateField, parseFlexibleDate } from './dates';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -35,34 +36,9 @@ const DATE_KEY = /date|time|timestamp|when/i;
 
 // Microsoft sometimes wraps dates as "/Date(1700000000000)/".
 function parseMsDate(v: unknown): Date | undefined {
-  if (v == null) {
-    return undefined;
-  }
+  const wrapped = typeof v === 'string' ? /\/Date\((\d+)\)\//.exec(v) : null;
 
-  if (typeof v === 'number') {
-    const d = new Date(v > 1e12 ? v : v * 1000);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  if (typeof v === 'string') {
-    const m = v.match(/\/Date\((\d+)\)\//);
-    if (m) {
-      const d = new Date(Number(m[1]));
-
-      return isNaN(d.getTime()) ? undefined : d;
-    }
-
-    if (!v.trim()) {
-      return undefined;
-    }
-
-    const d = new Date(v);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  return undefined;
+  return parseFlexibleDate(wrapped ? Number(wrapped[1]) : v, { epoch: 'auto' });
 }
 
 // Finite number from a number or numeric string (CSV cells), else undefined.
@@ -92,18 +68,7 @@ function str(v: unknown): string | undefined {
 }
 
 function findDate(rec: Record<string, unknown>): Date | undefined {
-  for (const [k, v] of Object.entries(rec)) {
-    if (!DATE_KEY.test(k)) {
-      continue;
-    }
-
-    const d = parseMsDate(v);
-    if (d) {
-      return d;
-    }
-  }
-
-  return undefined;
+  return findDateField(rec, DATE_KEY, parseMsDate);
 }
 
 // The Microsoft privacy export ships one file per category (the filename, e.g.

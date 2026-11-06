@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Metadata } from './timeline';
@@ -62,26 +63,8 @@ function spotifyUrl(uri: string | undefined): string | undefined {
   return m ? `https://open.spotify.com/${m[1]}/${m[2]}` : undefined;
 }
 
-async function* walkStreamFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 4) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkStreamFiles(p, depth + 1);
-    } else if (e.isFile() && STREAM_FILE.test(e.name)) {
-      yield p;
-    }
-  }
+function walkStreamFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, { maxDepth: 4, sorted: true, match: (name) => STREAM_FILE.test(name) });
 }
 
 export class SpotifyFileImporter implements FileImporter {

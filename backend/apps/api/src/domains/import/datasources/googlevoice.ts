@@ -9,7 +9,7 @@ import { isShortCode } from '../staging/identity';
 
 import { attachmentMediaKind } from './attachment_extract';
 import { matchingDivCloseIndex } from './htmlBlocks';
-import { htmlToText } from './htmlToText';
+import { decodeEntities, htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { AttachmentDescriptor, ImportParams, EntityAttribute, Relationship } from './timeline';
@@ -1140,46 +1140,6 @@ function messageBlocks(raw: string): string[] {
   return blocks;
 }
 
-// Named entities actually seen in the reference corpus (scanned across all
-// 59,748 HTML files: `grep -ohE '&[a-zA-Z]+;' | sort | uniq -c`) —
-// &aacute; 1,694, &ntilde; 647, &rsquo;/&lsquo; 462 each, &iacute; 66,
-// &eacute; 46, &iuml; 3 — plus the accented-vowel and curly-quote siblings
-// that did not happen to appear in THIS corpus but follow the same Latin-1
-// entity set a name can plausibly carry. Before this, `decodeHtml` handled
-// only numeric refs and the four XML entities, and was never even called on
-// an `<img>`/`<a>` stub (see resolveAttachment) — so every accented filename
-// failed a raw `fs.existsSync` string compare against the un-decoded markup.
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  aacute: 'á',
-  Aacute: 'Á',
-  eacute: 'é',
-  Eacute: 'É',
-  iacute: 'í',
-  Iacute: 'Í',
-  oacute: 'ó',
-  Oacute: 'Ó',
-  uacute: 'ú',
-  Uacute: 'Ú',
-  ntilde: 'ñ',
-  Ntilde: 'Ñ',
-  iuml: 'ï',
-  Iuml: 'Ï',
-  lsquo: '‘',
-  rsquo: '’',
-  ldquo: '“',
-  rdquo: '”',
-};
-
-function decodeHtml(h: string): string {
-  return h
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
-    .replace(/&([a-zA-Z]+);/g, (m, name) => NAMED_ENTITIES[name] ?? m)
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"');
-}
-
 // A voicemail transcript / SMS body has no paragraph structure of its own —
 // any newline the shared htmlToText introduces at a tag boundary is markup,
 // not something the caller said, so it collapses to a flat line.
@@ -1210,7 +1170,7 @@ function extractSender(block: string): GVEntity {
   // not a private copy: the same pattern that strips the heading HERE is the one
   // that refuses it downstream if a heading ever reaches a Person minter, and
   // two copies would drift the moment either side gained a verb.
-  const raw = nameMatch ? stripCallLogHeading(decodeHtml(nameMatch[1])) : undefined;
+  const raw = nameMatch ? stripCallLogHeading(decodeEntities(nameMatch[1])) : undefined;
 
   return { name: raw ? raw : undefined, phone: telMatch?.[1] };
 }
@@ -1303,7 +1263,7 @@ function resolveAttachment(
     return undefined;
   };
 
-  const decoded = decodeHtml(stub).normalize('NFC');
+  const decoded = decodeEntities(stub).normalize('NFC');
 
   const direct = findExact(decoded);
   if (direct) {

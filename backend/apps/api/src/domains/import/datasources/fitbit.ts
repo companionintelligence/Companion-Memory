@@ -18,9 +18,10 @@
    an export here used to import nothing and still report success.
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { childDir, filesIn } from './fsWalk';
 import { GoogleFitFileImporter } from './google_fit';
 import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -63,36 +64,12 @@ function isSleepExport(parsed: unknown): boolean {
   return 'minutesAsleep' in rec || 'dateOfSleep' in rec;
 }
 
-async function filesMatching(dir: string, re: RegExp): Promise<string[]> {
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  return entries.filter((e) => e.isFile() && re.test(e.name)).map((e) => path.join(dir, e.name));
-}
-
-async function childDir(dir: string, lowerName: string): Promise<string | undefined> {
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-
-  const match = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === lowerName);
-
-  return match ? path.join(dir, match.name) : undefined;
-}
-
 // Sleep files directly in a Fitbit/ folder, or its Global Export Data/ child.
 async function sleepFilesUnderFitbitDir(fitbitDir: string): Promise<string[]> {
-  const out = await filesMatching(fitbitDir, SLEEP_FILE_RE);
+  const out = await filesIn(fitbitDir, (name) => SLEEP_FILE_RE.test(name));
   const nested = await childDir(fitbitDir, 'global export data');
   if (nested) {
-    out.push(...(await filesMatching(nested, SLEEP_FILE_RE)));
+    out.push(...(await filesIn(nested, (name) => SLEEP_FILE_RE.test(name))));
   }
 
   return out;
@@ -111,7 +88,7 @@ async function sleepFilesUnderFitbitDir(fitbitDir: string): Promise<string[]> {
  * NOT being for a claim wider than what was actually found.
  */
 async function findSleepFiles(dir: string): Promise<string[]> {
-  const out = await filesMatching(dir, SLEEP_FILE_RE);
+  const out = await filesIn(dir, (name) => SLEEP_FILE_RE.test(name));
 
   if (path.basename(dir).toLowerCase() === 'fitbit') {
     out.push(...(await sleepFilesUnderFitbitDir(dir)));

@@ -24,13 +24,16 @@
    Dismissed a shelf) keep the generic handling below. */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isYouTubeProduct, parseActivityCell, youtubeActivityGraph } from './_youtube_activity';
+import { walkFiles } from './fsWalk';
 import { matchingDivCloseIndex } from './htmlBlocks';
+import { decodeEntities } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, Metadata } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -53,16 +56,11 @@ const FIRST_LINK_RE = /<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/;
 // Trailing "Mon DD, YYYY, H:MM:SS AM/PM TZ" timestamp line.
 const TIMESTAMP_RE = /([A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}:\d{2}\s?(?:AM|PM)\s+[A-Z]{2,5})/;
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&emsp;/g, ' ')
+// A body cell's text: `<br>`s to spaces, entities decoded (through the shared
+// decoder) BEFORE the remaining tags are stripped — the order the original
+// regex chain had — then whitespace collapsed.
+function cellText(s: string): string {
+  return decodeEntities(s.replace(/<br\s*\/?>/gi, ' '))
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -112,31 +110,17 @@ function headerProductBefore(raw: string, at: number): string | undefined {
 
   const from = start + HEADER_TITLE.length;
   const end = raw.indexOf('<', from);
-  const name = decodeEntities(raw.slice(from, end === -1 ? from : end));
+  const name = cellText(raw.slice(from, end === -1 ? from : end));
 
   return name || undefined;
 }
 
-async function* walkActivityFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 4) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkActivityFiles(p, depth + 1);
-    } else if (e.isFile() && e.name.toLowerCase() === 'myactivity.html') {
-      yield p;
-    }
-  }
+function walkActivityFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, {
+    maxDepth: 4,
+    sorted: true,
+    match: (name) => name.toLowerCase() === 'myactivity.html',
+  });
 }
 
 export class GoogleMyActivityFileImporter implements FileImporter {
@@ -159,22 +143,11 @@ export class GoogleMyActivityFileImporter implements FileImporter {
       }
 
       // Confirm the body-cell signature so we don't claim arbitrary HTML.
-      let fh: FileHandle | undefined;
-      try {
-        fh = await open(root, 'r');
-        const buf = Buffer.alloc(65536);
-        const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const head = await readHead(root, 65536);
 
-        return buf.subarray(0, bytesRead).includes('mdl-typography--body-1')
-          ? { confidence: 0.95 }
-          : { confidence: 0 };
-      } catch {
-        return { confidence: 0 };
-      } finally {
-        if (fh !== undefined) {
-          await fh.close().catch(() => {});
-        }
-      }
+      return head != null && head.includes('mdl-typography--body-1')
+        ? { confidence: 0.95 }
+        : { confidence: 0 };
     }
 
     if (st.isDirectory()) {
@@ -288,7 +261,7 @@ export class GoogleMyActivityFileImporter implements FileImporter {
     // Decode first, THEN match/strip the timestamp on the decoded text: the raw
     // HTML separates the date with &nbsp;/<br>, so a raw-matched timestamp string
     // won't substring-match the whitespace-normalised decoded action.
-    const decoded = decodeEntities(cellHtml);
+    const decoded = cellText(cellHtml);
     const tsMatch = decoded.match(TIMESTAMP_RE);
     const ts = parseGoogleDate(tsMatch?.[1]);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -298,8 +271,8 @@ export class GoogleMyActivityFileImporter implements FileImporter {
     }
 
     const link = cellHtml.match(FIRST_LINK_RE);
-    const url = link ? decodeEntities(link[1]) : undefined;
-    const linkText = link ? decodeEntities(link[2]) : undefined;
+    const url = link ? cellText(link[1]) : undefined;
+    const linkText = link ? cellText(link[2]) : undefined;
 
     // Full body text with the timestamp line stripped → the action phrase
     // ("Visited Jaron Lanier's Homepage", "Searched for Lanier", "Used Assistant").
@@ -309,7 +282,7 @@ export class GoogleMyActivityFileImporter implements FileImporter {
     }
 
     // The leading verb phrase before the linked target (e.g. "Searched for").
-    const verb = link ? decodeEntities(cellHtml.split(link[0])[0]) : action;
+    const verb = link ? cellText(cellHtml.split(link[0])[0]) : action;
 
     let classification: string;
     let title: string;

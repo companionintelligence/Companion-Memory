@@ -5,12 +5,12 @@
    every non-empty metric column as metadata. The signature is generic (*.csv)
    so recognition sniffs the header to avoid false-matching other CSV importers. */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -34,22 +34,9 @@ function headerLooksLikeOura(header: string): boolean {
 
 // Read the first ~4KB and inspect the CSV header row.
 async function sniffHeader(fpath: string): Promise<string | undefined> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead } = await handle.read(buf, 0, 4096, 0);
-    let text = buf.toString('utf8', 0, bytesRead);
-    if (text.charCodeAt(0) === 0xfeff) {
-      text = text.slice(1);
-    }
+  const head = await readHead(fpath);
 
-    return headerLine(text);
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head == null ? undefined : headerLine(stripBom(head));
 }
 
 async function csvMatches(fpath: string): Promise<boolean> {
@@ -85,87 +72,14 @@ function parseOuraDate(raw: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-export class OuraFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
+export class OuraFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    headerMatches: (fpath) => csvMatches(fpath),
+    confidence: { named: 0, sniffed: 0.9 },
+    importInDir: 'all-matches',
+  };
 
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      if (path.extname(root).toLowerCase() !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      return (await csvMatches(root)) ? { confidence: 0.9 } : { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await csvMatches(path.join(root, name))) {
-            return { confidence: 0.9 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      for (const name of names) {
-        if (path.extname(name).toLowerCase() !== '.csv') {
-          continue;
-        }
-
-        const fpath = path.join(root, name);
-        if (await csvMatches(fpath)) {
-          await this.processFile(fpath, params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {

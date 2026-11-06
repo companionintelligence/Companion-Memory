@@ -1,11 +1,10 @@
 /* Letterboxd — diary/ratings CSV export (diary.csv, ratings.csv). */
-import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readCsvFile } from './readers';
-import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -29,107 +28,23 @@ function parseYMD(s: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-export class LetterboxdFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root).toLowerCase();
-
-      // A filename match alone used to be worth 0.8 — higher than most other
-      // importers' own *verified* fallback tiers — with no read of the file at
-      // all. "diary.csv" and "ratings.csv" are generic enough names (a mood
-      // tracker's diary, a beer-rating app's ratings) that a same-named file
-      // from an unrelated app must not be claimed as Letterboxd. Require the
-      // same header check the top tier already does; a same-named file that
-      // fails it now correctly returns 0.
-      if (LETTERBOXD_FILES.includes(base)) {
-        return (await this.headerMatches(root)) ? { confidence: 0.95 } : { confidence: 0 };
-      }
-
-      return { confidence: 0 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        for (const name of names) {
-          if (!LETTERBOXD_FILES.includes(name.toLowerCase())) {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.95 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class LetterboxdFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => LETTERBOXD_FILES.includes(name),
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0 },
+    importInDir: 'all-named',
+  };
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(4096);
-      const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-      return headerHasLetterboxdCols(buf.toString('utf8', 0, n));
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return head != null && headerHasLetterboxdCols(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      for (const name of names) {
-        if (LETTERBOXD_FILES.includes(name.toLowerCase())) {
-          await this.processFile(path.join(root, name), params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {

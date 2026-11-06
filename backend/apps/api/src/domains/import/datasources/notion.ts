@@ -6,9 +6,10 @@
    the top of the body. One 'note' event per .md file.
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { listFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -27,23 +28,7 @@ function isNotionMarkdownName(name: string): boolean {
 
 // Recurse a directory up to `depth` levels, returning absolute paths of Notion-named *.md files.
 async function findMarkdownFiles(dir: string, depth: number, out: string[]): Promise<void> {
-  let names: fs.Dirent[];
-  try {
-    names = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const ent of names) {
-    const full = path.join(dir, ent.name);
-    if (ent.isFile()) {
-      if (isNotionMarkdownName(ent.name)) {
-        out.push(full);
-      }
-    } else if (ent.isDirectory() && depth > 0) {
-      await findMarkdownFiles(full, depth - 1, out);
-    }
-  }
+  out.push(...(await listFiles(dir, { maxDepth: depth, match: isNotionMarkdownName })));
 }
 
 // Strip the leading "# " of the first non-empty line to get a page title.

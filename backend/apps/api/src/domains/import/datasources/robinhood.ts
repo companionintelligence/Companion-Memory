@@ -58,13 +58,12 @@
    automatically: the options activity export and the consolidated
    transactions export") — only the consolidated transaction-history CSV
    documented above, which is what this source's guide entry points at. */
-import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readCsvFile } from './readers';
-import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -177,111 +176,24 @@ class IdAllocator {
   }
 }
 
-export class RobinhoodFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = await fsStat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (stat.isFile()) {
-      if (path.extname(root).toLowerCase() !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      return (await this.headerMatches(root)) ? { confidence: 0.9 } : { confidence: 0 };
-    }
-
-    if (stat.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.9 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class RobinhoodFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0, sniffed: 0.9 },
+    importInDir: 'all-matches',
+  };
 
   // Read only the first ~8KB — the header is always row 1 in every cited
   // sample, but the sniff still runs a real parse-shaped check (all three
   // signature columns as distinct header cells) rather than a bare filename
   // guess, matching paypal.ts/venmo.ts/coinbase.ts's own recognizers.
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(8192);
-        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+    const head = await readHead(fpath, 8192);
 
-        return textHasRobinhoodHeader(buf.toString('utf8', 0, bytesRead));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && textHasRobinhoodHeader(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-
-      return;
-    }
-
-    if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      for (const name of names) {
-        if (path.extname(name).toLowerCase() !== '.csv') {
-          continue;
-        }
-
-        const fpath = path.join(root, name);
-        if (await this.headerMatches(fpath)) {
-          await this.processFile(fpath, params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log, csv: { findHeader: isRobinhoodHeaderRow } });
     if (rows == null) {

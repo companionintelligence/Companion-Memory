@@ -20,6 +20,7 @@ import {
 } from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, EntityAttribute, Relationship } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -415,16 +416,7 @@ export class EmailFileImporter implements FileImporter {
 
 /** First 5 bytes 'From ' implies mbox (the column-0 record separator). */
 async function sniffIsMbox(fpath: string): Promise<boolean> {
-  try {
-    const fd = await fs.promises.open(fpath, 'r');
-    const buf = Buffer.alloc(5);
-    await fd.read(buf, 0, 5, 0);
-    await fd.close();
-
-    return buf.toString() === 'From ';
-  } catch {
-    return false;
-  }
+  return (await readHead(fpath, 5)) === 'From ';
 }
 
 function parseHeaders(raw: string): Record<string, string> {

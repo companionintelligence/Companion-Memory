@@ -3,9 +3,11 @@
  * Both are GeoJSON FeatureCollections of Point features. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseFlexibleDate } from './dates';
+import { listFiles } from './fsWalk';
 import { asRecord, asString, type JsonRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -27,39 +29,10 @@ const REVIEWS_FILE = 'reviews.json';
 const LABELED_FILE = 'labeled places.json';
 const SUPPORTED_FILES = new Set([SAVED_FILE, REVIEWS_FILE, LABELED_FILE]);
 
-async function findSupportedFiles(root: string, depth = 0): Promise<string[]> {
-  if (depth > 6) {
-    return [];
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const found: string[] = [];
-  for (const entry of entries) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      found.push(...(await findSupportedFiles(full, depth + 1)));
-    } else if (entry.isFile() && SUPPORTED_FILES.has(entry.name.toLowerCase())) {
-      found.push(full);
-    }
-  }
-
-  return found.sort();
-}
-
-function parseDate(s: unknown): Date | undefined {
-  if (!s || typeof s !== 'string') {
-    return undefined;
-  }
-
-  const d = new Date(s);
-
-  return isNaN(d.getTime()) ? undefined : d;
+async function findSupportedFiles(root: string): Promise<string[]> {
+  return (
+    await listFiles(root, { maxDepth: 6, match: (name) => SUPPORTED_FILES.has(name.toLowerCase()) })
+  ).sort();
 }
 
 function coords(feat: Feature): { lat: number; lon: number } | undefined {
@@ -277,7 +250,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
 
   private pushPlace(feat: Feature, params: ImportParams, labeled = false): void {
     const props = feat.properties || {};
-    const ts = parseDate(props.date);
+    const ts = parseFlexibleDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
@@ -339,7 +312,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
 
   private pushReview(feat: Feature, params: ImportParams): void {
     const props = feat.properties || {};
-    const ts = parseDate(props.date);
+    const ts = parseFlexibleDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }

@@ -14,6 +14,7 @@
  * table, not a hand-picked six) are correct by construction instead of by
  * regex luck.
  */
+import { decodeHTML, decodeXML } from 'entities';
 import { Parser } from 'htmlparser2';
 
 const SKIP_TAGS = new Set(['script', 'style', 'head', 'title', 'noscript', 'template']);
@@ -60,6 +61,27 @@ const BLOCK_TAGS = new Set([
 // downstream. Written as \u escapes, not literal characters, so the source
 // file itself doesn't carry invisible bytes.
 const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
+
+/**
+ * Decode character references in a string that is NOT a document: an attribute
+ * value, a date fragment, a link label a regex already pulled out of the page.
+ * Body text goes through {@link htmlToText}; this is for the pieces that stay
+ * markup-free but still carry `&amp;`, `&#39;`, `&#x27;`, `&eacute;`.
+ *
+ * Seven importers each kept a regex decoder with its own hand-picked subset
+ * (one knew `&nbsp;` but not `&#x27;`, one hex references but not `&eacute;`),
+ * and Google Voice carried a 40-entry entity table. This is the full HTML5
+ * table, through the same `entities` package htmlparser2 decodes with — or the
+ * XML five plus numeric references when `xml` is set, for SMS Backup & Restore's
+ * XML attributes, where `&copy;` is not an entity.
+ *
+ * Non-breaking and em spaces (`&nbsp;`, `&emsp;`) come back as plain spaces:
+ * every copy that handled them at all mapped them that way, and a fragment's
+ * whitespace is for display, not for layout.
+ */
+export function decodeEntities(s: string, { xml = false }: { xml?: boolean } = {}): string {
+  return (xml ? decodeXML(s) : decodeHTML(s)).replace(/[\u00a0\u2003]/g, ' ');
+}
 
 export interface HtmlToTextOptions {
   /**

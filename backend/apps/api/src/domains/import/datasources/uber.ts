@@ -14,12 +14,14 @@
  * Trip column reads go through `pick()` which tries both name styles, so one code
  * path serves both trip schemas. */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { listFiles } from './fsWalk';
 import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, LineItemRecord, Relationship } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -88,32 +90,7 @@ const EATS_FILE_RE = /^user_orders(-\d+)?\.csv$/i;
 // Recursively collect every CSV matching `re` under a directory (bounded depth;
 // Uber exports are small and nest files at Uber Data/<Rider|Eats>/<file>).
 async function findCsvFiles(root: string, re: RegExp, maxDepth = 6): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth) {
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        await walk(full, depth + 1);
-      } else if (e.isFile() && re.test(e.name)) {
-        out.push(full);
-      }
-    }
-  };
-
-  await walk(root, 0);
-
-  return out.sort();
+  return (await listFiles(root, { maxDepth, match: (name) => re.test(name) })).sort();
 }
 
 export class UberFileImporter implements FileImporter {
@@ -166,19 +143,9 @@ export class UberFileImporter implements FileImporter {
   }
 
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(4096);
-        const { bytesRead } = await fh.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-        return headerHasTripCols(buf.toString('utf8', 0, bytesRead));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && headerHasTripCols(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {

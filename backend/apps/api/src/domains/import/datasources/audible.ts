@@ -28,14 +28,14 @@
    SearchData files (browse noise, not listening). */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { audibleUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readCsvFile } from './readers';
-import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -61,18 +61,9 @@ function headerMatches(text: string): boolean {
 }
 
 async function sniffHeader(fpath: string): Promise<boolean> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return headerMatches(buf.toString('utf8', 0, n));
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head != null && headerMatches(head);
 }
 
 /** A field's value, with Audible's "Not Available" filler read as no value. */
@@ -111,86 +102,16 @@ function seriesTitles(info: string): string | undefined {
   return titles.length ? titles.join(', ') : undefined;
 }
 
-export class AudibleFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      if (path.extname(root).toLowerCase() !== '.csv' || !(await sniffHeader(root))) {
-        return { confidence: 0 };
-      }
-
-      return { confidence: FILENAME_RE.test(path.basename(root)) ? 0.95 : 0.85 };
-    }
-
-    if (st.isDirectory()) {
-      if ((await this.findFiles(root)).length) {
-        return { confidence: 0.95 };
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  // The export nests the file as Your Audible Library & Listening/…, and a
-  // drag-and-drop staging adds an "All Data Categories" wrapper above that —
-  // so recurse deep enough to survive a couple of wrapper directories. Every
-  // CSV is header-sniffed (a 4KB read) because the filename proves nothing.
-  private async findFiles(dir: string, depth = 0): Promise<string[]> {
-    const out: string[] = [];
-    let names: fs.Dirent[];
-    try {
-      names = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return out;
-    }
-
-    for (const dirent of names) {
-      const full = path.join(dir, dirent.name);
-      if (dirent.isDirectory()) {
-        if (depth < 4) {
-          out.push(...(await this.findFiles(full, depth + 1)));
-        }
-      } else if (dirent.isFile()) {
-        if (path.extname(dirent.name).toLowerCase() === '.csv' && (await sniffHeader(full))) {
-          out.push(full);
-        }
-      }
-    }
-
-    return out;
-  }
-
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    const files = stat.isFile() ? [root] : stat.isDirectory() ? await this.findFiles(root) : [];
-    for (const fpath of files) {
-      await this.processFile(fpath, params);
-    }
-  }
+export class AudibleFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => FILENAME_RE.test(name),
+    headerMatches: (fpath) => sniffHeader(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0.85 },
+    dirConfidence: { named: 0.95, sniffed: 0.95 },
+    scanDepth: 4,
+    importInDir: 'all-matches',
+  };
 
   /** Library.csv sitting next to the listening file, as an ASIN-keyed map. */
   private loadLibrary(listeningPath: string, params: ImportParams): Map<string, LibraryEntry> {
@@ -224,7 +145,7 @@ export class AudibleFileImporter implements FileImporter {
     return lib;
   }
 
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     const rows = await readCsvFile(fpath, { log: params.log });
     if (rows == null) {

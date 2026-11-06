@@ -16,6 +16,7 @@ import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
+import { findDateField, parseFlexibleDate } from './dates';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -24,30 +25,8 @@ import { textContent, timeframeContains } from './timeline';
 const DATE_KEY = /date|time|timestamp|created|when/i;
 
 function findDate(rec: Record<string, unknown>): Date | undefined {
-  for (const [k, v] of Object.entries(rec)) {
-    if (!DATE_KEY.test(k)) {
-      continue;
-    }
-
-    if (v == null) {
-      continue;
-    }
-
-    // Unix epoch (seconds or ms) or ISO/locale date string.
-    if (typeof v === 'number') {
-      const d = new Date(v > 1e12 ? v : v * 1000);
-      if (!isNaN(d.getTime())) {
-        return d;
-      }
-    } else if (typeof v === 'string' && v.trim()) {
-      const d = new Date(v);
-      if (!isNaN(d.getTime())) {
-        return d;
-      }
-    }
-  }
-
-  return undefined;
+  // Unix epoch (seconds or ms) or ISO/locale date string.
+  return findDateField(rec, DATE_KEY, (v) => parseFlexibleDate(v, { epoch: 'auto' }));
 }
 
 // Classify by filename heuristic (Roblox's format is undocumented, so this is

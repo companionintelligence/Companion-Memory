@@ -34,6 +34,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { hasGrokChats, importGrokChats, GROK_CHAT_STORE } from './_x_archive';
+import { parseFlexibleDate } from './dates';
 import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -191,31 +192,7 @@ function extractTimestamp(msg: GrokMessage): Date | undefined {
 }
 
 function parseTimestamp(raw: unknown): Date | undefined {
-  if (raw == null) {
-    return undefined;
-  }
-
-  if (typeof raw === 'number' && isFinite(raw)) {
-    // Heuristic: values >= 1e12 are ms, otherwise seconds.
-    const ms = raw >= 1e12 ? raw : raw * 1000;
-    const d = new Date(ms);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  if (typeof raw === 'string' && raw.trim()) {
-    const s = raw.trim();
-    // All-digits string: treat as a numeric epoch.
-    if (/^\d+$/.test(s)) {
-      return parseTimestamp(Number(s));
-    }
-
-    const d = new Date(s);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  return undefined;
+  return parseFlexibleDate(raw, { epoch: 'auto', numericStrings: true });
 }
 
 export class GrokFileImporter implements FileImporter {
