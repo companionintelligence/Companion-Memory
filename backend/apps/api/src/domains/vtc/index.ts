@@ -8,8 +8,9 @@
  *     Companion Memory's own `did:keri:D<x>` convention. KERI-shaped, not interoperable.
  *   - this domain: W3C Verifiable Credentials 2.0 with DTG Credentials v1, Data Integrity
  *     `eddsa-jcs-2022` proofs and Bitstring Status Lists, the formats OpenVTC's Verifiable Trust
- *     Infrastructure documents. The canonical JSON, base58, `did:key`, proof and status-list
- *     encodings reproduce published test vectors; the rest has unit tests only. Nothing has been
+ *     Infrastructure documents. The canonical JSON, base58, `did:key` and proof code reproduce
+ *     published test vectors and the status-list reader expands the specification's own example; the
+ *     rest has unit tests only. Nothing has been
  *     run against OpenVTC's software, and the status list its live community serves is refused
  *     today (it carries a proof set and an `encodedList` without the multibase prefix).
  *

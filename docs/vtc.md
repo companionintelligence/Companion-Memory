@@ -20,7 +20,7 @@ Two trust stacks live in this service and are kept apart on purpose.
 | Credential | none yet (grants are database rows; the ACDC/TEL design is [ADR-0013](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0013-keri-toip-decentralized-identity-and-trust-graphs.md)) | W3C VC 2.0 + DTG Credentials v1 |
 | Proof | RFC 9421 HTTP message signature | Data Integrity `eddsa-jcs-2022` |
 | Revocation | grant row (`revoked_at`) | Bitstring Status List |
-| Interoperable with an outside implementation | No, and says so in its source | Not yet run against one. The canonical JSON, base58, `did:key`, proof and status-list encodings reproduce published test vectors; the rest has unit tests only |
+| Interoperable with an outside implementation | No, and says so in its source | Not yet run against one. The canonical JSON, base58, `did:key` and proof code reproduce published test vectors and the status-list reader expands the specification's own example; the rest has unit tests only |
 
 The Hub froze its in-tree KERI module on 2026-10-30 because it produced identifiers that look like
 KERI and are not (`packages/common/src/keri/FROZEN.md` in the Hub repository, now `Companion-Hub`), and this service's `auditSaid.ts`
@@ -136,7 +136,8 @@ The credential has the shape OpenVTC documents: DTG v1 contexts, `issuerScope: p
 `validUntil` (30 days by default), one `BitstringStatusListEntry` for `revocation`. It is parsed back
 by this module's strict reader before it is returned. Slots are chosen at random (the Bitstring Status
 List specification asks issuers to), and slots 0–3 are decoys set from the first publication so a new
-community's first member is not visibly "index 0" (OpenVTC VTC spec §6.2). A slot is reserved before
+community's first member is not visibly "index 0" (as OpenVTC's VTC spec §6.2 describes; its service
+instead sets about 5% of a new list's slots at random, which also hides how many members there are). A slot is reserved before
 signing and given back if signing fails.
 
 Renewing is another `issueMembership` call and takes a **new** slot, so revoking the newest credential

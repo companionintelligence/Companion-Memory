@@ -44,7 +44,11 @@ import {
  * a member and revokes them all.
  */
 
-/** Slots 0 to 3 are never given to a credential, and are set from the first publication, so a new community's first member is not visibly "index 0" (VTC spec §6.2). */
+/**
+ * Slots 0 to 3 are never given to a credential, and are set from the first publication, so a new
+ * community's first member is not visibly "index 0" (as OpenVTC's VTC spec §6.2 describes; its
+ * service instead sets about 5% of a new list's slots at random, which also hides the member count).
+ */
 export const RESERVED_DECOY_SLOTS = 4;
 
 export const DEFAULT_MEMBERSHIP_VALIDITY_MS = 30 * 24 * 60 * 60 * 1000;
