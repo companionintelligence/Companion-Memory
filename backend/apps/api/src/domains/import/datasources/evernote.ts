@@ -13,7 +13,7 @@ import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // xml2js (default explicitArray: true) wraps every child in an array.
 interface EnexNote {
@@ -287,7 +287,7 @@ export class EvernoteFileImporter implements FileImporter {
             .digest('hex'),
         classification: 'note',
         timestamp: ts,
-        content: { filename: 'note.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('note.txt', text),
         metadata: {
           Title: title,
           Tags: tags.length > 0 ? tags : undefined,

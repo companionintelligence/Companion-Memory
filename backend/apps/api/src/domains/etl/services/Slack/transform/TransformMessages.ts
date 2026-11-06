@@ -84,31 +84,21 @@ export class SlackMessagesTransformService {
         continue;
       }
 
-      // Deliberately per-row create(), NOT createMany(). createMany is the bulk
-      // ingest path and does not emit CommunicationCreatedEvent — see its
-      // docstring: "Search indexing for bulk-loaded rows is deferred to the
-      // post-load batch embed". That backfill is only reachable by POSTing
-      // /api/maintenance/search-index/backfill by hand; nothing schedules it for
-      // an ETL sync. Batching here would therefore write Slack messages that are
-      // absent from ci_search.vectors — i.e. invisible to search — until someone
-      // ran that endpoint manually. Every sibling connector (Gmail, Outlook,
-      // Signal) ingests per-row for the same reason.
-      //
-      // The cost is that a re-synced message raises a unique violation on
-      // communications_source_identity_uniq, logged and swallowed below. That is
-      // noisy but harmless, and is the same behaviour those siblings have.
-      for (const row of rows) {
-        try {
-          await this.communicationService.create({ userId }, row);
-          createdCount += 1;
-        } catch (error) {
-          this.logger.error('Failed to transform Slack message', {
-            channelId,
-            sourceId: row.source_id,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-        }
-      }
+      // One idempotent write per channel page. This was a per-row create()
+      // loop on purpose: createMany is the importer's bulk path and emits no
+      // CommunicationCreatedEvent, and nothing schedules the search-index
+      // backfill for a connection sync (the arrival sweep covers content
+      // only), so a batched page would have been invisible to search and never
+      // people-linked. `emitCreated` closes that: the rows THIS sync inserted
+      // raise the event exactly as create() did, and a re-synced message is an
+      // upsert on communications_source_identity_uniq rather than a unique
+      // violation to log and swallow. Gmail, Outlook and Signal write the same
+      // way.
+      const results = await this.communicationService.createManyDetailed({ userId }, rows, {
+        emitCreated: true,
+      });
+
+      createdCount += results.filter(({ inserted }) => inserted).length;
     }
 
     this.logger.log('Slack messages transformation completed', {

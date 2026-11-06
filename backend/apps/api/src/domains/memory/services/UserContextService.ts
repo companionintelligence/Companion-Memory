@@ -56,7 +56,12 @@ export interface UserContext {
     relationship: 'PREFERS' | 'DISLIKES';
   }>;
   quickStats: {
-    totalEntities: number;
+    /**
+     * `null` when the caller asked `getUserContextForLLM` to skip the count:
+     * the number moves with every ingested row, and a prompt that carries it
+     * cannot be prefix-cached across turns (see `ChatTurnService`).
+     */
+    totalEntities: number | null;
     totalPreferences: number;
     totalDislikes: number;
     familySize: number;
@@ -99,9 +104,17 @@ export class UserContextService {
    * Get comprehensive user context for LLM system prompt injection
    *
    * @param userId - The user ID to get context for
+   * @param options.includeQuickStats - `false` skips the `COUNT(*)` over the
+   *   user's entities. Pair it with `formatContextForSystemPrompt(ctx, {
+   *   includeQuickStats: false })`: the count changes whenever anything is
+   *   ingested, so a per-turn system prompt that carries it is never
+   *   byte-identical to the previous turn's and never hits the KV prefix cache.
    * @returns UserContext object ready for system prompt
    */
-  async getUserContextForLLM(userId: string): Promise<UserContext | null> {
+  async getUserContextForLLM(
+    userId: string,
+    { includeQuickStats = true }: { includeQuickStats?: boolean } = {},
+  ): Promise<UserContext | null> {
     try {
       // 1. Get user's entity
       const userEntity = await this.resolveUserEntity(userId);
@@ -111,22 +124,22 @@ export class UserContextService {
         return null;
       }
 
-      // 2. Get family members (1-hop family relationships)
-      const familyMembers = await this.getFamilyMembers(userId, userEntity.entity_id);
-
-      // 3. Get top preferences and dislikes
-      const preferences = await this.getTopPreferences(userId, userEntity.entity_id, 10);
-      const dislikes = await this.getTopDislikes(userId, userEntity.entity_id, 5);
-
-      // 4. Get quick stats
-      const stats = await this.getQuickStats(userId);
+      // 2-4. Family (1-hop), top preferences and dislikes, graph count and
+      // username are independent reads; run them together.
+      const [familyMembers, preferences, dislikes, stats, username] = await Promise.all([
+        this.getFamilyMembers(userId, userEntity.entity_id),
+        this.getTopPreferences(userId, userEntity.entity_id, 10),
+        this.getTopDislikes(userId, userEntity.entity_id, 5),
+        includeQuickStats ? this.getQuickStats(userId) : Promise.resolve({ totalEntities: null }),
+        this.getUsernameFromUsersTable(userId),
+      ]);
 
       // 5. Format for LLM
       return {
         currentUser: {
           entityId: userEntity.entity_id,
           name: userEntity.name ?? 'User',
-          username: await this.getUsernameFromUsersTable(userId),
+          username,
           properties: this.pickImportantProperties(userEntity.properties ?? {}),
           // The free-text "about you" the Self page writes. It is an entity
           // COLUMN, not a property, so the allowlist above could never have
@@ -303,7 +316,10 @@ export class UserContextService {
 
     if (includeQuickStats) {
       lines.push('', '## Quick Stats');
-      lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
+      if (context.quickStats.totalEntities !== null) {
+        lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
+      }
+
       lines.push(`- Total preferences: ${context.quickStats.totalPreferences}`);
       lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
       lines.push(`- Family members: ${context.quickStats.familySize}`);

@@ -6,14 +6,15 @@
    disambiguates a Mastodon export from other JSON exports.
 */
 import fs from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { htmlToText } from './htmlToText';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface ActivityObject {
   type?: string;
@@ -38,25 +39,6 @@ interface Actor {
   type?: unknown;
   preferredUsername?: unknown;
   outbox?: unknown;
-}
-
-async function readJson(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  if (raw.charCodeAt(0) === 0xfeff) {
-    raw = raw.slice(1);
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 // An `orderedItems` array is the literal W3C ActivityPub OrderedCollection
@@ -135,7 +117,7 @@ export class MastodonFileImporter implements FileImporter {
         return { confidence: 0 };
       }
 
-      const parsed = await readJson(root);
+      const parsed = await readJsonFile(root);
       if (!isOutbox(parsed)) {
         return { confidence: 0 };
       }
@@ -162,7 +144,7 @@ export class MastodonFileImporter implements FileImporter {
         return { confidence: 0, dir_threshold: 0.7 };
       }
 
-      const outbox = await readJson(path.join(root, outboxName));
+      const outbox = await readJsonFile(path.join(root, outboxName));
       if (!isOutbox(outbox)) {
         return { confidence: 0, dir_threshold: 0.7 };
       }
@@ -171,7 +153,10 @@ export class MastodonFileImporter implements FileImporter {
       // own content is verified as a Mastodon actor pointing back at this
       // outbox — not merely a file with that name.
       const actorName = names.find((n) => n.toLowerCase() === 'actor.json');
-      if (actorName && isMastodonActor(await readJson(path.join(root, actorName)), (outbox as Outbox).id)) {
+      if (
+        actorName &&
+        isMastodonActor(await readJsonFile(path.join(root, actorName)), (outbox as Outbox).id)
+      ) {
         return { confidence: 0.97 };
       }
 
@@ -291,11 +276,7 @@ export class MastodonFileImporter implements FileImporter {
       item: {
         classification: 'post',
         timestamp: ts,
-        content: {
-          filename: 'post.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent('post.txt', text),
         metadata: {
           Source: 'Mastodon',
           URL: obj.url || undefined,

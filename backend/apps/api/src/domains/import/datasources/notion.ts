@@ -12,7 +12,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 /**
  * Notion's exporter names every page `<Title> <32-hex-id>.md` — that suffix is
@@ -186,11 +186,7 @@ export class NotionFileImporter implements FileImporter {
         id: 'notion:' + path.basename(fpath),
         classification: 'note',
         timestamp: ts,
-        content: {
-          filename: 'note.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(raw),
-        },
+        content: textContent('note.txt', raw),
         metadata: {
           Title: title || undefined,
           Source: 'Notion',

@@ -10,7 +10,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const DISCORD_HEADER = 'ID,Timestamp,Contents,Attachments';
 const MESSAGE_FILES = ['messages.csv', 'messages.json'];
@@ -536,11 +536,7 @@ export class DiscordFileImporter implements FileImporter {
           id: rowId ? `discord:${rowId}` : `discord:${path.basename(channelDir)}:${i}`,
           classification: 'message',
           timestamp: safeTs,
-          content: {
-            filename: 'message.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(contents),
-          },
+          content: textContent('message.txt', contents),
           metadata: {
             Conversation: channelName,
             // Recipient names only (see participantsFor) — the comms mapping

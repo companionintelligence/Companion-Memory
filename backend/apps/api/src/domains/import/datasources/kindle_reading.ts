@@ -31,6 +31,7 @@ import path from 'node:path';
 
 import { kindleUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
+import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -247,21 +248,8 @@ export class KindleReadingFileImporter implements FileImporter {
 
   private async processFile(fpath: string, titles: Map<string, string>, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', `Failed to read ${base}`, { error: (e as Error).message });
-
-      return;
-    }
-
-    let rows: Record<string, string>[];
-    try {
-      rows = parseCSV(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${base}`, { error: (e as Error).message });
-
+    const rows = await readCsvFile(fpath, { log: params.log });
+    if (rows == null) {
       return;
     }
 

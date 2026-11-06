@@ -19,7 +19,7 @@ import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
-import { mediaItemFromFile, timeframeContains } from './timeline';
+import { mediaItemFromFile, textContent, timeframeContains } from './timeline';
 
 interface IGMessage {
   sender_name?: string;
@@ -584,11 +584,7 @@ export class InstagramFileImporter implements FileImporter {
         item: {
           classification: 'message',
           timestamp: ts,
-          content: {
-            filename: path.basename(fpath),
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(text),
-          },
+          content: textContent(path.basename(fpath), text),
           metadata: {
             Sender: msg.sender_name || undefined,
             To: to.length ? to.join(', ') : undefined,
@@ -635,7 +631,7 @@ export class InstagramFileImporter implements FileImporter {
         item: {
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'post.txt', mediaType: 'text/plain', data: async () => Buffer.from(caption) },
+          content: textContent('post.txt', caption),
           metadata: {
             Text: caption || undefined,
             Title: caption || undefined,
@@ -809,11 +805,7 @@ export class InstagramFileImporter implements FileImporter {
           id: `instagram:msg:${threadKey}#${i}`,
           classification: 'message',
           timestamp: ent.ts,
-          content: {
-            filename: path.basename(fpath),
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(text),
-          },
+          content: textContent(path.basename(fpath), text),
           metadata: {
             Sender: ent.sender || undefined,
             To: conversation && conversation !== ent.sender ? conversation : undefined,

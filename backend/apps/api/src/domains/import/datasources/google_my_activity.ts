@@ -32,7 +32,7 @@ import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Metadata } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // The action body cell of one activity, matched by its OPENING tag only — the
 // close comes from matchingDivCloseIndex (./htmlBlocks), not a non-greedy
@@ -368,7 +368,7 @@ export class GoogleMyActivityFileImporter implements FileImporter {
         id: `gactivity:${product}:${entryFingerprint(ts, title, url)}`,
         classification,
         timestamp: ts,
-        content: { filename: 'activity.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('activity.txt', title),
         metadata,
       },
     };

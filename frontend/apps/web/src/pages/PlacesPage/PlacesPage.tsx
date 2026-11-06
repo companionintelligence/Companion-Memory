@@ -15,7 +15,7 @@ import { PageContent } from '@/components/layout';
 import { MAP_IMAGERY_ATTRIBUTION, Map } from '@/components/Map';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
-import { AddPlaceModal } from '@/components/modals/AddItemModal';
+import { AddPlaceModal } from '@/components/modals/AddItemModal/AddPlaceModal';
 import { PLACE_KIND_LABELS } from '@/components/PlaceForm';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { savedRecordRoute } from '@/components/SearchBox/entityRoute';

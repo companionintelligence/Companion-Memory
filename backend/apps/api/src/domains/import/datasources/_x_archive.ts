@@ -17,7 +17,7 @@ import path from 'node:path';
 
 import { mediaItemForAsset, insideRoot } from './_ai_media';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 /** The archive's per-store JS files: `<base>.js` plus `<base>-part1.js`, … */
 export function partFiles(dataDir: string, base: string): string[] {
@@ -268,7 +268,7 @@ export function importGrokChats(root: string, params: ImportParams): void {
           id: `grok:${chatId}:${i}:${hash}`,
           classification: 'message',
           timestamp: when,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: role,
             From: role === 'user' ? 'You' : 'Grok',

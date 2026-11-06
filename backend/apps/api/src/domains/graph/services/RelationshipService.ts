@@ -257,6 +257,106 @@ export class RelationshipService {
     }
   }
 
+  /**
+   * {@link create} for a batch: one multi-row `INSERT ... ON CONFLICT DO
+   * NOTHING`, returning the rows this call inserted. A duplicate of an existing
+   * active edge (relationships_unique_directed_idx) is skipped silently, which
+   * is what create()'s catch-23505-then-findOne path did one row at a time;
+   * duplicates within the batch collapse on the same key first, since the
+   * statement cannot touch one arbiter row twice.
+   *
+   * No per-row node lookups: create() SELECTs both endpoints before every
+   * insert, and the one caller of this (PromoteService) has just fetched or
+   * created every Person it links, so that is a round trip per edge for nothing.
+   * The caller vouches that every endpoint id exists.
+   */
+  async createMany(context: UserServiceContext, data: CreateRelationshipDto[]): Promise<Relationship[]> {
+    if (data.length === 0) {
+      return [];
+    }
+
+    const byKey = new Map<string, RelationshipEntity>();
+
+    for (const item of data) {
+      const prepared = this.prepareWrite(item);
+      const key = `${prepared.fromNodeId}\u0000${prepared.toNodeId}\u0000${prepared.type}`;
+
+      if (!byKey.has(key)) {
+        byKey.set(
+          key,
+          this.relationshipRepository.create({ id: uuidv7(), ...prepared, userId: context.userId }),
+        );
+      }
+    }
+
+    const rows = [...byKey.values()];
+    // Explicit SQL rather than the query builder's `.orIgnore().returning()`:
+    // the builder maps RETURNING values back onto the entity objects it was
+    // given BY POSITION, so with one of two rows skipped by the conflict the
+    // surviving id landed on the wrong object and both read as inserted.
+    // The conflict target names the partial index outright. Dates go through
+    // dateOnly() because the columns are `date`, as the entity declares.
+    const result = await this.relationshipRepository.manager.query<Array<{ relationship_id: string }>>(
+      `INSERT INTO ci.relationships
+         (relationship_id, from_entity_id, from_entity_type, to_entity_id, to_entity_type, relationship_type,
+          strength, is_bidirectional, start_date, end_date, owner_user_id, properties)
+       SELECT t.relationship_id, t.from_entity_id, t.from_entity_type, t.to_entity_id, t.to_entity_type,
+              t.relationship_type, COALESCE(t.strength, 1.0), COALESCE(t.is_bidirectional, false),
+              t.start_date, t.end_date, t.owner_user_id, COALESCE(t.properties, '{}'::jsonb)
+         FROM jsonb_to_recordset($1::jsonb) AS t(
+                relationship_id uuid, from_entity_id uuid, from_entity_type text, to_entity_id uuid,
+                to_entity_type text, relationship_type text, strength double precision,
+                is_bidirectional boolean, start_date date, end_date date, owner_user_id uuid,
+                properties jsonb, ord int)
+        ORDER BY t.ord
+       ON CONFLICT (from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING
+       RETURNING relationship_id`,
+      [
+        JSON.stringify(
+          rows.map((row, ord) => ({
+            ord,
+            relationship_id: row.id,
+            from_entity_id: row.fromNodeId,
+            from_entity_type: row.fromNodeType,
+            to_entity_id: row.toNodeId,
+            to_entity_type: row.toNodeType,
+            relationship_type: row.type,
+            strength: row.strength ?? null,
+            is_bidirectional: row.isBidirectional ?? null,
+            start_date: dateOnly(row.startDate),
+            end_date: dateOnly(row.endDate),
+            owner_user_id: row.userId,
+            properties: row.properties ?? {},
+          })),
+        ),
+      ],
+    );
+    const insertedIds = new Set(result.map((row) => row.relationship_id));
+    const inserted = rows.filter((row) => insertedIds.has(row.id));
+
+    await this.graphDeltaWriter?.recordMany(
+      inserted.map((relationship) => ({
+        nodeType: 'relationship' as const,
+        changeType: 'created' as const,
+        relationshipId: relationship.id,
+        relationshipType: relationship.type,
+        fromEntityId: relationship.fromNodeId,
+        toEntityId: relationship.toNodeId,
+        ownerUserId: relationship.userId,
+        changeSource: 'RelationshipService.createMany',
+        changedByUserId: relationship.userId,
+        changedFields: {
+          relationship_type: { new: relationship.type },
+          from_entity_id: { new: relationship.fromNodeId },
+          to_entity_id: { new: relationship.toNodeId },
+          properties: { new: relationship.properties ?? {} },
+        },
+      })),
+    );
+
+    return inserted.map((entity) => RelationshipEntity.toEgressType(entity));
+  }
+
   // There are some relationships where multiple identical relationships should
   // not exist. For example, a user should not have multiple "FRIENDS_WITH"
   // relationships to the same person. This upsert method checks for existing

@@ -13,7 +13,7 @@ import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface WatchEntry {
   header?: string;
@@ -300,11 +300,7 @@ export class YouTubeFileImporter implements FileImporter {
           id,
           classification: 'subscription',
           timestamp: undefined,
-          content: {
-            filename: 'subscription.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(channelUrl || channelTitle),
-          },
+          content: textContent('subscription.txt', channelUrl || channelTitle),
           metadata: {
             Channel: channelTitle || undefined,
             ChannelId: channelId || undefined,

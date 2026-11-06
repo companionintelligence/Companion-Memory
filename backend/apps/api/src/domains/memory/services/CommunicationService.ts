@@ -389,14 +389,24 @@ export class CommunicationService {
    * (INGEST_REFRESH_COLUMNS.communication) via ON CONFLICT DO UPDATE instead
    * of being a find-or-return no-op.
    *
-   * Bulk ingest does NOT emit per-row CommunicationCreatedEvent: at import
-   * volume the per-row pgboss fan-out (one job per registered queue per row)
-   * was the dominant cost. Search indexing for bulk-loaded rows is deferred to
-   * the post-load batch embed (POST /api/maintenance/search-index/backfill).
-   * Single-row create() still emits, so interactive creates index live.
+   * Bulk ingest does NOT emit per-row CommunicationCreatedEvent by default: at
+   * import volume the per-row pgboss fan-out (one job per registered queue per
+   * row) was the dominant cost. Search indexing for bulk-loaded rows is
+   * deferred to the post-load batch embed (POST /api/maintenance/search-index/
+   * backfill). Single-row create() still emits, so interactive creates index
+   * live — and a caller that is not the importer can ask for the same with
+   * `emitCreated: true`: the ETL connection syncs do, because nothing schedules
+   * that backfill for them (the arrival sweep covers content only), and a page
+   * of synced mail that skipped the event would be absent from search and
+   * never people-linked. Emitted for rows THIS call inserted, never for a
+   * re-sent triple, exactly as create()'s existing-row path emits nothing.
    */
-  async createMany(context: UserServiceContext, data: CreateCommunicationDto[]): Promise<Communication[]> {
-    return (await this.createManyDetailed(context, data)).map(({ entity }) => entity);
+  async createMany(
+    context: UserServiceContext,
+    data: CreateCommunicationDto[],
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Communication[]> {
+    return (await this.createManyDetailed(context, data, options)).map(({ entity }) => entity);
   }
 
   /**
@@ -413,10 +423,13 @@ export class CommunicationService {
   async createManyDetailed(
     context: UserServiceContext,
     data: CreateCommunicationDto[],
+    options: { emitCreated?: boolean } = {},
   ): Promise<Array<BulkInsertResult<Communication>>> {
     if (data.length === 0) {
       return [];
     }
+
+    const emitCreated = options.emitCreated ?? false;
 
     await refuseForeignLinks(this.dataSource, context.userId, communicationLinks(data), 'message');
 
@@ -542,6 +555,16 @@ export class CommunicationService {
       context.userId,
       results.map(({ entity }) => entity.time),
     );
+
+    // See createMany: only for rows this call inserted, so a re-sync is a no-op
+    // to the search index and the people-linker, as it is on the create() path.
+    if (emitCreated) {
+      for (const { entity, inserted } of results) {
+        if (inserted) {
+          await this.eventService.send(CommunicationCreatedEvent, { communicationId: entity.id });
+        }
+      }
+    }
 
     return egress;
   }

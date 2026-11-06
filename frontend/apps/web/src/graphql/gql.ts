@@ -36,6 +36,7 @@ type Documents = {
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": typeof types.UntagEntitiesDocument,
     "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n": typeof types.TriggerHbpeDocument,
     "\n  query GetWeekAhead {\n    weekForecast {\n      horizon\n      generatedAt\n      days {\n        date\n        dow\n        clusters {\n          clusterId\n          name\n          l0Class\n          pOccur\n          scheduled\n          daypartProbs { label probability }\n        }\n      }\n    }\n    dueForecast {\n      generatedAt\n      due {\n        clusterId\n        name\n        l0Class\n        lastSeen\n        daysSinceLast\n        medianIntervalDays\n        dueInDays\n        window\n        overdue\n        scheduledDate\n        confidence\n      }\n    }\n  }\n": typeof types.GetWeekAheadDocument,
+    "\n  query GetConnectionCount {\n    connections {\n      totalCount\n    }\n  }\n": typeof types.GetConnectionCountDocument,
     "\n  query GetTags {\n    tags {\n      edges {\n        node {\n          id\n          label\n          description\n        }\n      }\n    }\n  }\n": typeof types.GetTagsDocument,
     "\n  query WhatBarEventTypes {\n    eventTypes\n  }\n": typeof types.WhatBarEventTypesDocument,
     "\n  query ReverseGeocode($latitude: Float!, $longitude: Float!) {\n    reverseGeocode(latitude: $latitude, longitude: $longitude) {\n      status\n      placeName\n    }\n  }\n": typeof types.ReverseGeocodeDocument,
@@ -303,6 +304,7 @@ const documents: Documents = {
     "\n  mutation UntagEntities($input: TagEntitiesInput!) {\n    untagEntities(input: $input) {\n      ... on Node {\n        id\n      }\n\n      ... on Taggable {\n        tags {\n          id\n          label\n        }\n      }\n    }\n  }\n": types.UntagEntitiesDocument,
     "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n": types.TriggerHbpeDocument,
     "\n  query GetWeekAhead {\n    weekForecast {\n      horizon\n      generatedAt\n      days {\n        date\n        dow\n        clusters {\n          clusterId\n          name\n          l0Class\n          pOccur\n          scheduled\n          daypartProbs { label probability }\n        }\n      }\n    }\n    dueForecast {\n      generatedAt\n      due {\n        clusterId\n        name\n        l0Class\n        lastSeen\n        daysSinceLast\n        medianIntervalDays\n        dueInDays\n        window\n        overdue\n        scheduledDate\n        confidence\n      }\n    }\n  }\n": types.GetWeekAheadDocument,
+    "\n  query GetConnectionCount {\n    connections {\n      totalCount\n    }\n  }\n": types.GetConnectionCountDocument,
     "\n  query GetTags {\n    tags {\n      edges {\n        node {\n          id\n          label\n          description\n        }\n      }\n    }\n  }\n": types.GetTagsDocument,
     "\n  query WhatBarEventTypes {\n    eventTypes\n  }\n": types.WhatBarEventTypesDocument,
     "\n  query ReverseGeocode($latitude: Float!, $longitude: Float!) {\n    reverseGeocode(latitude: $latitude, longitude: $longitude) {\n      status\n      placeName\n    }\n  }\n": types.ReverseGeocodeDocument,
@@ -638,6 +640,10 @@ export function gql(source: "\n  mutation TriggerHbpe {\n    triggerHbpe\n  }\n"
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  query GetWeekAhead {\n    weekForecast {\n      horizon\n      generatedAt\n      days {\n        date\n        dow\n        clusters {\n          clusterId\n          name\n          l0Class\n          pOccur\n          scheduled\n          daypartProbs { label probability }\n        }\n      }\n    }\n    dueForecast {\n      generatedAt\n      due {\n        clusterId\n        name\n        l0Class\n        lastSeen\n        daysSinceLast\n        medianIntervalDays\n        dueInDays\n        window\n        overdue\n        scheduledDate\n        confidence\n      }\n    }\n  }\n"): (typeof documents)["\n  query GetWeekAhead {\n    weekForecast {\n      horizon\n      generatedAt\n      days {\n        date\n        dow\n        clusters {\n          clusterId\n          name\n          l0Class\n          pOccur\n          scheduled\n          daypartProbs { label probability }\n        }\n      }\n    }\n    dueForecast {\n      generatedAt\n      due {\n        clusterId\n        name\n        l0Class\n        lastSeen\n        daysSinceLast\n        medianIntervalDays\n        dueInDays\n        window\n        overdue\n        scheduledDate\n        confidence\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query GetConnectionCount {\n    connections {\n      totalCount\n    }\n  }\n"): (typeof documents)["\n  query GetConnectionCount {\n    connections {\n      totalCount\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

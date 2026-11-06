@@ -20,6 +20,7 @@ import {
   DISPATCH_QUEUED_STALE_MS,
   DISPATCH_RUNNING_STALE_MS,
   HARNESS_CONNECT_APP,
+  STALE_SWEEP_BATCH,
 } from '../constants';
 import { buildDispatchPacket } from '../dispatchPacket';
 import {
@@ -307,14 +308,20 @@ export class AgentDispatchService {
   async failStale(now = new Date()): Promise<number> {
     const queuedCutoff = new Date(now.getTime() - DISPATCH_QUEUED_STALE_MS);
     const runningCutoff = new Date(now.getTime() - DISPATCH_RUNNING_STALE_MS);
-    const stale = [
-      ...(await this.jobRepository.find({
-        where: { status: 'queued', createdAt: LessThan(queuedCutoff) },
-      })),
-      ...(await this.jobRepository.find({
-        where: { status: 'running', updatedAt: LessThan(runningCutoff) },
-      })),
-    ];
+    // One query, OR-ed and bounded, on the partial `agent_jobs_open_idx
+    // (status, created_at, updated_at) WHERE status IN ('queued','running')`.
+    // This runs every minute and almost always finds nothing; as two separate
+    // unbounded finds it was two sequential scans of the table per tick, since
+    // the other indexes lead with `thread_id` / `user_id`. The cap only bounds
+    // one tick: anything left over is still stale next minute.
+    const stale = await this.jobRepository.find({
+      where: [
+        { status: 'queued', createdAt: LessThan(queuedCutoff) },
+        { status: 'running', updatedAt: LessThan(runningCutoff) },
+      ],
+      order: { createdAt: 'ASC' },
+      take: STALE_SWEEP_BATCH,
+    });
 
     let closed = 0;
 

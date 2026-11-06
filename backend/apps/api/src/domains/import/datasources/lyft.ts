@@ -21,7 +21,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // True when the CSV header row carries a column hinting at a Lyft ride export.
 function headerHasRideCols(text: string): boolean {
@@ -425,7 +425,7 @@ export class LyftFileImporter implements FileImporter {
         // The event is anchored where the ride began, or — failing that — where
         // it was requested from, which is within a block of it.
         ...((pickup ?? request) ? { location: pickup ?? request } : {}),
-        content: { filename: 'trip.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('trip.txt', summary),
         metadata: {
           Title: title,
           'Ride ID': rideId || undefined,
@@ -507,7 +507,7 @@ export class LyftFileImporter implements FileImporter {
         classification: 'location',
         timestamp: ts,
         location: coords,
-        content: { filename: 'position.txt', mediaType: 'text/plain', data: async () => Buffer.from(body) },
+        content: textContent('position.txt', body),
         metadata: {
           // `Title` and `Name` are both read as the fix's PLACE NAME
           // (push/inputs.ts toPositionInput, via titleFor's location.fix arm), so

@@ -1022,12 +1022,17 @@ export class ChatTurnService {
     }
 
     try {
-      const userContext = await this.userContextService.getUserContextForLLM(context.userId);
+      // No Quick Stats: the entity count moves with every ingested row, and
+      // this text is the cached prefix of every request (see the comment in
+      // `buildSystemPrompt`). The per-turn Stats block carries live numbers.
+      const userContext = await this.userContextService.getUserContextForLLM(context.userId, {
+        includeQuickStats: false,
+      });
       if (!userContext) {
         return null;
       }
 
-      return this.userContextService.formatContextForSystemPrompt(userContext);
+      return this.userContextService.formatContextForSystemPrompt(userContext, { includeQuickStats: false });
     } catch (error) {
       this.logger.warn('Failed to fetch L0 context for minimal system prompt', {
         userId: context.userId,
@@ -1093,13 +1098,19 @@ Communication style:
     }
 
     try {
-      const userContext = await this.userContextService.getUserContextForLLM(context.userId);
+      // No Quick Stats here either: see `buildL0Context`.
+      const userContext = await this.userContextService.getUserContextForLLM(context.userId, {
+        includeQuickStats: false,
+      });
 
       if (!userContext) {
         return assemble(head);
       }
 
-      return assemble(head, this.userContextService.formatContextForSystemPrompt(userContext));
+      return assemble(
+        head,
+        this.userContextService.formatContextForSystemPrompt(userContext, { includeQuickStats: false }),
+      );
     } catch (error) {
       this.logger.warn('Failed to fetch user context for system prompt', {
         userId: context.userId,
@@ -1345,9 +1356,7 @@ Communication style:
       const actionsEnabled = await this.featureService.isFeatureEnabled('actions');
 
       if (actionsEnabled) {
-        const actions = (await this.actionService.findAll(context))
-          .filter((action) => !action.dismissed)
-          .slice(0, 8);
+        const actions = await this.actionService.findAll(context, { dismissed: false, limit: 8 });
 
         if (actions.length > 0) {
           lines.push('Actions:');
@@ -1386,7 +1395,14 @@ Communication style:
 
   private async buildStatsBlock(context: ReturnType<typeof toServiceContext>): Promise<string> {
     try {
-      const answers = await this.descriptiveQuestionService.answerAll(context, {});
+      // Descriptive questions only. The full catalog also carries correlational
+      // and predictive specs, each of which is its own round trip (a
+      // correlation-engine lookup, a forecast that re-reads the metrics range)
+      // run in series — nine extra queries per chat turn to pick five facts
+      // that the descriptive specs alone supply.
+      const answers = await this.descriptiveQuestionService.answerAll(context, {
+        analyticType: 'descriptive',
+      });
       const facts = answers
         .filter((answer) => answer.value !== null && answer.provenance.coveragePct >= 50)
         .slice(0, 5);

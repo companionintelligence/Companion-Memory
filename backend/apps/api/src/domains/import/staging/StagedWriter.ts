@@ -285,11 +285,24 @@ export class StagedWriter implements ImportPipeline {
     // holding a Postgres transaction open across that would pin a pooled
     // connection for the length of the slowest read in the batch.
     const digests = await this.digestBatch(batch);
+    const plan = this.planBatch(batch, digests);
 
+    // Three set-based statements per flush, not three per record. The first
+    // shape of this writer ran one single-row INSERT per item, per entity on
+    // every edge (and a SELECT read-back plus a possible UPDATE on each
+    // conflict), and one per relationship — all awaited in series inside the
+    // transaction, ~8-12 round trips for one message with a sender, two
+    // recipients and an owner. Over a 700k-row import that was millions of
+    // sequential round trips with the connection pinned throughout.
+    //
+    // The within-batch collapse now happens in memory first (planBatch), so the
+    // statements below never carry two rows for one key; the ON CONFLICT
+    // clauses only ever meet rows an EARLIER flush or attempt wrote.
     await this.manager.transaction(async (tx) => {
-      for (const graph of batch) {
-        await this.writeGraph(tx, graph, digests);
-      }
+      const itemIds = await this.writeItems(tx, plan.items);
+      const entityIds = await this.writeEntities(tx, plan.entities);
+
+      await this.writeRelationships(tx, plan.relationships, itemIds, entityIds);
     });
   }
 
@@ -323,105 +336,279 @@ export class StagedWriter implements ImportPipeline {
     return digests;
   }
 
-  private async writeGraph(tx: EntityManager, graph: Graph, digests: BatchDigests): Promise<string | null> {
-    const itemId = graph.item ? await this.writeItem(tx, graph.item, digests) : null;
-    const entityId = graph.entity ? await this.writeEntity(tx, graph.entity) : null;
+  /**
+   * Resolve one batch to the rows it will write, collapsing repeats in memory.
+   *
+   * Pure: no I/O, no counters. Items key on `(data_source, content_hash)`,
+   * identity-keyed entities on `identity_key`, handle-less ones on the sha256 of
+   * {@link entityKey} — the same three keys the partial unique indexes enforce,
+   * so what collapses here is exactly what Postgres would have collapsed one
+   * row at a time. The FIRST sighting of a key is the row; every later sighting
+   * is a repeat, which for an item is a dedup to count and for an entity is a
+   * growth to merge (see writeEntities).
+   *
+   * Walk order is the push order: a graph's item, then its entity, then each
+   * edge's far side (item or entity), then the owner — the order the single-row
+   * writer took, so first-sighting-wins resolves the same way it always did.
+   */
+  private planBatch(batch: Graph[], digests: BatchDigests): BatchPlan {
+    const items = new Map<string, PlannedItem>();
+    const entities = new Map<string, PlannedEntity>();
+    const relationships: PlannedRelationship[] = [];
+    const seenRelationships = new Set<string>();
 
-    for (const edge of graph.edges ?? []) {
-      // An edge hangs off an item. A graph that carried only an entity has
-      // nothing for its edges to attach to, and inventing an item to hold them
-      // would stage a record the export never contained.
-      if (itemId == null) {
-        continue;
+    const planItem = (item: Item): string => {
+      const dataSource = item.dataSource ?? this.scope.dataSource;
+      const digest = digests.get(item) ?? null;
+      const contentHash = hashItem(item, dataSource, digest?.sha256);
+      const key = `${dataSource}\u0000${contentHash}`;
+      const planned = items.get(key);
+
+      if (planned) {
+        planned.repeats.push({ item, digest });
+      } else {
+        items.set(key, { key, dataSource, contentHash, item, digest, repeats: [] });
       }
 
-      const targetItemId = edge.to.item ? await this.writeItem(tx, edge.to.item, digests) : null;
-      const targetEntityId = edge.to.entity ? await this.writeEntity(tx, edge.to.entity) : null;
+      return key;
+    };
 
-      await this.writeRelationship(tx, itemId, edge.relation, edge.metadata, {
-        entityId: targetEntityId,
-        relatedItemId: targetEntityId == null ? targetItemId : null,
-      });
+    const planEntity = (parsed: Entity): string => {
+      // Every email and phone a contact states, recorded while the parser's
+      // attributes still exist — after this write only `identity_key`, the ONE
+      // smallest handle, survives. See contactIdentifiers in ./identity.
+      const entity = withContactIdentifiers(parsed);
+      const identityKey = entityIdentityKey(entity);
+      let key: string;
+      let kind: PlannedEntity['kind'];
+      let cacheKey: string | null = null;
+
+      if (identityKey != null) {
+        kind = 'identity';
+        key = `identity\u0000${identityKey}`;
+      } else {
+        kind = 'handleless';
+        cacheKey = entityKey(entity);
+        key = `handleless\u0000${cacheKey}`;
+      }
+
+      const planned = entities.get(key);
+
+      if (planned) {
+        planned.repeats.push(entity);
+      } else {
+        // The key the rule before shared handles and phone extensions were
+        // passed over gave this entity (legacyEntityIdentityKey), kept only where
+        // it differs: an existing `ci.entities` row was minted under it, and the
+        // push moves that row onto the new key rather than minting a second one.
+        // On a conflict the FIRST card's legacy key stands, like its name does.
+        const legacy = legacyEntityIdentityKey(entity);
+
+        entities.set(key, {
+          key,
+          kind,
+          identityKey,
+          // Hashed because `entityKey` embeds the attribute JSON and has no
+          // length bound, while a btree index entry does.
+          dedupeKey: cacheKey == null ? null : createHash('sha256').update(cacheKey).digest('hex'),
+          cacheKey,
+          first: entity,
+          type: resolveEntityType(entity),
+          legacyIdentityKey: legacy !== identityKey ? legacy : null,
+          repeats: [],
+        });
+      }
+
+      return key;
+    };
+
+    const planRelationship = (
+      itemKey: string,
+      relation: string | null,
+      metadata: Metadata | undefined,
+      target: { entityKey: string | null; relatedItemKey: string | null },
+    ): void => {
+      if (target.entityKey == null && target.relatedItemKey == null) {
+        return;
+      }
+
+      // The two partial unique indexes treat NULL relations as equal (NULLS NOT
+      // DISTINCT), so a null relation is one value here too.
+      const dedupe = `${itemKey}\u0001${target.entityKey ?? ''}\u0001${target.relatedItemKey ?? ''}\u0001${
+        relation ?? '\u0000'
+      }`;
+
+      if (seenRelationships.has(dedupe)) {
+        return;
+      }
+
+      seenRelationships.add(dedupe);
+      relationships.push({ itemKey, relation, metadata, ...target });
+    };
+
+    for (const graph of batch) {
+      const itemKey = graph.item ? planItem(graph.item) : null;
+
+      if (graph.entity) {
+        planEntity(graph.entity);
+      }
+
+      for (const edge of graph.edges ?? []) {
+        // An edge hangs off an item. A graph that carried only an entity has
+        // nothing for its edges to attach to, and inventing an item to hold them
+        // would stage a record the export never contained.
+        if (itemKey == null) {
+          continue;
+        }
+
+        const targetItemKey = edge.to.item ? planItem(edge.to.item) : null;
+        const targetEntityKey = edge.to.entity ? planEntity(edge.to.entity) : null;
+
+        planRelationship(itemKey, edge.relation, edge.metadata, {
+          entityKey: targetEntityKey,
+          relatedItemKey: targetEntityKey == null ? targetItemKey : null,
+        });
+      }
+
+      // The owner is a participant like any other, expressed as an edge so the
+      // push has one shape to read rather than a special case.
+      if (itemKey != null && graph.item?.owner) {
+        planRelationship(itemKey, 'owner', undefined, {
+          entityKey: planEntity(graph.item.owner),
+          relatedItemKey: null,
+        });
+      }
     }
 
-    // The owner is a participant like any other, expressed as an edge so the
-    // push has one shape to read rather than a special case.
-    if (itemId != null && graph.item?.owner) {
-      const ownerId = await this.writeEntity(tx, graph.item.owner);
-
-      await this.writeRelationship(tx, itemId, 'owner', undefined, {
-        entityId: ownerId,
-        relatedItemId: null,
-      });
-    }
-
-    return itemId ?? entityId;
+    return { items: [...items.values()], entities: [...entities.values()], relationships };
   }
 
-  private async writeItem(tx: EntityManager, item: Item, digests: BatchDigests): Promise<string> {
-    // An item may name a different source than the importer running the job:
-    // the Fitbit parser also reads the Google Fit half of one Takeout, and those
-    // records are Google Fit's — they must stage (and dedup) as `google_fit`.
-    const dataSource = item.dataSource ?? this.scope.dataSource;
-    const digest = digests.get(item) ?? null;
-    const contentHash = hashItem(item, dataSource, digest?.sha256);
+  /**
+   * One INSERT for every distinct item in the batch, then one SELECT for the
+   * ones the run already had. Returns the staged id for every planned key.
+   *
+   * `jsonb_to_recordset` carries the rows as a single parameter, so a batch of
+   * any width is one statement with one bind; each row's `ord` (`ORDER BY t.ord`)
+   * keeps insertion in push order, which is what `ORDER BY id` on the uuid v7
+   * primary key means to every later stage.
+   */
+  private async writeItems(tx: EntityManager, planned: PlannedItem[]): Promise<Map<string, string>> {
+    const ids = new Map<string, string>();
 
-    const rows = await tx.query<Array<{ id: string; inserted: boolean }>>(
+    if (planned.length === 0) {
+      return ids;
+    }
+
+    const rows = planned.map((entry, ord) => ({
+      ord,
+      run_id: this.scope.runId,
+      user_id: this.scope.userId,
+      data_source: entry.dataSource,
+      classification: entry.item.classification ?? null,
+      content_hash: entry.contentHash,
+      // dateToIso rejects an Invalid Date (NaN getTime()) rather than letting
+      // it reach the timestamptz cast -- hashItem already applies this same
+      // normalization to these fields, this reuses it at the actual insert site.
+      occurred_at: dateToIso(entry.item.timestamp),
+      timespan_end: dateToIso(entry.item.timespanEnd),
+      latitude: entry.item.location?.latitude ?? null,
+      longitude: entry.item.location?.longitude ?? null,
+      filename: entry.item.content?.filename ?? null,
+      media_type: entry.item.content?.mediaType ?? null,
+      original_location: entry.item.originalLocation ?? null,
+      intermediate_location: entry.item.intermediateLocation ?? null,
+      metadata: entry.item.metadata ?? {},
+      content_sha256: entry.digest?.sha256 ?? null,
+      size_bytes: entry.digest?.sizeBytes ?? null,
+    }));
+
+    const inserted = await tx.query<Array<{ id: string; data_source: string; content_hash: string }>>(
       `INSERT INTO ci_import.staged_items
          (run_id, user_id, data_source, classification, content_hash, occurred_at, timespan_end,
           latitude, longitude, filename, media_type, original_location, intermediate_location, metadata,
           content_sha256, size_bytes)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::timestamptz, $7::timestamptz,
-               $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16::bigint)
+       SELECT t.run_id, t.user_id, t.data_source, t.classification, t.content_hash, t.occurred_at,
+              t.timespan_end, t.latitude, t.longitude, t.filename, t.media_type, t.original_location,
+              t.intermediate_location, t.metadata, t.content_sha256, t.size_bytes
+         FROM jsonb_to_recordset($1::jsonb) AS t(
+                run_id uuid, user_id uuid, data_source text, classification text, content_hash text,
+                occurred_at timestamptz, timespan_end timestamptz, latitude double precision,
+                longitude double precision, filename text, media_type text, original_location text,
+                intermediate_location text, metadata jsonb, content_sha256 text, size_bytes bigint,
+                ord bigint)
+        ORDER BY t.ord
        ON CONFLICT (run_id, data_source, content_hash) DO NOTHING
-       RETURNING id, true AS inserted`,
-      [
-        this.scope.runId,
-        this.scope.userId,
-        dataSource,
-        item.classification ?? null,
-        contentHash,
-        // dateToIso rejects an Invalid Date (NaN getTime()) rather than
-        // letting it reach the pg driver's timestamptz bind serialization --
-        // hashItem already applies this same normalization to these fields,
-        // this reuses it at the actual insert site.
-        dateToIso(item.timestamp),
-        dateToIso(item.timespanEnd),
-        item.location?.latitude ?? null,
-        item.location?.longitude ?? null,
-        item.content?.filename ?? null,
-        item.content?.mediaType ?? null,
-        item.originalLocation ?? null,
-        item.intermediateLocation ?? null,
-        JSON.stringify(item.metadata ?? {}),
-        digest?.sha256 ?? null,
-        digest?.sizeBytes ?? null,
-      ],
+       RETURNING id, data_source, content_hash`,
+      [JSON.stringify(rows)],
     );
 
-    if (rows.length > 0) {
-      this.counts.items += 1;
+    const insertedKeys = new Set<string>();
 
-      return rows[0].id;
+    for (const row of inserted) {
+      const key = `${row.data_source}\u0000${row.content_hash}`;
+
+      ids.set(key, row.id);
+      insertedKeys.add(key);
     }
 
-    // `DO NOTHING` returns nothing on conflict, so the duplicate is read back.
-    // This is the album-replicated photo collapsing, and it is counted rather
-    // than silently swallowed — "we staged 4,000 of your 12,000 photo files" is
-    // a question people ask.
-    this.counts.itemsDeduped += 1;
+    this.counts.items += inserted.length;
 
-    const existing = await tx.query<
-      Array<{ id: string; intermediate_location: string | null; content_sha256: string | null }>
-    >(
-      `SELECT id, intermediate_location, content_sha256 FROM ci_import.staged_items
-        WHERE run_id = $1::uuid AND data_source = $2 AND content_hash = $3`,
-      [this.scope.runId, dataSource, contentHash],
-    );
+    // `DO NOTHING` returns nothing on conflict, so the duplicates are read back
+    // in one go. This is the album-replicated photo collapsing, and it is counted
+    // rather than silently swallowed — "we staged 4,000 of your 12,000 photo
+    // files" is a question people ask.
+    const missed = planned.filter((entry) => !insertedKeys.has(entry.key));
+    const existingByKey = new Map<string, ExistingItemRow>();
 
-    this.recordCollapse(item, digest, existing[0]);
+    if (missed.length > 0) {
+      const existing = await tx.query<ExistingItemRow[]>(
+        `SELECT id, data_source, content_hash, intermediate_location, content_sha256
+           FROM ci_import.staged_items
+          WHERE run_id = $1::uuid
+            AND (data_source, content_hash) IN (
+                  SELECT data_source, content_hash
+                    FROM jsonb_to_recordset($2::jsonb) AS k(data_source text, content_hash text))`,
+        [
+          this.scope.runId,
+          JSON.stringify(
+            missed.map((entry) => ({ data_source: entry.dataSource, content_hash: entry.contentHash })),
+          ),
+        ],
+      );
 
-    return existing[0].id;
+      for (const row of existing) {
+        existingByKey.set(`${row.data_source}\u0000${row.content_hash}`, row);
+      }
+    }
+
+    for (const entry of planned) {
+      const existing = existingByKey.get(entry.key);
+
+      if (!insertedKeys.has(entry.key)) {
+        if (existing == null) {
+          throw new Error('staged item conflicted on its content hash but could not be read back');
+        }
+
+        ids.set(entry.key, existing.id);
+        this.counts.itemsDeduped += 1;
+        this.recordCollapse(entry.item, entry.digest, existing);
+      }
+
+      // A repeat within the batch collapsed onto the first sighting — or, when
+      // the first sighting itself conflicted, onto the row an earlier flush
+      // wrote, which is what its read-back would have shown it.
+      const collapsedOnto: ExistingLike = existing ?? {
+        intermediate_location: entry.item.intermediateLocation ?? null,
+        content_sha256: entry.digest?.sha256 ?? null,
+      };
+
+      for (const repeat of entry.repeats) {
+        this.counts.itemsDeduped += 1;
+        this.recordCollapse(repeat.item, repeat.digest, collapsedOnto);
+      }
+    }
+
+    return ids;
   }
 
   /**
@@ -460,208 +647,316 @@ export class StagedWriter implements ImportPipeline {
     this.drop(COLLAPSED_DISTINCT_PATH);
   }
 
-  private async writeEntity(tx: EntityManager, parsed: Entity): Promise<string> {
-    // Every email and phone a contact states, recorded while the parser's
-    // attributes still exist — after this write only `identity_key`, the ONE
-    // smallest handle, survives. See contactIdentifiers in ./identity.
-    const entity = withContactIdentifiers(parsed);
-    const identityKey = entityIdentityKey(entity);
-    const type = resolveEntityType(entity);
-    const metadata = (entity.metadata ?? {}) as Metadata;
-    // The key the rule before shared handles and phone extensions were passed
-    // over gave this entity (legacyEntityIdentityKey), kept only where it
-    // differs: an existing `ci.entities` row was minted under it, and the push
-    // moves that row onto the new key rather than minting a second one.
-    // On a conflict the FIRST card's legacy key stands, like its name does.
-    const legacy = legacyEntityIdentityKey(entity);
-    const legacyIdentityKey = legacy !== identityKey ? legacy : null;
+  /**
+   * One INSERT per entity path (identity-keyed, handle-less), one read-back of
+   * the rows the run already had, then one UPDATE for every row this batch
+   * grew. Returns the staged id for every planned key.
+   *
+   * Growth is sequential per key, in sighting order, exactly as the single-row
+   * writer's read-merge-write loop was: a row an earlier flush wrote starts from
+   * its stored metadata and takes every sighting in this batch; a row this
+   * batch inserted starts from its first sighting and takes the rest.
+   * `graph_dirty` is set alongside, because the push resumes from a high-water
+   * mark: a row that changed after it was already sent would otherwise never be
+   * revisited. So is the union of the sightings' `accumulate` lists, since the
+   * keys this batch grew must be unioned — not replaced — at push time too.
+   */
+  private async writeEntities(tx: EntityManager, planned: PlannedEntity[]): Promise<Map<string, string>> {
+    const ids = new Map<string, string>();
 
-    if (identityKey == null) {
-      return this.writeHandlelessEntity(tx, entity, type, metadata, legacyIdentityKey);
+    if (planned.length === 0) {
+      return ids;
     }
 
-    const rows = await tx.query<Array<{ id: string; metadata: Record<string, unknown> }>>(
+    const identityKeyed = planned.filter((entry) => entry.kind === 'identity');
+    // Handle-less entities with a handle cannot share the identity index — they
+    // would all collide on NULL — so they collapse on `(run_id, dedupe_key)`.
+    // The in-process map is a cache in front of that index, not the dedup
+    // itself: a StagedWriter is constructed per parse ATTEMPT, so a resume after
+    // a crash starts with an empty map and — before the index — simply
+    // re-inserted everything the dead attempt had already written.
+    const handleless = planned.filter((entry) => entry.kind === 'handleless');
+    const cached = handleless.filter((entry) => this.handleless.has(entry.cacheKey!));
+    const uncached = handleless.filter((entry) => !this.handleless.has(entry.cacheKey!));
+
+    const insertRows = (entries: PlannedEntity[]) =>
+      entries.map((entry, ord) => ({
+        ord,
+        run_id: this.scope.runId,
+        user_id: this.scope.userId,
+        type: entry.type,
+        name: entry.first.name ?? null,
+        metadata: entry.first.metadata ?? {},
+        identity_key: entry.identityKey,
+        data_source: this.scope.dataSource,
+        dedupe_key: entry.dedupeKey,
+        legacy_identity_key: entry.legacyIdentityKey,
+        accumulate: declaredAccumulate(entry.first),
+      }));
+
+    const insertSql = (conflict: string, returning: string) =>
       `INSERT INTO ci_import.staged_entities
-              (run_id, user_id, type, name, metadata, identity_key, data_source, legacy_identity_key, accumulate)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8, $9::text[])
-       ON CONFLICT (run_id, identity_key) WHERE identity_key IS NOT NULL DO NOTHING
-         RETURNING id, metadata`,
-      [
-        this.scope.runId,
-        this.scope.userId,
-        type,
-        entity.name ?? null,
-        JSON.stringify(metadata),
-        identityKey,
-        this.scope.dataSource,
-        legacyIdentityKey,
-        declaredAccumulate(entity),
-      ],
-    );
+         (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key, legacy_identity_key, accumulate)
+       SELECT t.run_id, t.user_id, t.type, t.name, t.metadata, t.identity_key, t.data_source, t.dedupe_key,
+              t.legacy_identity_key, t.accumulate
+         FROM jsonb_to_recordset($1::jsonb) AS t(
+                run_id uuid, user_id uuid, type text, name text, metadata jsonb, identity_key text,
+                data_source text, dedupe_key text, legacy_identity_key text, accumulate text[], ord bigint)
+        ORDER BY t.ord
+       ON CONFLICT ${conflict} DO NOTHING
+       RETURNING id, ${returning}`;
 
-    if (rows.length > 0) {
-      this.counts.entities += 1;
+    const insertedKeys = new Set<string>();
+    // Rows that must be read back: a stored row to grow onto, or an insert that
+    // conflicted with an earlier flush or attempt.
+    const existingByKey = new Map<string, StoredEntityRow>();
 
-      return rows[0].id;
+    if (identityKeyed.length > 0) {
+      const inserted = await tx.query<Array<{ id: string; identity_key: string }>>(
+        insertSql('(run_id, identity_key) WHERE identity_key IS NOT NULL', 'identity_key'),
+        [JSON.stringify(insertRows(identityKeyed))],
+      );
+
+      for (const row of inserted) {
+        const key = `identity\u0000${row.identity_key}`;
+
+        ids.set(key, row.id);
+        insertedKeys.add(key);
+      }
+
+      const missed = identityKeyed.filter((entry) => !insertedKeys.has(entry.key));
+
+      if (missed.length > 0) {
+        const existing = await tx.query<Array<StoredEntityRow & { identity_key: string }>>(
+          `SELECT id, metadata, accumulate, identity_key FROM ci_import.staged_entities
+            WHERE run_id = $1::uuid AND identity_key = ANY($2::text[])`,
+          [this.scope.runId, missed.map((entry) => entry.identityKey)],
+        );
+
+        for (const row of existing) {
+          existingByKey.set(`identity\u0000${row.identity_key}`, row);
+        }
+      }
     }
 
-    const existing = await tx.query<StoredEntityRow[]>(
-      `SELECT id, metadata, accumulate FROM ci_import.staged_entities
-        WHERE run_id = $1::uuid AND identity_key = $2`,
-      [this.scope.runId, identityKey],
-    );
+    if (uncached.length > 0) {
+      const inserted = await tx.query<Array<{ id: string; dedupe_key: string }>>(
+        insertSql('(run_id, dedupe_key) WHERE dedupe_key IS NOT NULL', 'dedupe_key'),
+        [JSON.stringify(insertRows(uncached))],
+      );
+      const byDedupeKey = new Map(uncached.map((entry) => [entry.dedupeKey!, entry]));
 
-    await this.growEntity(tx, existing[0], entity);
+      for (const row of inserted) {
+        const entry = byDedupeKey.get(row.dedupe_key)!;
 
-    return existing[0].id;
-  }
+        ids.set(entry.key, row.id);
+        insertedKeys.add(entry.key);
+      }
 
-  private async writeHandlelessEntity(
-    tx: EntityManager,
-    entity: Entity,
-    type: string | null,
-    metadata: Metadata,
-    legacyIdentityKey: string | null,
-  ): Promise<string> {
-    const key = entityKey(entity);
-    // Hashed because `entityKey` embeds the attribute JSON and has no length
-    // bound, while a btree index entry does.
-    const dedupeKey = createHash('sha256').update(key).digest('hex');
-    const seen = this.handleless.get(key);
+      // A previous attempt wrote it. Read it back and accumulate onto it, exactly
+      // as a repeat sighting within one attempt would — the resumed parse is
+      // replaying records the dead one had already seen, and treating them as
+      // new is what produced the duplicate edges alongside the duplicate rows.
+      const missed = uncached.filter((entry) => !insertedKeys.has(entry.key));
 
-    if (seen != null) {
+      if (missed.length > 0) {
+        const existing = await tx.query<Array<StoredEntityRow & { dedupe_key: string }>>(
+          `SELECT id, metadata, accumulate, dedupe_key FROM ci_import.staged_entities
+            WHERE run_id = $1::uuid AND dedupe_key = ANY($2::text[])`,
+          [this.scope.runId, missed.map((entry) => entry.dedupeKey)],
+        );
+
+        for (const row of existing) {
+          existingByKey.set(byDedupeKey.get(row.dedupe_key)!.key, row);
+        }
+      }
+    }
+
+    if (cached.length > 0) {
       // A recurring handle-less entity still accumulates. Dishes are the whole
       // reason: an Uber Eats croissant has no phone number, so it takes this
       // path, and its price on a second morning is a fact the first sighting
       // cannot carry. Growing only the identity-keyed path silently dropped
       // every one of them.
-      const rows = await tx.query<StoredEntityRow[]>(
-        `SELECT id, metadata, accumulate FROM ci_import.staged_entities WHERE id = $1::uuid`,
-        [seen],
+      const byId = new Map(cached.map((entry) => [this.handleless.get(entry.cacheKey!)!, entry]));
+      const existing = await tx.query<StoredEntityRow[]>(
+        `SELECT id, metadata, accumulate FROM ci_import.staged_entities WHERE id = ANY($1::uuid[])`,
+        [[...byId.keys()]],
       );
 
-      await this.growEntity(tx, rows[0] ?? { id: seen, metadata: {}, accumulate: null }, entity);
+      for (const row of existing) {
+        existingByKey.set(byId.get(row.id)!.key, row);
+      }
 
-      return seen;
+      for (const [id, entry] of byId) {
+        existingByKey.set(entry.key, existingByKey.get(entry.key) ?? { id, metadata: {}, accumulate: null });
+      }
     }
 
-    // ON CONFLICT against `staged_entities_run_dedupe_uniq`, mirroring the
-    // identity-keyed path above. The in-process map is a cache in front of this,
-    // not the dedup itself: a StagedWriter is constructed per parse ATTEMPT, so
-    // a resume after a crash starts with an empty map and — before this — simply
-    // re-inserted everything the dead attempt had already written.
-    const rows = await tx.query<Array<{ id: string }>>(
-      `INSERT INTO ci_import.staged_entities
-              (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key, legacy_identity_key, accumulate)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NULL, $6, $7, $8, $9::text[])
-         ON CONFLICT (run_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-         RETURNING id`,
-      [
-        this.scope.runId,
-        this.scope.userId,
-        type,
-        entity.name ?? null,
-        JSON.stringify(metadata),
-        this.scope.dataSource,
-        dedupeKey,
-        legacyIdentityKey,
-        declaredAccumulate(entity),
-      ],
-    );
+    const grown: Array<{ id: string; metadata: Record<string, unknown>; accumulate: string[] | null }> = [];
 
-    if (rows.length > 0) {
-      this.counts.entities += 1;
-      this.handleless.set(key, rows[0].id);
+    for (const entry of planned) {
+      const inserted = insertedKeys.has(entry.key);
+      const existing = existingByKey.get(entry.key);
 
-      return rows[0].id;
+      if (inserted) {
+        this.counts.entities += 1;
+      } else {
+        if (existing == null) {
+          throw new Error(
+            entry.kind === 'identity'
+              ? 'staged entity conflicted on its identity key but could not be read back'
+              : 'staged entity conflicted on its dedupe key but could not be read back',
+          );
+        }
+
+        ids.set(entry.key, existing.id);
+      }
+
+      if (entry.cacheKey != null) {
+        this.handleless.set(entry.cacheKey, ids.get(entry.key)!);
+      }
+
+      let current: { metadata: Record<string, unknown>; accumulate: string[] | null } = inserted
+        ? { metadata: entry.first.metadata ?? {}, accumulate: declaredAccumulate(entry.first) }
+        : { metadata: existing!.metadata ?? {}, accumulate: existing!.accumulate };
+      let dirty = false;
+
+      for (const sighting of inserted ? entry.repeats : [entry.first, ...entry.repeats]) {
+        const merged = mergeAccumulatedMetadata(current.metadata, sighting);
+
+        if (merged == null) {
+          continue;
+        }
+
+        current = { metadata: merged, accumulate: declaredAccumulate(sighting, current.accumulate) };
+        dirty = true;
+        this.counts.entitiesGrown += 1;
+      }
+
+      if (dirty) {
+        grown.push({ id: ids.get(entry.key)!, ...current });
+      }
     }
 
-    // A previous attempt wrote it. Read it back and accumulate onto it, exactly
-    // as a repeat sighting within one attempt would — the resumed parse is
-    // replaying records the dead one had already seen, and treating them as new
-    // is what produced the duplicate edges alongside the duplicate rows.
-    const existing = await tx.query<StoredEntityRow[]>(
-      `SELECT id, metadata, accumulate FROM ci_import.staged_entities
-        WHERE run_id = $1::uuid AND dedupe_key = $2`,
-      [this.scope.runId, dedupeKey],
-    );
-
-    if (existing.length === 0) {
-      throw new Error('staged entity conflicted on its dedupe key but could not be read back');
+    if (grown.length > 0) {
+      await tx.query(
+        `UPDATE ci_import.staged_entities AS s
+            SET metadata = t.metadata, graph_dirty = true, accumulate = t.accumulate
+           FROM jsonb_to_recordset($1::jsonb) AS t(id uuid, metadata jsonb, accumulate text[])
+          WHERE s.id = t.id`,
+        [JSON.stringify(grown)],
+      );
     }
 
-    await this.growEntity(tx, existing[0], entity);
-    this.handleless.set(key, existing[0].id);
-
-    return existing[0].id;
+    return ids;
   }
 
   /**
-   * Grow an existing entity's accumulating keys with this sighting.
-   *
-   * `graph_dirty` is set alongside, because the push resumes from a high-water
-   * mark: a row that changed after it was already sent would otherwise never be
-   * revisited. So is the union of the two sightings' `accumulate` lists, since
-   * the keys this one grew must be unioned — not replaced — at push time too.
+   * One INSERT per target kind. Two partial unique indexes rather than one over
+   * both target columns, so the ON CONFLICT target has to name the one that
+   * applies — a combined index would read every item→item row as
+   * (item_id, NULL, relation) and collapse edges pointing at different items.
    */
-  private async growEntity(tx: EntityManager, stored: StoredEntityRow, entity: Entity): Promise<void> {
-    const merged = mergeAccumulatedMetadata(stored.metadata ?? {}, entity);
-
-    if (merged == null) {
-      return;
-    }
-
-    await tx.query(
-      `UPDATE ci_import.staged_entities
-          SET metadata = $2::jsonb, graph_dirty = true, accumulate = $3::text[]
-        WHERE id = $1::uuid`,
-      [stored.id, JSON.stringify(merged), declaredAccumulate(entity, stored.accumulate)],
-    );
-
-    this.counts.entitiesGrown += 1;
-  }
-
-  private async writeRelationship(
+  private async writeRelationships(
     tx: EntityManager,
-    itemId: string,
-    relation: string | null,
-    metadata: Metadata | undefined,
-    target: { entityId: string | null; relatedItemId: string | null },
+    planned: PlannedRelationship[],
+    itemIds: Map<string, string>,
+    entityIds: Map<string, string>,
   ): Promise<void> {
-    if (target.entityId == null && target.relatedItemId == null) {
-      return;
-    }
+    const rows = planned.map((edge, ord) => ({
+      ord,
+      run_id: this.scope.runId,
+      item_id: itemIds.get(edge.itemKey)!,
+      entity_id: edge.entityKey == null ? null : entityIds.get(edge.entityKey)!,
+      related_item_id: edge.relatedItemKey == null ? null : itemIds.get(edge.relatedItemKey)!,
+      relation: edge.relation,
+      metadata: edge.metadata ?? {},
+    }));
 
-    // Two partial unique indexes rather than one over both target columns, so
-    // the ON CONFLICT target has to name the one that applies — a combined index
-    // would read every item→item row as (item_id, NULL, relation) and collapse
-    // edges pointing at different items.
-    const conflictTarget =
-      target.entityId != null
-        ? '(item_id, entity_id, relation) WHERE entity_id IS NOT NULL'
-        : '(item_id, related_item_id, relation) WHERE related_item_id IS NOT NULL';
+    const targets: Array<{ rows: typeof rows; conflict: string }> = [
+      {
+        rows: rows.filter((row) => row.entity_id != null),
+        conflict: '(item_id, entity_id, relation) WHERE entity_id IS NOT NULL',
+      },
+      {
+        rows: rows.filter((row) => row.entity_id == null),
+        conflict: '(item_id, related_item_id, relation) WHERE related_item_id IS NOT NULL',
+      },
+    ];
 
-    const rows = await tx.query<unknown[]>(
-      `INSERT INTO ci_import.staged_relationships
-         (run_id, item_id, entity_id, related_item_id, relation, metadata)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::jsonb)
-       ON CONFLICT ${conflictTarget} DO NOTHING
-       RETURNING id`,
-      [
-        this.scope.runId,
-        itemId,
-        target.entityId,
-        target.relatedItemId,
-        relation,
-        JSON.stringify(metadata ?? {}),
-      ],
-    );
+    for (const target of targets) {
+      if (target.rows.length === 0) {
+        continue;
+      }
 
-    if (rows.length > 0) {
-      this.counts.relationships += 1;
+      const inserted = await tx.query<unknown[]>(
+        `INSERT INTO ci_import.staged_relationships
+           (run_id, item_id, entity_id, related_item_id, relation, metadata)
+         SELECT t.run_id, t.item_id, t.entity_id, t.related_item_id, t.relation, t.metadata
+           FROM jsonb_to_recordset($1::jsonb) AS t(
+                  run_id uuid, item_id uuid, entity_id uuid, related_item_id uuid, relation text,
+                  metadata jsonb, ord bigint)
+          ORDER BY t.ord
+         ON CONFLICT ${target.conflict} DO NOTHING
+         RETURNING id`,
+        [JSON.stringify(target.rows)],
+      );
+
+      this.counts.relationships += inserted.length;
     }
   }
 }
+
+/** An item in the batch, resolved to its staging key, plus the sightings that collapsed onto it. */
+interface PlannedItem {
+  key: string;
+  dataSource: string;
+  contentHash: string;
+  item: Item;
+  digest: ContentDigest | null;
+  repeats: Array<{ item: Item; digest: ContentDigest | null }>;
+}
+
+/** An entity in the batch, resolved to the key it collapses on, plus every later sighting. */
+interface PlannedEntity {
+  key: string;
+  kind: 'identity' | 'handleless';
+  identityKey: string | null;
+  dedupeKey: string | null;
+  /** {@link entityKey}, for the handle-less cache. Null on the identity-keyed path. */
+  cacheKey: string | null;
+  /** The first sighting — the row — with its contact identifiers already recorded. */
+  first: Entity;
+  type: string | null;
+  legacyIdentityKey: string | null;
+  repeats: Entity[];
+}
+
+interface PlannedRelationship {
+  itemKey: string;
+  relation: string | null;
+  metadata: Metadata | undefined;
+  entityKey: string | null;
+  relatedItemKey: string | null;
+}
+
+interface BatchPlan {
+  items: PlannedItem[];
+  entities: PlannedEntity[];
+  relationships: PlannedRelationship[];
+}
+
+interface ExistingItemRow {
+  id: string;
+  data_source: string;
+  content_hash: string;
+  intermediate_location: string | null;
+  content_sha256: string | null;
+}
+
+/** What a collapse is judged against: the row the duplicate landed on. */
+type ExistingLike = { intermediate_location: string | null; content_sha256: string | null };
 
 /** Every item a batch will write, including the far side of each edge. */
 function collectItems(batch: Graph[]): Item[] {

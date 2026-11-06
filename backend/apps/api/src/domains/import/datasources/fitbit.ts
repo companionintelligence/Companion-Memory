@@ -18,14 +18,15 @@
    an export here used to import nothing and still report success.
 */
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { GoogleFitFileImporter } from './google_fit';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { Graph, ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const SLEEP_FILE_RE = /^sleep-\d{4}-\d{2}-\d{2}\.json$/i;
 // Confidence for an export holding only the Google Fit half. Deliberately below
@@ -43,25 +44,6 @@ interface SleepRecord {
   minutesAwake?: number;
   efficiency?: number;
   duration?: number;
-}
-
-async function readJson(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  if (raw.charCodeAt(0) === 0xfeff) {
-    raw = raw.slice(1);
-  } // strip UTF-8 BOM
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 // A parsed value looks like a Fitbit sleep export when it is a non-empty array
@@ -196,13 +178,13 @@ export class FitbitFileImporter implements FileImporter {
         return { confidence: 0 };
       }
 
-      return isSleepExport(await readJson(root)) ? { confidence: 0.95 } : { confidence: 0 };
+      return isSleepExport(await readJsonFile(root)) ? { confidence: 0.95 } : { confidence: 0 };
     }
 
     if (st.isDirectory()) {
       const found = await findSleepFiles(root);
       for (const f of found) {
-        if (isSleepExport(await readJson(f))) {
+        if (isSleepExport(await readJsonFile(f))) {
           return { confidence: 0.9 };
         }
       }
@@ -341,7 +323,7 @@ export class FitbitFileImporter implements FileImporter {
         classification: 'sleep',
         timestamp: ts,
         timespanEnd: tsEnd,
-        content: { filename: 'sleep.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('sleep.txt', summary),
         metadata: {
           Title: summary,
           'Minutes Asleep': minutesAsleep,

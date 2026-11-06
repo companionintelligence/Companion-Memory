@@ -8,7 +8,7 @@ import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media'
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, MediaAttachment } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // iOS 12-hr: [M/D/YY, H:MM:SS AM] Sender: message
 // iOS 24-hr: [M/D/YY, H:MM:SS] Sender: message  (common outside US)
@@ -389,7 +389,7 @@ export class WhatsAppFileImporter implements FileImporter {
           classification: loc ? 'location' : 'message',
           timestamp: p.ts,
           ...(loc && { location: loc }),
-          content: { filename: '_chat.txt', mediaType: 'text/plain', data: async () => Buffer.from(p.text) },
+          content: textContent('_chat.txt', p.text),
           metadata: {
             Sender: p.sender,
             Conversation: conversationName,
