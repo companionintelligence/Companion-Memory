@@ -5,6 +5,18 @@ upstream projects legally require us to reproduce. It is not a full dependency
 list — see [THIRD_PARTY.md](THIRD_PARTY.md) for that, and [CREDITS.md](CREDITS.md)
 for acknowledgements.
 
+<!-- hand-authored: do not regenerate this section -->
+## Upstream-derived test data
+
+Three binary test vectors under
+`backend/apps/api/src/domains/identikey/__tests__/fixtures/auth-v1/` are copied unmodified from
+[identikey/identikey-protocol](https://github.com/identikey/identikey-protocol)
+(`crates/identikey-auth/tests/fixtures/`, commit `e4fe668c7e6b21d6fb103d755dffcef86dd286e1`),
+Copyright © 2026 Identikey Inc. (<https://identikey.io>). Upstream licenses them under your choice of
+Apache-2.0 or BSD-2-Clause-Patent. That directory's `README.md` records their checksums and how the
+other vectors beside them were produced.
+<!-- end hand-authored -->
+
 ## Copyleft and reciprocal-licence dependencies
 
 These dependencies carry obligations beyond retaining a notice. Review before

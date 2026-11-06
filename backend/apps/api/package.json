@@ -56,6 +56,8 @@
     "@nestjs/platform-express": "^12.3.2",
     "@nestjs/schedule": "^12.0.2",
     "@nestjs/typeorm": "^12.0.2",
+    "@noble/hashes": "1.8.0",
+    "@noble/post-quantum": "0.4.1",
     "@sentry/nestjs": "^11.10.0",
     "adm-zip": "^0.6.0",
     "bcrypt": "^6.0.0",
