@@ -342,6 +342,12 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
     Ok(binary_path)
 }
 
+/// Lowercase hex of a digest. sha2 0.11 returns a `hybrid_array::Array`, which has no `LowerHex`
+/// impl, so `format!("{:x}", hasher.finalize())` no longer compiles.
+fn hex_lower(digest: &[u8]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn verify_checksum(path: &Path, expected_hex: &str) -> Result<(), String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -353,7 +359,7 @@ fn verify_checksum(path: &Path, expected_hex: &str) -> Result<(), String> {
         }
         hasher.update(&buf[..n]);
     }
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex_lower(&hasher.finalize());
     if actual != expected_hex {
         return Err(format!("Checksum mismatch for {}: expected {expected_hex}, got {actual}", path.display()));
     }
@@ -553,7 +559,7 @@ mod tests {
         let actual = {
             let mut hasher = Sha256::new();
             hasher.update(b"hello world");
-            format!("{:x}", hasher.finalize())
+            hex_lower(&hasher.finalize())
         };
         let wrong = format!("{}f", &actual[..actual.len() - 1]);
 

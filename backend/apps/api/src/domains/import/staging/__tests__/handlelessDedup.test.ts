@@ -18,46 +18,59 @@ const SCOPE = {
   dataSource: 'vcard',
 };
 
+interface InsertRow {
+  identity_key: string | null;
+  dedupe_key: string | null;
+}
+
 /**
  * A manager standing in for Postgres with the partial unique index in place:
- * an insert carrying a dedupe_key already present in this run returns no row,
- * exactly as `ON CONFLICT ... DO NOTHING` does.
+ * a row carrying a dedupe_key already present in this run is left out of what
+ * the set-based INSERT returns, exactly as `ON CONFLICT ... DO NOTHING
+ * RETURNING` does. The writer sends each statement's rows as ONE jsonb
+ * parameter (`jsonb_to_recordset`), so the stand-in reads them back from it.
  */
 function managerWithUniqueIndex(existing: Map<string, string>) {
   const inserts: string[] = [];
 
   const query = jest.fn(async (sql: string, params: unknown[]) => {
     if (sql.includes('INSERT INTO ci_import.staged_entities')) {
-      // $7, but identity_key is a literal NULL in the statement, so the
-      // bound parameter sits at index 6.
-      const dedupeKey = params[6] as string | undefined;
+      const rows = JSON.parse(params[0] as string) as InsertRow[];
+      const returned: Array<{ id: string; identity_key?: string; dedupe_key?: string }> = [];
 
-      if (dedupeKey != null) {
-        if (existing.has(dedupeKey)) {
-          return [];
+      for (const row of rows) {
+        if (row.dedupe_key == null) {
+          returned.push({ id: `entity-${existing.size + 1}`, identity_key: row.identity_key ?? undefined });
+          continue;
+        }
+
+        if (existing.has(row.dedupe_key)) {
+          continue;
         }
 
         const id = `entity-${existing.size + 1}`;
-        existing.set(dedupeKey, id);
-        inserts.push(dedupeKey);
-
-        return [{ id }];
+        existing.set(row.dedupe_key, id);
+        inserts.push(row.dedupe_key);
+        returned.push({ id, dedupe_key: row.dedupe_key });
       }
 
-      return [{ id: `entity-${existing.size + 1}` }];
+      return returned;
     }
 
-    if (
-      sql.includes('SELECT id, metadata, accumulate FROM ci_import.staged_entities') &&
-      sql.includes('dedupe_key')
-    ) {
-      const id = existing.get(params[1] as string);
+    // The read-back of rows an earlier attempt wrote, by dedupe key.
+    if (sql.includes('SELECT id, metadata, accumulate, dedupe_key')) {
+      const keys = params[1] as string[];
 
-      return id ? [{ id, metadata: {}, accumulate: null }] : [];
+      return keys.flatMap((key) => {
+        const id = existing.get(key);
+
+        return id ? [{ id, metadata: {}, accumulate: null, dedupe_key: key }] : [];
+      });
     }
 
-    if (sql.includes('UPDATE')) {
-      return [];
+    // The read-back of rows this attempt's cache already knows, by id.
+    if (sql.includes('WHERE id = ANY($1::uuid[])')) {
+      return (params[0] as string[]).map((id) => ({ id, metadata: {}, accumulate: null }));
     }
 
     return [];
@@ -108,6 +121,27 @@ describe('handle-less staged entity dedup', () => {
     writer.push(personGraph('Ada Lovelace'));
     await writer.settled();
 
+    expect(inserts).toHaveLength(1);
+  });
+
+  it('collapses repeat sightings within one BATCH before the statement is sent', async () => {
+    // Threshold 2: both sightings land in one flush, so the collapse has to
+    // happen in memory — the INSERT must carry one row, not two that would
+    // conflict with each other inside the statement.
+    const store = new Map<string, string>();
+    const { manager, inserts } = managerWithUniqueIndex(store);
+    const writer = new StagedWriter(manager as never, SCOPE, 2);
+
+    writer.push(personGraph('Ada Lovelace'));
+    writer.push(personGraph('Ada Lovelace'));
+    await writer.settled();
+
+    const insertCalls = (manager.query as jest.Mock).mock.calls.filter(([sql]) =>
+      (sql as string).includes('INSERT INTO ci_import.staged_entities'),
+    );
+
+    expect(insertCalls).toHaveLength(1);
+    expect(JSON.parse(insertCalls[0][1][0] as string)).toHaveLength(1);
     expect(inserts).toHaveLength(1);
   });
 

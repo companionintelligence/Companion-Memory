@@ -17,7 +17,7 @@ import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { headMatches } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 /** Element/emit counters threaded through the streaming parse for diagnostics. */
 interface Counters {
@@ -269,11 +269,7 @@ export class AppleHealthFileImporter implements FileImporter {
         classification: type === 'HKCategoryTypeIdentifierSleepAnalysis' ? 'sleep' : 'health',
         timestamp: ts,
         timespanEnd: parseHealthDate(attrs.endDate),
-        content: {
-          filename: 'health_record.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(`${type}: ${value} ${unit}`.trim()),
-        },
+        content: textContent('health_record.txt', `${type}: ${value} ${unit}`.trim()),
         metadata: {
           Title: type
             ? `${type.replace(/^HK\w*?Identifier/, '')}: ${value ?? ''} ${unit ?? ''}`.trim()
@@ -310,7 +306,7 @@ export class AppleHealthFileImporter implements FileImporter {
         classification: 'workout',
         timestamp: ts,
         timespanEnd: parseHealthDate(attrs.endDate),
-        content: { filename: 'workout.txt', mediaType: 'text/plain', data: async () => Buffer.from(actType) },
+        content: textContent('workout.txt', actType),
         metadata: {
           Title: actType || undefined,
           'Activity Type': actType || undefined,
@@ -343,11 +339,7 @@ export class AppleHealthFileImporter implements FileImporter {
         id: `apple_health:summary:${dateStr}`,
         classification: 'health',
         timestamp: ts,
-        content: {
-          filename: 'activity_summary.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(dateStr),
-        },
+        content: textContent('activity_summary.txt', dateStr),
         metadata: {
           Title: dateStr ? `Activity Summary ${dateStr}` : 'Activity Summary',
           Type: 'ActivitySummary',

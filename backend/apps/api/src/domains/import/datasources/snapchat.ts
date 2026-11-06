@@ -18,7 +18,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const SIGNATURE_FILES = ['snap_history.json', 'chat_history.json'];
 
@@ -228,11 +228,7 @@ export class SnapchatFileImporter implements FileImporter {
         id: `snapchat:${isSnap ? 'snap' : 'chat'}:${direction}:${username || 'unknown'}:${iso}:${seq}`,
         classification: 'message',
         timestamp: ts,
-        content: {
-          filename: 'message.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(body),
-        },
+        content: textContent('message.txt', body),
         metadata: {
           Direction: direction,
           // Without a title-bearing key, text-less snaps fall back to the

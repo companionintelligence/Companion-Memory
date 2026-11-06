@@ -34,7 +34,7 @@ import { readStore, readManifest, importGrokChats } from './_x_archive';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Item, MediaAttachment } from './timeline';
-import { timeframeContains, mimeForFile } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface TwitterOptions {
   includeRetweets?: boolean;
@@ -943,11 +943,7 @@ export class TwitterFileImporter implements FileImporter {
         classification: 'message',
         timestamp: created,
         location: coords,
-        content: {
-          filename: `${id}.txt`,
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent(`${id}.txt`, text),
         metadata: {
           Text: text,
           CommunicationType: 'post',
@@ -1022,11 +1018,7 @@ export class TwitterFileImporter implements FileImporter {
         classification: 'social',
         timestamp: created,
         location: tweetCoordinates(t),
-        content: {
-          filename: `${id}.txt`,
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(full),
-        },
+        content: textContent(`${id}.txt`, full),
         metadata: {
           Title: title,
           Text: full,
@@ -1181,11 +1173,7 @@ export class TwitterFileImporter implements FileImporter {
             id: `twitter:dm:${dm.id}`,
             classification: 'message',
             timestamp: created,
-            content: {
-              filename: `${dm.id}.txt`,
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(text),
-            },
+            content: textContent(`${dm.id}.txt`, text),
             metadata: {
               Text: text,
               CommunicationType: 'chat',

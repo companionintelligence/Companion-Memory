@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, EntityAttribute } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const SEPARATOR = '==========';
 
@@ -169,11 +169,7 @@ export class KindleFileImporter implements FileImporter {
           id,
           classification: 'annotation',
           timestamp: clip.addedOn,
-          content: {
-            filename: 'clipping.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(clip.text),
-          },
+          content: textContent('clipping.txt', clip.text),
           metadata: {
             'Clip Type': clip.clipType,
             Book: clip.bookTitle,

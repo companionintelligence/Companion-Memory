@@ -2390,15 +2390,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@capacitor/core@npm:^7.0.0":
-  version: 7.6.8
-  resolution: "@capacitor/core@npm:7.6.8"
-  dependencies:
-    tslib: "npm:^2.1.0"
-  checksum: 10c0/d3567623eff2288415473d4204b193f6774cfd56d19e75db967c71044b6574ca8e40d61d6605be393cf4e7619bae44a7ae19f83c42f0ee7bdd86bfb62fe54118
-  languageName: node
-  linkType: hard
-
 "@capacitor/core@npm:^8.6.0":
   version: 8.6.0
   resolution: "@capacitor/core@npm:8.6.0"
@@ -2451,7 +2442,7 @@ __metadata:
     "@nestjs/testing": "npm:^12.3.2"
     "@nestjs/typeorm": "npm:^12.0.2"
     "@sentry/nestjs": "npm:^11.10.0"
-    "@swc/core": "npm:^1.16.20"
+    "@swc/core": "npm:^1.16.21"
     "@swc/jest": "npm:^0.2.39"
     "@swc/register": "npm:^0.1.10"
     "@types/adm-zip": "npm:^0.6.0"
@@ -2512,7 +2503,7 @@ __metadata:
     multer: "npm:^2.5.0"
     nodemon: "npm:^3.1.10"
     ollama: "npm:^0.6.4"
-    openai: "npm:^7.45.1"
+    openai: "npm:^7.47.0"
     oxlint: "npm:^1.90.0"
     p-limit: "npm:^7.1.1"
     parse-duration: "npm:^2.1.11"
@@ -2530,7 +2521,7 @@ __metadata:
     rxjs: "npm:^7.8.1"
     supertest: "npm:^7.3.1"
     ts-node: "npm:^10.9.2"
-    tsc-alias: "npm:^1.9.9"
+    tsc-alias: "npm:^1.9.10"
     tsconfig-paths: "npm:^4.2.0"
     typedoc: "npm:^0.28.14"
     typedoc-plugin-markdown: "npm:^4.14.1"
@@ -2685,7 +2676,7 @@ __metadata:
   dependencies:
     "@ci/common": "workspace:*"
     "@ci/shadcn": "workspace:*"
-    "@floating-ui/dom": "npm:^1.0.0"
+    "@floating-ui/dom": "npm:^1.8.0"
     "@tiptap/core": "npm:^3.32.2"
     "@tiptap/extension-mention": "npm:3.32.2"
     "@tiptap/extension-text-style": "npm:^3.32.2"
@@ -2877,7 +2868,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/tool-core@workspace:backend/packages/tool-core"
   dependencies:
-    "@swc/core": "npm:^1.16.20"
+    "@swc/core": "npm:^1.16.21"
     "@swc/jest": "npm:^0.2.39"
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.6.6"
@@ -3552,6 +3543,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@floating-ui/core@npm:^1.8.0":
+  version: 1.8.0
+  resolution: "@floating-ui/core@npm:1.8.0"
+  dependencies:
+    "@floating-ui/utils": "npm:^0.2.12"
+  checksum: 10c0/cece958f6fab0f8cd7740cd57988c4f8bc5356dca39dd4c093433d44c91952c3a02c7a54d93d7ed6c078b6544d531a29f66621d2839c8bfbb4467dca6aed7df0
+  languageName: node
+  linkType: hard
+
 "@floating-ui/dom@npm:^1.0.0":
   version: 1.7.0
   resolution: "@floating-ui/dom@npm:1.7.0"
@@ -3559,6 +3559,16 @@ __metadata:
     "@floating-ui/core": "npm:^1.7.0"
     "@floating-ui/utils": "npm:^0.2.9"
   checksum: 10c0/49a7f0fbef82ba2c2f0bde7bb4812b276ae431b59e6a81427283a55cfb36c0af9cc459cbeb0bb1a5cc3efca1a332f584e123e7b1a8f0a9c94a21989b09b8c060
+  languageName: node
+  linkType: hard
+
+"@floating-ui/dom@npm:^1.8.0":
+  version: 1.8.0
+  resolution: "@floating-ui/dom@npm:1.8.0"
+  dependencies:
+    "@floating-ui/core": "npm:^1.8.0"
+    "@floating-ui/utils": "npm:^0.2.12"
+  checksum: 10c0/c32b2de7a596b69cfffa909c7028825e14f6319be1b45da529f8943c89fe16b75a49c214e800c87ded3f172353d3b99163d50072f11410488e756961b7b629cc
   languageName: node
   linkType: hard
 
@@ -3571,6 +3581,13 @@ __metadata:
     react: ">=16.8.0"
     react-dom: ">=16.8.0"
   checksum: 10c0/e855131c74e68cab505f7f44f92cd4e2efab1c125796db3116c54c0859323adae4bf697bf292ee83ac77b9335a41ad67852193d7aeace90aa2e1c4a640cafa60
+  languageName: node
+  linkType: hard
+
+"@floating-ui/utils@npm:^0.2.12":
+  version: 0.2.12
+  resolution: "@floating-ui/utils@npm:0.2.12"
+  checksum: 10c0/bb910b90d56991a62011afaf5f8e0c4b7fb6dab69403f4dd17fbd6eb25560b28d533dff9791f270b4f459852e9006a1077b5d73cbedb5e34d9424afc6a828314
   languageName: node
   linkType: hard
 
@@ -9696,13 +9713,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-darwin-arm64@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-darwin-arm64@npm:1.16.20"
-  conditions: os=darwin & cpu=arm64
-  languageName: node
-  linkType: hard
-
 "@swc/core-darwin-arm64@npm:1.16.21":
   version: 1.16.21
   resolution: "@swc/core-darwin-arm64@npm:1.16.21"
@@ -9710,10 +9720,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-darwin-x64@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-darwin-x64@npm:1.16.20"
-  conditions: os=darwin & cpu=x64
+"@swc/core-darwin-arm64@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-darwin-arm64@npm:1.16.22"
+  conditions: os=darwin & cpu=arm64
   languageName: node
   linkType: hard
 
@@ -9724,10 +9734,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-arm-gnueabihf@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-arm-gnueabihf@npm:1.16.20"
-  conditions: os=linux & cpu=arm
+"@swc/core-darwin-x64@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-darwin-x64@npm:1.16.22"
+  conditions: os=darwin & cpu=x64
   languageName: node
   linkType: hard
 
@@ -9738,10 +9748,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-arm64-gnu@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-arm64-gnu@npm:1.16.20"
-  conditions: os=linux & cpu=arm64 & libc=glibc
+"@swc/core-linux-arm-gnueabihf@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-arm-gnueabihf@npm:1.16.22"
+  conditions: os=linux & cpu=arm
   languageName: node
   linkType: hard
 
@@ -9752,10 +9762,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-arm64-musl@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-arm64-musl@npm:1.16.20"
-  conditions: os=linux & cpu=arm64 & libc=musl
+"@swc/core-linux-arm64-gnu@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-arm64-gnu@npm:1.16.22"
+  conditions: os=linux & cpu=arm64 & libc=glibc
   languageName: node
   linkType: hard
 
@@ -9766,10 +9776,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-ppc64-gnu@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-ppc64-gnu@npm:1.16.20"
-  conditions: os=linux & cpu=ppc64 & libc=glibc
+"@swc/core-linux-arm64-musl@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-arm64-musl@npm:1.16.22"
+  conditions: os=linux & cpu=arm64 & libc=musl
   languageName: node
   linkType: hard
 
@@ -9780,10 +9790,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-s390x-gnu@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-s390x-gnu@npm:1.16.20"
-  conditions: os=linux & cpu=s390x & libc=glibc
+"@swc/core-linux-ppc64-gnu@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-ppc64-gnu@npm:1.16.22"
+  conditions: os=linux & cpu=ppc64 & libc=glibc
   languageName: node
   linkType: hard
 
@@ -9794,10 +9804,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-x64-gnu@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-x64-gnu@npm:1.16.20"
-  conditions: os=linux & cpu=x64 & libc=glibc
+"@swc/core-linux-s390x-gnu@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-s390x-gnu@npm:1.16.22"
+  conditions: os=linux & cpu=s390x & libc=glibc
   languageName: node
   linkType: hard
 
@@ -9808,10 +9818,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-linux-x64-musl@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-linux-x64-musl@npm:1.16.20"
-  conditions: os=linux & cpu=x64 & libc=musl
+"@swc/core-linux-x64-gnu@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-x64-gnu@npm:1.16.22"
+  conditions: os=linux & cpu=x64 & libc=glibc
   languageName: node
   linkType: hard
 
@@ -9822,10 +9832,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-win32-arm64-msvc@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-win32-arm64-msvc@npm:1.16.20"
-  conditions: os=win32 & cpu=arm64
+"@swc/core-linux-x64-musl@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-linux-x64-musl@npm:1.16.22"
+  conditions: os=linux & cpu=x64 & libc=musl
   languageName: node
   linkType: hard
 
@@ -9836,10 +9846,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-win32-ia32-msvc@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-win32-ia32-msvc@npm:1.16.20"
-  conditions: os=win32 & cpu=ia32
+"@swc/core-win32-arm64-msvc@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-win32-arm64-msvc@npm:1.16.22"
+  conditions: os=win32 & cpu=arm64
   languageName: node
   linkType: hard
 
@@ -9850,16 +9860,23 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core-win32-x64-msvc@npm:1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core-win32-x64-msvc@npm:1.16.20"
-  conditions: os=win32 & cpu=x64
+"@swc/core-win32-ia32-msvc@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-win32-ia32-msvc@npm:1.16.22"
+  conditions: os=win32 & cpu=ia32
   languageName: node
   linkType: hard
 
 "@swc/core-win32-x64-msvc@npm:1.16.21":
   version: 1.16.21
   resolution: "@swc/core-win32-x64-msvc@npm:1.16.21"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@swc/core-win32-x64-msvc@npm:1.16.22":
+  version: 1.16.22
+  resolution: "@swc/core-win32-x64-msvc@npm:1.16.22"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
@@ -9916,22 +9933,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@swc/core@npm:^1.16.20":
-  version: 1.16.20
-  resolution: "@swc/core@npm:1.16.20"
+"@swc/core@npm:^1.16.21":
+  version: 1.16.22
+  resolution: "@swc/core@npm:1.16.22"
   dependencies:
-    "@swc/core-darwin-arm64": "npm:1.16.20"
-    "@swc/core-darwin-x64": "npm:1.16.20"
-    "@swc/core-linux-arm-gnueabihf": "npm:1.16.20"
-    "@swc/core-linux-arm64-gnu": "npm:1.16.20"
-    "@swc/core-linux-arm64-musl": "npm:1.16.20"
-    "@swc/core-linux-ppc64-gnu": "npm:1.16.20"
-    "@swc/core-linux-s390x-gnu": "npm:1.16.20"
-    "@swc/core-linux-x64-gnu": "npm:1.16.20"
-    "@swc/core-linux-x64-musl": "npm:1.16.20"
-    "@swc/core-win32-arm64-msvc": "npm:1.16.20"
-    "@swc/core-win32-ia32-msvc": "npm:1.16.20"
-    "@swc/core-win32-x64-msvc": "npm:1.16.20"
+    "@swc/core-darwin-arm64": "npm:1.16.22"
+    "@swc/core-darwin-x64": "npm:1.16.22"
+    "@swc/core-linux-arm-gnueabihf": "npm:1.16.22"
+    "@swc/core-linux-arm64-gnu": "npm:1.16.22"
+    "@swc/core-linux-arm64-musl": "npm:1.16.22"
+    "@swc/core-linux-ppc64-gnu": "npm:1.16.22"
+    "@swc/core-linux-s390x-gnu": "npm:1.16.22"
+    "@swc/core-linux-x64-gnu": "npm:1.16.22"
+    "@swc/core-linux-x64-musl": "npm:1.16.22"
+    "@swc/core-win32-arm64-msvc": "npm:1.16.22"
+    "@swc/core-win32-ia32-msvc": "npm:1.16.22"
+    "@swc/core-win32-x64-msvc": "npm:1.16.22"
     "@swc/counter": "npm:^0.1.3"
     "@swc/types": "npm:^0.1.28"
   peerDependencies:
@@ -9964,7 +9981,7 @@ __metadata:
   peerDependenciesMeta:
     "@swc/helpers":
       optional: true
-  checksum: 10c0/1dae88a3c5c9c78ed463ad6b166943249f8af3705dc523d59545811dd02a738f69f31e399e8ea0e24f64ecb9b94ded57dc2e189618e544f4dbcaa430417cc813
+  checksum: 10c0/1fecb6764b2b9ad3b5e5ce14fcc78ba8eb6226ef23e51df28f485f3ca207d9587732a61a4a4ec3c439e3fe80955128d9d4780f1976757b7d05f40d803f106781
   languageName: node
   linkType: hard
 
@@ -21632,9 +21649,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"openai@npm:^7.45.1":
-  version: 7.45.1
-  resolution: "openai@npm:7.45.1"
+"openai@npm:^7.47.0":
+  version: 7.52.0
+  resolution: "openai@npm:7.52.0"
   peerDependencies:
     "@aws-sdk/credential-provider-node": ">=3.972.0 <4"
     "@smithy/hash-node": ">=4.3.0 <5"
@@ -21658,7 +21675,7 @@ __metadata:
       optional: true
     zod:
       optional: true
-  checksum: 10c0/5376321a1d165f5b2c1ffb1c1bc353aeaad99ed278b2a53d03b263c244c7ee6deed194b6c6ac3bd6c63cd1c8a137141b137f036d68517d95ce84ad42fffe0ca8
+  checksum: 10c0/f3b5ede6f96e7008adcc70532c143fd67ce574e4cc5363f023f7e3464e2e403189e86036fe2bc310f459fc0d63fe8d75ee4e158a64e484c26dbcbd82e1d65c52
   languageName: node
   linkType: hard
 
@@ -26059,9 +26076,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsc-alias@npm:^1.9.9":
-  version: 1.9.9
-  resolution: "tsc-alias@npm:1.9.9"
+"tsc-alias@npm:^1.9.10":
+  version: 1.9.10
+  resolution: "tsc-alias@npm:1.9.10"
   dependencies:
     chokidar: "npm:^3.5.3"
     commander: "npm:^9.0.0"
@@ -26072,7 +26089,7 @@ __metadata:
     plimit-lit: "npm:^1.2.6"
   bin:
     tsc-alias: dist/bin/index.js
-  checksum: 10c0/525d256bdea8923cba6b403faf1c04ffd7d0e729eb0c5a2a4fa16ba58dc5770a10f78b315da22ab558769d08c9d119f879b4b1a8281fecff88b0b10d30d95e22
+  checksum: 10c0/9f4ba42f41409cf3e0291c3698e8b69ac0d273e5ecc47ba140c3304e3e01c9b00e8227261c335a5c7e3c67ac1e0f023a730cd1a8d1c328223a16c6956aea94b5
   languageName: node
   linkType: hard
 

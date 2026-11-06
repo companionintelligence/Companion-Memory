@@ -21,7 +21,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Files that uniquely identify a Microsoft privacy export.
 const ANCHORS = [
@@ -346,11 +346,7 @@ export class MicrosoftAccountFileImporter implements FileImporter {
         classification,
         timestamp: ts,
         location,
-        content: {
-          filename: 'microsoft.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(JSON.stringify(rec)),
-        },
+        content: textContent('microsoft.txt', JSON.stringify(rec)),
         metadata,
       },
     });

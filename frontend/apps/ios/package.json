@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",
-    "@capacitor-mlkit/barcode-scanning": "^8.2.1",
+    "@capacitor-mlkit/barcode-scanning": "^8.2.2",
     "@capacitor/app": "^8.1.2",
     "@capacitor/browser": "^8.0.5",
     "@capacitor/camera": "^8.2.6",

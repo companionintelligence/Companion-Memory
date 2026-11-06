@@ -19,7 +19,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const DATE_KEY = /date|time|timestamp|created|when/i;
 
@@ -301,7 +301,7 @@ export class RobloxFileImporter implements FileImporter {
         id: `roblox:${rowKey}`,
         classification: classify(path.basename(fpath)),
         timestamp: ts,
-        content: { filename: 'roblox.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('roblox.txt', summary),
         metadata,
       },
     });

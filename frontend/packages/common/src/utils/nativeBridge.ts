@@ -8,6 +8,8 @@
  *
  * Every function degrades gracefully on web (no `window.Capacitor`): secure storage
  * falls back to `localStorage`, and external links fall back to a normal navigation.
+ * The desktop shell (Tauri) keeps secure storage in the OS keychain instead; see
+ * {@link desktopSecureGet}.
  */
 
 import { isAndroidPlatform, isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
@@ -402,8 +404,8 @@ export const SECURE_STORE_KEYS = [
 ] as const;
 
 /**
- * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, or
- * `localStorage` on web. Returns null when absent.
+ * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, the OS
+ * keychain on desktop, or `localStorage` on web. Returns null when absent.
  *
  * On native this is the Local Hub plugin's `CompanionSecureStore`, which fails closed rather
  * than degrading to unencrypted storage. Any native failure is collapsed to null here — the
@@ -444,6 +446,10 @@ export async function secureStorageGet(key: string): Promise<string | null> {
     }
   }
 
+  if (isTauriPlatform()) {
+    return desktopSecureGet(key);
+  }
+
   try {
     return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
   } catch {
@@ -452,10 +458,12 @@ export async function secureStorageGet(key: string): Promise<string | null> {
 }
 
 /**
- * Persist a value to the OS keystore on native, or `localStorage` on web.
+ * Persist a value to the OS keystore on native, the OS keychain on desktop, or `localStorage`
+ * on web.
  *
  * Failures propagate on purpose: a caller that just stored an API key needs to know if it did
- * not stick, and the native side rejects rather than falling back to unprotected storage.
+ * not stick, and the native and desktop sides reject rather than falling back to unprotected
+ * storage.
  */
 export async function secureStorageSet(key: string, value: string): Promise<void> {
   const hub = plugins()?.LocalHub;
@@ -486,6 +494,12 @@ export async function secureStorageSet(key: string, value: string): Promise<void
     return;
   }
 
+  if (isTauriPlatform()) {
+    await desktopSecureSet(key, value);
+
+    return;
+  }
+
   try {
     window.localStorage.setItem(key, value);
   } catch {
@@ -493,7 +507,7 @@ export async function secureStorageSet(key: string, value: string): Promise<void
   }
 }
 
-/** Remove a value from the OS keystore on native, or `localStorage` on web. */
+/** Remove a value from the OS keystore on native, the OS keychain on desktop, or `localStorage` on web. */
 export async function secureStorageRemove(key: string): Promise<void> {
   const hub = plugins()?.LocalHub;
   const secure = plugins()?.SecureStoragePlugin;
@@ -520,10 +534,113 @@ export async function secureStorageRemove(key: string): Promise<void> {
     return;
   }
 
+  if (isTauriPlatform()) {
+    await desktopSecureRemove(key);
+
+    return;
+  }
+
   try {
     window.localStorage.removeItem(key);
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Desktop (Tauri) keeps its secure values in the OS keychain through `tauri-plugin-ci-auth`:
+ * Keychain on macOS, Credential Manager on Windows, Secret Service on Linux. The plugin's
+ * `secure_*` commands take any key the caller names, and its keychain service is shared with any
+ * other app built on the plugin, so every key carries Memory's namespace.
+ */
+const DESKTOP_SECURE_NAMESPACE = 'memory:';
+
+function desktopSecureKey(key: string): string {
+  return `${DESKTOP_SECURE_NAMESPACE}${key}`;
+}
+
+/**
+ * Reads a desktop secure value from the keychain. A keychain that refuses the read is "no value",
+ * and the legacy `localStorage` copy is not consulted: a failing store must never hand back the
+ * weaker copy.
+ */
+async function desktopSecureGet(key: string): Promise<string | null> {
+  try {
+    const { value } = await tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', {
+      key: desktopSecureKey(key),
+    });
+
+    if (value !== null && value !== undefined) {
+      // The keychain copy is authoritative, so a legacy copy an earlier build left is removed.
+      removeLegacyLocalStorageValue(key);
+
+      return value;
+    }
+
+    return await migrateLegacyLocalStorageValue(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Moves a value that an earlier desktop build kept in `localStorage` into the keychain, once.
+ * The keychain write resolves before the `localStorage` copy is removed, so a failed write leaves
+ * the old copy where it is for the next launch to retry. A failed write throws, and
+ * {@link desktopSecureGet} turns that into "no value" instead of returning the weaker copy.
+ */
+async function migrateLegacyLocalStorageValue(key: string): Promise<string | null> {
+  const legacyValue = readLegacyLocalStorageValue(key);
+
+  if (legacyValue === null) {
+    return null;
+  }
+
+  await tauriInvoke('plugin:ci-auth|secure_set', { key: desktopSecureKey(key), value: legacyValue });
+  removeLegacyLocalStorageValue(key);
+
+  return legacyValue;
+}
+
+/**
+ * Stores a desktop secure value in the keychain. A refused write throws, and the value is not
+ * written anywhere else.
+ */
+async function desktopSecureSet(key: string, value: string): Promise<void> {
+  await tauriInvoke('plugin:ci-auth|secure_set', { key: desktopSecureKey(key), value });
+  removeLegacyLocalStorageValue(key);
+}
+
+/**
+ * Removes a desktop secure value from the keychain and from any legacy `localStorage` copy. A
+ * keychain that refuses the delete is swallowed, as the native branch swallows its own: sign-out
+ * has already asked the server to revoke the key by the time this runs, and a throw here would
+ * leave the screen signed in. The keychain keeps its copy in that case, and no weaker copy is
+ * written.
+ */
+async function desktopSecureRemove(key: string): Promise<void> {
+  try {
+    await tauriInvoke('plugin:ci-auth|secure_remove', { key: desktopSecureKey(key) });
+  } catch {
+    // Already gone, or the keychain refused. Either way there is no weaker store to fall back to.
+  }
+
+  removeLegacyLocalStorageValue(key);
+}
+
+function readLegacyLocalStorageValue(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function removeLegacyLocalStorageValue(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable — nothing to clear.
   }
 }
 

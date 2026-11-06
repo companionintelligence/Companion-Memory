@@ -15,7 +15,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // A Garmin Activities.csv header has "Activity Type" AND "Distance" (case-insensitive),
 // plus at least one Garmin-distinctive column. The extra column is what keeps this from
@@ -214,7 +214,7 @@ export class GarminFileImporter implements FileImporter {
         id: `garmin:${base}:${(row['Date'] || '').trim()}:${index}`,
         classification: 'workout',
         timestamp: ts,
-        content: { filename: 'workout.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('workout.txt', text),
         metadata: {
           'Activity Type': activityType || undefined,
           Title: title || activityType || undefined,

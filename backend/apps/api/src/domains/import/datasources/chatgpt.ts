@@ -20,19 +20,26 @@
    (_ai_media.ts). Resolved photos/videos land as 'media' items attached to
    their message; pointers with no file on disk (expired assets OpenAI omits)
    are recorded in the drop ledger. */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ResolvedAsset } from './_ai_media';
 import { mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryShapeHints, memoryTitle } from './_ai_memory';
+import {
+  CHATGPT_SIBLINGS,
+  CLAUDE_SIBLINGS,
+  findName,
+  importMemoriesFile,
+  isMemoryFilename,
+  memoryShapeHints,
+  parseMemoryEntries,
+} from './_ai_memory';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface ChatGPTMessage {
   author?: { role?: string };
@@ -65,35 +72,6 @@ interface ChatGPTConversation {
   update_time?: number | null;
   mapping?: Record<string, ChatGPTNode>;
   current_node?: string;
-}
-
-const MEMORY_FILENAMES = ['memories.json', 'memory.json'];
-// Files only OpenAI's export ships next to conversations.json — their presence
-// marks a memory-only directory as ChatGPT's even when the entries themselves
-// carry no vendor signal.
-const CHATGPT_SIBLINGS = [
-  'user.json',
-  'message_feedback.json',
-  'model_comparisons.json',
-  'shared_conversations.json',
-  'chat.html',
-];
-// Claude's data export ships users.json (plural) + projects.json.
-const CLAUDE_SIBLINGS = ['users.json', 'projects.json'];
-
-async function readJson(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 // A parsed value is a ChatGPT export when it is a non-empty array whose first
@@ -133,14 +111,6 @@ function chatgptMemoryConfidence(parsed: unknown): number {
   return 0.5;
 }
 
-function isMemoryFilename(name: string): boolean {
-  return MEMORY_FILENAMES.includes(name.toLowerCase());
-}
-
-function findName(names: string[], wanted: (n: string) => boolean): string | undefined {
-  return names.find((n) => wanted(n.toLowerCase()));
-}
-
 export class ChatGPTFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -158,11 +128,11 @@ export class ChatGPTFileImporter implements FileImporter {
     if (st.isFile()) {
       const base = path.basename(root).toLowerCase();
       if (base === 'conversations.json') {
-        return isChatGPTExport(await readJson(root)) ? { confidence: 0.95 } : { confidence: 0 };
+        return isChatGPTExport(await readJsonFile(root)) ? { confidence: 0.95 } : { confidence: 0 };
       }
 
       if (isMemoryFilename(base)) {
-        const conf = chatgptMemoryConfidence(await readJson(root));
+        const conf = chatgptMemoryConfidence(await readJsonFile(root));
 
         return conf > 0 ? { confidence: conf } : { confidence: 0 };
       }
@@ -182,7 +152,7 @@ export class ChatGPTFileImporter implements FileImporter {
       if (conv) {
         // conversations.json decides ownership of the whole directory: when it
         // is another vendor's shape the memories file next to it is theirs too.
-        if (isChatGPTExport(await readJson(path.join(root, conv)))) {
+        if (isChatGPTExport(await readJsonFile(path.join(root, conv)))) {
           return { confidence: 0.9 };
         }
 
@@ -191,7 +161,7 @@ export class ChatGPTFileImporter implements FileImporter {
 
       const mem = findName(names, isMemoryFilename);
       if (mem && !findName(names, (n) => CLAUDE_SIBLINGS.includes(n))) {
-        const conf = chatgptMemoryConfidence(await readJson(path.join(root, mem)));
+        const conf = chatgptMemoryConfidence(await readJsonFile(path.join(root, mem)));
         if (conf > 0) {
           const marked = !!findName(names, (n) => CHATGPT_SIBLINGS.includes(n));
 
@@ -253,7 +223,11 @@ export class ChatGPTFileImporter implements FileImporter {
     }
 
     if (memPath) {
-      await this.importMemories(memPath, params);
+      await importMemoriesFile(memPath, params, {
+        idPrefix: 'chatgpt',
+        source: 'ChatGPT',
+        label: 'ChatGPT memories',
+      });
     }
   }
 
@@ -389,53 +363,6 @@ export class ChatGPTFileImporter implements FileImporter {
     }
   }
 
-  private async importMemories(fpath: string, params: ImportParams): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', 'Failed to read ChatGPT memories', { error: (e as Error).message });
-
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
-
-    for (const m of parseMemoryEntries(parsed)) {
-      this.pushMemory(m, params);
-    }
-  }
-
-  private pushMemory(m: MemoryEntry, params: ImportParams): void {
-    const ts = m.created ?? m.updated;
-    if (!timeframeContains(params.timeframe, ts)) {
-      return;
-    }
-
-    const key = m.idHint || crypto.createHash('sha1').update(m.text).digest('hex').slice(0, 24);
-    params.pipeline.push({
-      item: {
-        id: `chatgpt:memory:${key}`,
-        classification: 'note',
-        timestamp: ts,
-        content: { filename: 'memory.txt', mediaType: 'text/plain', data: async () => Buffer.from(m.text) },
-        metadata: {
-          Kind: 'memory',
-          Title: memoryTitle(m.text),
-          Category: m.category || undefined,
-          Updated: m.updated || undefined,
-          Source: 'ChatGPT',
-          Text: m.text,
-        },
-      },
-    });
-  }
-
   private pushConversation(conv: ChatGPTConversation, params: ImportParams): void {
     if (!conv || !conv.mapping || typeof conv.mapping !== 'object') {
       return;
@@ -489,7 +416,7 @@ export class ChatGPTFileImporter implements FileImporter {
           id: `chatgpt:${convId}:${nodeId}`,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: role,
             From: role === 'user' ? 'You' : 'ChatGPT',

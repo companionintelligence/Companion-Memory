@@ -29,17 +29,25 @@
    already-recognized directory, or it is silently dropped. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ResolvedAsset } from './_ai_media';
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryShapeHints, memoryTitle } from './_ai_memory';
+import {
+  CHATGPT_SIBLINGS,
+  CLAUDE_SIBLINGS,
+  findName,
+  importMemoriesFile,
+  isMemoryFilename,
+  memoryShapeHints,
+  parseMemoryEntries,
+} from './_ai_memory';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item } from './timeline';
-import { mimeForFile, timeframeContains } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface ClaudeContentBlock {
   type?: string;
@@ -97,33 +105,6 @@ interface ClaudeProject {
   docs?: ClaudeProjectDoc[];
 }
 
-const MEMORY_FILENAMES = ['memories.json', 'memory.json'];
-// Claude's data export ships users.json (plural) + projects.json next to
-// conversations.json; OpenAI's ships user.json (singular) + feedback files.
-const CLAUDE_SIBLINGS = ['users.json', 'projects.json'];
-const CHATGPT_SIBLINGS = [
-  'user.json',
-  'message_feedback.json',
-  'model_comparisons.json',
-  'shared_conversations.json',
-  'chat.html',
-];
-
-async function readJson(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-}
-
 // A parsed value is a Claude export when it is a non-empty array whose first
 // element has a `chat_messages` array and does NOT have a `mapping` key (which
 // would mark it as a ChatGPT export).
@@ -164,14 +145,6 @@ function claudeMemoryConfidence(parsed: unknown): number {
   return 0.4;
 }
 
-function isMemoryFilename(name: string): boolean {
-  return MEMORY_FILENAMES.includes(name.toLowerCase());
-}
-
-function findName(names: string[], wanted: (n: string) => boolean): string | undefined {
-  return names.find((n) => wanted(n.toLowerCase()));
-}
-
 /** First non-empty trimmed string among the candidates, else undefined. */
 function firstText(...candidates: (string | undefined)[]): string | undefined {
   for (const c of candidates) {
@@ -210,11 +183,11 @@ export class ClaudeFileImporter implements FileImporter {
     if (st.isFile()) {
       const base = path.basename(root).toLowerCase();
       if (base === 'conversations.json') {
-        return isClaudeExport(await readJson(root)) ? { confidence: 0.95 } : { confidence: 0 };
+        return isClaudeExport(await readJsonFile(root)) ? { confidence: 0.95 } : { confidence: 0 };
       }
 
       if (isMemoryFilename(base)) {
-        const conf = claudeMemoryConfidence(await readJson(root));
+        const conf = claudeMemoryConfidence(await readJsonFile(root));
 
         return conf > 0 ? { confidence: conf } : { confidence: 0 };
       }
@@ -234,7 +207,7 @@ export class ClaudeFileImporter implements FileImporter {
       if (conv) {
         // conversations.json decides ownership of the whole directory: when it
         // is another vendor's shape the memories file next to it is theirs too.
-        if (isClaudeExport(await readJson(path.join(root, conv)))) {
+        if (isClaudeExport(await readJsonFile(path.join(root, conv)))) {
           return { confidence: 0.9 };
         }
 
@@ -243,7 +216,7 @@ export class ClaudeFileImporter implements FileImporter {
 
       const mem = findName(names, isMemoryFilename);
       if (mem && !findName(names, (n) => CHATGPT_SIBLINGS.includes(n))) {
-        const conf = claudeMemoryConfidence(await readJson(path.join(root, mem)));
+        const conf = claudeMemoryConfidence(await readJsonFile(path.join(root, mem)));
         if (conf > 0) {
           const marked = !!findName(names, (n) => CLAUDE_SIBLINGS.includes(n));
 
@@ -316,7 +289,12 @@ export class ClaudeFileImporter implements FileImporter {
     }
 
     if (memPath) {
-      await this.importMemories(memPath, params);
+      await importMemoriesFile(memPath, params, {
+        idPrefix: 'claude',
+        source: 'Claude',
+        label: 'Claude memories',
+        preferEntryTitle: true,
+      });
     }
 
     if (projectsDir) {
@@ -411,28 +389,6 @@ export class ClaudeFileImporter implements FileImporter {
     }
 
     return media;
-  }
-
-  private async importMemories(fpath: string, params: ImportParams): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', 'Failed to read Claude memories', { error: (e as Error).message });
-
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
-
-    for (const m of parseMemoryEntries(parsed)) {
-      this.pushMemory(m, params);
-    }
   }
 
   /** One `<uuid>.json` per Claude Project inside the sibling `projects/` dir. */
@@ -534,37 +490,12 @@ export class ClaudeFileImporter implements FileImporter {
         id: `claude:project:${key}`,
         classification: 'note',
         timestamp: ts,
-        content: { filename: 'project.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('project.txt', text),
         metadata: {
           Kind: 'project',
           Title: name,
           Source: 'Claude',
           Text: text,
-        },
-      },
-    });
-  }
-
-  private pushMemory(m: MemoryEntry, params: ImportParams): void {
-    const ts = m.created ?? m.updated;
-    if (!timeframeContains(params.timeframe, ts)) {
-      return;
-    }
-
-    const key = m.idHint || crypto.createHash('sha1').update(m.text).digest('hex').slice(0, 24);
-    params.pipeline.push({
-      item: {
-        id: `claude:memory:${key}`,
-        classification: 'note',
-        timestamp: ts,
-        content: { filename: 'memory.txt', mediaType: 'text/plain', data: async () => Buffer.from(m.text) },
-        metadata: {
-          Kind: 'memory',
-          Title: m.title || memoryTitle(m.text),
-          Category: m.category || undefined,
-          Updated: m.updated || undefined,
-          Source: 'Claude',
-          Text: m.text,
         },
       },
     });
@@ -614,7 +545,7 @@ export class ClaudeFileImporter implements FileImporter {
           id: msg.uuid || `claude:${conv.uuid ?? 'unknown'}:${index}`,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: sender === 'human' ? 'user' : 'assistant',
             Direction: sender === 'human' ? 'outgoing' : 'incoming',

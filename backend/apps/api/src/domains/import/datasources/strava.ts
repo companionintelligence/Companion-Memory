@@ -12,7 +12,7 @@ import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { csvHeaderHas } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const gunzip = promisify(zlib.gunzip);
 
@@ -125,11 +125,7 @@ export class StravaFileImporter implements FileImporter {
             : `strava:${path.basename(csvPath)}:${index}`,
           timestamp: actDate,
           ...(start && { location: start }),
-          content: {
-            filename: 'activity.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(actName || actType),
-          },
+          content: textContent('activity.txt', actName || actType),
           metadata: {
             'Activity ID': row['Activity ID'] || undefined,
             Name: actName || actType || 'Strava Activity',

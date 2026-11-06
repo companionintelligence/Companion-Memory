@@ -6,6 +6,7 @@ import {
   CommunicationDirection,
   CommunicationService,
   CommunicationType,
+  type CreateCommunicationDto,
   platformIdentity,
 } from '@ci/domains/memory';
 
@@ -31,6 +32,13 @@ export class SignalMessagesTransformService {
       connectionId: connection.id,
     });
 
+    // One idempotent write for the page, with `emitCreated` so the rows this
+    // sync inserted still raise CommunicationCreatedEvent for the search index
+    // and the people-linker — see SlackMessagesTransformService for why the
+    // bulk path alone would not do. A re-synced message is an upsert on
+    // communications_source_identity_uniq now, not a unique violation to log.
+    const rows: CreateCommunicationDto[] = [];
+
     for (const envelope of messages) {
       const dataMessage = envelope?.dataMessage;
       const text = dataMessage?.message;
@@ -45,43 +53,39 @@ export class SignalMessagesTransformService {
           ? CommunicationDirection.OUTBOUND
           : CommunicationDirection.INBOUND;
 
-      try {
-        await this.communicationService.create(
-          { userId },
-          {
-            time: new Date(envelope.timestamp),
-            communication_type: CommunicationType.SMS,
-            direction,
-            thread_id: dataMessage.groupInfo?.groupId || envelope.sourceNumber || envelope.source,
-            subject: dataMessage.groupInfo?.groupName || envelope.sourceNumber || envelope.source,
-            content: text,
-            connection_id: connection.id,
-            source_type: 'ETL',
-            ...(() => {
-              const identity = platformIdentity('signal', sourceId);
+      rows.push({
+        time: new Date(envelope.timestamp),
+        communication_type: CommunicationType.SMS,
+        direction,
+        thread_id: dataMessage.groupInfo?.groupId || envelope.sourceNumber || envelope.source,
+        subject: dataMessage.groupInfo?.groupName || envelope.sourceNumber || envelope.source,
+        content: text,
+        connection_id: connection.id,
+        source_type: 'ETL',
+        ...(() => {
+          const identity = platformIdentity('signal', sourceId);
 
-              return { source_system: identity.system, source_id: identity.id };
-            })(),
-            participants_metadata: {
-              source: envelope.source,
-              source_number: envelope.sourceNumber,
-              group_id: dataMessage.groupInfo?.groupId,
-              group_name: dataMessage.groupInfo?.groupName,
-            },
-          },
-        );
-      } catch (error) {
-        this.logger.error('Failed to transform Signal message', {
-          sourceId,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
+          return { source_system: identity.system, source_id: identity.id };
+        })(),
+        participants_metadata: {
+          source: envelope.source,
+          source_number: envelope.sourceNumber,
+          group_id: dataMessage.groupInfo?.groupId,
+          group_name: dataMessage.groupInfo?.groupName,
+        },
+      });
     }
+
+    const results = await this.communicationService.createManyDetailed({ userId }, rows, {
+      emitCreated: true,
+    });
 
     this.logger.log('Signal messages transformation completed', {
       userId,
       connectionId: connection.id,
       totalMessages: messages.length,
+      written: results.length,
+      inserted: results.filter(({ inserted }) => inserted).length,
     });
   }
 }

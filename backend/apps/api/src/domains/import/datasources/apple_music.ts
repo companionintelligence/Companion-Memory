@@ -10,7 +10,7 @@ import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Filename like "Apple Music Play Activity.csv" / "Apple Music - Play Activity.csv".
 function filenameMatches(base: string): boolean {
@@ -203,11 +203,7 @@ export class AppleMusicFileImporter implements FileImporter {
         id: `apple_music:${base}:${(start || '').trim()}:${index}`,
         classification: 'listen',
         timestamp: ts,
-        content: {
-          filename: 'play.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(`${artist} — ${track}`),
-        },
+        content: textContent('play.txt', `${artist} — ${track}`),
         metadata: {
           Track: track || undefined,
           Artist: artist || undefined,

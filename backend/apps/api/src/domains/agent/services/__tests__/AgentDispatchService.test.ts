@@ -114,8 +114,9 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     const { job, service, jobRepository } = setup();
     job.status = 'queued';
     job.createdAt = new Date(Date.now() - 3 * 60 * 1000);
+    // `failStale` now sends ONE find whose `where` is an array of OR-ed clauses.
     jobRepository.find = jest.fn(async ({ where }: { where: { status: string } }) =>
-      where.status === 'queued' ? [job] : [],
+      (Array.isArray(where) ? where : [where]).some((clause) => clause.status === 'queued') ? [job] : [],
     );
 
     const closed = await service.failStale();
@@ -168,7 +169,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     job.status = 'queued';
     job.createdAt = new Date(Date.now() - 3 * 60 * 1000);
     jobRepository.find = jest.fn(async ({ where }: { where: { status: string } }) =>
-      where.status === 'queued' ? [job] : [],
+      (Array.isArray(where) ? where : [where]).some((clause) => clause.status === 'queued') ? [job] : [],
     );
 
     await service.failStale();

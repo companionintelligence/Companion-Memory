@@ -11,7 +11,7 @@ import { extension } from 'mime-types';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Byte constants for the streaming tokenizer (all ASCII — safe against UTF-8,
 // whose multi-byte sequences never use bytes < 0x80).
@@ -727,7 +727,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
       item: {
         classification: 'message',
         timestamp: ts,
-        content: { filename: 'sms.txt', mediaType: 'text/plain', data: async () => Buffer.from(body) },
+        content: textContent('sms.txt', body),
         metadata: {
           Sender: sender || undefined,
           Address: address || undefined,
@@ -785,7 +785,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
       item: {
         classification: 'call',
         timestamp: ts,
-        content: { filename: 'call.txt', mediaType: 'text/plain', data: async () => Buffer.from(contentStr) },
+        content: textContent('call.txt', contentStr),
         metadata: {
           Contact: contact,
           Number: number || undefined,
@@ -850,7 +850,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
       item: {
         classification: 'message',
         timestamp: ts,
-        content: { filename: 'mms.txt', mediaType: 'text/plain', data: async () => Buffer.from(content) },
+        content: textContent('mms.txt', content),
         metadata: {
           Sender: sender || undefined,
           Address: rootAddress || undefined,

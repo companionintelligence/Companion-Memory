@@ -310,6 +310,17 @@ export function mediaItemFromFile(fpath: string): Item & { content: ItemData } {
 }
 
 /**
+ * A text body as an item's content: the `{ filename, mediaType, data }` triple
+ * with a lazy loader over `body`. This literal was written out by hand in 115
+ * places across the importers — `textContent('post.txt', text)` is that
+ * literal. `mediaType` says what the row IS, which for a placeholder body is
+ * not always the bytes' type (see WATCH_MEDIA_TYPE in _watch.ts).
+ */
+export function textContent(filename: string, body: string, mediaType = 'text/plain'): ItemData {
+  return { filename, mediaType, data: async () => Buffer.from(body) };
+}
+
+/**
  * Best-effort creation/modification time for a file, as a fallback when no
  * embedded date (EXIF, sidecar) is available.
  *
