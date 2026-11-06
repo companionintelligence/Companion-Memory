@@ -138,7 +138,9 @@ describe('HubForwardAuthBridgeService', () => {
     config.auth.hubForwardAuth.secret = SECRET;
     config.auth.hubForwardAuth.identitySecret = '';
     config.auth.hubForwardAuth.audience = '';
-    config.auth.hubForwardAuth.requireAudience = 'auto';
+    // Most cases below are an older Hub's unbound triple, which only the explicit legacy opt-in
+    // accepts. The default ('true') is covered under 'the default configuration'.
+    config.auth.hubForwardAuth.requireAudience = 'false';
     config.auth.hubForwardAuth.maxSkewMs = 300_000;
   });
 
@@ -910,7 +912,27 @@ describe('HubForwardAuthBridgeService', () => {
   });
 
   describe('one session per Hub sign-in', () => {
-    it('spends no unbound header set: two tabs an older Hub signed in the same millisecond both sign in', async () => {
+    it.each(['true', 'auto'] as const)(
+      'mints nothing from one unbound header set replayed twice under requireAudience %s',
+      async (requireAudience) => {
+        config.auth.hubForwardAuth.requireAudience = requireAudience;
+        const { service, userService, authService } = makeService();
+        userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+        const headers = signedHeaders('hello@lifescope.io');
+
+        for (let i = 0; i < 2; i++) {
+          await expect(service.alignSession(requestWith(headers, null), response())).resolves.toEqual({
+            username: null,
+            replaced: false,
+          });
+        }
+
+        expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      },
+    );
+
+    it('spends no unbound header set under the legacy false: two tabs an older Hub signed in the same millisecond both sign in', async () => {
+      config.auth.hubForwardAuth.requireAudience = 'false';
       const { service, userService, authService } = makeService();
       userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
       const headers = signedHeaders('hello@lifescope.io');
@@ -1056,18 +1078,48 @@ describe('HubForwardAuthBridgeService', () => {
       expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('accepts identity headers'));
     });
 
-    it('says when the unbound format is still accepted beside the bound one', () => {
-      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
-      config.auth.hubForwardAuth.audience = AUDIENCE;
+    it('says Hub sign-in is off under the default when this app has no key', () => {
+      config.auth.hubForwardAuth.requireAudience = 'auto';
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Hub sign-in is off'));
+    });
+
+    it.each([
+      ['beside the bound one', IDENTITY_SECRET, AUDIENCE],
+      ['from a Hub that provided no key', '', ''],
+    ])('warns once, under the legacy false, that unbound triples are accepted %s', (_label, key, urn) => {
+      config.auth.hubForwardAuth.identitySecret = key;
+      config.auth.hubForwardAuth.audience = urn;
       config.auth.hubForwardAuth.requireAudience = 'false';
       const { logger } = makeService();
 
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('REQUIRE_AUDIENCE=false'));
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /REQUIRE_AUDIENCE=false: unbound forward-auth triples are accepted.*Remove this setting once the Hub provisions per-app keys/,
+        ),
+      );
+    });
+
+    it.each([
+      ['a key with no URN', IDENTITY_SECRET, ''],
+      ['a URN with no key', '', AUDIENCE],
+    ])('says Hub sign-in is off with %s, even under the legacy false', (_label, key, urn) => {
+      config.auth.hubForwardAuth.identitySecret = key;
+      config.auth.hubForwardAuth.audience = urn;
+      config.auth.hubForwardAuth.requireAudience = 'false';
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('only one of'));
     });
 
     it("says when this app's own key is the Hub-wide secret", () => {
       config.auth.hubForwardAuth.identitySecret = SECRET;
       config.auth.hubForwardAuth.audience = AUDIENCE;
+      config.auth.hubForwardAuth.requireAudience = 'true';
       const { logger } = makeService();
 
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('is the Hub-wide'));
@@ -1076,16 +1128,71 @@ describe('HubForwardAuthBridgeService', () => {
     it('says nothing for a Hub that gave this app its own key', () => {
       config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
       config.auth.hubForwardAuth.audience = AUDIENCE;
+      config.auth.hubForwardAuth.requireAudience = 'true';
       const { logger } = makeService();
 
       expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 
+  describe('the default configuration', () => {
+    beforeEach(() => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+    });
+
+    it('refuses an unbound triple from a Hub that provided no key, and mints nothing from it', async () => {
+      const { service, userService, authService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+      expect(service.verifyIdentity(requestWith(stableHeaders('hello@lifescope.io'), null))).toBeNull();
+      await expect(
+        service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+      ).resolves.toEqual({ username: null, replaced: false });
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('signs in by a bound assertion with the correct audience', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-a');
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+      await expect(
+        service.alignSession(requestWith(boundHeaders('hello@lifescope.io'), null), response()),
+      ).resolves.toMatchObject({ replaced: true });
+      expect(authService.issueSessionToken).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['a key with no URN', IDENTITY_SECRET, ''],
+      ['a URN with no key', '', AUDIENCE],
+    ])(
+      'refuses an unbound triple with %s, under the default and the legacy false alike',
+      async (_label, key, urn) => {
+        config.auth.hubForwardAuth.identitySecret = key;
+        config.auth.hubForwardAuth.audience = urn;
+
+        for (const requireAudience of ['true', 'false'] as const) {
+          config.auth.hubForwardAuth.requireAudience = requireAudience;
+          const { service, userService, authService } = makeService();
+          userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+          expect(service.verifyIdentity(requestWith(signedHeaders('hello@lifescope.io'), null))).toBeNull();
+          await expect(
+            service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+          ).resolves.toEqual({ username: null, replaced: false });
+          expect(authService.issueSessionToken).not.toHaveBeenCalled();
+        }
+      },
+    );
+  });
+
   describe('a Hub that gave Memory its own key', () => {
     beforeEach(() => {
       config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
       config.auth.hubForwardAuth.audience = AUDIENCE;
+      config.auth.hubForwardAuth.requireAudience = 'true';
     });
 
     it('signs in by the bound assertion', () => {

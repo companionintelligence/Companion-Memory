@@ -9,6 +9,7 @@ import {
   type HubStableId,
   type VerifiedHubForwardAuth,
   forwardAuthPolicy,
+  isPartialForwardAuthBinding,
   readForwardAuthHeaders,
   verifyHubForwardAuth,
 } from '@ci/common/crypto';
@@ -158,10 +159,15 @@ export class HubForwardAuthBridgeService {
 
     const policy = forwardAuthPolicy(cfg);
     if (!policy.bound) {
-      if (!policy.acceptUnbound) {
+      if (isPartialForwardAuthBinding(cfg)) {
         this.logger.warn(
-          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
-            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
+          'Hub sign-in is off: only one of CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN is set. Both are ' +
+            'needed for the bound assertion, and unbound forward-auth triples are refused while either is set.',
+        );
+      } else if (!policy.acceptUnbound) {
+        this.logger.warn(
+          'Hub sign-in is off: it requires the bound assertion, but CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and ' +
+            'CI_APP_URN are not set. Updating the Hub provides both.',
         );
       } else if (!policy.sharedSecret) {
         this.logger.warn(
@@ -169,20 +175,14 @@ export class HubForwardAuthBridgeService {
             'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET with CI_APP_URN is set, so no identity header can verify.',
         );
       } else {
-        this.logger.warn(
-          'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
-            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
-        );
+        this.warnUnboundAccepted();
       }
 
       return;
     }
 
     if (policy.acceptUnbound) {
-      this.logger.warn(
-        'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: Hub sign-in also accepts identity headers that are not ' +
-          'bound to this app.',
-      );
+      this.warnUnboundAccepted();
     }
 
     if (policy.bound.secret === cfg.secret.trim()) {
@@ -191,6 +191,15 @@ export class HubForwardAuthBridgeService {
           "also gave other apps: any of them can sign this app's identity assertion.",
       );
     }
+  }
+
+  /** The one warning for the explicit legacy `requireAudience: 'false'`. */
+  private warnUnboundAccepted(): void {
+    this.logger.warn(
+      'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: unbound forward-auth triples are accepted, so any app behind ' +
+        'the Hub that receives them can sign in to Memory as that user. Remove this setting once the Hub ' +
+        'provisions per-app keys (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN).',
+    );
   }
 
   /** The verified Hub identity on this request, or null when the feature is off or headers do not verify. */

@@ -329,22 +329,40 @@ export interface ForwardAuthPolicy {
   maxSkewMs: number;
 }
 
-/** `auto` follows the Hub: an assertion is required once the Hub has given this app its own key. */
+/**
+ * `true` (the default) requires the bound assertion. `false` is the legacy opt-in that also accepts
+ * the unbound format. `auto` is kept so an existing env value still parses, and now means `true`.
+ */
 export type RequireAudienceSetting = 'auto' | 'true' | 'false';
+
+/**
+ * Whether exactly one of this app's own key and its URN is set: a half-provisioned bound key.
+ *
+ * Either value alone means the Hub meant to bind this app and the env lost the other half, so it is
+ * never read as "a Hub that predates bound assertions".
+ */
+export function isPartialForwardAuthBinding(cfg: {
+  identitySecret?: string | null;
+  audience?: string | null;
+}): boolean {
+  return Boolean((cfg.identitySecret ?? '').trim()) !== Boolean((cfg.audience ?? '').trim());
+}
 
 /**
  * The verification policy for an `auth.hubForwardAuth` config block.
  *
- * - A Hub that predates bound assertions gives Memory only its Hub-wide secret, and signs every
- *   app that has no key of its own with that secret too. Its headers are the only ones such a Hub
- *   sends, so refusing them would end Hub sign-in to Memory: `auto` accepts them.
- * - A Hub that gives Memory `identitySecret` and `audience` (its app URN) signs Memory's requests
- *   with a bound assertion under that key, and signs no other app with the Hub-wide secret. From
- *   then on the unbound format proves nothing a bound assertion doesn't, and is the one shape a
- *   copy from elsewhere could take: `auto` refuses it.
- * - `true` refuses the unbound format even from an older Hub (no Hub sign-in to Memory until the
- *   Hub is updated). `false` accepts it beside the bound one, for a Hub whose Traefik does not
- *   pass the assertion header through.
+ * The unbound format (`username\ntimestamp` under the Hub-wide secret) names no audience and carries
+ * no nonce. An older Hub signs every app that has no key of its own with that same secret, so any
+ * sibling app behind the Hub receives a copy that verifies here and can replay it for 30 seconds. It
+ * is therefore refused unless the operator opts in:
+ *
+ * - `true` (default) and `auto`: only the bound assertion, under `identitySecret` and `audience`
+ *   (this app's URN), both provisioned by the Hub. Without both, Hub sign-in to Memory is off until
+ *   the Hub is updated.
+ * - `false`: the legacy opt-in for a Hub that still sends only unbound triples (or whose Traefik does
+ *   not pass the assertion header through). The unbound format is accepted beside the bound one.
+ *   Even then a half-provisioned binding (one of the two values set) fails closed: see
+ *   {@link isPartialForwardAuthBinding}.
  */
 export function forwardAuthPolicy(cfg: {
   secret: string;
@@ -356,8 +374,7 @@ export function forwardAuthPolicy(cfg: {
   const identitySecret = (cfg.identitySecret ?? '').trim();
   const audience = (cfg.audience ?? '').trim();
   const bound = identitySecret && audience ? { secret: identitySecret, audience } : null;
-  const setting = cfg.requireAudience ?? 'auto';
-  const acceptUnbound = setting === 'auto' ? bound == null : setting === 'false';
+  const acceptUnbound = cfg.requireAudience === 'false' && !isPartialForwardAuthBinding(cfg);
 
   return { sharedSecret: cfg.secret, bound, acceptUnbound, maxSkewMs: cfg.maxSkewMs };
 }
@@ -374,7 +391,8 @@ export interface VerifiedHubForwardAuth {
    * Null for the unbound format, which has nothing that tells one signing from another: two
    * requests for the same person in the same millisecond carry the same signature, so treating it
    * as single-use would refuse the second of two tabs opened together. It would buy nothing either,
-   * since a Hub that sends only this format hands fresh copies of it to other apps.
+   * since a Hub that sends only this format hands fresh copies of it to other apps. That is why the
+   * format is accepted only under the explicit legacy `requireAudience: 'false'`.
    */
   replayKey: string | null;
   /** When this header set stops verifying anyway (its timestamp plus the skew), in ms. */
