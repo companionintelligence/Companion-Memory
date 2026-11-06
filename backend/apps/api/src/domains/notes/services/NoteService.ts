@@ -6,12 +6,14 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  type HourlyActivityOptions,
   type KeysetByPage,
   type KeysetPageArgs,
   type SeekKey,
   computeChunkSize,
   keysetPaginateBy,
   keysetSeek,
+  touchedHourlyBucketsSql,
   withoutUndefined,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -613,15 +615,26 @@ export class NoteService {
    * Hourly UTC activity buckets for the activity rollup: notes counted by
    * creation time, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyNoteCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.noteRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyNoteCount[]> {
+    const query = this.noteRepository
       .createQueryBuilder('note')
       .select('note.userId', 'user_id')
       .addSelect(`date_trunc('hour', note.createdAt, 'UTC')`, 'bucket_start')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.where(
+        touchedHourlyBucketsSql(
+          { user: 'note.userId', bucket: 'note.createdAt' },
+          { table: 'ci.notes', userColumn: 'user_id', bucketColumn: 'created_at', changed: 'src.updated_at' },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

@@ -6,7 +6,13 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
+import {
+  CONVERGED_REPROBE_SECONDS,
+  SHARD_LEASE_SECONDS,
+  STAGE_ID_LIST,
+  STAGE_IDS,
+  type StageId,
+} from '../constants';
 import { stageHeldByOutboundPolicy } from '../outboundHolds';
 import { STAGE_REOPENS } from '../reopens';
 import {
@@ -671,6 +677,14 @@ export interface ControlTickReport {
    * nightly pipeline and a permanent background tenant.
    */
   legsNotDue: number;
+
+  /**
+   * Stage legs not probed at all, because the previous probe found them
+   * converged at this stage version within `CONVERGED_REPROBE_SECONDS`. On a
+   * converged appliance this is most legs on most ticks, and each one is an
+   * anti-join over the leg's whole source that did not run.
+   */
+  probesSkipped: number;
 }
 
 /**
@@ -693,7 +707,18 @@ interface TickConditions {
 interface LegScheduleRow {
   stage: string;
   entity_type: string;
-  last_started_at: Date | string;
+  /** NULL for a leg stamped converged before it ever ran. */
+  last_started_at: Date | string | null;
+  converged_at: Date | string | null;
+  converged_version: number | string | null;
+}
+
+/** A leg's `ci.pipeline_schedule` facts, keyed by {@link PipelineControlService.key}. */
+interface LegSchedule {
+  /** When a sweep for the leg last started; absent for a leg that never ran. */
+  lastStartedAt: Map<string, Date>;
+  /** When the tick last found the leg converged, at which stage version. */
+  converged: Map<string, { at: Date; version: number }>;
 }
 
 /** One active run, as the tick reads it. */
@@ -720,6 +745,7 @@ function emptyReport(): ControlTickReport {
     legsBlocked: 0,
     legsDrained: 0,
     legsNotDue: 0,
+    probesSkipped: 0,
   };
 }
 
@@ -944,7 +970,7 @@ export class PipelineControlService {
     // second per-leg round trip would double the tick's statement count to
     // answer a question one `WHERE user_id = $1` covers. Read before the
     // candidates, because the source-change re-open below is gated on it.
-    const lastStartedAt = await this.legScheduleFor(userId);
+    const { lastStartedAt, converged } = await this.legScheduleFor(userId);
 
     // So is a source row that changed after its decision — for a stage that
     // declares `source.changedAtColumn`. Same placement, same reason.
@@ -954,7 +980,31 @@ export class PipelineControlService {
     const candidates = new Map<string, boolean>();
 
     for (const leg of legs) {
-      candidates.set(this.legKey(leg), await this.hasCandidates(leg, userId));
+      const key = this.legKey(leg);
+      const stamp = converged.get(key);
+
+      // A leg the previous probe found converged, at this stage version, within
+      // the re-probe interval: nothing new can have made it stale that the tick
+      // would act on before the interval is up — see CONVERGED_REPROBE_SECONDS —
+      // so the anti-join over its whole source is not run again.
+      if (
+        stamp != null &&
+        stamp.version === leg.stage.version &&
+        conditions.now.getTime() - stamp.at.getTime() < CONVERGED_REPROBE_SECONDS * 1000
+      ) {
+        candidates.set(key, false);
+        report.probesSkipped += 1;
+
+        continue;
+      }
+
+      const found = await this.hasCandidates(leg, userId);
+
+      candidates.set(key, found);
+
+      if (!found) {
+        await this.recordConverged(userId, leg);
+      }
     }
 
     // ── 3. WHICH of those may run right now ────────────────────────────────
@@ -1594,41 +1644,55 @@ export class PipelineControlService {
    * trip through Postgres's `timestamptz`, and a mock agrees with whatever it is
    * asked.
    */
-  async legScheduleFor(userId: string): Promise<Map<string, Date>> {
+  async legScheduleFor(userId: string): Promise<LegSchedule> {
     const rows = await this.dataSource.query<LegScheduleRow[]>(
-      `SELECT stage, entity_type, last_started_at
+      `SELECT stage, entity_type, last_started_at, converged_at, converged_version
          FROM ci.pipeline_schedule
         WHERE user_id = $1::uuid`,
       [userId],
     );
 
-    const schedule = new Map<string, Date>();
+    const schedule: LegSchedule = { lastStartedAt: new Map(), converged: new Map() };
 
     for (const row of rows) {
-      // `Date` on node-postgres, a string on some drivers and after a JSON round
-      // trip. Coerced rather than trusted, because the failure is silent: an
-      // Invalid Date arithmetics to NaN, every comparison against it is false,
-      // and `staleness < minInterval` being false is DUE — a metered stage
-      // becoming due every tick because a driver handed back a string.
-      const startedAt =
-        row.last_started_at instanceof Date ? row.last_started_at : new Date(row.last_started_at);
+      const key = this.key(row.stage, row.entity_type);
 
-      if (Number.isNaN(startedAt.getTime())) {
-        // Fail CLOSED, in the direction the cost lives: treated as started right
-        // now, so the leg waits a full interval rather than being swept on every
-        // tick until somebody notices.
-        this.logger.error(
-          `ci.pipeline_schedule holds an unreadable last_started_at for ${row.stage} ` +
-            `(${row.entity_type}); treating the leg as just-started so it is not due again until its ` +
-            `minInterval elapses`,
-        );
+      // A stamped-converged leg that never ran has a row with no clock: never-run.
+      if (row.last_started_at != null) {
+        // `Date` on node-postgres, a string on some drivers and after a JSON round
+        // trip. Coerced rather than trusted, because the failure is silent: an
+        // Invalid Date arithmetics to NaN, every comparison against it is false,
+        // and `staleness < minInterval` being false is DUE — a metered stage
+        // becoming due every tick because a driver handed back a string.
+        const startedAt =
+          row.last_started_at instanceof Date ? row.last_started_at : new Date(row.last_started_at);
 
-        schedule.set(this.key(row.stage, row.entity_type), new Date());
+        if (Number.isNaN(startedAt.getTime())) {
+          // Fail CLOSED, in the direction the cost lives: treated as started right
+          // now, so the leg waits a full interval rather than being swept on every
+          // tick until somebody notices.
+          this.logger.error(
+            `ci.pipeline_schedule holds an unreadable last_started_at for ${row.stage} ` +
+              `(${row.entity_type}); treating the leg as just-started so it is not due again until its ` +
+              `minInterval elapses`,
+          );
 
-        continue;
+          schedule.lastStartedAt.set(key, new Date());
+        } else {
+          schedule.lastStartedAt.set(key, startedAt);
+        }
       }
 
-      schedule.set(this.key(row.stage, row.entity_type), startedAt);
+      if (row.converged_at != null && row.converged_version != null) {
+        const at = row.converged_at instanceof Date ? row.converged_at : new Date(row.converged_at);
+        const version = Number(row.converged_version);
+
+        // An unreadable stamp is no stamp: the leg is probed, which is the
+        // direction a wrong answer costs least.
+        if (!Number.isNaN(at.getTime()) && Number.isInteger(version)) {
+          schedule.converged.set(key, { at, version });
+        }
+      }
     }
 
     return schedule;
@@ -1656,11 +1720,45 @@ export class PipelineControlService {
       `INSERT INTO ci.pipeline_schedule AS s (user_id, stage, entity_type, last_started_at, starts)
        VALUES ($1::uuid, $2, $3, now(), 1)
        ON CONFLICT (user_id, stage, entity_type) DO UPDATE
-          SET last_started_at = now(),
-              starts          = s.starts + 1,
-              updated_at      = now()`,
+          SET last_started_at   = now(),
+              starts            = s.starts + 1,
+              converged_at      = NULL,
+              converged_version = NULL,
+              updated_at        = now()`,
       [userId, leg.stageId, leg.entityType],
     );
+  }
+
+  /**
+   * Stamp "the probe found nothing stale for this leg, at this stage version".
+   * Read back by {@link legScheduleFor} and honoured for
+   * `CONVERGED_REPROBE_SECONDS`; {@link recordStageStart} clears it, and a
+   * version bump outdates it. A leg that never ran gets a row with no clock,
+   * which still reads as never-run.
+   *
+   * Contained: the stamp is an optimisation of the next tick, so a failure to
+   * write it costs one more probe, never the tick. Public, like
+   * {@link recordStageStart}, so the upsert can be asserted against a real Postgres.
+   */
+  async recordConverged(userId: string, leg: StageLeg): Promise<void> {
+    try {
+      await this.dataSource.query(
+        `INSERT INTO ci.pipeline_schedule AS s
+                (user_id, stage, entity_type, last_started_at, starts, converged_at, converged_version)
+         VALUES ($1::uuid, $2, $3, NULL, 0, now(), $4::int)
+         ON CONFLICT (user_id, stage, entity_type) DO UPDATE
+            SET converged_at      = now(),
+                converged_version = EXCLUDED.converged_version,
+                updated_at        = now()`,
+        [userId, leg.stageId, leg.entityType, leg.stage.version],
+      );
+    } catch (err: unknown) {
+      this.logger.debug('Could not stamp a converged leg; it will be probed again next tick', {
+        stage: leg.stageId,
+        entityType: leg.entityType,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

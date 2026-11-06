@@ -7,6 +7,13 @@ function makeListener(task: Record<string, unknown> | null = null) {
   const taskService = { findById: jest.fn().mockResolvedValue(task) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -59,9 +66,10 @@ describe('TaskSearchIndexListener tenant scoping', () => {
 
     await listener.indexTask({ taskId: 'task-1', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'task', entityId: 'task-1', embedding: [0.1, 0.2] },
+      { entityType: 'task', entityId: 'task-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalled();
   });
@@ -74,7 +82,7 @@ describe('TaskSearchIndexListener tenant scoping', () => {
     await listener.indexTask({ taskId: 'task-1' } as never);
 
     expect(taskService.findById).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -86,7 +94,7 @@ describe('TaskSearchIndexListener.indexTask / updateTask', () => {
 
     await listener.indexTask({ taskId: 'ghost', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -130,9 +138,10 @@ describe('TaskSearchIndexListener.indexTask / updateTask', () => {
 
     await listener.updateTask({ taskId: 'task-1', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'task', entityId: 'task-1' }),
+      expect.any(Function),
     );
   });
 
@@ -148,7 +157,7 @@ describe('TaskSearchIndexListener.indexTask / updateTask', () => {
 
     await listener.indexTask({ taskId: 'task-2', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 });
 
@@ -164,7 +173,7 @@ describe('TaskSearchIndexListener archived handling', () => {
 
     await listener.updateTask({ taskId: 'task-1', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(embeddingService.remove).toHaveBeenCalledWith(
       { userId: SYSTEM_USER },
@@ -208,7 +217,7 @@ describe('CI_EMBED_TYPES allowlist', () => {
 
     await listener.indexTask({ taskId: 'task-1', userId: 'user-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalled();
   });
 });

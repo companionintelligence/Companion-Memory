@@ -74,6 +74,12 @@ export type EmbedTarget =
  * that introduced it; promoting this to `config.embedding.timeoutMs` /
  * `CI_EMBED_TIMEOUT_MS` is a wanted follow-up.
  */
+/**
+ * How many recently embedded texts the single-text path remembers. Queries are
+ * short and a vector is 768 doubles, so this is a few megabytes at most.
+ */
+export const RECENT_VECTORS_MAX = 256;
+
 export const EMBED_TIMEOUT_MS = 270_000;
 
 /**
@@ -175,6 +181,16 @@ export class EmbeddingGenerationService {
 
   /** Texts buffered for the next coalesced flush. */
   private buffer: PendingEmbedding[] = [];
+
+  /**
+   * The vectors of the texts most recently embedded through the single-text
+   * path, by text, newest last (a `Map` keeps insertion order). A grounded
+   * recall turn embeds the same question for the anchored search, the semantic
+   * search, the graph expansion and the message search — the first two in one
+   * coalesced window, the others after — so the second and later asks are
+   * answered from here. Bounded at {@link RECENT_VECTORS_MAX}.
+   */
+  private readonly recent = new Map<string, number[]>();
 
   private flushTimer: NodeJS.Timeout | null = null;
 
@@ -294,6 +310,16 @@ export class EmbeddingGenerationService {
       throw new Error('Cannot embed empty text');
     }
 
+    const remembered = this.recent.get(input);
+
+    if (remembered != null) {
+      // Re-insert, so the text is the newest again and the last to be evicted.
+      this.recent.delete(input);
+      this.recent.set(input, remembered);
+
+      return remembered;
+    }
+
     return new Promise<number[]>((resolve, reject) => {
       this.buffer.push({ input, resolve, reject });
 
@@ -327,11 +353,28 @@ export class EmbeddingGenerationService {
       return [];
     }
 
-    const chunks = chunk(inputs, this.batchSize);
-
+    // A text named twice is sent once and answered in both places.
+    const distinct = [...new Set(inputs)];
+    const chunks = chunk(distinct, this.batchSize);
     const chunkResults = await Promise.all(chunks.map((batch) => this.limit(() => this.embedBatch(batch))));
+    const vectors = chunkResults.flat();
+    const byText = new Map(distinct.map((text, index) => [text, vectors[index]]));
 
-    return chunkResults.flat();
+    return inputs.map((text) => byText.get(text) as number[]);
+  }
+
+  /** Keep a text's vector for the next ask, dropping the oldest once over the bound. */
+  private remember(input: string, vector: number[]): void {
+    this.recent.delete(input);
+    this.recent.set(input, vector);
+
+    if (this.recent.size > RECENT_VECTORS_MAX) {
+      const oldest = this.recent.keys().next().value;
+
+      if (oldest != null) {
+        this.recent.delete(oldest);
+      }
+    }
   }
 
   /**
@@ -367,21 +410,36 @@ export class EmbeddingGenerationService {
     const pending = this.buffer;
     this.buffer = [];
 
-    const inputs = pending.map((item) => item.input);
+    // One model input per distinct text: every caller that asked for the same
+    // text in this window shares its vector.
+    const waiters = new Map<string, PendingEmbedding[]>();
+
+    for (const item of pending) {
+      waiters.set(item.input, [...(waiters.get(item.input) ?? []), item]);
+    }
+
+    const inputs = [...waiters.keys()];
 
     // Chunk + concurrency-limit are handled by generateEmbeddings.
     this.generateEmbeddings(inputs)
       .then((vectors) => {
-        pending.forEach((item, index) => {
+        inputs.forEach((input, index) => {
           const vector = vectors[index];
+          const items = waiters.get(input) ?? [];
 
           if (vector == null || vector.length === 0) {
-            item.reject(new Error('Received empty embedding vector'));
+            for (const item of items) {
+              item.reject(new Error('Received empty embedding vector'));
+            }
 
             return;
           }
 
-          item.resolve(vector);
+          this.remember(input, vector);
+
+          for (const item of items) {
+            item.resolve(vector);
+          }
         });
       })
       .catch((error: unknown) => {

@@ -15,6 +15,7 @@ import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/c
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
+  type HourlyActivityOptions,
   INGEST_MERGE_KINDS,
   INGEST_PRODUCER_PREFERENCE,
   INGEST_REFRESH_COLUMNS,
@@ -1159,7 +1160,13 @@ export class CommunicationService {
    * Hourly UTC activity buckets for the activity rollup: communications
    * counted by their event `time`, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyCommunicationCount[]> {
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyCommunicationCount[]> {
+    // Always in full: `ci.communications` carries no row timestamp, only the
+    // message's own `time`, and a filter on that would miss an import of old
+    // mail until the next full pass. The option is accepted for the contract's
+    // sake and changes nothing here.
+    void options;
+
     const rows: Array<{ user_id: string; bucket_start: Date; count: number }> =
       await this.communicationRepository
         .createQueryBuilder('communication')

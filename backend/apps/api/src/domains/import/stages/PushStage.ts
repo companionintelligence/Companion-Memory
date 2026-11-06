@@ -492,6 +492,19 @@ type DestinationCounts = Partial<Record<Destination, number>>;
  * crashes per poison row, failed to isolate it at all when recovery took more
  * than a minute, and quarantined good rows when every write crashed the server.
  */
+/** One staged entity's terminal state for this push, written by `markEntities`. */
+interface EntityOutcome {
+  stagedEntityId: string;
+  status: 'pushed' | 'failed' | 'skipped';
+  error: string | null;
+}
+
+/** Which graph entity a staged entity resolved to, written by `recordEntityMappings`. */
+interface EntityMapping {
+  stagedEntityId: string;
+  serverEntityId: string;
+}
+
 @Injectable()
 export class PushStage implements ImportStageRunner {
   readonly kind = 'push' as const;
@@ -1284,16 +1297,32 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
     selfEntityId: string | null,
   ): Promise<{ resolved: number; skipped: number; unresolved: number; failed: number }> {
-    // Every ledger write below is by row id and idempotent, so each is safe to
-    // repeat across a database restart. See `retrying`.
-    const mark = (stagedEntityId: string, status: 'pushed' | 'failed' | 'skipped', error: string | null) =>
-      this.retrying(context, 'recording an entity outcome', () =>
-        this.markEntity(stagedEntityId, status, error),
+    // Outcomes and mappings are collected as the pass goes and written as two
+    // set-based statements (`flush`), where there used to be two single-row
+    // statements per entity — an archive stages five figures of them. Both
+    // writes are by row id and idempotent, so a flush is safe to repeat across
+    // a database restart (see `retrying`), and one that never happens leaves
+    // every row pending for the next attempt, which re-resolves them.
+    const outcomes: EntityOutcome[] = [];
+    const mappings: EntityMapping[] = [];
+    const mark = (stagedEntityId: string, status: EntityOutcome['status'], error: string | null): void => {
+      outcomes.push({ stagedEntityId, status, error });
+    };
+
+    const map = (stagedEntityId: string, serverEntityId: string): void => {
+      mappings.push({ stagedEntityId, serverEntityId });
+    };
+
+    const flush = async (): Promise<void> => {
+      // Taken out before the retry loop, so a repeated attempt writes the same rows.
+      const pendingMappings = mappings.splice(0);
+      const pendingOutcomes = outcomes.splice(0);
+
+      await this.retrying(context, 'recording entity mappings', () =>
+        this.recordEntityMappings(context.userId, pendingMappings),
       );
-    const map = (stagedEntityId: string, serverEntityId: string) =>
-      this.retrying(context, 'recording an entity mapping', () =>
-        this.recordEntityMapping(stagedEntityId, context.userId, serverEntityId),
-      );
+      await this.retrying(context, 'recording entity outcomes', () => this.markEntities(pendingOutcomes));
+    };
 
     await this.retrying(context, 'recording progress', () =>
       context.progress({ processed: 0, total: null, phase: 'resolving people' }),
@@ -1354,7 +1383,7 @@ export class PushStage implements ImportStageRunner {
       // and a resumed push does not reconsider it.
       if (isGraphExcluded(row)) {
         skipped += 1;
-        await mark(row.id, 'skipped', null);
+        mark(row.id, 'skipped', null);
         continue;
       }
 
@@ -1367,7 +1396,7 @@ export class PushStage implements ImportStageRunner {
         // graph, and `unresolved` is what rolls the run up to `partial` for it.
         skipped += 1;
         unresolved += 1;
-        await mark(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
+        mark(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
         continue;
       }
 
@@ -1378,8 +1407,8 @@ export class PushStage implements ImportStageRunner {
         input.entityType === 'Person' &&
         this.isOwnerContactInput(identity, input, trustMode)
       ) {
-        await map(row.id, selfEntityId);
-        await mark(row.id, 'pushed', null);
+        map(row.id, selfEntityId);
+        mark(row.id, 'pushed', null);
         resolved += 1;
         continue;
       }
@@ -1403,6 +1432,7 @@ export class PushStage implements ImportStageRunner {
         unresolved,
         failed: 0,
       });
+      await flush();
 
       return { resolved, skipped, unresolved, failed: 0 };
     }
@@ -1429,8 +1459,8 @@ export class PushStage implements ImportStageRunner {
 
       for (const mapping of result.entities) {
         for (const row of byKey.get(mapping.key) ?? []) {
-          await map(row.id, mapping.entityId);
-          await mark(row.id, 'pushed', null);
+          map(row.id, mapping.entityId);
+          mark(row.id, 'pushed', null);
           resolved += 1;
         }
 
@@ -1503,7 +1533,7 @@ export class PushStage implements ImportStageRunner {
 
     for (const [key, reason] of refused) {
       for (const row of byKey.get(key) ?? []) {
-        await mark(row.id, 'failed', reason);
+        mark(row.id, 'failed', reason);
         failed += 1;
 
         // Logged, not just recorded: an entity that will not resolve costs every
@@ -1517,6 +1547,8 @@ export class PushStage implements ImportStageRunner {
         });
       }
     }
+
+    await flush();
 
     this.logger.log('Resolved staged entities', {
       runId: context.runId,
@@ -1659,36 +1691,46 @@ export class PushStage implements ImportStageRunner {
     }
   }
 
-  private async recordEntityMapping(
-    stagedEntityId: string,
-    userId: string,
-    serverEntityId: string,
-  ): Promise<void> {
+  /**
+   * Where each staged entity went, for a whole pass at once. `ON CONFLICT`
+   * cannot touch one row twice in a statement, so the last mapping offered for
+   * a row is the one written.
+   */
+  private async recordEntityMappings(userId: string, mappings: EntityMapping[]): Promise<void> {
+    const latest = new Map(mappings.map((mapping) => [mapping.stagedEntityId, mapping.serverEntityId]));
+
+    if (latest.size === 0) {
+      return;
+    }
+
     await this.dataSource.query(
       `INSERT INTO ci_import.entity_mappings (staged_entity_id, user_id, server_entity_id)
-            VALUES ($1::uuid, $2::uuid, $3::uuid)
+       SELECT t.staged_entity_id, $2::uuid, t.server_entity_id
+         FROM unnest($1::uuid[], $3::uuid[]) AS t(staged_entity_id, server_entity_id)
        ON CONFLICT (staged_entity_id) DO UPDATE
             SET server_entity_id = EXCLUDED.server_entity_id, synced_at = now()`,
-      [stagedEntityId, userId, serverEntityId],
+      [[...latest.keys()], userId, [...latest.values()]],
     );
   }
 
-  private async markEntity(
-    stagedEntityId: string,
-    status: 'pushed' | 'failed' | 'skipped',
-    error: string | null,
-  ): Promise<void> {
+  /** Each staged entity's outcome, for a whole pass at once; the last outcome offered for a row wins. */
+  private async markEntities(outcomes: EntityOutcome[]): Promise<void> {
+    const latest = new Map(outcomes.map((outcome) => [outcome.stagedEntityId, outcome]));
+
+    if (latest.size === 0) {
+      return;
+    }
+
+    const rows = [...latest.values()];
+
     await this.dataSource.query(
-      // `$2` is used twice. It deduces today because both uses are text, but
-      // that is luck, not design — the identical shape in `recordProgress` threw
-      // "inconsistent types deduced" because one use was numeric. Cast at both
-      // sites so a future change to the status type cannot resurrect it.
-      `UPDATE ci_import.staged_entities
-          SET push_status = $2::text,
-              push_error = $3::text,
-              pushed_at = CASE WHEN $2::text = 'pushed' THEN now() END
-        WHERE id = $1::uuid`,
-      [stagedEntityId, status, error],
+      `UPDATE ci_import.staged_entities AS se
+          SET push_status = t.status,
+              push_error = t.error,
+              pushed_at = CASE WHEN t.status = 'pushed' THEN now() END
+         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, status, error)
+        WHERE se.id = t.id`,
+      [rows.map((row) => row.stagedEntityId), rows.map((row) => row.status), rows.map((row) => row.error)],
     );
   }
 

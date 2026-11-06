@@ -6,6 +6,13 @@ function makeListener(content: Record<string, unknown> | null = null, embeddedId
   const contentService = { findById: jest.fn().mockResolvedValue(content) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
     existingEntityIds: jest.fn().mockResolvedValue(new Set<string>(embeddedIds)),
@@ -91,7 +98,7 @@ describe('ContentSearchIndexListener.indexContent skip markers', () => {
 
     await listener.indexContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledTimes(1);
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
@@ -114,7 +121,7 @@ describe('ContentSearchIndexListener.indexContent skip markers', () => {
 
     await listener.indexContent({ contentId: 'content-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'content',
@@ -131,10 +138,11 @@ describe('ContentSearchIndexListener.indexContent skip markers', () => {
 
     await listener.indexContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
+      expect.any(Function),
     );
     expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
     expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
@@ -164,9 +172,10 @@ describe('ContentSearchIndexListener owner-id resolution', () => {
 
     await listener.indexContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-scalar' },
       expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
+      expect.any(Function),
     );
   });
 
@@ -179,9 +188,10 @@ describe('ContentSearchIndexListener owner-id resolution', () => {
 
     await listener.indexContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-relation' },
       expect.objectContaining({ entityType: 'content' }),
+      expect.any(Function),
     );
   });
 
@@ -194,7 +204,7 @@ describe('ContentSearchIndexListener owner-id resolution', () => {
 
     await listener.indexContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no associated user'));
   });
@@ -206,7 +216,7 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
 
     await listener.indexContent({ contentId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -219,9 +229,10 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
 
     await listener.updateContent({ contentId: 'content-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'content', entityId: 'content-1', embedding: [0.1, 0.2] },
+      { entityType: 'content', entityId: 'content-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -243,7 +254,7 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
       'content-1',
     ]);
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
@@ -259,7 +270,7 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
     await listener.updateContent({ contentId: 'content-1' } as never);
 
     expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledTimes(1);
-    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsertDocument).toHaveBeenCalledTimes(1);
   });
 
   it('skips both embedding and vectorization when there is no searchable content at all', async () => {
@@ -275,7 +286,7 @@ describe('ContentSearchIndexListener.indexContent / updateContent', () => {
 
     await listener.indexContent({ contentId: 'content-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 });

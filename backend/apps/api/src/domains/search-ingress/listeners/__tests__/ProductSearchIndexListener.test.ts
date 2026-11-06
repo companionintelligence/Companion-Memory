@@ -58,6 +58,13 @@ function makeListener(
   };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -116,7 +123,7 @@ describe('ProductSearchIndexListener.indexProduct / updateProduct', () => {
 
     await listener.indexProduct({ productId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -133,9 +140,10 @@ describe('ProductSearchIndexListener.indexProduct / updateProduct', () => {
 
     await listener.updateProduct({ productId: 'product-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'product', entityId: 'product-1', embedding: [0.1, 0.2] },
+      { entityType: 'product', entityId: 'product-1', text: expect.any(String) },
+      expect.any(Function),
     );
 
     const upserted = vectorService.upsert.mock.calls[0][1];
@@ -199,7 +207,7 @@ describe('ProductSearchIndexListener.indexProduct / updateProduct', () => {
 
     await listener.indexProduct({ productId: 'product-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'product',
       entityId: 'product-2',
@@ -243,7 +251,7 @@ describe('ProductSearchIndexListener CI_EMBED_TYPES allowlist', () => {
 
     await listener.indexProduct({ productId: 'product-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).toHaveBeenCalled();
   });
 });
@@ -260,7 +268,7 @@ describe('ProductSearchIndexListener — merge tombstones', () => {
     await listener.updateProduct({ productId: 'loser' } as never);
 
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     // Deleting the tombstone's rows belongs to the transaction that made it
     // one — ObjectMergeService.mergeProductModels. A branch here would be

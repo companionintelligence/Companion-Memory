@@ -14,6 +14,8 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import {
+  type HourlyActivityOptions,
+  touchedHourlyBucketsSql,
   type BulkInsertResult,
   appendRecordSources,
   bulkInsertIdempotent,
@@ -1770,16 +1772,32 @@ export class ContentService {
    * Hourly UTC activity buckets for the activity rollup: content counted by
    * creation time, per user. Rows without an owner are skipped.
    */
-  async aggregateHourlyActivity(): Promise<HourlyContentCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.contentRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyContentCount[]> {
+    const query = this.contentRepository
       .createQueryBuilder('content')
       .select('content.userId', 'user_id')
       .addSelect(`date_trunc('hour', content.createdAt, 'UTC')`, 'bucket_start')
       .addSelect('COUNT(*)::int', 'count')
       .where('content.userId IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'content.userId', bucket: 'content.createdAt' },
+          {
+            table: 'ci.content',
+            userColumn: 'user_id',
+            bucketColumn: 'created_at',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

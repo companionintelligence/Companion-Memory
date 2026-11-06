@@ -7,6 +7,13 @@ function makeListener(place: Record<string, unknown> | null = null) {
   const placeService = { findById: jest.fn().mockResolvedValue(place) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -50,7 +57,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     await listener.indexPlace({ placeId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -63,7 +70,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     await listener.indexPlace({ placeId: 'place-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
@@ -78,9 +85,10 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     await listener.updatePlace({ placeId: 'place-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'place', entityId: 'place-1', embedding: [0.1, 0.2] },
+      { entityType: 'place', entityId: 'place-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -108,7 +116,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
     await listener.updatePlace({ placeId: 'place-9' } as never);
 
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(embeddingService.remove).toHaveBeenCalledWith(
       { userId: SYSTEM_USER },
@@ -130,7 +138,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     await listener.indexPlace({ placeId: 'place-2' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalled(); // name alone is enough
+    expect(embeddingService.upsertDocument).toHaveBeenCalled(); // name alone is enough
   });
 
   it('skips both embedding and vectorization for a place with no searchable fields', async () => {
@@ -144,7 +152,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     await listener.indexPlace({ placeId: 'place-3' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
@@ -167,7 +175,7 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
       await listener.indexPlace({ placeId: 'place-4' } as never);
 
-      expect(embeddingService.upsert).not.toHaveBeenCalled();
+      expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
       expect(vectorService.upsert).toHaveBeenCalled();
     });
   });

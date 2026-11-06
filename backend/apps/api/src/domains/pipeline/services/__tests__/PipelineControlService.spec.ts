@@ -135,6 +135,13 @@ interface ControlOptions {
    */
   lastStartedAt?: Record<string, Date>;
 
+  /**
+   * `ci.pipeline_schedule` convergence stamps, as `stageId` or
+   * `stageId|entityType` → when the tick last found nothing stale, and at
+   * which stage version (the harness's stages are all version 1).
+   */
+  converged?: Record<string, { at: Date; version: number }>;
+
   /** `WindowStatus.open`. Defaults to open, so a test opts in to the night. */
   windowOpen?: boolean;
 
@@ -243,10 +250,22 @@ function makeControl(options: ControlOptions = {}) {
 
     // The per-leg clock, read once per user per tick.
     if (/from ci\.pipeline_schedule/.test(sql)) {
-      return Object.entries(options.lastStartedAt ?? {}).map(([leg, startedAt]) => {
-        const [stage, entityType = 'event'] = leg.split('|');
+      const legs = new Set([
+        ...Object.keys(options.lastStartedAt ?? {}),
+        ...Object.keys(options.converged ?? {}),
+      ]);
 
-        return { stage, entity_type: entityType, last_started_at: startedAt };
+      return [...legs].map((leg) => {
+        const [stage, entityType = 'event'] = leg.split('|');
+        const stamp = options.converged?.[leg];
+
+        return {
+          stage,
+          entity_type: entityType,
+          last_started_at: options.lastStartedAt?.[leg] ?? null,
+          converged_at: stamp?.at ?? null,
+          converged_version: stamp?.version ?? null,
+        };
       });
     }
 
@@ -1169,7 +1188,8 @@ describe('PipelineControlService', () => {
 
       await h.service.tick();
 
-      const stamped = h.indexOf(/^insert into ci\.pipeline_schedule/);
+      // The sweep-start stamp, not a converged stamp (also an upsert of this table).
+      const stamped = h.indexOf(/^insert into ci\.pipeline_schedule.*last_started_at = now\(\)/);
       const claimed = h.indexOf(/^insert into ci\.pipeline_shards.*make_interval/);
 
       expect(stamped).toBeGreaterThan(claimed);
@@ -2145,6 +2165,7 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
         legsBlocked: 0,
         legsDrained: 0,
         legsNotDue: 0,
+        probesSkipped: 0,
       };
     }
 
@@ -2376,7 +2397,10 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
     });
 
     it('reports no row at all as never-run, which is what makes a fresh appliance enrich now', async () => {
-      await expect(service.legScheduleFor(scheduleUser)).resolves.toEqual(new Map());
+      await expect(service.legScheduleFor(scheduleUser)).resolves.toEqual({
+        lastStartedAt: new Map(),
+        converged: new Map(),
+      });
     });
 
     it('stamps a leg and reads the same instant back', async () => {
@@ -2385,7 +2409,7 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
 
       const schedule = await service.legScheduleFor(scheduleUser);
-      const startedAt = schedule.get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`);
+      const startedAt = schedule.lastStartedAt.get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`);
 
       expect(startedAt).toBeInstanceOf(Date);
       // Within a second of now in BOTH directions. A timestamp that came back as
@@ -2402,7 +2426,7 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
 
       const schedule = await service.legScheduleFor(scheduleUser);
 
-      expect([...schedule.keys()].sort()).toEqual([
+      expect([...schedule.lastStartedAt.keys()].sort()).toEqual([
         `${STAGE_IDS.INDEX_EMBED}\0communication`,
         `${STAGE_IDS.INDEX_EMBED}\0event`,
       ]);
@@ -2414,7 +2438,9 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       // Postgres felt like, including the oldest — a leg permanently overdue.
       await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
 
-      const first = (await service.legScheduleFor(scheduleUser)).get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`);
+      const first = (await service.legScheduleFor(scheduleUser)).lastStartedAt.get(
+        `${STAGE_IDS.ENRICH_GEOCODE}\0event`,
+      );
 
       // `now()` is transaction time and this suite runs inside ONE transaction,
       // so the two stamps are equal by design. What is under test is the row
@@ -2433,6 +2459,25 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       expect(rows[0].last_started_at.getTime()).toBe(first?.getTime());
     });
 
+    it('stamps a never-run leg converged without giving it a clock, and a sweep start clears the stamp', async () => {
+      const key = `${STAGE_IDS.ENRICH_GEOCODE}\0event`;
+      // This suite's legs carry no stage; the stamp records the stage's version.
+      const versioned = { ...leg(STAGE_IDS.ENRICH_GEOCODE), stage: { version: 3 } as never };
+
+      await service.recordConverged(scheduleUser, versioned);
+
+      const stamped = await service.legScheduleFor(scheduleUser);
+      expect(stamped.lastStartedAt.has(key)).toBe(false);
+      expect(stamped.converged.get(key)).toMatchObject({ version: 3 });
+      expect(stamped.converged.get(key)?.at).toBeInstanceOf(Date);
+
+      await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
+
+      const started = await service.legScheduleFor(scheduleUser);
+      expect(started.lastStartedAt.has(key)).toBe(true);
+      expect(started.converged.has(key)).toBe(false);
+    });
+
     it('keeps one user’s clock out of another’s', async () => {
       // The property the whole per-leg design exists for: a second user's first
       // import must be due immediately regardless of how recently the first
@@ -2441,8 +2486,11 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
 
       await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
 
-      await expect(service.legScheduleFor(other)).resolves.toEqual(new Map());
-      expect((await service.legScheduleFor(scheduleUser)).size).toBe(1);
+      await expect(service.legScheduleFor(other)).resolves.toEqual({
+        lastStartedAt: new Map(),
+        converged: new Map(),
+      });
+      expect((await service.legScheduleFor(scheduleUser)).lastStartedAt.size).toBe(1);
     });
 
     it('survives the round trip well enough for stageDueness to answer too_soon', async () => {
@@ -2453,7 +2501,9 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
       await service.recordStageStart(scheduleUser, leg(STAGE_IDS.ENRICH_GEOCODE));
 
       const lastStartedAt =
-        (await service.legScheduleFor(scheduleUser)).get(`${STAGE_IDS.ENRICH_GEOCODE}\0event`) ?? null;
+        (await service.legScheduleFor(scheduleUser)).lastStartedAt.get(
+          `${STAGE_IDS.ENRICH_GEOCODE}\0event`,
+        ) ?? null;
 
       expect(
         stageDueness({ stageId: STAGE_IDS.ENRICH_GEOCODE, lastStartedAt, windowOpen: true }),
@@ -2471,5 +2521,91 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
         }),
       ).toMatchObject({ due: true, reason: 'interval_elapsed' });
     });
+  });
+});
+
+describe('remembering a converged leg', () => {
+  // A converged leg never starts a sweep, so nothing moves its clock, and
+  // without this the tick re-proved convergence with a whole-source anti-join
+  // per leg on every tick — see CONVERGED_REPROBE_SECONDS.
+  const probed = (h: ReturnType<typeof makeControl>) =>
+    h.stateService.selectStale.mock.calls.map(([stage]) => (stage as { id: string }).id);
+  const stamps = (h: ReturnType<typeof makeControl>) =>
+    h.statements.filter(
+      (s) => s.sql.startsWith('insert into ci.pipeline_schedule') && s.sql.includes('converged_at = now()'),
+    );
+
+  it('stamps a leg whose probe found nothing, at the stage version', async () => {
+    const h = makeControl({ users: [noRun()], stale: [] });
+
+    await h.service.tick();
+
+    expect(probed(h)).toContain(STAGE_IDS.INDEX_EMBED);
+    expect(stamps(h).map((s) => s.params)).toContainEqual([USER_A, STAGE_IDS.INDEX_EMBED, 'event', 1]);
+  });
+
+  it('does not stamp a leg that has work', async () => {
+    const h = makeControl({ users: [noRun()], stale: [STAGE_IDS.INDEX_EMBED] });
+
+    await h.service.tick();
+
+    expect(stamps(h).map((s) => s.params[1])).not.toContain(STAGE_IDS.INDEX_EMBED);
+  });
+
+  it('skips the probe for a leg stamped at this version within the interval, and counts it', async () => {
+    const h = makeControl({
+      users: [noRun()],
+      stale: [],
+      converged: { [STAGE_IDS.INDEX_EMBED]: { at: new Date(Date.now() - 60_000), version: 1 } },
+    });
+
+    const report = await h.service.tick();
+
+    expect(probed(h)).not.toContain(STAGE_IDS.INDEX_EMBED);
+    expect(probed(h).length).toBeGreaterThan(0);
+    expect(report.probesSkipped).toBe(1);
+  });
+
+  it('probes again once the interval has passed', async () => {
+    const h = makeControl({
+      users: [noRun()],
+      stale: [],
+      converged: { [STAGE_IDS.INDEX_EMBED]: { at: new Date(Date.now() - 11 * 60_000), version: 1 } },
+    });
+
+    const report = await h.service.tick();
+
+    expect(probed(h)).toContain(STAGE_IDS.INDEX_EMBED);
+    expect(report.probesSkipped).toBe(0);
+  });
+
+  it('probes again when the stage version moved: a stamp at an older version proves nothing', async () => {
+    const h = makeControl({
+      users: [noRun()],
+      stale: [],
+      converged: { [STAGE_IDS.INDEX_EMBED]: { at: new Date(Date.now() - 60_000), version: 0 } },
+    });
+
+    await h.service.tick();
+
+    expect(probed(h)).toContain(STAGE_IDS.INDEX_EMBED);
+  });
+
+  it('a stale stamp never hides work: the leg is probed and swept when the interval is up', async () => {
+    const h = makeControl({
+      users: [noRun()],
+      stale: [STAGE_IDS.INDEX_EMBED],
+      converged: { [STAGE_IDS.INDEX_EMBED]: { at: new Date(Date.now() - 11 * 60_000), version: 1 } },
+    });
+
+    const report = await h.service.tick();
+
+    expect(report.sweepsStarted).toBeGreaterThan(0);
+    // The sweep start drops the stamp, so the next tick probes the leg.
+    const start = h.statements.find(
+      (s) =>
+        s.sql.startsWith('insert into ci.pipeline_schedule') && s.sql.includes('last_started_at = now()'),
+    );
+    expect(start?.sql).toContain('converged_at = null');
   });
 });

@@ -119,17 +119,10 @@ export class CommunicationSearchIndexListener {
         reason: skipReason,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
-
-      await this.embeddingService.upsert(
-        {
-          userId: communication.userId,
-        },
-        {
-          entityType: 'communication',
-          entityId: communication.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: communication.userId },
+        { entityType: 'communication', entityId: communication.id, text: searchDocument! },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated communication that became embeddable is no longer skipped.

@@ -49,7 +49,7 @@ describe('VectorStageBase (via ContentVectorStage)', () => {
     // (entity_type, entity_id) key, weighted setweight expression inline.
     expect(sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT (entity_type, entity_id)');
     expect(params).toContain('content');
-    expect(params).toContain('c1');
+    expect(params).toContainEqual(['c1']);
     expect(params).toContain(USER);
   });
 
@@ -119,7 +119,10 @@ describe('VectorStageBase (via ContentVectorStage)', () => {
 
 /** Every INSERT INTO ci_search.vectors call's bound weighted-text params, flattened to one string for a substring check that doesn't care which weight bucket a phrase landed in. */
 function insertedText(params: unknown[] | undefined): string {
-  return (params ?? []).filter((p): p is string => typeof p === 'string').join(' | ');
+  return (params ?? [])
+    .flat()
+    .filter((p): p is string => typeof p === 'string')
+    .join(' | ');
 }
 
 function makeVectorStageHarness(loadMatch: RegExp, rows: Array<Record<string, unknown>>) {
@@ -157,7 +160,9 @@ describe('CommunicationVectorStage (loadTexts: ci.communications -> communicatio
     expect(results.get('comm-1')).toEqual({ outcome: 'done' });
     expect(h.load()?.params).toEqual([['comm-1'], USER]);
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('communication');
     expect(entityId).toBe('comm-1');
     expect(insertedText(rest)).toContain('Dinner Friday?');
@@ -198,7 +203,9 @@ describe('EventVectorStage (loadTexts: ci.events -> eventWeightedTexts)', () => 
 
     expect(results.get('event-1')).toEqual({ outcome: 'done' });
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('event');
     expect(entityId).toBe('event-1');
     // This is the exact substring an accidental swap to itemWeightedTexts or
@@ -262,7 +269,9 @@ describe('ItemVectorStage (loadTexts: ci.objects -> itemWeightedTexts)', () => {
 
     expect(results.get('item-1')).toEqual({ outcome: 'done' });
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('item');
     expect(entityId).toBe('item-1');
     // "Garage" only reaches the text via itemWeightedTexts' lastSeenPlaceName
@@ -307,7 +316,9 @@ describe('PersonVectorStage (loadTexts: ci.entities [Person] -> personWeightedTe
     expect(results.get('person-1')).toEqual({ outcome: 'done' });
     expect(h.load()?.sql).toContain("entity_type = 'Person'");
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('person');
     expect(entityId).toBe('person-1');
     expect(insertedText(rest)).toContain('Jane Doe');
@@ -343,7 +354,9 @@ describe('FileVectorStage (loadTexts: ci.files -> fileWeightedTexts)', () => {
 
     expect(results.get('file-1')).toEqual({ outcome: 'done' });
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('file');
     expect(entityId).toBe('file-1');
     expect(insertedText(rest)).toContain('Vacation photo album');
@@ -378,7 +391,9 @@ describe('BrowserActivityVectorStage (loadTexts: ci.browser_activity -> browserA
 
     expect(results.get('browse-1')).toEqual({ outcome: 'done' });
 
-    const [, entityType, entityId, ...rest] = h.insert()!.params as unknown[];
+    const rest = h.insert()!.params as unknown[];
+    // Batch-shaped: the entity ids are the second array, the type the ninth parameter.
+    const [entityType, entityId] = [rest[8], (rest[1] as string[])[0]];
     expect(entityType).toBe('browser-activity');
     expect(entityId).toBe('browse-1');
     expect(insertedText(rest)).toContain('Pasta Recipe - AllRecipes');

@@ -138,17 +138,10 @@ export class ProductSearchIndexListener {
         reason: 'empty',
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: product.userId,
-        },
-        {
-          entityType: 'product',
-          entityId: product.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: product.userId },
+        { entityType: 'product', entityId: product.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // A model that gained a title/brand is no longer skipped.

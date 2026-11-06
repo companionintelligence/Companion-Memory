@@ -4,7 +4,12 @@ import { Repository, In } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { type KeysetPageArgs, resolvePageShape } from '@ci/common/persistence';
+import {
+  type HourlyActivityOptions,
+  type KeysetPageArgs,
+  resolvePageShape,
+  touchedHourlyBucketsSql,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 
@@ -421,17 +426,37 @@ export class MessageService {
    * activity. MessageEntity models the user only as a relation, so the FK
    * column is referenced directly.
    */
-  async aggregateHourlyActivity(): Promise<HourlyMessageCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.messageRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyMessageCount[]> {
+    const live = 'message.canceled = false';
+    const query = this.messageRepository
       .createQueryBuilder('message')
       .select('message.user_id', 'user_id')
       .addSelect(`date_trunc('hour', message.createdAt, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
-      .where('message.canceled = false')
-      .andWhere('message.createdAt IS NOT NULL')
+      // Incrementally, a bucket is recounted over every row it holds, cancelled
+      // or not, so one whose messages were all cancelled comes back as 0 and is pruned.
+      .addSelect(options.changedSince ? `COUNT(*) FILTER (WHERE ${live})::int` : 'COUNT(*)::int', 'count')
+      .where('message.createdAt IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'message.user_id', bucket: 'message.createdAt' },
+          {
+            table: 'ci.messages',
+            userColumn: 'user_id',
+            bucketColumn: 'created_at',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    } else {
+      query.andWhere(live);
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

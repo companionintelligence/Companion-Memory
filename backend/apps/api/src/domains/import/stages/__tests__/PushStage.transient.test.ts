@@ -249,7 +249,12 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
       }
 
       if (sql.includes('INSERT INTO ci_import.entity_mappings')) {
-        mappings.push({ stagedEntityId: String(params[0]), serverEntityId: String(params[2]) });
+        // One statement for the pass: the staged ids and the server ids, in step.
+        const [stagedIds, , serverIds] = params as [string[], string, string[]];
+
+        stagedIds.forEach((stagedEntityId, i) => {
+          mappings.push({ stagedEntityId, serverEntityId: serverIds[i] });
+        });
 
         return [];
       }
@@ -387,7 +392,12 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
   const entityMarks = () =>
     updates
       .filter((update) => update.sql.includes('UPDATE ci_import.staged_entities'))
-      .map((update) => ({ id: String(update.params[0]), status: String(update.params[1]) }));
+      .flatMap((update) => {
+        // One statement for the pass: three parallel arrays, one row each.
+        const [ids, statuses] = update.params as [string[], string[]];
+
+        return ids.map((id, i) => ({ id, status: statuses[i] }));
+      });
 
   return {
     stage,

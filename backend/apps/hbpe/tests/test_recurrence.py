@@ -153,6 +153,12 @@ def test_build_profiles_empty_read_leaves_profiles_alone(monkeypatch):
 
 def test_build_profiles_prunes_only_vanished_clusters(monkeypatch):
     calls: list = []
+    # The profile upsert is one execute_batch; the fake cursor sees it as one execute per row.
+    monkeypatch.setattr(
+        rec.psycopg2.extras,
+        "execute_batch",
+        lambda cur, sql, rows: [cur.execute(sql, r) for r in rows],
+    )
     rows = [
         ("c1", datetime.date(2026, 3, 2), [1], [4]),
         ("c1", datetime.date(2026, 3, 9), [1], [4]),
@@ -880,6 +886,12 @@ def test_build_profiles_credits_a_spilling_block_to_one_daypart(monkeypatch):
     """End to end through build_recurrence_profiles: the stored daypart counts
     must come from the significant dayparts, not every one touched."""
     calls: list = []
+    # The profile upsert is one execute_batch; the fake cursor sees it as one execute per row.
+    monkeypatch.setattr(
+        rec.psycopg2.extras,
+        "execute_batch",
+        lambda cur, sql, rows: [cur.execute(sql, r) for r in rows],
+    )
     rows = [
         ("c1", datetime.date(2026, 3, 2), [1, 2], [24, 4]),
         ("c1", datetime.date(2026, 3, 3), [1, 2], [24, 4]),

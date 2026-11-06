@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, Point, In } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
@@ -203,61 +204,67 @@ export class PositionService {
       });
     }
 
-    const times = uniquePositions.map((item) => new Date(item.time));
-    const existingPositions = await this.findExistingByTimes(context, times);
-    const existingTimesSet = new Set(existingPositions.map((p) => p.time.toISOString()));
-    const newPositions: CreatePositionDto[] = [];
+    // The device lookup only feeds a warning; one read for the batch's distinct
+    // devices, not one per fix.
+    const deviceIds = [
+      ...new Set(uniquePositions.flatMap((item) => (item.device_id ? [item.device_id] : []))),
+    ];
 
-    for (const item of uniquePositions) {
-      const itemTime = new Date(item.time).toISOString();
+    if (deviceIds.length > 0) {
+      const devices = await this.deviceService.findByIds(context, deviceIds);
 
-      if (!existingTimesSet.has(itemTime)) {
-        if (item.device_id) {
-          const device = await this.deviceService.findById(context, item.device_id);
-
-          if (!device) {
-            this.logger.warn('Device not found for position', {
-              deviceId: item.device_id,
-              userId: context.userId,
-            });
-          }
+      deviceIds.forEach((deviceId, i) => {
+        if (!devices[i]) {
+          this.logger.warn('Device not found for position', { deviceId, userId: context.userId });
         }
+      });
+    }
 
-        // createPositionEntity() reads item.heading_degrees (snake_case, the
-        // DTO's own field), not a headingDegrees key -- normalizing onto the
-        // wrong key here was a no-op that let out-of-range headings through
-        // to storage unfiltered. Overwrite the field it actually reads.
-        const normalizedItem = {
-          ...item,
-          heading_degrees: this.normalizeHeading(item.heading_degrees),
-        };
+    // createPositionEntity() reads item.heading_degrees (snake_case, the DTO's
+    // own field), not a headingDegrees key -- normalizing onto the wrong key
+    // here was a no-op that let out-of-range headings through to storage
+    // unfiltered. Overwrite the field it actually reads.
+    const entities = uniquePositions.map((item) =>
+      this.createPositionEntity(context, {
+        ...item,
+        heading_degrees: this.normalizeHeading(item.heading_degrees),
+      }),
+    );
 
-        newPositions.push(normalizedItem);
+    // One statement for the batch, and the dedupe is the database's: a fix
+    // already stored for the instant is left as it is (`(time, user_id)` is
+    // the primary key), so two writers racing on the same instant no longer
+    // read "nothing there" together and then collide. Only the rows that went
+    // in come back; the batch is then read once, existing and new together.
+    const inserted = await this.positionRepository
+      .createQueryBuilder()
+      .insert()
+      .into(PositionEntity)
+      // The entities carry a GeoJSON `location`; the builder's deep-partial type does not name one.
+      .values(entities as unknown as QueryDeepPartialEntity<PositionEntity>[])
+      .onConflict('("time", "user_id") DO NOTHING')
+      .returning(['id'])
+      .execute();
+    const createdIds = new Set((inserted.raw as Array<{ id: string }>).map((row) => row.id));
+    const stored = await this.positionRepository.find({
+      where: { userId: context.userId, time: In(entities.map((entity) => entity.time)) },
+    });
+    const createdEntities = stored.filter((entity) => createdIds.has(entity.id));
+
+    // emitCreated:false is the bulk-ingest path (#1672): a GPS-track import is
+    // tens of thousands of rows, and a PositionCreatedEvent per row hammers
+    // the job queue for listeners that bulk clients drive via
+    // POST /v1/ingest/finish anyway (mirrors the emitCreated:false services
+    // behind the other /v1 routes).
+    if (options.emitCreated !== false) {
+      for (const position of createdEntities) {
+        await this.eventService.send(PositionCreatedEvent, {
+          positionId: position.id,
+        });
       }
     }
 
-    const createdEntities: PositionEntity[] = [];
-
-    if (newPositions.length > 0) {
-      const entitiesToSave = newPositions.map((item) => this.createPositionEntity(context, item));
-      const saved = await this.positionRepository.save(entitiesToSave);
-      // emitCreated:false is the bulk-ingest path (#1672): a GPS-track import is
-      // tens of thousands of rows, and a PositionCreatedEvent per row hammers
-      // the job queue for listeners that bulk clients drive via
-      // POST /v1/ingest/finish anyway (mirrors the emitCreated:false services
-      // behind the other /v1 routes).
-      if (options.emitCreated !== false) {
-        for (const position of saved) {
-          await this.eventService.send(PositionCreatedEvent, {
-            positionId: position.id,
-          });
-        }
-      }
-
-      createdEntities.push(...saved);
-    }
-
-    const allPositions = [...existingPositions, ...createdEntities]
+    const allPositions = stored
       .sort((a, b) => b.time.getTime() - a.time.getTime())
       .map((entity) => PositionEntity.toEgressType(entity));
 
@@ -265,7 +272,7 @@ export class PositionService {
       userId: context.userId,
       totalCount: allPositions.length,
       newCount: createdEntities.length,
-      existingCount: existingPositions.length,
+      existingCount: allPositions.length - createdEntities.length,
     });
 
     return allPositions;
@@ -894,19 +901,6 @@ export class PositionService {
       sourceType: item.source_type ?? null,
       sourceSystem: item.source_system ?? null,
       sourceId: item.source_id ?? null,
-    });
-  }
-
-  private async findExistingByTimes(context: UserServiceContext, times: Date[]): Promise<PositionEntity[]> {
-    if (times.length === 0) {
-      return [];
-    }
-
-    return this.positionRepository.find({
-      where: {
-        userId: context.userId,
-        time: In(times),
-      },
     });
   }
 

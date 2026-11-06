@@ -70,3 +70,4 @@ export {
   retryOnTransientDatabaseError,
 } from './transientDatabaseError';
 export type { DatabaseAbsence, TransientRetryNotice, TransientRetryPolicy } from './transientDatabaseError';
+export { touchedHourlyBucketsSql, type HourlyActivityOptions } from './hourlyBuckets';

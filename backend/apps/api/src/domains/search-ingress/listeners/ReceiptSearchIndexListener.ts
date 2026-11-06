@@ -134,17 +134,10 @@ export class ReceiptSearchIndexListener {
         reason: 'empty',
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: receipt.userId,
-        },
-        {
-          entityType: 'receipt',
-          entityId: receipt.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: receipt.userId },
+        { entityType: 'receipt', entityId: receipt.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       await this.indexSkipService.clearSkip({

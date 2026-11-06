@@ -154,17 +154,10 @@ export class ItemSearchIndexListener {
     if (searchDocument == null) {
       this.logger.log('Item has no search document, skipping embedding');
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: item.userId,
-        },
-        {
-          entityType: 'item',
-          entityId: item.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: item.userId },
+        { entityType: 'item', entityId: item.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       this.logger.log('Generated embedding for item');

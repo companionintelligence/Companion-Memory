@@ -42,10 +42,11 @@ function stageWith(count: number, ingestMessage: string) {
       }
 
       if (sql.includes('UPDATE ci_import.staged_entities')) {
-        marks.push({
-          id: String(params[0]),
-          status: String(params[1]),
-          error: (params[2] as string) ?? null,
+        // One statement for the pass: three parallel arrays, one row each.
+        const [ids, statuses, errors] = params as [string[], string[], (string | null)[]];
+
+        ids.forEach((id, i) => {
+          marks.push({ id, status: statuses[i], error: errors[i] ?? null });
         });
 
         return [];

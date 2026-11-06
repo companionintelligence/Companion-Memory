@@ -198,17 +198,10 @@ export class ThreadSearchIndexListener {
         skipReason,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
-
-      await this.embeddingService.upsert(
-        {
-          userId: thread.user.id,
-        },
-        {
-          entityType: 'thread',
-          entityId: thread.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: thread.user.id },
+        { entityType: 'thread', entityId: thread.id, text: searchDocument! },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       this.logger.log('Generated embedding for thread');

@@ -297,21 +297,19 @@ def build_recurrence_profiles(user_id: str, history_days: int = HISTORY_DAYS) ->
         return {"user_id": user_id, "profiles": 0, "periodic": 0, "skipped": True}
 
     periodic = 0
+    profiles: list[dict] = []
+    for cluster_id, (dates, parts) in by_cluster.items():
+        s = _profile_stats(dates, parts)
+        if s["conf"] >= DUE_CONFIDENCE_MIN:
+            periodic += 1
+        profiles.append(
+            {"user_id": user_id, "cluster_id": cluster_id, "history": history_days, **s}
+        )
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for cluster_id, (dates, parts) in by_cluster.items():
-                s = _profile_stats(dates, parts)
-                if s["conf"] >= DUE_CONFIDENCE_MIN:
-                    periodic += 1
-                cur.execute(
-                    _UPSERT_PROFILE_SQL,
-                    {
-                        "user_id": user_id,
-                        "cluster_id": cluster_id,
-                        "history": history_days,
-                        **s,
-                    },
-                )
+            # One batched round trip for the user's profiles, as the occurrence
+            # log below already does, not one statement per cluster.
+            psycopg2.extras.execute_batch(cur, _UPSERT_PROFILE_SQL, profiles)
             # Drop profiles for clusters that vanished from the window
             cur.execute(
                 """DELETE FROM hbpe.recurrence_profiles

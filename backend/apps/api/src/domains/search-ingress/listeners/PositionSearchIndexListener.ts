@@ -156,10 +156,10 @@ export class PositionSearchIndexListener {
       return;
     }
 
-    const embedding = await this.embeddingGenerationService.generateEmbedding(text);
-    await this.embeddingService.upsert(
+    await this.embeddingService.upsertDocument(
       { userId: position.userId },
-      { entityType: 'position', entityId: position.id, embedding },
+      { entityType: 'position', entityId: position.id, text: text },
+      (text) => this.embeddingGenerationService.generateEmbedding(text),
     );
     await this.indexSkipService.clearSkip({ entityType: 'position', entityId: position.id });
 

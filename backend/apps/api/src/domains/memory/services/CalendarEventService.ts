@@ -18,6 +18,8 @@ import { v7 as uuidv7 } from 'uuid';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import {
+  type HourlyActivityOptions,
+  touchedHourlyBucketsSql,
   type BulkInsertResult,
   type KeysetCountOptions,
   type KeysetPage,
@@ -3386,16 +3388,36 @@ export class CalendarEventService {
    * Hourly UTC activity buckets for the activity rollup: events counted by
    * `startTime`, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyEventCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.eventRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyEventCount[]> {
+    const live = 'event.is_deleted = false';
+    const query = this.eventRepository
       .createQueryBuilder('event')
       .select('event.userId', 'user_id')
       .addSelect(`date_trunc('hour', event.startTime, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
-      .where('event.is_deleted = false')
+      // Incrementally, a bucket is recounted over every row it holds, live or
+      // not, so one whose events were all deleted comes back as 0 and is pruned.
+      .addSelect(options.changedSince ? `COUNT(*) FILTER (WHERE ${live})::int` : 'COUNT(*)::int', 'count')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.where(
+        touchedHourlyBucketsSql(
+          { user: 'event.userId', bucket: 'event.startTime' },
+          {
+            table: 'ci.events',
+            userColumn: 'user_id',
+            bucketColumn: 'start_time',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    } else {
+      query.where(live);
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }
