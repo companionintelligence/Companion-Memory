@@ -421,18 +421,23 @@ describe('PortalTokenService', () => {
       expect(MEMORY_SIGN_IN_REFUSED_MESSAGE).toMatch(/up-to-date app/);
     });
 
-    it("confines another client's stamped token addressed to no appliance to the capture scope", async () => {
+    it("refuses another client's stamped token addressed to no appliance, with no explanation", async () => {
+      // A ci-hub id_token: every Hub a person signs in to with Companion holds one, someone else's
+      // included. It used to get the capture scope, which let that Hub write into this Memory.
       portalConfig.audience = 'ci-server,ci-hub,ci-import-tools,ci-even';
       signedInAs({ aud: 'ci-hub', azp: 'ci-hub', ci_appliance_binding: 1 });
 
-      expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
+      expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+      expect(federatedIdentityService.findUserId).not.toHaveBeenCalled();
+      expect(userService.findAccountByEmail).not.toHaveBeenCalled();
     });
 
-    it('confines a companion-atlas token the Portal stamped to the capture scope', async () => {
+    it('confines a companion-atlas token the Portal stamped to the capture scope, as a capture client', async () => {
       // The Companion Atlas viewer's token: a JWT the Portal stamps (CI-Portal jwtAccessToken.ts),
-      // addressed to no appliance. Not a capture client, so it takes the route any other client's
-      // unaddressed token takes: the capture scope.
+      // addressed to no appliance. It records captures only because it is listed as a capture
+      // client, as the shipped default lists it.
       portalConfig.audience = 'ci-server,ci-import-tools,ci-even,companion-atlas';
+      portalConfig.captureClients = 'ci-import-tools,ci-even,companion-atlas';
       signedInAs({ aud: 'companion-atlas', ci_appliance_binding: 1 });
 
       expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
@@ -576,7 +581,8 @@ describe('PortalTokenService', () => {
 //
 // Keep in step with CI-Portal's PUBLIC_CLIENTS (createAuth.ts): the portal
 // issues per-client tokens with `aud === client_id`, so any client registered
-// there must be accepted here or it can authenticate but not write to memory.
+// there that writes to a Memory must be accepted here or it can authenticate
+// but not write. The exception is ci-hub, whose tokens no Memory accepts.
 describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
   it('accepts every first-party client that CI-Portal can issue tokens for', () => {
     // Read rather than import: the api workspace's tsconfig has no
@@ -586,13 +592,14 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     const audiences = defaults.auth.portal.audience.split(',').map((a) => a.trim());
 
     expect(audiences).toContain('ci-server');
-    expect(audiences).toContain('ci-hub');
+    // Every Hub a person signs in to holds their ci-hub id_token; it is no credential at a Memory.
+    expect(audiences).not.toContain('ci-hub');
     expect(audiences).not.toContain('ci-import-tools');
     expect(audiences).toContain('ci-browser-extension');
     expect(audiences).toContain('ci-even');
     // Companion Memory App (CI-Applet), the desktop capture client.
     expect(audiences).toContain('ci-applet');
-    // Companion Atlas, the globe viewer. The Portal stamps its tokens, so they are capture-only here.
+    // Companion Atlas, the globe viewer. A capture client, so its tokens are capture-only here.
     expect(audiences).toContain('companion-atlas');
 
     expect(new Set(audiences).size).toBe(audiences.length);
@@ -606,7 +613,7 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     ).auth;
 
     expect(portal.captureClients.split(',').sort()).toEqual(
-      ['ci-applet', 'ci-browser-extension', 'ci-even'].sort(),
+      ['ci-applet', 'ci-browser-extension', 'ci-even', 'companion-atlas'].sort(),
     );
     // Nothing presents a service token: the sidecars authenticate with SIDECAR_AUTH_SECRET.
     expect(portal.serviceClients).toBe('');

@@ -115,16 +115,10 @@ export function emailFromIdToken(idToken: string | null | undefined): string | n
 /**
  * Client ids Memory's PortalTokenService accepts (auth.portal.audience). The
  * Portal's OIDC access token is opaque, not a JWT, and is a credential for the
- * Portal itself: it is never sent to a Memory.
+ * Portal itself: it is never sent to a Memory. `ci-hub` is not one: every Hub a
+ * person signs in to holds their ci-hub id_token, so a Memory refuses it.
  */
-const MEMORY_PORTAL_AUDIENCES = new Set([
-  'ci-server',
-  'ci-hub',
-  'ci-import-tools',
-  'ci-browser-extension',
-  'ci-even',
-  'ci-applet',
-]);
+const MEMORY_PORTAL_AUDIENCES = new Set(['ci-server', 'ci-browser-extension', 'ci-even', 'ci-applet']);
 
 function audienceValues(aud: JwtClaims['aud']): string[] {
   if (!aud) {
