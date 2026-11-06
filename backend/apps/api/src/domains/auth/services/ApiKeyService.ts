@@ -199,7 +199,7 @@ export class ApiKeyService {
   async findUserIdByName(name: string): Promise<string | null> {
     const keys = await this.apiKeyRepository.find({
       where: { name, managed_by: CONNECT_PROVENANCE },
-      select: ['user_id'],
+      select: { user_id: true },
     });
 
     if (keys.length === 0) {
@@ -417,7 +417,15 @@ export class ApiKeyService {
 
     const key = await this.apiKeyRepository.findOne({
       where: { hashed_key: hashed },
-      select: ['id', 'user_id', 'expires_at', 'scopes', 'capability', 'name', 'managed_by'],
+      select: {
+        id: true,
+        user_id: true,
+        expires_at: true,
+        scopes: true,
+        capability: true,
+        name: true,
+        managed_by: true,
+      },
     });
 
     if (!key) {

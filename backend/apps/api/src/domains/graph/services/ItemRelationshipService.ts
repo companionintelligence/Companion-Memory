@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -101,19 +102,18 @@ export class ItemRelationshipService {
     // arbiter verbatim so re-sends dedup; RETURNING id yields ONLY the rows this
     // statement actually inserted (conflicting rows return nothing under DO
     // NOTHING), which is our inserted count.
-    const result = await this.itemRelationshipRepository
-      .createQueryBuilder()
-      .insert()
-      .into(this.itemRelationshipRepository.metadata.target)
-      .values(unique)
-      .onConflict(
-        `(user_id, from_source_type, from_source_system, from_source_id,` +
-          ` to_source_type, to_source_system, to_source_id, relation) DO NOTHING`,
-      )
-      .returning(['id'])
-      .execute();
+    const insertedRows = await executeInsertWithRawConflict(
+      this.itemRelationshipRepository
+        .createQueryBuilder()
+        .insert()
+        .into(this.itemRelationshipRepository.metadata.target)
+        .values(unique)
+        .returning(['id']),
+      `(user_id, from_source_type, from_source_system, from_source_id,` +
+        ` to_source_type, to_source_system, to_source_id, relation) DO NOTHING`,
+    );
 
-    const inserted = (result.raw as unknown[])?.length ?? 0;
+    const inserted = insertedRows?.length ?? 0;
 
     return {
       inserted,

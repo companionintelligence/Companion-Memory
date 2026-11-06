@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -1419,19 +1420,20 @@ export class GraphUtilityService {
       is_active: true,
     });
 
-    const result = await this.relationshipRepo
-      .createQueryBuilder()
-      .insert()
-      // `metadata.target`, as in PlaceService: the entity class would narrow
-      // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
-      .into(this.relationshipRepo.metadata.target)
-      .values(relationship)
-      .onConflict('(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING')
-      .returning(['relationship_id'])
-      .execute();
+    const insertedRows = await executeInsertWithRawConflict(
+      this.relationshipRepo
+        .createQueryBuilder()
+        .insert()
+        // `metadata.target`, as in PlaceService: the entity class would narrow
+        // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
+        .into(this.relationshipRepo.metadata.target)
+        .values(relationship)
+        .returning(['relationship_id']),
+      '(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING',
+    );
 
     // Postgres hands back the RETURNING rows, and a yielded insert returns none.
-    return (result.raw as unknown[]).length > 0 ? relationship : null;
+    return insertedRows.length > 0 ? relationship : null;
   }
 
   async softDeleteRelationship(relationshipId: string, ownerUserId: string): Promise<void> {
@@ -1583,7 +1585,7 @@ export class GraphUtilityService {
       return this.entityRepo.manager.transaction(async (manager) => {
         const repository = manager.getRepository(GraphNodeEntity);
         const owned = await repository.find({
-          select: ['entity_id'],
+          select: { entity_id: true },
           where: { entity_id: In(entityIds), owner_user_id: ownerUserId },
         });
 

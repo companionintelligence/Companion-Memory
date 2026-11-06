@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState, type PointerEvent } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { DropdownMenu, IconButton, Tooltip, useToast } from '@ci/shadcn';
 import {

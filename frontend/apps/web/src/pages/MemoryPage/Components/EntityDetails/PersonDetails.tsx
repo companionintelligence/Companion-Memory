@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 import { PERSON_FRAGMENT } from '@/components/entities/grid/PersonGridItem';
 import { EditPersonModal, PERSON_EDITOR_FIELDS } from '@/components/modals/AddItemModal/EditPersonModal';

@@ -356,7 +356,7 @@ export class PlaceMergeService {
 
     const entity = await this.placeRepository.findOne({
       where: { id: targetId, user: { id: ownerUserId } },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     if (!entity) {

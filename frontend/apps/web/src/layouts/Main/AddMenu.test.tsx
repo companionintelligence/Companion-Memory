@@ -16,7 +16,8 @@
 
 import { useEffect } from 'react';
 
-import { type ApolloClient, useApolloClient } from '@apollo/client';
+import { type ApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

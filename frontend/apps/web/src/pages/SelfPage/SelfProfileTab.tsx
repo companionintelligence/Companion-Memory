@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, usePageTitle } from '@ci/common';
 import { Card } from '@ci/shadcn';
 

@@ -1,4 +1,4 @@
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 
 import { CONTENT_FRAGMENT } from '@/components/entities/grid/ContentGridItem';
 import { formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';

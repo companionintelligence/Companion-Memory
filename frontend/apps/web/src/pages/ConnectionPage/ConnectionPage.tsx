@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react';
 
-import { isReference, type Reference, useMutation, useQuery } from '@apollo/client';
+import { isReference, type Reference } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { apiKeyHeaders, buildApiUrl, GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import {
   Card,

@@ -1,5 +1,5 @@
 import { Field, ID, Int, ObjectType, Float, registerEnumType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import { type ObjectLifecycleState, type Item } from '@ci/domains/memory';
 

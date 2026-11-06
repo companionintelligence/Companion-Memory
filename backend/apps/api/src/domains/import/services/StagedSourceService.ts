@@ -558,7 +558,7 @@ export class StagedSourceService {
    *    the tie goes to the run.
    */
   private async dropDirIsLive(dropId: string): Promise<boolean> {
-    const liveStatus = await this.sources.exist({
+    const liveStatus = await this.sources.exists({
       where: { dropId, status: In(['staged', 'claimed', 'moved']) },
     });
 

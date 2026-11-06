@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { Button, Input, Label, Select, Textarea, cn } from '@ci/shadcn';
 import { Link } from 'react-router-dom';

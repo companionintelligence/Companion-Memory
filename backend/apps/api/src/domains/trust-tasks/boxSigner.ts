@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, type JsonWebKey } from 'node:crypto';
+import { createPrivateKey, createPublicKey, type webcrypto } from 'node:crypto';
 
 import { base64urlDecode } from './crypto/multibase';
 import { isJsonObject } from './document';
@@ -30,7 +30,7 @@ export function signerFromJwk(raw: unknown): DocumentSigner | null {
       return null;
     }
 
-    const privateKey = createPrivateKey({ key: parsed as JsonWebKey, format: 'jwk' });
+    const privateKey = createPrivateKey({ key: parsed as webcrypto.JsonWebKey, format: 'jwk' });
     const derived = createPublicKey(privateKey).export({ format: 'jwk' });
     const publicKey = base64urlDecode(parsed.x);
     if (derived.x !== parsed.x || publicKey == null || publicKey.length !== 32) {

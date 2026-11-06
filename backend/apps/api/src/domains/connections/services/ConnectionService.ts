@@ -59,7 +59,7 @@ export class ConnectionService {
         }),
         active: true,
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entities.map((entity) => ConnectionEntity.toEgressType(entity));
@@ -75,7 +75,7 @@ export class ConnectionService {
           },
         }),
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     const map = new Map(entities.map((entity) => [entity.id, ConnectionEntity.toEgressType(entity)]));
@@ -93,7 +93,7 @@ export class ConnectionService {
           },
         }),
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entity ? ConnectionEntity.toEgressType(entity) : null;
@@ -217,7 +217,7 @@ export class ConnectionService {
           },
         },
       ],
-      relations: ['user', 'provider'],
+      relations: { user: true, provider: true },
     });
 
     return entities.map((entity) => ({
@@ -238,7 +238,7 @@ export class ConnectionService {
 
     const entities = await this.connectionRepository.find({
       where: whereClause,
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entities.map((entity) => ConnectionEntity.toEgressType(entity));

@@ -1,4 +1,5 @@
-import { isReference, useApolloClient, useMutation, type Reference } from '@apollo/client';
+import { isReference, type Reference } from '@apollo/client';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import { useToast } from '@ci/shadcn';
 
 import { gql } from '@/graphql';

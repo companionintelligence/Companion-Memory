@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog, IconButton, Label, useToast } from '@ci/shadcn';
 import { Check, ClipboardCopy, Mail, MessageSquare, QrCode as QrCodeIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';

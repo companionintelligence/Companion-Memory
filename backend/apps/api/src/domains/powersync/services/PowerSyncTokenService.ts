@@ -1,5 +1,5 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 
 import config from '@ci/configuration';
 
@@ -101,7 +101,7 @@ export class PowerSyncTokenService {
         secret: config.powersync.jwtSecret,
         subject: userId,
         audience: config.powersync.audience,
-        expiresIn: config.powersync.tokenTtl,
+        expiresIn: config.powersync.tokenTtl as JwtSignOptions['expiresIn'],
         keyid: config.powersync.jwtKid,
       },
     );

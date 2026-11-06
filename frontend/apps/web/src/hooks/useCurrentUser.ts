@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
 
 import { gql } from '@/graphql';

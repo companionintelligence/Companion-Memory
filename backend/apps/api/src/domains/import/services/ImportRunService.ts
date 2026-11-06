@@ -1105,7 +1105,7 @@ export class ImportRunService {
    * reconciling the two.
    */
   async runBelongsTo(runId: string, userId: string): Promise<boolean> {
-    return this.dataSource.getRepository(ImportRunEntity).exist({ where: { id: runId, userId } });
+    return this.dataSource.getRepository(ImportRunEntity).exists({ where: { id: runId, userId } });
   }
 
   async stagesFor(runId: string): Promise<ImportStage[]> {

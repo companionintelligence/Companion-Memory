@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 
 import { gql } from '@/graphql';
 import { useLiveChanges } from '@/hooks/useLiveChanges';

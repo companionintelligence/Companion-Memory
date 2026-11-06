@@ -1,4 +1,4 @@
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage } from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
 

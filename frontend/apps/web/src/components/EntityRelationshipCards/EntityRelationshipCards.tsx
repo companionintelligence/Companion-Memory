@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { gql as apolloGql, useApolloClient } from '@apollo/client';
+import { gql as apolloGql } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, cn } from '@ci/shadcn';
 import { Link } from 'react-router-dom';

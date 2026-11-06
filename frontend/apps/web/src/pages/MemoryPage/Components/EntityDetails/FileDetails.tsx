@@ -1,4 +1,4 @@
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 
 import { FILE_FRAGMENT } from '@/components/entities/grid/FileGridItem';
 import { resolveFileTileUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';

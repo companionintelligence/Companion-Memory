@@ -1,4 +1,5 @@
-import { gql as apolloGql, useQuery } from '@apollo/client';
+import { gql as apolloGql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 

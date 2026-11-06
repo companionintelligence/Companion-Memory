@@ -150,7 +150,7 @@ export class DataDeletionService {
     // Owner scoping: load the connection ONLY if it belongs to the caller.
     const connection = await this.connectionRepository.findOne({
       where: { id: connectionId, userId: context.userId },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     if (connection == null) {
@@ -307,7 +307,7 @@ export class DataDeletionService {
 
     const connections = await this.connectionRepository.find({
       where: { userId },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     const revocations: AccountDeletionResult['revocations'] = [];

@@ -915,7 +915,7 @@ export class FileService implements OnModuleInit {
 
     const owned = await this.fileRepository.findOne({
       where: { key, userId: context.userId },
-      select: ['id'],
+      select: { id: true },
       withDeleted: true,
     });
 

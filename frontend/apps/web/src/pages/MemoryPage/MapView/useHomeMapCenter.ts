@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { gql, useApolloClient } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { fetchJson } from '@ci/common';
 
 import { useAuth } from '@/hooks';

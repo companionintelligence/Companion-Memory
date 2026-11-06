@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 
-import { gql, useQuery, useMutation } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery, useMutation } from '@apollo/client/react';
 import { Button, Card, Dialog, IconButton, Input, Label } from '@ci/shadcn';
 import { Eye, EyeOff, Save, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';

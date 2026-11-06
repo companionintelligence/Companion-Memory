@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { gql, useFragment } from '@/graphql';

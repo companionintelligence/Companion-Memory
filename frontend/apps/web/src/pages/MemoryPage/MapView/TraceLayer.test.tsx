@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { LatLngBounds } from 'leaflet';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

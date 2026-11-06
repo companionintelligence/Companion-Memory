@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { JsonObjectScalar } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { Module } from '@nestjs/common';
 import { GraphQLModule as NestGraphQLModule } from '@nestjs/graphql';
@@ -188,6 +189,8 @@ import { UserResolver } from './resolvers/UserResolver';
     UserModule,
   ],
   providers: [
+    // NestJS discovers @Scalar classes through module providers.
+    JsonObjectScalar,
     ActionResolver,
     ActivityResolver,
     AskResolver,

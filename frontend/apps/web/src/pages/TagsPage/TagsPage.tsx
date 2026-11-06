@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, usePageTitle } from '@ci/common';
 import { DropdownMenu, IconButton } from '@ci/shadcn';
 import { Ellipsis, Pencil, Trash } from '@ci/shadcn/icons';

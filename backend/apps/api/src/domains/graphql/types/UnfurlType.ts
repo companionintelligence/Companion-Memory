@@ -1,5 +1,5 @@
 import { Field, Int, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import type { UnfurlView } from '../loaders/UnfurlLoader';
 

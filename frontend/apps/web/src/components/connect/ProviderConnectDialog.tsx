@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage } from '@ci/common';
 import {
   Dialog,

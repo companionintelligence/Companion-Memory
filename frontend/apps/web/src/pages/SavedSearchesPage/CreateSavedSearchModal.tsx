@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog, Input, Label, Textarea, useToast } from '@ci/shadcn';
 
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';

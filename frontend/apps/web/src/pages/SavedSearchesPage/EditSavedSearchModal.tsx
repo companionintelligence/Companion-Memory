@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { useMutation, type Reference, isReference } from '@apollo/client';
+import { type Reference, isReference } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { Button, Dialog, Input, Label, Textarea } from '@ci/shadcn';
 

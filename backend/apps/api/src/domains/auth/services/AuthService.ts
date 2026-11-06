@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto';
 
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import parseDuration from 'parse-duration';
@@ -436,7 +436,7 @@ export class AuthService {
 
     return this.jwtService.sign(payload, {
       secret: config.auth.jwt.refreshTokenSecret,
-      expiresIn: config.auth.jwt.refreshTokenExpiration,
+      expiresIn: config.auth.jwt.refreshTokenExpiration as JwtSignOptions['expiresIn'],
     });
   }
 

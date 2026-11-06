@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 
 import type { ApolloError } from '@apollo/client';
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { createHookContext } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { type ResultOf, type VariablesOf } from '@graphql-typed-document-node/core';

@@ -18,7 +18,7 @@
  */
 
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -64,7 +64,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     JwtModule.register({
       secret: config.auth.jwt.authTokenSecret,
       signOptions: {
-        expiresIn: config.auth.jwt.authTokenExpiration,
+        expiresIn: config.auth.jwt.authTokenExpiration as JwtSignOptions['expiresIn'],
       },
     }),
   ],

@@ -156,7 +156,7 @@ export class TagService {
           userId: context.userId,
         }),
       },
-      relations: includeEntities ? ['entities'] : [],
+      relations: includeEntities ? { entities: true } : {},
     });
 
     return entity ? TagEntity.toEgressType(entity) : null;
@@ -239,7 +239,7 @@ export class TagService {
         label,
         userId: context.userId,
       },
-      relations: includeEntities ? ['entities'] : [],
+      relations: includeEntities ? { entities: true } : {},
     });
 
     return entity ? TagEntity.toEgressType(entity) : null;

@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Card } from '@ci/shadcn';
 import { Link } from 'react-router-dom';

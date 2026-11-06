@@ -1,5 +1,5 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /**
  * Batch communication ingest input for the importer (net-new write path outside

@@ -64,13 +64,10 @@ if (telemetry.enabled && telemetry.dsn) {
     release: telemetry.release,
     enabled: true,
     tracesSampleRate: sampleRate('SENTRY_TRACES_SAMPLE_RATE', 0.1),
-    profilesSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
-    enableMetrics: process.env.SENTRY_ENABLE_METRICS !== 'false',
-    enableLogs: process.env.SENTRY_ENABLE_LOGS !== 'false',
+    profileSessionSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
     // Never attach IPs, cookies or request bodies. This is deliberate and
     // differs from CI-Hub's current setting — see
     // CI-Engineering/architecture/subsystems/security-trust-and-ops.md gap #7.
-    sendDefaultPii: false,
     // The machine hostname identifies the household as surely as a home path.
     includeServerName: false,
     // Off by default in @sentry/node today — the localVariables integration

@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { AlertDialog, Badge, Button, Card, Input, Select, Sheet, Tabs } from '@ci/shadcn';
 import { Filter, Merge, X } from '@ci/shadcn/icons';

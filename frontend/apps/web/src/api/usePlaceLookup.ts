@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import { useLazyQuery } from '@apollo/client';
+import { useLazyQuery } from '@apollo/client/react';
 
 import { gql } from '@/graphql';
 

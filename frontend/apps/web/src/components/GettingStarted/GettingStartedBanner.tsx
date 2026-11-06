@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { Button, IconButton, useToast } from '@ci/shadcn';
 import { AlertCircle, Check, Circle, Loader2, Sparkles, X } from '@ci/shadcn/icons';

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useApolloClient, useMutation } from '@apollo/client';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import { Button, Dialog, useToast } from '@ci/shadcn';
 import { Loader2 } from '@ci/shadcn/icons';
 

@@ -1,6 +1,6 @@
 import { useCallback, useState, useMemo } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Calendar, IconButton, Label, Select } from '@ci/shadcn';
 import { X } from '@ci/shadcn/icons';

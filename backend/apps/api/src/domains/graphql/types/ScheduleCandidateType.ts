@@ -1,5 +1,5 @@
 import { Field, Float, ID, Int, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import { type EventCandidate } from '@ci/domains/schedule';
 

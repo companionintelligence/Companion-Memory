@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 

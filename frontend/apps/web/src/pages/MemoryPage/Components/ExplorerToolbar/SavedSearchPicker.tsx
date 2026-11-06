@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useLazyQuery, useQuery } from '@apollo/client';
+import { useLazyQuery, useQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Input, Popover, cn } from '@ci/shadcn';
 import { ChevronDown, FolderSearch2 } from '@ci/shadcn/icons';

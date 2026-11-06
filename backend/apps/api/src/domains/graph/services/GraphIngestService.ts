@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, type WhereExpressionBuilder } from 'typeorm';
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
@@ -838,25 +839,26 @@ export class GraphIngestService {
         for (const group of byUnionKeys.values()) {
           const rows = group.map((p) => p.row);
           for (let offset = 0; offset < rows.length; offset += chunkSize) {
-            const insertResult = await this.nodeRepository
-              .createQueryBuilder()
-              .insert()
-              .into(this.nodeRepository.metadata.target)
-              .values(rows.slice(offset, offset + chunkSize))
-              .onConflict(ENTITY_CONFLICT_ACTION)
-              .setParameter('unionKeys', group[0].unionKeys)
-              .returning([
-                'entityId',
-                'entityType',
-                'linkedTable',
-                'linkedId',
-                'name',
-                'description',
-                'properties',
-              ])
-              .execute();
+            const insertedRows = await executeInsertWithRawConflict(
+              this.nodeRepository
+                .createQueryBuilder()
+                .insert()
+                .into(this.nodeRepository.metadata.target)
+                .values(rows.slice(offset, offset + chunkSize))
+                .setParameter('unionKeys', group[0].unionKeys)
+                .returning([
+                  'entityId',
+                  'entityType',
+                  'linkedTable',
+                  'linkedId',
+                  'name',
+                  'description',
+                  'properties',
+                ]),
+              ENTITY_CONFLICT_ACTION,
+            );
 
-            for (const raw of (insertResult.raw as Array<Record<string, unknown>>) ?? []) {
+            for (const raw of insertedRows) {
               const ck = coordKey(String(raw.entity_type), String(raw.linked_table), String(raw.linked_id));
               idByCoord.set(ck, String(raw.entity_id));
               written.set(ck, {
@@ -1100,13 +1102,14 @@ export class GraphIngestService {
         const rows = toInsert.map((p) => p.row);
         const chunkSize = computeChunkSize(this.relationshipRepository.metadata.columns.length);
         for (let offset = 0; offset < rows.length; offset += chunkSize) {
-          await this.relationshipRepository
-            .createQueryBuilder()
-            .insert()
-            .into(this.relationshipRepository.metadata.target)
-            .values(rows.slice(offset, offset + chunkSize))
-            .onConflict('(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING')
-            .execute();
+          await executeInsertWithRawConflict(
+            this.relationshipRepository
+              .createQueryBuilder()
+              .insert()
+              .into(this.relationshipRepository.metadata.target)
+              .values(rows.slice(offset, offset + chunkSize)),
+            '(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING',
+          );
         }
 
         await this.graphDeltaWriter.recordMany(

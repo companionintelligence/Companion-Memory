@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-import { useLazyQuery } from '@apollo/client';
+import { useLazyQuery } from '@apollo/client/react';
 import {
   getCurrentDeviceLocation,
   isDeviceLocationError,

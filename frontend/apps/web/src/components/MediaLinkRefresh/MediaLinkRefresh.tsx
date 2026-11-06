@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 
 import { apolloMediaLinkRefresher, installMediaLinkRefresh } from '@/lib/mediaLinkRefresh';
 

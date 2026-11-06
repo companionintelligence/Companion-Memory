@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { Button, cn } from '@ci/shadcn';
 import { Route } from '@ci/shadcn/icons';
 import L from 'leaflet';

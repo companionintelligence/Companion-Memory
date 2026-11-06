@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog } from '@ci/shadcn';
 
 import { gql } from '@/graphql';

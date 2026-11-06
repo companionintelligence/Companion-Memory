@@ -1,6 +1,6 @@
 import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { Button, DropdownMenu, cn } from '@ci/shadcn';
 import { ChevronDown, Shapes, Tag as TagIcon } from '@ci/shadcn/icons';

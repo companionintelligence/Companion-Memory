@@ -179,7 +179,7 @@ export class AnswerService {
     const ids = entities.map((entity) => entity.id);
     const rows = await this.answerRepository.find({
       where: { id: In(ids) },
-      relations: ['user', 'question'],
+      relations: { user: true, question: true },
     });
     const byId = new Map(rows.map((row) => [row.id, row]));
 
@@ -193,7 +193,7 @@ export class AnswerService {
           id: context.userId,
         },
       },
-      relations: ['user', 'question'],
+      relations: { user: true, question: true },
     });
 
     return result.map((entity) => AnswerEntity.toEgressType(entity));
@@ -211,7 +211,7 @@ export class AnswerService {
         }),
         id: In(ids),
       },
-      relations: ['user', 'question'],
+      relations: { user: true, question: true },
     });
 
     const map = new Map(result.map((entity) => [entity.id, AnswerEntity.toEgressType(entity)]));
@@ -227,7 +227,7 @@ export class AnswerService {
         }),
         id: id,
       },
-      relations: ['user', 'question'],
+      relations: { user: true, question: true },
     });
 
     return result ? AnswerEntity.toEgressType(result) : null;
@@ -243,7 +243,7 @@ export class AnswerService {
           id: questionId,
         },
       },
-      relations: ['user', 'question'],
+      relations: { user: true, question: true },
     });
 
     return result ? AnswerEntity.toEgressType(result) : null;

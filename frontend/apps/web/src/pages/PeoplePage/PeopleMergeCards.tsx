@@ -1,6 +1,6 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Badge, Button } from '@ci/shadcn';
 import { Loader2, Merge } from '@ci/shadcn/icons';

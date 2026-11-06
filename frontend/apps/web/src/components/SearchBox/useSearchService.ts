@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useOptionalConnectionMode } from '@ci/common';
 
 import { type LocalSearchNode, searchLocal } from '@/api/powersync/localSearch';

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
-import { useQuery, gql } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID, getWebOrigin } from '@ci/common';
 import { cn, Dialog, Button } from '@ci/shadcn';
 import {

@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import {
-  ApolloClient,
-  ApolloProvider as BaseApolloProvider,
-  InMemoryCache,
-  createHttpLink,
-} from '@apollo/client';
+import { ApolloClient, InMemoryCache, createHttpLink } from '@apollo/client';
+import { ApolloProvider as BaseApolloProvider } from '@apollo/client/react';
 import { setContext } from '@apollo/client/link/context';
 import { apiFetch, apiKeyHeaders, buildApiUrl } from '@ci/common';
 

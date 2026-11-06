@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { type ApolloError, useQuery, type OperationVariables, type TypedDocumentNode } from '@apollo/client';
+import { type ApolloError, type OperationVariables, type TypedDocumentNode } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 /** One row of an `*_HIDDEN_CHARACTERS` answer. */
 export interface HiddenCharacterRow {

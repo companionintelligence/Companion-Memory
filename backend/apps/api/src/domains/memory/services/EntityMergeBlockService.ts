@@ -112,7 +112,7 @@ export class EntityMergeBlockService {
         { ownerUserId: context.userId, entityIdA: In(unique) },
         { ownerUserId: context.userId, entityIdB: In(unique) },
       ],
-      select: ['entityIdA', 'entityIdB'],
+      select: { entityIdA: true, entityIdB: true },
     });
 
     const candidates = new Set(unique);

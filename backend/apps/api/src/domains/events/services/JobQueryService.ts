@@ -554,8 +554,6 @@ export class JobQueryService {
                COUNT(*)::int AS count
           FROM (
             SELECT name, data, created_on FROM pgboss.job     WHERE created_on >= $1 AND name <> $3
-            UNION ALL
-            SELECT name, data, created_on FROM pgboss.archive WHERE created_on >= $1 AND name <> $3
           ) AS live
          GROUP BY 1, 2, 3
         `,
@@ -661,8 +659,6 @@ export class JobQueryService {
       SELECT MIN(created_on) AS oldest
         FROM (
           SELECT created_on FROM pgboss.job     WHERE name <> $1
-          UNION ALL
-          SELECT created_on FROM pgboss.archive WHERE name <> $1
         ) AS live
       `,
       [DEAD_LETTER_QUEUE],

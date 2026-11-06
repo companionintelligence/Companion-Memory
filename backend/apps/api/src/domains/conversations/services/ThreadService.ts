@@ -129,7 +129,7 @@ export class ThreadService {
         }),
         isArchived: false,
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(entities.map((entity) => [entity.id, ThreadEntity.toEgressType(entity)]));
@@ -148,7 +148,7 @@ export class ThreadService {
         }),
         isArchived: false,
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     if (result == null) {
