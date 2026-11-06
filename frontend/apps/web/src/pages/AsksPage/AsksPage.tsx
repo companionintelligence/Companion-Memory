@@ -15,7 +15,6 @@ import {
   partyAvatar,
   partyLabel,
   peerLinksByHandle,
-  scopeSummary,
   searchBreadthNote,
 } from './askBinding';
 import { AskComposer } from './AskComposer';
@@ -337,7 +336,7 @@ export function AsksPage() {
                 prompt={ask.query.prompt}
                 promptHiddenCharactersRemoved={inboxHiddenCharacters.removed.has(ask.id)}
                 hiddenCharacterCheck={inboxHiddenCharacters.checkOf(ask.id)}
-                scopeSummary={scopeSummary(ask.query)}
+                scope={ask.query}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
                 actor={ask.query.actor}

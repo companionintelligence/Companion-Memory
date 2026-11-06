@@ -302,7 +302,13 @@ describe('AsksPage', () => {
   it('shows the structured scope, which is all that is on the wire', async () => {
     renderPage(defaultMocks);
 
-    await waitFor(() => expect(screen.getByText(/photos · photos/)).toBeInTheDocument());
+    // Each part is the asker's own text, so each is shown attributed and
+    // isolated rather than joined into one line of app copy.
+    const kind = await screen.findByText('Would search:');
+    const dataClass = screen.getByText('Data class they named:');
+
+    expect(kind.parentElement).toHaveTextContent('Would search: photos');
+    expect(dataClass.parentElement).toHaveTextContent('Data class they named: photos');
   });
 
   it('never lets the declared data class read as a narrower search than runs', async () => {
