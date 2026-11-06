@@ -120,6 +120,11 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
   routing, trust-ping and friends, `did:key`/`did:peer`/`did:web`, pinned to the specification's and
   the Rust reference's test vectors. A tested library kept beside the KERI design, which it does not
   depend on and refuses to impersonate; not wired into the API yet.
+- [pws.md](pws.md) — Portable Web Spaces (W3C CCG storage API and zCap authorization): Spaces,
+  Collections and Resources controlled by a DID, shared by attenuated expiring capabilities. A tested
+  library kept beside, not on top of, the KERI-shaped peer code (`did:keri` is refused); not wired into
+  the API. It passes 203 of the Interop Alliance's 305 conformance checks; the suite reports
+  `conformant: false` because the failures trace to features that are not built.
 - [asks-threat-model.md](asks-threat-model.md) — the adversaries the ask feature does and
   does not defend against: coercion in a shared household, stalking via repeated free/busy,
   social engineering at the consent moment, prompt injection (traced, none today),
