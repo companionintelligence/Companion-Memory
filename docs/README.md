@@ -110,6 +110,9 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 - [peer-federation.md](peer-federation.md) — asking questions across two Companion memories:
   Portal discovery, the three ask archetypes, the consent gate, free/busy without leaking a
   calendar.
+- [trust-tasks.md](trust-tasks.md) — Trust Tasks (Trust Over IP) as a second door onto the
+  same ask pipeline: signed task documents with the proof inside, `POST /agent/v1/trust-tasks`,
+  off by default; what is implemented, how a request is checked, and what is not here.
 - [asks-threat-model.md](asks-threat-model.md) — the adversaries the ask feature does and
   does not defend against: coercion in a shared household, stalking via repeated free/busy,
   social engineering at the consent moment, prompt injection (traced, none today),
