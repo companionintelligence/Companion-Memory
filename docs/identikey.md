@@ -284,13 +284,13 @@ relying on this.
 
 Measured in the sandbox this was built in (Node 22.23.4, one core of a shared cloud container, so noisy):
 read it as a ratio, not as capacity. A response to a challenge this verifier never issued now costs the
-decode and one lookup, **about 0.2 ms for Ed25519 and 0.1 ms for P-256, with an ML-DSA half of any size or
-none**. That is the same as a response for the wrong audience (0.2 ms). Before the checks were reordered,
-the independent reviewer measured 0.66 ms for the same response with only an Ed25519 signature, and 2.7,
-4.0 and 6.0 ms with ML-DSA-44, -65 and -87, each plus one pin-store read. A hostile 16 KiB body that is
-nothing but values is now refused in about 30 microseconds (it was 4.3 to 5.4 ms). What remains is mostly
-the Ed25519 key's on-curve test (about 0.16 ms), which stays in decoding on purpose: it keeps every key
-value in the library one that is already known to be usable. Rate-limit the endpoint anyway.
+decode and one lookup, **about 0.2 to 0.3 ms for Ed25519 and 0.1 ms for P-256, whether or not there is an
+ML-DSA half**. That is about what a response for the wrong audience costs (0.2 ms). Before the checks were
+reordered, the independent reviewer measured 0.66 ms for the same response with only an Ed25519 signature,
+and 2.7, 4.0 and 6.0 ms with ML-DSA-44, -65 and -87, each plus one pin-store read. A hostile 16 KiB body
+that is nothing but values is now refused in 30 to 40 microseconds (it was 4.3 to 5.4 ms). What remains is
+mostly the Ed25519 key's on-curve test (about 0.16 ms), which stays in decoding on purpose: it keeps every
+key value in the library one that is already known to be usable. Rate-limit the endpoint anyway.
 
 ## Evidence: what was checked, and what was not
 
