@@ -135,11 +135,11 @@ function makeResolver() {
   return { resolver, contentCalls, eventCalls };
 }
 
+/** The cursor's (time, id); a first page's cursor carries the browse total as a third segment. */
 function decodeCursor(cursor: string): { time: string; globalId: string } {
-  const decoded = Buffer.from(cursor, 'base64').toString('utf8');
-  const separator = decoded.indexOf('::');
+  const [time, globalId] = Buffer.from(cursor, 'base64').toString('utf8').split('::');
 
-  return { time: decoded.slice(0, separator), globalId: decoded.slice(separator + 2) };
+  return { time, globalId };
 }
 
 describe('SearchResolver cursor / sort-key coupling', () => {
