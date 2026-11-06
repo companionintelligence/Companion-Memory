@@ -88,6 +88,9 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 
 - [spikes/webbed-feet-graph-view.md](spikes/webbed-feet-graph-view.md) — spike: a full-bleed
   force-layout graph view for the Explorer, over the unchanged graph read APIs
+- [vtc.md](vtc.md) — Verifiable Trust Community credentials (OpenVTC / DTG v1): a tested library that
+  issues, revokes and recognises membership credentials. Kept beside, not on top of, the KERI-shaped
+  peer code; not wired into the API and not yet run against OpenVTC's software.
 - [`docs/scratch1-bdc/`](scratch1-bdc/) — the 2026-08-09 prediction/planning proposal set,
   for team review rather than as a record of what shipped:
   [system map](scratch1-bdc/ci-prediction-doc-map.md) (start here — how the four systems relate) ·
