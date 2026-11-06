@@ -1860,4 +1860,30 @@ if (parsed.peers.allowCgnatEndpoints) {
   );
 }
 
+/**
+ * True when the inbound peer surface accepts a Portal-token ask that carries no
+ * message signature: `peers.audience` is bound (so Portal-token asks are served
+ * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
+ *
+ * That is the shipped default once an operator binds an audience. The bearer
+ * token alone then authenticates the ask, so a leaked token works for its whole
+ * lifetime and replay is not detected; only a signature binds the token to one
+ * request. The default stays off for interoperability with peers that do not
+ * sign yet, so this is surfaced rather than refused.
+ */
+export function acceptsUnsignedPeerAsks(
+  peers: { audience?: string; requireHttpSignature?: boolean } = parsed.peers,
+): boolean {
+  return Boolean(peers.audience?.trim()) && peers.requireHttpSignature !== true;
+}
+
+if (acceptsUnsignedPeerAsks()) {
+  console.warn(
+    '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
+      'that carry only a Portal token are accepted without an HTTP message signature, so a leaked ' +
+      'token is enough to ask as that peer and a replayed request is not detected. Turn on ' +
+      'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
+  );
+}
+
 export default parsed;
