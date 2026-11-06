@@ -443,3 +443,75 @@ describe('Instagram datasource — HTML activity entry fidelity', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
+
+describe('Instagram datasource — mojibake repair (emoji/accents)', () => {
+  // Instagram DYI JSON comes out of the same Meta exporter as Facebook's, and
+  // it escapes every UTF-8 byte of a non-ASCII character as its own \u00XX
+  // code point. facebook.ts has repaired that since the day it shipped;
+  // instagram.ts parsed the same bytes bare and stored "😊" as "ð\u009f\u0098\u008a".
+  it('decodes latin-1-escaped UTF-8 in DM text, sender names, thread titles and captions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-mojibake-'));
+    try {
+      const threadDir = path.join(root, 'your_instagram_activity', 'messages', 'inbox', 'jose_111');
+      fs.mkdirSync(threadDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(threadDir, 'message_1.json'),
+        `{
+          "participants": [{"name": "JosÃ© GarcÃ­a"}, {"name": "testuser"}],
+          "messages": [
+            {
+              "sender_name": "JosÃ© GarcÃ­a",
+              "timestamp_ms": 1609459200000,
+              "content": "Happy birthday ð\u009f\u0098\u008að\u009f\u008e\u0082"
+            }
+          ],
+          "title": "JosÃ© GarcÃ­a",
+          "thread_type": "Regular"
+        }`,
+      );
+      const postsDir = path.join(root, 'your_instagram_activity', 'posts');
+      fs.mkdirSync(postsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(postsDir, 'post_1.json'),
+        `[{"media": [{"uri": "media/posts/202101/photo1.jpg", "creation_timestamp": 1609459200, "title": "CafÃ© ð\u009f\u008e¸"}], "title": "CafÃ© ð\u009f\u008e¸", "creation_timestamp": 1609459200}]`,
+      );
+
+      const fi = new InstagramFileImporter();
+      const pipeline: EmittedGraph[] = [];
+      await fi.fileImport({}, { filename: 'ig', fullPath: root }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      const msg = pipeline.find((p) => p.item.classification === 'message');
+      expect(msg!.item.metadata.Text).toBe('Happy birthday 😊🎂');
+      expect(msg!.item.metadata.Sender).toBe('José García');
+      expect(msg!.item.metadata.Conversation).toBe('José García');
+      expect(msg!.item.metadata.To).toBe('testuser');
+
+      const post = pipeline.find((p) => p.item.classification !== 'message');
+      expect(post!.item.metadata.Caption).toBe('Café 🎸');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves text that is already real Unicode untouched', async () => {
+    // The checked-in fixture carries real emoji ("🌅", "☕"); the repair must
+    // pass those through, not double-decode them.
+    const root = path.join(FIXTURES_DIR, 'instagram-export');
+    const fi = new InstagramFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'instagram-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const captions = pipeline
+      .filter((p) => p.item.classification !== 'message')
+      .map((p) => p.item.metadata.Caption);
+    expect(captions).toEqual(['Beautiful sunset at the beach 🌅', 'Morning coffee ☕']);
+  });
+});
