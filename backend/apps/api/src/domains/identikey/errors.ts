@@ -29,6 +29,10 @@ export type IdentiKeyErrorCode =
   | 'unknown-challenge'
   /** The nonce was issued here, but for different challenge bytes than the response carries. */
   | 'challenge-mismatch'
+  /** The challenge has had its allowed number of attempts. Whatever the next response says, it is not looked at. */
+  | 'attempts-exceeded'
+  /** The pin lookup said this fingerprint is not enrolled here. Refused before any post-quantum work. */
+  | 'unknown-identity'
   /** Policy demands a post-quantum signature and none was present. */
   | 'pq-required'
   /** A post-quantum key without its signature, or the reverse. */

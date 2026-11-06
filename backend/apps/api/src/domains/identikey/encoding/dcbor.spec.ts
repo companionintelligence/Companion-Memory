@@ -9,6 +9,7 @@ import {
   cbor,
   closedMap,
   decode,
+  DEFAULT_MAX_ITEMS,
   encode,
   type Cbor,
 } from './dcbor';
@@ -279,6 +280,56 @@ describe('dCBOR subset', () => {
 
     it('does not recurse its way to a stack overflow on deep hostile input', () => {
       expect(codeOf(() => decode(hex('81'.repeat(60_000) + '00'), { maxBytes: 100_000 }))).toBe('malformed');
+    });
+
+    describe('the item budget: bytes alone do not bound the work', () => {
+      // Every value costs at least one byte and allocates a node, so a body of zeros is as many
+      // allocations as it is bytes. The budget counts every value and every map key.
+      const zeros = (count: number): Uint8Array =>
+        new Uint8Array([0x99, count >> 8, count & 0xff, ...Array.from({ length: count }, () => 0)]);
+
+      it('counts the container, its values and its keys', () => {
+        // [0, 0, 0] is four items: the array and three zeros.
+        expect(() => decode(hex('83000000'), { maxItems: 4 })).not.toThrow();
+        expect(codeOf(() => decode(hex('83000000'), { maxItems: 3 }))).toBe('malformed');
+        // {"a": 0, "b": 0} is five: the map, two keys and two values.
+        expect(() => decode(hex('a2616100616200'), { maxItems: 5 })).not.toThrow();
+        expect(codeOf(() => decode(hex('a2616100616200'), { maxItems: 4 }))).toBe('malformed');
+      });
+
+      it('has a default ceiling, and refuses one item past it', () => {
+        expect(() => decode(zeros(DEFAULT_MAX_ITEMS - 1))).not.toThrow();
+        expect(codeOf(() => decode(zeros(DEFAULT_MAX_ITEMS)))).toBe('malformed');
+      });
+
+      it('refuses a small body that is nearly all values, and says it was the budget', () => {
+        // 16 000 bytes, well under the byte limit.
+        expect(() => decode(zeros(16_000))).toThrow(/more than 4096 values and keys/);
+      });
+
+      it('refuses a long run of empty maps, which are one byte and one node each', () => {
+        const maps = new Uint8Array([0x99, 0x1f, 0x40, ...Array.from({ length: 8000 }, () => 0xa0)]);
+
+        expect(() => decode(maps)).toThrow(/more than 4096 values and keys/);
+      });
+
+      it('refuses a map with thousands of tiny keys', () => {
+        const keys = 3000;
+        const entries: number[] = [];
+        for (let i = 0; i < keys; i += 1) {
+          // "0".."9" then two-character keys in increasing order: the encoded form of each is length 2,
+          // so they sort by their bytes, as the canonical form requires.
+          entries.push(0x62, 0x30 + (i >> 6), 0x30 + (i & 0x3f), 0x00);
+        }
+
+        const bytes = new Uint8Array([0xb9, keys >> 8, keys & 0xff, ...entries]);
+
+        expect(() => decode(bytes)).toThrow(/more than 4096 values and keys/);
+      });
+
+      it('can be raised for a caller that really holds more', () => {
+        expect(() => decode(zeros(5000), { maxItems: 6000 })).not.toThrow();
+      });
     });
 
     it('refuses input over the size limit before reading it', () => {

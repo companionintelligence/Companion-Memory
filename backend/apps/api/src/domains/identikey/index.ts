@@ -44,7 +44,9 @@ export {
 
 export {
   MAX_CHALLENGE_BYTES,
+  MAX_CHALLENGE_ITEMS,
   MAX_RESPONSE_BYTES,
+  MAX_RESPONSE_ITEMS,
   PROTOCOL_VERSION,
   PURPOSE_CHALLENGE,
   SIGNING_CONTEXT,
@@ -60,6 +62,7 @@ export {
 export {
   ChallengeIssuer,
   InMemoryNonceStore,
+  type AttemptOutcome,
   type ChallengeIssuerOptions,
   type ConsumeOutcome,
   type InMemoryNonceStoreOptions,

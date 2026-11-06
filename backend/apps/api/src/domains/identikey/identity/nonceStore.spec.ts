@@ -92,6 +92,112 @@ describe('InMemoryNonceStore', () => {
     expect(await store.consume(challenge.nonce, bytes)).toBe('used');
   });
 
+  describe('attempts', () => {
+    const recorded = async (store: InMemoryNonceStore, nonceByte = 1) => {
+      const { challenge, bytes } = challengeWith(nonceByte);
+      await store.recordIssued(challenge.nonce, bytes, challenge.expiresAt, NOW);
+
+      return { nonce: challenge.nonce, bytes };
+    };
+
+    it('knows nothing of a nonce it never issued, and remembers nothing about asking', async () => {
+      const store = new InMemoryNonceStore();
+      const { challenge, bytes } = challengeWith(1);
+
+      expect(await store.beginAttempt(challenge.nonce, bytes)).toBe('unknown');
+      expect(store.size).toBe(0);
+    });
+
+    it('allows three attempts by default and then stops looking', async () => {
+      const store = new InMemoryNonceStore();
+      const { nonce, bytes } = await recorded(store);
+
+      expect(await store.beginAttempt(nonce, bytes)).toBe('proceed');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('proceed');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('proceed');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('exhausted');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('exhausted');
+    });
+
+    it('honors a lower limit', async () => {
+      const store = new InMemoryNonceStore({ maxAttempts: 1 });
+      const { nonce, bytes } = await recorded(store);
+
+      expect(await store.beginAttempt(nonce, bytes)).toBe('proceed');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('exhausted');
+    });
+
+    it('hands out exactly the allowed number to callers that all arrive at once', async () => {
+      const store = new InMemoryNonceStore({ maxAttempts: 3 });
+      const { nonce, bytes } = await recorded(store);
+
+      const outcomes = await Promise.all(Array.from({ length: 50 }, () => store.beginAttempt(nonce, bytes)));
+
+      expect(outcomes.filter((outcome) => outcome === 'proceed')).toHaveLength(3);
+      expect(outcomes.filter((outcome) => outcome === 'exhausted')).toHaveLength(47);
+    });
+
+    it('keeps one challenge’s attempts apart from another’s', async () => {
+      const store = new InMemoryNonceStore({ maxAttempts: 1 });
+      const first = await recorded(store, 1);
+      const second = await recorded(store, 2);
+
+      expect(await store.beginAttempt(first.nonce, first.bytes)).toBe('proceed');
+      expect(await store.beginAttempt(first.nonce, first.bytes)).toBe('exhausted');
+      expect(await store.beginAttempt(second.nonce, second.bytes)).toBe('proceed');
+    });
+
+    it('does not count changed challenge bytes as an attempt, because they are not one at this challenge', async () => {
+      const store = new InMemoryNonceStore({ maxAttempts: 1 });
+      const { nonce, bytes } = await recorded(store);
+      const altered = challengeWith(1, NOW + 100_000);
+
+      expect(await store.beginAttempt(nonce, altered.bytes)).toBe('mismatch');
+      expect(await store.beginAttempt(nonce, altered.bytes)).toBe('mismatch');
+      expect(await store.beginAttempt(nonce, bytes)).toBe('proceed');
+    });
+
+    it('says "used" for a spent challenge, whatever attempts were left', async () => {
+      const store = new InMemoryNonceStore();
+      const { nonce, bytes } = await recorded(store);
+      await store.beginAttempt(nonce, bytes);
+      await store.consume(nonce, bytes);
+
+      expect(await store.beginAttempt(nonce, bytes)).toBe('used');
+    });
+
+    it('lets an attempt already claimed still win once the limit has been reached', async () => {
+      // The limit is on starting an attempt, not on finishing one: a response that was admitted must be
+      // able to complete, or a burst of junk could make a genuine, admitted answer fail at the last step.
+      const store = new InMemoryNonceStore({ maxAttempts: 1 });
+      const { nonce, bytes } = await recorded(store);
+      await store.beginAttempt(nonce, bytes);
+
+      expect(await store.beginAttempt(nonce, bytes)).toBe('exhausted');
+      expect(await store.consume(nonce, bytes)).toBe('consumed');
+    });
+
+    it('does not keep a forgotten challenge answerable', async () => {
+      const store = new InMemoryNonceStore({ retainSeconds: 0 });
+      const { challenge, bytes } = challengeWith(1, NOW + 10);
+      await store.recordIssued(challenge.nonce, bytes, challenge.expiresAt, NOW);
+      await store.gc(NOW + 11);
+
+      expect(await store.beginAttempt(challenge.nonce, bytes)).toBe('unknown');
+    });
+
+    it.each([0, -1, 11, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'refuses to be built with %s attempts',
+      (maxAttempts) => {
+        expect(() => new InMemoryNonceStore({ maxAttempts })).toThrow(RangeError);
+      },
+    );
+
+    it.each([1, 3, 10])('accepts %s attempts', (maxAttempts) => {
+      expect(() => new InMemoryNonceStore({ maxAttempts })).not.toThrow();
+    });
+  });
+
   describe('forgetting', () => {
     it('drops entries only after they expire AND the retention window has passed', async () => {
       const store = new InMemoryNonceStore({ retainSeconds: 60 });
@@ -139,6 +245,32 @@ describe('InMemoryNonceStore', () => {
         ),
       ).toBe('store-full');
       expect(store.size).toBe(3);
+    });
+
+    it('counts answered challenges, and expired ones still being retained, against the limit', async () => {
+      // A slot is held for the challenge's lifetime PLUS the retention window, whether or not anyone
+      // answers it. So what a client controls is how many challenges it ISSUES per second, not how
+      // many are outstanding; one client can hold every slot, and issuing needs a rate limit in front.
+      const store = new InMemoryNonceStore({ maxEntries: 2, retainSeconds: 60 });
+      const first = challengeWith(1, NOW + 10);
+      const second = challengeWith(2, NOW + 10);
+      for (const { challenge, bytes } of [first, second]) {
+        await store.recordIssued(challenge.nonce, bytes, challenge.expiresAt, NOW);
+      }
+
+      await store.consume(first.challenge.nonce, first.bytes);
+
+      const third = challengeWith(3, NOW + 200);
+      // Both are over (and one was answered), and both are inside the retention window.
+      expect(
+        await codeOfAsync(() =>
+          store.recordIssued(third.challenge.nonce, third.bytes, third.challenge.expiresAt, NOW + 20),
+        ),
+      ).toBe('store-full');
+
+      // Past the retention window they are forgotten, and the slot is free again.
+      await store.recordIssued(third.challenge.nonce, third.bytes, third.challenge.expiresAt, NOW + 10 + 61);
+      expect(store.size).toBe(1);
     });
 
     it('makes room by forgetting what has expired before it refuses anyone', async () => {

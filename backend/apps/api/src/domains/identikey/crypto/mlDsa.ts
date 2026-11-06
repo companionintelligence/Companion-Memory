@@ -9,7 +9,7 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
  *
  * `@noble/post-quantum`, pinned to 0.4.1. Node's own ML-DSA arrived after the Node 22 this repo's
  * `.nvmrc` and CI use (22.23 throws on `generateKeyPairSync('ml-dsa-65')`), while the API image ships
- * a newer Node; relying on the native one would make behaviour depend on which Node ran the code. noble
+ * a newer Node; relying on the native one would make behavior depend on which Node ran the code. noble
  * is the same everywhere.
  *
  * 0.4.1 is the last release that is both CommonJS and built on `@noble/hashes` 1.x, which is what a
@@ -34,7 +34,7 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
  * that only verify under that context: a Rust verifier (empty context) rejects every one. The same
  * library also signs DETERMINISTICALLY unless `random` is passed. So this file describes the runtime
  * API itself, passes an explicit empty context everywhere, and supplies the randomness explicitly;
- * `mlDsa.spec.ts` pins all three behaviours.
+ * `mlDsa.spec.ts` pins all three behaviors.
  *
  * Interop was checked against an independent FIPS 204 implementation (see the spec's third-party
  * vectors), NOT against Rust-made ML-DSA bytes: upstream commits no ML-DSA fixture. See docs/identikey.md.

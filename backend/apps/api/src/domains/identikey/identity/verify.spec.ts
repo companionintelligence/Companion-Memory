@@ -19,7 +19,13 @@ import {
   signatureToCbor,
   type PqPublicKey,
 } from './keys';
-import { ChallengeIssuer, InMemoryNonceStore, type NonceStore } from './nonceStore';
+import {
+  ChallengeIssuer,
+  InMemoryNonceStore,
+  type AttemptOutcome,
+  type ConsumeOutcome,
+  type NonceStore,
+} from './nonceStore';
 import { SoftwareSigner, respond, type Signer } from './softwareSigner';
 import { verifyResponse, type PqPin, type VerifyOptions, type VerifyResult } from './verify';
 
@@ -240,7 +246,12 @@ describe('verifyResponse', () => {
       const forged = baseChallenge({ nonce: issued.nonce, expiresAt: NOW + 1_000_000 });
       const response = await answerChallenge(SoftwareSigner.generateEd25519(), forged, nonces, false);
 
-      expectFailure(await verifyResponse(response, options(nonces)), 'challenge-mismatch');
+      // More tries than a challenge is allowed: changed bytes are not an attempt AT this challenge, so
+      // someone who has seen a nonce cannot use them to use up the genuine claimant's attempts.
+      for (let tries = 0; tries < 5; tries += 1) {
+        expectFailure(await verifyResponse(response, options(nonces)), 'challenge-mismatch');
+      }
+
       // And the genuine challenge is still answerable afterwards.
       const genuine = await answerChallenge(SoftwareSigner.generateEd25519(), issued, nonces, false);
 
@@ -253,6 +264,14 @@ describe('verifyResponse', () => {
       const spent = new Set<string>();
       const naive: NonceStore = {
         recordIssued: async () => undefined,
+        beginAttempt: async (nonce) => {
+          const key = toHex(nonce);
+          if (!issuedNonces.has(key)) {
+            return 'unknown';
+          }
+
+          return spent.has(key) ? 'used' : 'proceed';
+        },
         consume: async (nonce) => {
           const key = toHex(nonce);
           if (!issuedNonces.has(key)) {
@@ -313,18 +332,192 @@ describe('verifyResponse', () => {
     });
   });
 
+  describe('the order of the checks: what a caller must have paid before a dearer check is spent on them', () => {
+    // A caller with no account has a throwaway key pair and signs anything with it, so "the signature
+    // verifies" says nothing about them. What does is that THIS verifier issued the challenge. Each test
+    // gives a response a defect that a LATER check would report, and asks which check reports first.
+
+    /** A hybrid response from a throwaway identity to a challenge of its own making, plus one defect. */
+    async function throwaway(defect: 'none' | 'classical' | 'post-quantum', challengeBytes?: Uint8Array) {
+      const signer = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-87');
+      const bytes = challengeBytes ?? encodeChallenge(baseChallenge());
+      const genuine = decodeResponse(await respond(signer, bytes, { audience: AUD }));
+      const pq = must(genuine.pq);
+
+      if (defect === 'classical') {
+        const damaged = Uint8Array.from(genuine.signature.bytes);
+        damaged[0] ^= 0x01;
+
+        return encodeResponse({ ...genuine, signature: classicalSignature('ed25519', damaged) });
+      }
+
+      if (defect === 'post-quantum') {
+        // Flipping the first byte changes only the commitment hash, so the whole of the dearest
+        // verification runs before it fails: the most expensive failure there is.
+        const damaged = Uint8Array.from(pq.signature.bytes);
+        damaged[0] ^= 0x01;
+
+        return encodeResponse({
+          ...genuine,
+          pq: { publicKey: pq.publicKey, signature: pqSignature('ml-dsa-87', damaged) },
+        });
+      }
+
+      return encodeResponse(genuine);
+    }
+
+    const DEFECTS = [
+      ['a response that is otherwise perfect', 'none'],
+      ['a damaged classical signature', 'classical'],
+      ['a damaged post-quantum signature', 'post-quantum'],
+    ] as const;
+
+    it.each(DEFECTS)(
+      'stops a challenge nobody issued at the nonce, with no pin lookup: %s',
+      async (_label, defect) => {
+        const resolvePqPin = jest.fn((): PqPin => ({ kind: 'unpinned' }));
+        const nothingIssued = new InMemoryNonceStore();
+
+        expectFailure(
+          await verifyResponse(
+            await throwaway(defect),
+            options(nothingIssued, { policy: 'pq-required', resolvePqPin }),
+          ),
+          'unknown-challenge',
+        );
+        expect(resolvePqPin).not.toHaveBeenCalled();
+        expect(nothingIssued.size).toBe(0);
+      },
+    );
+
+    it('stops a challenge that was issued and answered, with no pin lookup, however many times it is replayed', async () => {
+      const resolvePqPin = jest.fn((): PqPin => ({ kind: 'unpinned' }));
+      const { nonces, issued } = await issue();
+      const signer = SoftwareSigner.generateEd25519();
+      const response = await respond(signer, issued.bytes, { audience: AUD });
+      expectOk(await verifyResponse(response, options(nonces, { resolvePqPin })));
+      expect(resolvePqPin).toHaveBeenCalledTimes(1);
+
+      for (let replays = 0; replays < 20; replays += 1) {
+        expectFailure(await verifyResponse(response, options(nonces, { resolvePqPin })), 'replay');
+      }
+
+      expect(resolvePqPin).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets a challenge be answered wrongly only a few times, and runs the pin lookup only for those', async () => {
+      const resolvePqPin = jest.fn((): PqPin => ({ kind: 'unpinned' }));
+      const { nonces, issued } = await issue();
+      const bad = await throwaway('post-quantum', issued.bytes);
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        expectFailure(await verifyResponse(bad, options(nonces, { resolvePqPin })), 'bad-signature');
+      }
+
+      for (let attempt = 4; attempt <= 20; attempt += 1) {
+        expectFailure(await verifyResponse(bad, options(nonces, { resolvePqPin })), 'attempts-exceeded');
+      }
+
+      expect(resolvePqPin).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not look at a response once the attempts are used up, even a perfect one: the claimant asks again', async () => {
+      const { nonces, issued } = await issue();
+      const bad = await throwaway('classical', issued.bytes);
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        expectFailure(await verifyResponse(bad, options(nonces)), 'bad-signature');
+      }
+
+      const perfect = await throwaway('none', issued.bytes);
+
+      expectFailure(await verifyResponse(perfect, options(nonces)), 'attempts-exceeded');
+    });
+
+    it('holds that limit when the attempts all arrive at once', async () => {
+      const resolvePqPin = jest.fn((): PqPin => ({ kind: 'unpinned' }));
+      const { nonces, issued } = await issue();
+      const bad = await throwaway('post-quantum', issued.bytes);
+
+      const results = await Promise.all(
+        Array.from({ length: 50 }, () => verifyResponse(bad, options(nonces, { resolvePqPin }))),
+      );
+      const codes = results.map((result) => (result.ok ? 'ok' : result.code));
+
+      expect(codes.filter((code) => code === 'bad-signature')).toHaveLength(3);
+      expect(codes.filter((code) => code === 'attempts-exceeded')).toHaveLength(47);
+      expect(resolvePqPin).toHaveBeenCalledTimes(3);
+    });
+
+    it('lets a wrong answer and then the right one both fit in the allowance', async () => {
+      const signer = SoftwareSigner.generateEd25519();
+      const { nonces, issued } = await issue();
+      const genuine = decodeResponse(await respond(signer, issued.bytes, { audience: AUD }));
+      const damaged = Uint8Array.from(genuine.signature.bytes);
+      damaged[0] ^= 0x01;
+
+      expectFailure(
+        await verifyResponse(
+          encodeResponse({ ...genuine, signature: classicalSignature('ed25519', damaged) }),
+          options(nonces),
+        ),
+        'bad-signature',
+      );
+      expectOk(await verifyResponse(encodeResponse(genuine), options(nonces)));
+    });
+
+    it('answers a challenge outside its window before it asks the store anything', async () => {
+      const claimed = jest.fn();
+      const { nonces, issued } = await issue();
+      const watching: NonceStore = {
+        recordIssued: (...args) => nonces.recordIssued(...args),
+        beginAttempt: (...args) => {
+          claimed();
+
+          return nonces.beginAttempt(...args);
+        },
+        consume: (...args) => nonces.consume(...args),
+        gc: (now) => nonces.gc(now),
+      };
+      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+
+      expectFailure(await verifyResponse(response, options(watching, { now: NOW + 10_000 })), 'time-window');
+      expectFailure(
+        await verifyResponse(response, options(watching, { audience: 'someone-else' })),
+        'audience',
+      );
+      expect(claimed).not.toHaveBeenCalled();
+    });
+  });
+
   describe('tampering', () => {
     it('refuses a changed challenge, because the signature covered the original bytes', async () => {
+      // This store has been told about the changed challenge, so the nonce check lets it through and
+      // the signature is the only thing left to stop it.
+      const { issued } = await issue();
+      const response = decodeResponse(
+        await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD }),
+      );
+      const changed = encodeChallenge({ ...issued.challenge, expiresAt: issued.challenge.expiresAt + 1 });
+      const nonces = new InMemoryNonceStore();
+      await nonces.recordIssued(issued.challenge.nonce, changed, issued.challenge.expiresAt + 1, NOW);
+
+      expectFailure(
+        await verifyResponse(encodeResponse({ ...response, challengeBytes: changed }), options(nonces)),
+        'bad-signature',
+      );
+    });
+
+    it('stops a changed challenge the verifier never issued at the nonce check, before any signature work', async () => {
       const { nonces, issued } = await issue();
       const response = decodeResponse(
         await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD }),
       );
       const changed = Uint8Array.from(response.challengeBytes);
-      changed[changed.length - 1] ^= 0xff;
+      changed[changed.length - 1] ^= 0xff; // the last member is the nonce, so this is a different nonce
 
       expectFailure(
         await verifyResponse(encodeResponse({ ...response, challengeBytes: changed }), options(nonces)),
-        'bad-signature',
+        'unknown-challenge',
       );
     });
 
@@ -391,9 +584,13 @@ describe('verifyResponse', () => {
       const results = await Promise.all(
         Array.from({ length: 10 }, () => verifyResponse(response, options(nonces))),
       );
+      const refusals = results.flatMap((r) => (r.ok ? [] : [r.code]));
 
       expect(results.filter((r) => r.ok)).toHaveLength(1);
-      expect(results.filter((r) => !r.ok && r.code === 'replay')).toHaveLength(9);
+      // Three get as far as the nonce (the attempt limit) and two of those find it spent; the other
+      // seven never reach a signature check. Every one of the nine is refused.
+      expect(refusals.filter((code) => code === 'replay')).toHaveLength(2);
+      expect(refusals.filter((code) => code === 'attempts-exceeded')).toHaveLength(7);
     });
   });
 
@@ -504,42 +701,231 @@ describe('verifyResponse', () => {
   });
 
   describe('when OUR side fails, that is not an answer about the claimant', () => {
-    it('rejects, rather than returning ok or a failure code, when the nonce store is down', async () => {
-      const { issued } = await issue();
-      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
-      const down: NonceStore = {
-        recordIssued: async () => undefined,
-        consume: async () => {
-          throw new Error('connection refused');
-        },
-        gc: async () => 0,
-      };
+    const refused = async (): Promise<never> => {
+      throw new Error('connection refused');
+    };
 
-      await expect(verifyResponse(response, options(down))).rejects.toThrow('connection refused');
+    it.each([
+      ['when it claims the attempt', { beginAttempt: refused }],
+      ['when it spends the nonce', { consume: refused }],
+    ] as const)(
+      'rejects, rather than returning ok or a failure code, when the nonce store is down %s',
+      async (_when, broken) => {
+        const { nonces, issued } = await issue();
+        const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+        const down: NonceStore = {
+          recordIssued: (...args) => nonces.recordIssued(...args),
+          beginAttempt: (...args) => nonces.beginAttempt(...args),
+          consume: (...args) => nonces.consume(...args),
+          gc: (now) => nonces.gc(now),
+          ...broken,
+        };
+
+        await expect(verifyResponse(response, options(down))).rejects.toThrow('connection refused');
+      },
+    );
+  });
+
+  describe('when a store or a callback answers outside its contract, the call rejects', () => {
+    // Types protect callers who are typed. An untyped one (a database row with a missing column, a
+    // value added to a union next year) can return something the type forbids, and the one thing the
+    // verifier must never do is read a surprise as a yes. Each of these once authenticated a caller.
+
+    const storeWith = (real: NonceStore, overrides: Partial<NonceStore>): NonceStore => ({
+      recordIssued: (...args) => real.recordIssued(...args),
+      beginAttempt: (...args) => real.beginAttempt(...args),
+      consume: (...args) => real.consume(...args),
+      gc: (now) => real.gc(now),
+      ...overrides,
+    });
+
+    const SURPRISES = [
+      ['undefined', undefined],
+      ['null', null],
+      ['a string outside the union', 'expired'],
+      ['a near miss', 'consumed '],
+      ['a number', 1],
+      ['an object', { ok: true }],
+    ] as const;
+
+    it.each(SURPRISES)('does not accept a response when consume answers %s', async (_label, answer) => {
+      const { nonces, issued } = await issue();
+      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+      const sloppy = storeWith(nonces, { consume: async () => answer as unknown as ConsumeOutcome });
+
+      // The second call is the replay: it must not succeed either.
+      await expect(verifyResponse(response, options(sloppy))).rejects.toThrow(/not a value it may return/);
+      await expect(verifyResponse(response, options(sloppy))).rejects.toThrow(/not a value it may return/);
+    });
+
+    it.each(SURPRISES)('does not proceed when beginAttempt answers %s', async (_label, answer) => {
+      const { nonces, issued } = await issue();
+      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+      const sloppy = storeWith(nonces, { beginAttempt: async () => answer as unknown as AttemptOutcome });
+
+      await expect(verifyResponse(response, options(sloppy))).rejects.toThrow(/not a value it may return/);
+    });
+
+    it.each([
+      ['undefined', undefined],
+      ['null', null],
+      ['a string', 'key'],
+      ['a number', 42],
+      ['an object without a kind', {}],
+      ['an unknown kind', { kind: 'revoked' }],
+      ['a kind in the wrong case', { kind: 'Unpinned' }],
+    ] as const)('does not read a pin lookup that answers %s as "unpinned"', async (_label, pin) => {
+      const { nonces, issued } = await issue();
+      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+
+      await expect(
+        verifyResponse(response, options(nonces, { resolvePqPin: () => pin as unknown as PqPin })),
+      ).rejects.toThrow(/not a value it may return/);
+    });
+
+    it('does not spend the challenge when it rejects, so the claimant can try again once we are fixed', async () => {
+      const { nonces, issued } = await issue();
+      const response = await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD });
+
+      await expect(
+        verifyResponse(response, options(nonces, { resolvePqPin: () => ({ kind: 'revoked' }) as never })),
+      ).rejects.toThrow();
+      expectOk(await verifyResponse(response, options(nonces)));
+    });
+
+    it.each([
+      ['a misspelled policy', 'pq-requird'],
+      ['a policy in the wrong case', 'PQ-REQUIRED'],
+      ['an empty policy', ''],
+      ['no policy', undefined],
+    ])('does not weaken to pq-optional on %s', async (_label, policy) => {
+      const { nonces, response } = await exchange(SoftwareSigner.generateEd25519());
+
+      await expect(
+        verifyResponse(response, options(nonces, { policy: policy as unknown as VerifyOptions['policy'] })),
+      ).rejects.toThrow(RangeError);
+    });
+
+    it('refuses to run with no audience to compare a challenge against', async () => {
+      const { nonces, response } = await exchange(SoftwareSigner.generateEd25519());
+
+      await expect(verifyResponse(response, options(nonces, { audience: '' }))).rejects.toThrow(RangeError);
     });
   });
 
   describe('post-quantum pinning', () => {
     // The reference carries the ML-DSA key inside the response, and the fingerprint hashes only the
-    // classical key. So a PQ key is not bound to an identity unless the verifier remembers it.
+    // classical key. So a PQ key is not bound to an identity unless the verifier remembers it, and
+    // what the verifier remembers must come from ENROLLMENT, never from a login (see PqPin).
 
-    it('reports an unpinned identity’s post-quantum key so that the caller can pin it', async () => {
+    it('reports the post-quantum key an unpinned identity presented, and says that it is not pinned', async () => {
       const signer = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
       const verified = expectOk((await exchange(signer)).result);
 
       expect(toHex(must(verified.pqPublicKey).bytes)).toBe(toHex(must(signer.pqPublicKey()).bytes));
+      expect(verified.pqPinned).toBe(false);
     });
 
-    it('accepts an identity that presents exactly the key it is pinned to', async () => {
+    it('accepts an identity that presents exactly the key it is pinned to, and says that it was pinned', async () => {
       const signer = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
       const pin: PqPin = { kind: 'key', publicKey: must(signer.pqPublicKey()) };
 
-      expectOk((await exchange(signer, { policy: 'pq-required', resolvePqPin: () => pin })).result);
+      const verified = expectOk(
+        (await exchange(signer, { policy: 'pq-required', resolvePqPin: () => pin })).result,
+      );
+
+      expect(verified.pqPinned).toBe(true);
     });
 
-    describe('the swap a quantum forger would try', () => {
-      // The forger can produce the victim's CLASSICAL signature (that is what a quantum computer
-      // gives them) but not the victim's ML-DSA one. They attach a key pair of their own.
+    it('does not call a classical-only answer pinned, whether the identity is unpinned or enrolled without a key', async () => {
+      const signer = SoftwareSigner.generateEd25519();
+
+      for (const pin of [{ kind: 'unpinned' }, { kind: 'none' }] as const) {
+        const verified = expectOk((await exchange(signer, { resolvePqPin: () => pin })).result);
+
+        expect(verified.pqPublicKey).toBeNull();
+        expect(verified.pqPinned).toBe(false);
+      }
+    });
+
+    describe('an identity the pin lookup does not know', () => {
+      // The lookup's way to say "not enrolled here". Everything dearer than the lookup is refused to a
+      // key nobody has heard of: the post-quantum verification costs milliseconds of synchronous CPU,
+      // and a throwaway key pair is free.
+      const unknownIdentity = (): PqPin => ({ kind: 'unknown-identity' });
+
+      it.each([
+        ['with a good post-quantum signature', 'good'],
+        ['with a damaged post-quantum signature', 'damaged'],
+        ['with no post-quantum half, though one is required', 'absent'],
+      ] as const)('is refused as unknown, %s', async (_label, shape) => {
+        const signer = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-87');
+        const { nonces, issued } = await issue();
+        const genuine = decodeResponse(await respond(signer, issued.bytes, { audience: AUD }));
+        const pq = must(genuine.pq);
+        const damaged = Uint8Array.from(pq.signature.bytes);
+        damaged[0] ^= 0x01;
+        const wire = {
+          good: genuine,
+          damaged: {
+            ...genuine,
+            pq: { publicKey: pq.publicKey, signature: pqSignature('ml-dsa-87', damaged) },
+          },
+          absent: {
+            challengeBytes: genuine.challengeBytes,
+            publicKey: genuine.publicKey,
+            signature: genuine.signature,
+          },
+        }[shape];
+
+        // `bad-signature` or `pq-required` here would mean the post-quantum half had been looked at.
+        expectFailure(
+          await verifyResponse(
+            encodeResponse(wire),
+            options(nonces, { policy: 'pq-required', resolvePqPin: unknownIdentity }),
+          ),
+          'unknown-identity',
+        );
+      });
+
+      it('does not spend the challenge, so the same answer works once the identity is enrolled', async () => {
+        const signer = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
+        const { nonces, issued } = await issue();
+        const response = await respond(signer, issued.bytes, { audience: AUD });
+        const enrolled: PqPin = { kind: 'key', publicKey: must(signer.pqPublicKey()) };
+
+        expectFailure(
+          await verifyResponse(response, options(nonces, { resolvePqPin: unknownIdentity })),
+          'unknown-identity',
+        );
+        expectOk(await verifyResponse(response, options(nonces, { resolvePqPin: () => enrolled })));
+      });
+
+      it('is asked about only after the classical signature has held', async () => {
+        const resolvePqPin = jest.fn(unknownIdentity);
+        const { nonces, issued } = await issue();
+        const response = decodeResponse(
+          await respond(SoftwareSigner.generateEd25519(), issued.bytes, { audience: AUD }),
+        );
+        const damaged = Uint8Array.from(response.signature.bytes);
+        damaged[0] ^= 0x01;
+
+        expectFailure(
+          await verifyResponse(
+            encodeResponse({ ...response, signature: classicalSignature('ed25519', damaged) }),
+            options(nonces, { resolvePqPin }),
+          ),
+          'bad-signature',
+        );
+        expect(resolvePqPin).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('the swap: the victim’s classical half with the attacker’s post-quantum pair', () => {
+      // Who can do this. Anyone who can ALTER one response in flight needs no cryptanalysis: the
+      // classical signature covers the challenge and nothing else, so it keeps the victim's classical
+      // key and signature and replaces the post-quantum pair with a key pair of their own. A forger of
+      // classical signatures (what a quantum computer provides) can do the same without being on the path.
       const build = async (victim: SoftwareSigner, attacker: SoftwareSigner) => {
         const { nonces, issued } = await issue();
         const payload = signingPayload(issued.bytes);
@@ -559,9 +945,12 @@ describe('verifyResponse', () => {
         const { nonces, response } = await build(victim, attacker);
         const verified = expectOk(await verifyResponse(response, options(nonces, { policy: 'pq-required' })));
 
-        // "Post-quantum verified", and the post-quantum key is the attacker's.
+        // "Post-quantum verified", and the post-quantum key is the attacker's. The one thing that
+        // tells this apart from a genuine login is `pqPinned`, which is false: the key matched nothing
+        // that was ever enrolled.
         expect(toHex(must(verified.pqPublicKey).bytes)).toBe(toHex(must(attacker.pqPublicKey()).bytes));
         expect(toHex(must(verified.pqPublicKey).bytes)).not.toBe(toHex(must(victim.pqPublicKey()).bytes));
+        expect(verified.pqPinned).toBe(false);
       });
 
       it('is refused once the verifier has pinned the victim’s real key', async () => {
@@ -575,6 +964,32 @@ describe('verifyResponse', () => {
           'pq-key-changed',
         );
         expect(resolvePqPin).toHaveBeenCalledTimes(1);
+      });
+
+      it('locks the owner out if the verifier pins what it saw at a login: why a pin comes from enrollment', async () => {
+        // This is the mistake the documentation warns against, run to its end. The first login the
+        // verifier ever sees was altered in flight, and the verifier recorded "the first good login's
+        // key" as the pin.
+        const victim = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
+        const attacker = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
+        const { nonces, response } = await build(victim, attacker);
+        const first = expectOk(await verifyResponse(response, options(nonces, { policy: 'pq-required' })));
+        const wrongPin: PqPin = { kind: 'key', publicKey: must(first.pqPublicKey) };
+
+        // The flag was the warning: nothing enrolled vouched for this key.
+        expect(first.pqPinned).toBe(false);
+
+        // The real owner now logs in with the real hybrid key, and is refused for ever.
+        const second = await issue();
+        const genuine = await respond(victim, second.issued.bytes, { audience: AUD });
+
+        expectFailure(
+          await verifyResponse(
+            genuine,
+            options(second.nonces, { policy: 'pq-required', resolvePqPin: () => wrongPin }),
+          ),
+          'pq-key-changed',
+        );
       });
     });
 

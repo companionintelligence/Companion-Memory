@@ -4,6 +4,7 @@ import {
   ChallengeIssuer,
   InMemoryNonceStore,
   SoftwareSigner,
+  fingerprintOf,
   fingerprintToBase58,
   respond,
   verifyResponse,
@@ -17,11 +18,12 @@ import {
 describe('the worked example in docs/identikey.md', () => {
   const audience = 'papyrus';
   const now = Math.floor(Date.now() / 1000);
+  const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 
-  it('authenticates a hybrid identity, pins its post-quantum key, then refuses a swapped one', async () => {
+  it('authenticates an enrolled hybrid identity, then refuses a swapped key and a stranger', async () => {
     const nonces = new InMemoryNonceStore();
     const issuer = new ChallengeIssuer({ audience, ttlSeconds: 120 });
-    const pins = new Map<string, PqPin>(); // in production: a table keyed by fingerprint
+    const enrolled = new Map<string, PqPin>(); // in production: a table keyed by fingerprint
 
     const verify = (response: Uint8Array) =>
       verifyResponse(response, {
@@ -30,13 +32,23 @@ describe('the worked example in docs/identikey.md', () => {
         skewSeconds: 30,
         policy: 'pq-required',
         nonces,
-        resolvePqPin: (fingerprint) =>
-          pins.get(Buffer.from(fingerprint).toString('hex')) ?? { kind: 'unpinned' },
+        // Only an identity that was enrolled here gets as far as the post-quantum check.
+        resolvePqPin: (fingerprint) => enrolled.get(hex(fingerprint)) ?? { kind: 'unknown-identity' },
       });
 
     // The claimant holds an Ed25519 key and an ML-DSA-65 key.
     const classicalSeed = randomBytes(32);
     const claimant = SoftwareSigner.fromEd25519Seed(classicalSeed).withMlDsa('ml-dsa-65');
+
+    // ENROLLMENT. Phase 2 builds the real thing; this is its stand-in. Both public keys are recorded
+    // together, in one step, over a channel the verifier already trusts. It is never done with
+    // whatever post-quantum key a login happens to present: a login does not vouch for that key.
+    const pqKey = claimant.pqPublicKey();
+    if (pqKey === null) {
+      throw new Error('a hybrid claimant always has a post-quantum key');
+    }
+
+    enrolled.set(hex(fingerprintOf(claimant.classicalPublicKey())), { kind: 'key', publicKey: pqKey });
 
     // Verifier: issue a challenge. Claimant: answer it. Verifier: check the answer.
     const first = await issuer.issue(nonces, now);
@@ -48,13 +60,8 @@ describe('the worked example in docs/identikey.md', () => {
       throw new Error(`unexpected refusal: ${result.code}`);
     }
 
-    // First contact: remember which post-quantum key belongs to this fingerprint.
-    const fingerprint = Buffer.from(result.verified.fingerprint).toString('hex');
-    if (result.verified.pqPublicKey === null) {
-      throw new Error('a pq-required verification always reports the key that signed');
-    }
-
-    pins.set(fingerprint, { kind: 'key', publicKey: result.verified.pqPublicKey });
+    // `pqPinned` is how a caller knows the post-quantum signature is about THIS identity.
+    expect(result.verified.pqPinned).toBe(true);
     expect(fingerprintToBase58(result.verified.fingerprint)).toMatch(/^[1-9A-HJ-NP-Za-km-z]{43,44}$/);
 
     // The same response cannot be used twice.
@@ -67,9 +74,18 @@ describe('the worked example in docs/identikey.md', () => {
 
     expect(await verify(forged)).toEqual({ ok: false, code: 'pq-key-changed' });
 
-    // The genuine claimant is unaffected by the failed attempt.
+    // A stranger was never enrolled. They are refused before any post-quantum work is done for them.
+    const stranger = SoftwareSigner.generateEd25519().withMlDsa('ml-dsa-65');
     const third = await issuer.issue(nonces, now);
 
-    expect((await verify(await respond(claimant, third.bytes, { audience }))).ok).toBe(true);
+    expect(await verify(await respond(stranger, third.bytes, { audience }))).toEqual({
+      ok: false,
+      code: 'unknown-identity',
+    });
+
+    // The genuine claimant is unaffected by the failed attempts.
+    const fourth = await issuer.issue(nonces, now);
+
+    expect((await verify(await respond(claimant, fourth.bytes, { audience }))).ok).toBe(true);
   });
 });

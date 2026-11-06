@@ -1,9 +1,11 @@
 import { codeOf, fixture, hex, toHex, VECTOR } from '../__tests__/support';
-import { cbor, encode, type Cbor } from '../encoding/dcbor';
+import { cbor, decode, encode, type Cbor } from '../encoding/dcbor';
 
 import {
   MAX_CHALLENGE_BYTES,
+  MAX_CHALLENGE_ITEMS,
   MAX_RESPONSE_BYTES,
+  MAX_RESPONSE_ITEMS,
   PROTOCOL_VERSION,
   PURPOSE_CHALLENGE,
   SIGNING_CONTEXT,
@@ -25,6 +27,18 @@ const CHALLENGE: Challenge = {
   issuedAt: VECTOR.now,
   expiresAt: VECTOR.now + VECTOR.ttlSeconds,
 };
+
+/** Values plus map keys, counted the way the decoder's budget counts them. */
+function itemsIn(value: Cbor): number {
+  switch (value.t) {
+    case 'array':
+      return 1 + value.v.reduce((sum, item) => sum + itemsIn(item), 0);
+    case 'map':
+      return 1 + value.v.reduce((sum, [, item]) => sum + 1 + itemsIn(item), 0);
+    default:
+      return 1;
+  }
+}
 
 describe('challenge and response messages', () => {
   describe('the challenge', () => {
@@ -134,6 +148,30 @@ describe('challenge and response messages', () => {
       expect(codeOf(() => decodeChallenge(big))).toBe('malformed');
     });
 
+    it('is 11 items, inside the item ceiling with a little room', () => {
+      const items = itemsIn(decode(encodeChallenge(CHALLENGE)));
+
+      expect(items).toBe(11);
+      expect(MAX_CHALLENGE_ITEMS).toBeGreaterThanOrEqual(items);
+      expect(MAX_CHALLENGE_ITEMS).toBeLessThanOrEqual(2 * items);
+    });
+
+    it('refuses a challenge that is mostly values, as a budget failure and not a shape failure', () => {
+      // 1 000 zeros in "v": about a kilobyte, under the byte ceiling, over the item ceiling.
+      const hostile = new Uint8Array([
+        0xa1,
+        0x61,
+        0x76,
+        0x99,
+        0x03,
+        0xe8,
+        ...Array.from({ length: 1000 }, () => 0),
+      ]);
+
+      expect(hostile.length).toBeLessThanOrEqual(MAX_CHALLENGE_BYTES);
+      expect(() => decodeChallenge(hostile)).toThrow(/more than 16 values and keys/);
+    });
+
     it('reads a version it does not speak without judging it (the verifier does that)', () => {
       expect(decodeChallenge(encodeChallenge({ ...CHALLENGE, version: 2 })).version).toBe(2);
     });
@@ -198,6 +236,34 @@ describe('challenge and response messages', () => {
       // The ceiling has to admit the biggest honest response, with room to spare.
       expect(bytes.length).toBeGreaterThan(7000);
       expect(bytes.length).toBeLessThan(MAX_RESPONSE_BYTES / 2);
+    });
+
+    it('is 27 items at its largest, inside the item ceiling with room to spare', async () => {
+      // A P-256 key (the longer classical encoding) with ML-DSA-87: every member present.
+      const signer = SoftwareSigner.generateP256().withMlDsa('ml-dsa-87');
+      const bytes = await respond(signer, encodeChallenge(CHALLENGE), { audience: VECTOR.audience });
+      const items = itemsIn(decode(bytes));
+
+      expect(items).toBe(27);
+      expect(MAX_RESPONSE_ITEMS).toBeGreaterThanOrEqual(items);
+      expect(MAX_RESPONSE_ITEMS).toBeLessThanOrEqual(2 * items);
+    });
+
+    it('refuses a response that is mostly values, as a budget failure and not a shape failure', () => {
+      // "chal" holding 10 000 zeros: 10 KB, well under the byte ceiling, far over the item ceiling.
+      const count = 10_000;
+      const hostile = new Uint8Array([
+        0xa1,
+        0x64,
+        ...new TextEncoder().encode('chal'),
+        0x99,
+        count >> 8,
+        count & 0xff,
+        ...Array.from({ length: count }, () => 0),
+      ]);
+
+      expect(hostile.length).toBeLessThan(MAX_RESPONSE_BYTES);
+      expect(() => decodeResponse(hostile)).toThrow(/more than 40 values and keys/);
     });
 
     it('refuses a post-quantum key without its signature, and a signature without its key', () => {

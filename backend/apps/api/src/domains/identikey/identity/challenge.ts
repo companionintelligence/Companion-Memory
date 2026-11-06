@@ -39,6 +39,13 @@ export const PURPOSE_CHALLENGE = 'challenge';
 export const MAX_CHALLENGE_BYTES = 1024;
 /** The largest legitimate response is ML-DSA-87 (2592-byte key + 4627-byte signature) on top of a classical pair, about 8 KiB. */
 export const MAX_RESPONSE_BYTES = 16 * 1024;
+/**
+ * Values and map keys a message may hold. A challenge has 11 (the map, five keys, five values) and the
+ * largest response, with both post-quantum members, has 27. The ceilings leave room, and no more: bytes
+ * alone do not bound the work a decoder does for an anonymous caller (see `DEFAULT_MAX_ITEMS`).
+ */
+export const MAX_CHALLENGE_ITEMS = 16;
+export const MAX_RESPONSE_ITEMS = 40;
 
 export interface Challenge {
   readonly version: number;
@@ -63,7 +70,7 @@ export function encodeChallenge(challenge: Challenge): Uint8Array {
 }
 
 export function decodeChallenge(bytes: Uint8Array): Challenge {
-  const members = closedMap(decode(bytes, { maxBytes: MAX_CHALLENGE_BYTES }), [
+  const members = closedMap(decode(bytes, { maxBytes: MAX_CHALLENGE_BYTES, maxItems: MAX_CHALLENGE_ITEMS }), [
     'v',
     'aud',
     'nonce',
@@ -112,7 +119,7 @@ export function encodeResponse(response: Response): Uint8Array {
 
 export function decodeResponse(bytes: Uint8Array): Response {
   const members = closedMap(
-    decode(bytes, { maxBytes: MAX_RESPONSE_BYTES }),
+    decode(bytes, { maxBytes: MAX_RESPONSE_BYTES, maxItems: MAX_RESPONSE_ITEMS }),
     ['chal', 'pub', 'sig'],
     ['pqpub', 'pqsig'],
   );

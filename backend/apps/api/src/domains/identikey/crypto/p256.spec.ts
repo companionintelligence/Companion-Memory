@@ -54,7 +54,7 @@ describe('P-256 (ECDSA, SHA-256, compressed keys, r || s)', () => {
     expect(verifyP256(publicKey, message, new Uint8Array(64))).toBe(false);
   });
 
-  it('accepts the high-S twin of a signature, because hardware signers do not normalise S', () => {
+  it('accepts the high-S twin of a signature, because hardware signers do not normalize S', () => {
     // Apple's Secure Enclave and TPMs return whichever S they computed, so rejecting high S would
     // reject honest hardware. The consequence is that a P-256 signature here is MALLEABLE: it must
     // never be used as an identifier or hashed into one.

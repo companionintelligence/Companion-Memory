@@ -20,7 +20,7 @@ import { IdentiKeyError } from '../errors';
  *     with no duplicates;
  *   * no floats, no tags, no negative integers, no simple values.
  *
- * DECODING IS STRICT. A non-canonical input is refused, never normalised: a peer must not be able to
+ * DECODING IS STRICT. A non-canonical input is refused, never normalized: a peer must not be able to
  * send a second, differently-encoded form of one logical value, because the signature covers the
  * bytes it sent. That is also why callers verify over the bytes they RECEIVED and decode only to
  * read fields out of them.
@@ -42,6 +42,12 @@ const UINT64_MAX = (1n << 64n) - 1n;
 /** Default ceilings on untrusted input. Every IdentiKey auth message is a few kilobytes at most. */
 export const DEFAULT_MAX_BYTES = 64 * 1024;
 export const DEFAULT_MAX_DEPTH = 16;
+/**
+ * Values (and map keys) one decode may read. Bytes alone do not bound the work: every element costs
+ * at least one byte but allocates a node, so a 16 KiB body of zeros is 16 000 allocations. The auth
+ * messages set their own, far lower, ceilings; this one is the backstop for anything else.
+ */
+export const DEFAULT_MAX_ITEMS = 4096;
 
 const textEncoder = new TextEncoder();
 // `fatal`: malformed UTF-8 is an error, not U+FFFD. `ignoreBOM: true` keeps a leading U+FEFF in the
@@ -83,7 +89,7 @@ export const cbor = {
 
 // ─── encoding ────────────────────────────────────────────────────────────────
 
-/** Serialise to canonical bytes. Throws on a duplicate map key or a string that is not well-formed. */
+/** Serialize to canonical bytes. Throws on a duplicate map key or a string that is not well-formed. */
 export function encode(value: Cbor): Uint8Array {
   const chunks: Uint8Array[] = [];
   write(value, chunks);
@@ -210,6 +216,8 @@ export interface DecodeOptions {
   maxBytes?: number;
   /** Refuse nesting deeper than this. Defaults to {@link DEFAULT_MAX_DEPTH}. */
   maxDepth?: number;
+  /** Refuse input holding more values and map keys than this. Defaults to {@link DEFAULT_MAX_ITEMS}. */
+  maxItems?: number;
 }
 
 /**
@@ -217,7 +225,7 @@ export interface DecodeOptions {
  *
  * Refuses (as `malformed`): non-minimal integers, indefinite lengths, unsupported major types,
  * non-text map keys, keys out of canonical order or repeated, invalid UTF-8, trailing bytes, input over
- * `maxBytes`, and nesting past `maxDepth`.
+ * `maxBytes`, nesting past `maxDepth`, and more than `maxItems` values and keys.
  */
 export function decode(data: Uint8Array, options: DecodeOptions = {}): Cbor {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -225,7 +233,11 @@ export function decode(data: Uint8Array, options: DecodeOptions = {}): Cbor {
     throw new IdentiKeyError('malformed', `input is ${data.length} bytes, over the ${maxBytes} byte limit`);
   }
 
-  const reader = new Reader(data, options.maxDepth ?? DEFAULT_MAX_DEPTH);
+  const reader = new Reader(
+    data,
+    options.maxDepth ?? DEFAULT_MAX_DEPTH,
+    options.maxItems ?? DEFAULT_MAX_ITEMS,
+  );
   const value = reader.readValue(0);
   if (reader.remaining !== 0) {
     throw new IdentiKeyError('malformed', 'trailing bytes after the top-level value');
@@ -237,13 +249,24 @@ export function decode(data: Uint8Array, options: DecodeOptions = {}): Cbor {
 class Reader {
   private pos = 0;
 
+  private items = 0;
+
   constructor(
     private readonly data: Uint8Array,
     private readonly maxDepth: number,
+    private readonly maxItems: number,
   ) {}
 
   get remaining(): number {
     return this.data.length - this.pos;
+  }
+
+  /** Every value and every map key is one item, counted BEFORE it is allocated. */
+  private countItem(): void {
+    this.items += 1;
+    if (this.items > this.maxItems) {
+      throw new IdentiKeyError('malformed', `more than ${this.maxItems} values and keys`);
+    }
   }
 
   readValue(depth: number): Cbor {
@@ -251,6 +274,7 @@ class Reader {
       throw new IdentiKeyError('malformed', 'nesting is too deep');
     }
 
+    this.countItem();
     const { major, arg } = this.readHead();
 
     switch (major) {
@@ -284,6 +308,7 @@ class Reader {
     let previous: Uint8Array | null = null;
 
     for (let i = 0; i < count; i += 1) {
+      this.countItem();
       const keyStart = this.pos;
       const { major, arg } = this.readHead();
       if (major !== 3) {

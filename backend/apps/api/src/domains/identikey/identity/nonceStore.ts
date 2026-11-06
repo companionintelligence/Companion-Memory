@@ -12,7 +12,13 @@ import { bytesEqual } from './keys';
  * makes both true: it remembers every challenge it handed out, and `consume` is an atomic
  * test-and-set, so two concurrent responses to one challenge cannot both win.
  *
- * Two departures from the Rust reference's `NonceStore`:
+ * It also makes the verifier's work a function of what it issued. `beginAttempt` runs BEFORE any
+ * signature is checked (spec §7 step 3) and is an atomic test-and-increment, so a response to a
+ * challenge that was never issued costs one lookup, and a challenge allows only a few attempts however
+ * many responses are in flight at once. Without it, one live challenge, which any anonymous caller can
+ * obtain, buys unlimited rounds of the most expensive thing the verifier does.
+ *
+ * Three departures from the Rust reference's `NonceStore`:
  *
  *   * The store keeps the exact CHALLENGE BYTES it issued under each nonce and refuses a response
  *     whose bytes differ. That is what makes the next point safe: `verifyResponse` judges the window
@@ -22,6 +28,7 @@ import { bytesEqual } from './keys';
  *   * The store does not judge time. `verifyResponse` does, once, with the one skew parameter. (The
  *     reference also checks `now > exp` in its store, without skew, which silently cancels the upper
  *     half of the skew tolerance it applies a few lines earlier.)
+ *   * The store limits attempts. The reference allows any number of failing responses to one challenge.
  *
  * This file is the interface and an in-memory implementation for one process. A deployment with more
  * than one API replica needs a shared store (the same `claimOnce` shape the peer-ask replay cache has);
@@ -38,6 +45,18 @@ export type ConsumeOutcome =
   /** Issued here, but the response carries different challenge bytes. */
   | 'mismatch';
 
+export type AttemptOutcome =
+  /** An issued, unspent challenge with an attempt left. One attempt has been used up. */
+  | 'proceed'
+  /** Never issued here (or forgotten). */
+  | 'unknown'
+  /** Issued here and already answered. */
+  | 'used'
+  /** Issued here, but the response carries different challenge bytes. Not counted: it is not an attempt at this challenge. */
+  | 'mismatch'
+  /** Issued here, unspent, and it has had all the attempts it gets. */
+  | 'exhausted';
+
 export interface NonceStore {
   /**
    * Remember a freshly issued challenge. Throws `store-full` when it cannot, and throws (a plain
@@ -45,6 +64,15 @@ export interface NonceStore {
    * and overwriting a SPENT entry would resurrect it.
    */
   recordIssued(nonce: Uint8Array, challengeBytes: Uint8Array, expiresAt: number, now: number): Promise<void>;
+
+  /**
+   * Atomically claim one attempt at the challenge: if and only if it was issued here for exactly these
+   * bytes, is unspent and has an attempt left, count the attempt and answer `proceed`. Called before any
+   * signature work, so the count includes responses that turn out to be wrong, and a hostile caller
+   * holding one live challenge gets a handful of tries and no more. It must be a single atomic
+   * test-and-increment: concurrent callers must not all be told `proceed` past the limit.
+   */
+  beginAttempt(nonce: Uint8Array, challengeBytes: Uint8Array): Promise<AttemptOutcome>;
 
   /** Atomically spend the nonce, if and only if it was issued here for exactly these bytes and is unspent. */
   consume(nonce: Uint8Array, challengeBytes: Uint8Array): Promise<ConsumeOutcome>;
@@ -57,6 +85,7 @@ interface Entry {
   readonly challengeBytes: Uint8Array;
   readonly expiresAt: number;
   used: boolean;
+  attempts: number;
 }
 
 export interface InMemoryNonceStoreOptions {
@@ -67,6 +96,11 @@ export interface InMemoryNonceStoreOptions {
   maxEntries?: number;
   /** How long past `expiresAt` an entry is kept, so a late replay reads `used` and not `unknown`. Default 60. */
   retainSeconds?: number;
+  /**
+   * How many responses one challenge may receive, right or wrong, before it stops being looked at.
+   * A person gets it right in one. Default 3, at most 10.
+   */
+  maxAttempts?: number;
 }
 
 export class InMemoryNonceStore implements NonceStore {
@@ -76,9 +110,16 @@ export class InMemoryNonceStore implements NonceStore {
 
   private readonly retainSeconds: number;
 
+  private readonly maxAttempts: number;
+
   constructor(options: InMemoryNonceStoreOptions = {}) {
     this.maxEntries = options.maxEntries ?? 10_000;
     this.retainSeconds = options.retainSeconds ?? 60;
+    this.maxAttempts = options.maxAttempts ?? 3;
+
+    if (!Number.isSafeInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > 10) {
+      throw new RangeError('maxAttempts must be an integer from 1 to 10');
+    }
   }
 
   /** Entries currently held, for tests and metrics. */
@@ -105,7 +146,36 @@ export class InMemoryNonceStore implements NonceStore {
       throw new IdentiKeyError('store-full', `${this.maxEntries} unexpired challenges are outstanding`);
     }
 
-    this.entries.set(key, { challengeBytes: new Uint8Array(challengeBytes), expiresAt, used: false });
+    this.entries.set(key, {
+      challengeBytes: new Uint8Array(challengeBytes),
+      expiresAt,
+      used: false,
+      attempts: 0,
+    });
+  }
+
+  async beginAttempt(nonce: Uint8Array, challengeBytes: Uint8Array): Promise<AttemptOutcome> {
+    const entry = this.entries.get(keyOf(nonce));
+    if (entry === undefined) {
+      return 'unknown';
+    }
+
+    if (!bytesEqual(entry.challengeBytes, challengeBytes)) {
+      return 'mismatch';
+    }
+
+    if (entry.used) {
+      return 'used';
+    }
+
+    if (entry.attempts >= this.maxAttempts) {
+      return 'exhausted';
+    }
+
+    // No await between the reads above and this write: in one process that is what makes it atomic.
+    entry.attempts += 1;
+
+    return 'proceed';
   }
 
   async consume(nonce: Uint8Array, challengeBytes: Uint8Array): Promise<ConsumeOutcome> {
