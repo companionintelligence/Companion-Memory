@@ -1,7 +1,5 @@
 /* PayPal — CSV download (Activity → Statements → Download). */
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';

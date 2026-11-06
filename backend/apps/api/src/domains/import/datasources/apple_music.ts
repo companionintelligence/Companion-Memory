@@ -2,9 +2,6 @@
    The "Apple Music Play Activity.csv" file (also exported as
    "Apple Music - Play Activity.csv") holds one play event per row. */
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
-import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';

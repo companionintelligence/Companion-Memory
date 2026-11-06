@@ -14,15 +14,11 @@
  * Trip column reads go through `pick()` which tries both name styles, so one code
  * path serves both trip schemas. */
 import fs from 'node:fs';
-import { readdir, stat as fsStat } from 'node:fs/promises';
+import { stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { readCsvFile } from './readers';
-import { open, stat as fsStat } from 'node:fs/promises';
-import path from 'node:path';
-
-import { parseCSV } from './csv';
 import { listFiles } from './fsWalk';
+import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';

@@ -24,8 +24,7 @@
    Dismissed a shelf) keep the generic handling below. */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { open, stat, type FileHandle } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isYouTubeProduct, parseActivityCell, youtubeActivityGraph } from './_youtube_activity';

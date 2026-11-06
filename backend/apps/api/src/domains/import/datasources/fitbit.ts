@@ -18,8 +18,7 @@
    an export here used to import nothing and still report success.
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { childDir, filesIn } from './fsWalk';

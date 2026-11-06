@@ -9,9 +9,9 @@
    this module only answers "what memories does this JSON contain?" plus a few
    shape hints the datasources use to disambiguate a shared filename. */
 
-import { parseFlexibleDate } from './dates';
 import crypto from 'node:crypto';
 
+import { parseFlexibleDate } from './dates';
 import { readJsonFile } from './readers';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';

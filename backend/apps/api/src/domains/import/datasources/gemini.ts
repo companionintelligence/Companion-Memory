@@ -21,10 +21,8 @@ import path from 'node:path';
 
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
 import { parseMemoryEntries, pushMemoryEntry } from './_ai_memory';
-import { readJsonFile } from './readers';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryTitle } from './_ai_memory';
 import { firstFile } from './fsWalk';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item } from './timeline';

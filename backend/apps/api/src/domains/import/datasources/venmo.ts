@@ -4,8 +4,6 @@
    header with an empty ID are running-balance/summary rows and are skipped.
 */
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSVRows } from './csv';

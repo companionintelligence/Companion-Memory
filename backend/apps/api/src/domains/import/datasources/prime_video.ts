@@ -11,8 +11,6 @@
    and importing both would double-count everything they share. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';

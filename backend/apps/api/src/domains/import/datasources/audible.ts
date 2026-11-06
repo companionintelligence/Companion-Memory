@@ -28,15 +28,12 @@
    SearchData files (browse noise, not listening). */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { audibleUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
 import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { readCsvFile } from './readers';
-import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';

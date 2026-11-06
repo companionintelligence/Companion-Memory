@@ -5,8 +5,6 @@
    signature is generic (*.csv) so recognition sniffs the header to avoid
    false-matching other CSV importers. */
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';

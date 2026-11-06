@@ -34,18 +34,16 @@ import path from 'node:path';
 
 import type { ResolvedAsset } from './_ai_media';
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryShapeHints, memoryTitle } from './_ai_memory';
-import { parseFlexibleDate } from './dates';
 import {
+  parseMemoryEntries,
+  memoryShapeHints,
   CHATGPT_SIBLINGS,
   CLAUDE_SIBLINGS,
   findName,
   importMemoriesFile,
   isMemoryFilename,
-  memoryShapeHints,
-  parseMemoryEntries,
 } from './_ai_memory';
+import { parseFlexibleDate } from './dates';
 import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';

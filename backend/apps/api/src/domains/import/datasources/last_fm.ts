@@ -1,15 +1,8 @@
 /* Last.fm — scrobble CSV export (scrobbles.csv). */
-import fs from 'node:fs';
-import { open } from 'node:fs/promises';
 import path from 'node:path';
 
-import { parseCSV } from './csv';
 import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
-import { readdir, stat as fsStat } from 'node:fs/promises';
-import path from 'node:path';
-
 import { readCsvFile } from './readers';
-import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';

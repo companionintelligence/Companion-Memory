@@ -8,8 +8,6 @@
    columns — we additionally require a Garmin-distinctive column.
 */
 import fs from 'node:fs';
-import { open } from 'node:fs/promises';
-import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';

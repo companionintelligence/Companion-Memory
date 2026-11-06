@@ -16,8 +16,7 @@
    same ci.browser_activity row, and Takeout is just a third arrival of it.
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { open, stat, type FileHandle } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
