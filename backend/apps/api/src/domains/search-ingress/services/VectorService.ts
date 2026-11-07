@@ -103,10 +103,11 @@ export interface SearchDocumentText {
  * message with no subject) takes its first text instead, so a result row is
  * never blank. Everything else is the body, in builder order, cut at
  * {@link DOCUMENT_BODY_MAX_CHARS}: enough for a snippet and for FTS to match
- * on, not the whole of a long note.
+ * on, not the whole of a long note. A text marked `vectorOnly` is left out.
  */
 export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
   const kept = texts
+    .filter((t) => !t.vectorOnly)
     .map((t) => ({ text: t.text?.trim() ?? '', weight: t.weight }))
     .filter((t) => t.text.length > 0);
   const titleIndex = kept.findIndex((t) => t.weight >= 8);

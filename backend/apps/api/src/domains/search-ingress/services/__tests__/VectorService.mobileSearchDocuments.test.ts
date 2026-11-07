@@ -38,6 +38,18 @@ describe('searchDocumentText', () => {
     expect(body).toHaveLength(DOCUMENT_BODY_MAX_CHARS);
   });
 
+  it('leaves a vector-only text out of the document', () => {
+    expect(
+      searchDocumentText([
+        { text: 'IMG_2034.JPG', weight: 10 },
+        { text: 'IMG 2034 JPG', weight: 10, vectorOnly: true },
+        { text: 'os-plan-lighthouse.jpg', weight: 3 },
+        { text: 'os-plan-lighthouse jpg os plan lighthouse jpg', weight: 3, vectorOnly: true },
+        { text: 'image/jpeg', weight: 1 },
+      ]),
+    ).toEqual({ title: 'IMG_2034.JPG', body: 'os-plan-lighthouse.jpg image/jpeg' });
+  });
+
   it('nothing to index gives an empty document rather than throwing', () => {
     expect(searchDocumentText([])).toEqual({ title: '', body: '' });
   });

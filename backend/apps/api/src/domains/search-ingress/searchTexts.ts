@@ -1099,11 +1099,58 @@ export function fileSearchDocument(file: FileSearchFields): string | null {
   return joinParts(parts);
 }
 
+/**
+ * The words of a file name, for the search index, or `null` when the name has
+ * nothing to split.
+ *
+ * Postgres's text-search parser reads `os-plan-lighthouse.jpg` (or
+ * `IMG_2034.JPG`, `report.final.v2.docx`) as ONE token of type host or file,
+ * so `to_tsvector` stores the whole name as a single lexeme and a search for
+ * `lighthouse`, `receipt` or `jpg` never matches it. Two spellings of the name
+ * go into the index beside the original:
+ *
+ * - dots and slashes turned into spaces, hyphens kept: the parser then reads
+ *   `os-plan-lighthouse` as a hyphenated word and indexes it together with its
+ *   parts at consecutive positions, which is what a search for
+ *   `os-plan-lighthouse` asks for (a phrase). Only when a hyphen or plus is
+ *   joined to a letter or digit: without one this spelling parses to the same
+ *   lexemes as the next, and indexing every part twice only inflates its rank;
+ * - every run of punctuation turned into a space, so each part stands alone,
+ *   numbers too (`Photo-2026` otherwise indexes `-2026`, which `2026` misses).
+ *   Combining marks are kept: an accent in a decomposed (NFD) name, or a vowel
+ *   sign in Devanagari or Thai, is part of its word.
+ *
+ * The original stays indexed, so the exact full name keeps matching.
+ */
+export function fileNameWords(name: string | null | undefined): string | null {
+  const trimmed = name?.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const hyphenated = /[-+][\p{L}\p{N}]/u.test(trimmed) ? trimmed.replace(/[./\\@:]+/g, ' ').trim() : '';
+  const spaced = trimmed.replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  const spellings = [hyphenated, spaced].filter(
+    (spelling, index, all) => spelling && spelling !== trimmed && all.indexOf(spelling) === index,
+  );
+
+  return spellings.length > 0 ? spellings.join(' ') : null;
+}
+
 export function fileWeightedTexts(file: FileSearchFields): WeightedText[] {
   const parts: WeightedText[] = [];
 
   if (file.title) {
     parts.push({ text: file.title, weight: 10 });
+
+    // A title with spaces in it is prose and already splits into words; only a
+    // name-like title (`IMG_2034.JPG`) needs its parts indexed too.
+    const titleWords = /\s/.test(file.title.trim()) ? null : fileNameWords(file.title);
+
+    if (titleWords) {
+      parts.push({ text: titleWords, weight: 10, vectorOnly: true });
+    }
   }
 
   if (file.description) {
@@ -1112,6 +1159,12 @@ export function fileWeightedTexts(file: FileSearchFields): WeightedText[] {
 
   if (file.filename) {
     parts.push({ text: file.filename, weight: 3 });
+
+    const filenameWords = fileNameWords(file.filename);
+
+    if (filenameWords) {
+      parts.push({ text: filenameWords, weight: 3, vectorOnly: true });
+    }
   }
 
   if (file.contentType) {
