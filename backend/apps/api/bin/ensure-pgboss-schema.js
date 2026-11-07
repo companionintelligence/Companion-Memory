@@ -3,7 +3,8 @@
 
 /**
  * Prepare a migrated database so the DB-backed jest suites can run: create the
- * `pgboss` schema, the dead-letter queue, and a catch-all job partition.
+ * `pgboss` schema and the dead-letter queue, and let the default job partition
+ * take a row for any queue name.
  *
  * pg-boss builds its own tables at boot rather than through dbmate, so a
  * freshly-migrated database has `ci.*` but no `pgboss.job`. That is fine on an
@@ -24,7 +25,9 @@
  */
 
 const { Client } = require('pg');
-const PgBoss = require('pg-boss');
+// pg-boss 12 is an ES module with a named export only. Node 22's require(esm)
+// returns the module namespace, so the class has to be picked out by name.
+const { PgBoss } = require('pg-boss');
 
 // Must match PGBossEventService's `schema` and DEAD_LETTER_QUEUE, or CI would
 // prepare a schema and a queue the suites do not look in.
@@ -39,26 +42,35 @@ if (!url) {
 }
 
 /**
- * A DEFAULT partition for `pgboss.job`.
+ * Let `pgboss.job` take a row for any queue name.
  *
- * pg-boss v10 declares `job ... PARTITION BY LIST (name)` and adds one
- * partition per queue inside `create_queue`, so an INSERT naming a queue that
- * was never created fails with `no partition of relation "job" found for row`.
- * On an appliance that is correct and desirable: every real queue is registered
- * by a listener at boot.
+ * The suites seed synthetic `pgboss.job` rows for queues drawn from the
+ * listener registry (`default`, `pipeline-index`, `people-linking`, ...), which
+ * a bin script cannot enumerate without booting Nest. Several of them commit
+ * those rows, because the service under test reads them over its own
+ * connection.
  *
- * The suites are the exception. They seed synthetic `pgboss.job` rows for
- * queues drawn from the listener registry, which a bin script cannot enumerate
- * without booting Nest — so rather than couple this script to that registry (and
- * silently under-create the day someone adds a queue), CI gets a catch-all.
+ * Under pg-boss 10 such a row had no partition to land in, so this script added
+ * a catch-all DEFAULT partition with no foreign keys. pg-boss 12 attaches its
+ * own DEFAULT partition, `job_common`, and keeps every queue there unless the
+ * queue asks for `partition: true`; a second default is refused ("conflicts
+ * with existing default partition"). What refuses the rows now is
+ * `job_common`'s `q_fkey` and `dlq_fkey`: a name with no `pgboss.queue` row
+ * fails at COMMIT. Dropping those two keys from the default partition gives the
+ * suites what the old catch-all did, a partition that accepts any queue name.
+ * Partitions made with `partition: true` get their own keys from
+ * `create_queue` and keep them.
  *
- * This is deliberately a TEST-ONLY accommodation: pg-boss attaches the
- * `q_fkey`/`dlq_fkey` foreign keys per-partition, so the default partition has
- * none and accepts any queue name. That is the point — the suites assert on the
- * rows they seeded, never on partition routing — but it is also why this script
- * must never be pointed at an appliance database.
+ * This is a TEST-ONLY accommodation, as the old partition was. On an appliance
+ * those keys are how pg-boss notices a job sent to a queue that was deleted
+ * after it cached the queue, so this script must never be pointed at an
+ * appliance database.
  */
-const CREATE_DEFAULT_PARTITION = `CREATE TABLE IF NOT EXISTS ${SCHEMA}.job_ci_default PARTITION OF ${SCHEMA}.job DEFAULT`;
+const DEFAULT_PARTITION_QUERY = `
+  SELECT c.relname AS name
+    FROM pg_partitioned_table p
+    JOIN pg_class c ON c.oid = p.partdefid
+   WHERE p.partrelid = to_regclass('${SCHEMA}.job')`;
 
 async function main() {
   const boss = new PgBoss({ connectionString: url, schema: SCHEMA, schedule: false });
@@ -71,23 +83,35 @@ async function main() {
 
   await boss.start();
 
-  // Created before the default partition below: this one gets pg-boss's real
-  // per-partition foreign keys and a `pgboss.queue` row, so anything joining
-  // the queue table for the DLQ sees what an appliance would.
-  await boss.createQueue(DEAD_LETTER_QUEUE, { name: DEAD_LETTER_QUEUE });
+  // A real `pgboss.queue` row, so anything joining the queue table for the DLQ
+  // sees what an appliance would.
+  await boss.createQueue(DEAD_LETTER_QUEUE);
 
   await boss.stop({ graceful: false });
 
   const client = new Client({ connectionString: url });
   await client.connect();
   try {
-    await client.query(CREATE_DEFAULT_PARTITION);
+    const { rows } = await client.query(DEFAULT_PARTITION_QUERY);
+
+    if (rows.length === 0) {
+      throw new Error(
+        `${SCHEMA}.job has no DEFAULT partition, so rows for queues that were never created have nowhere to go. ` +
+          'pg-boss 12 attaches job_common as the default; check what this version does instead.',
+      );
+    }
+
+    const partition = `${client.escapeIdentifier(SCHEMA)}.${client.escapeIdentifier(rows[0].name)}`;
+
+    await client.query(
+      `ALTER TABLE ${partition} DROP CONSTRAINT IF EXISTS q_fkey, DROP CONSTRAINT IF EXISTS dlq_fkey`,
+    );
   } finally {
     await client.end();
   }
 
   console.log(
-    `ensure-pgboss-schema: '${SCHEMA}' schema, '${DEAD_LETTER_QUEUE}' queue and catch-all job partition are present.`,
+    `ensure-pgboss-schema: '${SCHEMA}' schema, '${DEAD_LETTER_QUEUE}' queue and an any-name default job partition are present.`,
   );
 }
 

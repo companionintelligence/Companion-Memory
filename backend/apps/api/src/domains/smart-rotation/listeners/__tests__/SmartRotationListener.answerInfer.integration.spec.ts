@@ -109,8 +109,8 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
     const listener = buildListener(dataSource, send);
 
     // Executing it is the assertion: Postgres validates every column, join and
-    // cast — including `pgboss.job` / `pgboss.archive`, which no other
-    // smart-rotation query touches, and the five bound parameters, whose types
+    // cast — including `pgboss.job`, which no other smart-rotation query
+    // touches, and the five bound parameters, whose types
     // it has to deduce as {uuid, text, text, integer, text} without a conflict.
     //
     // A random owner is NOT a no-op here: the reflection catalogue is shared
@@ -143,8 +143,6 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         COUNT(*)::text AS attempts
       FROM (
         SELECT data FROM pgboss.job WHERE name = 'llm-background' AND data->>'name' = $1
-        UNION ALL
-        SELECT data FROM pgboss.archive WHERE name = 'llm-background' AND data->>'name' = $1
       ) dispatched
       WHERE dispatched.data->>'ownerId' IS NOT NULL
       GROUP BY 1, 2
@@ -398,8 +396,8 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
   // Each case gets its own owner and its own job rows, written in one
   // transaction that is always rolled back. `create_queue` is pg-boss's own,
   // idempotent function: a throwaway test database has no `llm-background`
-  // partition until something creates it, and on a database that already has
-  // one it does nothing.
+  // queue until something creates it, and on a database that already has one
+  // it does nothing.
   describe('dispatch gate', () => {
     const INTERVAL_MINUTES = 20;
 
@@ -415,7 +413,7 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
 
     async function withGate(
       run: (helpers: {
-        owner(jobs?: JobFixture[], archived?: number[]): Promise<string>;
+        owner(jobs?: JobFixture[]): Promise<string>;
         isOpen(ownerId: string): Promise<boolean>;
         selectorOffers(ownerId: string): Promise<boolean>;
       }) => Promise<void>,
@@ -431,7 +429,7 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         } as unknown as DataSource;
         const questionService = new QuestionService(forwarding, {} as never, { send: jest.fn() } as never);
 
-        await runner.query(`SELECT pgboss.create_queue($1, $2::json)`, [
+        await runner.query(`SELECT pgboss.create_queue($1, $2::jsonb)`, [
           LLM_BACKGROUND_QUEUE,
           JSON.stringify({ policy: 'short' }),
         ]);
@@ -446,7 +444,7 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         );
 
         await run({
-          async owner(jobs = [], archived = []) {
+          async owner(jobs = []) {
             const ownerId = randomUUID();
 
             await runner.query(
@@ -456,14 +454,14 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
 
             for (const job of jobs) {
               await runner.query(
-                `INSERT INTO pgboss.job (name, data, state, created_on, started_on, expire_in)
+                `INSERT INTO pgboss.job (name, data, state, created_on, started_on, expire_seconds)
                  VALUES (
                    $1,
                    jsonb_build_object('name', $2::text, 'ownerId', $3::text, 'questionId', gen_random_uuid()::text),
                    $4::pgboss.job_state,
                    NOW() - make_interval(mins => $5),
                    CASE WHEN $6::int IS NULL THEN NULL ELSE NOW() - make_interval(mins => $6::int) END,
-                   interval '10 minutes'
+                   600
                  )`,
                 [
                   LLM_BACKGROUND_QUEUE,
@@ -473,29 +471,6 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
                   job.createdMinutesAgo,
                   job.startedMinutesAgo ?? null,
                 ],
-              );
-            }
-
-            for (const createdMinutesAgo of archived) {
-              // `archive` is `LIKE job` without the defaults, so every NOT NULL
-              // column is spelled out.
-              await runner.query(
-                `INSERT INTO pgboss.archive
-                   (id, name, priority, data, state, retry_limit, retry_count, retry_delay, retry_backoff,
-                    start_after, expire_in, created_on, keep_until)
-                 VALUES (
-                   gen_random_uuid(),
-                   $1,
-                   0,
-                   jsonb_build_object('name', $2::text, 'ownerId', $3::text, 'questionId', gen_random_uuid()::text),
-                   'completed',
-                   0, 0, 0, false,
-                   NOW() - make_interval(mins => $4),
-                   interval '10 minutes',
-                   NOW() - make_interval(mins => $4),
-                   NOW() + interval '1 day'
-                 )`,
-                [LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, ownerId, createdMinutesAgo],
               );
             }
 
@@ -556,16 +531,14 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
       });
     });
 
-    it('closes for the interval after a dispatch, whether the job is still live or already archived', async () => {
+    it('closes for the interval after a dispatch, whether the job is still live or already settled', async () => {
       await withGate(async ({ owner, isOpen }) => {
         expect(await isOpen(await owner([{ state: 'completed', createdMinutesAgo: 5 }]))).toBe(false);
         expect(await isOpen(await owner([{ state: 'failed', createdMinutesAgo: 5 }]))).toBe(false);
-        expect(await isOpen(await owner([], [5]))).toBe(false);
 
         expect(
           await isOpen(await owner([{ state: 'completed', createdMinutesAgo: INTERVAL_MINUTES + 1 }])),
         ).toBe(true);
-        expect(await isOpen(await owner([], [INTERVAL_MINUTES + 1]))).toBe(true);
       });
     });
 
