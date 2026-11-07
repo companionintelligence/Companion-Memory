@@ -57,6 +57,7 @@ import {
   type OutboxCapacity,
   type OutboxItem,
 } from './outbox';
+import { adoptEarlierOutboxRows, forgetOutboxOwners } from './outboxOwners';
 
 /**
  * The `kind` device-native location fixes are queued under. Routes to `/v1/positions`,
@@ -427,6 +428,11 @@ export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutb
 
 async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
   const { signal, recordTransientFailures = true } = options;
+
+  // Before the queue is read, so rows this account queued under a key it no longer has are
+  // stamped for the current one and go out in this drain. See outboxOwners.ts.
+  await adoptEarlierOutboxRows(signal);
+
   const listing = await listOutbox('pending');
 
   if (!listing.ok) {
@@ -620,13 +626,14 @@ export async function drainOutboxBeforeSignOut(timeoutMs = SIGN_OUT_DRAIN_TIMEOU
 
 /**
  * Sign-out, step two, after the last drain and while the key is still active: how many
- * captures signing out now would delete before they ever reached this account. That is
- * every row this session is the one to send, waiting or needing attention: stamped for it,
- * or unstamped from a build that predates stamping. Rows queued for another account or
- * server are left out, since nothing this session does can send them.
+ * captures signing out now would delete before they ever reached Memory. That is every row
+ * still queued, waiting or needing attention, whoever it was stamped for, because step three
+ * deletes them all. A row this session cannot send (queued under a key the phone no longer
+ * has, that the last drain could not match to this account) is still a capture the person
+ * would lose, and they are asked about it rather than have it vanish.
  *
- * Zero when nobody is signed in, and when there is no queue to read (web, or a sidecar
- * that does not answer): sign-out then goes ahead as it would with an empty queue.
+ * Zero when there is no queue to read (web, or a sidecar that does not answer): sign-out
+ * then goes ahead as it would with an empty queue.
  */
 export async function countUnsentBeforeSignOut(): Promise<number> {
   const listing = await listOutbox('all');
@@ -635,9 +642,7 @@ export async function countUnsentBeforeSignOut(): Promise<number> {
     return 0;
   }
 
-  const current = outboxOwnerStamp();
-
-  return listing.value.items.filter((entry) => sendableUnder(entry.owner, current)).length;
+  return listing.value.items.length;
 }
 
 /**
@@ -659,6 +664,7 @@ const queueClearedListeners = new Set<() => void>();
 export async function clearOutboxAfterSignOut(): Promise<void> {
   resetIngestFinishState();
   await clearOutbox();
+  forgetOutboxOwners();
 
   for (const listener of queueClearedListeners) {
     listener();

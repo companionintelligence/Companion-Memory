@@ -52,6 +52,9 @@ final class LocalHubServer {
     private static let outboxPathRegex = "^/api/outbox(/.*)?$"
     private static let attemptSegment = "attempt"
     private static let retrySegment = "retry"
+    private static let ownerSegment = "owner"
+    /// More earlier stamps than one phone could plausibly have held is a malformed request.
+    private static let maxReassignFrom = 64
     private static let statusQueryKey = "status"
     private static let statusFilterAll = "all"
     private static let authHeaderName = "Authorization"
@@ -331,6 +334,8 @@ final class LocalHubServer {
                 // Sign-out's clear: every row goes, and the count says how many.
                 let deleted = try store.deleteAll()
                 return Self.jsonResponse(["deleted": deleted], statusCode: 200)
+            case ("POST", 1) where segments[0] == Self.ownerSegment:
+                return try handleReassignOwner(request, store: store)
             case ("GET", 1):
                 return try handleGetOne(id: segments[0], store: store)
             case ("DELETE", 1):
@@ -465,6 +470,32 @@ final class LocalHubServer {
             return Self.notFound()
         }
         return Self.jsonResponse(Self.itemDictionary(item, includePayload: true), statusCode: 200)
+    }
+
+    /// `POST /api/outbox/owner` `{"from": [stamps], "to": stamp}`: re-stamp the rows queued
+    /// under an earlier key of the same account, so they send under the current one. Answers
+    /// `{"updated": n}`. Mirrors Android's `handleReassignOwner`.
+    private func handleReassignOwner(_ request: GCDWebServerRequest, store: OutboxStore) throws -> GCDWebServerResponse {
+        guard let body = Self.jsonBody(request) else {
+            return Self.badRequest("Request body must be a JSON object.")
+        }
+        guard let to = Self.nonEmptyString(body["to"]) else {
+            return Self.badRequest("\"to\" must be a non-empty string.")
+        }
+        guard let rawFrom = body["from"] as? [Any], !rawFrom.isEmpty, rawFrom.count <= Self.maxReassignFrom else {
+            return Self.badRequest("\"from\" must be a non-empty array of at most \(Self.maxReassignFrom) stamps.")
+        }
+        var from: [String] = []
+        for value in rawFrom {
+            guard let stamp = Self.nonEmptyString(value) else {
+                return Self.badRequest("\"from\" must hold only non-empty strings.")
+            }
+            if stamp != to && !from.contains(stamp) {
+                from.append(stamp)
+            }
+        }
+        let updated = try store.reassignOwner(from: from, to: to)
+        return Self.jsonResponse(["updated": updated], statusCode: 200)
     }
 
     private func handleAttempt(

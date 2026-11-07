@@ -407,6 +407,24 @@ export async function clearOutbox(): Promise<OutboxResult<number>> {
   return result.ok ? { ok: true, value: result.value?.deleted ?? 0 } : result;
 }
 
+/**
+ * Re-stamp every row owned by one of `from` to `to`, whatever its status. Resolves with how
+ * many rows changed. Only {@link adoptEarlierOutboxRows} calls it, for stamps it has matched to
+ * the account and Memory the current key belongs to. A sidecar from before this route answers
+ * `not_found`.
+ */
+export async function reassignOutboxOwner(
+  from: readonly string[],
+  to: string,
+): Promise<OutboxResult<number>> {
+  const result = await callOutbox<{ updated?: number }>(`${OUTBOX_PATH}/owner`, {
+    method: 'POST',
+    body: { from, to },
+  });
+
+  return result.ok ? { ok: true, value: result.value?.updated ?? 0 } : result;
+}
+
 /** Move a `needs_attention` item back to `pending` and reset its attempt counter. */
 export async function retryOutboxItem(id: string): Promise<OutboxResult<OutboxItem>> {
   return requireBody(

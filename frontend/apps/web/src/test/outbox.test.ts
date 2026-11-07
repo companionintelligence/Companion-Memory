@@ -121,7 +121,7 @@ function item(overrides: Partial<OutboxItem> & Pick<OutboxItem, 'id' | 'seq'>): 
  * behaviors the contract cares about: FIFO by `seq`, idempotent enqueue, MAX_ATTEMPTS
  * escalation to `needs_attention`, and rows only ever leaving on an explicit delete.
  */
-function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
+function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number; reassign?: boolean } = {}) {
   const max = options.max ?? 5000;
   const store = new Map(seed.map((entry) => [entry.id, { ...entry }]));
   const byKey = new Map<string, string>();
@@ -212,6 +212,20 @@ function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
       store.clear();
 
       return jsonResponse(200, { deleted });
+    }
+
+    if (call.method === 'POST' && id === 'owner' && !verb && options.reassign !== false) {
+      const { from, to } = call.body as { from: string[]; to: string };
+      let updated = 0;
+
+      for (const entry of store.values()) {
+        if (entry.owner != null && from.includes(entry.owner)) {
+          entry.owner = to;
+          updated += 1;
+        }
+      }
+
+      return jsonResponse(200, { updated });
     }
 
     const target = id ? store.get(id) : undefined;
@@ -826,6 +840,202 @@ describe('outbox owner stamp: a capture only ever uploads to the account it was 
   });
 });
 
+/** A localStorage stand-in, for the ledger of which account each stamp was made under. */
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      values.set(key, String(value));
+    },
+  };
+}
+
+/** {@link setNativeWindow}, plus a localStorage. Returns the storage. */
+function setNativeWindowWithStorage(storage: Storage = memoryStorage()): Storage {
+  setNativeWindow();
+  Object.assign((globalThis as GlobalWithWindow).window as object, { localStorage: storage });
+
+  return storage;
+}
+
+/** An appliance that answers `me` as `accountFor(the key the request carried)` and takes every send. */
+function applianceAs(accountFor: (key: string | undefined) => string | null): Handler {
+  return (call) => {
+    if (call.url.endsWith('/api/graphql')) {
+      const id = accountFor(call.headers['x-api-key']);
+
+      return jsonResponse(200, { data: { me: id ? { id } : null } });
+    }
+
+    return applianceAccepts(call);
+  };
+}
+
+describe('outbox owner ledger: a new key for the same account picks up what the old one queued', () => {
+  it("sends the rows queued under the account's earlier key, once that key is gone", async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    // Online under the first key: Memory says whose it is.
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+
+    // Offline, two notes queue under that key. Then "Sign out everywhere" revokes it, and the
+    // phone signs in again as the same account on the same Memory.
+    store.set('a', item({ id: 'a', seq: 1, owner: firstStamp, payload: { n: 1 } }));
+    store.set('b', item({ id: 'b', seq: 2, owner: firstStamp, payload: { n: 2 } }));
+    setApiKey('second-key-same-account');
+    calls.length = 0;
+
+    const summary = await flushOutbox();
+
+    expect(calls.find((call) => call.path === '/api/outbox/owner')?.body).toEqual({
+      from: [firstStamp],
+      to: outboxOwnerStamp(),
+    });
+    expect(summary).toMatchObject({ attempted: 2, succeeded: 2, skipped: 0 });
+    expect(calls.filter((call) => call.url === '/api/position').map((call) => call.body)).toEqual([
+      { n: 1 },
+      { n: 2 },
+    ]);
+    expect(store.size).toBe(0);
+
+    // The old key is settled: later drains neither ask Memory again nor call the sidecar.
+    calls.length = 0;
+    await flushOutbox();
+    expect(calls.some((call) => call.url.endsWith('/api/graphql'))).toBe(false);
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+  });
+
+  it("never moves another account's rows onto this one", async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs((key) => (key === DEVICE_KEY ? 'account-1' : 'account-2')),
+      ),
+    );
+
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+    store.set('theirs', item({ id: 'theirs', seq: 1, owner: firstStamp }));
+
+    setApiKey('someone-elses-key');
+    calls.length = 0;
+    const summary = await flushOutbox();
+
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(store.get('theirs')).toMatchObject({ owner: firstStamp, attempts: 0 });
+  });
+
+  it('never moves rows queued for the same account on a different Memory', async () => {
+    setNativeWindowWithStorage();
+    setApiBaseUrl('https://memory-a.example.com');
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    const onA = outboxOwnerStamp();
+    store.set('for-a', item({ id: 'for-a', seq: 1, owner: onA }));
+
+    setApiBaseUrl('https://memory-b.example.com');
+    setApiKey('key-on-b');
+    calls.length = 0;
+    await flushOutbox();
+
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(store.get('for-a')).toMatchObject({ owner: onA });
+  });
+
+  it('records nothing when Memory does not say whose the key is', async () => {
+    const storage = setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => null),
+      ),
+    );
+
+    await flushOutbox();
+    store.set('a', item({ id: 'a', seq: 1, owner: outboxOwnerStamp() }));
+    const firstStamp = outboxOwnerStamp();
+    setApiKey('second-key');
+    calls.length = 0;
+    await flushOutbox();
+
+    expect(storage.length).toBe(0);
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(store.get('a')).toMatchObject({ owner: firstStamp });
+  });
+
+  it('keeps trying while the sidecar predates the route, without holding up the drain', async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar([], { reassign: false });
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+    store.set('old', item({ id: 'old', seq: 1, owner: firstStamp }));
+    setApiKey('second-key');
+
+    await flushOutbox();
+    calls.length = 0;
+    const summary = await flushOutbox();
+
+    expect(calls.filter((call) => call.path === '/api/outbox/owner')).toHaveLength(1);
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(store.get('old')).toMatchObject({ owner: firstStamp });
+  });
+
+  it('sign-out forgets every recorded key along with the rows', async () => {
+    const storage = setNativeWindowWithStorage();
+    const { handler } = fakeSidecar();
+    installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    expect(storage.length).toBe(1);
+
+    setApiKey(null);
+    await clearOutboxAfterSignOut();
+
+    expect(storage.length).toBe(0);
+  });
+});
+
 describe('sign-out and the outbox', () => {
   it('clears every row through DELETE /api/outbox', async () => {
     setNativeWindow();
@@ -881,22 +1091,20 @@ describe('sign-out and the outbox', () => {
     expect(store.get('refused')).toMatchObject({ status: 'needs_attention', attempts: 1 });
   });
 
-  it("counts every row of this session's that has not uploaded, and none of another's", async () => {
+  it('counts every row sign-out would delete, including ones this session cannot send', async () => {
     setNativeWindow();
     const mine = outboxOwnerStamp();
     const { handler } = fakeSidecar([
       item({ id: 'waiting', seq: 1, owner: mine }),
       item({ id: 'parked', seq: 2, owner: mine, status: 'needs_attention', attempts: 5 }),
       item({ id: 'older-build', seq: 3, owner: null }),
-      item({ id: 'other-account', seq: 4, owner: 'https://memory.example.com 00000000000000' }),
+      // Queued under a key the phone no longer has. Sign-out deletes it too, so the person is
+      // asked about it rather than have it vanish.
+      item({ id: 'earlier-key', seq: 4, owner: 'https://memory.example.com 00000000000000' }),
     ]);
     installFetch(handler);
 
-    await expect(countUnsentBeforeSignOut()).resolves.toBe(3);
-
-    // With nobody signed in there is no session to send them, so there is nothing to warn of.
-    setApiKey(null);
-    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(4);
   });
 
   it('counts nothing where there is no queue to read', async () => {

@@ -116,6 +116,7 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 | `POST` | `/api/outbox` | Enqueue one item. `201`, or `507` when full. |
 | `GET` | `/api/outbox` | List items oldest-first. Optional `?status=pending\|needs_attention\|all` (default `all`). |
 | `DELETE` | `/api/outbox` | Remove every item. Sign-out only. `200 {"deleted": n}`. |
+| `POST` | `/api/outbox/owner` | Re-stamp the rows of earlier owner stamps to the current one. `200 {"updated": n}`. |
 | `GET` | `/api/outbox/{id}` | One item **including** `payload`. `404` if unknown. |
 | `DELETE` | `/api/outbox/{id}` | Remove one item (successful flush, or deliberate user discard). `204` / `404`. |
 | `POST` | `/api/outbox/{id}/attempt` | Record a flush outcome. `204` on success, `200` with the updated item on failure, `404` if unknown. |
@@ -190,6 +191,21 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
   `needs_attention` if `permanent` is true **or** `attempts` reaches `MAX_ATTEMPTS`;
   otherwise it stays `pending`.
 - The response is the list-shaped item (no `payload`).
+
+**Re-stamp** — `POST /api/outbox/owner`
+
+```jsonc
+{ "from": ["https://memory.example.com 1a2b…"], "to": "https://memory.example.com 3c4d…" }
+// -> 200 {"updated": 2}
+```
+
+- Every row whose `owner` is one of `from` gets `owner` = `to`, whatever its status. The
+  web layer calls it when the phone signs in again as the same account on the same Memory:
+  the new key is a new stamp, and rows queued under the old one would otherwise never send.
+  Which stamps belong to the same account is decided by the web layer
+  (`@ci/common`'s `outboxOwners.ts`); the sidecar never interprets stamps.
+- `from` must be a non-empty array of at most 64 non-empty strings, and `to` a non-empty
+  string, or `400`. Duplicates, and `to` itself, are ignored.
 
 **Retry** — `POST /api/outbox/{id}/retry` sets `status` back to `pending` and `attempts` to
 `0`. It applies to any existing item, not only `needs_attention` ones, so it is idempotent.

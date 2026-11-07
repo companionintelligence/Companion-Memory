@@ -173,4 +173,41 @@ class LocalHubServerRoutingTest {
         assertEquals(200, serve(request(Method.POST, "/api/outbox/here/retry"), outbox).code())
         assertEquals(listOf("gone", "here"), outbox.retriedIds)
     }
+
+    @Test
+    fun reassignOwner_restampsTheNamedStamps_andAnswersHowMany() {
+        val outbox = FakeOutbox()
+        outbox.reassignResult = 3
+
+        val response = serve(
+            request(Method.POST, "/api/outbox/owner", body = """{"from":["old-a","old-b","old-a","new"],"to":"new"}"""),
+            outbox,
+        )
+
+        assertEquals(200, response.code())
+        assertEquals(3, JSONObject(response.text()).getInt("updated"))
+        // Duplicates and the target itself are dropped before the store sees them.
+        assertEquals(listOf(listOf("old-a", "old-b") to "new"), outbox.reassignCalls)
+    }
+
+    @Test
+    fun reassignOwner_rejectsAMalformedBody_withoutTouchingTheQueue() {
+        val bodies = listOf(
+            """{"from":["old"]}""",
+            """{"from":["old"],"to":""}""",
+            """{"from":[],"to":"new"}""",
+            """{"from":"old","to":"new"}""",
+            """{"from":["old",""],"to":"new"}""",
+            """{"from":["old",7],"to":"new"}""",
+            """{"from":[${(1..65).joinToString(",") { "\"s$it\"" }}],"to":"new"}""",
+        )
+
+        bodies.forEach { body ->
+            val outbox = FakeOutbox()
+            val response = serve(request(Method.POST, "/api/outbox/owner", body = body), outbox)
+
+            assertEquals(body, 400, response.code())
+            assertFalse(body, outbox.wasTouched)
+        }
+    }
 }

@@ -40,6 +40,12 @@ private class MemoryOutbox : OutboxQueue {
 
     override fun deleteAll(): Int = rows.size.also { rows.clear() }
 
+    override fun reassignOwner(from: List<String>, to: String): Int {
+        var changed = 0
+        rows.replaceAll { row -> if (row.owner in from) row.copy(owner = to).also { changed++ } else row }
+        return changed
+    }
+
     override fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem? {
         val index = rows.indexOfFirst { it.id == id }
         if (index < 0) return null

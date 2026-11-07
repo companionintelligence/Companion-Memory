@@ -85,7 +85,7 @@ const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
   CAPTURE_SCOPE,
 ]);
 
-/** What a capture agent, or another client's token not addressed to this appliance, may do: record captures. */
+/** What a capture agent's token may do, however it was issued: record captures. */
 const CAPTURE_ONLY = {
   limits: { scopes: [CAPTURE_SCOPE], capability: WRITE_CAPABILITY },
   credentialRoutes: false,
@@ -159,10 +159,11 @@ class PortalVerifyTimeoutError extends Error {
  * meant for. The Portal can now say: a token addressed to an appliance carries
  * `urn:ci:device:<device id>` in `aud` (see `utils/applianceAudience.ts`). Only a
  * token addressed to this appliance carries the user's full authority, and one
- * addressed to another is refused. So is a `ci-server` token from such a Portal
- * that is addressed to no appliance: that is the id_token a Memory receives at
- * its own sign-in. Capture clients, and other clients' unaddressed tokens, get
- * the capture scope. See {@link PortalTokenService.authorityFor}.
+ * addressed to another is refused. So is any token from such a Portal that is
+ * addressed to no appliance, unless its client is a capture agent: a `ci-server`
+ * one is the id_token a Memory receives at its own sign-in, a `ci-hub` one the
+ * id_token every Hub a person signs in to holds. Capture clients get the capture
+ * scope. See {@link PortalTokenService.authorityFor}.
  *
  * ## Service accounts
  *
@@ -255,8 +256,7 @@ export class PortalTokenService implements PortalTokenVerifier {
    * |-------------------------------------------------------------------|------------------------------|
    * | issued to a capture client                                        | capture scope, write         |
    * | addressed to this appliance                                       | full                         |
-   * | not addressed, from a Portal that addresses tokens, `ci-server`   | refused                      |
-   * | not addressed, from a Portal that addresses tokens, other clients | capture scope, write         |
+   * | not addressed, from a Portal that addresses tokens                | refused                      |
    * | not addressed, from a Portal from before addressing               | full except the admin guards |
    *
    * "From a Portal that addresses tokens" is read off the token itself (the
@@ -270,6 +270,14 @@ export class PortalTokenService implements PortalTokenVerifier {
    * token is refused rather than confined, so one Memory's sign-in is no credential at any other,
    * whichever address (provisioned host, tailnet name, LAN address) the other is reached at. The
    * phone never sends one: it pairs only with a token addressed to the Memory it picked.
+   *
+   * Any other client's stamped, unaddressed token is refused for the same reason. The Portal
+   * addresses only `ci-server` tokens, so for every other client that is all of them, and they are
+   * held by whoever the person signed in to: a `ci-hub` id_token is held by every Hub a person
+   * signs in to with Companion (the Hub exchanges the code itself), including someone else's.
+   * Confining it to the capture scope still let that Hub add captures, upload files and register
+   * devices in the person's own Memory for the token's lifetime. A client whose tokens are meant to
+   * record captures here is listed in `auth.portal.captureClients` instead.
    */
   private authorityFor(address: TokenAddress, payload: JWTPayload): Omit<PortalPrincipal, 'user'> | null {
     if (this.captureClients().includes(address.client)) {
@@ -284,15 +292,11 @@ export class PortalTokenService implements PortalTokenVerifier {
       return BEFORE_ADDRESSING;
     }
 
-    if (address.client === MEMORY_SIGN_IN_CLIENT) {
-      this.logger.debug('Portal token refused: a Memory sign-in token addressed to no appliance', {
-        client: address.client,
-      });
+    this.logger.debug('Portal token refused: a stamped token addressed to no appliance', {
+      client: address.client,
+    });
 
-      return null;
-    }
-
-    return CAPTURE_ONLY;
+    return null;
   }
 
   private getJwks(): ReturnType<typeof createRemoteJWKSet> {
@@ -444,7 +448,13 @@ export class PortalTokenService implements PortalTokenVerifier {
     // Decided before anyone is looked up: a token that may do nothing here resolves no account.
     const authority = this.authorityFor(address, payload);
     if (!authority) {
-      throw new UnauthorizedException(MEMORY_SIGN_IN_REFUSED_MESSAGE);
+      // Only a Memory sign-in token gets the explanation: an older phone app sends one and shows
+      // the answer. Any other client's refused token is just not a credential here.
+      if (address.client === MEMORY_SIGN_IN_CLIENT) {
+        throw new UnauthorizedException(MEMORY_SIGN_IN_REFUSED_MESSAGE);
+      }
+
+      return null;
     }
 
     const user = await this.provisionUser(payload);

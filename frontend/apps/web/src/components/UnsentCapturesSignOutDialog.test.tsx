@@ -193,7 +193,7 @@ afterEach(() => {
 });
 
 describe('signing out of the phone app with captures that have not uploaded', () => {
-  it("asks first, counting only this account's captures, and touches nothing before the answer", async () => {
+  it('asks first, counting every capture sign-out would delete, and touches nothing before the answer', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { keystore, queue, calls } = phone({ online: false });
     await signedIn();
@@ -202,12 +202,13 @@ describe('signing out of the phone app with captures that have not uploaded', ()
     queue.set('note', row('note', 1, { owner: mine }));
     queue.set('older-build', row('older-build', 2, { owner: null }));
     queue.set('parked', row('parked', 3, { owner: mine, status: 'needs_attention', attempts: 5 }));
-    queue.set('other-account', row('other-account', 4, { owner: `${MEMORY} 00000000000000` }));
+    // Queued under a key this phone no longer has: it cannot send it, but signing out deletes it.
+    queue.set('earlier-key', row('earlier-key', 4, { owner: `${MEMORY} 00000000000000` }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
     const dialog = await screen.findByRole('alertdialog');
 
-    expect(within(dialog).getByText("3 captures haven't uploaded yet")).toBeInTheDocument();
+    expect(within(dialog).getByText("4 captures haven't uploaded yet")).toBeInTheDocument();
     expect(
       within(dialog).getByText('Sign out and delete them? To keep them, cancel and stay signed in.'),
     ).toBeInTheDocument();
@@ -284,19 +285,20 @@ describe('signing out of the phone app with captures that have not uploaded', ()
     expect(revoked(calls)).toBe(true);
   });
 
-  it("signs out without asking when only another account's captures are left", async () => {
+  it('asks about captures this session cannot send, rather than deleting them unasked', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { queue, calls } = phone({ online: false });
     await signedIn();
-    queue.set('other-account', row('other-account', 1, { owner: `${MEMORY} 00000000000000` }));
+    queue.set('earlier-key', row('earlier-key', 1, { owner: `${MEMORY} 00000000000000` }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+    const dialog = await screen.findByRole('alertdialog');
 
-    await screen.findByText('signed out');
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    // Never sent anywhere, and gone with the session as before.
+    expect(within(dialog).getByText("1 capture hasn't uploaded yet")).toBeInTheDocument();
+    // Never sent anywhere, and still there until the person answers.
     expect(calls.some((call) => call.url.startsWith(MEMORY) && call.url.endsWith('/notes'))).toBe(false);
-    expect(queue.size).toBe(0);
+    expect(cleared(calls)).toBe(false);
+    expect(queue.size).toBe(1);
   });
 });
 
