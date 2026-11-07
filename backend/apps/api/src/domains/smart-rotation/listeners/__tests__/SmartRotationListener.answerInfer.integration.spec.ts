@@ -104,14 +104,14 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
     }
   });
 
-  it('the selection query agrees with the live schema — ci.questions, ci.answers and pgboss both sides', async () => {
+  it('the selection query agrees with the live schema of ci.questions, ci.answers and pgboss.job', async () => {
     const send = jest.fn();
     const listener = buildListener(dataSource, send);
 
     // Executing it is the assertion: Postgres validates every column, join and
-    // cast — including `pgboss.job`, which no other smart-rotation query
-    // touches, and the five bound parameters, whose types
-    // it has to deduce as {uuid, text, text, integer, text} without a conflict.
+    // cast. That covers the attempt history it reads from `pgboss.job` as well
+    // as the five bound parameters, whose types it has to deduce as
+    // {uuid, text, text, integer, text} without a conflict.
     //
     // A random owner is NOT a no-op here: the reflection catalogue is shared
     // (`is_private_to IS NULL`), so an owner with no rows of their own still
@@ -394,14 +394,14 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
   // with pgboss.job's own `id`.
   //
   // Each case gets its own owner and its own job rows, written in one
-  // transaction that is always rolled back. `create_queue` is pg-boss's own,
-  // idempotent function: a throwaway test database has no `llm-background`
-  // queue until something creates it, and on a database that already has one
-  // it does nothing.
+  // transaction that is always rolled back. No `llm-background` queue row is
+  // needed: pg-boss 12 keeps every queue that is not `partition: true` in its
+  // default partition, whose queue key waits for COMMIT. These rows never get
+  // that far.
   describe('dispatch gate', () => {
     const INTERVAL_MINUTES = 20;
 
-    type JobState = 'created' | 'retry' | 'active' | 'completed' | 'failed';
+    type JobState = 'created' | 'retry' | 'active' | 'completed' | 'failed' | 'cancelled';
 
     interface JobFixture {
       state: JobState;
@@ -429,10 +429,6 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         } as unknown as DataSource;
         const questionService = new QuestionService(forwarding, {} as never, { send: jest.fn() } as never);
 
-        await runner.query(`SELECT pgboss.create_queue($1, $2::jsonb)`, [
-          LLM_BACKGROUND_QUEUE,
-          JSON.stringify({ policy: 'short' }),
-        ]);
         // One shared question nobody has answered, so the cron selector has
         // something to offer an ungated owner whatever the catalogue holds.
         await runner.query(
@@ -531,10 +527,11 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
       });
     });
 
-    it('closes for the interval after a dispatch, whether the job is still live or already settled', async () => {
+    it('closes for the interval after a dispatch, however the job settled', async () => {
       await withGate(async ({ owner, isOpen }) => {
         expect(await isOpen(await owner([{ state: 'completed', createdMinutesAgo: 5 }]))).toBe(false);
         expect(await isOpen(await owner([{ state: 'failed', createdMinutesAgo: 5 }]))).toBe(false);
+        expect(await isOpen(await owner([{ state: 'cancelled', createdMinutesAgo: 5 }]))).toBe(false);
 
         expect(
           await isOpen(await owner([{ state: 'completed', createdMinutesAgo: INTERVAL_MINUTES + 1 }])),
