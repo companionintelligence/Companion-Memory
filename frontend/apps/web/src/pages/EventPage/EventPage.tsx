@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { Card, Label } from '@ci/shadcn';
 import { User } from '@ci/shadcn/icons';
@@ -127,7 +127,7 @@ export function EventPage() {
 
   usePageTitle(event?.title ? `Event - ${event.title} - Companion Memory` : 'Event - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

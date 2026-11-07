@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button } from '@ci/shadcn';
 import { FileType, Filter, Shapes, X } from '@ci/shadcn/icons';

@@ -1,5 +1,6 @@
 import { Field, ID, InputType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /** No `status`, `data`, `cursor` or `nextCursor`; see {@link CreateConnectionSyncJobInput} for why. */
 @InputType()

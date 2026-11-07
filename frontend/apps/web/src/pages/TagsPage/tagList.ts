@@ -27,7 +27,7 @@ export function normalizeTagLabel(label: string): string {
  * the normalized tag itself. Neither query passes arguments to `tags`, so a
  * single field modifier covers both.
  */
-export function evictTag(cache: ApolloCache<unknown>, id: string): void {
+export function evictTag(cache: ApolloCache, id: string): void {
   cache.modify({
     fields: {
       tags(existing: { edges: { node: Reference }[] } | Reference = { edges: [] }, { readField }) {

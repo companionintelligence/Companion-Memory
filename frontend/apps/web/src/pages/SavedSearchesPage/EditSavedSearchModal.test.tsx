@@ -32,8 +32,7 @@ function renderModal(onSave: (variables: Record<string, unknown>) => void) {
         mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: ['gmail', 'reddit'] }),
         mockQuery(EVENT_TYPES_QUERY, {}, { eventTypes: ['messaged', 'visited'] }),
         {
-          request: { query: UPDATE_SAVED_SEARCH },
-          variableMatcher: () => true,
+          request: { query: UPDATE_SAVED_SEARCH, variables: () => true },
           result: (variables: Record<string, unknown>) => {
             onSave(variables);
 

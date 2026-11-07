@@ -1,5 +1,7 @@
-import { gql, useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
+import { parse } from 'graphql';
 
+// parse(), not gql: codegen cannot read the interpolated fragments below.
 const TREE_FIELDS = `
   question
   guessed
@@ -18,21 +20,21 @@ const TREE_FIELDS = `
   }
 `;
 
-export const GET_BRANCHIAL = gql`
+export const GET_BRANCHIAL = parse(`
   query GetBranchial {
     branchialForecast {
       ${TREE_FIELDS}
     }
   }
-`;
+`);
 
-export const GUESS_BRANCHIAL = gql`
+export const GUESS_BRANCHIAL = parse(`
   mutation GuessBranchial {
     guessBranchialForecast {
       ${TREE_FIELDS}
     }
   }
-`;
+`);
 
 export type BranchialPermutation = {
   id: string;

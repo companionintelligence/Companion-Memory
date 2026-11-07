@@ -269,8 +269,7 @@ describe('ThingModal dates', () => {
     renderWithProviders(<ThingModal open onClose={onClose} item={item} create={false} />, {
       mocks: [
         {
-          request: { query: UPDATE_THING },
-          variableMatcher: () => true,
+          request: { query: UPDATE_THING, variables: () => true },
           result: (variables: Record<string, unknown>) => {
             saved.push(variables.input as Record<string, unknown>);
 

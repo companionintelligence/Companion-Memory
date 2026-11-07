@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, GlobalUID, usePageTitle } from '@ci/common';
 import { Badge, Input, Select } from '@ci/shadcn';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -231,7 +231,7 @@ function RemoteReceiptsPage() {
     fetchNextPage,
   });
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && view == null) {
     content = (

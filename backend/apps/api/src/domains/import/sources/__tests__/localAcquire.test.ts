@@ -5,6 +5,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -45,7 +46,7 @@ async function withInbox<T>(dir: string, run: () => Promise<T>): Promise<T> {
 }
 
 async function fixture(): Promise<{ inbox: string; scratch: string }> {
-  const parent = await mkdtemp(path.join(os.tmpdir(), 'ci-acquire-'));
+  const parent = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ci-acquire-')));
   const inbox = path.join(parent, 'inbox');
   const scratch = path.join(parent, 'scratch');
 

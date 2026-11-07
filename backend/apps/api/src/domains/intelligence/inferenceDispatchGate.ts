@@ -63,14 +63,15 @@ export function inferenceDispatchOpenSql(params: {
         AND pending.data->>'ownerId' = ${ownerText}
         AND (
           pending.state IN ('created', 'retry')
-          OR (pending.state = 'active' AND pending.started_on + pending.expire_in > NOW())
+          OR (pending.state = 'active' AND pending.started_on + make_interval(secs => pending.expire_seconds) > NOW())
           OR pending.created_on > NOW() - make_interval(mins => ${intervalMinutes})
         )
     )
     AND NOT EXISTS (
       SELECT 1
-      FROM pgboss.archive settled
-      WHERE settled.name = ${queue}
+      FROM pgboss.job settled
+      WHERE settled.state IN ('completed', 'failed', 'cancelled')
+        AND settled.name = ${queue}
         AND settled.data->>'name' = ${eventName}
         AND settled.data->>'ownerId' = ${ownerText}
         AND settled.created_on > NOW() - make_interval(mins => ${intervalMinutes})

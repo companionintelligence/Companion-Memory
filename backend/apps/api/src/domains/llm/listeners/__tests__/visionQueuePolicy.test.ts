@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { getConstructionPlans, PgBoss, policies, states } from 'pg-boss';
+
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
 import {
@@ -113,24 +115,34 @@ describe('image-description / thing-vision queue declarations', () => {
 
 /**
  * The dedup rule below is read out of the installed pg-boss, not restated from
- * memory: `plans.create()` renders the very DDL that `create_queue` executes
- * for each queue partition, and `insertJob` is the statement `boss.send()`
- * runs. Modelling it by hand is how the previous version of this file managed
- * to "prove" a broken configuration correct — its helper typed `singletonKey`
- * as required, so the one shape that loses jobs could not even be expressed.
+ * memory: `getConstructionPlans()` renders the very DDL that `create_queue`
+ * executes for each queue partition, and `insert()` is run against a stubbed
+ * database to capture the statement it sends. Modelling it by hand is how the
+ * previous version of this file managed to "prove" a broken configuration
+ * correct — its helper typed `singletonKey` as required, so the one shape that
+ * loses jobs could not even be expressed.
  */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const plans = require('pg-boss/src/plans') as {
-  create(schema: string, version: number): string;
-  insertJob(schema: string): string;
-  QUEUE_POLICIES: Record<string, string>;
-  JOB_STATES: Record<string, string>;
-};
-
 const SHORT_INDEX_SQL =
-  /CREATE UNIQUE INDEX [^']*_i1 [^']*?\(name, COALESCE\(singleton_key, ''''\)\) WHERE state = ''created'' AND policy = ''short''/.exec(
-    plans.create('pgboss', 25),
+  /CREATE UNIQUE INDEX [^']*_i1 [^']*?\(name, COALESCE\(singleton_key, ''\)\) WHERE state = 'created' AND policy = 'short'/.exec(
+    getConstructionPlans('pgboss'),
   )?.[0];
+
+async function captureInsertSql(): Promise<string> {
+  const statements: string[] = [];
+  const boss = new PgBoss({
+    db: {
+      executeSql: async (sql: string) => {
+        statements.push(sql);
+
+        return { rows: [{ name: 'demo', policy: 'short', table: 'job_common' }], rowCount: 1 };
+      },
+    },
+  });
+
+  await boss.insert('demo', [{ data: {} }]);
+
+  return statements.find((sql) => sql.includes('INSERT INTO')) ?? '';
+}
 
 type Policy = 'standard' | 'short' | 'singleton' | 'stately';
 
@@ -166,12 +178,12 @@ function send(
 describe('pg-boss short-policy dedup, as the installed pg-boss defines it', () => {
   it('dedups on (name, COALESCE(singleton_key, \'\')) for created jobs on a "short" queue', () => {
     expect(SHORT_INDEX_SQL).toBeDefined();
-    expect(plans.QUEUE_POLICIES.short).toBe('short');
-    expect(plans.JOB_STATES.created).toBe('created');
+    expect(policies.short).toBe('short');
+    expect(states.created).toBe('created');
   });
 
-  it('discards the losing insert silently — no error, no dead letter', () => {
-    expect(plans.insertJob('pgboss')).toContain('ON CONFLICT DO NOTHING');
+  it('discards the losing insert silently — no error, no dead letter', async () => {
+    expect(await captureInsertSql()).toContain('ON CONFLICT DO NOTHING');
   });
 
   it('collapses every KEYLESS send on a "short" queue into one job', () => {

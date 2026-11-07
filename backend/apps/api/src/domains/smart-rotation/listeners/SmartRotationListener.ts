@@ -514,12 +514,6 @@ export class SmartRotationListener {
           WHERE name = $2
             AND data->>'name' = $3
             AND data->>'ownerId' = $5
-          UNION ALL
-          SELECT data, created_on
-          FROM pgboss.archive
-          WHERE name = $2
-            AND data->>'name' = $3
-            AND data->>'ownerId' = $5
         ) dispatched
         GROUP BY 1
       ),

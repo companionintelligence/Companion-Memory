@@ -222,7 +222,7 @@ describe('ApiKeyService.findUserIdByName', () => {
     expect(await service.findUserIdByName('app:ci-openclaw:ci-marketplace')).toBe('owner-1');
     expect(repo.find).toHaveBeenCalledWith({
       where: { name: 'app:ci-openclaw:ci-marketplace', managed_by: 'connect' },
-      select: ['user_id'],
+      select: { user_id: true },
     });
   });
 

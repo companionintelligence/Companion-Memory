@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,8 +10,8 @@ import { usePlanTasks } from './usePlanTasks';
 // Same technique as useEntityService.test.tsx: mock Apollo's hooks directly so
 // the exact variables a mutation call sends can be asserted without spinning
 // up MockedProvider for a document this test does not otherwise care about.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
   useMutation: vi.fn(),
 }));

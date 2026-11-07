@@ -209,7 +209,7 @@ export class EntityIdentifierService {
   ): Promise<string | null> {
     const row = await this.repository.findOne({
       where: { ownerUserId, kind, valueNormalized },
-      select: ['entityId'],
+      select: { entityId: true },
     });
 
     return row?.entityId ?? null;

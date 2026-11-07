@@ -1,5 +1,6 @@
 import { Field, Float, ID, Int, InputType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 @InputType()
 export class CreateEventInput {

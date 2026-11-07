@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-import { useLazyQuery } from '@apollo/client';
+import { useLazyQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Input, Select } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';

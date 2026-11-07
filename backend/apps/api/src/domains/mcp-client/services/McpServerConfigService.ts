@@ -275,7 +275,7 @@ export class McpServerConfigService {
     let candidate = base;
     let suffix = 2;
 
-    while (await this.repo.exist({ where: { userId, slug: candidate } })) {
+    while (await this.repo.exists({ where: { userId, slug: candidate } })) {
       candidate = `${base}-${suffix}`;
       suffix += 1;
     }

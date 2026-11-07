@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -164,10 +164,20 @@ describe('OAuthSection', () => {
 
   it('creates a provider key for a provider with none yet, using the id looked up from the providers query', async () => {
     let createVariables: unknown;
+    let providersLoaded = false;
+    const providersBase = providersMock(BASE_PROVIDERS);
+    const providers = {
+      ...providersBase,
+      result: () => {
+        providersLoaded = true;
+
+        return providersBase.result;
+      },
+    };
 
     renderWithProviders(<OAuthSection />, {
       mocks: [
-        providersMock(BASE_PROVIDERS),
+        providers,
         {
           request: {
             query: CREATE_PROVIDER_KEY,
@@ -201,6 +211,8 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    await waitFor(() => expect(providersLoaded).toBe(true));
+    await act(async () => {});
     const google = providerCard('Google');
 
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'client-abc' } });

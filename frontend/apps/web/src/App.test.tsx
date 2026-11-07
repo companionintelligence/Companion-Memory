@@ -92,13 +92,8 @@ vi.mock('@ci/common', async (importOriginal) => ({
 // A client whose link never emits: the pages under test are asserted on their
 // route matching, not their data, and a pending query is the quietest stand-in.
 vi.mock('@/api/ApolloProvider', async () => {
-  const {
-    ApolloClient,
-    ApolloLink,
-    ApolloProvider: Provider,
-    InMemoryCache,
-    Observable,
-  } = await import('@apollo/client');
+  const { ApolloClient, ApolloLink, InMemoryCache, Observable } = await import('@apollo/client');
+  const { ApolloProvider: Provider } = await import('@apollo/client/react');
 
   const client = new ApolloClient({
     cache: new InMemoryCache(),

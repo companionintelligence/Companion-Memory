@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { Button, IconButton, Tooltip } from '@ci/shadcn';
 import { Link as LinkIcon } from '@ci/shadcn/icons';
@@ -122,7 +122,7 @@ export function PersonPage() {
 
   usePageTitle(person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

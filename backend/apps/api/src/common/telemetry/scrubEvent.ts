@@ -18,7 +18,11 @@ import type { Breadcrumb, ErrorEvent, Log, NodeOptions } from '@sentry/nestjs';
 // @sentry/nestjs does not re-export these two, and @sentry/core is not a
 // dependency of this workspace, so take them from the hook signatures.
 type TransactionEvent = Parameters<NonNullable<NodeOptions['beforeSendTransaction']>>[0];
-type SpanJSON = Parameters<NonNullable<NodeOptions['beforeSendSpan']>>[0];
+/** The streamed span `beforeSendSpan` receives (Sentry 10+): `name` and `attributes`. */
+type StreamedSpan = Parameters<NonNullable<NodeOptions['beforeSendSpan']>>[0];
+
+/** A span nested in a transaction event: the legacy `data`, `description` and `op` shape. */
+type LegacySpan = NonNullable<TransactionEvent['spans']>[number];
 type RequestData = NonNullable<ErrorEvent['request']>;
 
 const SECRET_PATTERNS = [
@@ -309,9 +313,24 @@ function scrubSpanName(name: string, op: unknown): string {
 
 /**
  * `beforeSendSpan`. Runs for the root span of a transaction and for every
- * child span in it.
+ * child span in it. The operation is the `sentry.op` attribute of a streamed span.
  */
-export function scrubSpan(span: SpanJSON): SpanJSON {
+export function scrubSpan(span: StreamedSpan): StreamedSpan {
+  const op = span.attributes?.['sentry.op'];
+  span.attributes = scrubAttributes(span.attributes ?? {});
+
+  if (typeof span.name === 'string') {
+    span.name = scrubSpanName(span.name, op);
+  }
+
+  return span;
+}
+
+/**
+ * Spans nested in a transaction event (`event.spans`) keep the legacy shape:
+ * `data`, `description` and `op`.
+ */
+export function scrubLegacySpan(span: LegacySpan): LegacySpan {
   span.data = scrubAttributes(span.data ?? {});
 
   if (typeof span.description === 'string') {
@@ -339,7 +358,7 @@ export function scrubTransaction(event: TransactionEvent): TransactionEvent {
   }
 
   if (event.spans) {
-    event.spans = event.spans.map(scrubSpan);
+    event.spans = event.spans.map(scrubLegacySpan);
   }
 
   scrubSharedEventFields(event);

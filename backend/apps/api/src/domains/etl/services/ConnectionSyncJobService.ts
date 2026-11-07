@@ -177,7 +177,7 @@ export class ConnectionSyncJobService {
       where: {
         userId: context.userId,
       },
-      relations: ['user', 'connection'],
+      relations: { user: true, connection: true },
     });
 
     return result.map((entity) => ConnectionSyncJobEntity.toEgressType(entity));
@@ -191,7 +191,7 @@ export class ConnectionSyncJobService {
           userId: context.userId,
         }),
       },
-      relations: ['user', 'connection'],
+      relations: { user: true, connection: true },
     });
 
     return result ? ConnectionSyncJobEntity.toEgressType(result) : null;
@@ -205,7 +205,7 @@ export class ConnectionSyncJobService {
           userId: context.userId,
         }),
       },
-      relations: ['user', 'connection'],
+      relations: { user: true, connection: true },
     });
 
     const map = new Map(result.map((SyncJob) => [SyncJob.id, ConnectionSyncJobEntity.toEgressType(SyncJob)]));
@@ -228,7 +228,7 @@ export class ConnectionSyncJobService {
           userId: context.userId,
         }),
       },
-      relations: ['user', 'connection'],
+      relations: { user: true, connection: true },
       order: {
         createdAt: 'DESC',
       },
@@ -245,7 +245,7 @@ export class ConnectionSyncJobService {
           userId: context.userId,
         }),
       },
-      relations: ['user', 'connection'],
+      relations: { user: true, connection: true },
       order: {
         createdAt: 'DESC',
       },

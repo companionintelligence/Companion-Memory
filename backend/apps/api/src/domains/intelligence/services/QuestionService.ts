@@ -1038,11 +1038,6 @@ export class QuestionService {
           FROM pgboss.job
           WHERE name = $1
             AND data->>'name' = $2
-          UNION ALL
-          SELECT data, created_on
-          FROM pgboss.archive
-          WHERE name = $1
-            AND data->>'name' = $2
         ) dispatched
         GROUP BY 1, 2
       ),

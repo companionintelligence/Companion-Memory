@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import {
-  ApolloClient,
-  ApolloProvider as BaseApolloProvider,
-  InMemoryCache,
-  createHttpLink,
-} from '@apollo/client';
+import { ApolloClient, InMemoryCache, createHttpLink } from '@apollo/client';
 import { setContext } from '@apollo/client/link/context';
+import { ApolloProvider as BaseApolloProvider } from '@apollo/client/react';
 import { apiFetch, apiKeyHeaders, buildApiUrl } from '@ci/common';
 
 import introspectionResult from '@/graphql/possibleTypes';

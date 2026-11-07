@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
-import { useQuery, gql } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID, getWebOrigin } from '@ci/common';
 import { cn, Dialog, Button } from '@ci/shadcn';
 import {
@@ -34,7 +35,27 @@ import { useNavigate } from 'react-router-dom';
 
 import { SourceCard, type TrackedObject } from '@/components/connect/SourceCard';
 import { useBlueBubblesStatus } from '@/components/connect/useBlueBubblesStatus';
-import { GET_PROVIDERS, GET_OAUTH_CALLBACK_URL } from '@/queries';
+import {
+  GET_OAUTH_CALLBACK_URL,
+  GET_PROVIDERS,
+  type OAuthCallbackUrlQueryData,
+  type ProvidersQueryData,
+} from '@/queries';
+
+interface ConnectionsQueryData {
+  connections: {
+    edges: Array<{
+      node: {
+        id: string;
+        name: string | null;
+        active: boolean;
+        needsReauth: boolean;
+        providerId: string;
+        syncState: unknown;
+      };
+    }>;
+  };
+}
 
 const GET_CONNECTIONS = gql`
   query GetConnectionsForOnboarding {
@@ -300,13 +321,13 @@ export function ServiceIntegrationsSection({
   onProviderSelect,
 }: ServiceIntegrationsSectionProps) {
   const navigate = useNavigate();
-  const { data: providersData } = useQuery(GET_PROVIDERS, {
+  const { data: providersData } = useQuery<ProvidersQueryData>(GET_PROVIDERS, {
     fetchPolicy: 'cache-and-network',
   });
-  const { data: connectionsData } = useQuery(GET_CONNECTIONS, {
+  const { data: connectionsData } = useQuery<ConnectionsQueryData>(GET_CONNECTIONS, {
     fetchPolicy: 'cache-and-network',
   });
-  const { data: oauthData } = useQuery(GET_OAUTH_CALLBACK_URL);
+  const { data: oauthData } = useQuery<OAuthCallbackUrlQueryData>(GET_OAUTH_CALLBACK_URL);
   const blueBubbles = useBlueBubblesStatus();
 
   const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${getWebOrigin()}/oauth/callback`;
@@ -343,7 +364,7 @@ export function ServiceIntegrationsSection({
       (edge: {
         node: {
           id: string;
-          name: string;
+          name: string | null;
           authType: string | null;
           localOnly: boolean;
           providerKeys: unknown;

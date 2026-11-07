@@ -1,6 +1,6 @@
 import { Field, Float, ID, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type Content } from '@ci/domains/memory';
 
 import { EmbedPlayerType } from './EmbedPlayerType';

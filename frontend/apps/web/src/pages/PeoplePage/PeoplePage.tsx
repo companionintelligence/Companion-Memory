@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
-import { useApolloClient, useQuery } from '@apollo/client';
+import { useApolloClient, useQuery } from '@apollo/client/react';
 import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
@@ -417,7 +417,7 @@ function RemotePeoplePage() {
     [client, peopleVariables, refetchCandidates],
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && view == null) {
     content = (

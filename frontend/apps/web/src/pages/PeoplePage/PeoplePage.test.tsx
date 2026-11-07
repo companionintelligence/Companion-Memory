@@ -193,7 +193,7 @@ function candidateEdge(people: unknown[], overrides: Record<string, unknown> = {
           score: 0.85,
         },
       ],
-      people,
+      people: people.map((person) => mergePerson(person as Record<string, unknown>)),
       ...overrides,
     },
   };
@@ -389,7 +389,7 @@ describe('PeoplePage', () => {
       }),
     });
 
-    expect(await screen.findByRole('link', { name: 'A. Lovelace' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /^A\.\s*Lovelace$/ })).toHaveAttribute(
       'href',
       `/people/${DUPLICATE_UUID}`,
     );
@@ -701,7 +701,7 @@ describe('PeoplePage', () => {
 
     expect(await screen.findByText('Liam Broza')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Grace Hopper' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Grace\s*Hopper$/ })).not.toBeInTheDocument();
 
     const keep = screen.getByRole('button', { name: 'Use Liam Broza as the kept person' });
     expect(keep).toHaveTextContent('Keep');
@@ -709,7 +709,7 @@ describe('PeoplePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show 1 more' }));
 
-    expect(await screen.findByRole('link', { name: 'Grace Hopper' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /^Grace\s*Hopper$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show only one' })).toHaveAttribute('aria-expanded', 'true');
   });
 
@@ -965,21 +965,26 @@ describe('PeoplePage', () => {
       }),
     });
 
-    const heading = await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
-    // The card, not the People list below it (which shares Ada's cache entry).
-    const card = within(heading.closest('[data-merge-candidate]') as HTMLElement);
+    await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
 
-    // Ada's own row, and the evidence number under Bo — both "shared".
-    const adaRow = card.getByText('(212) 555-0118').closest('div');
-    expect(adaRow).toHaveTextContent('shared');
-    expect(adaRow).not.toHaveTextContent('only here');
-    expect(card.getByText('+1 (212) 555-0118').closest('div')).toHaveTextContent('shared');
+    // The card, not the People list below it (which shares Ada's cache entry). Queried again on each
+    // try: the list re-renders while it loads, so a card held from before the last render is detached.
+    await waitFor(() => {
+      const heading = screen.getByText('Same phone number +1 (212) 555-0118, but names differ');
+      const card = within(heading.closest('[data-merge-candidate]') as HTMLElement);
 
-    // Bo's main line is genuinely his alone.
-    expect(card.getByText('212-555-0110').closest('div')).toHaveTextContent('only here');
-    // And the differences line no longer lists the shared number as Ada's alone.
-    expect(card.queryByText(/Ada Quill has \(212\) 555-0118/)).not.toBeInTheDocument();
-    expect(card.getByText(/Bo Brightwater has 212-555-0110/)).toBeInTheDocument();
+      // Ada's own row, and the evidence number under Bo — both "shared".
+      const adaRow = card.getByText('(212) 555-0118').closest('div');
+      expect(adaRow).toHaveTextContent('shared');
+      expect(adaRow).not.toHaveTextContent('only here');
+      expect(card.getByText('+1 (212) 555-0118').closest('div')).toHaveTextContent('shared');
+
+      // Bo's main line is genuinely his alone.
+      expect(card.getByText('212-555-0110').closest('div')).toHaveTextContent('only here');
+      // And the differences line no longer lists the shared number as Ada's alone.
+      expect(card.queryByText(/Ada Quill has \(212\) 555-0118/)).not.toBeInTheDocument();
+      expect(card.getByText(/Bo Brightwater has 212-555-0110/)).toBeInTheDocument();
+    });
   });
 
   it('shows a merging spinner on the merge button until the request finishes', async () => {
@@ -1045,9 +1050,9 @@ describe('PeoplePage', () => {
       }),
     });
 
-    expect(await screen.findByText(/might be one of these people/)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'This is them' })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'None of these' })).toBeInTheDocument();
+    await screen.findByText(/might be one of these people/, undefined, { timeout: 5000 });
+    expect(await screen.findAllByRole('button', { name: 'This is them' })).toHaveLength(2);
+    expect(await screen.findByRole('button', { name: 'None of these' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Merge into one person' })).not.toBeInTheDocument();
   });
 

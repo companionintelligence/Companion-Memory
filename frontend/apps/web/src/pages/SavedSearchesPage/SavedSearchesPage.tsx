@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
 import { Button, Collapsible, Input } from '@ci/shadcn';
 import { ChevronRight, Plus, Search } from '@ci/shadcn/icons';

@@ -1,6 +1,5 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import type { LoggerService } from '@ci/common/logging';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 
 import type { EntityTypeAuditResult, EntityTypeAuditService } from '../../services/EntityTypeAuditService';
 import { ENTITY_TYPE_AUDIT_CRON, EntityTypeAuditCron } from '../EntityTypeAuditCron';

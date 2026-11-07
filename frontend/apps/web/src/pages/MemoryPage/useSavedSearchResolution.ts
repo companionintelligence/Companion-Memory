@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
 import { useSearchParams } from 'react-router-dom';

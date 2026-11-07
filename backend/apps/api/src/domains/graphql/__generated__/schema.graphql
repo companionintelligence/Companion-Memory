@@ -163,7 +163,7 @@ enum AnswerSource {
 type AnswerType implements Node {
   answer: String!
   answerConfidence: Float
-  answerEvidence: JSON
+  answerEvidence: JSONObject
   answerMethod: String!
   answerRationale: String
   answerSource: String
@@ -474,8 +474,8 @@ type CommunicationType implements Node & Taggable {
   direction: String!
   from: PersonType
   id: ID!
-  metadata: JSON!
-  participantsMetadata: JSON!
+  metadata: JSONObject!
+  participantsMetadata: JSONObject!
   preview: String
   sourceId: String
   sourceSystem: String
@@ -539,14 +539,14 @@ type ConnectionSyncJobType implements Node {
   connection: ConnectionType
   connectionId: ID!
   createdAt: DateTime!
-  cursor: JSON
-  data: JSON!
+  cursor: JSONObject
+  data: JSONObject!
   endpointName: String!
-  error: JSON
+  error: JSONObject
   id: ID!
   jobId: ID
-  nextCursor: JSON
-  properties: JSON
+  nextCursor: JSONObject
+  properties: JSONObject
   status: String!
   type: String!
   updatedAt: DateTime!
@@ -564,7 +564,7 @@ type ConnectionType implements Node {
   provider: ProviderType!
   providerId: ID!
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -607,7 +607,7 @@ type ContentType implements Node & Taggable {
   playbackUrl: String
   player: EmbedPlayerType
   previewUrl: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceId: String
   sourceSystem: String
   sourceType: String
@@ -664,7 +664,7 @@ input CreateBrowserActivityInput {
   isIncognito: Boolean
   pageSummary: String
   productivityScore: Float
-  properties: JSON
+  properties: JSONObject
   scrollDepthPercent: Float
   sourceId: String
   sourceSystem: String
@@ -675,13 +675,13 @@ input CreateBrowserActivityInput {
 }
 
 input CreateCommunicationInput {
-  attachments: [JSON!]
+  attachments: [JSONObject!]
   communicationType: String!
   content: String!
   direction: String
   durationSeconds: Int
   fromEntityId: String
-  participantsMetadata: JSON
+  participantsMetadata: JSONObject
   preview: String
   sourceId: String
   sourceSystem: String
@@ -712,7 +712,7 @@ input CreateConnectionInput {
   providerId: ID!
   refreshToken: String
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -724,10 +724,10 @@ type CreateConnectionPayload {
 input CreateConnectionSyncJobInput {
   connectionId: ID!
   endpointName: String!
-  error: JSON
+  error: JSONObject
   id: ID
   jobId: ID
-  properties: JSON
+  properties: JSONObject
   type: String!
   userId: ID!
 }
@@ -741,7 +741,7 @@ input CreateContentInput {
   eventId: ID
   externalId: String
   mimetype: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceId: String
   sourceSystem: String
   sourceType: String
@@ -766,10 +766,10 @@ input CreateEventInput {
   """
   isLocked: Boolean
   isRecurring: Boolean
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
-  metadata: JSON
+  metadata: JSONObject
   organizerEntityId: ID
   participantEntityIds: [ID!]
   sharingLevel: String
@@ -800,7 +800,7 @@ input CreateItemInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -820,7 +820,7 @@ input CreateItemInput {
   heightMm: Float
 
   """Serial number, UPC, ISBN, order id, …"""
-  identifierCodes: JSON
+  identifierCodes: JSONObject
 
   """A digital item is refused a mass, a size and a volume."""
   isDigital: Boolean
@@ -836,7 +836,7 @@ input CreateItemInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -915,14 +915,14 @@ input CreatePlaceInput {
   description: String
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String!
   parentId: String
   placeKind: String
-  properties: JSON
+  properties: JSONObject
   tracked: Boolean
   type: String
   uploaded: Boolean
@@ -944,7 +944,7 @@ input CreateRelationshipInput {
   fromNodeId: ID!
   fromNodeType: String!
   isBidirectional: Boolean
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
   toNodeId: String!
@@ -1032,7 +1032,7 @@ input CreateThingInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -1050,7 +1050,7 @@ input CreateThingInput {
 
   """Height, in millimetres."""
   heightMm: Float
-  identifierCodes: JSON
+  identifierCodes: JSONObject
 
   """A digital item is refused a mass, a size and a volume."""
   isDigital: Boolean
@@ -1066,7 +1066,7 @@ input CreateThingInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -1260,7 +1260,7 @@ type EventType implements Node & Taggable {
   """
   lastMovedAt: DateTime
   location: PlaceType
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
   mediaContentType: String
@@ -1268,7 +1268,7 @@ type EventType implements Node & Taggable {
   mediaSize: Float
   mediaUrl: String
   mediaWidth: Int
-  metadata: JSON
+  metadata: JSONObject
   organizer: PersonType
   organizerEntityId: ID
 
@@ -1327,7 +1327,7 @@ type FileChunkType implements Node {
   parserName: String!
   parserVersion: String!
   sectionTitle: String
-  sourceLocator: JSON
+  sourceLocator: JSONObject
   updatedAt: DateTime!
 }
 
@@ -1516,7 +1516,7 @@ type GraphEdgeType {
   fromEntityId: ID!
   id: ID!
   isActive: Boolean!
-  properties: JSON
+  properties: JSONObject
   strength: Float
   toEntityId: ID!
   type: String!
@@ -1527,7 +1527,7 @@ input GraphEntityInput {
   entityType: String!
   key: String!
   name: String
-  properties: JSON
+  properties: JSONObject
   sourceSystem: String!
 }
 
@@ -1539,12 +1539,12 @@ type GraphNodeType {
   linkedId: String
   linkedTable: String
   name: String
-  properties: JSON
+  properties: JSONObject
 }
 
 input GraphRelationshipInput {
   fromKey: String!
-  properties: JSON
+  properties: JSONObject
   toKey: String!
   type: String!
 }
@@ -1647,7 +1647,7 @@ input ItemRelationshipInput {
   fromSourceId: String!
   fromSourceSystem: String!
   fromSourceType: String!
-  metadata: JSON
+  metadata: JSONObject
   relation: String!
   toSourceId: String!
   toSourceSystem: String!
@@ -1686,7 +1686,7 @@ type ItemType implements Node & Taggable {
   colors: [String!]
 
   """{material: fraction}; {} when the proportions are unknown."""
-  composition: JSON!
+  composition: JSONObject!
   condition: ItemCondition
   createdAt: DateTime!
   currency: String!
@@ -1727,7 +1727,7 @@ type ItemType implements Node & Taggable {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String
   observations: [ObjectObservationType!]!
@@ -1760,9 +1760,9 @@ enum ItemUnitSystem {
 }
 
 """
-The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+The `JSONObject` scalar type represents JSON objects as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
 """
-scalar JSON
+scalar JSONObject
 
 type KnownPlaceCandidateType {
   confidence: Float!
@@ -1944,7 +1944,7 @@ type MetricAnomalyType {
   detector: String!
   direction: String!
   id: String!
-  metadata: JSON!
+  metadata: JSONObject!
   metric: String!
   score: Float!
   value: Float
@@ -1997,7 +1997,7 @@ An evidence-linked suggestion. Never emitted without a correlation or anomaly FK
 type MetricSuggestionType {
   acceptedAt: String
   dismissedAt: String
-  evidence: JSON!
+  evidence: JSONObject!
   id: String!
   key: String!
   priority: Int
@@ -2372,7 +2372,7 @@ type ObjectMergeCountsType {
 }
 
 type ObjectObservationType implements Node {
-  attributes: JSON!
+  attributes: JSONObject!
   bbox: BoundingBoxType
 
   """A human confirmed this link. Written only by confirmObservation."""
@@ -2395,7 +2395,7 @@ type ObjectObservationType implements Node {
   The cropped thumbnail of the sighting, or the whole frame when there is no crop.
   """
   media: ContentType
-  metadata: JSON!
+  metadata: JSONObject!
   observedAt: DateTime!
   place: PlaceType
   placeEntityId: ID
@@ -2650,23 +2650,23 @@ type PlaceNearType {
 
 type PlaceType implements Node & Taggable {
   appearedAt: DateTime
-  boundary: JSON
+  boundary: JSONObject
   description: String
   entityType: String!
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   id: ID!
   incomingRelationships(limit: Int): [RelationshipType!]
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String
   outgoingRelationships(limit: Int): [RelationshipType!]
   parent: PlaceType
   parentId: ID
   placeKind: String
-  properties: JSON!
+  properties: JSONObject!
   tags: [EntityTagType!]!
   tracked: Boolean
   type: String
@@ -2769,7 +2769,7 @@ type ProductModelType implements Node & Taggable {
   """ci.content rows holding manuals."""
   manualContentIds: [ID!]
   manufacturer: String
-  metadata: JSON!
+  metadata: JSONObject!
   modelNumber: String
 
   """Manufacturer list price in integer MINOR units of `currency`."""
@@ -2783,14 +2783,14 @@ type ProductModelType implements Node & Taggable {
   sourceType: String
 
   """Descriptive specifications."""
-  spec: JSON!
+  spec: JSONObject!
   subcategory: String
   tags: [EntityTagType!]!
   title: String!
   updatedAt: DateTime!
 
   """Variant AXES only ({color, capacity, size}) — never descriptive specs."""
-  variantAttributes: JSON!
+  variantAttributes: JSONObject!
 }
 
 type ProviderConnection implements Connection {
@@ -3235,7 +3235,7 @@ type ReceiptLineItemType {
   """
   isPhysical: Boolean!
   lineNumber: Int!
-  metadata: JSON!
+  metadata: JSONObject!
   mintedObjectId: ID
   modelNumber: String
   productId: ID
@@ -3267,7 +3267,7 @@ type ReceiptType implements Node & Taggable {
   lineItems: [ReceiptLineItemType!]!
   merchantEntityId: ID
   merchantName: String
-  metadata: JSON!
+  metadata: JSONObject!
   orderNumber: String
 
   """Last four digits only. A full card number is never stored."""
@@ -3316,7 +3316,7 @@ type RelationshipType implements Node {
   fromNodeType: String!
   id: ID!
   isBidirectional: Boolean!
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
   toNodeId: ID!
@@ -3471,7 +3471,7 @@ type ScheduleCandidateType {
   """
   Saved how-you'd-do-it compose for this card, when the user has personalized it
   """
-  personalization: JSON
+  personalization: JSONObject
 
   """The sentence shown to the user. Never empty."""
   rationale: String!
@@ -3733,7 +3733,7 @@ type TaskPendingChangeType implements Node {
   createdAt: DateTime!
   id: ID!
   kind: TaskPendingChangeKind!
-  patch: JSON!
+  patch: JSONObject!
   rationale: String
   resolvedAt: DateTime
   status: TaskPendingChangeStatus!
@@ -3840,7 +3840,7 @@ type UnfurlType {
   durationSeconds: Int
   externalRef: String
   fetchedAt: DateTime!
-  payload: JSON!
+  payload: JSONObject!
   resolver: String!
   siteName: String
   status: String!
@@ -3895,7 +3895,7 @@ input UpdateConnectionInput {
   needsReauth: Boolean
   refreshToken: String
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -3907,10 +3907,10 @@ type UpdateConnectionPayload {
 input UpdateConnectionSyncJobInput {
   completedAt: DateTime
   endpointName: String
-  error: JSON
+  error: JSONObject
   id: ID!
   jobId: ID
-  properties: JSON
+  properties: JSONObject
   type: String
 }
 
@@ -3923,7 +3923,7 @@ input UpdateContentInput {
   externalId: String
   id: ID!
   mimetype: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceUrl: String
   text: String
   title: String
@@ -3951,10 +3951,10 @@ input UpdateEventInput {
   """
   isLocked: Boolean
   isRecurring: Boolean
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
-  metadata: JSON
+  metadata: JSONObject
   organizerEntityId: ID
   participantEntityIds: [ID!]
   sourceId: ID
@@ -3990,7 +3990,7 @@ input UpdateItemInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -4025,7 +4025,7 @@ input UpdateItemInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -4114,15 +4114,15 @@ input UpdatePlaceInput {
   description: String
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   id: String!
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String!
   parentId: String
   placeKind: String
-  properties: JSON
+  properties: JSONObject
   tracked: Boolean
   type: String
   uploaded: Boolean
@@ -4143,7 +4143,7 @@ input UpdateRelationshipInput {
   endDate: DateTime
   id: ID!
   isBidirectional: Boolean
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
 }

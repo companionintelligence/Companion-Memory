@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 
-import { gql, NetworkStatus, useQuery } from '@apollo/client';
+import { gql, NetworkStatus } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 import { useLiveChanges } from '@/hooks/useLiveChanges';
 import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';

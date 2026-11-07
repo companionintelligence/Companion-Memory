@@ -6,8 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /** The providers the server lists, per test. Empty unless a test is about them. */
 const h = vi.hoisted(() => ({ providers: [] as Array<Record<string, unknown>> }));
 
-vi.mock('@apollo/client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@apollo/client')>();
+vi.mock('@apollo/client/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@apollo/client/react')>();
 
   return {
     ...actual,

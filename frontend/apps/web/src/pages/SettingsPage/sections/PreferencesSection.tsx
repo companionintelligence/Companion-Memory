@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Card, Label, Select } from '@ci/shadcn';
 import { Check, Clock, Globe } from '@ci/shadcn/icons';
 

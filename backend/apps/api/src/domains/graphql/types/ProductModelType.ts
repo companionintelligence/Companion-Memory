@@ -1,6 +1,6 @@
 import { Field, Float, ID, Int, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
 
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type ProductModel } from '@ci/domains/memory';
 
 import { EntityTagType } from './EntityTagType';

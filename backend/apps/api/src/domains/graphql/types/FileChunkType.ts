@@ -1,7 +1,7 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
 
 import { type SignedFile } from '@ci/domains/files';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { type FileChunk } from '@ci/domains/parsing';
 
 import { FileType } from './FileType';

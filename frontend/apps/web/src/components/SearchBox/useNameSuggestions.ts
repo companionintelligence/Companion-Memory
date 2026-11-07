@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useDebounced } from '@ci/common';
 
 import { gql } from '@/graphql';

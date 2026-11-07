@@ -223,7 +223,7 @@ export class BrowserActivityService {
       order: {
         time: 'DESC',
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     return results.map((entity) => BrowserActivityEntity.toEgressType(entity));
@@ -263,7 +263,7 @@ export class BrowserActivityService {
         }),
       },
       order: { time: 'DESC' },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(results.map((entity) => [entity.id, BrowserActivityEntity.toEgressType(entity)]));
@@ -279,7 +279,7 @@ export class BrowserActivityService {
           user_id: context.userId,
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     return entity == null ? null : BrowserActivityEntity.toEgressType(entity);
@@ -377,7 +377,7 @@ export class BrowserActivityService {
         time: MoreThanOrEqual(since),
       },
       order: { time: 'DESC' },
-      select: ['category', 'productivity_score'],
+      select: { category: true, productivity_score: true },
     });
   }
 

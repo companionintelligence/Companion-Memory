@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useLazyQuery, useMutation } from '@apollo/client';
+import { useLazyQuery, useMutation } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { AlertDialog, Badge, Button, Input, Select } from '@ci/shadcn';
 import { Merge, Trash2 } from '@ci/shadcn/icons';

@@ -107,8 +107,7 @@ describe('MemoryPage — ?saved_search on a mobile viewport', () => {
     h.capturedArgs = undefined;
 
     const savedSearchMock: MockedResponse = {
-      request: { query: GET_SAVED_SEARCH },
-      variableMatcher: () => true,
+      request: { query: GET_SAVED_SEARCH, variables: () => true },
       result: {
         data: {
           savedSearch: {

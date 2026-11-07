@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { usePageTitle, LoadingPage, GlobalUID } from '@ci/common';
 import {
   Button,

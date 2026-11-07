@@ -1298,7 +1298,7 @@ export class PlaceService {
     const ids = entities.map((entity) => entity.id);
     const rows = await this.placeRepository.find({
       where: { id: In(ids) },
-      relations: ['user'],
+      relations: { user: true },
     });
     const byId = new Map(rows.map((row) => [row.id, row]));
 
@@ -1382,7 +1382,7 @@ export class PlaceService {
           },
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     return result ? PlaceEntity.toEgressType(result) : null;
@@ -1402,7 +1402,7 @@ export class PlaceService {
           },
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(result.map((entity) => [entity.id, PlaceEntity.toEgressType(entity)]));

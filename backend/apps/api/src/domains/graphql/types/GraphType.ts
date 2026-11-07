@@ -1,5 +1,6 @@
 import { Field, Float, ID, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /**
  * First-class GraphQL graph surface (#1941). Nodes/edges are projections over

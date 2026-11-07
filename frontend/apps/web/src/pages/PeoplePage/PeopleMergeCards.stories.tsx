@@ -1,4 +1,6 @@
-import { ApolloClient, ApolloProvider, InMemoryCache } from '@apollo/client';
+import { ApolloClient, InMemoryCache } from '@apollo/client';
+import { HttpLink } from '@apollo/client/link/http';
+import { ApolloProvider } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import type { Decorator, Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
@@ -8,9 +10,8 @@ import { MergeCandidateCard, type MergeCandidate } from './PeopleMergeCards';
 // The card calls useMutation for merge/reject; those only fire on a click, so a
 // client that is never reached is enough to render it.
 const storyClient = new ApolloClient({
-  uri: '/graphql',
+  link: new HttpLink({ uri: '/graphql' }),
   cache: new InMemoryCache(),
-  connectToDevTools: false,
 });
 
 const withApollo: Decorator = (Story) => (

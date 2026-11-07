@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { Button, cn, IconButton, Sheet, Tabs, Tooltip } from '@ci/shadcn';
 import { Plus, X } from '@ci/shadcn/icons';

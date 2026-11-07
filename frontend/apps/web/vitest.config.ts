@@ -26,9 +26,9 @@ const packagesDir = path.resolve(__dirname, '../../packages');
 
 export default defineConfig({
   resolve: { alias },
-  // Vitest transforms .tsx via esbuild; use the React 19 automatic JSX runtime
+  // Vitest transforms .tsx via oxc (Vite 8); use the React 19 automatic JSX runtime
   // (matches tsconfig's "jsx": "react-jsx"). No Fast Refresh plugin needed under test.
-  esbuild: { jsx: 'automatic' },
+  oxc: { jsx: { runtime: 'automatic' } },
   test: {
     // describe/it/expect/vi available without imports; also lets @testing-library/jest-dom
     // augment the global `expect`.

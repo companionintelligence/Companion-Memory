@@ -1,6 +1,5 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import { CronRegistry } from '@ci/common/schedule';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 
 import { CONSUMPTION_SWEEP_CRON, ConsumptionSweepCron } from './ConsumptionSweepCron';
 

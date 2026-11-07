@@ -20,6 +20,7 @@ import { EtlModule } from '@ci/domains/etl';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
+import { JsonObjectScalar } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule, ObjectObservationEntity, ReceiptLineItemEntity } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
@@ -188,6 +189,8 @@ import { UserResolver } from './resolvers/UserResolver';
     UserModule,
   ],
   providers: [
+    // NestJS discovers @Scalar classes through module providers.
+    JsonObjectScalar,
     ActionResolver,
     ActivityResolver,
     AskResolver,

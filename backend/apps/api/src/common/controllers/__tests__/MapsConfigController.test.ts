@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 
+import { PORTAL_TOKEN_VERIFIER } from '@ci/common/guards/PortalTokenVerifier';
 import config from '@ci/configuration';
 
 import { MapsConfigController } from '../MapsConfigController';
@@ -11,6 +12,7 @@ describe('MapsConfigController', () => {
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [MapsConfigController],
+      providers: [{ provide: PORTAL_TOKEN_VERIFIER, useValue: { verify: jest.fn() } }],
     }).compile();
 
     controller = moduleRef.get(MapsConfigController);

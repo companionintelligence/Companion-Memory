@@ -7,6 +7,7 @@ import type {
 } from 'typeorm';
 import { Brackets } from 'typeorm';
 
+import { executeInsertWithRawConflict } from './insertWithRawConflict';
 import { appendRecordSources, type RecordSourceRow } from './recordSources';
 
 /**
@@ -208,15 +209,16 @@ export async function chunkedConflictInsert<Entity extends ObjectLiteral>(
 ): Promise<void> {
   const chunkSize = computeChunkSize(repository.metadata.columns.length);
   for (let offset = 0; offset < rows.length; offset += chunkSize) {
-    await repository
-      .createQueryBuilder()
-      .insert()
-      // Route through `metadata.target` so TS picks the `ObjectLiteral`
-      // overload of `.values()`.
-      .into(repository.metadata.target)
-      .values(rows.slice(offset, offset + chunkSize))
-      .onConflict(onConflict)
-      .execute();
+    await executeInsertWithRawConflict(
+      repository
+        .createQueryBuilder()
+        .insert()
+        // Route through `metadata.target` so TS picks the `ObjectLiteral`
+        // overload of `.values()`.
+        .into(repository.metadata.target)
+        .values(rows.slice(offset, offset + chunkSize)),
+      onConflict,
+    );
   }
 }
 
@@ -628,15 +630,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
       ? `${conflictTarget} DO UPDATE SET ${conflictUpdateSetClause(alias, conflictUpdateColumns!, conflictMergeKinds, conflictProducerPreference)}`
       : `${conflictTarget} DO NOTHING`;
 
-    const insertQb = repository
-      .createQueryBuilder()
-      .insert()
-      .into(meta.target)
-      .values(toInsert)
-      // Deprecated but the only API that emits an explicit ON CONFLICT target;
-      // `orIgnore()` would emit a bare untargeted DO NOTHING (which also swallows
-      // PK conflicts). We want to target exactly the provenance unique index.
-      .onConflict(conflictAction);
+    const insertQb = repository.createQueryBuilder().insert().into(meta.target).values(toInsert);
 
     // Under DO UPDATE every conflicting row is returned, so RETURNING must carry
     // the xmax-derived inserted flag to distinguish inserts from refreshes.
@@ -646,9 +640,11 @@ async function executeChunk<Entity extends ObjectLiteral>(
     // is resolved against entity property paths (see pkPropertyPath above).
     insertQb.returning(doUpdate ? `${pkDbName}, (xmax = 0) AS ${insertedFlagAlias}` : [pkPropertyPath]);
 
-    const insertResult = await insertQb.execute();
+    // The conflict clause (DO UPDATE SET merge, or DO NOTHING on the provenance
+    // unique index) is spliced in raw; see insertWithRawConflict.
+    const insertRows = await executeInsertWithRawConflict(insertQb, conflictAction);
 
-    for (const raw of (insertResult.raw as Record<string, unknown>[]) ?? []) {
+    for (const raw of insertRows) {
       // DO NOTHING: every returned row was inserted. DO UPDATE: only xmax = 0 was.
       if (!doUpdate || raw[insertedFlagAlias] === true) {
         insertedPks.add(raw[pkDbName]);

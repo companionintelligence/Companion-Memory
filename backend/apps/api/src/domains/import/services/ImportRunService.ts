@@ -405,7 +405,7 @@ export class ImportRunService {
     }
 
     const result = await this.dataSource.transaction(async (manager) => {
-      let defaultLabel: string | null = null;
+      let defaultLabel: string | null;
 
       if (input.dropId != null) {
         const uploads = await manager.query<Array<{ original_filename: string | null; status: string }>>(
@@ -1105,7 +1105,7 @@ export class ImportRunService {
    * reconciling the two.
    */
   async runBelongsTo(runId: string, userId: string): Promise<boolean> {
-    return this.dataSource.getRepository(ImportRunEntity).exist({ where: { id: runId, userId } });
+    return this.dataSource.getRepository(ImportRunEntity).exists({ where: { id: runId, userId } });
   }
 
   async stagesFor(runId: string): Promise<ImportStage[]> {

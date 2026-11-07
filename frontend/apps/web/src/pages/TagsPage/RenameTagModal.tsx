@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog, Input, Label, Textarea } from '@ci/shadcn';
 
 import { gql } from '@/graphql';

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,8 +9,8 @@ import { EntityServiceProvider, resolveLiveEntity, useEntityService } from './us
 // Same technique as useSearchService.test.ts: mock Apollo's useQuery directly
 // so the variables/fetchMore contract can be asserted without reproducing the
 // large SEARCH_QUERY document.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 

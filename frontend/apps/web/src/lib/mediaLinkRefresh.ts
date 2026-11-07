@@ -263,7 +263,7 @@ function resumeWith(media: HTMLMediaElement, fresh: string): void {
 }
 
 /** The refresher backed by the app's Apollo client. */
-export function apolloMediaLinkRefresher(client: ApolloClient<unknown>): MediaLinkRefresher {
+export function apolloMediaLinkRefresher(client: ApolloClient): MediaLinkRefresher {
   return new MediaLinkRefresher(async (urls) => {
     const { data } = await client.query({
       query: REFRESH_MEDIA_URLS,

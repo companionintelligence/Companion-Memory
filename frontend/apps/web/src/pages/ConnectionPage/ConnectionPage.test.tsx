@@ -86,8 +86,7 @@ describe('ConnectionPage — Edit does not touch the sync schedule', () => {
       mocks: [
         connectionMock(connectionRow()),
         {
-          request: { query: UPDATE_CONNECTION },
-          variableMatcher: () => true,
+          request: { query: UPDATE_CONNECTION, variables: () => true },
           result: (variables: Record<string, unknown>) => {
             saved.push(variables);
 
@@ -120,8 +119,7 @@ describe('ConnectionPage — Edit does not touch the sync schedule', () => {
 
 function updateConnectionMock(saved: Record<string, unknown>[]) {
   return {
-    request: { query: UPDATE_CONNECTION },
-    variableMatcher: () => true,
+    request: { query: UPDATE_CONNECTION, variables: () => true },
     result: (variables: Record<string, unknown>) => {
       saved.push(variables);
 

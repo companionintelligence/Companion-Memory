@@ -1,6 +1,5 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import type { LoggerService } from '@ci/common/logging';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 
 import type { RecallProbeRun } from '../../services/RecallProbeService';
 import { RECALL_PROBE_CRON, RecallProbeCron } from '../RecallProbeCron';

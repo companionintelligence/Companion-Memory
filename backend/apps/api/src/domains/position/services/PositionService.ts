@@ -7,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type OwnedLink, refuseForeignLinks } from '@ci/common/persistence';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { DeviceService } from '@ci/domains/devices';
 import { EventService } from '@ci/domains/events';
 import {
@@ -236,16 +237,17 @@ export class PositionService {
     // the primary key), so two writers racing on the same instant no longer
     // read "nothing there" together and then collide. Only the rows that went
     // in come back; the batch is then read once, existing and new together.
-    const inserted = await this.positionRepository
-      .createQueryBuilder()
-      .insert()
-      .into(PositionEntity)
-      // The entities carry a GeoJSON `location`; the builder's deep-partial type does not name one.
-      .values(entities as unknown as QueryDeepPartialEntity<PositionEntity>[])
-      .onConflict('("time", "user_id") DO NOTHING')
-      .returning(['id'])
-      .execute();
-    const createdIds = new Set((inserted.raw as Array<{ id: string }>).map((row) => row.id));
+    const inserted = await executeInsertWithRawConflict(
+      this.positionRepository
+        .createQueryBuilder()
+        .insert()
+        .into(PositionEntity)
+        // The entities carry a GeoJSON `location`; the builder's deep-partial type does not name one.
+        .values(entities as unknown as QueryDeepPartialEntity<PositionEntity>[])
+        .returning(['id']),
+      '("time", "user_id") DO NOTHING',
+    );
+    const createdIds = new Set((inserted as Array<{ id: string }>).map((row) => row.id));
     const stored = await this.positionRepository.find({
       where: { userId: context.userId, time: In(entities.map((entity) => entity.time)) },
     });

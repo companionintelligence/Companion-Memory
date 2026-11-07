@@ -9,7 +9,7 @@ import { McpServerConfigService } from '../McpServerConfigService';
 
 function buildService(): McpServerConfigService {
   const repo = {
-    exist: async () => false,
+    exists: async () => false,
     create: (fields: Partial<McpServerConfigEntity>) => Object.assign(new McpServerConfigEntity(), fields),
     save: async (entity: McpServerConfigEntity) =>
       Object.assign(entity, {

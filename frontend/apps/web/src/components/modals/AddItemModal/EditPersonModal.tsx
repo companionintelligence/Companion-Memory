@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { Button, Skeleton } from '@ci/shadcn';
 
 import {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { DataSource, type Logger as TypeOrmLogger } from 'typeorm';
-import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
+import type { PostgresDataSourceOptions } from 'typeorm/driver/postgres/PostgresDataSourceOptions';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { ConnectionEntity, ProviderEntity } from '@ci/domains/connections';
@@ -109,7 +109,7 @@ describeWithDatabase(
       await scratch.assertOwn();
 
       const { host, port, username, password, database } = scratch.dataSource
-        .options as PostgresConnectionOptions;
+        .options as PostgresDataSourceOptions;
 
       const captureLogger: TypeOrmLogger = {
         logQuery: (sql: string, parameters?: unknown[]) => {

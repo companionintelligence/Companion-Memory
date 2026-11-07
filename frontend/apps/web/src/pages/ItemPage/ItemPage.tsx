@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { Badge, Button, Card, useToast } from '@ci/shadcn';
 import { useParams } from 'react-router-dom';
@@ -116,7 +116,7 @@ export function ItemPage() {
 
   usePageTitle(item?.name ? `Thing - ${item.name} - Companion Memory` : 'Thing - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading && item == null) {
     content = <LoadingPage />;

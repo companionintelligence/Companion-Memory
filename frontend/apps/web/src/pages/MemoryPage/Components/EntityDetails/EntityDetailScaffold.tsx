@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, IconButton, Label, Sheet, Tooltip, cn, useToast } from '@ci/shadcn';
 import { Download, FileSymlink, ImageOff, Loader2, Pencil, Play, Trash2 } from '@ci/shadcn/icons';

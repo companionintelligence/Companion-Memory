@@ -91,9 +91,7 @@ describe('SpendChart', () => {
     // The Y axis is tick-formatted through `formatMinorUnits(Math.round(value * 100))` —
     // every rendered tick is therefore a currency string, and none is a bare
     // multi-digit number (which is what an un-converted cents value would look like).
-    const tickTexts = Array.from(
-      document.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text'),
-    )
+    const tickTexts = Array.from(document.querySelectorAll('.recharts-yAxis-tick-labels text'))
       .map((el) => el.textContent ?? '')
       .filter(Boolean);
 

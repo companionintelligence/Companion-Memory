@@ -186,5 +186,10 @@ EXPOSE 3030
 #   SECRETS_FILE               Path to secrets file [/run/secrets/.env.secrets]
 # ──────────────────────────────────────────────────
 
+# The API runs as CommonJS, and some of its packages are ESM-only. Without this condition,
+# require('graphql') and the ESM import in @apollo/server load two copies of graphql, and every
+# operation with a variable is rejected ("cannot be used as an input type").
+ENV NODE_OPTIONS=--conditions=module-sync
+
 ENTRYPOINT ["/usr/bin/tini", "--", "./entrypoint.sh"]
 CMD ["node", "dist/src/main.js"]

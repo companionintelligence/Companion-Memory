@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { gql, useQuery } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 // How long to keep polling a non-READY forecast before giving up and showing an
 // actionable empty state. The timer resets whenever the status *or* item

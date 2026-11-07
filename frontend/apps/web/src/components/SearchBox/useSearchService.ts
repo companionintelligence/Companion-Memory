@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useOptionalConnectionMode } from '@ci/common';
 
+import { isNetworkFailure } from '@/api/apolloErrors';
 import { type LocalSearchNode, searchLocal } from '@/api/powersync/localSearch';
 import { getReplicaDatabase } from '@/api/powersync/session';
 import { gql } from '@/graphql';
@@ -112,7 +113,7 @@ export function useSearchService({
     fetchPolicy: 'cache-and-network',
   });
 
-  const networkFailed = Boolean(error?.networkError);
+  const networkFailed = isNetworkFailure(error);
   const useDevice = Boolean(trimmedQuery) && (applianceUnreachable || networkFailed);
   // The type arrays are rebuilt every render; the effect below keys on their
   // contents, not their identity.

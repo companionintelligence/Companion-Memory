@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { AlertDialog, Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';

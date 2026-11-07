@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { Button, cn } from '@ci/shadcn';
 import { Calendar, Clock, Loader2, MapPin, Pencil, Search as SearchIcon, Square, X } from '@ci/shadcn/icons';
 import L, { type LatLngExpression } from 'leaflet';

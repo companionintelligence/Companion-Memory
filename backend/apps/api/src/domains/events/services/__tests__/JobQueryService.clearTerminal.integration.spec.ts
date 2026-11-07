@@ -1,6 +1,6 @@
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
+import type { PostgresDataSourceOptions } from 'typeorm/driver/postgres/PostgresDataSourceOptions';
 import { v7 as uuidv7 } from 'uuid';
 
 import type { RequestContext } from '@ci/common/context';
@@ -206,7 +206,7 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
     // real SQL. `synchronize` stays off — the DDL above is the schema, and
     // TypeORM would otherwise "fix" the drift rather than report it.
     const { host, port, username, password, database } = scratch.dataSource
-      .options as PostgresConnectionOptions;
+      .options as PostgresDataSourceOptions;
 
     mapped = new DataSource({
       type: 'postgres',

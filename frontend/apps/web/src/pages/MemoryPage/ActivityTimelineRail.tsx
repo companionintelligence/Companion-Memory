@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { cn } from '@ci/shadcn';
 import { useLocation, useSearchParams } from 'react-router-dom';
 

@@ -24,7 +24,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...original, useNavigate: () => navigate };
 });
 
-vi.mock('@apollo/client', async (importOriginal) => {
+vi.mock('@apollo/client/react', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
 
   return { ...original, useApolloClient: () => CLIENT };

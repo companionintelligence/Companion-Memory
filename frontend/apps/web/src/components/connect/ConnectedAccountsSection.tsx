@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Dialog, Card } from '@ci/shadcn';
 import { AlertCircle, RefreshCw } from '@ci/shadcn/icons';

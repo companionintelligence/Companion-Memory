@@ -28,6 +28,34 @@ const tripleKey = (r: { sourceSystem: string | null; sourceId: string | null }) 
   `${r.sourceSystem ?? ''}|${r.sourceId ?? ''}`;
 
 /**
+ * Models the slice of TypeORM 1.x's InsertQueryBuilder that
+ * executeInsertWithRawConflict drives: `getQuery()` (SQL without a conflict
+ * clause), `getParameters()`, `connection.driver.escapeQueryWithParameters()`
+ * and the protected `queryRunner`. The spliced statement reaches `run` as the
+ * SQL string, so `conflictClauseOf` reads back exactly what the helper emitted.
+ */
+function attachRawConflict(
+  iqb: Record<string, unknown>,
+  returningSql: () => string,
+  run: (sql: string) => Promise<Record<string, unknown>[]>,
+) {
+  iqb.getQuery = () => `INSERT INTO "fake"${returningSql()}`;
+  iqb.getParameters = () => ({});
+  iqb.connection = {
+    driver: { escapeQueryWithParameters: (sql: string, params: unknown) => [sql, params] },
+  };
+
+  iqb.queryRunner = { query: async (sql: string) => run(sql) };
+}
+
+const conflictClauseOf = (sql: string): string => {
+  const start = sql.indexOf(' ON CONFLICT ') + ' ON CONFLICT '.length;
+  const end = sql.indexOf(' RETURNING ');
+
+  return sql.slice(start, end === -1 ? undefined : end);
+};
+
+/**
  * A fake TypeORM repository backed by an in-memory table that enforces the partial
  * unique index on the (source_type, source_system, source_id) triple WHERE
  * source_id IS NOT NULL — enough to exercise the helper's pre-check, ON CONFLICT
@@ -166,7 +194,7 @@ function makeFakeRepository(initial: Row[] = []) {
 
   function makeInsertQB(viaTxRepo: boolean, viaExternalManager = false) {
     let values: Row[] = [];
-    let conflictAction = '';
+    let returning = '';
     const iqb: Record<string, unknown> = {};
     iqb.insert = () => iqb;
     iqb.into = () => iqb;
@@ -176,57 +204,61 @@ function makeFakeRepository(initial: Row[] = []) {
       return iqb;
     };
 
-    iqb.onConflict = (action: string) => {
-      conflictAction = action;
+    iqb.returning = (arg: string | string[]) => {
+      returning = typeof arg === 'string' ? arg : arg.join(', ');
 
       return iqb;
     };
 
-    iqb.returning = () => iqb;
-    iqb.execute = async () => {
-      statements.push({ kind: 'insert', insideTx: tx.active, viaTxRepo, viaExternalManager });
+    attachRawConflict(
+      iqb,
+      () => (returning ? ` RETURNING ${returning}` : ''),
+      async (sql) => {
+        const conflictAction = conflictClauseOf(sql);
+        statements.push({ kind: 'insert', insideTx: tx.active, viaTxRepo, viaExternalManager });
 
-      const doUpdate = / DO UPDATE /i.test(conflictAction);
-      // Mirror Postgres RETURNING (xmax = 0) AS bulk_inserted under DO UPDATE.
-      const insertedRaw: { id: string; bulk_inserted?: boolean }[] = [];
-      for (const row of values) {
-        const existing = row.sourceId != null ? existsByTriple(row) : undefined;
+        const doUpdate = / DO UPDATE /i.test(conflictAction);
+        // Mirror Postgres RETURNING (xmax = 0) AS bulk_inserted under DO UPDATE.
+        const insertedRaw: { id: string; bulk_inserted?: boolean }[] = [];
+        for (const row of values) {
+          const existing = row.sourceId != null ? existsByTriple(row) : undefined;
 
-        if (existing) {
-          if (doUpdate) {
-            const target = existing as Record<keyof Row, unknown>;
-            const sameProducer = row.sourceType === existing.sourceType;
-            for (const col of REFRESHABLE) {
-              if (!(col in row)) {
-                continue;
+          if (existing) {
+            if (doUpdate) {
+              const target = existing as Record<keyof Row, unknown>;
+              const sameProducer = row.sourceType === existing.sourceType;
+              for (const col of REFRESHABLE) {
+                if (!(col in row)) {
+                  continue;
+                }
+
+                const incoming = row[col];
+                const current = target[col];
+                if (col === 'participantsMetadata') {
+                  const a = (current ?? {}) as Record<string, unknown>;
+                  const b = (incoming ?? {}) as Record<string, unknown>;
+                  target[col] = sameProducer ? { ...a, ...b } : { ...b, ...a };
+                } else {
+                  target[col] = sameProducer ? (incoming ?? current) : (current ?? incoming);
+                }
               }
 
-              const incoming = row[col];
-              const current = target[col];
-              if (col === 'participantsMetadata') {
-                const a = (current ?? {}) as Record<string, unknown>;
-                const b = (incoming ?? {}) as Record<string, unknown>;
-                target[col] = sameProducer ? { ...a, ...b } : { ...b, ...a };
-              } else {
-                target[col] = sameProducer ? (incoming ?? current) : (current ?? incoming);
-              }
+              insertedRaw.push({ id: existing.id, bulk_inserted: false });
             }
 
-            insertedRaw.push({ id: existing.id, bulk_inserted: false });
+            // DO NOTHING — skip entirely (no RETURNING row).
+            continue;
           }
 
-          // DO NOTHING — skip entirely (no RETURNING row).
-          continue;
+          // Genuine insert (also covers the intra-batch dup guard the unique index
+          // would catch; the helper already collapses dups before this point).
+          table.set(row.id, row);
+          insertedRaw.push({ id: row.id, bulk_inserted: true });
         }
 
-        // Genuine insert (also covers the intra-batch dup guard the unique index
-        // would catch; the helper already collapses dups before this point).
-        table.set(row.id, row);
-        insertedRaw.push({ id: row.id, bulk_inserted: true });
-      }
-
-      return { raw: insertedRaw };
-    };
+        return insertedRaw;
+      },
+    );
 
     return iqb;
   }
@@ -849,17 +881,16 @@ describe('chunkedConflictInsert', () => {
           return iqb;
         };
 
-        iqb.onConflict = (action: string) => {
-          conflictActions.push(action);
+        attachRawConflict(
+          iqb,
+          () => '',
+          async (sql) => {
+            conflictActions.push(conflictClauseOf(sql));
+            chunksInserted.push(values);
 
-          return iqb;
-        };
-
-        iqb.execute = async () => {
-          chunksInserted.push(values);
-
-          return { raw: [] };
-        };
+            return [];
+          },
+        );
 
         return iqb;
       },
@@ -1086,7 +1117,6 @@ function makeReturningAwareRepository(pkColumn: PkColumn, initial: Row[] = []) {
 
   function makeInsertQB() {
     let values: Row[] = [];
-    let conflictAction = '';
     let returning: string | string[] | undefined;
     const iqb: Record<string, unknown> = {};
     iqb.insert = () => iqb;
@@ -1097,58 +1127,66 @@ function makeReturningAwareRepository(pkColumn: PkColumn, initial: Row[] = []) {
       return iqb;
     };
 
-    iqb.onConflict = (action: string) => {
-      conflictAction = action;
-
-      return iqb;
-    };
-
     iqb.returning = (arg: string | string[]) => {
       returning = arg;
 
       return iqb;
     };
 
-    iqb.execute = async () => {
-      const doUpdate = / DO UPDATE /i.test(conflictAction);
-      // String form: emitted verbatim (the DO UPDATE branch's
-      // `pk, (xmax = 0) AS bulk_inserted`). Array form: property-path resolution.
-      const verbatim = typeof returning === 'string';
-      const requested = verbatim ? [] : ((returning as string[] | undefined) ?? []);
-      emitted.columns = verbatim
+    // String form: emitted verbatim (the DO UPDATE branch's
+    // `pk, (xmax = 0) AS bulk_inserted`). Array form: property-path resolution.
+    const verbatim = () => typeof returning === 'string';
+    const resolvedColumns = (): string[] =>
+      verbatim()
         ? [pkColumn.databaseName]
-        : requested.filter((e) => e === pkColumn.propertyPath).map(() => pkColumn.databaseName);
+        : ((returning as string[] | undefined) ?? [])
+            .filter((e) => e === pkColumn.propertyPath)
+            .map(() => pkColumn.databaseName);
 
-      const raw: Record<string, unknown>[] = [];
-      const build = (id: string, insertedFlag: boolean) => {
-        const out: Record<string, unknown> = {};
-        for (const col of emitted.columns) {
-          out[col] = id;
+    attachRawConflict(
+      iqb,
+      () => {
+        if (returning === undefined) {
+          return '';
         }
 
-        if (verbatim) {
-          out.bulk_inserted = insertedFlag;
-        }
+        return ` RETURNING ${verbatim() ? (returning as string) : resolvedColumns().join(', ')}`;
+      },
+      async (sql) => {
+        const doUpdate = / DO UPDATE /i.test(conflictClauseOf(sql));
+        emitted.columns = resolvedColumns();
 
-        return out;
-      };
-
-      for (const r of values) {
-        const existing = r.sourceId != null ? existsByTriple(r) : undefined;
-        if (existing) {
-          if (doUpdate) {
-            raw.push(build(existing.id, false));
+        const raw: Record<string, unknown>[] = [];
+        const build = (id: string, insertedFlag: boolean) => {
+          const out: Record<string, unknown> = {};
+          for (const col of emitted.columns) {
+            out[col] = id;
           }
 
-          continue;
+          if (verbatim()) {
+            out.bulk_inserted = insertedFlag;
+          }
+
+          return out;
+        };
+
+        for (const r of values) {
+          const existing = r.sourceId != null ? existsByTriple(r) : undefined;
+          if (existing) {
+            if (doUpdate) {
+              raw.push(build(existing.id, false));
+            }
+
+            continue;
+          }
+
+          table.set(r.id, r);
+          raw.push(build(r.id, true));
         }
 
-        table.set(r.id, r);
-        raw.push(build(r.id, true));
-      }
-
-      return { raw };
-    };
+        return raw;
+      },
+    );
 
     return iqb;
   }

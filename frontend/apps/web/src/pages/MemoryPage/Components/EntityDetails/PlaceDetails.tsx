@@ -1,4 +1,4 @@
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 
 import { PLACE_FRAGMENT } from '@/components/entities/grid/PlaceGridItem';
 import { gql, useFragment } from '@/graphql';

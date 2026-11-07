@@ -300,8 +300,6 @@ export class JobMetricsCollector {
       `
       WITH settled AS (
         SELECT name, state, started_on, completed_on FROM pgboss.job    WHERE completed_on >= $1
-        UNION ALL
-        SELECT name, state, started_on, completed_on FROM pgboss.archive WHERE completed_on >= $1
       )
       SELECT name AS queue,
              COUNT(*) FILTER (WHERE state = 'completed')::int AS completed,
@@ -495,9 +493,6 @@ export class JobMetricsCollector {
       `
       WITH recent AS (
         SELECT name, data, state, created_on, completed_on FROM pgboss.job
-         WHERE created_on >= $1 OR completed_on >= $1
-        UNION ALL
-        SELECT name, data, state, created_on, completed_on FROM pgboss.archive
          WHERE created_on >= $1 OR completed_on >= $1
       )
       SELECT data->>'name' AS event,

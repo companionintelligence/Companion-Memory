@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { LatLngBounds } from 'leaflet';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,8 +79,8 @@ vi.mock('react-leaflet', () => ({
 // Same technique as useEntityService.test.tsx / useSearchService.test.ts: mock
 // Apollo's useQuery directly so the variables it's called with can be
 // asserted without standing up a real network layer.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 

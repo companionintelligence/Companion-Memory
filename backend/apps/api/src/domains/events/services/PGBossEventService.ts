@@ -8,7 +8,7 @@ import {
 import { EventEmitter2, EventEmitterReadinessWatcher } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import plimit from 'p-limit';
-import PgBoss, { JobWithMetadata } from 'pg-boss';
+import { type JobInsert, PgBoss, type JobWithMetadata, type SendOptions } from 'pg-boss';
 import { DataSource } from 'typeorm';
 
 import { ContextService } from '@ci/common/context';
@@ -78,6 +78,14 @@ const QUEUE_PROVISION_LOCK_KEY = 804_551_297;
 // minutes is the only retention unit pg-boss v10 persists on a queue row (see
 // the createQueue call in onModuleInit).
 const DEAD_LETTER_RETENTION_MINUTES = 30 * 24 * 60;
+
+// Default expiry for a job on a work queue: 12 hours, the window pg-boss v10 applied
+// to every job through the constructor (`expireInHours`), which v12 only takes per queue.
+const JOB_EXPIRE_SECONDS = 12 * 60 * 60;
+
+// Finished jobs are deleted this long after completion. v10 applied it through the
+// constructor (`deleteAfterHours: 24`) to its archive table, which v12 no longer has.
+const FINISHED_JOB_RETENTION_SECONDS = 24 * 60 * 60;
 
 /**
  * How long an UNFINISHED job may sit on a work queue before pg-boss discards
@@ -322,8 +330,6 @@ export class PGBossEventService
     password: config.db.password,
     schema: 'pgboss',
     ...QUEUE_RETRY_POLICY,
-    expireInHours: 12,
-    deleteAfterHours: 24,
     max: 10,
     // pg-boss's cron scheduler, off. Nothing in this codebase calls
     // `boss.schedule()` — every recurring job is a NestJS `@Cron` — so leaving
@@ -418,15 +424,13 @@ export class PGBossEventService
       // carried `retention_minutes = NULL`. Same 30 days, expressed in the one
       // unit that survives the trip.
       await this.boss.createQueue(PGBossEventService.DEAD_LETTER_QUEUE, {
-        name: PGBossEventService.DEAD_LETTER_QUEUE,
-        retentionMinutes: DEAD_LETTER_RETENTION_MINUTES,
+        retentionSeconds: DEAD_LETTER_RETENTION_MINUTES * 60,
       });
 
       // createQueue is a no-op when the queue already exists, so a DLQ created
       // before this fix keeps its NULL retention forever without this line.
       await this.boss.updateQueue(PGBossEventService.DEAD_LETTER_QUEUE, {
-        name: PGBossEventService.DEAD_LETTER_QUEUE,
-        retentionMinutes: DEAD_LETTER_RETENTION_MINUTES,
+        retentionSeconds: DEAD_LETTER_RETENTION_MINUTES * 60,
       });
 
       // Create all discovered queues, routing exhausted-retry jobs to the DLQ and
@@ -446,6 +450,7 @@ export class PGBossEventService
           role,
           yieldsTo: _yieldsTo,
           lane,
+          retentionMinutes,
           ...queueOptions
         } = EventListenerRegistry.getQueueOptions(queue) ?? {};
 
@@ -462,13 +467,19 @@ export class PGBossEventService
           // `keep_until` falling through to pg-boss's 14-day default and
           // deleting never-run jobs off a paused or backlogged queue — see
           // WORK_QUEUE_RETENTION_MINUTES.
-          retentionMinutes: WORK_QUEUE_RETENTION_MINUTES,
+          retentionSeconds: WORK_QUEUE_RETENTION_MINUTES * 60,
+          deleteAfterSeconds: FINISHED_JOB_RETENTION_SECONDS,
+          expireInSeconds: JOB_EXPIRE_SECONDS,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
+          ...(retentionMinutes !== undefined ? { retentionSeconds: retentionMinutes * 60 } : {}),
         };
 
         await this.boss.createQueue(queue, options);
-        await this.boss.updateQueue(queue, options);
+        // pg-boss 12's updateQueue rejects any `policy` key, even an unchanged one. The
+        // policy is fixed when the queue is created, so the merge leaves it out.
+        const { policy: _creationPolicy, ...mergeable } = options;
+        await this.boss.updateQueue(queue, mergeable);
 
         if (localConcurrency != null) {
           this.declaredQueueCeilings.set(queue, localConcurrency);
@@ -664,11 +675,11 @@ export class PGBossEventService
     // pg-boss fetches ORDER BY priority DESC, so a higher number is worked
     // sooner. Every job carries an explicit priority rather than leaning on the
     // column default, so the ordering is legible from the enqueue side.
-    const sendOptions: PgBoss.SendOptions = {
+    const sendOptions: SendOptions = {
       priority: options?.priority ?? DEFAULT_JOB_PRIORITY,
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
       ...(options?.startAfter !== undefined ? { startAfter: options.startAfter } : {}),
-      ...(options?.retentionMinutes !== undefined ? { retentionMinutes: options.retentionMinutes } : {}),
+      ...(options?.retentionMinutes !== undefined ? { retentionSeconds: options.retentionMinutes * 60 } : {}),
     };
 
     // If a specific queue is provided and that queue exists, send only to that queue.
@@ -786,7 +797,7 @@ export class PGBossEventService
     name: string,
     queue: string,
     data: EventData,
-    sendOptions: PgBoss.SendOptions,
+    sendOptions: SendOptions,
   ): Promise<string | null> {
     const policy = this.enforcingPolicyFor(queue);
 
@@ -895,8 +906,7 @@ export class PGBossEventService
     // it identically.
     const priority = options?.priority ?? DEFAULT_JOB_PRIORITY;
 
-    const jobs: PgBoss.JobInsert[] = events.map((event) => ({
-      name: queue,
+    const jobs: JobInsert[] = events.map((event) => ({
       data: { ...event.data, name: event.name },
       priority,
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
@@ -905,7 +915,7 @@ export class PGBossEventService
       // extracts it as text, then `now() + interval` — see plans.js) — send()'s
       // SendOptions (via JobOptions) declares the correct three-way union.
       ...(options?.startAfter !== undefined
-        ? { startAfter: options.startAfter as PgBoss.JobInsert['startAfter'] }
+        ? { startAfter: options.startAfter as JobInsert['startAfter'] }
         : {}),
     }));
 
@@ -942,7 +952,7 @@ export class PGBossEventService
       // JOINs pgboss.queue, so an unprovisioned queue silently swallows the
       // whole batch. That is what the getRegisteredQueues() check at the top of
       // sendMany is for.
-      await this.boss.insert(chunk);
+      await this.boss.insert(queue, chunk);
     }
 
     this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);

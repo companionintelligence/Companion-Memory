@@ -24,9 +24,12 @@ interface InMemoryInsert<T> {
   insert(): InMemoryInsert<T>;
   into(target: unknown): InMemoryInsert<T>;
   values(row: T): InMemoryInsert<T>;
-  onConflict(clause: string): InMemoryInsert<T>;
   returning(columns: string[]): InMemoryInsert<T>;
   execute(): Promise<{ raw: T[] }>;
+  getQuery(): string;
+  getParameters(): Record<string, unknown>;
+  connection: { driver: { escapeQueryWithParameters(sql: string, params: unknown): [string, unknown] } };
+  queryRunner: { query(sql: string, params?: unknown): Promise<T[]> };
 }
 
 export class InMemoryRepository<T extends object> {
@@ -100,7 +103,6 @@ export class InMemoryRepository<T extends object> {
 
         return builder;
       },
-      onConflict: () => builder,
       returning: () => builder,
       execute: async () => {
         if (row === undefined) {
@@ -110,6 +112,24 @@ export class InMemoryRepository<T extends object> {
         this.seed(row);
 
         return { raw: [structuredClone(row)] };
+      },
+      getQuery: () => 'INSERT INTO "in_memory" RETURNING "id"',
+      getParameters: () => ({}),
+      connection: {
+        driver: {
+          escapeQueryWithParameters: (sql: string, params: unknown): [string, unknown] => [sql, params],
+        },
+      },
+      queryRunner: {
+        query: async () => {
+          if (row === undefined) {
+            throw new Error('InMemoryRepository.createQueryBuilder: insert without values');
+          }
+
+          this.seed(row);
+
+          return [structuredClone(row)];
+        },
       },
     };
 

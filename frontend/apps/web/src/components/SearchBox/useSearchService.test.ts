@@ -1,6 +1,8 @@
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { graphQLFailure, transportFailure } from '@/test/apolloErrors';
 
 import { useSearchService } from './useSearchService';
 
@@ -14,8 +16,8 @@ const mocks = vi.hoisted(() => ({
 
 // Mock Apollo's useQuery so we can assert the variables/skip the service derives
 // and feed canned edges back — no need to reproduce the large SEARCH_QUERY doc.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 
@@ -159,7 +161,7 @@ describe('useSearchService — answering from this device', () => {
     mockedUseQuery.mockReturnValue({
       data: undefined,
       loading: false,
-      error: { networkError: new TypeError('Failed to fetch') },
+      error: transportFailure(),
     } as unknown as ReturnType<typeof useQuery>);
     mocks.searchLocal.mockResolvedValue({ nodes: [deviceNode], tags: [] });
 
@@ -173,7 +175,7 @@ describe('useSearchService — answering from this device', () => {
     mockedUseQuery.mockReturnValue({
       data: undefined,
       loading: false,
-      error: { graphQLErrors: [{ message: 'nope' }], networkError: null },
+      error: graphQLFailure([{ message: 'nope' }]),
     } as unknown as ReturnType<typeof useQuery>);
     mocks.searchLocal.mockClear();
 

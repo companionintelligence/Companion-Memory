@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { graphQLFailure } from '@/test/apolloErrors';
+
 import { emptyPersonDraft, type PersonDraft } from './personDraft';
 import {
   type RefusedContact,
@@ -16,11 +18,9 @@ const REFUSED: RefusedContact = {
   reason: 'extension',
 };
 
-/** The shape Apollo Client rejects a mutation with when the server answers with errors. */
+/** The error Apollo Client 4 rejects a mutation with when the server answers with GraphQL errors. */
 function apolloError(extensions: Record<string, unknown>) {
-  return Object.assign(new Error('refused'), {
-    graphQLErrors: [{ message: 'refused', extensions }],
-  });
+  return graphQLFailure([{ message: 'refused', extensions }]);
 }
 
 function draftWith(overrides: Partial<PersonDraft>): PersonDraft {

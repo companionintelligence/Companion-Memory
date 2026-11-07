@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 
-import { useApolloClient, useMutation } from '@apollo/client';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
 import { AlertDialog, Button, cn, useToast } from '@ci/shadcn';
 import { ListTodo } from '@ci/shadcn/icons';

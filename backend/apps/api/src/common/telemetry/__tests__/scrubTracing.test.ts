@@ -1,16 +1,16 @@
 import type { Breadcrumb, Log, NodeOptions } from '@sentry/nestjs';
 
 import { isKeyInUrlRequest } from '../outgoingRequests';
-import { scrubBreadcrumb, scrubLog, scrubSpan, scrubTransaction } from '../scrubEvent';
+import { scrubBreadcrumb, scrubLegacySpan, scrubLog, scrubSpan, scrubTransaction } from '../scrubEvent';
 
 type TransactionEvent = Parameters<NonNullable<NodeOptions['beforeSendTransaction']>>[0];
-type SpanJSON = Parameters<NonNullable<NodeOptions['beforeSendSpan']>>[0];
+type LegacySpan = NonNullable<TransactionEvent['spans']>[number];
 
 const MAPS_KEY = 'AIzaSyD-abc123';
 const GEOCODE_URL = `https://maps.googleapis.com/maps/api/geocode/json?address=12+Elm+St&key=${MAPS_KEY}`;
 
 /** What the undici instrumentation records for an outbound fetch. */
-function outboundFetchSpan(): SpanJSON {
+function outboundFetchSpan(): LegacySpan {
   return {
     span_id: 'b1',
     trace_id: 't1',
@@ -25,7 +25,7 @@ function outboundFetchSpan(): SpanJSON {
       'server.address': 'maps.googleapis.com',
       'http.response.status_code': 200,
     },
-  } as SpanJSON;
+  } as unknown as LegacySpan;
 }
 
 /** What the inbound server span records for a search request. */
@@ -43,9 +43,9 @@ function inboundServerSpanData(): Record<string, unknown> {
   };
 }
 
-describe('scrubSpan (beforeSendSpan)', () => {
+describe('scrubLegacySpan (spans nested in transaction events)', () => {
   it('strips the query from url.full and drops url.query on an outbound fetch span', () => {
-    const data = scrubSpan(outboundFetchSpan()).data;
+    const data = scrubLegacySpan(outboundFetchSpan()).data;
 
     expect(data['url.full']).toBe('https://maps.googleapis.com/maps/api/geocode/json');
     expect(data['url.query']).toBeUndefined();
@@ -58,7 +58,7 @@ describe('scrubSpan (beforeSendSpan)', () => {
   });
 
   it('strips the query from an HTTP span description', () => {
-    expect(scrubSpan(outboundFetchSpan()).description).toBe(
+    expect(scrubLegacySpan(outboundFetchSpan()).description).toBe(
       'GET https://maps.googleapis.com/maps/api/geocode/json',
     );
   });
@@ -70,9 +70,9 @@ describe('scrubSpan (beforeSendSpan)', () => {
       start_timestamp: 1,
       op: 'http.server',
       data: inboundServerSpanData(),
-    } as SpanJSON;
+    } as unknown as LegacySpan;
 
-    const data = scrubSpan(span).data;
+    const data = scrubLegacySpan(span).data;
 
     expect(data['http.url']).toBe('https://memory.local/api/graph/search');
     expect(data['http.target']).toBe('/api/graph/search');
@@ -94,9 +94,9 @@ describe('scrubSpan (beforeSendSpan)', () => {
         'http.request.header.referer': 'https://memory.local/memory?search=oncologist',
         'http.request.header.user_agent': 'Mozilla/5.0',
       },
-    } as SpanJSON;
+    } as unknown as LegacySpan;
 
-    const data = scrubSpan(span).data;
+    const data = scrubLegacySpan(span).data;
 
     expect(data['http.request.header.referer']).toBe('https://memory.local/memory');
     expect(data['http.request.header.user_agent']).toBe('Mozilla/5.0');
@@ -112,9 +112,9 @@ describe('scrubSpan (beforeSendSpan)', () => {
         'gen_ai.usage.input_tokens': 412,
         'db.statement': 'SELECT 1 -- /home/ci/notes',
       },
-    } as SpanJSON;
+    } as unknown as LegacySpan;
 
-    const data = scrubSpan(span).data;
+    const data = scrubLegacySpan(span).data;
 
     expect(data['http.request.header.authorization']).toBe('[Filtered]');
     expect(data['gen_ai.usage.input_tokens']).toBe(412);
@@ -129,9 +129,11 @@ describe('scrubSpan (beforeSendSpan)', () => {
       op: 'db',
       description: "SELECT data->>'title' FROM ci.content WHERE data ? 'title'",
       data: {},
-    } as SpanJSON;
+    } as unknown as LegacySpan;
 
-    expect(scrubSpan(span).description).toBe("SELECT data->>'title' FROM ci.content WHERE data ? 'title'");
+    expect(scrubLegacySpan(span).description).toBe(
+      "SELECT data->>'title' FROM ci.content WHERE data ? 'title'",
+    );
   });
 });
 
@@ -255,4 +257,29 @@ describe('isKeyInUrlRequest (ignoreOutgoingRequests)', () => {
       expect(isKeyInUrlRequest(url)).toBe(false);
     },
   );
+});
+
+describe('scrubSpan (beforeSendSpan, streamed spans)', () => {
+  function streamedGeocodeSpan(): Parameters<typeof scrubSpan>[0] {
+    return {
+      span_id: 'b1',
+      trace_id: 't1',
+      name: `GET ${GEOCODE_URL}`,
+      start_timestamp: 1,
+      status: 'ok',
+      is_segment: false,
+      attributes: {
+        'sentry.op': 'http.client',
+        'url.full': GEOCODE_URL,
+        'url.query': `?address=12+Elm+St&key=${MAPS_KEY}`,
+      },
+    } as Parameters<typeof scrubSpan>[0];
+  }
+
+  it('strips the key from the name and the attributes, and drops url.query', () => {
+    const span = scrubSpan(streamedGeocodeSpan());
+
+    expect(JSON.stringify(span)).not.toContain(MAPS_KEY);
+    expect(span.attributes['url.query']).toBeUndefined();
+  });
 });

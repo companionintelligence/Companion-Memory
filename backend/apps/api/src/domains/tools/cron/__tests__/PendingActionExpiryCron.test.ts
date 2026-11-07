@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 
 import { PendingActionExpiryCron, PENDING_ACTION_EXPIRY_CRON } from '../PendingActionExpiryCron';
 

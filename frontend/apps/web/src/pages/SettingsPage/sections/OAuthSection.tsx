@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 
-import { gql, useQuery, useMutation } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery, useMutation } from '@apollo/client/react';
 import { Button, Card, Dialog, IconButton, Input, Label } from '@ci/shadcn';
 import { Eye, EyeOff, Save, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
-import type { Provider } from '@/components/connect/ConnectedAccountsSection';
-import { GET_PROVIDERS } from '@/queries';
+import { GET_PROVIDERS, type ProvidersQueryData } from '@/queries';
 
 export interface ProviderKey {
   readonly id: string;
@@ -47,6 +47,43 @@ const DELETE_PROVIDER_KEY = gql(`
     deleteProviderKey(id: $id)
   }
 `);
+
+interface CreateProviderKeyData {
+  createProviderKey: {
+    id: string;
+    providerId: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretHint: string | null;
+    userId: string;
+  };
+}
+
+interface CreateProviderKeyVariables {
+  input: { providerId: string; clientId: string; clientSecret: string };
+}
+
+interface UpdateProviderKeyData {
+  updateProviderKey: {
+    id: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretHint: string | null;
+  } | null;
+}
+
+interface UpdateProviderKeyVariables {
+  id: string;
+  input: { clientId: string; clientSecret?: string };
+}
+
+interface DeleteProviderKeyData {
+  deleteProviderKey: boolean;
+}
+
+interface DeleteProviderKeyVariables {
+  id: string;
+}
 
 type OAuthProvider =
   'google' | 'microsoft' | 'facebook' | 'spotify' | 'github' | 'reddit' | 'slack' | 'dropbox';
@@ -138,17 +175,23 @@ export function OAuthSection() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<OAuthProvider | null>(null);
 
-  const { data: providersData } = useQuery(GET_PROVIDERS);
-  const [createProviderKey] = useMutation(CREATE_PROVIDER_KEY);
-  const [updateProviderKey] = useMutation(UPDATE_PROVIDER_KEY);
-  const [deleteProviderKey] = useMutation(DELETE_PROVIDER_KEY);
+  const { data: providersData } = useQuery<ProvidersQueryData>(GET_PROVIDERS);
+  const [createProviderKey] = useMutation<CreateProviderKeyData, CreateProviderKeyVariables>(
+    CREATE_PROVIDER_KEY,
+  );
+  const [updateProviderKey] = useMutation<UpdateProviderKeyData, UpdateProviderKeyVariables>(
+    UPDATE_PROVIDER_KEY,
+  );
+  const [deleteProviderKey] = useMutation<DeleteProviderKeyData, DeleteProviderKeyVariables>(
+    DELETE_PROVIDER_KEY,
+  );
 
   useEffect(() => {
     if (!providersData) {
       return;
     }
 
-    const providers: Provider[] = providersData.providers.edges.map((edge: { node: Provider }) => edge.node);
+    const providers = providersData.providers.edges.map((edge) => edge.node);
 
     const newOriginalValues: Record<string, { clientId: string }> = {
       google: { clientId: '' },
@@ -294,9 +337,7 @@ export function OAuthSection() {
           return;
         }
 
-        const providers: Provider[] = providersData.providers.edges.map(
-          (edge: { node: Provider }) => edge.node,
-        );
+        const providers = providersData.providers.edges.map((edge) => edge.node);
         const providerEntity = providers.find((p) => p.name?.toLowerCase() === provider);
 
         if (!providerEntity) {

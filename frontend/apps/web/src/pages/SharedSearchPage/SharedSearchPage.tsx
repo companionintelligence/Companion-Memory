@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, Portal, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Sheet, Tabs } from '@ci/shadcn';
 import { Images, List, Map as MapIcon, Share2, type LucideIcon } from '@ci/shadcn/icons';

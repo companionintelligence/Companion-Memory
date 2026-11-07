@@ -7,7 +7,8 @@
 import type { Breadcrumb, Log, NodeOptions } from '@sentry/nestjs';
 
 type TransactionEvent = Parameters<NonNullable<NodeOptions['beforeSendTransaction']>>[0];
-type SpanJSON = Parameters<NonNullable<NodeOptions['beforeSendSpan']>>[0];
+type LegacySpan = NonNullable<TransactionEvent['spans']>[number];
+type StreamedSpan = Parameters<NonNullable<NodeOptions['beforeSendSpan']>>[0];
 type Integration = { name: string; options?: { ignoreOutgoingRequests?: (url: string) => boolean } };
 
 const MAPS_KEY = 'AIzaSyD-abc123';
@@ -60,7 +61,23 @@ afterEach(() => {
   setCrashReportsUserEnabled(true);
 });
 
-function geocodeSpan(): SpanJSON {
+function streamedGeocodeSpan(): StreamedSpan {
+  return {
+    span_id: 'b1',
+    trace_id: 't1',
+    name: `GET ${GEOCODE_URL}`,
+    start_timestamp: 1,
+    status: 'ok',
+    is_segment: false,
+    attributes: {
+      'sentry.op': 'http.client',
+      'url.full': GEOCODE_URL,
+      'url.query': `?address=12+Elm+St&key=${MAPS_KEY}`,
+    },
+  } as StreamedSpan;
+}
+
+function geocodeSpan(): LegacySpan {
   return {
     span_id: 'b1',
     trace_id: 't1',
@@ -68,7 +85,7 @@ function geocodeSpan(): SpanJSON {
     op: 'http.client',
     description: `GET ${GEOCODE_URL}`,
     data: { 'url.full': GEOCODE_URL, 'url.query': `?address=12+Elm+St&key=${MAPS_KEY}` },
-  } as SpanJSON;
+  } as unknown as LegacySpan;
 }
 
 describe('instrument.ts Sentry hooks', () => {
@@ -102,10 +119,10 @@ describe('instrument.ts Sentry hooks', () => {
   });
 
   it('beforeSendSpan strips url.full and drops url.query', () => {
-    const span = options.beforeSendSpan!(geocodeSpan());
+    const span = options.beforeSendSpan!(streamedGeocodeSpan());
 
-    expect(span.data['url.full']).toBe('https://maps.googleapis.com/maps/api/geocode/json');
-    expect(span.data['url.query']).toBeUndefined();
+    expect(span.attributes['url.full']).toBe('https://maps.googleapis.com/maps/api/geocode/json');
+    expect(span.attributes['url.query']).toBeUndefined();
   });
 
   it('beforeSendLog scrubs the body and attributes', () => {

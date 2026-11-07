@@ -1,4 +1,4 @@
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 
 import { gql, useFragment } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';

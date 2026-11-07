@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { GlobalUID, useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {

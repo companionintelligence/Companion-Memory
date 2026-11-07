@@ -1,6 +1,5 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import type { LoggerService } from '@ci/common/logging';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import { BACKFILL_JOB_PRIORITY, EventListenerRegistry } from '@ci/domains/events';
 
 import { probeQueuePolicyGuard } from '../../../__tests__/support/queuePolicyGuardProbe';

@@ -1,4 +1,4 @@
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,8 +10,8 @@ import { type RhythmDay, useScheduleService } from './useScheduleService';
 // Mock Apollo's useQuery rather than standing up MockedProvider: everything
 // under test here is what the hook does to the response and what options it
 // asks for, both of which the network layer would only obscure.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 

@@ -1,5 +1,7 @@
-import { gql, useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
+import { parse } from 'graphql';
 
+// parse(), not gql: codegen cannot read the interpolated fragments below.
 const FORAGE_FIELDS = `
   question
   horizon
@@ -18,37 +20,37 @@ const FORAGE_FIELDS = `
   reads { itemId cue g epistemic branchDelta { label mass } }
 `;
 
-export const GET_FORAGE = gql`
+export const GET_FORAGE = parse(`
   query GetForage {
     forage {
       ${FORAGE_FIELDS}
     }
   }
-`;
+`);
 
-export const FORAGE_SAMPLE = gql`
+export const FORAGE_SAMPLE = parse(`
   mutation ForageSample {
     forageSample {
       ${FORAGE_FIELDS}
     }
   }
-`;
+`);
 
-export const FORAGE_PIN = gql`
+export const FORAGE_PIN = parse(`
   mutation ForagePin($branch: String!) {
     foragePin(branch: $branch) {
       ${FORAGE_FIELDS}
     }
   }
-`;
+`);
 
-export const FORAGE_RESET = gql`
+export const FORAGE_RESET = parse(`
   mutation ForageReset {
     forageReset {
       ${FORAGE_FIELDS}
     }
   }
-`;
+`);
 
 export type ForageMass = { label: string; mass: number };
 export type ForageBranch = {

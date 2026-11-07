@@ -43,11 +43,13 @@ function fill(label: RegExp, value: string) {
 /** A create mock that records the input it was called with. */
 function createMock(capture: (input: Record<string, unknown>) => void): MockedResponse {
   return {
-    request: { query: CREATE_EVENT },
-    variableMatcher: (variables: { input: Record<string, unknown> }) => {
-      capture(variables.input);
+    request: {
+      query: CREATE_EVENT,
+      variables: (variables: { input: Record<string, unknown> }) => {
+        capture(variables.input);
 
-      return true;
+        return true;
+      },
     },
     result: {
       data: {
@@ -165,8 +167,7 @@ describe('AddEventModal — creating the event', () => {
   it('keeps the draft and shows the error when the write is rejected', async () => {
     const { onClose, onCreated } = renderModal([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);

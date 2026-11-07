@@ -1,5 +1,4 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import { ActivityRollupCron } from '@ci/domains/activity/cron/ActivityRollupCron';
 import { AgentDispatchStaleCron } from '@ci/domains/agent/cron/AgentDispatchStaleCron';
 import { MemoryCompactionCron } from '@ci/domains/agent/cron/MemoryCompactionCron';

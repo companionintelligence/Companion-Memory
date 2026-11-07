@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { gql, useApolloClient } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { fetchJson } from '@ci/common';
 
 import { useAuth } from '@/hooks';
@@ -29,6 +30,10 @@ export interface HomePlaceNode {
   name?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+}
+
+interface HomePlaceData {
+  places: { edges: Array<{ node: HomePlaceNode }> };
 }
 
 function normalizeName(value: string): string {
@@ -138,7 +143,7 @@ export function useHomeMapCenter(enabled = true): {
           return;
         }
 
-        const { data } = await client.query({
+        const { data } = await client.query<HomePlaceData>({
           query: HOME_PLACE_QUERY,
           variables: { query: city, first: 20 },
         });

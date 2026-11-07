@@ -98,7 +98,7 @@ export class MessageService {
         }),
         canceled: false,
       },
-      relations: ['files'],
+      relations: { files: true },
     });
 
     return entities.map((entity) => MessageEntity.toEgressType(entity));
@@ -115,7 +115,7 @@ export class MessageService {
         }),
         canceled: false,
       },
-      relations: ['files'],
+      relations: { files: true },
     });
 
     const map = new Map(entities.map((entity) => [entity.id, MessageEntity.toEgressType(entity)]));
@@ -134,7 +134,7 @@ export class MessageService {
         }),
         canceled: false,
       },
-      relations: ['files'],
+      relations: { files: true },
     });
 
     if (entity == null) {
@@ -177,7 +177,7 @@ export class MessageService {
         },
         canceled: false,
       },
-      relations: ['files'],
+      relations: { files: true },
       order: {
         id: 'asc',
       },

@@ -180,7 +180,7 @@ describe('JobQueryService.categoryHistory — the grouping key', () => {
     // dead-letter queue outright, so every row it groups still HAS its origin
     // queue. `dead-letter`, the one value that would make the pair
     // unrecoverable, is the one value this query never sees.
-    expect(sql.match(/name <> \$3/g)).toHaveLength(2);
+    expect(sql.match(/name <> \$3/g)).toHaveLength(1);
   });
 
   it('excludes the dead-letter copies, whose created_on is the failure time and not an arrival', async () => {
@@ -190,21 +190,8 @@ describe('JobQueryService.categoryHistory — the grouping key', () => {
 
     const { sql, params } = liveQuery(harness);
 
-    // Both halves of the UNION, or the archive half re-admits them.
-    expect(sql.match(/name <> \$3/g)).toHaveLength(2);
+    expect(sql.match(/name <> \$3/g)).toHaveLength(1);
     expect(params[2]).toBe('dead-letter');
-  });
-
-  it('unions the archive, which holds the older half of the ~36h live window', async () => {
-    const harness = makeService({ oldest: new Date('2026-09-01T00:07:00.000Z') });
-
-    await harness.service.categoryHistory(CTX, { windowHours: 24 });
-
-    const { sql } = liveQuery(harness);
-
-    expect(sql).toContain('pgboss.job');
-    expect(sql).toContain('pgboss.archive');
-    expect(sql).toContain('UNION ALL');
   });
 });
 
@@ -337,7 +324,7 @@ describe('JobQueryService.categoryHistory — the live/sampled seam', () => {
     // a MONTH of live coverage that exists only for dead-letter copies, and
     // every bucket older than 36h would then be answered by a live scan that
     // finds nothing — weeks of confident zeros instead of the sampled table.
-    expect(probe?.sql.match(/name <> \$1/g)).toHaveLength(2);
+    expect(probe?.sql.match(/name <> \$1/g)).toHaveLength(1);
     expect(probe?.params[0]).toBe('dead-letter');
   });
 

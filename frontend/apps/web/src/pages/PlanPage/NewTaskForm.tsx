@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Input } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 

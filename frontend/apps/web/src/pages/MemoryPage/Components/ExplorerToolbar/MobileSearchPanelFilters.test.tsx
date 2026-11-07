@@ -106,7 +106,7 @@ function openFilters() {
 
 /** The row for one dimension inside the open sheet, found by its label. */
 function row(sheet: HTMLElement, label: string) {
-  return within(sheet).getByRole('button', { name: new RegExp(`^${label}\\b`) });
+  return within(sheet).getByRole('button', { name: new RegExp(`^${label}`) });
 }
 
 describe('MobileSearchPanelFilters', () => {

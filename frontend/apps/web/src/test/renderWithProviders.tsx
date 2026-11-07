@@ -1,7 +1,8 @@
 import { type ReactElement, type ReactNode } from 'react';
 
 import { InMemoryCache } from '@apollo/client';
-import { MockedProvider, type MockedResponse } from '@apollo/client/testing';
+import type { MockedResponse } from '@apollo/client/testing';
+import { MockedProvider } from '@apollo/client/testing/react';
 import { DeviceLayoutProvider } from '@ci/common';
 import { render, type RenderOptions, type RenderResult } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';

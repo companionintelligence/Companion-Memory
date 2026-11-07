@@ -1,5 +1,6 @@
 import { Field, Float, ID, InputType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import { ItemLifecycleState } from './ItemFilters';
 import { ItemCondition } from './ItemType';

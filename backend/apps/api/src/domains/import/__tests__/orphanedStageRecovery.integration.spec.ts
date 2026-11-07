@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import PgBoss from 'pg-boss';
+import { type JobWithMetadata, PgBoss } from 'pg-boss';
 import type { DataSource } from 'typeorm';
 
 import type { LoggerService } from '@ci/common/logging';
@@ -82,7 +82,7 @@ jest.setTimeout(60_000);
 const DEAD_LETTER_QUEUE = 'dead-letter';
 
 type StagePayload = { runId: string; stageId: string; userId: string };
-type StageJob = PgBoss.JobWithMetadata<StagePayload>;
+type StageJob = JobWithMetadata<StagePayload>;
 
 const HANDLER_BY_KIND = {
   unpack: 'handleUnpackStage',

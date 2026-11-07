@@ -1003,7 +1003,7 @@ export class ContentService {
 
     const scope = context.userId !== SYSTEM_USER ? { userId: context.userId } : {};
     const rows = await this.contentRepository.find({
-      select: ['id', 'externalId'],
+      select: { id: true, externalId: true },
       where: [
         { ...scope, externalId: In(fileIds), externalIdKind: 'file' },
         { ...scope, externalId: In(fileIds), externalIdKind: IsNull() },

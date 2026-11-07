@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { Label } from '@ci/shadcn';
 import { User } from '@ci/shadcn/icons';
@@ -87,7 +87,7 @@ export function CommunicationPage() {
       : 'Communication - Companion Memory',
   );
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

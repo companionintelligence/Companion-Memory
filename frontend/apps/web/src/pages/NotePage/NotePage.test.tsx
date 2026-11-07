@@ -6,6 +6,7 @@ import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
+import { httpFailure } from '@/test/apolloErrors';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { NotePage } from './NotePage';
@@ -655,8 +656,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
     return {
       sent,
       mock: {
-        request: { query: UPDATE_NOTE },
-        variableMatcher: sent,
+        request: { query: UPDATE_NOTE, variables: sent },
         maxUsageCount: 99,
         result: { data: { updateNote: { __typename: 'UpdateNotePayload', success: true, note: null } } },
       },
@@ -717,7 +717,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
     await advance(2000);
     expect(landed).not.toHaveBeenCalled();
 
-    await advance(2000);
+    await advance(3000);
     await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
     expect(document.querySelector('time')).toBeInTheDocument();
@@ -778,7 +778,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
       mocks: [
         loadedNote,
         typedSaveFails,
-        { request: { query: UPDATE_NOTE }, variableMatcher: hangs, delay: Infinity, result: {} },
+        { request: { query: UPDATE_NOTE, variables: hangs }, delay: Infinity, result: {} },
         extra.mock,
       ],
     });
@@ -859,7 +859,9 @@ describe('NotePage — a failed save is sent again on its own', () => {
     const ownLateSave = answer(false, typed, lateAt);
     const landed = answer(true, newer, savedAt);
     const newerInput = { id: noteGlobalId, content: newer, title: 'Trip ideas in May and June' };
-    const guardedTypedSave = vi.fn(() => ({ errors: [{ message: '502 Bad Gateway' }] }));
+    // A gateway's 502 is an HTTP answer, not a GraphQL one, so it reaches the save as a ServerError.
+    const guardedTypedSaveSent = vi.fn();
+    const guardedInput = { ...newerInput, expectedUpdatedAt: loadedAt };
 
     renderWithProviders(<NotePage />, {
       route: '/notes/abc-uuid',
@@ -871,9 +873,19 @@ describe('NotePage — a failed save is sent again on its own', () => {
         {
           request: {
             query: UPDATE_NOTE,
-            variables: { input: { ...newerInput, expectedUpdatedAt: loadedAt } },
+            variables: (variables: unknown) => {
+              try {
+                expect(variables).toEqual({ input: guardedInput });
+              } catch {
+                return false;
+              }
+
+              guardedTypedSaveSent();
+
+              return true;
+            },
           },
-          result: guardedTypedSave,
+          error: httpFailure(502),
         },
         {
           request: {
@@ -897,7 +909,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
     await advance(4000);
 
     await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
-    expect(guardedTypedSave).toHaveBeenCalledTimes(1);
+    expect(guardedTypedSaveSent).toHaveBeenCalledTimes(1);
     expect(ownLateSave).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
   });
@@ -933,9 +945,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
   it('stops sending it again when Memory turns the save down, as an older Memory would the guard', async () => {
     const extra = unexpected();
     // What Apollo's HTTP link throws for a 400: GraphQL validation, here an unknown field.
-    const badRequest = Object.assign(new Error('Response not successful: Received status code 400'), {
-      statusCode: 400,
-    });
+    const badRequest = httpFailure(400);
 
     renderWithProviders(<NotePage />, {
       route: '/notes/abc-uuid',
@@ -970,8 +980,7 @@ describe('NotePage — a failed save is sent again on its own', () => {
       mocks: [
         { request: { query: CREATE_NOTE, variables: { input: draftInput } }, error: gatewayError() },
         {
-          request: { query: CREATE_NOTE },
-          variableMatcher: createdAnyway,
+          request: { query: CREATE_NOTE, variables: createdAnyway },
           maxUsageCount: 99,
           result: { data: { createNote: { __typename: 'CreateNotePayload', success: false, note: null } } },
         },
