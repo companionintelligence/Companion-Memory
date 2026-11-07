@@ -1,5 +1,7 @@
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
+import { isSyncTokenInvalidError } from './syncTokenErrors';
+
 interface Contact {
   resourceName: string;
   names?: Array<Record<string, unknown>>;
@@ -63,17 +65,32 @@ export async function syncContacts({
     }
 
     const endpoint = `https://people.googleapis.com/v1/people/me/connections?${params.toString()}`;
-    const response = (await client.request(connection, endpoint)) as {
-      connections?: Contact[];
-      nextPageToken?: string;
-      nextSyncToken?: string;
-    };
+    let response: { connections?: Contact[]; nextPageToken?: string; nextSyncToken?: string };
+
+    try {
+      response = (await client.request(connection, endpoint)) as typeof response;
+    } catch (err) {
+      if (nextCursor.syncToken && isSyncTokenInvalidError(err)) {
+        // Google expires a People sync token about seven days after the last sync. Thrown, the
+        // failure kept the dead token as the last successful cursor, so every tick replayed it and
+        // failed the same way, every minute, forever. As in syncCalendar: report an empty success
+        // with no cursor, and the next run lists every contact again and gets a fresh token.
+        client.logger.warn('Contacts syncToken expired; clearing cursor for full resync', {
+          connectionId: connection.id,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+
+        return { data: { contacts: [] }, nextCursor: {} };
+      }
+
+      throw err;
+    }
 
     const connections = (response.connections as unknown[]) || [];
     const nextPageToken = response.nextPageToken as string | undefined;
     const nextSyncToken = response.nextSyncToken as string | undefined;
 
-    client.logger.log('YouTube likes sync completed', {
+    client.logger.log('Contacts sync completed', {
       connectionId: connection.id,
       contactCount: connections.length,
       hasNextPage: !!nextPageToken,

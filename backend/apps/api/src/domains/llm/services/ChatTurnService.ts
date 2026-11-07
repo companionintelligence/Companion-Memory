@@ -66,6 +66,7 @@ import { isFirstResponseTimeout } from '../firstResponseDeadline';
 import { foldHistory } from '../foldHistory';
 import {
   THREAD_TITLE_SYSTEM_PROMPT,
+  titleExcerptFromMessage,
   provisionalTitleFromMessage,
   sidebarTitleFromModel,
 } from '../threadTitle';
@@ -499,12 +500,13 @@ export class ChatTurnService {
 
     const messages = await this.messageService.findByThreadId(context, thread.id);
     const excerpts: OllamaMessage[] = messages
-      .filter((message) => message.role !== 'tool' && message.content?.trim())
-      .slice(-12)
+      .filter((message) => message.role !== 'tool')
       .map((message) => ({
         role: message.role as OllamaMessage['role'],
-        content: message.content.slice(0, 400),
-      }));
+        content: titleExcerptFromMessage(message.content ?? '').slice(0, 400),
+      }))
+      .filter((excerpt) => excerpt.content !== '')
+      .slice(-12);
 
     if (excerpts.length === 0) {
       return;

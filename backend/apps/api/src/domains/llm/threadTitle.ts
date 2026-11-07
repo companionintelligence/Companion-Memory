@@ -3,7 +3,7 @@
  * strips thinking traces, quotes, and extra punctuation so the list stays short.
  */
 export function sidebarTitleFromModel(raw: string): string {
-  const withoutThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, ' ');
+  const withoutThink = withoutThinking(raw);
   const cleaned = withoutThink
     .replace(/["'`]/g, '')
     .replace(/[^A-Za-z0-9\s-]/g, ' ')
@@ -17,6 +17,27 @@ export function sidebarTitleFromModel(raw: string): string {
   const words = cleaned.split(' ').slice(0, 6);
 
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+}
+
+/**
+ * `text` without its thinking: every `<think>…</think>` block, and a trailing `<think>` that never
+ * closed (a reply cut off while still reasoning).
+ */
+function withoutThinking(text: string): string {
+  return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, ' ');
+}
+
+/**
+ * A stored chat message as the title model should read it: the words that were said, without the
+ * reasoning they were stored with.
+ *
+ * Assistant replies are stored as `<think>reasoning</think>answer` (see persistedAssistantContent).
+ * Handed to the title call as they are, a thinking model continued that pattern and reasoned about
+ * the conversation instead of naming it, even with thinking switched off, and its reply held no
+ * title. A reply that was only reasoning (a tool-calling step) comes back empty.
+ */
+export function titleExcerptFromMessage(content: string): string {
+  return withoutThinking(content).replace(/\s+/g, ' ').trim();
 }
 
 export const THREAD_TITLE_SYSTEM_PROMPT =
