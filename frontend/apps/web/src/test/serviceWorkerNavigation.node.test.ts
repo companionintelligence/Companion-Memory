@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { isAppNavigation } from '../../vite.config';
 
 /**
- * Which page loads the service worker answers (network first, the precached
- * shell only offline) and which it leaves to the browser.
+ * Which page loads the service worker's navigation route answers (network
+ * first, the precached shell only offline) and which it passes over.
  *
  * A file's Open button opens its presigned object-store URL
  * (`/static/<bucket>/<key>?X-Amz-…`) in a new tab, which is a navigation, so
@@ -27,7 +27,7 @@ describe.each([
   ['its copy in the service worker', serialized],
 ])('service worker navigation route: %s', (_label, matches) => {
   it.each(['/static/companion/b4791adb-e0a9-4a67-b178-fcc71dca93d5', '/api/graphql', '/api/import/runs'])(
-    'leaves %s to the browser',
+    'does not answer a page load of %s',
     (pathname) => {
       expect(matches(navigation(pathname))).toBe(false);
     },
