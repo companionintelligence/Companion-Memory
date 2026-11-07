@@ -1099,11 +1099,53 @@ export function fileSearchDocument(file: FileSearchFields): string | null {
   return joinParts(parts);
 }
 
+/**
+ * The words of a file name, for the search index, or `null` when the name has
+ * nothing to split.
+ *
+ * Postgres's text-search parser reads `os-plan-lighthouse.jpg` (or
+ * `IMG_2034.JPG`, `report.final.v2.docx`) as ONE token of type host or file,
+ * so `to_tsvector` stores the whole name as a single lexeme and a search for
+ * `lighthouse`, `receipt` or `jpg` never matches it. Two spellings of the name
+ * go into the index beside the original:
+ *
+ * - dots and slashes turned into spaces, hyphens kept: the parser then reads
+ *   `os-plan-lighthouse` as a hyphenated word and indexes it together with its
+ *   parts at consecutive positions, which is what a search for
+ *   `os-plan-lighthouse` asks for (a phrase);
+ * - every run of punctuation turned into a space, so each part stands alone,
+ *   numbers too (`Photo-2026` otherwise indexes `-2026`, which `2026` misses).
+ *
+ * The original stays indexed, so the exact full name keeps matching.
+ */
+export function fileNameWords(name: string | null | undefined): string | null {
+  const trimmed = name?.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const spellings = [
+    trimmed.replace(/[./\\@:]+/g, ' ').trim(),
+    trimmed.replace(/[^\p{L}\p{N}]+/gu, ' ').trim(),
+  ].filter((spelling, index, all) => spelling && spelling !== trimmed && all.indexOf(spelling) === index);
+
+  return spellings.length > 0 ? spellings.join(' ') : null;
+}
+
 export function fileWeightedTexts(file: FileSearchFields): WeightedText[] {
   const parts: WeightedText[] = [];
 
   if (file.title) {
     parts.push({ text: file.title, weight: 10 });
+
+    const titleWords = fileNameWords(file.title);
+
+    // A title with spaces in it is prose and already splits into words; only a
+    // name-like title (`IMG_2034.JPG`) needs its parts indexed too.
+    if (titleWords && !/\s/.test(file.title.trim())) {
+      parts.push({ text: titleWords, weight: 10 });
+    }
   }
 
   if (file.description) {
@@ -1112,6 +1154,12 @@ export function fileWeightedTexts(file: FileSearchFields): WeightedText[] {
 
   if (file.filename) {
     parts.push({ text: file.filename, weight: 3 });
+
+    const filenameWords = fileNameWords(file.filename);
+
+    if (filenameWords) {
+      parts.push({ text: filenameWords, weight: 3 });
+    }
   }
 
   if (file.contentType) {

@@ -363,6 +363,25 @@ describe('FileVectorStage (loadTexts: ci.files -> fileWeightedTexts)', () => {
     expect(insertedText(rest)).toContain('album.zip');
   });
 
+  it('also writes the words of a punctuated file name, so part of the name finds it', async () => {
+    const h = makeVectorStageHarness(/FROM ci\.files/i, [
+      {
+        id: 'file-1',
+        title: null,
+        description: null,
+        filename: 'os-plan-lighthouse.jpg',
+        contentType: 'image/jpeg',
+      },
+    ]);
+    const stage = new FileVectorStage(h.dataSource as never, h.logger as never);
+
+    await stage.run({ userId: USER }, ['file-1']);
+
+    const rest = h.insert()!.params as unknown[];
+    expect(insertedText(rest)).toContain('os-plan-lighthouse.jpg');
+    expect(insertedText(rest)).toContain('os-plan-lighthouse jpg os plan lighthouse jpg');
+  });
+
   it('skips a row with no weighted text as "empty"', async () => {
     const h = makeVectorStageHarness(/FROM ci\.files/i, [
       { id: 'file-1', title: null, description: null, filename: null, contentType: null },
