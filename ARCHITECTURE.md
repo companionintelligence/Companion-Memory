@@ -1,7 +1,5 @@
 # ARCHITECTURE
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This document states where code goes and why. It is the normative answer to
 "which directory does this belong in", for both the JavaScript and the Python
 stack, so the answer stops being folklore that lives in one file's header

@@ -1,7 +1,5 @@
 # Job controls — turning Memory's work down without turning it off
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 CI-Server left to itself will use a machine. Import fan-out, embeddings, image
 description and the nightly HBPE run are all real work, and none of them ask
 first. Until now the only way to make it stop was an environment variable and a

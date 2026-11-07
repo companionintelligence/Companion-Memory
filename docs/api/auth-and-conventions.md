@@ -1,7 +1,5 @@
 # CI-Server API — Authentication, Conventions & MCP Surface
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Reference documentation for the CI-Server NestJS API: its authentication mechanisms, the guard model, cross-cutting request conventions, and the Model Context Protocol (MCP) surface. The GraphQL surface is in [graphql.md](graphql.md); the REST controllers in [rest.md](rest.md).
 
 All citations are `path:line` against `backend/apps/api/src`.

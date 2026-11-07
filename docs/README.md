@@ -1,7 +1,5 @@
 # CI-Server documentation index
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Map of everything documented in this repo, plus where the cross-repo docs live.
 Orientation and quickstart are in the [root README](../README.md); the backend
 developer guide is [`backend/apps/api/README.md`](../backend/apps/api/README.md).

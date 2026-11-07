@@ -1,7 +1,5 @@
 # CI-Server API Reference
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 CI-Server is the **memory brain** of the Companion Intelligence appliance — a personal database, RAG/search engine, knowledge graph, and behavioral-prediction engine. This directory documents every way to talk to it.
 
 It is a single **NestJS 11** process (default `0.0.0.0:3030`) backed by PostgreSQL 18 + pgvector + TimescaleDB + PostGIS (see [Database.md](../architecture/Database.md)), Ollama (local LLM/embeddings), PGBoss (jobs), and MinIO (object store). All clients — the React/Vite web app, the native iOS/Android shells (`frontend/apps/ios`, `frontend/apps/android`) and the iOS App Intents, Companion Capture, and MCP agents (CI-Hermes, CI-OpenClaw) — reach it through the surfaces below. (The importer is CI-Server's own native import domain, `backend/apps/api/src/domains/import/`, running in-process — not a separate external client — ported from the now-retired CI-Import-Tools, since renamed `ZARCHIVED-CI-Import-Tools`.)

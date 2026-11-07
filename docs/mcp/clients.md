@@ -1,7 +1,5 @@
 # Connecting an MCP client to the appliance
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Recipes for pointing Claude Code, Claude Desktop and Cursor at a running
 CI-Server. The endpoint, auth model and tool surface are explained in
 [server.md](server.md); this page is the copy-pasteable half.

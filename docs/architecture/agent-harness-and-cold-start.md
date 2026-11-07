@@ -1,6 +1,5 @@
 # Agent harness (#59) + cold-start gates (#63)
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Status: **implemented and merged to `main`** (2026-08-17; `places.next` arrived
 > with [#2045](https://github.com/companionintelligence/CI-Server/pull/2045)).

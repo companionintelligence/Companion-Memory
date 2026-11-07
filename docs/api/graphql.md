@@ -1,7 +1,5 @@
 # CI-Server GraphQL API Reference
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 The memory-brain GraphQL surface of CI-Server: a single Apollo/NestJS endpoint exposing the personal database (events, communications, content, inventory/things, receipts and product models, browser activity, files, notes, threads), the knowledge graph (entities, relationships, identifiers, merge candidates), intelligence (questions, answers, actions, summaries, daily metrics), planning (tasks, schedule candidates), asks & grants, cross-entity search, saved searches, connectors/providers, and the HBPE forecasts. Auth and conventions are in [auth-and-conventions.md](auth-and-conventions.md); REST surfaces in [rest.md](rest.md).
 
 - **Schema (source of truth):** `backend/apps/api/src/domains/graphql/__generated__/schema.graphql` — **92 queries, 116 mutations, 283 named type definitions** (187 `type`, 67 `input`, 21 `enum`, 4 `interface`, 2 `union`, 2 `scalar`), code-first generated from resolver decorators (`autoSchemaFile`, `index.ts:113`). **Do not edit it by hand.** (Counts drift as resolvers are added; the SDL is authoritative — counted against the file on 2026-08-19.)

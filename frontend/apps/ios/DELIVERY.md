@@ -1,6 +1,5 @@
 # Companion iOS — App Store / Play Store Delivery & Roadmap
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Delivery readiness + forward roadmap for the Capacitor app (`@ci/fe-ios`,
 > `com.companionintelligence.app`). Companion to [`README.md`](./README.md), which

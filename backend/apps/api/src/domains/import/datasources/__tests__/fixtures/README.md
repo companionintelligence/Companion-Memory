@@ -1,7 +1,5 @@
 # Test Fixtures
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This directory contains test data fixtures for the data source importers in
 `backend/apps/api/src/domains/import/datasources/`. (These importers were ported
 from the now-retired CI-Import-Tools repo — renamed `ZARCHIVED-CI-Import-Tools` —

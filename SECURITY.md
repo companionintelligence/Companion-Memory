@@ -1,7 +1,5 @@
 # Security Policy
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This file previously carried GitHub's unedited template — including a version
 table (`5.1.x`, `4.0.x`) for versions CI-Server has never had. Replaced with what
 is actually true, verified against the repository on 2026-08-19.
@@ -26,7 +24,7 @@ leaves it alone. See **Releasing & image tags** in the [README](README.md).
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue, pull request or discussion for a security
-problem.** This repository and everything in it are private and confidential.
+problem.**
 
 - Report privately to the CI-Server maintainers through an internal Lifescope
   channel. GitHub's private vulnerability reporting is **not** enabled on this

@@ -1,5 +1,4 @@
-// Copyright (c) Lifescope Inc. All rights reserved.
-// Private & Confidential — Property of Lifescope Inc. Do not distribute.
+// Copyright (c) Lifescope Inc. Licensed under the PolyForm Noncommercial License 1.0.0; see LICENSE.md.
 
 //! tauri-plugin-ci-auth: RFC 8252 sign-in over a loopback redirect, and OS keychain storage for
 //! the Companion Intelligence desktop apps. README.md covers registration, the command contract

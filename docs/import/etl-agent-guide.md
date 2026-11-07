@@ -1,7 +1,5 @@
 # The import ETL, for the agent who has to fix it
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 You have been handed a bug in the import system and no context. This document is
 the context. It is written for an AI agent as much as for a person, so it
 optimises for one thing: being able to answer, from a cold start, **what ran, how

@@ -1,7 +1,5 @@
 # `@ci/cli`
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 `ci` — the Companion Intelligence appliance at the command line. Twenty-eight
 commands in three groups, over two protocols: the import spine and the
 appliance-wide `stats`, `doctor` and `backfill` over REST; `peers`, `grants` and

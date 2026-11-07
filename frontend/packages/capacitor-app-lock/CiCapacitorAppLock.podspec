@@ -10,8 +10,9 @@ Pod::Spec.new do |s|
   s.version = package['version']
   s.summary = package['description']
   # Private, never published; consumed only via the generated `:path =>` entry in
-  # ../../apps/ios/ios/App/Podfile. license/homepage/author are filler for CocoaPods.
-  s.license = 'UNLICENSED'
+  # ../../apps/ios/ios/App/Podfile. The license is the repo's PolyForm Noncommercial 1.0.0
+  # (see LICENSE.md); homepage and author are filler for CocoaPods.
+  s.license = { :type => 'PolyForm-Noncommercial-1.0.0' }
   s.homepage = 'https://github.com/companionintelligence/CI-Server'
   s.author = 'Lifescope Inc.'
   s.source = { :git => 'https://github.com/companionintelligence/CI-Server.git' }

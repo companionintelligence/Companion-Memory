@@ -1,7 +1,5 @@
 # Set up Companion Memory
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This is the operational setup guide for a Companion Memory appliance. It is the
 current contract between CI-Portal, CI-Hub, and CI-Server; the older
 [Hub-inference integration design](../architecture/hub-inference-integration.md)

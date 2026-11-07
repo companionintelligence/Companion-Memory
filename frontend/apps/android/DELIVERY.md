@@ -1,6 +1,5 @@
 # Companion Android — App Store / Play Store Delivery & Roadmap
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Delivery readiness + forward roadmap for the Capacitor app (`@ci/fe-android`,
 > Android Play id `com.ci.memory`, iOS bundle `com.companionintelligence.app`).

@@ -1,6 +1,5 @@
 # Companion Intelligence vs. Apple Intelligence — Architecture Comparison
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Scope: contrasts the **CI platform** (CI-Server memory brain, CI-Hub app runtime, CI-Portal cloud plane) and our **agentic harnesses** (CI-Hermes, CI-OpenClaw) with **Apple Intelligence** — the App Intents framework, App Schema Domains, the Foundation Models framework, and Private Cloud Compute (PCC). Closes with a prioritized list of what we should adopt.
 >

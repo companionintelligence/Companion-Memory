@@ -48,4 +48,4 @@ Python container at port 8001. Reads the same Postgres instance. See `CI-Enginee
 - Do not mix package managers.
 - Keep PRs small and linked to CI-Engineering issues.
 - Multiple agents may work this codebase simultaneously — never use destructive git operations.
-- All code is **private and confidential** — do not surface or transmit source beyond this session.
+- Code is licensed under PolyForm Noncommercial 1.0.0 (see LICENSE.md). Never commit or transmit secrets, credentials, or personal data.

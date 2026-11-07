@@ -1,6 +1,5 @@
 # The Asks system — reference guide
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > **Read this before you change anything on the consent path.** It is the
 > reference document for the interpersonal ask feature: what it is, what the

@@ -1,5 +1,4 @@
-// Copyright (c) Lifescope Inc. All rights reserved.
-// Private & Confidential — Property of Lifescope Inc. Do not distribute.
+// Copyright (c) Lifescope Inc. Licensed under the PolyForm Noncommercial License 1.0.0; see LICENSE.md.
 
 //! Loopback redirect receiver (RFC 8252, section 7.3). It binds 127.0.0.1 on an ephemeral port,
 //! accepts one GET to /callback and returns that URL. Any other request gets an error response and

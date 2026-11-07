@@ -1,6 +1,5 @@
 # Google Play — Health Apps Declaration: verification, verdict & response plan
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Single-issue deep-dive on the Play **Health apps declaration**, opened because
 > [`DEVICE_DATA_COMPLIANCE.md`](./DEVICE_DATA_COMPLIANCE.md) §6.1/§9 flagged it as a

@@ -16,10 +16,9 @@ Pod::Spec.new do |s|
   s.summary = package['description']
   # This pod is private and never published to a spec repo -- it's consumed only via the
   # generated `:path =>` entry in ../../apps/ios/ios/App/Podfile (see capacitor_pods
-  # there). license/homepage/author are filler for CocoaPods' benefit, not derived from
-  # package.json (which has neither field), matching this repo's "Private &
-  # Confidential" status.
-  s.license = 'UNLICENSED'
+  # there). The license is the repo's PolyForm Noncommercial 1.0.0 (see LICENSE.md);
+  # homepage and author are filler for CocoaPods' benefit, not derived from package.json.
+  s.license = { :type => 'PolyForm-Noncommercial-1.0.0' }
   s.homepage = 'https://github.com/companionintelligence/CI-Server'
   s.author = 'Lifescope Inc.'
   s.source = { :git => 'https://github.com/companionintelligence/CI-Server.git' }

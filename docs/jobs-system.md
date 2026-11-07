@@ -1,7 +1,5 @@
 # The jobs system — reference
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 What every background job on this appliance is, what it does, and how the machine
 that runs it works. Read against the worktree at the time of writing; every claim
 carries a `path:line`. **Counts re-verified against `main` @ `cee410cf1`

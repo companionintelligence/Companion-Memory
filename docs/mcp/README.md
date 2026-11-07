@@ -1,7 +1,5 @@
 # MCP on the appliance
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 CI-Server sits on **both** sides of the Model Context Protocol, and the two sides
 are separate domains that happen to share a name:
 

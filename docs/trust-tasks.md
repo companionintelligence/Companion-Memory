@@ -1,7 +1,5 @@
 # Trust Tasks alongside the peer surface
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 [Trust Tasks](https://trusttasks.org) is a Trust Over IP (DTGWG) framework for *self-contained, transport-agnostic, JSON-based task documents*: one object carrying its own type, parties, freshness and proof, with a registry of task specifications and a small set of transport bindings. This box serves it as a **second front door to the ask pipeline** — `POST /agent/v1/trust-tasks` — next to `POST /agent/v1/ask`. Same four gates behind it, a different way to establish who is asking.
 
 Implemented against the framework **Working Draft 0.7.0** (spec commit `bdf2cdd9256f`, 2026-09-24) and the registry's HTTPS binding **0.3**. Code: [`backend/apps/api/src/domains/trust-tasks/`](../backend/apps/api/src/domains/trust-tasks/). Design record: `CI-Engineering` ADR-0015 and `projects/decentralized-trust-graphs/TRUST-TASKS.md`.

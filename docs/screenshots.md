@@ -1,7 +1,5 @@
 # Screenshots & visual documentation
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This guide tracks the UI screenshots we want in the docs and how to capture them
 consistently. Screenshots can only be taken against a **running** stack, so they
 are produced manually (not in CI) and committed under `docs/images/`.
@@ -39,8 +37,7 @@ are produced manually (not in CI) and committed under `docs/images/`.
 ## Conventions
 
 - **Use the seeded demo data only.** Never capture a screen containing real
-  personal data, secrets, tokens, or `.env` values — this repo is private and
-  confidential.
+  personal data, secrets, tokens, or `.env` values.
 - Scrub anything sensitive (API keys, OAuth tokens, email addresses other than
   the demo user) before committing.
 - Keep files reasonably sized (prefer < 500 KB; compress large PNGs).

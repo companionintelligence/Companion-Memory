@@ -1,7 +1,5 @@
 # Mobile local search — plan
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Status: 2026-10-22, branch `mobile-local-search`. Phases 0, 0.5 and 1 are
 committed (a785c54c4, 8319711c3). The SQLCipher soft-heap fix is staged. **The
 remaining work is re-planned in [Revision 2026-10-21](#revision-2026-10-21-one-device-record-per-entity)

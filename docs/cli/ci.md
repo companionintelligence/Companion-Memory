@@ -1,7 +1,5 @@
 # `ci` — the appliance at the command line
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 > **Renamed.** This binary was `ci-import` and this file was
 > `docs/cli/ci-import.md`. Both names still work: `ci-import` is kept as an
 > alias bin that prints a deprecation notice **to stderr** — so `ci-import runs

@@ -1,7 +1,5 @@
 # Account deletion and the data purge
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 What `DELETE /account` promises, what actually happens, and — the part that matters
 for the App Store nutrition label and the Google Play Data Safety form — what is
 still true afterwards.
