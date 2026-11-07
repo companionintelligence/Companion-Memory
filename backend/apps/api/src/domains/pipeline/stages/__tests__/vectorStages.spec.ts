@@ -380,6 +380,12 @@ describe('FileVectorStage (loadTexts: ci.files -> fileWeightedTexts)', () => {
     const rest = h.insert()!.params as unknown[];
     expect(insertedText(rest)).toContain('os-plan-lighthouse.jpg');
     expect(insertedText(rest)).toContain('os-plan-lighthouse jpg os plan lighthouse jpg');
+    // The words go into the tsvector only: the device document ($7 title, $8
+    // body) stays as it was, so the version bump resends nothing to a phone.
+    expect([(rest[6] as string[])[0], (rest[7] as string[])[0]]).toEqual([
+      'os-plan-lighthouse.jpg',
+      'image/jpeg',
+    ]);
   });
 
   it('skips a row with no weighted text as "empty"', async () => {

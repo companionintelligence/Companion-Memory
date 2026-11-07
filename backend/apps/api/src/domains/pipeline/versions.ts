@@ -238,9 +238,12 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.INDEX_VECTOR_PERSON]: 2,
   /**
    * v3 (2026-11-07): the file name is also indexed split into its words
-   * (`fileNameWords`), so `lighthouse` finds `os-plan-lighthouse.jpg`. Postgres reads the whole name as one host/file
-   * token, so before this only the exact full name matched. The bump rewrites
-   * every file's tsvector; it touches no embedding.
+   * (`fileNameWords`), so `lighthouse` finds `os-plan-lighthouse.jpg`.
+   * Postgres reads the whole name as one host/file token, so before this only
+   * the exact full name matched. The bump rewrites every file's tsvector. It
+   * touches no embedding, and no device document: the split words are
+   * `vectorOnly`, so the document upsert finds nothing changed and no phone is
+   * sent the row again.
    */
   [STAGE_IDS.INDEX_VECTOR_FILE]: 3,
   /**

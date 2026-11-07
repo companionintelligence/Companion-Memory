@@ -6,7 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
 import { RETRIEVAL_POLICY_DEFAULTS } from '@ci/domains/retrieval-policy';
 import { fileWeightedTexts, type FileSearchFields } from '@ci/domains/search-ingress/searchTexts';
-import { buildWeightedVectorSql } from '@ci/domains/search-ingress/services/VectorService';
+import { buildVectorUpsertStatement } from '@ci/domains/search-ingress/services/VectorService';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { SearchService } from '../SearchService';
@@ -17,9 +17,10 @@ import { SearchService } from '../SearchService';
  * Postgres's text-search parser reads `os-plan-lighthouse.jpg` as one host
  * token, so before the file recipe indexed the spaced-out name too, only the
  * whole name matched and `lighthouse`, `receipt` or `jpg` came back empty. The
- * tsvector here is written with the same `buildWeightedVectorSql` expression the
- * listener and the pipeline stage use, from the real `fileWeightedTexts`, and
- * read back through `SearchService.search`, the call the explorer makes.
+ * rows here are written by `buildVectorUpsertStatement`, the statement the
+ * listener writes (the pipeline stage writes its batch form), from the real
+ * `fileWeightedTexts`, and read back through `SearchService.search`, the call
+ * the explorer makes.
  */
 
 const SEARCH_NEXT_DATABASE_ENV = {
@@ -48,13 +49,14 @@ describeWithDatabase(`File name search against a live Postgres (${availability.t
   const receipt = randomUUID();
 
   const indexFile = async (entityId: string, file: FileSearchFields) => {
-    const { sql, params } = buildWeightedVectorSql(fileWeightedTexts(file), 5);
+    const { sql, params } = buildVectorUpsertStatement(fileWeightedTexts(file), {
+      id: randomUUID(),
+      entityType: 'file',
+      entityId,
+      userId,
+    });
 
-    await dataSource.query(
-      `INSERT INTO ci_search.vectors (id, entity_type, entity_id, user_id, vector)
-       VALUES ($1, $2, $3, $4, ${sql})`,
-      [randomUUID(), 'file', entityId, userId, ...params],
-    );
+    await dataSource.query(sql, params);
   };
 
   beforeAll(async () => {
@@ -121,5 +123,14 @@ describeWithDatabase(`File name search against a live Postgres (${availability.t
     const results = await service.search(context, { query: 'lighthouse', includeTypes: ['file'] });
 
     expect(results.map((r) => r.id)).toContain(photo);
+  });
+
+  it('keeps the split words out of the device document', async () => {
+    const documents = await dataSource.query(
+      'SELECT title, body FROM ci_search.mobile_search_documents WHERE entity_type = $1 AND entity_id = $2',
+      ['file', photo],
+    );
+
+    expect(documents).toEqual([{ title: 'os-plan-lighthouse.jpg', body: 'image/jpeg' }]);
   });
 });
