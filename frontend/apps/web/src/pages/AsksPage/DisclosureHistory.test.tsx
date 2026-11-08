@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import { DisclosureHistory, type DisclosureRow } from './DisclosureHistory';
 
-const BIDI_OR_INVISIBLE = /[‪-‮⁦-⁩‎‏؜​]/u;
+const BIDI_OR_INVISIBLE = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C\u200B]/u;
 const CURLY_QUOTE = /[“”]/u;
 
 /**
  * A data class from a linked peer that closes a quotation, speaks in the app's
  * voice, and carries a right-to-left override to reorder what follows it.
  */
-const HOSTILE_CLASS = 'photos” · nothing was shared ‮detareneg-otua‬ “';
+const HOSTILE_CLASS = 'photos” \u00B7 nothing was shared \u202Edetareneg-otua\u202C “';
 
 function row(overrides: Partial<DisclosureRow> = {}): DisclosureRow {
   return {
@@ -45,7 +45,7 @@ describe('DisclosureHistory — the peer’s scope cannot rewrite the record', (
     const peer = label.parentElement?.querySelector<HTMLElement>('[data-peer-text]');
 
     expect(peer).not.toBeNull();
-    expect(peer?.textContent).toContain('photos” · nothing was shared');
+    expect(peer?.textContent).toContain('photos” \u00B7 nothing was shared');
     expect(peer?.textContent).not.toMatch(BIDI_OR_INVISIBLE);
     expect(peer).toHaveAttribute('dir', 'ltr');
     expect(peer?.style.unicodeBidi).toBe('isolate');
