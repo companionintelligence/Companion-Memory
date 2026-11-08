@@ -98,6 +98,7 @@ function makeService() {
   const federatedIdentityService = {
     findUserId: jest.fn().mockResolvedValue(null),
     findForUserFromIssuer: jest.fn().mockResolvedValue(null),
+    listForUser: jest.fn().mockResolvedValue([]),
     bind: jest.fn(async (data: { userId: string; issuer: string; subject: string }) => ({ ...data })),
   };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -185,21 +186,74 @@ describe('HubForwardAuthBridgeService', () => {
       const { service } = makeService();
       const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
 
-      await expect(service.namesAccount(req, ' Hello@LifeScope.io ')).resolves.toBe(true);
+      await expect(service.namesAccount(req, { id: 'user-a', email: ' Hello@LifeScope.io ' })).resolves.toBe(
+        true,
+      );
     });
 
     it('is false for someone else', async () => {
       const { service } = makeService();
       const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
 
-      await expect(service.namesAccount(req, 'other@lifescope.io')).resolves.toBe(false);
+      await expect(service.namesAccount(req, { id: 'user-a', email: 'other@lifescope.io' })).resolves.toBe(
+        false,
+      );
     });
 
-    it('is false for a header the Hub did not sign', async () => {
-      const { service } = makeService();
-      const req = { headers: signedHeaders('hello@lifescope.io', 'not-the-secret'), cookies: {} } as never;
+    it('fails closed for a header that does not verify but claims this address, while the account has no Hub link', async () => {
+      // Under the default an older Hub's unbound triple no longer verifies, yet the address may be all
+      // that Hub finds the person by. The claim can only lock the account it is sent with.
+      const { service, federatedIdentityService } = makeService();
+      const user = { id: 'user-a', email: 'hello@lifescope.io' };
 
-      await expect(service.namesAccount(req, 'hello@lifescope.io')).resolves.toBe(false);
+      for (const headers of [
+        signedHeaders('hello@lifescope.io', 'not-the-secret'),
+        signedHeaders('hello@lifescope.io'),
+      ]) {
+        config.auth.hubForwardAuth.requireAudience = 'true';
+        await expect(service.namesAccount({ headers, cookies: {} } as never, user)).resolves.toBe(true);
+      }
+
+      expect(federatedIdentityService.listForUser).toHaveBeenCalledWith('user-a');
+    });
+
+    it('is false for an unverified claim once the account holds a Hub link, read from the stored bindings', async () => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+      const { service, federatedIdentityService } = makeService();
+      federatedIdentityService.listForUser.mockResolvedValue([
+        { userId: 'user-a', issuer: 'https://hub.ci.computer', subject: 'oidc-sub' },
+        { userId: 'user-a', issuer: DIRECTORY, subject: HUB_ID },
+      ]);
+      const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
+
+      await expect(service.namesAccount(req, { id: 'user-a', email: 'hello@lifescope.io' })).resolves.toBe(
+        false,
+      );
+    });
+
+    it('is not locked by an OIDC binding alone, which the Hub does not find anyone by', async () => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+      const { service, federatedIdentityService } = makeService();
+      federatedIdentityService.listForUser.mockResolvedValue([
+        { userId: 'user-a', issuer: 'https://hub.ci.computer', subject: 'oidc-sub' },
+      ]);
+      const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
+
+      await expect(service.namesAccount(req, { id: 'user-a', email: 'hello@lifescope.io' })).resolves.toBe(
+        true,
+      );
+    });
+
+    it('is false for an unverified claim of another address, or no claim at all', async () => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+      const { service, federatedIdentityService } = makeService();
+      const user = { id: 'user-a', email: 'hello@lifescope.io' };
+
+      await expect(
+        service.namesAccount({ headers: signedHeaders('other@lifescope.io'), cookies: {} } as never, user),
+      ).resolves.toBe(false);
+      await expect(service.namesAccount({ headers: {}, cookies: {} } as never, user)).resolves.toBe(false);
+      expect(federatedIdentityService.listForUser).not.toHaveBeenCalled();
     });
 
     it('is false when forward-auth is disabled', async () => {
@@ -207,7 +261,9 @@ describe('HubForwardAuthBridgeService', () => {
       const { service } = makeService();
       const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
 
-      await expect(service.namesAccount(req, 'hello@lifescope.io')).resolves.toBe(false);
+      await expect(service.namesAccount(req, { id: 'user-a', email: 'hello@lifescope.io' })).resolves.toBe(
+        false,
+      );
     });
 
     it('is false once the stable id is linked: the link finds them, not the address', async () => {
@@ -215,7 +271,10 @@ describe('HubForwardAuthBridgeService', () => {
       federatedIdentityService.findUserId.mockResolvedValue('user-a');
 
       await expect(
-        service.namesAccount(requestWith(stableHeaders('hello@lifescope.io'), null), 'hello@lifescope.io'),
+        service.namesAccount(requestWith(stableHeaders('hello@lifescope.io'), null), {
+          id: 'user-a',
+          email: 'hello@lifescope.io',
+        }),
       ).resolves.toBe(false);
       expect(federatedIdentityService.findUserId).toHaveBeenCalledWith(DIRECTORY, HUB_ID);
     });
@@ -224,7 +283,10 @@ describe('HubForwardAuthBridgeService', () => {
       const { service } = makeService();
 
       await expect(
-        service.namesAccount(requestWith(stableHeaders('hello@lifescope.io'), null), 'hello@lifescope.io'),
+        service.namesAccount(requestWith(stableHeaders('hello@lifescope.io'), null), {
+          id: 'user-a',
+          email: 'hello@lifescope.io',
+        }),
       ).resolves.toBe(true);
     });
   });
@@ -1116,14 +1178,20 @@ describe('HubForwardAuthBridgeService', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('only one of'));
     });
 
-    it("says when this app's own key is the Hub-wide secret", () => {
-      config.auth.hubForwardAuth.identitySecret = SECRET;
-      config.auth.hubForwardAuth.audience = AUDIENCE;
-      config.auth.hubForwardAuth.requireAudience = 'true';
-      const { logger } = makeService();
+    it.each(['true', 'false'] as const)(
+      "says Hub sign-in is off when this app's own key is the Hub-wide secret, under %s",
+      (requireAudience) => {
+        config.auth.hubForwardAuth.identitySecret = SECRET;
+        config.auth.hubForwardAuth.audience = AUDIENCE;
+        config.auth.hubForwardAuth.requireAudience = requireAudience;
+        const { logger } = makeService();
 
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('is the Hub-wide'));
-    });
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/^Hub sign-in is off: .*is the Hub-wide .*treated as not provisioned/),
+        );
+      },
+    );
 
     it('says nothing for a Hub that gave this app its own key', () => {
       config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
@@ -1186,6 +1254,132 @@ describe('HubForwardAuthBridgeService', () => {
         }
       },
     );
+  });
+
+  describe('an identity secret equal to the Hub-wide secret', () => {
+    it('trusts no assertion signed with it, which any app holding the Hub-wide secret could sign', async () => {
+      config.auth.hubForwardAuth.identitySecret = SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      config.auth.hubForwardAuth.requireAudience = 'true';
+      const { service, authService } = makeService();
+      const signature = signForwardAuthAssertion(
+        SECRET,
+        AUDIENCE,
+        'nB7cS0fTq3kz1XyH9wA2eQ',
+        NOW,
+        'hello@lifescope.io',
+        DIRECTORY,
+        HUB_ID,
+      );
+      const headers = {
+        ...stableHeaders('hello@lifescope.io'),
+        'x-ci-hub-user-assertion': formatForwardAuthAssertion('nB7cS0fTq3kz1XyH9wA2eQ', signature),
+      };
+
+      expect(service.verifyIdentity(requestWith(headers, null))).toBeNull();
+      await expect(service.alignSession(requestWith(headers, null), response())).resolves.toEqual({
+        username: null,
+        replaced: false,
+      });
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a Hub identity that does not verify, on a browser holding a session', () => {
+    beforeEach(() => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+    });
+
+    /** A browser whose live session belongs to user-a at `sessionEmail`. */
+    function holdingSessionAt(sessionEmail: string) {
+      const made = makeService();
+      made.authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      made.userService.findById.mockResolvedValue(account('user-a', sessionEmail));
+
+      return made;
+    }
+
+    it("signs out another person's session instead of leaving it for the SPA to reuse", async () => {
+      // A shared browser: the first person's session, then a second Hub person's unbound triple.
+      const { service, authService, logger } = holdingSessionAt('first@lifescope.io');
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('second@lifescope.io')), res),
+      ).resolves.toEqual({ username: null, replaced: false, refused: 'identity_unverified' });
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.anything());
+      expect(res.clearCookie).toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('do not verify'));
+    });
+
+    it('says so to the SPA, without naming anyone', async () => {
+      const { service } = holdingSessionAt('first@lifescope.io');
+
+      await expect(
+        service.describeIdentity(requestWith(signedHeaders('second@lifescope.io'))),
+      ).resolves.toEqual({ username: null, accountId: null, refused: 'identity_unverified' });
+    });
+
+    it('signs out for a forged or expired header set too', async () => {
+      for (const headers of [
+        signedHeaders('second@lifescope.io', 'not-the-secret'),
+        signedHeaders('second@lifescope.io', SECRET, NOW - 3_600_000),
+      ]) {
+        const { service, authService } = holdingSessionAt('first@lifescope.io');
+
+        await expect(service.alignSession(requestWith(headers), response())).resolves.toMatchObject({
+          refused: 'identity_unverified',
+        });
+        expect(authService.invalidateSession).toHaveBeenCalled();
+      }
+    });
+
+    it('keeps a live session already at the claimed address: keeping it grants nothing new', async () => {
+      const { service, authService } = holdingSessionAt('first@lifescope.io');
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('First@LifeScope.io')), res),
+      ).resolves.toEqual({
+        username: null,
+        replaced: false,
+      });
+      await expect(
+        service.describeIdentity(requestWith(signedHeaders('first@lifescope.io'))),
+      ).resolves.toMatchObject({ refused: null });
+      expect(authService.invalidateSession).not.toHaveBeenCalled();
+      expect(res.clearCookie).not.toHaveBeenCalled();
+    });
+
+    it('signs out a session at the claimed address whose row is gone', async () => {
+      const { service, authService } = holdingSessionAt('first@lifescope.io');
+      authService.resolveLiveSession.mockResolvedValue(null);
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('first@lifescope.io')), response()),
+      ).resolves.toMatchObject({ refused: 'identity_unverified' });
+    });
+
+    it('changes nothing when the request names no Hub person, or forward-auth is off', async () => {
+      const { service, authService } = holdingSessionAt('first@lifescope.io');
+
+      await expect(service.alignSession(requestWith({}), response())).resolves.toEqual({
+        username: null,
+        replaced: false,
+      });
+      await expect(service.describeIdentity(requestWith({}))).resolves.toEqual({
+        username: null,
+        accountId: null,
+        refused: null,
+      });
+
+      config.auth.hubForwardAuth.enabled = false;
+      await expect(
+        service.alignSession(requestWith(signedHeaders('second@lifescope.io')), response()),
+      ).resolves.toEqual({ username: null, replaced: false });
+      expect(authService.invalidateSession).not.toHaveBeenCalled();
+    });
   });
 
   describe('a Hub that gave Memory its own key', () => {

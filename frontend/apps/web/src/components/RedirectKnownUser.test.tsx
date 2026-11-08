@@ -46,6 +46,14 @@ describe('hubNamesSomeoneElse', () => {
     }
   });
 
+  it('names someone else when the Hub person could not be verified, though no username comes with it', () => {
+    // An unbound triple under the default, a forged one, a wrong assertion: the session this browser
+    // holds is not proven to be the Hub person's, so it must not be sent to that session's home.
+    expect(
+      hubNamesSomeoneElse(user, { username: null, accountId: null, refused: 'identity_unverified' }),
+    ).toBe(true);
+  });
+
   it('compares addresses, ignoring case, when the Hub sends no stable id', () => {
     expect(hubNamesSomeoneElse(user, { username: 'Old@Example.com', accountId: null })).toBe(false);
     expect(hubNamesSomeoneElse(user, { username: 'other@example.com', accountId: null })).toBe(true);
