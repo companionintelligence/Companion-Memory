@@ -72,6 +72,42 @@ const SIGNED_PEER_PREFIX = '/agent/v1';
 /** The one body type the signed peer surface accepts, and the one `json()` captures the bytes of. */
 const SIGNED_PEER_CONTENT_TYPE = 'application/json';
 
+/** The only parameter the signed peer surface accepts: `charset=utf-8`, the value optionally quoted. */
+const SIGNED_PEER_CHARSET_PARAM = /^[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*$/i;
+
+/**
+ * Whether `header` is exactly `application/json`, alone or with the single
+ * parameter `charset=utf-8` (names and values case-insensitive, the value
+ * optionally quoted). Anything else -- another type, another charset, any
+ * other parameter, an empty or repeated parameter -- is refused.
+ *
+ * WHY THE CHARSET MATTERS: `json()` decodes the body with the DECLARED
+ * charset, while the digest is computed over the UTF-8 reading of the same
+ * bytes, and `Content-Type` is not a covered component. A signed ask re-sent
+ * as `charset=utf-7` (or utf-16) would be digested as what was signed and
+ * parsed as something else. Pinning UTF-8 makes the two readings one.
+ */
+export function isSignedPeerContentType(header: string | undefined): boolean {
+  if (header == null) {
+    return false;
+  }
+
+  const [mediaType, ...params] = header.split(';');
+  if (mediaType.trim().toLowerCase() !== SIGNED_PEER_CONTENT_TYPE) {
+    return false;
+  }
+
+  if (params.length === 0) {
+    return true;
+  }
+
+  if (params.length > 1) {
+    return false;
+  }
+
+  return SIGNED_PEER_CHARSET_PARAM.test(params[0]);
+}
+
 /**
  * Whether the TRANSPORT says this request carries a body: a positive
  * `Content-Length`, or any `Transfer-Encoding`.
@@ -168,8 +204,13 @@ export class BodyParserMiddleware implements NestMiddleware {
 
     // Only `json()` keeps the bytes, so a body of any other type on the signed
     // surface would reach the signature check with nothing to digest. Every
-    // route under the prefix takes JSON, so refuse the rest before parsing.
-    if (isSignedPeerRoute && transportHasBody(req.headers) && contentType !== SIGNED_PEER_CONTENT_TYPE) {
+    // route under the prefix takes JSON, so refuse the rest before parsing --
+    // including JSON in any charset but UTF-8 (see `isSignedPeerContentType`).
+    if (
+      isSignedPeerRoute &&
+      transportHasBody(req.headers) &&
+      !isSignedPeerContentType(req.headers['content-type'])
+    ) {
       throw new UnsupportedMediaTypeException();
     }
 

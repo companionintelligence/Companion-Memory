@@ -4,7 +4,7 @@ import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 
 import { BODY_LIMIT_KEY } from '../../decorators';
-import { BodyParserMiddleware, transportHasBody } from '../BodyParserMiddleware';
+import { BodyParserMiddleware, isSignedPeerContentType, transportHasBody } from '../BodyParserMiddleware';
 
 // Stub the express parsers: capture the options they're constructed with and
 // hand back a pass-through handler so use() completes synchronously.
@@ -214,6 +214,50 @@ describe('BodyParserMiddleware signed peer surface', () => {
     expect(typeof jsonOptions?.verify).toBe('function');
   });
 
+  /**
+   * `json()` decodes with the DECLARED charset while the digest is over the
+   * UTF-8 reading of the bytes, and Content-Type is not signed. Only UTF-8 (or
+   * no charset, which `json()` reads as UTF-8) keeps the two readings the same.
+   */
+  it('refuses JSON in any charset but UTF-8, and any other parameter, with 415', () => {
+    for (const type of [
+      'application/json; charset=utf-7',
+      'application/json; charset=UTF-16',
+      'application/json; charset=utf-16le',
+      'application/json; charset=iso-8859-1',
+      'application/json; charset=utf8',
+      'application/json; charset="utf-7"',
+      'application/json; charset=utf-8; charset=utf-7',
+      'application/json; charset=utf-8; foo=bar',
+      'application/json; foo=bar',
+      'application/json;',
+      'application/json; charset=',
+      'application/json; charset=utf-8x',
+      'application/jsonx',
+      'application/json-patch+json',
+    ]) {
+      expect(() => run('/agent/v1/ask', { 'content-type': type, 'content-length': '12' })).toThrow(
+        UnsupportedMediaTypeException,
+      );
+      expect(json).not.toHaveBeenCalled();
+    }
+  });
+
+  it('accepts plain application/json and application/json with charset=utf-8', () => {
+    for (const type of [
+      'application/json',
+      'Application/JSON',
+      'application/json; charset=utf-8',
+      'application/json;charset=UTF-8',
+      'application/json; Charset="utf-8"',
+    ]) {
+      const { next, jsonOptions } = run('/agent/v1/ask', { 'content-type': type, 'content-length': '12' });
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(typeof jsonOptions?.verify).toBe('function');
+    }
+  });
+
   it('lets a bodyless request through whatever its content type', () => {
     const bodyless: Record<string, string>[] = [{}, { 'content-type': 'text/plain', 'content-length': '0' }];
 
@@ -230,6 +274,16 @@ describe('BodyParserMiddleware signed peer surface', () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(jsonOptions?.verify).toBeUndefined();
+  });
+});
+
+describe('isSignedPeerContentType', () => {
+  it('accepts only application/json, bare or with charset=utf-8', () => {
+    expect(isSignedPeerContentType(undefined)).toBe(false);
+    expect(isSignedPeerContentType('application/json')).toBe(true);
+    expect(isSignedPeerContentType(' application/json ; charset = utf-8 ')).toBe(true);
+    expect(isSignedPeerContentType('application/json; charset=utf-7')).toBe(false);
+    expect(isSignedPeerContentType('application/json; charset=utf-16')).toBe(false);
   });
 });
 
