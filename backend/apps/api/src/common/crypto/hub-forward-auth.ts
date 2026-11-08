@@ -349,6 +349,20 @@ export function isPartialForwardAuthBinding(cfg: {
 }
 
 /**
+ * Whether this app's own key is the Hub-wide secret.
+ *
+ * An older Hub gives that secret to every app it signs without a key of its own, so any of them could
+ * sign a bound assertion for this app's URN. Such a key binds nothing and is treated as not
+ * provisioned: the bound path is refused, and so is the unbound format (the env is misconfigured, not
+ * an older Hub's).
+ */
+export function isIdentitySecretShared(cfg: { secret: string; identitySecret?: string | null }): boolean {
+  const identitySecret = (cfg.identitySecret ?? '').trim();
+
+  return identitySecret !== '' && identitySecret === cfg.secret.trim();
+}
+
+/**
  * The verification policy for an `auth.hubForwardAuth` config block.
  *
  * The unbound format (`username\ntimestamp` under the Hub-wide secret) names no audience and carries
@@ -363,6 +377,9 @@ export function isPartialForwardAuthBinding(cfg: {
  *   not pass the assertion header through). The unbound format is accepted beside the bound one.
  *   Even then a half-provisioned binding (one of the two values set) fails closed: see
  *   {@link isPartialForwardAuthBinding}.
+ *
+ * An `identitySecret` equal to the Hub-wide secret is not a key of this app's own: no bound path, and
+ * no unbound format either. See {@link isIdentitySecretShared}.
  */
 export function forwardAuthPolicy(cfg: {
   secret: string;
@@ -373,8 +390,9 @@ export function forwardAuthPolicy(cfg: {
 }): ForwardAuthPolicy {
   const identitySecret = (cfg.identitySecret ?? '').trim();
   const audience = (cfg.audience ?? '').trim();
-  const bound = identitySecret && audience ? { secret: identitySecret, audience } : null;
-  const acceptUnbound = cfg.requireAudience === 'false' && !isPartialForwardAuthBinding(cfg);
+  const shared = isIdentitySecretShared(cfg);
+  const bound = identitySecret && audience && !shared ? { secret: identitySecret, audience } : null;
+  const acceptUnbound = cfg.requireAudience === 'false' && !isPartialForwardAuthBinding(cfg) && !shared;
 
   return { sharedSecret: cfg.secret, bound, acceptUnbound, maxSkewMs: cfg.maxSkewMs };
 }

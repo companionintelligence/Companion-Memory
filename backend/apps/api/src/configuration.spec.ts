@@ -195,3 +195,41 @@ describe('peers.localPubEnabled', () => {
     }
   });
 });
+
+/**
+ * `auth.hubForwardAuth.requireAudience` decides whether an unbound forward-auth triple (no audience,
+ * no nonce, replayable by any sibling app behind the Hub) can sign anyone in. The schema default,
+ * the shipped default and the env var are pinned together, so none of them drifts back to `auto`.
+ */
+describe('auth.hubForwardAuth.requireAudience', () => {
+  const field = ConfigSchema.shape.auth.shape.hubForwardAuth.shape.requireAudience;
+
+  function hubForwardAuthIn(file: string): Record<string, unknown> {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      auth?: { hubForwardAuth?: Record<string, unknown> };
+    };
+
+    return contents.auth?.hubForwardAuth ?? {};
+  }
+
+  it('defaults to "true" in the schema when nothing sets it', () => {
+    expect(field.parse(undefined)).toBe('true');
+  });
+
+  it('ships "true" and is set through CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE', () => {
+    expect(hubForwardAuthIn('default.json').requireAudience).toBe('true');
+    expect(hubForwardAuthIn('custom-environment-variables.json').requireAudience).toBe(
+      'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE',
+    );
+  });
+
+  it('still parses the legacy values, and nothing else', () => {
+    for (const value of ['auto', 'true', 'false']) {
+      expect(field.parse(value)).toBe(value);
+    }
+
+    for (const value of ['TRUE', 'yes', '', 'off']) {
+      expect(field.safeParse(value).success).toBe(false);
+    }
+  });
+});

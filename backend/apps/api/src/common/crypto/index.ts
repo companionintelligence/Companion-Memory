@@ -16,6 +16,7 @@ export {
   formatForwardAuthAssertion,
   forwardAuthPolicy,
   isHubIssuer,
+  isIdentitySecretShared,
   isPartialForwardAuthBinding,
   readForwardAuthHeaders,
   signForwardAuthAssertion,

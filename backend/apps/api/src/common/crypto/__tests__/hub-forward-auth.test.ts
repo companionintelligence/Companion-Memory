@@ -11,6 +11,7 @@ import {
   formatForwardAuthAssertion,
   forwardAuthPolicy,
   isHubIssuer,
+  isIdentitySecretShared,
   isPartialForwardAuthBinding,
   readForwardAuthHeaders,
   signForwardAuthAssertion,
@@ -346,6 +347,36 @@ describe('forwardAuthPolicy', () => {
     }
 
     expect(isPartialForwardAuthBinding(partial)).toBe(true);
+  });
+
+  it.each(['auto', 'true', 'false'] as const)(
+    'treats an identity secret equal to the Hub-wide secret as not provisioned under %s',
+    (requireAudience) => {
+      const policy = forwardAuthPolicy({
+        secret: SECRET,
+        identitySecret: ` ${SECRET} `,
+        audience: AUDIENCE,
+        requireAudience,
+        maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
+      });
+
+      expect(policy).toMatchObject({ bound: null, acceptUnbound: false });
+      // A sibling app holding the Hub-wide secret signs an assertion for this app's URN.
+      expect(
+        verifyHubForwardAuth(policy, boundHeadersFor('alice', NOW, { secret: SECRET }), { now: NOW }),
+      ).toEqual({ ok: false, reason: 'unbound' });
+      expect(verifyHubForwardAuth(policy, headersFor('alice', NOW), { now: NOW })).toEqual({
+        ok: false,
+        reason: 'unbound',
+      });
+    },
+  );
+
+  it('says when the identity secret is the Hub-wide one, and only then', () => {
+    expect(isIdentitySecretShared({ secret: SECRET, identitySecret: SECRET })).toBe(true);
+    expect(isIdentitySecretShared({ secret: SECRET, identitySecret: IDENTITY_SECRET })).toBe(false);
+    expect(isIdentitySecretShared({ secret: '', identitySecret: '' })).toBe(false);
+    expect(isIdentitySecretShared({ secret: SECRET })).toBe(false);
   });
 
   it('counts only one of the two values as a partial binding', () => {
