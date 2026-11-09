@@ -14,11 +14,17 @@ const config = require('config');
 const { Client } = require('pg');
 const { z } = require('zod/v3');
 
+const { upgradePgBossSchema } = require('./upgrade-pgboss-schema');
+
 const UNSAFE_OPERATIONS = new Set(['drop_all_pg_data.sql']);
 
 // dbmate subcommands that only touch the filesystem; creating a migration
 // must not require a running database.
 const OFFLINE_COMMANDS = new Set(['new']);
+
+// dbmate subcommands that apply migrations. Matched anywhere in the arguments,
+// because a flag placed before the subcommand stays in `program.args`.
+const MIGRATING_COMMANDS = new Set(['up', 'migrate']);
 
 const schema = z.object({
   type: z.literal('postgres'),
@@ -260,6 +266,19 @@ const forwardArgs = program.args;
     if (result.signal) {
       console.error(`dbmate was terminated by signal ${result.signal}.`);
       process.exit(1);
+    }
+
+    if (
+      result.status === 0 &&
+      !OFFLINE_COMMANDS.has(forwardArgs[0]) &&
+      forwardArgs.some((arg) => MIGRATING_COMMANDS.has(arg))
+    ) {
+      try {
+        await upgradePgBossSchema(DATABASE_URL);
+      } catch (err) {
+        console.error(`Failed to move the job queue to the new pg-boss schema: ${err.message}`);
+        process.exit(1);
+      }
     }
 
     process.exit(result.status);
