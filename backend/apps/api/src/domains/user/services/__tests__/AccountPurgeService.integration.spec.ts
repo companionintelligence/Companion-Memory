@@ -7,6 +7,13 @@ import type { PurgeObjectStore } from '../../purge/objectStore';
 import { AccountPurgeService } from '../AccountPurgeService';
 
 /**
+ * The purge refuses to run without a grant revoker (`ACCOUNT_GRANT_REVOKER`). These accounts hold no
+ * provider grants, so this one finds nothing to revoke; the revocations themselves are covered by
+ * `AccountPurgeService.grants.test.ts` and the privacy domain's suites.
+ */
+const noGrantsToRevoke = { get: () => ({ revokePendingGrants: async () => [] }) } as never;
+
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * The purge, against the real schema.
  * ═══════════════════════════════════════════════════════════════════════════
@@ -97,7 +104,7 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       },
     };
 
-    service = new AccountPurgeService(scratch.dataSource, new LoggerService(), objectStore);
+    service = new AccountPurgeService(scratch.dataSource, new LoggerService(), objectStore, noGrantsToRevoke);
 
     // ── Two accounts, one of which created the other ────────────────────────
     // ci.users.created_by is NO ACTION and points at ci.users: the single most
@@ -641,11 +648,16 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       );
 
       const logger = new LoggerService();
-      const down = new AccountPurgeService(scratch.dataSource, logger, {
-        deleteObjects: async () => {
-          throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
+      const down = new AccountPurgeService(
+        scratch.dataSource,
+        logger,
+        {
+          deleteObjects: async () => {
+            throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
+          },
         },
-      });
+        noGrantsToRevoke,
+      );
 
       const outcome = await down.purgeAccount(victim.id, new Date(), new Date());
 
