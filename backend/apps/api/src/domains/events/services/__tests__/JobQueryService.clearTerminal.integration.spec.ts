@@ -1,4 +1,5 @@
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { PgBoss } from 'pg-boss';
 import { DataSource } from 'typeorm';
 import type { PostgresDataSourceOptions } from 'typeorm/driver/postgres/PostgresDataSourceOptions';
 import { v7 as uuidv7 } from 'uuid';
@@ -10,7 +11,6 @@ import { DeadLetterReaperListener } from '../../../pipeline';
 import { DEAD_LETTER_QUEUE } from '../../constants';
 import { JobCategoryMetricEntity } from '../../entities/JobCategoryMetricEntity';
 import { JobMetricEntity } from '../../entities/JobMetricEntity';
-import { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../../entities/PgBossJobEntity';
 import { JobQueryService } from '../JobQueryService';
 
@@ -31,25 +31,22 @@ import { JobQueryService } from '../JobQueryService';
  * ── Why a database of its own, and not a transaction ────────────────────────
  *
  * Because the statement under test is an unqualified DELETE across
- * `pgboss.job` and `pgboss.archive`. There is no marker, no owner and no run id
+ * `pgboss.job`. There is no marker, no owner and no run id
  * to scope it to — deleting everything IS the behaviour. Running that against
  * the dev appliance behind a rollback would be the exact bet
  * `__tests__/support/scratchDatabase.ts` documents losing: a suite that believed
  * a transaction fenced it in and left ~599,000 rows in somebody's archive.
  * Isolation here is a property of the CONNECTION.
  *
- * ── Why the pgboss DDL is in this file ─────────────────────────────────────
+ * ── Why pg-boss builds the tables here ─────────────────────────
  *
  * pg-boss's TABLES are created by pg-boss at boot, not by a migration —
  * `20251001000000_setup_pgboss_schema.sql` creates the empty schema and says so
  * — so a freshly migrated database has `ci.pipeline_dead_letters` and no
- * `pgboss.job` to join it to. The DDL below is pg-boss v10's own, copied from a
- * live appliance
- * (`\d pgboss.job`) — partitioned BY LIST (name), `(name, id)` primary key, the
- * real `pgboss.job_state` enum. The partitioning is reproduced rather than
- * flattened because the predicate under test correlates a subquery to the
- * DELETE target on a partitioned table, which is precisely the shape a mocked
- * QueryBuilder cannot check and a simplified table would not exercise.
+ * `pgboss.job` to join it to. Booting the real pg-boss gives this file the
+ * partitioned table the running appliance has, which matters because the
+ * predicate under test correlates a subquery to the DELETE target on it: a
+ * shape a mocked QueryBuilder cannot check and a copied table goes stale on.
  */
 
 const availability = scratchDatabaseAvailability();
@@ -62,56 +59,17 @@ if (!availability.available) {
 // CREATE DATABASE plus every migration.
 jest.setTimeout(300_000);
 
-/**
- * pg-boss v10's own schema, as far as these two tables.
- *
- * The `pgboss` schema itself already exists — a migration creates it empty —
- * so this only adds what pg-boss would add at boot.
- */
-const PGBOSS_DDL = `
-  CREATE TYPE pgboss.job_state AS ENUM ('created', 'retry', 'active', 'completed', 'cancelled', 'failed');
-
-  CREATE TABLE pgboss.job (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    name text NOT NULL,
-    priority integer NOT NULL DEFAULT 0,
-    data jsonb,
-    state pgboss.job_state NOT NULL DEFAULT 'created',
-    retry_limit integer NOT NULL DEFAULT 2,
-    retry_count integer NOT NULL DEFAULT 0,
-    retry_delay integer NOT NULL DEFAULT 0,
-    retry_backoff boolean NOT NULL DEFAULT false,
-    start_after timestamptz NOT NULL DEFAULT now(),
-    started_on timestamptz,
-    singleton_key text,
-    singleton_on timestamp,
-    expire_in interval NOT NULL DEFAULT interval '15 minutes',
-    created_on timestamptz NOT NULL DEFAULT now(),
-    completed_on timestamptz,
-    keep_until timestamptz NOT NULL DEFAULT now() + interval '14 days',
-    output jsonb,
-    dead_letter text,
-    policy text,
-    PRIMARY KEY (name, id)
-  ) PARTITION BY LIST (name);
-
-  CREATE TABLE pgboss.j_dead_letter PARTITION OF pgboss.job FOR VALUES IN ('dead-letter');
-  CREATE TABLE pgboss.j_default PARTITION OF pgboss.job FOR VALUES IN ('default');
-
-  CREATE TABLE pgboss.archive (LIKE pgboss.job);
-  ALTER TABLE pgboss.archive ADD COLUMN archived_on timestamptz NOT NULL DEFAULT now();
-`;
-
 describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres (${availability.target})`, () => {
   let scratch: ScratchDatabase;
   let dataSource: DataSource;
   let mapped: DataSource;
   let service: JobQueryService;
   let reaper: DeadLetterReaperListener;
+  let boss: PgBoss;
 
   const CTX: RequestContext = { userId: uuidv7() } as RequestContext;
 
-  /** Insert a job. `queue` must be one of the two partitions created above. */
+  /** Insert a job. `queue` must be one of the two queues created in `beforeAll`. */
   async function seedJob(overrides: {
     id?: string;
     queue?: string;
@@ -130,36 +88,6 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
         JSON.stringify({ name: overrides.eventName ?? 'test.event', userId: CTX.userId }),
         overrides.state ?? 'failed',
         overrides.output ? JSON.stringify(overrides.output) : null,
-      ],
-    );
-
-    return id;
-  }
-
-  /**
-   * Insert an ARCHIVED job — pg-boss's own resting place for finished rows.
-   *
-   * Every NOT NULL column is supplied explicitly because `pgboss.archive` really
-   * does carry no defaults: pg-boss creates it as `CREATE TABLE archive (LIKE
-   * job)`, and `LIKE` without `INCLUDING DEFAULTS` copies the constraints and
-   * not the defaults. Reproduced rather than papered over with `INCLUDING
-   * DEFAULTS`, because a seed that only works against a friendlier table is not
-   * evidence about this one.
-   */
-  async function seedArchived(overrides: { queue?: string; state?: string } = {}): Promise<string> {
-    const id = uuidv7();
-
-    await dataSource.query(
-      `INSERT INTO pgboss.archive
-              (id, name, priority, data, state, retry_limit, retry_count, retry_delay, retry_backoff,
-               start_after, expire_in, created_on, keep_until)
-       VALUES ($1, $2, 0, $3::jsonb, $4::pgboss.job_state, 2, 0, 0, false,
-               now(), interval '15 minutes', now(), now() + interval '14 days')`,
-      [
-        id,
-        overrides.queue ?? 'default',
-        JSON.stringify({ name: 'test.event', userId: CTX.userId }),
-        overrides.state ?? 'failed',
       ],
     );
 
@@ -185,7 +113,6 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
 
   async function truncateAll(): Promise<void> {
     await dataSource.query('DELETE FROM pgboss.job');
-    await dataSource.query('DELETE FROM pgboss.archive');
     await dataSource.query('DELETE FROM ci.pipeline_dead_letters');
   }
 
@@ -198,15 +125,21 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
 
     dataSource = scratch.dataSource;
 
-    await dataSource.query(PGBOSS_DDL);
+    const { host, port, username, password, database } = scratch.dataSource
+      .options as PostgresDataSourceOptions;
+
+    boss = new PgBoss({ host, port, user: username, password, database, schema: 'pgboss', schedule: false });
+    boss.on('error', (error: Error) => console.error(`pg-boss: ${error.message}`));
+
+    await boss.start();
+    await boss.createQueue(DEAD_LETTER_QUEUE);
+    await boss.createQueue('default');
 
     // A second connection to the same scratch database, this one with the
     // entities mapped: `clearTerminal` builds its DELETE through the
     // repository's query builder, so it needs real entity metadata to emit the
-    // real SQL. `synchronize` stays off — the DDL above is the schema, and
-    // TypeORM would otherwise "fix" the drift rather than report it.
-    const { host, port, username, password, database } = scratch.dataSource
-      .options as PostgresDataSourceOptions;
+    // real SQL. `synchronize` stays off: pg-boss owns the schema, and TypeORM
+    // would otherwise "fix" the drift rather than report it.
 
     mapped = new DataSource({
       type: 'postgres',
@@ -215,7 +148,7 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
       username,
       password,
       database,
-      entities: [PgBossJobEntity, PgBossArchiveEntity, JobMetricEntity, JobCategoryMetricEntity],
+      entities: [PgBossJobEntity, JobMetricEntity, JobCategoryMetricEntity],
       synchronize: false,
       extra: { max: 4 },
     });
@@ -224,7 +157,6 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
 
     service = new JobQueryService(
       mapped.getRepository(PgBossJobEntity),
-      mapped.getRepository(PgBossArchiveEntity),
       mapped.getRepository(JobMetricEntity),
       mapped.getRepository(JobCategoryMetricEntity),
     );
@@ -247,6 +179,7 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
   });
 
   afterAll(async () => {
+    await boss?.stop({ graceful: false });
     await mapped?.destroy();
     await scratch?.drop();
   });
@@ -372,48 +305,40 @@ describeWithDatabase(`JobQueryService.clearTerminal — against real Postgres ($
   });
 
   // -------------------------------------------------------------------------
-  // The scope that could never finish
+  // The failed scope
   // -------------------------------------------------------------------------
 
-  it('clears failed rows out of the archive too, so the count can reach zero', async () => {
+  it('clears failed rows so the count can reach zero', async () => {
     // The Health card's number is `JobMonitorService.getSummary`'s `failed`,
-    // which is `job('failed') + archived('failed')`. The delete covered only the
-    // first term, so on any appliance whose maintenance has archived a failure —
-    // which is every appliance — the number never moved and the operator clicked
-    // again.
+    // which counts these rows.
     await seedJob({ state: 'failed' });
-    await seedArchived({ state: 'failed' });
-    await seedArchived({ state: 'failed' });
+    await seedJob({ state: 'failed' });
 
     const result = await service.clearTerminal(CTX, 'failed');
 
-    expect(result).toEqual({ scope: 'failed', deleted: 3, retained: 0 });
+    expect(result).toEqual({ scope: 'failed', deleted: 2, retained: 0 });
 
     const [{ live }] = await dataSource.query<Array<{ live: string }>>(
       `SELECT count(*)::text AS live FROM pgboss.job WHERE state = 'failed'`,
     );
-    const [{ archived }] = await dataSource.query<Array<{ archived: string }>>(
-      `SELECT count(*)::text AS archived FROM pgboss.archive WHERE state = 'failed'`,
-    );
 
     expect(live).toBe('0');
-    expect(archived).toBe('0');
   });
 
-  it('leaves archived rows that merely finished, and archived dead letters', async () => {
-    // Two ways the widened delete could overreach, both pinned: `completed`
-    // history is not this button's business, and an archived dead letter is the
-    // OTHER scope's, under the other scope's predicate.
-    const completed = await seedArchived({ state: 'completed' });
-    const archivedDeadLetter = await seedArchived({ queue: DEAD_LETTER_QUEUE, state: 'failed' });
+  it('leaves rows that merely finished, and failed dead letters', async () => {
+    // Two ways the delete could overreach, both pinned: `completed` history is
+    // not this button's business, and a dead letter is the OTHER scope's, under
+    // the other scope's predicate.
+    const completed = await seedJob({ state: 'completed' });
+    const failedDeadLetter = await seedJob({ queue: DEAD_LETTER_QUEUE, state: 'failed' });
 
     const result = await service.clearTerminal(CTX, 'failed');
 
     expect(result.deleted).toBe(0);
 
-    const rows = await dataSource.query<Array<{ id: string }>>(`SELECT id FROM pgboss.archive ORDER BY id`);
+    const rows = await dataSource.query<Array<{ id: string }>>(`SELECT id FROM pgboss.job ORDER BY id`);
 
-    expect(rows.map((row) => row.id).sort()).toEqual([completed, archivedDeadLetter].sort());
+    expect(rows.map((row) => row.id).sort()).toEqual([completed, failedDeadLetter].sort());
   });
 
   it('refuses a request with no user context, before touching anything', async () => {

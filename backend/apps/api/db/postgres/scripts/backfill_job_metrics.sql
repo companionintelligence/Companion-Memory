@@ -2,7 +2,7 @@
 --
 -- The collector samples forward from the moment it starts, so a freshly
 -- migrated appliance shows empty charts until enough ticks have accumulated.
--- pg-boss's own tables still hold up to ~36 hours of terminal jobs with
+-- `pgboss.job` still holds up to ~24 hours of terminal jobs with
 -- `completed_on` and `started_on` on every row, which is exactly the throughput
 -- and latency the collector would have recorded had it been running.
 --
@@ -23,10 +23,6 @@ INSERT INTO ci.job_metrics (
 WITH settled AS (
     SELECT name, state, started_on, completed_on
       FROM pgboss.job
-     WHERE completed_on IS NOT NULL
-    UNION ALL
-    SELECT name, state, started_on, completed_on
-      FROM pgboss.archive
      WHERE completed_on IS NOT NULL
 )
 SELECT
