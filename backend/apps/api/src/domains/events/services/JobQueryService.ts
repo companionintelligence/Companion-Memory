@@ -7,7 +7,6 @@ import { RequestContext } from '@ci/common/context';
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { JobCategoryMetricEntity } from '../entities/JobCategoryMetricEntity';
 import { JobMetricEntity } from '../entities/JobMetricEntity';
-import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import {
   categoryOfJob,
@@ -105,7 +104,7 @@ export interface JobCategoryHistoryDto {
   /**
    * Which store the returned buckets came from.
    *
-   * `live` — every bucket was counted from `pgboss.job`/`archive` directly.
+   * `live` — every bucket was counted from `pgboss.job` directly.
    * `metrics` — every bucket came from the sampled `ci.job_category_metrics`.
    * `mixed` — the recent end is live and the older end is sampled.
    *
@@ -202,8 +201,6 @@ export class JobQueryService {
   constructor(
     @InjectRepository(PgBossJobEntity)
     private readonly jobRepository: Repository<PgBossJobEntity>,
-    @InjectRepository(PgBossArchiveEntity)
-    private readonly archiveRepository: Repository<PgBossArchiveEntity>,
     @InjectRepository(JobMetricEntity)
     private readonly metricRepository: Repository<JobMetricEntity>,
     @InjectRepository(JobCategoryMetricEntity)
@@ -300,30 +297,22 @@ export class JobQueryService {
   }
 
   /**
-   * Delete the `failed` origin rows — from `pgboss.archive` as well as
-   * `pgboss.job`.
+   * Delete the `failed` origin rows. The number this clears is
+   * `JobMonitorService.getSummary`'s `failed`, which counts these same rows, so
+   * it reaches zero.
    *
-   * The archive half is not an extension of scope, it is what makes the button
-   * finish. The number this clears is `JobMonitorService.getSummary`'s
-   * `failed`, which is `job('failed') + archived('failed')`; the delete covered
-   * only the first term, so on any appliance old enough for pg-boss's
-   * maintenance to have archived a failure — which is every appliance, the
-   * archive being where finished rows go — the count could not reach zero. The
-   * operator clicks, watches a number that does not move, and clicks again.
-   *
-   * Safe to widen precisely because of what the OTHER scope now refuses to
-   * touch: every queue is created with `deadLetter: 'dead-letter'`, so a job
+   * Safe because of what the OTHER scope refuses to touch: every queue is
+   * created with `deadLetter: 'dead-letter'`, so a job
    * that exhausts its retries mints an independent dead-letter copy carrying the
    * same payload, and that copy is a different row with a different id which
    * nothing here deletes. A failed origin row is a duplicate of evidence held
    * elsewhere; an unharvested dead letter is the evidence.
    *
-   * `name != 'dead-letter'` on both tables for the same reason it was always
-   * there: a dead letter that pg-boss has since archived is still a dead letter,
-   * and it is the other scope's business, under the other scope's predicate.
+   * `name != 'dead-letter'` because a dead letter is the other scope's
+   * business, under the other scope's predicate.
    */
   private async clearFailedOrigins(): Promise<TerminalJobClearDto> {
-    const live = await this.jobRepository
+    const result = await this.jobRepository
       .createQueryBuilder()
       .delete()
       .from(PgBossJobEntity)
@@ -331,19 +320,7 @@ export class JobQueryService {
       .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
       .execute();
 
-    const archived = await this.archiveRepository
-      .createQueryBuilder()
-      .delete()
-      .from(PgBossArchiveEntity)
-      .where('state = :failed', { failed: 'failed' })
-      .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
-      .execute();
-
-    return {
-      scope: 'failed',
-      deleted: (live.affected ?? 0) + (archived.affected ?? 0),
-      retained: 0,
-    };
+    return { scope: 'failed', deleted: result.affected ?? 0, retained: 0 };
   }
 
   async list(context: RequestContext, query: JobQuery): Promise<JobListDto> {
@@ -473,10 +450,9 @@ export class JobQueryService {
    * Two stores, unioned, because neither one alone can answer the question
    * honestly:
    *
-   *  - `pgboss.job` + `pgboss.archive` hold about thirty-six hours (twelve to
-   *    archive, twenty-four of archive retention). Inside that window they are
-   *    the exact answer, and they are the answer from the moment this ships —
-   *    a chart that only read the sampled table would be empty until the
+   *  - `pgboss.job` holds about twenty-four hours of finished jobs. Inside that
+   *    window it is the exact answer, and it is the answer from the moment this ships.
+   *    A chart that only read the sampled table would be empty until the
    *    collector had run for a day.
    *  - `ci.job_category_metrics` is the only thing that remembers anything
    *    older, and it starts accumulating from the first sample after deploy.
@@ -635,14 +611,14 @@ export class JobQueryService {
   }
 
   /**
-   * The oldest instant `pgboss.job`/`archive` can still be trusted for, rounded
+   * The oldest instant `pgboss.job` can still be trusted for, rounded
    * UP to the next bucket boundary.
    *
    * Excludes the dead-letter queue, and that exclusion is the whole point.
-   * Every work queue is pruned on the ~36h cycle, but the DLQ carries a 30-day
+   * Every work queue is pruned on a ~24h cycle, but the DLQ carries a 30-day
    * retention and nothing consumes it (see `PGBossEventService.onModuleInit`),
    * so an unfiltered `MIN(created_on)` reports up to a MONTH of live coverage
-   * that exists only for dead-letter copies. Every bucket older than 36h would
+   * that exists only for dead-letter copies. Every bucket older than 24h would
    * then be served from a live query that finds nothing, and the chart would
    * render weeks of confident zeros instead of falling back to the sampled
    * table.
@@ -894,7 +870,7 @@ export class JobQueryService {
     return rows.map((row) => row.queue);
   }
 
-  private toListItem(job: PgBossJobEntity | PgBossArchiveEntity): JobListItemDto {
+  private toListItem(job: PgBossJobEntity): JobListItemDto {
     const data = job.data ?? {};
     const event = typeof data['name'] === 'string' ? data['name'] : null;
     const workType = typeof data['workType'] === 'string' ? data['workType'] : null;

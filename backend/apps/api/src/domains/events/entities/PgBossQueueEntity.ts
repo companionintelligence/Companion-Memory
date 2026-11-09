@@ -25,8 +25,8 @@ export class PgBossQueueEntity {
   @Column({ name: 'expire_seconds', type: 'integer', nullable: true })
   expireInSeconds!: number | null;
 
-  @Column({ name: 'retention_minutes', type: 'integer', nullable: true })
-  retentionMinutes!: number | null;
+  @Column({ name: 'retention_seconds', type: 'integer', nullable: true })
+  retentionSeconds!: number | null;
 
   @Column({ name: 'dead_letter', type: 'text', nullable: true })
   deadLetter!: string | null;
