@@ -88,8 +88,13 @@ export {
 export { type AccountPurgeOutcome } from './services/AccountPurgeService';
 export {
   ACCOUNT_GRANT_REVOKER,
+  AccountGrantRevokerUnavailable,
+  accountTokenRevoked,
+  summarizeRevocations,
   type AccountGrantRevoker,
   type GrantRevocation,
+  type RevocationOutcome,
+  type RevocationSummary,
 } from './services/accountGrantRevoker';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';

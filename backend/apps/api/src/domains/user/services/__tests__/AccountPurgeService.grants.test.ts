@@ -1,10 +1,13 @@
-import { ACCOUNT_GRANT_REVOKER, type AccountGrantRevoker } from '../accountGrantRevoker';
-import { AccountPurgeService } from '../AccountPurgeService';
+import {
+  ACCOUNT_GRANT_REVOKER,
+  type AccountGrantRevoker,
+  type GrantRevocation,
+} from '../accountGrantRevoker';
+import { AccountPurgeService, REVOCATION_RETRY_DAYS } from '../AccountPurgeService';
 
 /**
- * The purge revokes the provider grants an ended account still holds, before it deletes the
- * connection rows that hold the tokens. Both account deletes revoke and clear them when the account
- * ends, so this normally finds nothing; it is what catches an account ended before they did.
+ * The purge asks again for every provider grant an ended account still has pending, before it
+ * deletes the connection rows that hold the tokens, and refuses to delete while one still fails.
  *
  * The rows and the catalog are faked: the plan here is the user row alone. What the purge deletes
  * is covered against a real database by `AccountPurgeService.integration.spec.ts`.
@@ -72,13 +75,12 @@ function makePurge(options: { locked?: boolean; revoker?: Partial<AccountGrantRe
     options.revoker === null
       ? null
       : {
-          revokeGrants: jest.fn(),
           recordAccountEnd: jest.fn(),
           recordAccountEndFailed: jest.fn(),
-          revokeRemainingGrants: jest.fn(async () => {
-            journal.push('revoke-remaining-grants');
+          revokePendingGrants: jest.fn(async (): Promise<GrantRevocation[]> => {
+            journal.push('revoke-pending-grants');
 
-            return [{ connectionId: 'conn-1', providerId: 'google', tokenRevoked: true }];
+            return [REVOKED];
           }),
           ...options.revoker,
         };
@@ -105,52 +107,110 @@ function makePurge(options: { locked?: boolean; revoker?: Partial<AccountGrantRe
   return { service, journal, revoker, logger };
 }
 
+const REVOKED: GrantRevocation = {
+  connectionId: 'conn-1',
+  providerId: 'google',
+  outcome: 'revoked',
+  tokenRevoked: true,
+};
+const FAILED: GrantRevocation = {
+  connectionId: 'conn-2',
+  providerId: 'dropbox',
+  outcome: 'failed',
+  tokenRevoked: false,
+};
+
 const REQUESTED = new Date('2026-10-01T00:00:00Z');
-const DUE = new Date('2026-10-31T00:00:00Z');
+/** Due an hour ago: inside the window in which a failed revocation holds the purge. */
+const due = () => new Date(Date.now() - 60 * 60 * 1000);
 
 describe('AccountPurgeService — provider grants', () => {
-  it('revokes the remaining grants once, after taking the account, before deleting anything', async () => {
+  it('asks again for the pending grants once, after taking the account, before deleting anything', async () => {
     const { service, journal, revoker } = makePurge();
 
-    const outcome = await service.purgeAccount('user-1', REQUESTED, DUE);
+    const outcome = await service.purgeAccount('user-1', REQUESTED, due());
 
     expect(outcome.status).toBe('purged');
-    expect(revoker!.revokeRemainingGrants).toHaveBeenCalledTimes(1);
-    expect(revoker!.revokeRemainingGrants).toHaveBeenCalledWith('user-1');
-    expect(journal.slice(0, 3)).toEqual(['lock', 'mark-started', 'revoke-remaining-grants']);
+    expect(revoker!.revokePendingGrants).toHaveBeenCalledTimes(1);
+    expect(revoker!.revokePendingGrants).toHaveBeenCalledWith('user-1');
+    expect(journal.slice(0, 3)).toEqual(['lock', 'mark-started', 'revoke-pending-grants']);
     expect(journal).toContain('delete');
-    expect(journal.indexOf('revoke-remaining-grants')).toBeLessThan(journal.indexOf('delete'));
+    expect(journal.indexOf('revoke-pending-grants')).toBeLessThan(journal.indexOf('delete'));
+  });
+
+  it('deletes nothing and fails the run while a revocation still fails, then purges once it succeeds', async () => {
+    const revokePendingGrants = jest
+      .fn<Promise<GrantRevocation[]>, [string]>()
+      .mockResolvedValueOnce([REVOKED, FAILED])
+      .mockResolvedValueOnce([{ ...FAILED, outcome: 'revoked', tokenRevoked: true }]);
+    const { service, journal } = makePurge({ revoker: { revokePendingGrants } });
+
+    const first = await service.purgeAccount('user-1', REQUESTED, due());
+
+    expect(first.status).toBe('failed');
+    expect(first.error).toMatch(/1 provider grant revocation\(s\) failed \(conn-2\)/);
+    expect(journal).not.toContain('delete');
+    expect(journal).toContain('mark-failed');
+    expect(journal).toContain('unlock');
+
+    // The next run (the hourly retry) asks again, and this time the provider answers.
+    const second = await service.purgeAccount('user-1', REQUESTED, due());
+
+    expect(second.status).toBe('purged');
+    expect(revokePendingGrants).toHaveBeenCalledTimes(2);
+    expect(journal).toContain('delete');
+  });
+
+  it('goes on with the purge once the revocation has failed for longer than the retry window', async () => {
+    const { service, journal, logger } = makePurge({
+      revoker: { revokePendingGrants: jest.fn(async () => [FAILED]) },
+    });
+    const longAgo = new Date(Date.now() - (REVOCATION_RETRY_DAYS + 1) * 24 * 60 * 60 * 1000);
+
+    await expect(service.purgeAccount('user-1', REQUESTED, longAgo)).resolves.toMatchObject({
+      status: 'purged',
+    });
+    expect(journal).toContain('delete');
+    expect(logger.error).toHaveBeenCalledWith(
+      'Purging an account whose provider grants could not be revoked',
+      expect.objectContaining({ connections: ['conn-2'] }),
+    );
   });
 
   it('deletes nothing, and fails for a retry, when the connections cannot be read or cleared', async () => {
     const { service, journal } = makePurge({
       revoker: {
-        revokeRemainingGrants: jest.fn(async () => {
+        revokePendingGrants: jest.fn(async () => {
           throw new Error('connection pool exhausted');
         }),
       },
     });
 
-    const outcome = await service.purgeAccount('user-1', REQUESTED, DUE);
+    const outcome = await service.purgeAccount('user-1', REQUESTED, due());
 
     expect(outcome.status).toBe('failed');
     expect(outcome.error).toBe('connection pool exhausted');
     expect(journal).not.toContain('delete');
     expect(journal).toContain('mark-failed');
-    expect(journal).toContain('unlock');
   });
 
-  it('revokes nothing while another worker holds the account', async () => {
+  it('asks nothing while another worker holds the account', async () => {
     const { service, revoker } = makePurge({ locked: false });
 
-    await expect(service.purgeAccount('user-1', REQUESTED, DUE)).resolves.toMatchObject({ status: 'locked' });
-    expect(revoker!.revokeRemainingGrants).not.toHaveBeenCalled();
+    await expect(service.purgeAccount('user-1', REQUESTED, due())).resolves.toMatchObject({
+      status: 'locked',
+    });
+    expect(revoker!.revokePendingGrants).not.toHaveBeenCalled();
   });
 
-  it('purges as before when nothing is bound to the token', async () => {
+  it('fails the run and deletes nothing when no revoker is bound', async () => {
     const { service, journal } = makePurge({ revoker: null });
 
-    await expect(service.purgeAccount('user-1', REQUESTED, DUE)).resolves.toMatchObject({ status: 'purged' });
-    expect(journal).not.toContain('revoke-remaining-grants');
+    const outcome = await service.purgeAccount('user-1', REQUESTED, due());
+
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toMatch(/No provider is bound to ACCOUNT_GRANT_REVOKER/);
+    expect(journal).not.toContain('delete');
+    expect(journal).toContain('mark-failed');
   });
 });

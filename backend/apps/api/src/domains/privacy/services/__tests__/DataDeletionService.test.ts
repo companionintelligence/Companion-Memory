@@ -192,22 +192,71 @@ function makeService(opts: {
 }) {
   const { dataSource, store, run, query, audits } = makeDataSource(opts.store);
 
+  // The connections as the table holds them, changed by the statements the service runs. A
+  // connection given no access token holds one, so the direct revocation path has a token to send.
+  const connections = opts.connections.map((c) => ({
+    ...c,
+    accessToken: c.accessToken === undefined ? `access-${c.id}` : c.accessToken,
+    refreshToken: c.refreshToken ?? null,
+    revocationPending: false,
+  }));
+
+  query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    // Ending the account: every connection inactive and revocation-pending, tokens kept.
+    if (/WITH marked AS \(\s*UPDATE ci\.connections/.test(sql)) {
+      return connections
+        .filter((c) => c.userId === params[0])
+        .map((c) => {
+          c.revocationPending = true;
+
+          return { id: c.id, provider_id: c.providerId };
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    // What is still to revoke.
+    if (sql.includes('SELECT id FROM ci.connections')) {
+      return connections
+        .filter((c) => c.userId === params[0])
+        .filter((c) => c.revocationPending || c.accessToken != null || c.refreshToken != null)
+        .map((c) => ({ id: c.id }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    // One connection revoked (or with nothing to revoke): tokens and mark cleared.
+    if (sql.includes('UPDATE ci.connections') && sql.includes('WHERE id = $1 AND user_id = $2')) {
+      for (const c of connections) {
+        if (c.id === params[0] && c.userId === params[1]) {
+          c.accessToken = null;
+          c.refreshToken = null;
+          c.revocationPending = false;
+        }
+      }
+
+      return [[], 1];
+    }
+
+    return run(sql, params);
+  });
+
   const connectionRepository = {
     findOne: jest.fn(async ({ where }: { where: { id: string; userId: string } }) => {
-      const c = opts.connections.find((x) => x.id === where.id && x.userId === where.userId);
+      const c = connections.find((x) => x.id === where.id && x.userId === where.userId);
 
       return c ? { ...c, provider: { id: c.providerId } } : null;
     }),
-    find: jest.fn(async ({ where }: { where: { userId: string } }) =>
-      opts.connections
+    // `id: In([...])`: TypeORM's FindOperator carries the list as `value`.
+    find: jest.fn(async ({ where }: { where: { userId: string; id?: { value: string[] } } }) =>
+      connections
         .filter((x) => x.userId === where.userId)
+        .filter((x) => where.id == null || where.id.value.includes(x.id))
         .map((c) => ({ ...c, provider: { id: c.providerId } })),
     ),
     // `userId: Not(<caller>)`: another account's connection to the same provider. Matches only on
     // the keys the service asks about, so a narrower query would show up as a different answer.
     exists: jest.fn(
       async ({ where }: { where: { providerId: string; externalId?: string; userId: { value: string } } }) =>
-        opts.connections.some(
+        connections.some(
           (x) =>
             x.providerId === where.providerId &&
             (!('externalId' in where) || x.externalId === where.externalId) &&
@@ -259,19 +308,19 @@ function makeService(opts: {
   // The order things happened in, across the user service, the purge and the audit.
   const journal: string[] = [];
   const purgeAt = new Date('2026-10-27T12:00:00Z');
+  if (client instanceof FakeGoogleClient) {
+    // When a provider is asked, relative to the transactions around it.
+    const answer = client.revoke.getMockImplementation()!;
+    client.revoke.mockImplementation(async () => {
+      journal.push('provider:revoke');
+
+      return answer();
+    });
+  }
+
   const txManager = {
     query: jest.fn(async (sql: string, params: unknown[]) => {
       journal.push(`tx:${sql.replace(/\s+/g, ' ').trim().slice(0, 40)}`);
-
-      // One connection's tokens cleared (the purge's revocation): what a later read then finds.
-      if (sql.includes('UPDATE ci.connections') && sql.includes('WHERE id = $1')) {
-        for (const connection of opts.connections) {
-          if (connection.id === params[0] && connection.userId === params[1]) {
-            connection.accessToken = null;
-            connection.refreshToken = null;
-          }
-        }
-      }
 
       return query(sql, params);
     }),
@@ -293,9 +342,6 @@ function makeService(opts: {
   });
 
   const userService = {
-    assertMayEndAccount: jest.fn(async () => {
-      journal.push('assert-may-end');
-    }),
     endAccountNow: jest.fn(
       async (
         _context: unknown,
@@ -366,6 +412,7 @@ function makeService(opts: {
     query,
     savedAudits,
     connectionRepository,
+    connections,
     clientFactory,
     cleanOrphans,
     client,
@@ -506,21 +553,18 @@ describe('DataDeletionService.disconnectConnection', () => {
 describe('DataDeletionService.deleteAccount', () => {
   const OWN = { userId: 'user-1' };
 
-  it('revokes the grants, ends the account in one transaction, then purges it outside that transaction', async () => {
-    const { service, journal, client, txManager, userService, purgeAccount, savedAudits } = makeService({
-      connections: [
-        { id: 'conn-1', userId: 'user-1', providerId: 'google' },
-        { id: 'conn-2', userId: 'user-1', providerId: 'google' },
-      ],
-      store: {},
-    });
+  it('ends the account under the lock first, asks the providers after the commit, then purges', async () => {
+    const { service, journal, client, txManager, userService, purgeAccount, savedAudits, connections } =
+      makeService({
+        connections: [
+          { id: 'conn-1', userId: 'user-1', providerId: 'google' },
+          { id: 'conn-2', userId: 'user-1', providerId: 'google' },
+        ],
+        store: {},
+      });
 
     const result = await service.deleteAccount(OWN, { successorEmail: 'member@example.com' });
 
-    expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(2);
-    expect(userService.assertMayEndAccount).toHaveBeenCalledWith(OWN, 'user-1', {
-      successorEmail: 'member@example.com',
-    });
     expect(userService.endAccountNow).toHaveBeenCalledWith(
       OWN,
       'user-1',
@@ -528,35 +572,68 @@ describe('DataDeletionService.deleteAccount', () => {
       expect.any(Function),
     );
 
-    // Access ends inside the transaction that ends the account, with the `started` audit row.
-    const statements = txManager.query.mock.calls.map(([sql]) => sql.replace(/\s+/g, ' ').trim());
-    expect(statements).toEqual([
-      'DELETE FROM ci.sessions WHERE user_id = $1',
-      'DELETE FROM ci.api_keys WHERE user_id = $1',
-      'UPDATE ci.connections SET active = false, access_token = NULL, refresh_token = NULL WHERE user_id = $1',
+    // In the transaction that ends the account: access ends, the connections are marked pending
+    // with their tokens kept, and the `started` row lists them as pending. No provider is asked.
+    const ending = journal.slice(journal.indexOf('end:begin'), journal.indexOf('end:commit') + 1);
+    expect(ending).toEqual([
+      'end:begin',
+      'tx:DELETE FROM ci.sessions WHERE user_id = ',
+      'tx:DELETE FROM ci.api_keys WHERE user_id = ',
+      'tx:WITH marked AS ( UPDATE ci.connections S',
+      'tx:audit:started',
+      'end:commit',
     ]);
-    expect(txManager.query.mock.calls.every(([, params]) => (params as unknown[])[0] === 'user-1')).toBe(
-      true,
-    );
-    expect(savedAudits).toEqual([
+    expect(
+      txManager.query.mock.calls.slice(0, 3).every(([, params]) => (params as unknown[])[0] === 'user-1'),
+    ).toBe(true);
+    expect(savedAudits[0]).toEqual(
       expect.objectContaining({
         status: 'started',
         scope: 'account',
         subjectUserId: 'user-1',
-        tokenRevoked: true,
+        tokenRevoked: null,
+        revocations: {
+          revoked: 0,
+          notApplicable: 0,
+          failed: 0,
+          pending: 2,
+          connections: [
+            { connectionId: 'conn-1', providerId: 'google', outcome: 'pending' },
+            { connectionId: 'conn-2', providerId: 'google', outcome: 'pending' },
+          ],
+        },
       }),
-    ]);
+    );
 
-    // The purge (and the sweep) only after that transaction has committed.
-    expect(journal.slice(journal.indexOf('end:commit'))).toEqual(['end:commit', 'purge', 'sweep']);
+    // Then the providers, each outcome recorded with its connection's tokens cleared, then the purge.
+    expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(2);
+    expect(journal.slice(journal.indexOf('end:commit'))).toEqual([
+      'end:commit',
+      'provider:revoke',
+      'tx:begin',
+      'tx:UPDATE ci.connections SET active = false',
+      'tx:audit:completed',
+      'tx:commit',
+      'provider:revoke',
+      'tx:begin',
+      'tx:UPDATE ci.connections SET active = false',
+      'tx:audit:completed',
+      'tx:commit',
+      'purge',
+      'sweep',
+    ]);
+    expect(connections.map((c) => [c.accessToken, c.revocationPending])).toEqual([
+      [null, false],
+      [null, false],
+    ]);
     expect(purgeAccount).toHaveBeenCalledWith('user-1', expect.any(Date), expect.any(Date));
 
     expect(result).toEqual({
       userId: 'user-1',
       status: 'deleted',
       revocations: [
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: true },
-        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
+        { connectionId: 'conn-1', providerId: 'google', outcome: 'revoked', tokenRevoked: true },
+        { connectionId: 'conn-2', providerId: 'google', outcome: 'revoked', tokenRevoked: true },
       ],
       deletedCounts: { 'ci.notes': 1, 'ci.users': 1 },
       detachedCounts: {},
@@ -567,33 +644,23 @@ describe('DataDeletionService.deleteAccount', () => {
     });
   });
 
-  it('revokes nothing and records nothing when the last administrator names no successor', async () => {
+  it('asks no provider and records nothing when the locked rule refuses the last administrator', async () => {
     const { service, client, userService, purgeAccount, savedAudits } = makeService({
       connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
       store: {},
     });
-    userService.assertMayEndAccount.mockRejectedValue(new LastAdminDeletionRefused('successor_required'));
+    userService.endAccountNow.mockRejectedValue(new LastAdminDeletionRefused('successor_required'));
 
     await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
 
     expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
-    expect(userService.endAccountNow).not.toHaveBeenCalled();
     expect(purgeAccount).not.toHaveBeenCalled();
     expect(savedAudits).toEqual([]);
   });
 
-  it('records no failure when the locked rule refuses after the forecast let it through', async () => {
-    const { service, userService, purgeAccount, savedAudits } = makeService({ connections: [], store: {} });
-    userService.endAccountNow.mockRejectedValue(new LastAdminDeletionRefused('successor_not_found'));
-
-    await expect(service.deleteAccount(OWN)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
-    expect(purgeAccount).not.toHaveBeenCalled();
-    expect(savedAudits).toEqual([]);
-  });
-
-  it('writes the failed audit only once the transaction that tried has rolled back, purges nothing, and rethrows', async () => {
-    const { service, journal, userService, purgeAccount, savedAudits } = makeService({
-      connections: [],
+  it('writes the failed audit only once the transaction that tried has rolled back, asks no provider, purges nothing, and rethrows', async () => {
+    const { service, journal, client, userService, purgeAccount, savedAudits } = makeService({
+      connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
       store: {},
     });
     const failure = new Error('could not obtain lock on row in relation "users"');
@@ -604,10 +671,16 @@ describe('DataDeletionService.deleteAccount', () => {
 
     await expect(service.deleteAccount(OWN)).rejects.toBe(failure);
 
-    expect(journal).toEqual(['assert-may-end', 'end:rolled-back', 'audit:failed']);
+    expect(journal).toEqual(['end:rolled-back', 'audit:failed']);
     expect(savedAudits).toEqual([
-      expect.objectContaining({ status: 'failed', error: failure.message, totalDeleted: 0 }),
+      expect.objectContaining({
+        status: 'failed',
+        error: failure.message,
+        totalDeleted: 0,
+        tokenRevoked: null,
+      }),
     ]);
+    expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
     expect(purgeAccount).not.toHaveBeenCalled();
   });
 
@@ -754,12 +827,12 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(result.status).toBe('deleting');
   });
 
-  it('stops waiting on a provider that never answers a revocation and goes on with the delete', async () => {
+  it('stops waiting on a provider that never answers, keeps the grant pending, and goes on with the delete', async () => {
     jest.useFakeTimers();
     try {
       const hung = new FakeGoogleClient();
       hung.revoke = jest.fn(() => new Promise<{ revoked: boolean }>(() => undefined));
-      const { service, userService } = makeService({
+      const { service, userService, connections } = makeService({
         connections: [
           { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
           { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
@@ -774,11 +847,15 @@ describe('DataDeletionService.deleteAccount', () => {
 
       expect(hung.revoke).toHaveBeenCalledTimes(2);
       expect(result.revocations).toEqual([
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
-        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: false },
+        { connectionId: 'conn-1', providerId: 'google', outcome: 'failed', tokenRevoked: false },
+        { connectionId: 'conn-2', providerId: 'google', outcome: 'failed', tokenRevoked: false },
+      ]);
+      // Tokens kept, for the purge to try again.
+      expect(connections.map((c) => [c.refreshToken, c.revocationPending])).toEqual([
+        ['r1', true],
+        ['r2', true],
       ]);
       expect(userService.endAccountNow).toHaveBeenCalledTimes(1);
-      expect(result.status).toBe('deleted');
     } finally {
       jest.useRealTimers();
     }
@@ -1084,10 +1161,34 @@ describe('DataDeletionService.revokeConnectionGrant via CI Portal', () => {
   });
 });
 
-/**
- * The user domain's `ACCOUNT_GRANT_REVOKER`: what `DELETE /account` (`UserService.requestDeletion`)
- * and the account purge revoke provider grants through.
- */
+/** A provider this appliance has no way to revoke with: `revoke()` would only ever answer false. */
+class FakeNoRevocationClient extends BaseOAuth2Client {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  logger: any = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+  protected baseUrl = 'https://example.com';
+
+  protected authorizationEndpoint = 'https://example.com/auth';
+
+  protected tokenEndpoint = 'https://example.com/token';
+
+  protected scopes = [];
+
+  protected extraAuthParams = {};
+
+  protected endpointScopeMap = {};
+
+  getScopesFromActiveEndpoints() {
+    return '';
+  }
+
+  getAccountIdentifier() {
+    return Promise.resolve('');
+  }
+
+  revoke = jest.fn(async () => ({ revoked: false }));
+}
+
 /** The connections `revoke()` was called with, in order. */
 function revokedConnectionIds(client: BaseOAuth2Client | null): string[] {
   const calls = (client as FakeGoogleClient).revoke.mock.calls as unknown as Array<[{ id: string }]>;
@@ -1095,121 +1196,213 @@ function revokedConnectionIds(client: BaseOAuth2Client | null): string[] {
   return calls.map(([connection]) => connection.id);
 }
 
+/**
+ * The user domain's `ACCOUNT_GRANT_REVOKER`: what `DELETE /account` (`UserService.requestDeletion`)
+ * and the account purge revoke provider grants through.
+ */
 describe('DataDeletionService as the account grant revoker', () => {
-  describe('revokeGrants (before DELETE /account ends the account)', () => {
-    it('revokes each connection exactly once and reports each outcome', async () => {
-      const { service, client } = makeService({
-        connections: [
-          { id: 'conn-1', userId: 'user-1', providerId: 'google', accessToken: 'a1', refreshToken: 'r1' },
-          { id: 'conn-2', userId: 'user-1', providerId: 'google', accessToken: 'a2', refreshToken: null },
-          { id: 'conn-3', userId: 'user-2', providerId: 'google', accessToken: 'a3', refreshToken: 'r3' },
-        ],
-        store: {},
-      });
-
-      const revocations = await service.revokeGrants('user-1');
-
-      const revoke = (client as FakeGoogleClient).revoke;
-      expect(revoke).toHaveBeenCalledTimes(2);
-      expect(revokedConnectionIds(client)).toEqual(['conn-1', 'conn-2']);
-      expect(revocations).toEqual([
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: true },
-        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
-      ]);
-    });
-
-    it('counts a provider that throws as not revoked and goes on to the next connection', async () => {
-      const { service, client } = makeService({
-        connections: [
-          { id: 'conn-1', userId: 'user-1', providerId: 'google', accessToken: 'a1' },
-          { id: 'conn-2', userId: 'user-1', providerId: 'google', accessToken: 'a2' },
-        ],
-        store: {},
-      });
-      (client as FakeGoogleClient).revoke
-        .mockRejectedValueOnce(new Error('provider down'))
-        .mockResolvedValueOnce({ revoked: true });
-
-      await expect(service.revokeGrants('user-1')).resolves.toEqual([
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
-        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
-      ]);
-    });
-
-    it('does not wait for good on a provider that never answers', async () => {
-      jest.useFakeTimers();
-      try {
-        const { service, client } = makeService({
-          connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google', accessToken: 'a1' }],
-          store: {},
-        });
-        (client as FakeGoogleClient).revoke.mockImplementation(() => new Promise(() => undefined));
-
-        const revocations = service.revokeGrants('user-1');
-        await jest.advanceTimersByTimeAsync(REVOCATION_DEADLINE_MS + 1);
-
-        await expect(revocations).resolves.toEqual([
-          { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
-        ]);
-      } finally {
-        jest.useRealTimers();
-      }
-    });
-  });
+  const OWN = { userId: 'user-1' };
 
   describe('recordAccountEnd (in the transaction that ends the account)', () => {
-    it('closes every connection, clears its tokens and writes the started audit row through that transaction', async () => {
-      const { service, txManager, savedAudits } = makeService({ connections: [], store: {} });
+    it('marks every connection pending with its tokens kept, asks no provider, and lists them on the started row', async () => {
+      const { service, txManager, savedAudits, connections, client } = makeService({
+        connections: [
+          { id: 'conn-2', userId: 'user-1', providerId: 'dropbox', refreshToken: 'r2' },
+          { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
+          { id: 'conn-9', userId: 'user-2', providerId: 'google', refreshToken: 'r9' },
+        ],
+        store: {},
+      });
 
-      const auditId = await service.recordAccountEnd(txManager as never, 'user-1', [
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
-        { connectionId: 'conn-2', providerId: 'google', tokenRevoked: true },
-      ]);
+      const auditId = await service.recordAccountEnd(txManager as never, 'user-1');
 
       const statements = txManager.query.mock.calls.map(([sql]) => sql.replace(/\s+/g, ' ').trim());
-      expect(statements).toEqual([
-        'UPDATE ci.connections SET active = false, access_token = NULL, refresh_token = NULL WHERE user_id = $1',
-      ]);
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toMatch(
+        /UPDATE ci\.connections SET active = false, revocation_pending_at = COALESCE\(revocation_pending_at, now\(\)\) WHERE user_id = \$1/,
+      );
+      expect(statements[0]).not.toMatch(/access_token|refresh_token/);
       expect(txManager.query.mock.calls[0][1]).toEqual(['user-1']);
+      expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
+      expect(connections.map((c) => [c.id, c.refreshToken, c.revocationPending])).toEqual([
+        ['conn-2', 'r2', true],
+        ['conn-1', 'r1', true],
+        ['conn-9', 'r9', false],
+      ]);
       expect(txManager.save).toHaveBeenCalledTimes(1);
       expect(savedAudits).toEqual([
         expect.objectContaining({
           status: 'started',
           scope: 'account',
           subjectUserId: 'user-1',
-          requestedByUserId: 'user-1',
-          tokenRevoked: true,
+          tokenRevoked: null,
+          revocations: {
+            revoked: 0,
+            notApplicable: 0,
+            failed: 0,
+            pending: 2,
+            connections: [
+              { connectionId: 'conn-1', providerId: 'google', outcome: 'pending' },
+              { connectionId: 'conn-2', providerId: 'dropbox', outcome: 'pending' },
+            ],
+          },
         }),
       ]);
       expect(auditId).toBe(savedAudits[0].id);
     });
+  });
 
-    it('records tokenRevoked false when no provider accepted the revocation', async () => {
-      const { service, txManager, savedAudits } = makeService({ connections: [], store: {} });
+  describe('revokePendingGrants (after the commit, and again by the purge)', () => {
+    it('asks each pending connection once, clears the one revoked, keeps the one that failed, and records each', async () => {
+      const { service, client, txManager, savedAudits, connections } = makeService({
+        connections: [
+          { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
+          { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
+        ],
+        store: {},
+      });
+      await service.recordAccountEnd(txManager as never, 'user-1');
+      savedAudits.length = 0;
+      (client as FakeGoogleClient).revoke
+        .mockResolvedValueOnce({ revoked: true })
+        .mockResolvedValueOnce({ revoked: false });
 
-      await service.recordAccountEnd(txManager as never, 'user-1', [
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
+      const revocations = await service.revokePendingGrants('user-1');
+
+      expect(revokedConnectionIds(client)).toEqual(['conn-1', 'conn-2']);
+      expect(revocations).toEqual([
+        { connectionId: 'conn-1', providerId: 'google', outcome: 'revoked', tokenRevoked: true },
+        { connectionId: 'conn-2', providerId: 'google', outcome: 'failed', tokenRevoked: false },
       ]);
+      expect(connections.map((c) => [c.id, c.refreshToken, c.revocationPending])).toEqual([
+        ['conn-1', null, false],
+        ['conn-2', 'r2', true],
+      ]);
+      // Recorded one by one, so a mixed result is never a single "revoked".
+      expect(savedAudits).toEqual([
+        expect.objectContaining({
+          scope: 'connection',
+          connectionId: 'conn-1',
+          tokenRevoked: true,
+          status: 'completed',
+        }),
+        expect.objectContaining({
+          scope: 'connection',
+          connectionId: 'conn-2',
+          tokenRevoked: false,
+          status: 'failed',
+          error: expect.stringContaining('did not confirm'),
+        }),
+      ]);
+    });
 
-      expect(savedAudits).toEqual([expect.objectContaining({ status: 'started', tokenRevoked: false })]);
+    it('asks again for a failed revocation on the next call (the purge), and clears it once it succeeds', async () => {
+      const { service, client, txManager, connections, savedAudits } = makeService({
+        connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' }],
+        store: {},
+      });
+      await service.recordAccountEnd(txManager as never, 'user-1');
+      const revoke = (client as FakeGoogleClient).revoke;
+      revoke.mockRejectedValueOnce(new Error('provider down')).mockResolvedValueOnce({ revoked: true });
+
+      await expect(service.revokePendingGrants('user-1')).resolves.toEqual([
+        expect.objectContaining({ connectionId: 'conn-1', outcome: 'failed' }),
+      ]);
+      expect(connections[0]).toMatchObject({ refreshToken: 'r1', revocationPending: true });
+
+      await expect(service.revokePendingGrants('user-1')).resolves.toEqual([
+        expect.objectContaining({ connectionId: 'conn-1', outcome: 'revoked' }),
+      ]);
+      expect(connections[0]).toMatchObject({
+        accessToken: null,
+        refreshToken: null,
+        revocationPending: false,
+      });
+
+      // Nothing left to ask.
+      await expect(service.revokePendingGrants('user-1')).resolves.toEqual([]);
+      expect(revoke).toHaveBeenCalledTimes(2);
+      expect(savedAudits.filter((row) => row.scope === 'connection').map((row) => row.status)).toEqual([
+        'failed',
+        'completed',
+      ]);
+    });
+
+    it('clears a connection with nothing to revoke, recording no revocation rather than a failure', async () => {
+      const { service, txManager, connections, savedAudits } = makeService({
+        connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'github', refreshToken: 'r1' }],
+        client: new FakeNoRevocationClient(),
+        store: {},
+      });
+      await service.recordAccountEnd(txManager as never, 'user-1');
+      savedAudits.length = 0;
+
+      await expect(service.revokePendingGrants('user-1')).resolves.toEqual([
+        { connectionId: 'conn-1', providerId: 'github', outcome: 'not_applicable', tokenRevoked: false },
+      ]);
+      expect(connections[0]).toMatchObject({ refreshToken: null, revocationPending: false });
+      expect(savedAudits).toEqual([expect.objectContaining({ tokenRevoked: null, status: 'completed' })]);
+    });
+
+    it('counts a provider that never answers as failed and keeps its tokens', async () => {
+      jest.useFakeTimers();
+      try {
+        const { service, client, connections } = makeService({
+          connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' }],
+          store: {},
+        });
+        (client as FakeGoogleClient).revoke.mockImplementation(() => new Promise(() => undefined));
+
+        const revocations = service.revokePendingGrants('user-1');
+        await jest.advanceTimersByTimeAsync(REVOCATION_DEADLINE_MS + 1);
+
+        await expect(revocations).resolves.toEqual([expect.objectContaining({ outcome: 'failed' })]);
+        expect(connections[0]).toMatchObject({ refreshToken: 'r1' });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rejects, and logs, when the connections cannot be read', async () => {
+      const { service, query, logger } = makeService({ connections: [], store: {} });
+      query.mockRejectedValueOnce(new Error('pool exhausted'));
+
+      await expect(service.revokePendingGrants('user-1')).rejects.toThrow('pool exhausted');
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not revoke the provider grants of an ended account; the purge retries',
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+    });
+
+    it('in a delete with one grant revoked and one failed, answers each outcome', async () => {
+      const { service, client } = makeService({
+        connections: [
+          { id: 'conn-1', userId: 'user-1', providerId: 'google', refreshToken: 'r1' },
+          { id: 'conn-2', userId: 'user-1', providerId: 'google', refreshToken: 'r2' },
+        ],
+        store: {},
+      });
+      (client as FakeGoogleClient).revoke
+        .mockResolvedValueOnce({ revoked: true })
+        .mockResolvedValueOnce({ revoked: false });
+
+      const result = await service.deleteAccount(OWN);
+
+      expect(result.revocations.map((r) => r.outcome)).toEqual(['revoked', 'failed']);
     });
   });
 
   describe('recordAccountEndFailed', () => {
-    it('writes the failed audit row with what was revoked and why it failed', async () => {
+    it('writes the failed audit row, with nothing revoked, and why it failed', async () => {
       const { service, savedAudits } = makeService({ connections: [], store: {} });
 
-      await service.recordAccountEndFailed(
-        'user-1',
-        [{ connectionId: 'conn-1', providerId: 'google', tokenRevoked: true }],
-        new Error('lock timeout'),
-      );
+      await service.recordAccountEndFailed('user-1', new Error('lock timeout'));
 
       expect(savedAudits).toEqual([
         expect.objectContaining({
           status: 'failed',
           scope: 'account',
-          tokenRevoked: true,
+          tokenRevoked: null,
           error: 'lock timeout',
         }),
       ]);
@@ -1219,68 +1412,7 @@ describe('DataDeletionService as the account grant revoker', () => {
       const { service, auditRepository } = makeService({ connections: [], store: {} });
       auditRepository.save.mockRejectedValue(new Error('pool exhausted'));
 
-      await expect(service.recordAccountEndFailed('user-1', [], new Error('boom'))).resolves.toBeUndefined();
-    });
-  });
-
-  describe('revokeRemainingGrants (the purge)', () => {
-    const connections = () => [
-      { id: 'conn-1', userId: 'user-1', providerId: 'google', accessToken: 'a1', refreshToken: 'r1' },
-      // Already cleared when the account ended: nothing left to revoke.
-      { id: 'conn-2', userId: 'user-1', providerId: 'google', accessToken: null, refreshToken: null },
-      { id: 'conn-3', userId: 'user-1', providerId: 'google', accessToken: null, refreshToken: 'r3' },
-    ];
-
-    it('revokes each connection that still holds a token, once, then clears it and records the outcome', async () => {
-      const { service, client, txManager, savedAudits } = makeService({
-        connections: connections(),
-        store: {},
-      });
-
-      const revocations = await service.revokeRemainingGrants('user-1');
-
-      expect(revokedConnectionIds(client)).toEqual(['conn-1', 'conn-3']);
-      expect(revocations).toEqual([
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: true },
-        { connectionId: 'conn-3', providerId: 'google', tokenRevoked: true },
-      ]);
-
-      const cleared = txManager.query.mock.calls.filter(([sql]) => sql.includes('UPDATE ci.connections'));
-      expect(cleared.map(([, params]) => params)).toEqual([
-        ['conn-1', 'user-1'],
-        ['conn-3', 'user-1'],
-      ]);
-      expect(cleared[0][0]).toMatch(/SET active = false, access_token = NULL, refresh_token = NULL/);
-      expect(savedAudits).toEqual([
-        expect.objectContaining({ scope: 'connection', connectionId: 'conn-1', tokenRevoked: true }),
-        expect.objectContaining({ scope: 'connection', connectionId: 'conn-3', tokenRevoked: true }),
-      ]);
-    });
-
-    it('clears the tokens and records tokenRevoked false when the provider fails', async () => {
-      const { service, client, txManager, savedAudits } = makeService({
-        connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google', accessToken: 'a1' }],
-        store: {},
-      });
-      (client as FakeGoogleClient).revoke.mockRejectedValue(new Error('provider down'));
-
-      await expect(service.revokeRemainingGrants('user-1')).resolves.toEqual([
-        { connectionId: 'conn-1', providerId: 'google', tokenRevoked: false },
-      ]);
-      expect(txManager.query.mock.calls.some(([sql]) => sql.includes('UPDATE ci.connections'))).toBe(true);
-      expect(savedAudits).toEqual([
-        expect.objectContaining({ scope: 'connection', connectionId: 'conn-1', tokenRevoked: false }),
-      ]);
-    });
-
-    it('is idempotent: a second run finds the tokens cleared and revokes nothing', async () => {
-      const { service, client, savedAudits } = makeService({ connections: connections(), store: {} });
-
-      await service.revokeRemainingGrants('user-1');
-      await expect(service.revokeRemainingGrants('user-1')).resolves.toEqual([]);
-
-      expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(2);
-      expect(savedAudits).toHaveLength(2);
+      await expect(service.recordAccountEndFailed('user-1', new Error('boom'))).resolves.toBeUndefined();
     });
   });
 });

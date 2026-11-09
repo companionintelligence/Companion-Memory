@@ -14,9 +14,10 @@ import { EventService } from '@ci/domains/events';
 import { normalizeEmail } from '../email';
 import { type User, UserEntity } from '../entities/UserEntity';
 import { UserCreatedEvent, UserUpdatedEvent, UserRemovedEvent } from '../events';
+import { recordRefusedAccountDeletion } from '../purge/deletionAudit';
 import { CreateUserDto, UpdateUserDto } from '../types';
 
-import { resolveAccountGrantRevoker } from './accountGrantRevoker';
+import { type AccountGrantRevoker, requireAccountGrantRevoker } from './accountGrantRevoker';
 
 /**
  * Grace period between "delete my account" and the irreversible purge of the data.
@@ -491,22 +492,22 @@ export class UserService {
    * ── Provider grants ────────────────────────────────────────────────────────
    *
    * Hiding the row stops the account's own sign-ins, but not the OAuth grants its connections hold
-   * with each provider: those stayed live for the whole grace period, and a person who deleted the
-   * account to cut a provider off was not cut off. So, as the immediate delete does
-   * (`DataDeletionService.deleteAccount`), every connection's grant is revoked first, through
-   * `ACCOUNT_GRANT_REVOKER`: best-effort, with no lock held, and only once the
-   * last-administrator rule has been asked without the lock ({@link assertMayEndAccount}), so a
-   * request that will be refused revokes nothing. A provider that fails is recorded as not revoked
-   * and does not stop the delete. Then, in the transaction that ends the account, its connections
-   * are marked inactive with their tokens cleared and the `started` audit row is written; a failure
-   * there rolls the end back and is recorded as `failed`. The purge revokes whatever still holds a
-   * token when it runs (`AccountPurgeService`).
+   * with each provider. Those are revoked through `ACCOUNT_GRANT_REVOKER` (see that contract for the
+   * whole order), and only once the request can no longer be refused:
    *
-   * A service built without that binding (by hand, in a test) ends the account as before and
-   * revokes nothing.
+   * 1. The revoker is resolved first. When it cannot be, the request is refused (thrown) and a
+   *    `failed` audit row written: ending the account without revoking its grants would leave them
+   *    live with the providers.
+   * 2. In the locked transaction: the last-administrator rule, the account ended, and (last, so it
+   *    commits only with all of that) every connection marked inactive and revocation-pending, its
+   *    tokens kept, with the `started` audit row. A failure there rolls the whole end back and is
+   *    recorded as `failed`; a refusal by the rule writes nothing and revokes nothing.
+   * 3. After the commit, with no lock held, each provider is asked. A grant revoked (or with nothing
+   *    to revoke) has its connection's tokens cleared; one that failed keeps them and its pending
+   *    mark, and the purge tries again before it deletes the row (`AccountPurgeService`).
    *
    * Idempotent: a second request finds nothing (the first one hid the row), revokes nothing and
-   * returns false rather than throwing.
+   * returns false rather than throwing. What the first one could not revoke is the purge's to retry.
    */
   async requestDeletion(
     context: ServiceContext,
@@ -517,74 +518,41 @@ export class UserService {
       throw new UnauthorizedException();
     }
 
+    let revoker: AccountGrantRevoker;
+
+    try {
+      revoker = requireAccountGrantRevoker(this.moduleRef);
+    } catch (error) {
+      await recordRefusedAccountDeletion(this.userRepository.manager, id, error);
+
+      throw error;
+    }
+
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
-    const revoker = resolveAccountGrantRevoker(this.moduleRef);
-
-    if (!revoker) {
-      return (await this.endAccount(id, options, purgeAfter)) != null;
-    }
-
-    if (!(await this.forecastEnd(id, options))) {
-      return false;
-    }
-
-    const revocations = await revoker.revokeGrants(id);
 
     try {
       const ended = await this.endAccount(id, options, purgeAfter, (manager) =>
-        revoker.recordAccountEnd(manager, id, revocations),
+        revoker.recordAccountEnd(manager, id),
       );
 
-      return ended != null;
+      if (ended == null) {
+        return false;
+      }
     } catch (error) {
       if (!(error instanceof LastAdminDeletionRefused)) {
         // The transaction has rolled back by now and released what it held.
-        await revoker.recordAccountEndFailed(id, revocations, error);
+        await revoker.recordAccountEndFailed(id, error);
       }
 
       throw error;
     }
-  }
 
-  /**
-   * The last-administrator rule of {@link requestDeletion}, asked without the lock and without
-   * writing anything: throws {@link LastAdminDeletionRefused} when ending account `id` now would be
-   * refused. For a caller that does something irreversible before it ends the account (the immediate
-   * delete revokes the OAuth grants first, so the provider side stops even if what follows fails)
-   * and should not do it for a request that will be refused anyway.
-   *
-   * Only a forecast: {@link endAccountNow} asks again under the lock, and that answer is the one that
-   * counts. An account that disappears in between makes this answer nothing.
-   */
-  async assertMayEndAccount(
-    context: ServiceContext,
-    id: string,
-    options: DeletionOptions = {},
-  ): Promise<void> {
-    if (context.userId !== SYSTEM_USER && context.userId !== id) {
-      throw new UnauthorizedException();
-    }
+    // The account is ended whatever happens here. A failure to reach the database (the revoker
+    // logs it) leaves the connections pending, which is what the purge retries; it is not reported
+    // to the person as a failed delete, because the delete did not fail.
+    await revoker.revokePendingGrants(id).catch(() => undefined);
 
-    await this.forecastEnd(id, options);
-  }
-
-  /**
-   * {@link assertMayEndAccount} without the caller check.
-   *
-   * @returns whether there is a live account `id` to end.
-   */
-  private async forecastEnd(id: string, options: DeletionOptions): Promise<boolean> {
-    const manager = this.userRepository.manager;
-    const [target] = await manager.query<Array<{ role: string }>>(
-      `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
-      [id],
-    );
-
-    if (target?.role === 'admin') {
-      await this.successorFor(manager, id, options);
-    }
-
-    return target != null;
+    return true;
   }
 
   /**
