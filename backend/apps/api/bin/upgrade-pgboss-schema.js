@@ -27,35 +27,47 @@ const OLD_SCHEMA = 'pgboss_v10';
 
 const OLDEST_VERSION_PG_BOSS_12_CAN_START_FROM = 25;
 
+// Must match PGBossEventService's FINISHED_JOB_RETENTION_SECONDS. `deletion_seconds`
+// is stored per job and `updateQueue` never reaches it, so a moved job would
+// otherwise keep pg-boss's 7-day default for good.
+const FINISHED_JOB_RETENTION_SECONDS = 24 * 60 * 60;
+
 /**
  * An `active` job's worker went away when the old build stopped, so it goes back
- * to `retry` to run again, as pg-boss's own expiry would have sent it. The id
- * stays: `ci_import.import_stages.claim_job_id` points at it.
+ * to `retry` to run again. Clearing `started_on` keeps the interruption from
+ * counting as a retry, so a job already on its last retry gets one more run where
+ * pg-boss's own expiry would have failed it. The id stays:
+ * `ci_import.import_stages.claim_job_id` points at it.
  *
- * `ON CONFLICT DO NOTHING` covers the queue policies' unique indexes, where an
- * interrupted job can collide with one already waiting behind it.
+ * `ON CONFLICT DO NOTHING` covers the `stately` policy's unique index, where an
+ * interrupted job can collide with one already in `retry`.
  */
-const MOVE_JOBS = `
+const moveJobsSql = (oldSchema) => `
   INSERT INTO ${SCHEMA}.job (
     id, name, priority, data, state, retry_limit, retry_count, retry_delay, retry_backoff,
-    expire_seconds, singleton_key, singleton_on, start_after, created_on, started_on,
+    expire_seconds, deletion_seconds, singleton_key, singleton_on, start_after, created_on, started_on,
     completed_on, keep_until, output, dead_letter, policy
   )
   SELECT
     j.id, j.name, j.priority, j.data,
     (CASE WHEN j.state = 'active' THEN 'retry' ELSE j.state::text END)::${SCHEMA}.job_state,
     j.retry_limit, j.retry_count, j.retry_delay, j.retry_backoff,
-    GREATEST(EXTRACT(EPOCH FROM j.expire_in)::int, 1), j.singleton_key, j.singleton_on, j.start_after, j.created_on,
+    GREATEST(EXTRACT(EPOCH FROM j.expire_in)::int, 1), ${FINISHED_JOB_RETENTION_SECONDS},
+    j.singleton_key, j.singleton_on, j.start_after, j.created_on,
     CASE WHEN j.state = 'active' THEN NULL ELSE j.started_on END,
     j.completed_on, j.keep_until, j.output, j.dead_letter, q.policy
-  FROM ${OLD_SCHEMA}.job j
+  FROM ${oldSchema}.job j
   JOIN ${SCHEMA}.queue q ON q.name = j.name
   ON CONFLICT DO NOTHING`;
 
-async function schemaExists(client, schema) {
-  const { rows } = await client.query('SELECT 1 FROM pg_namespace WHERE nspname = $1', [schema]);
+/** The schemas set aside so far and not yet emptied. */
+async function oldSchemas(client) {
+  const { rows } = await client.query(
+    `SELECT nspname FROM pg_namespace WHERE nspname = $1 OR nspname LIKE $1 || '\\_%' ORDER BY nspname`,
+    [OLD_SCHEMA],
+  );
 
-  return rows.length > 0;
+  return rows.map((row) => row.nspname);
 }
 
 /** The migration that creates `pgboss` leaves it empty until pg-boss first boots, so no table means nothing to do. */
@@ -69,16 +81,21 @@ async function setOldSchemaAside(client) {
   const { rows: versions } = await client.query(`SELECT version FROM ${SCHEMA}.version`);
 
   if (Number(versions[0].version) < OLDEST_VERSION_PG_BOSS_12_CAN_START_FROM) {
-    await client.query(`ALTER SCHEMA ${SCHEMA} RENAME TO ${OLD_SCHEMA}`);
+    // The name is taken when a move failed and the old build then ran, because
+    // pg-boss 10 rebuilds a missing `pgboss`. Both schemas hold jobs worth keeping.
+    const taken = (await oldSchemas(client)).includes(OLD_SCHEMA);
+
+    await client.query(`ALTER SCHEMA ${SCHEMA} RENAME TO ${taken ? `${OLD_SCHEMA}_${Date.now()}` : OLD_SCHEMA}`);
   }
 }
 
 /**
  * Starting pg-boss builds the new schema, and each queue needs a row before jobs
- * can reference it. Only what a queue can't change later is copied: the API's
- * boot runs `updateQueue` with the real retry and retention settings.
+ * can reference it. The policy is copied because a queue can't change it later,
+ * and the dead letter because a retired queue never gets another `updateQueue`.
+ * The API's boot applies the real retry and retention settings.
  */
-async function createQueues(client, url) {
+async function createQueues(client, url, oldSchema) {
   // Here and not at the top of the file: every `dbmate` command loads this module, and only an upgrade needs pg-boss.
   const { PgBoss } = require('pg-boss');
 
@@ -91,34 +108,37 @@ async function createQueues(client, url) {
   await boss.start();
 
   try {
-    // Queues with no dead letter first: `dead_letter` references another queue's
-    // row. `__pgboss__*` are pg-boss 10's cron queues, and the API turns cron off.
+    // `__pgboss__*` are pg-boss 10's cron queues, and the API turns cron off.
     const { rows } = await client.query(
       `SELECT name, policy, dead_letter
-         FROM ${OLD_SCHEMA}.queue
-        WHERE name NOT LIKE '\\_\\_pgboss%'
-        ORDER BY dead_letter IS NOT NULL, name`,
+         FROM ${oldSchema}.queue
+        WHERE name NOT LIKE '\\_\\_pgboss%'`,
     );
 
     for (const queue of rows) {
-      await boss.createQueue(queue.name, {
-        ...(queue.policy ? { policy: queue.policy } : {}),
-        ...(queue.dead_letter ? { deadLetter: queue.dead_letter } : {}),
-      });
+      await boss.createQueue(queue.name, { policy: queue.policy });
+    }
+
+    // Once every queue exists: `dead_letter` references another queue's row.
+    for (const queue of rows.filter((row) => row.dead_letter)) {
+      await boss.updateQueue(queue.name, { deadLetter: queue.dead_letter });
     }
   } finally {
     await boss.stop({ graceful: false });
   }
 }
 
-async function moveJobs(client) {
+async function moveJobs(client, oldSchema) {
   await client.query('BEGIN');
 
   try {
-    const { rows } = await client.query(`SELECT count(*)::int AS total FROM ${OLD_SCHEMA}.job`);
-    const { rowCount } = await client.query(MOVE_JOBS);
+    // Through the queue join, so the cron jobs dropped on purpose don't read as a shortfall.
+    const { rows } = await client.query(
+      `SELECT count(*)::int AS total FROM ${oldSchema}.job j JOIN ${SCHEMA}.queue q ON q.name = j.name`,
+    );
+    const { rowCount } = await client.query(moveJobsSql(oldSchema));
 
-    await client.query(`DROP SCHEMA ${OLD_SCHEMA} CASCADE`);
+    await client.query(`DROP SCHEMA ${oldSchema} CASCADE`);
     await client.query('COMMIT');
 
     console.log(`Moved ${rowCount} of ${rows[0].total} jobs to the new pg-boss schema.`);
@@ -137,9 +157,9 @@ async function upgradePgBossSchema(url) {
   try {
     await setOldSchemaAside(client);
 
-    if (await schemaExists(client, OLD_SCHEMA)) {
-      await createQueues(client, url);
-      await moveJobs(client);
+    for (const oldSchema of await oldSchemas(client)) {
+      await createQueues(client, url, oldSchema);
+      await moveJobs(client, oldSchema);
     }
   } finally {
     await client.end();

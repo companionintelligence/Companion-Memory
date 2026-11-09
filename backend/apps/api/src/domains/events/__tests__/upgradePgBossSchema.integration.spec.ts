@@ -24,8 +24,21 @@ function node(script: string, url: string): string {
   });
 }
 
-function upgradePgBossSchema(url: string): void {
-  node(`await require('./bin/upgrade-pgboss-schema').upgradePgBossSchema(process.argv[1]);`, url);
+function upgradePgBossSchema(url: string): string {
+  return node(`await require('./bin/upgrade-pgboss-schema').upgradePgBossSchema(process.argv[1]);`, url);
+}
+
+/** Builds the pg-boss 12 schema with one empty `default` queue, as a run that died before the move leaves it. */
+function buildNewSchema(url: string): void {
+  node(
+    `const { PgBoss } = require('pg-boss');
+     const boss = new PgBoss({ connectionString: process.argv[1], schema: 'pgboss', schedule: false, supervise: false });
+     boss.on('error', (e) => { console.error(e); process.exit(1); });
+     await boss.start();
+     await boss.createQueue('default', { policy: 'standard' });
+     await boss.stop({ graceful: false });`,
+    url,
+  );
 }
 
 /** Starts the pg-boss this build ships and returns the ids it hands a worker from the `default` queue. */
@@ -107,6 +120,7 @@ const PGBOSS_10_DDL = `
 
   INSERT INTO pgboss.queue (name, policy) VALUES ('dead-letter', 'standard'), ('__pgboss__send-it', 'standard');
   INSERT INTO pgboss.queue (name, policy, dead_letter) VALUES ('default', 'standard', 'dead-letter');
+  INSERT INTO pgboss.queue (name, policy, dead_letter) VALUES ('chained', 'standard', 'default');
 `;
 
 describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availability.target})`, () => {
@@ -186,7 +200,7 @@ describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availabil
     const lettered = await seedJob('created', {}, 'dead-letter');
     const cron = await seedJob('created', {}, '__pgboss__send-it');
 
-    upgradePgBossSchema(url);
+    expect(upgradePgBossSchema(url)).toContain('Moved 6 of 6 jobs');
 
     expect(await exists(`to_regnamespace('pgboss_v10') IS NULL`)).toBe(true);
 
@@ -201,6 +215,7 @@ describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availabil
       priority: 3,
       retry_limit: 5,
       singleton_key: 'k1',
+      deletion_seconds: 86_400,
     });
     expect(await job(delayed)).toMatchObject({ state: 'created', start_after: later, expire_seconds: 3600 });
     expect(await job(retrying)).toMatchObject({ state: 'retry', retry_count: 1 });
@@ -218,6 +233,12 @@ describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availabil
     );
 
     expect(queue).toEqual({ policy: 'standard', dead_letter: 'dead-letter' });
+
+    const [chained] = await dataSource.query<Array<{ dead_letter: string }>>(
+      `SELECT dead_letter FROM pgboss.queue WHERE name = 'chained'`,
+    );
+
+    expect(chained).toEqual({ dead_letter: 'default' });
 
     expect(fetchWithPgBoss(url).sort()).toEqual([waiting, retrying, interrupted].sort());
   });
@@ -249,5 +270,33 @@ describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availabil
 
     expect(await job(id)).toMatchObject({ state: 'created' });
     expect(await exists(`to_regnamespace('pgboss_v10') IS NULL`)).toBe(true);
+  });
+
+  it('finishes the move when an earlier run died after building the new schema', async () => {
+    await dataSource.query(PGBOSS_10_DDL);
+    const id = await seedJob('created');
+
+    await dataSource.query('ALTER SCHEMA pgboss RENAME TO pgboss_v10');
+    buildNewSchema(url);
+
+    upgradePgBossSchema(url);
+
+    expect(await job(id)).toMatchObject({ state: 'created' });
+    expect(await exists(`to_regnamespace('pgboss_v10') IS NULL`)).toBe(true);
+  });
+
+  it('moves both sets of jobs when pg-boss 10 rebuilt its schema after a failed move', async () => {
+    await dataSource.query(PGBOSS_10_DDL);
+    const stranded = await seedJob('created');
+
+    await dataSource.query('ALTER SCHEMA pgboss RENAME TO pgboss_v10; CREATE SCHEMA pgboss;');
+    await dataSource.query(PGBOSS_10_DDL);
+    const newer = await seedJob('created');
+
+    upgradePgBossSchema(url);
+
+    expect(await job(stranded)).toMatchObject({ state: 'created' });
+    expect(await job(newer)).toMatchObject({ state: 'created' });
+    expect(await exists(`NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname LIKE 'pgboss\\_v10%')`)).toBe(true);
   });
 });
