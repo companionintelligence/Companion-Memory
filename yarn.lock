@@ -2475,7 +2475,7 @@ __metadata:
     better-sqlite3: "npm:^13.0.3"
     cli-progress: "npm:^3.12.0"
     commander: "npm:^15.0.0"
-    config: "npm:^5.0.1"
+    config: "npm:^4.4.2"
     cookie-parser: "npm:^1.4.7"
     cron: "npm:4.4.0"
     csv-parse: "npm:^7.0.2"
@@ -14448,12 +14448,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"config@npm:*, config@npm:^5.0.1":
+"config@npm:*":
   version: 5.0.1
   resolution: "config@npm:5.0.1"
   dependencies:
     json5: "npm:^2.2.3"
   checksum: 10c0/835f299f3d29f4b8d38b3f5fafcf8ac20d0798970912cdc280a36ec8727b13de90b573c69e04b894019b6012d5540bbe2d8261f78ceb16b77484020762d57bb1
+  languageName: node
+  linkType: hard
+
+"config@npm:^4.4.2":
+  version: 4.4.2
+  resolution: "config@npm:4.4.2"
+  dependencies:
+    json5: "npm:^2.2.3"
+  checksum: 10c0/2ef94db31c8f573d2beefa6682ec16f142f9f56710c43e4fc8a8d5bb48cc056b1f8174ae8fa4554af23c041e366dc8c940e7e6d9664904c6ef0ed2e60fe51216
   languageName: node
   linkType: hard
 
@@ -16162,7 +16171,7 @@ __metadata:
 
 "eslint-plugin-import@patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch":
   version: 2.32.0
-  resolution: "eslint-plugin-import@patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch::version=2.32.0&hash=1d4b3f"
+  resolution: "eslint-plugin-import@patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch::version=2.32.0&hash=8e78f9"
   dependencies:
     "@rtsao/scc": "npm:^1.1.0"
     array-includes: "npm:^3.1.9"
@@ -16185,7 +16194,7 @@ __metadata:
     tsconfig-paths: "npm:^3.15.0"
   peerDependencies:
     eslint: ^2 || ^3 || ^4 || ^5 || ^6 || ^7.2.0 || ^8 || ^9
-  checksum: 10c0/99b8e6ac073c39f4654c433f42e0d3ce3a29a8148ca9a5177c79cc65f8658d29111682cf565f7c96ee934e2c9952e04e2ddf0d976b0e931d0dc50068756eb836
+  checksum: 10c0/33a9cfbd037db2ba1403e45b6091a72baede4dd171f38697f19d9247971ed6c9cc74cc5d21991abbecfc037e9b0c3abadf9227301f4ffee1850cb1ff9fd4b96c
   languageName: node
   linkType: hard
 
