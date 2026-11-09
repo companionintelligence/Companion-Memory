@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import config, { ConfigSchema, isGeocodingConfigured, resolveGeocodingPortalBaseUrl } from './configuration';
+import config, {
+  acceptsUnsignedPeerAsks,
+  ConfigSchema,
+  isGeocodingConfigured,
+  resolveGeocodingPortalBaseUrl,
+} from './configuration';
 
 /**
  * Covers the geocoding portalBaseUrl fallback (previously an inline `if` at
@@ -231,5 +236,36 @@ describe('auth.hubForwardAuth.requireAudience', () => {
     for (const value of ['TRUE', 'yes', '', 'off']) {
       expect(field.safeParse(value).success).toBe(false);
     }
+  });
+});
+
+/**
+ * The boot-time warning for token-only peer asks. With an audience bound and the signature
+ * requirement off (its shipped default), `PeerAskController` serves a Portal-token ask that carries
+ * no signature, so the token alone authenticates it. The default is kept for peers that do not sign
+ * yet; the warning is what tells the operator.
+ */
+describe('acceptsUnsignedPeerAsks', () => {
+  it('ships with the signature requirement off', () => {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', 'default.json'), 'utf8')) as {
+      peers: { requireHttpSignature: unknown };
+    };
+
+    expect(contents.peers.requireHttpSignature).toBe(false);
+  });
+
+  it('is true once an audience is bound and signatures are not required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: false })).toBe(true);
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a' })).toBe(true);
+  });
+
+  it('is false when signatures are required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: true })).toBe(false);
+  });
+
+  it('is false with no audience, where the controller refuses every Portal-token ask anyway', () => {
+    expect(acceptsUnsignedPeerAsks({ requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '', requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '   ', requireHttpSignature: false })).toBe(false);
   });
 });

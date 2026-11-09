@@ -201,9 +201,17 @@ export class PeerAskController {
    *
    * Downstream routing still resolves a peer link by `(issuer, subject)` — the
    * OIDC identity — so this step does not REPLACE that, it constrains it. What
-   * it adds is the property the bearer token cannot have: a leaked token is no
-   * longer sufficient, because the request must also be signed by the key the
-   * owner recorded on that same link, over a digest of this exact body.
+   * it adds, for a request that is signed, is the property the bearer token
+   * cannot have: the request is bound to the key the owner recorded on that
+   * same link, over a digest of this exact body, with a nonce that makes a
+   * replay detectable.
+   *
+   * On the shipped defaults that is optional. `peers.requireHttpSignature` is
+   * off, so a request with no signature headers returns early below and the
+   * Portal token alone authenticates it: a leaked token is enough to ask as
+   * that peer, and a replay is not detected. Only with the flag on does every
+   * request have to carry a valid signature, and an unsigned one is refused.
+   * The boot-time warning in `configuration.ts` reports the default state.
    *
    * Making the KEY the primary identity (and the Portal token an optional
    * attestation, per UMA's FLOW.md) is the follow-up; it needs the thumbprint
