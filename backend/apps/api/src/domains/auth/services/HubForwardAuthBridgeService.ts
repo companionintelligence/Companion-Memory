@@ -9,6 +9,9 @@ import {
   type HubStableId,
   type VerifiedHubForwardAuth,
   forwardAuthPolicy,
+  isHubIssuer,
+  isIdentitySecretShared,
+  isPartialForwardAuthBinding,
   readForwardAuthHeaders,
   verifyHubForwardAuth,
 } from '@ci/common/crypto';
@@ -44,9 +47,18 @@ export interface HubIdentity {
  *   Signing in to that account here with its password, then reloading, links them. Applies to a
  *   Hub that sends no stable id too: there the address is the whole link, so it is refused the same
  *   way, and a browser already signed in to that account keeps its session.
+ * - `identity_unverified`: the request names a Hub person, but the headers do not verify under this
+ *   app's policy (an unbound triple under the default, a forged or expired one, a wrong assertion).
+ *   Nothing proves who the Hub person is, so a session this browser holds for another address is
+ *   signed out rather than reused. A session already at the claimed address is kept: keeping it
+ *   grants nothing the browser did not already have.
  */
 export type HubBridgeRefusal =
-  'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous' | 'account_unproven';
+  | 'account_unavailable'
+  | 'account_linked_elsewhere'
+  | 'account_ambiguous'
+  | 'account_unproven'
+  | 'identity_unverified';
 
 export interface HubBridgeResult {
   /** Verified Hub username (email), or null when headers are absent/disabled/invalid. */
@@ -158,10 +170,21 @@ export class HubForwardAuthBridgeService {
 
     const policy = forwardAuthPolicy(cfg);
     if (!policy.bound) {
-      if (!policy.acceptUnbound) {
+      if (isIdentitySecretShared(cfg)) {
         this.logger.warn(
-          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
-            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
+          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_IDENTITY_SECRET is the Hub-wide CI_HUB_FORWARD_AUTH_SECRET, ' +
+            "which an older Hub also gave other apps, so any of them could sign this app's identity assertion. " +
+            'It is treated as not provisioned; the Hub must give this app a key of its own.',
+        );
+      } else if (isPartialForwardAuthBinding(cfg)) {
+        this.logger.warn(
+          'Hub sign-in is off: only one of CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN is set. Both are ' +
+            'needed for the bound assertion, and unbound forward-auth triples are refused while either is set.',
+        );
+      } else if (!policy.acceptUnbound) {
+        this.logger.warn(
+          'Hub sign-in is off: it requires the bound assertion, but CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and ' +
+            'CI_APP_URN are not set. Updating the Hub provides both.',
         );
       } else if (!policy.sharedSecret) {
         this.logger.warn(
@@ -169,28 +192,24 @@ export class HubForwardAuthBridgeService {
             'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET with CI_APP_URN is set, so no identity header can verify.',
         );
       } else {
-        this.logger.warn(
-          'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
-            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
-        );
+        this.warnUnboundAccepted();
       }
 
       return;
     }
 
     if (policy.acceptUnbound) {
-      this.logger.warn(
-        'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: Hub sign-in also accepts identity headers that are not ' +
-          'bound to this app.',
-      );
+      this.warnUnboundAccepted();
     }
+  }
 
-    if (policy.bound.secret === cfg.secret.trim()) {
-      this.logger.warn(
-        'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET is the Hub-wide CI_HUB_FORWARD_AUTH_SECRET, which an older Hub ' +
-          "also gave other apps: any of them can sign this app's identity assertion.",
-      );
-    }
+  /** The one warning for the explicit legacy `requireAudience: 'false'`. */
+  private warnUnboundAccepted(): void {
+    this.logger.warn(
+      'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: unbound forward-auth triples are accepted, so any app behind ' +
+        'the Hub that receives them can sign in to Memory as that user. Remove this setting once the Hub ' +
+        'provisions per-app keys (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN).',
+    );
   }
 
   /** The verified Hub identity on this request, or null when the feature is off or headers do not verify. */
@@ -212,6 +231,21 @@ export class HubForwardAuthBridgeService {
     return result.ok ? { ...result, verifiedAt: now } : null;
   }
 
+  /**
+   * The `X-CI-Hub-User` this request claims when the feature is on and its headers do NOT verify, or
+   * null. Never an identity: used only to decide what to refuse or lock, which is safe to base on a
+   * claim the browser could have made up (it can only refuse or lock itself).
+   */
+  private unverifiedClaim(req: Request): string | null {
+    if (!config.auth.hubForwardAuth.enabled || this.verify(req)) {
+      return null;
+    }
+
+    const claimed = readForwardAuthHeaders(req.headers).user?.trim();
+
+    return claimed ? claimed : null;
+  }
+
   /** Verified `X-CI-Hub-User`, or null when the feature is off or headers do not verify. */
   verifyUsername(req: Request): string | null {
     return this.verifyIdentity(req)?.username ?? null;
@@ -224,10 +258,27 @@ export class HubForwardAuthBridgeService {
    * covers a Hub that sends no stable id, and a stable id not linked yet: {@link alignSession} links
    * it on the next page load to the account this address names. Once the link exists it is what
    * finds them, and the address is the person's to change.
+   *
+   * Also true, failing closed, when the request claims this address as its Hub person but the
+   * headers do not verify (an older Hub's unbound triple under the default) and the account holds
+   * no Hub link: the address may be all such a Hub finds them by. Whether a link exists is read from
+   * the account's stored bindings, since nothing on the request can be trusted to say.
    */
-  async namesAccount(req: Request, email: string): Promise<boolean> {
+  async namesAccount(req: Request, user: { id: string; email: string }): Promise<boolean> {
+    const { email } = user;
     const identity = this.verifyIdentity(req);
-    if (!identity || !emailsEqual(identity.username, email)) {
+    if (!identity) {
+      const claimed = this.unverifiedClaim(req);
+      if (!claimed || !emailsEqual(claimed, email)) {
+        return false;
+      }
+
+      const bindings = await this.federatedIdentityService.listForUser(user.id);
+
+      return !bindings.some((binding) => isHubIssuer(binding.issuer));
+    }
+
+    if (!emailsEqual(identity.username, email)) {
       return false;
     }
 
@@ -260,7 +311,9 @@ export class HubForwardAuthBridgeService {
   async describeIdentity(req: Request): Promise<HubIdentityDescription> {
     const identity = this.verifyIdentity(req);
     if (!identity) {
-      return { username: null, accountId: null, refused: null };
+      const refused = (await this.sessionRefusedForUnverified(req)) ? 'identity_unverified' : null;
+
+      return { username: null, accountId: null, refused };
     }
 
     try {
@@ -307,6 +360,25 @@ export class HubForwardAuthBridgeService {
   }
 
   /**
+   * The session this browser holds when it must not be reused because the request claims a Hub
+   * person whose headers do not verify, or null. A live session already at the claimed address is
+   * kept (null), and no session means nothing to reuse.
+   */
+  private async sessionRefusedForUnverified(req: Request): Promise<MemorySession | null> {
+    const claimed = this.unverifiedClaim(req);
+    if (!claimed) {
+      return null;
+    }
+
+    const session = await this.readSession(req);
+    if (!session || (await this.keepsSessionAt(session, claimed))) {
+      return null;
+    }
+
+    return session;
+  }
+
+  /**
    * Whether {@link alignByEmail} keeps this browser's session as it is: a live one already signed in
    * to the address the Hub calls this person. The bridge asks this before it looks up any account.
    */
@@ -326,7 +398,17 @@ export class HubForwardAuthBridgeService {
   async alignSession(req: Request, res: Response): Promise<HubBridgeResult> {
     const identity = this.verify(req);
     if (!identity) {
-      return { username: null, replaced: false };
+      const session = await this.sessionRefusedForUnverified(req);
+      if (!session) {
+        return { username: null, replaced: false };
+      }
+
+      await this.signOut(req, res, session);
+      this.logger.warn(
+        'signed out a Memory session: the request names a Hub person whose headers do not verify',
+      );
+
+      return { username: null, replaced: false, refused: 'identity_unverified' };
     }
 
     return identity.stableId

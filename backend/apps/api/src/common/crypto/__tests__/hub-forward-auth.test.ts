@@ -11,6 +11,8 @@ import {
   formatForwardAuthAssertion,
   forwardAuthPolicy,
   isHubIssuer,
+  isIdentitySecretShared,
+  isPartialForwardAuthBinding,
   readForwardAuthHeaders,
   signForwardAuthAssertion,
   signForwardAuthUser,
@@ -237,13 +239,13 @@ describe('default replay window', () => {
     expect(DEFAULT_FORWARD_AUTH_MAX_SKEW_MS).toBe(30_000);
   });
 
-  it('ships as 30 seconds, with audience binding following the Hub', () => {
+  it('ships as 30 seconds, with the bound assertion required', () => {
     // Read rather than import: the api tsconfig has no resolveJsonModule (see PortalTokenService.test.ts).
     const raw = readFileSync(resolvePath(__dirname, '../../../../config/default.json'), 'utf8');
     const { hubForwardAuth } = (JSON.parse(raw) as { auth: { hubForwardAuth: Record<string, unknown> } })
       .auth;
 
-    expect(hubForwardAuth).toMatchObject({ maxSkewMs: 30_000, requireAudience: 'auto' });
+    expect(hubForwardAuth).toMatchObject({ maxSkewMs: 30_000, requireAudience: 'true' });
   });
 
   it('accepts an unbound header set 30 s old and refuses one a millisecond older', () => {
@@ -287,10 +289,17 @@ const BOUND = forwardAuthPolicy({
   secret: SECRET,
   identitySecret: IDENTITY_SECRET,
   audience: AUDIENCE,
-  requireAudience: 'auto',
+  requireAudience: 'true',
   maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
 });
-const LEGACY = forwardAuthPolicy({ secret: SECRET, maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS });
+/** A Hub that provided no key of its own, with the default setting. */
+const UNPROVISIONED = forwardAuthPolicy({ secret: SECRET, maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS });
+/** The same Hub with the explicit legacy opt-in. */
+const LEGACY = forwardAuthPolicy({
+  secret: SECRET,
+  requireAudience: 'false',
+  maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
+});
 
 describe('forwardAuthPolicy', () => {
   it('binds to this app once the Hub provides both its own key and its URN, and then requires the assertion', () => {
@@ -302,25 +311,77 @@ describe('forwardAuthPolicy', () => {
     });
   });
 
-  it('accepts the unbound format from a Hub that provided neither', () => {
+  it('refuses the unbound format by default, even from a Hub that provided neither', () => {
+    expect(UNPROVISIONED).toMatchObject({ bound: null, acceptUnbound: false });
+  });
+
+  it.each(['auto', 'true', null] as const)('refuses the unbound format under %s', (requireAudience) => {
+    expect(forwardAuthPolicy({ secret: SECRET, requireAudience, maxSkewMs: 1 })).toMatchObject({
+      bound: null,
+      acceptUnbound: false,
+    });
+    expect(
+      forwardAuthPolicy({
+        secret: SECRET,
+        identitySecret: IDENTITY_SECRET,
+        audience: AUDIENCE,
+        requireAudience,
+        maxSkewMs: 1,
+      }),
+    ).toMatchObject({ bound: { audience: AUDIENCE }, acceptUnbound: false });
+  });
+
+  it('accepts the unbound format from a Hub that provided neither only under the explicit legacy false', () => {
     expect(LEGACY).toMatchObject({ bound: null, acceptUnbound: true });
   });
 
   it.each([
     ['a key with no URN', { identitySecret: IDENTITY_SECRET, audience: '' }],
     ['a URN with no key', { identitySecret: '  ', audience: AUDIENCE }],
-  ])('is not bound with %s', (_label, partial) => {
-    expect(forwardAuthPolicy({ secret: SECRET, maxSkewMs: 1, ...partial })).toMatchObject({
-      bound: null,
-      acceptUnbound: true,
-    });
+  ])('is not bound with %s, and refuses the unbound format even under false', (_label, partial) => {
+    for (const requireAudience of ['auto', 'true', 'false'] as const) {
+      expect(forwardAuthPolicy({ secret: SECRET, requireAudience, maxSkewMs: 1, ...partial })).toMatchObject({
+        bound: null,
+        acceptUnbound: false,
+      });
+    }
+
+    expect(isPartialForwardAuthBinding(partial)).toBe(true);
   });
 
-  it('refuses the unbound format from an older Hub when told to', () => {
-    expect(forwardAuthPolicy({ secret: SECRET, requireAudience: 'true', maxSkewMs: 1 })).toMatchObject({
-      bound: null,
-      acceptUnbound: false,
-    });
+  it.each(['auto', 'true', 'false'] as const)(
+    'treats an identity secret equal to the Hub-wide secret as not provisioned under %s',
+    (requireAudience) => {
+      const policy = forwardAuthPolicy({
+        secret: SECRET,
+        identitySecret: ` ${SECRET} `,
+        audience: AUDIENCE,
+        requireAudience,
+        maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
+      });
+
+      expect(policy).toMatchObject({ bound: null, acceptUnbound: false });
+      // A sibling app holding the Hub-wide secret signs an assertion for this app's URN.
+      expect(
+        verifyHubForwardAuth(policy, boundHeadersFor('alice', NOW, { secret: SECRET }), { now: NOW }),
+      ).toEqual({ ok: false, reason: 'unbound' });
+      expect(verifyHubForwardAuth(policy, headersFor('alice', NOW), { now: NOW })).toEqual({
+        ok: false,
+        reason: 'unbound',
+      });
+    },
+  );
+
+  it('says when the identity secret is the Hub-wide one, and only then', () => {
+    expect(isIdentitySecretShared({ secret: SECRET, identitySecret: SECRET })).toBe(true);
+    expect(isIdentitySecretShared({ secret: SECRET, identitySecret: IDENTITY_SECRET })).toBe(false);
+    expect(isIdentitySecretShared({ secret: '', identitySecret: '' })).toBe(false);
+    expect(isIdentitySecretShared({ secret: SECRET })).toBe(false);
+  });
+
+  it('counts only one of the two values as a partial binding', () => {
+    expect(isPartialForwardAuthBinding({})).toBe(false);
+    expect(isPartialForwardAuthBinding({ identitySecret: IDENTITY_SECRET, audience: AUDIENCE })).toBe(false);
   });
 
   it('accepts the unbound format beside the bound one when told to', () => {
@@ -362,6 +423,25 @@ describe('bound assertion', () => {
       expiresAt: NOW + 30_000,
     });
   });
+
+  it.each([undefined, 'auto', 'false'] as const)(
+    'verifies an assertion for this app under requireAudience %s too',
+    (requireAudience) => {
+      const policy = forwardAuthPolicy({
+        secret: SECRET,
+        identitySecret: IDENTITY_SECRET,
+        audience: AUDIENCE,
+        requireAudience,
+        maxSkewMs: DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
+      });
+
+      expect(verifyHubForwardAuth(policy, boundHeadersFor('alice', NOW), { now: NOW })).toMatchObject({
+        ok: true,
+        bound: true,
+        replayKey: NONCE,
+      });
+    },
+  );
 
   it('verifies an assertion with no stable id', () => {
     expect(
@@ -471,7 +551,40 @@ describe('old-format (unbound) header sets', () => {
     });
   });
 
-  it('are accepted from a Hub that has not provided a key, with nothing to spend them by', () => {
+  it('are refused by default from a Hub that has not provided a key, even when they verify', () => {
+    const unbound = headersFor('alice', NOW);
+
+    expect(verifyForwardAuthHeaders(SECRET, unbound, { now: NOW }).ok).toBe(true);
+    expect(verifyHubForwardAuth(UNPROVISIONED, unbound, { now: NOW })).toEqual({
+      ok: false,
+      reason: 'unbound',
+    });
+    expect(verifyHubForwardAuth(UNPROVISIONED, stableHeadersFor('alice', NOW), { now: NOW })).toEqual({
+      ok: false,
+      reason: 'unbound',
+    });
+  });
+
+  it('are refused under a half-provisioned binding even with the legacy false', () => {
+    for (const partial of [
+      { identitySecret: IDENTITY_SECRET, audience: '' },
+      { identitySecret: '', audience: AUDIENCE },
+    ]) {
+      const policy = forwardAuthPolicy({
+        secret: SECRET,
+        requireAudience: 'false',
+        maxSkewMs: 30_000,
+        ...partial,
+      });
+
+      expect(verifyHubForwardAuth(policy, headersFor('alice', NOW), { now: NOW })).toEqual({
+        ok: false,
+        reason: 'unbound',
+      });
+    }
+  });
+
+  it('are accepted under the explicit legacy false from a Hub that has not provided a key, with nothing to spend them by', () => {
     expect(verifyHubForwardAuth(LEGACY, headersFor('alice', NOW), { now: NOW })).toEqual({
       ok: true,
       username: 'alice',
@@ -499,6 +612,17 @@ describe('old-format (unbound) header sets', () => {
       ok: false,
       reason: 'expired',
     });
+  });
+
+  it('are refused from an older Hub under true and auto', () => {
+    for (const requireAudience of ['true', 'auto'] as const) {
+      const strict = forwardAuthPolicy({ secret: SECRET, requireAudience, maxSkewMs: 30_000 });
+
+      expect(verifyHubForwardAuth(strict, headersFor('alice', NOW), { now: NOW })).toEqual({
+        ok: false,
+        reason: 'unbound',
+      });
+    }
   });
 
   it('are refused from an older Hub when told to', () => {

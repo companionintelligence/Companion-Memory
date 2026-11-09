@@ -263,7 +263,10 @@ describe('AccountController — get', () => {
     const req = mockRequest();
 
     await expect(controller.get(requestContext(), req)).resolves.toMatchObject({ emailManagedByHub: true });
-    expect(hubBridge.namesAccount).toHaveBeenCalledWith(req, 'jsmith@example.com');
+    expect(hubBridge.namesAccount).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ email: 'jsmith@example.com' }),
+    );
   });
 });
 

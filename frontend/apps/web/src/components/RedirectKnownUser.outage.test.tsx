@@ -1,3 +1,4 @@
+import { fetchJson } from '@ci/common';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -198,6 +199,50 @@ describe('RedirectKnownUser while Memory does not answer', () => {
     };
 
     renderAt('/login');
+    expect(await screen.findByText('memory home')).toBeInTheDocument();
+  });
+});
+
+describe('RedirectKnownUser with a Hub identity Memory could not verify', () => {
+  const signedIn = {
+    expired: false,
+    authToken: 'tok',
+    authenticated: true,
+    initializing: false,
+    unreachable: false,
+  };
+
+  it("keeps the Log In form instead of sending the browser to the held session's home", async () => {
+    // A shared browser: another Hub person's unbound or forged headers arrive while it still holds
+    // the first person's session. Nothing proves that session is theirs.
+    vi.mocked(fetchJson).mockResolvedValueOnce({
+      username: null,
+      accountId: null,
+      refused: 'identity_unverified',
+    });
+    h.auth = signedIn;
+    h.user = {
+      user: { id: 'u1', email: 'a@example.com', onboarded: true },
+      loading: false,
+      unreachable: false,
+    };
+
+    renderAt('/login');
+
+    expect(await screen.findByText('login form')).toBeInTheDocument();
+    expect(screen.queryByText('memory home')).not.toBeInTheDocument();
+  });
+
+  it('still sends a known user on when no Hub person is named at all', async () => {
+    h.auth = signedIn;
+    h.user = {
+      user: { id: 'u1', email: 'a@example.com', onboarded: true },
+      loading: false,
+      unreachable: false,
+    };
+
+    renderAt('/login');
+
     expect(await screen.findByText('memory home')).toBeInTheDocument();
   });
 });

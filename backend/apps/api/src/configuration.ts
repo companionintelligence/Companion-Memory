@@ -196,10 +196,11 @@ export const ConfigSchema = z.object({
       // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
       identitySecret: z.string().default(''),
       audience: z.string().default(''),
-      // `auto` (default) requires the bound assertion once the Hub has provided
-      // both values above, and accepts the unbound format until then. `true`
-      // always requires it; `false` always accepts the unbound format too.
-      requireAudience: z.enum(['auto', 'true', 'false']).default('auto'),
+      // `true` (default) requires the bound assertion, so Hub sign-in is off
+      // until the Hub has provided both values above. `auto` is kept so older
+      // env values parse, and means `true`. `false` is the legacy opt-in that
+      // also accepts the unbound format (unless only one value above is set).
+      requireAudience: z.enum(['auto', 'true', 'false']).default('true'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single
