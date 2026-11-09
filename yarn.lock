@@ -2636,8 +2636,6 @@ __metadata:
       built: true
     bcrypt:
       built: true
-    better-sqlite3:
-      built: true
     esbuild:
       built: true
     unrs-resolver:
