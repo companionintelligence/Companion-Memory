@@ -8,6 +8,8 @@
 
 import type { AnswerForm, PeerTrustTier } from '@/graphql/graphql';
 
+import { sanitizeAskerText } from './promptSafety';
+
 /** Consent posture of a standing grant (mirrors GrantMode on the backend). */
 export type GrantMode = 'auto' | 'review' | 'block';
 
@@ -486,13 +488,17 @@ export interface AskActorView {
  * Compressing it into a chip beside the name would put the least understood
  * fact in the smallest type on the card.
  *
- * ═══ THE LABEL IS QUOTED, NOT ASSERTED ═══
+ * ═══ THE LABEL IS NOT PART OF THIS LINE ═══
  *
  * `label` is a string the ASKER writes and this box never verifies — the same
- * class of input as the prompt, which is why the prompt goes through
- * `AskerQuote`. So the label is attributed ("calling itself …") rather than
- * stated, and the KIND — which is a commitment, and what the consent evaluator
- * actually matches on — carries the meaning.
+ * class of input as the prompt. It used to be spliced into this sentence as
+ * `calling itself “{label}”`, which handed the asker the rest of the sentence:
+ * a label containing `”` closed the quote and everything after it read as the
+ * app talking, a few pixels above Approve. So this line is now FIXED COPY that
+ * nothing the asker sends can change, and the label is returned separately by
+ * {@link actorLabelQuote} for the card to render as attributed, isolated text
+ * (see `PeerText`). The KIND — which is a commitment, and what the consent
+ * evaluator actually matches on — carries the meaning.
  *
  * Returns null when the ask declares no actor, because there is nothing
  * truthful to say. The absence is not neutral, though: a grant restricting
@@ -504,20 +510,57 @@ export function actorLine(actor: AskActorView | null | undefined): string | null
     return null;
   }
 
-  const calling = actor.label?.trim() ? ` calling itself \u201C${actor.label.trim()}\u201D` : '';
-
   switch (actor.kind) {
     case 'person':
       return 'They say a person is asking, not software acting for them.';
     case 'first-party-agent':
-      return `Their own Companion is asking on their behalf${calling}.`;
+      return 'Their own Companion is asking on their behalf.';
     case 'third-party-agent':
-      return `Software they delegated to is asking${calling} — not their own Companion.`;
+      return 'Software they delegated to is asking — not their own Companion.';
     default:
       // An unrecognized kind reaches here only if the server's vocabulary grew
       // past this build's. Say what is known and claim nothing more.
       return 'Something is asking on their behalf, and this app does not recognise what.';
   }
+}
+
+/**
+ * Peer-supplied text paired with the app's own words that introduce it.
+ *
+ * `attribution` is fixed copy. `text` is RAW — exactly what the asker sent — and
+ * must only ever be rendered through `PeerText`, which sanitizes it and isolates
+ * it in its own element. Never interpolate `text` into a sentence: that is the
+ * defect this shape exists to prevent.
+ */
+export interface AttributedPeerText {
+  attribution: string;
+  text: string;
+}
+
+/** Whether a peer-supplied value has anything visible left once sanitized. */
+function hasVisibleText(value: unknown): value is string {
+  return typeof value === 'string' && sanitizeAskerText(value).text !== '';
+}
+
+/**
+ * The name delegated software gives itself, as attributed peer text.
+ *
+ * Null for a person (the card has never shown a person's self-label, and the
+ * asker's name is already on the card), for an unrecognised kind (claim
+ * nothing), and for a label that is blank or made only of characters that
+ * render as nothing.
+ *
+ * Both paths reach here: a LOCAL ask's label went through the backend's
+ * `normalizeText` (askInput.ts), but a FEDERATED ask's label is only
+ * length-bounded by the peer protocol schema and arrives otherwise as the peer
+ * wrote it. Sanitizing at render covers both the same way.
+ */
+export function actorLabelQuote(actor: AskActorView | null | undefined): AttributedPeerText | null {
+  if (actor == null || !actorIsDelegated(actor) || !hasVisibleText(actor.label)) {
+    return null;
+  }
+
+  return { attribution: 'It calls itself:', text: actor.label };
 }
 
 /**
@@ -548,15 +591,23 @@ export function actorIsDelegated(actor: AskActorView | null | undefined): boolea
  * is enforced is a purpose-LIMITED grant, which is the owner's own narrowing
  * and can only ever refuse to match.
  *
+ * ═══ RETURNED APART FROM ITS SENTENCE ═══
+ *
+ * This used to return `They say this is for: “{purpose}”`, and the purpose
+ * could contain `”`. One closing quote and the rest of the peer's text read as
+ * the app's own copy beside Approve. The attribution is now fixed copy and the
+ * purpose comes back separately, RAW, for `PeerText` to sanitize and isolate.
+ *
  * Null when none was stated — and the absence is worth noticing rather than
- * hiding, which is why `purposeAbsentNote` exists beside this.
+ * hiding, which is why `purposeAbsentNote` exists beside this. A purpose made
+ * only of characters that render as nothing counts as none stated.
  */
-export function purposeLine(purpose: unknown): string | null {
-  if (typeof purpose !== 'string' || !purpose.trim()) {
+export function purposeQuote(purpose: unknown): AttributedPeerText | null {
+  if (!hasVisibleText(purpose)) {
     return null;
   }
 
-  return `They say this is for: \u201C${purpose.trim()}\u201D`;
+  return { attribution: 'They say this is for:', text: purpose };
 }
 
 /**
@@ -569,7 +620,7 @@ export function purposeLine(purpose: unknown): string | null {
  * not show me".
  */
 export function purposeAbsentNote(purpose: unknown): string | null {
-  return purposeLine(purpose) == null ? 'They did not say what this is for.' : null;
+  return purposeQuote(purpose) == null ? 'They did not say what this is for.' : null;
 }
 
 /**

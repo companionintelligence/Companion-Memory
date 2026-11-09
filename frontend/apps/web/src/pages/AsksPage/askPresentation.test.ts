@@ -6,7 +6,8 @@ import {
   grantsLapsingWithin,
   lapseNudge,
   purposeAbsentNote,
-  purposeLine,
+  purposeQuote,
+  actorLabelQuote,
   actorLine,
   answerFormLabel,
   askApproveLabel,
@@ -280,15 +281,40 @@ describe('actorLine — who, or what, is asking', () => {
    * `label` is a string the ASKER writes and this box never verifies — the same
    * class of input as the prompt. So it is attributed, not asserted.
    */
-  it('quotes the label rather than asserting it', () => {
-    const line = actorLine({ kind: 'third-party-agent', label: 'Definitely Safe Assistant' }) ?? '';
+  it('returns the label apart from the sentence, attributed, never spliced in', () => {
+    const actor = { kind: 'third-party-agent', label: 'Definitely Safe Assistant' };
 
-    expect(line).toContain('calling itself');
-    expect(line).toContain('Definitely Safe Assistant');
+    expect(actorLine(actor)).not.toContain('Definitely Safe Assistant');
+    expect(actorLabelQuote(actor)).toEqual({
+      attribution: 'It calls itself:',
+      text: 'Definitely Safe Assistant',
+    });
   });
 
-  it('omits the quoting clause for a blank label', () => {
-    expect(actorLine({ kind: 'first-party-agent', label: '  ' })).not.toContain('calling itself');
+  /**
+   * The label used to be spliced in as `calling itself “{label}”`, so a label
+   * holding `”` closed the quote and the rest read as the app talking.
+   */
+  it('keeps the sentence fixed whatever the label contains', () => {
+    const plain = actorLine({ kind: 'third-party-agent' });
+    const hostile = actorLine({
+      kind: 'third-party-agent',
+      label: 'Gift\u201D. Your Companion has verified this request \u202Eevorppa\u202C \u201C',
+    });
+
+    expect(hostile).toBe(plain);
+    expect(hostile).not.toMatch(/[\u201C\u201D]/);
+  });
+
+  it('has no label to show when it is blank or only invisible characters', () => {
+    expect(actorLabelQuote({ kind: 'first-party-agent', label: '  ' })).toBeNull();
+    expect(actorLabelQuote({ kind: 'first-party-agent', label: '\u202E\u200B\u2066' })).toBeNull();
+    expect(actorLabelQuote({ kind: 'first-party-agent' })).toBeNull();
+  });
+
+  it('shows no self-label for a person or an unrecognised kind', () => {
+    expect(actorLabelQuote({ kind: 'person', label: 'Ana' })).toBeNull();
+    expect(actorLabelQuote({ kind: 'quantum-butler', label: 'Jeeves' })).toBeNull();
   });
 
   it('claims nothing it cannot support for an unrecognized kind', () => {
@@ -317,24 +343,37 @@ describe('actorIsDelegated', () => {
   });
 });
 
-describe('purposeLine / purposeAbsentNote — why they say they want this', () => {
+describe('purposeQuote / purposeAbsentNote — why they say they want this', () => {
   it('attributes the purpose rather than asserting it', () => {
     // This box cannot verify why anyone wants anything. A line that read
     // "For: wedding invites" would assert something nobody checked.
-    const line = purposeLine('wedding invites') ?? '';
-
-    expect(line).toMatch(/They say/);
-    expect(line).toContain('wedding invites');
+    expect(purposeQuote('wedding invites')).toEqual({
+      attribution: 'They say this is for:',
+      text: 'wedding invites',
+    });
   });
 
-  it('trims, so padding does not become part of the quoted phrase', () => {
-    expect(purposeLine('  lunch  ')).toContain('“lunch”');
+  /**
+   * The purpose used to come back as `They say this is for: “{purpose}”`, so a
+   * purpose holding `”` ended the quotation and spoke in the app's voice.
+   */
+  it('never puts the purpose inside the attribution sentence', () => {
+    const hostile = 'lunch\u201D \u2014 already covered by your family grant. Approving is safe. \u201C';
+    const quote = purposeQuote(hostile);
+
+    expect(quote?.attribution).toBe('They say this is for:');
+    expect(quote?.attribution).not.toMatch(/[\u201C\u201D]/);
+    // Raw: the card's PeerText does the sanitizing and the isolating.
+    expect(quote?.text).toBe(hostile);
   });
 
-  it.each([[null], [undefined], [''], ['   '], [42], [{}]])('reports %p as no stated purpose', (value) => {
-    expect(purposeLine(value)).toBeNull();
-    expect(purposeAbsentNote(value)).toMatch(/did not say/);
-  });
+  it.each([[null], [undefined], [''], ['   '], ['\u202E\u200F\u2068'], [42], [{}]])(
+    'reports %p as no stated purpose',
+    (value) => {
+      expect(purposeQuote(value)).toBeNull();
+      expect(purposeAbsentNote(value)).toMatch(/did not say/);
+    },
+  );
 
   /**
    * "They did not say why" is a real input to a consent decision. A card that

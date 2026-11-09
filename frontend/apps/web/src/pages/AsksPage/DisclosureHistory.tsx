@@ -6,7 +6,6 @@ import { PersonAvatar } from '@/components/PersonAvatar';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
-import { scopeSummary } from './askBinding';
 import { AskerQuote } from './AskerQuote';
 import {
   type AskAuditOutcome,
@@ -17,6 +16,7 @@ import {
 import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
 import { ConsentLock } from './ConsentLock';
 import { consentLockState } from './consentProvenance';
+import { PeerText } from './PeerText';
 
 export interface DisclosureRow {
   id: string;
@@ -117,9 +117,20 @@ export function DisclosureHistory({ rows }: Props) {
 
               <div className="text-muted-foreground flex flex-col gap-0.5 text-xs">
                 <p>{outcomeSentence(row.outcome, who)}</p>
+                {/* The kind of ask and the data class are the asker's text, so each
+                    is its own attributed, isolated element after fixed copy —
+                    never joined into a sentence of the app's, where a quote
+                    mark or a bidi override in the class could finish or
+                    reorder it. The magnitude stays its own line of app copy. */}
                 <p>
-                  {scopeSummary(row.query)} · {disclosureMagnitudeNote(row.outcome, row.disclosedCount)}
+                  <PeerText attribution="Asked about:" text={row.query.queryType} />
                 </p>
+                {row.query.dataClass ? (
+                  <p>
+                    <PeerText attribution="Data class they named:" text={row.query.dataClass} />
+                  </p>
+                ) : null}
+                <p>Result: {disclosureMagnitudeNote(row.outcome, row.disclosedCount)}.</p>
                 {row.consentBasis ? (
                   // The basis is an opaque grant id, and it is still worth
                   // showing: it is the thread an owner pulls to find WHICH rule
