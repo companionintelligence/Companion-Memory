@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
+// The package is unplugged (root package.json) so the build can read this stylesheet; see .yarnrc.yml.
 import timelineCssUrl from '@knight-lab/timelinejs/dist/css/timeline.css?url';
 import timelineLocaleUrl from '@knight-lab/timelinejs/dist/js/locale/en.json?url';
 import timelineJsUrl from '@knight-lab/timelinejs/dist/js/timeline.js?url';

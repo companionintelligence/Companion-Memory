@@ -69,6 +69,9 @@
     "@journeyapps/wa-sqlite": {
       "built": true
     },
+    "@knight-lab/timelinejs": {
+      "unplugged": true
+    },
     "@parcel/watcher": {
       "built": true
     },
