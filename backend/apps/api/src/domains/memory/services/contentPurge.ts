@@ -2,9 +2,10 @@ import type { EntityManager } from 'typeorm';
 
 import { clearHbpeLinks, CONTENT_REFERENCES, deleteBareReferences } from './purgeTeardown';
 import {
-  deleteWrappedFileObjects,
   deleteWrappedFileRows,
   planWrappedFiles,
+  queueWrappedFileObjects,
+  type WrappedFilePlan,
   type WrappedFilesPurged,
   type WrappedFileStorage,
 } from './wrappedFilePurge';
@@ -55,6 +56,11 @@ export interface PurgedContentAggregates {
   contentIds: string[];
   /** What was done about the stored files those rows wrapped. */
   files: WrappedFilesPurged;
+  /**
+   * The `ci.stored_object_deletions` rows the purge queued: the stored objects of the files that went, to
+   * delete once the transaction has committed (`drainStoredObjectDeletes`).
+   */
+  queuedObjectIds: string[];
 }
 
 /**
@@ -64,18 +70,18 @@ export interface PurgedContentAggregates {
  * that is the target itself.
  *
  * It is not {@link ContentService.remove}. That is the app's delete: it writes a
- * `deleted` graph delta, which carries the title, and leaves the edges and
- * ledger rows where they are. This is `memory.forget`'s `archive_and_delete`: a
- * node's deltas are deleted with it and none is written, and the edges, ledger,
- * pipeline state, tags and search rows go too.
+ * `deleted` graph delta, which carries the title, and keeps the node's earlier
+ * deltas. This is `memory.forget`'s `archive_and_delete`: a node's deltas are
+ * deleted with it and none is written, and the pipeline state, tags and search
+ * rows of the content go in the transaction too. Both take the edges, the ledger
+ * rows and the stored file the content wraps ({@link purgeFilesWrappedBy}).
  *
  * A photo is two rows, and the bytes are the part that is the photo: the content row
  * wraps a `ci.files` row through `external_id`. That file goes with the content when
  * nothing else uses it, and stays, reported in the result, when something does
- * ({@link planWrappedFiles}). The file is decided and its objects deleted BEFORE any row
- * is, so a failure in the store rolls everything back, and a failure after it leaves
- * rows that still say where the bytes were; this content row is one of them, still
- * wrapping the file, so forgetting it again finishes the job.
+ * ({@link planWrappedFiles}). Its objects are QUEUED in this transaction and deleted by
+ * the caller after the commit ({@link purgeFilesWrappedBy}), so a failure anywhere here
+ * rolls the rows back with the bytes untouched.
  *
  * Only the caller's own content is purged. An id that does not exist, or that
  * belongs to someone else, is left out of the result rather than raising. So is
@@ -110,20 +116,54 @@ export async function purgeContentAggregates(
     [requestedContentIds, userId],
   );
   const contentIds = content.map((row) => row.id);
+  const { files, queuedObjectIds } = await purgeFilesWrappedBy(manager, userId, contentIds, storage, () =>
+    teardownContent(manager, contentIds),
+  );
 
-  // The files this content wraps are locked, decided and have their objects deleted before anything
-  // else is touched. The files come before the content in lock order, here and in the event's purge,
-  // so that two purges that share a file cannot wait on each other.
+  return { contentIds, files, queuedObjectIds };
+}
+
+/**
+ * Deletes the stored files these content rows wrap, when nothing else uses them, around the caller's
+ * own teardown of the content, in the caller's transaction. The one sequence both deletes of content
+ * run, so that they agree on what goes: `memory.forget`'s purge ({@link purgeContentAggregates}) and
+ * the app's delete (`ContentService.remove`, which the Explorer drawer calls).
+ *
+ * The files are locked and decided ({@link planWrappedFiles}) before `teardown` touches the content,
+ * which is given the plan (`plan.wrapping` says which content rows are file-backed). The files come
+ * before the content in lock order, here and in the event's purge, so that two purges that share a file
+ * cannot wait on each other. Then the file rows go with every row that names them: the `File` nodes,
+ * their edges and deltas, the pipeline state, the tags, categories and search rows keyed by the file,
+ * its chunks or its node ({@link deleteWrappedFileRows}).
+ *
+ * **The bytes are not deleted here.** Their objects are queued in `ci.stored_object_deletions`, in this
+ * transaction, and the caller deletes them after it commits (`drainStoredObjectDeletes`, given
+ * `queuedObjectIds`). Deleting them in the transaction, as this used to, lost bytes whenever anything
+ * after that failed: the teardown, the row deletes or the commit rolled the rows back, and the bytes
+ * stayed gone. Now a rollback takes the queue rows back too and never touches a byte, and a commit
+ * whose store delete fails, times out or half succeeds leaves queue rows the sweep retries. The
+ * no-store refusal still comes before anything is changed.
+ *
+ * Only `userId`'s own files are taken, whoever's content names them, and the caller is expected to
+ * have already scoped `contentIds` to that user.
+ */
+export async function purgeFilesWrappedBy(
+  manager: EntityManager,
+  userId: string,
+  contentIds: string[],
+  storage: WrappedFileStorage | undefined,
+  teardown: (plan: WrappedFilePlan) => Promise<void>,
+): Promise<{ files: WrappedFilesPurged; queuedObjectIds: string[] }> {
   const plan = await planWrappedFiles(manager, userId, {
     content: contentIds.map((id) => ({ id, named: id })),
     eventIds: [],
     messageIds: [],
   });
-  const stored = await deleteWrappedFileObjects(manager, plan, storage);
+  const queued = await queueWrappedFileObjects(manager, plan, storage);
 
-  await teardownContent(manager, contentIds);
+  await teardown(plan);
 
-  const files = await deleteWrappedFileRows(manager, userId, plan, stored);
+  const files = await deleteWrappedFileRows(manager, userId, plan, queued);
 
-  return { contentIds, files };
+  return { files, queuedObjectIds: queued.ids };
 }
