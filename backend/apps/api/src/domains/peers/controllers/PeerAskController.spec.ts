@@ -274,6 +274,50 @@ describe('PeerAskController — signatures required', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  /**
+   * Only `json()` keeps the raw bytes. A form body arrives with `rawBody`
+   * unset, and the honest headers copied off a JSON ask -- digest included --
+   * must not verify it: whether there is a body is the transport's answer.
+   */
+  it('refuses honest signature headers carried on a form body', async () => {
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+    const form = 'askId=abc12345&prompt=something+else';
+    const headers = {
+      ...peer.headers,
+      'content-type': 'application/x-www-form-urlencoded',
+      'content-length': String(form.length),
+    };
+
+    await expect(controller.ask('Bearer t', request(headers, undefined), BODY)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+
+    // The same headers on the JSON body they were made for still verify.
+    await controller.ask(
+      'Bearer t',
+      request({ ...peer.headers, 'content-length': String(Buffer.byteLength(raw)) }, raw),
+      BODY,
+    );
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a chunked body whose bytes were not captured, on the collect route too', async () => {
+    const url = '/agent/v1/ask/abc12345';
+    const peer = signAs(undefined, 'GET', `${ENDPOINT}/ask/abc12345`);
+    const { controller } = makeController([link(peer.publicJwk)]);
+
+    await expect(
+      controller.result(
+        'Bearer t',
+        request({ ...peer.headers, 'transfer-encoding': 'chunked' }, undefined, url, 'GET'),
+        'abc12345',
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   describe('a sovereign peer: no Portal token, a did:keri:D<x> keyid', () => {
     /** A peer key, its self-certifying AID, and the headers a peer signing under that AID sends. */
     function signSovereign(rawBody: string | undefined, method = 'POST', targetUri = `${ENDPOINT}/ask`) {
