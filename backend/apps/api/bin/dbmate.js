@@ -14,6 +14,8 @@ const config = require('config');
 const { Client } = require('pg');
 const { z } = require('zod/v3');
 
+const { upgradePgBossSchema } = require('./upgrade-pgboss-schema');
+
 const UNSAFE_OPERATIONS = new Set(['drop_all_pg_data.sql']);
 
 // dbmate subcommands that only touch the filesystem; creating a migration
@@ -260,6 +262,15 @@ const forwardArgs = program.args;
     if (result.signal) {
       console.error(`dbmate was terminated by signal ${result.signal}.`);
       process.exit(1);
+    }
+
+    if (result.status === 0 && forwardArgs[0] === 'up') {
+      try {
+        await upgradePgBossSchema(DATABASE_URL);
+      } catch (err) {
+        console.error(`Failed to move the job queue to the new pg-boss schema: ${err.message}`);
+        process.exit(1);
+      }
     }
 
     process.exit(result.status);
