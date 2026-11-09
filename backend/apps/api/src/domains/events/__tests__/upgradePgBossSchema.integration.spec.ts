@@ -297,6 +297,8 @@ describeWithDatabase(`upgradePgBossSchema — against real Postgres (${availabil
 
     expect(await job(stranded)).toMatchObject({ state: 'created' });
     expect(await job(newer)).toMatchObject({ state: 'created' });
-    expect(await exists(`NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname LIKE 'pgboss\\_v10%')`)).toBe(true);
+    expect(await exists(`NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname LIKE 'pgboss\\_v10%')`)).toBe(
+      true,
+    );
   });
 });

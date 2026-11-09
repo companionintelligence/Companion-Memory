@@ -85,7 +85,9 @@ async function setOldSchemaAside(client) {
     // pg-boss 10 rebuilds a missing `pgboss`. Both schemas hold jobs worth keeping.
     const taken = (await oldSchemas(client)).includes(OLD_SCHEMA);
 
-    await client.query(`ALTER SCHEMA ${SCHEMA} RENAME TO ${taken ? `${OLD_SCHEMA}_${Date.now()}` : OLD_SCHEMA}`);
+    await client.query(
+      `ALTER SCHEMA ${SCHEMA} RENAME TO ${taken ? `${OLD_SCHEMA}_${Date.now()}` : OLD_SCHEMA}`,
+    );
   }
 }
 
