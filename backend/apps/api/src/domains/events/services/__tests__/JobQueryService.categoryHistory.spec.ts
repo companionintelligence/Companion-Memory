@@ -131,12 +131,7 @@ function makeService(options: {
   const noop = { createQueryBuilder: jest.fn() };
 
   return {
-    service: new JobQueryService(
-      jobRepository as never,
-      noop as never,
-      noop as never,
-      categoryMetricRepository as never,
-    ),
+    service: new JobQueryService(jobRepository as never, noop as never, categoryMetricRepository as never),
     queries,
     metrics,
   };

@@ -50,7 +50,7 @@ describe('JobQueryService.facetCounts — bucket expression', () => {
     });
 
     const repo = { createQueryBuilder: jest.fn(() => builder) };
-    const service = new JobQueryService(repo as never, repo as never, repo as never, repo as never);
+    const service = new JobQueryService(repo as never, repo as never, repo as never);
 
     // facetCounts is private; exercising it through the public shape keeps the
     // test honest about what it is guarding.
