@@ -37,9 +37,11 @@ import { nothingWrapped } from '../wrappedFilePurge';
  * before the purge, in every table, so the test cannot pass because a fixture
  * quietly wrote nothing.
  *
- * `remove` shares the HBPE links, the edges and the ledger rows (and, for a photo,
- * the stored file: `WrappedFilePurge.integration.test.ts`). It keeps the node's
- * deltas and writes its own `deleted` one, so its cases check that and not the rest.
+ * `remove` shares the HBPE links. For a file-backed item it also takes the stored
+ * file, the edges and the ledger rows (`WrappedFilePurge.integration.test.ts`); an
+ * item that wraps no file, like the notes here, keeps its edges and ledger rows as
+ * before. It keeps the node's deltas and writes its own `deleted` one, so its cases
+ * check that and not the rest.
  *
  * Opt-in like its neighbours: set `MEMORY_TEST_DATABASE_URL` to a migrated
  * database of your OWN, or run `make test-db`, which provides one.
@@ -456,7 +458,11 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [doomed.contentId]);
 
-      expect(purged).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
+      expect(purged).toEqual({
+        contentIds: [doomed.contentId],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await footprint(doomed)).toEqual(EMPTY);
       // The control content is exactly as it was, row for row.
       expect(await footprint(control)).toEqual(controlBefore);
@@ -510,7 +516,11 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(true);
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', bare)).toBe(true);
 
-      expect(await contents.purge(owner, [bare])).toEqual({ contentIds: [bare], files: nothingWrapped() });
+      expect(await contents.purge(owner, [bare])).toEqual({
+        contentIds: [bare],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(false);
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', bare)).toBe(false);
     });
@@ -565,7 +575,11 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [doomed.contentId]);
 
-      expect(purged).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
+      expect(purged).toEqual({
+        contentIds: [doomed.contentId],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await footprint(doomed)).toEqual(EMPTY);
 
       // The event is the owner of its own life: purging its content does not touch it.
@@ -619,7 +633,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [theirs.contentId, uuidv7()]);
 
-      expect(purged).toEqual({ contentIds: [], files: nothingWrapped() });
+      expect(purged).toEqual({ contentIds: [], files: nothingWrapped(), queuedObjectIds: [] });
       expect(await footprint(theirs)).toEqual(theirsBefore);
       expect(published).toEqual([]);
 
@@ -633,7 +647,11 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       // of its to clear, and the generic node delete handles it. This is not the purge’s to guess at.
       const orphan = await bareContent('Legacy note', null);
 
-      expect(await contents.purge(owner, [orphan])).toEqual({ contentIds: [], files: nothingWrapped() });
+      expect(await contents.purge(owner, [orphan])).toEqual({
+        contentIds: [],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', orphan)).toBe(true);
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', orphan)).toBe(true);
     });
@@ -644,13 +662,21 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       published.length = 0;
 
-      expect(await contents.purge(owner, [graphOnly])).toEqual({ contentIds: [], files: nothingWrapped() });
+      expect(await contents.purge(owner, [graphOnly])).toEqual({
+        contentIds: [],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', graphOnly)).toBe(true);
       expect(published).toEqual([]);
     });
 
     it('does nothing for an empty request', async () => {
-      expect(await contents.purge(owner, [])).toEqual({ contentIds: [], files: nothingWrapped() });
+      expect(await contents.purge(owner, [])).toEqual({
+        contentIds: [],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(published).toEqual([]);
     });
 
@@ -707,7 +733,11 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       }
 
       // Having waited, the purge sees the membership that just committed and clears it with the rest.
-      expect(await purging).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
+      expect(await purging).toEqual({
+        contentIds: [doomed.contentId],
+        files: nothingWrapped(),
+        queuedObjectIds: [],
+      });
       expect(await footprint(doomed)).toEqual(EMPTY);
     });
 
@@ -795,12 +825,15 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       ]);
     });
 
-    it('deletes the edges, in both directions, and the ledger rows that name the content, and nobody else’s', async () => {
+    it('keeps the edges and ledger rows of an item that wraps no file, as it always did', async () => {
+      // A note is not file-backed: deleting it leaves its links to people and places, and its ledger entry,
+      // exactly where they were. Only a file-backed item takes them with it (WrappedFilePurge.integration.test.ts).
       const doomed = await clusteredNote('Trip notes');
       const control = await clusteredNote('Shopping list');
       const controlBefore = await footprint(control);
+      const before = await footprint(doomed);
 
-      expect(await footprint(doomed)).toMatchObject({
+      expect(before).toMatchObject({
         'ci.relationships': 2,
         'ci.graph_deltas (of its edges)': 2,
         'ci.record_sources': 1,
@@ -809,9 +842,9 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       await expect(contents.remove(owner, doomed.contentId)).resolves.toBe(true);
 
       expect(await footprint(doomed)).toMatchObject({
-        'ci.relationships': 0,
-        'ci.graph_deltas (of its edges)': 0,
-        'ci.record_sources': 0,
+        'ci.relationships': 2,
+        'ci.graph_deltas (of its edges)': 2,
+        'ci.record_sources': 1,
         // Its own deltas stay: the `created` one, and the `deleted` one this wrote.
         'ci.graph_deltas': 2,
       });

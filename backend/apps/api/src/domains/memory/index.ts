@@ -37,6 +37,7 @@ import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { GraphController } from './controllers/GraphController';
 import { DeterministicPersonMergeCron } from './cron/DeterministicPersonMergeCron';
+import { StoredObjectDeletionSweepCron } from './cron/StoredObjectDeletionSweepCron';
 import { BaseEntity } from './entities/BaseEntity';
 import { CommunicationBaseEntity } from './entities/CommunicationBaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
@@ -175,6 +176,7 @@ import { UserContextService } from './services/UserContextService';
     // Hourly, worker-role: drains the deterministic merge-candidate backlog
     // (email / E.164 phone / exact profile URL) with a live re-check per pair.
     DeterministicPersonMergeCron,
+    StoredObjectDeletionSweepCron,
     PersonMergeService,
     PlaceMergeService,
     PlaceDuplicateService,

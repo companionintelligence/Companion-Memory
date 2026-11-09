@@ -17,9 +17,13 @@ import { ContentEntity } from '../../entities/ContentEntity';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { CalendarEventService } from '../CalendarEventService';
-import { purgeContentAggregates } from '../contentPurge';
 import { ContentService } from '../ContentService';
-import { lockFiles, StoredObjectsDeletedError, type StoredObjects } from '../filePurge';
+import {
+  drainStoredObjectDeletes,
+  lockFiles,
+  StoredObjectsDeletedError,
+  type StoredObjects,
+} from '../filePurge';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 /**
@@ -216,6 +220,9 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
   /** Every id a case seeded, for the tables that carry no owner to wipe by. */
   let seeded: string[] = [];
 
+  /** Every object key a case seeded, for the deletion queue, which carries no owner either. */
+  let seededKeys: string[] = [];
+
   /** What the object store was asked to delete, call by call. */
   const objectCalls: Array<{ bucket: string; keys: string[] }> = [];
   let deleteObjectsImpl: (bucket: string, keys: string[]) => Promise<void> = async () => undefined;
@@ -286,6 +293,11 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
 
   async function wipe(): Promise<void> {
     const users = [ownerId, strangerId];
+
+    await dataSource.query('DELETE FROM ci.stored_object_deletions WHERE object_key = ANY($1::text[])', [
+      seededKeys,
+    ]);
+    seededKeys = [];
 
     await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1::uuid[])', [users]);
     await dataSource.query(
@@ -399,6 +411,10 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
     const key = extra.key === undefined ? (external ? null : uuidv4()) : extra.key;
 
     seeded.push(id);
+    if (key !== null) {
+      seededKeys.push(key);
+    }
+
     await dataSource.query(
       `INSERT INTO ci.files
          (id, filename, content_type, variant, bucket, key, hash, external_id, parent_id, event_id, user_id)
@@ -637,6 +653,23 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
   }
 
   const fileExists = (id: string) => exists('SELECT count(*) FROM ci.files WHERE id = $1', id);
+
+  /** The deletion-queue rows for these object keys: what is still to be deleted from the store. */
+  const queued = (
+    keys: string[],
+  ): Promise<Array<{ id: string; object_key: string; attempts: number; last_error: string | null }>> =>
+    dataSource.query(
+      `SELECT id, object_key, attempts, last_error FROM ci.stored_object_deletions
+        WHERE object_key = ANY($1::text[]) ORDER BY object_key`,
+      [keys],
+    );
+
+  /** What the retry sweep does, limited to this case's rows so that it never takes another suite's. */
+  const sweep = async (keys: string[], deadlineMs?: number) =>
+    drainStoredObjectDeletes(dataSource.manager, storage as unknown as StoredObjects, {
+      ids: (await queued(keys)).map((row) => row.id),
+      deadlineMs,
+    });
   const nodeExists = (id: string) => exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', id);
   const contentExists = (id: string) => exists('SELECT count(*) FROM ci.content WHERE id = $1', id);
   const eventExists = (id: string) => exists('SELECT count(*) FROM ci.events WHERE event_id = $1', id);
@@ -988,25 +1021,144 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
       expect(published).toEqual([]);
     });
 
-    it('rolls the whole delete back when the object store fails, so deleting again can finish it', async () => {
+    it('deletes the item when the object store fails afterwards, and leaves its objects queued for the sweep', async () => {
       const stored = await storedPhoto('Trip photo');
-      const storedBefore = await footprint(stored);
       const content = await wrapper(stored.fileId, 'file');
+      const keys = sorted([stored.originalKey, stored.variantKey]);
 
       deleteObjectsImpl = async () => {
-        throw new Error('object store is down');
+        throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
       };
 
-      await expect(contents.remove(owner, content)).rejects.toThrow(/object store is down/);
+      // The rows are gone and committed; the bytes are what is left, and they are not forgotten.
+      await expect(contents.remove(owner, content)).resolves.toBe(true);
 
+      expect(await contentExists(content)).toBe(false);
+      expect(await footprint(stored)).toEqual(EMPTY);
+      expect(await queued(keys)).toEqual([
+        expect.objectContaining({
+          object_key: keys[0],
+          attempts: 1,
+          last_error: expect.stringContaining('ECONNREFUSED'),
+        }),
+        expect.objectContaining({
+          object_key: keys[1],
+          attempts: 1,
+          last_error: expect.stringContaining('ECONNREFUSED'),
+        }),
+      ]);
+
+      // The store comes back, and the sweep deletes them.
+      deleteObjectsImpl = async () => undefined;
+      objectCalls.length = 0;
+
+      expect(await sweep(keys)).toEqual({ deleted: 2, skipped: 0, pending: 0, errors: [] });
+      expect(objectCalls).toEqual([{ bucket: BUCKET, keys }]);
+      expect(await queued(keys)).toEqual([]);
+    });
+
+    it('loses no bytes when the delete fails after the bytes step: the rows come back and no object was touched', async () => {
+      const stored = await storedPhoto('Trip photo');
+      const content = await wrapper(stored.fileId, 'file');
+      const storedBefore = await footprint(stored);
+
+      // `ci.users.entity_id` references ci.entities with no ON DELETE action, so the delete of the File node, the
+      // last thing the transaction does after the objects are queued, is refused.
+      await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [stored.nodeId, strangerId]);
+
+      const failure = await contents.remove(owner, content).catch((error: unknown) => error);
+
+      expect(sqlState(failure)).toBe('23503');
+      expect(failure).not.toBeInstanceOf(StoredObjectsDeletedError);
+      // Nothing was deleted from the store, and nothing is queued: the queue rows went back with the rest.
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(await queued([stored.originalKey, stored.variantKey])).toEqual([]);
       expect(await contentExists(content)).toBe(true);
       expect(await footprint(stored)).toEqual(storedBefore);
       expect(published).toEqual([]);
 
-      deleteObjectsImpl = async () => undefined;
+      // Once nothing refuses, deleting again finishes it.
+      await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [strangerId]);
 
       await expect(contents.remove(owner, content)).resolves.toBe(true);
       expect(await footprint(stored)).toEqual(EMPTY);
+      expect(deletedKeys()).toEqual(sorted([stored.originalKey, stored.variantKey]));
+    });
+
+    it('takes the edges and ledger rows of a file-backed item with it', async () => {
+      const photo = await storedPhoto('Trip photo');
+      const content = await wrapper(photo.fileId, 'file');
+      const person = await node('Person', 'Trip companion');
+
+      await edge(person, content, 'DEPICTED_IN');
+      await edge(content, person, 'SHOWS');
+      await dataSource.query(
+        `INSERT INTO ci.record_sources (user_id, record_table, record_id, source_type, source_system, source_id)
+         VALUES ($1, 'content', $2, 'ci.import', 'wrapped_file_spec', $3)`,
+        [ownerId, content, `content-${content}`],
+      );
+
+      const edgesOf = async () =>
+        Number(
+          (
+            await dataSource.query(
+              'SELECT count(*) FROM ci.relationships WHERE from_entity_id = $1 OR to_entity_id = $1',
+              [content],
+            )
+          )[0].count,
+        );
+      const ledgerOf = async () =>
+        Number(
+          (
+            await dataSource.query(
+              `SELECT count(*) FROM ci.record_sources WHERE record_table = 'content' AND record_id = $1`,
+              [content],
+            )
+          )[0].count,
+        );
+
+      expect([await edgesOf(), await ledgerOf()]).toEqual([2, 1]);
+
+      await expect(contents.remove(owner, content)).resolves.toBe(true);
+
+      expect([await edgesOf(), await ledgerOf()]).toEqual([0, 0]);
+      expect(await nodeExists(person)).toBe(true);
+    });
+
+    it('keeps a file that another item wraps with its id in capitals', async () => {
+      const photo = await storedPhoto('Trip photo');
+      const photoBefore = await footprint(photo);
+      const lower = await wrapper(photo.fileId, 'file');
+      const upper = await wrapper(photo.fileId.toUpperCase(), 'file');
+
+      await expect(contents.remove(owner, lower)).resolves.toBe(true);
+
+      // The other row still wraps the file, in capitals, and so still shows it: the file stays.
+      expect(await contentExists(upper)).toBe(true);
+      expect(await footprint(photo)).toEqual(photoBefore);
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(await queued([photo.originalKey, photo.variantKey])).toEqual([]);
+
+      // And the forget path judges it the same way, and names the row in capitals as the one that keeps it.
+      const second = await wrapper(photo.fileId, 'file');
+      const purged = await contents.purge(owner, [second]);
+
+      expect(purged.files.kept).toEqual([
+        expect.objectContaining({
+          fileId: photo.fileId,
+          usedBy: expect.objectContaining({ contentIds: [upper] }),
+        }),
+      ]);
+      expect(await footprint(photo)).toEqual(photoBefore);
+    });
+
+    it('deletes the file when the last item, named in capitals, goes', async () => {
+      const photo = await storedPhoto('Trip photo');
+      const upper = await wrapper(photo.fileId.toUpperCase(), 'file');
+
+      await expect(contents.remove(owner, upper)).resolves.toBe(true);
+      expect(await footprint(photo)).toEqual(EMPTY);
+      expect(deletedKeys()).toEqual(sorted([photo.originalKey, photo.variantKey]));
     });
   });
 
@@ -1471,48 +1623,33 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
 
   // ── the objects go first, and what a failure leaves ───────────────────────
 
-  describe('the objects go first, while the rows are locked', () => {
-    it('deletes the objects while every row is still there and locked, and the rows afterwards', async () => {
+  describe('a purge of content deletes the bytes after its transaction commits', () => {
+    it('deletes the objects only once the rows are gone, from another connection’s view, and empties the queue', async () => {
       const doomed = await storedPhoto('Trip photo');
       const content = await wrapper(doomed.fileId, 'file');
-      const seen: { files: number; content: number; lockedAgainstOthers: boolean } = {
-        files: -1,
-        content: -1,
-        lockedAgainstOthers: false,
-      };
+      const keys = sorted([doomed.originalKey, doomed.variantKey]);
+      const seen = { files: -1, content: -1, queued: -1 };
 
       deleteObjectsImpl = async () => {
-        // On other connections, as a listener or another request would see it: nothing is deleted yet...
+        // On other connections, as a listener or another request would see it: the rows are already gone and
+        // committed, and the objects are on the queue, so a crash right now would still leave a record of them.
         seen.files = Number(
           (await dataSource.query('SELECT count(*) FROM ci.files WHERE id = $1', [doomed.fileId]))[0].count,
         );
         seen.content = Number(
           (await dataSource.query('SELECT count(*) FROM ci.content WHERE id = $1', [content]))[0].count,
         );
-
-        // ...and the file is locked, which Postgres says by refusing to wait for it.
-        const probe = dataSource.createQueryRunner();
-
-        await probe.connect();
-        await probe.startTransaction();
-
-        try {
-          await probe.query('SELECT 1 FROM ci.files WHERE id = $1 FOR UPDATE NOWAIT', [doomed.fileId]);
-        } catch (error) {
-          seen.lockedAgainstOthers = sqlState(error) === '55P03';
-        } finally {
-          await probe.rollbackTransaction().catch(() => undefined);
-          await probe.release();
-        }
+        seen.queued = (await queued(keys)).length;
       };
 
       await contents.purge(owner, [content]);
 
-      expect(seen).toEqual({ files: 1, content: 1, lockedAgainstOthers: true });
-      expect(await fileExists(doomed.fileId)).toBe(false);
+      expect(seen).toEqual({ files: 0, content: 0, queued: 2 });
+      expect(deletedKeys()).toEqual(keys);
+      expect(await queued(keys)).toEqual([]);
     });
 
-    it('keeps a variant that is written while the object store works out until the purge has committed', async () => {
+    it('holds no lock while the object store works', async () => {
       const doomed = await storedPhoto('Trip photo');
       const content = await wrapper(doomed.fileId, 'file');
       const gate = deferred();
@@ -1526,53 +1663,32 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
       const purging = contents.purge(owner, [content]);
 
       purging.catch(() => undefined);
-      await inCall.promise;
-
-      const writer = dataSource.createQueryRunner();
-
-      await writer.connect();
-      await writer.startTransaction();
 
       try {
-        const [{ pid }] = await writer.query('SELECT pg_backend_pid() AS pid');
+        await inCall.promise;
 
-        // What the preview stage does for a file it has just rendered a preview of: the insert checks its
-        // parent with a key-share lock, which the purge's lock conflicts with.
-        const writing = writer.query(
-          `INSERT INTO ci.files (id, filename, content_type, variant, bucket, key, parent_id, user_id)
-           VALUES ($1, 'late.webp', 'image/webp', 'THUMBNAIL', $2, $3, $4, $5)`,
-          [uuidv7(), BUCKET, uuidv4(), doomed.fileId, ownerId],
-        );
-        const outcome = writing.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+        // The transaction has committed: a write that would have waited on the purge's locks goes straight through.
+        const probe = dataSource.createQueryRunner();
 
-        const holders = await until(async () => {
-          const rows: Array<{ state: string }> = await dataSource.query(
-            'SELECT state FROM pg_stat_activity WHERE pid = ANY(pg_blocking_pids($1::int))',
-            [pid],
-          );
+        await probe.connect();
+        await probe.startTransaction();
 
-          return rows.length > 0 ? rows : null;
-        }, 'the variant insert to block on the purge');
+        try {
+          await expect(
+            probe.query('SELECT 1 FROM ci.content WHERE user_id = $1 FOR UPDATE NOWAIT', [ownerId]),
+          ).resolves.toBeDefined();
+        } finally {
+          await probe.rollbackTransaction().catch(() => undefined);
+          await probe.release();
+        }
 
-        // The purge is not in the middle of a statement: it is idle in its transaction, waiting for the store.
-        expect(holders).toEqual([{ state: 'idle in transaction' }]);
-
-        gate.resolve();
-        await purging;
-
-        // The parent is gone, so the insert that waited for it fails, and no object was left without a row.
-        expect(sqlState(await outcome)).toBe('23503');
-        expect(deletedKeys()).toEqual(sorted([doomed.originalKey, doomed.variantKey]));
-        expect(await footprint(doomed)).toEqual(EMPTY);
+        expect(await fileExists(doomed.fileId)).toBe(false);
       } finally {
         gate.resolve();
-        await writer.rollbackTransaction().catch(() => undefined);
-        await writer.release();
         await purging.catch(() => undefined);
       }
+
+      expect(await footprint(doomed)).toEqual(EMPTY);
     }, 60_000);
 
     it('decides after it holds the lock, so a purge that had to wait sees what the one it waited for committed', async () => {
@@ -1633,79 +1749,112 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
       expect(deletedKeys()).toEqual(sorted([photo.originalKey, photo.variantKey]));
     }, 60_000);
 
-    it('leaves everything as it was, and says so, when the object store fails; and finishes when it comes back', async () => {
+    it('commits when the object store fails afterwards, and keeps the objects queued until the store comes back', async () => {
       const doomed = await storedPhoto('Trip photo');
       const content = await wrapper(doomed.fileId, 'file');
-      const doomedBefore = await footprint(doomed);
+      const keys = sorted([doomed.originalKey, doomed.variantKey]);
 
       deleteObjectsImpl = async () => {
         throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
       };
 
-      published.length = 0;
+      const purged = await contents.purge(owner, [content]);
 
-      const failure = await contents.purge(owner, [content]).catch((error: unknown) => error);
+      expect(purged.files.wrappedFileIds).toEqual([doomed.fileId]);
+      expect(await footprint(doomed)).toEqual(EMPTY);
+      expect(await contentExists(content)).toBe(false);
+      expect((await queued(keys)).map((row) => row.attempts)).toEqual([1, 1]);
 
-      expect(failure).toBeInstanceOf(Error);
-      // Not the error that says the bytes are gone: nothing was deleted from the database.
-      expect(failure).not.toBeInstanceOf(StoredObjectsDeletedError);
-      expect((failure as Error).message).toContain('nothing was deleted from the database');
-      expect((failure as Error).message).toContain('ECONNREFUSED');
-      expect(await footprint(doomed)).toEqual(doomedBefore);
-      expect(await contentExists(content)).toBe(true);
-      expect(published).toEqual([]);
+      // A second failure is counted too, and nothing is lost.
+      expect(await sweep(keys)).toMatchObject({ deleted: 0, pending: 2 });
+      expect((await queued(keys)).map((row) => row.attempts)).toEqual([2, 2]);
 
-      // And it let go of the rows: a purge that failed does not leave them locked.
-      const probe = dataSource.createQueryRunner();
-
-      await probe.connect();
-      await probe.startTransaction();
-      await expect(
-        probe.query('SELECT 1 FROM ci.files WHERE id = $1 FOR UPDATE NOWAIT', [doomed.fileId]),
-      ).resolves.toBeDefined();
-      await probe.rollbackTransaction();
-      await probe.release();
-
-      // The store comes back, and forgetting the content again goes through.
       deleteObjectsImpl = async () => undefined;
 
-      expect((await contents.purge(owner, [content])).files.wrappedFileIds).toEqual([doomed.fileId]);
-      expect(await footprint(doomed)).toEqual(EMPTY);
+      expect(await sweep(keys)).toEqual({ deleted: 2, skipped: 0, pending: 0, errors: [] });
+      expect(await queued(keys)).toEqual([]);
     });
 
-    it('gives up on an object store that does not answer, and lets go of the rows', async () => {
+    it('keeps the queue when the store does not answer in time, which does not cancel the call', async () => {
       const doomed = await storedPhoto('Trip photo');
       const content = await wrapper(doomed.fileId, 'file');
-      const doomedBefore = await footprint(doomed);
+      const keys = sorted([doomed.originalKey, doomed.variantKey]);
 
-      // Nothing else bounds the wait: the client sets no timeout, and neither does the database.
-      const failure = await dataSource
-        .transaction((manager) =>
-          purgeContentAggregates(manager, ownerId, [content], {
-            objects: { deleteObjects: () => new Promise<void>(() => undefined) },
-            deadlineMs: 100,
-          }),
-        )
-        .catch((error: unknown) => error);
+      // The store is down at the purge, so the objects wait on the queue.
+      deleteObjectsImpl = async () => {
+        throw new Error('down');
+      };
 
-      expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain('did not answer within');
-      expect((failure as Error).message).toContain('nothing was deleted from the database');
-      expect(await footprint(doomed)).toEqual(doomedBefore);
-      expect(await contentExists(content)).toBe(true);
+      await contents.purge(owner, [content]);
 
-      const probe = dataSource.createQueryRunner();
+      // At the sweep the store hangs: the deadline gives up on it, and the rows stay for the next sweep.
+      const hung = deferred();
 
-      await probe.connect();
-      await probe.startTransaction();
-      await expect(
-        probe.query('SELECT 1 FROM ci.files WHERE id = $1 FOR UPDATE NOWAIT', [doomed.fileId]),
-      ).resolves.toBeDefined();
-      await probe.rollbackTransaction();
-      await probe.release();
+      deleteObjectsImpl = () => hung.promise;
+
+      const drained = await sweep(keys, 100);
+
+      expect(drained).toMatchObject({ deleted: 0, pending: 2 });
+      expect(drained.errors[0]).toContain('did not answer within');
+      expect(await queued(keys)).toHaveLength(2);
+
+      // The hung call finishes late. The queue still has the rows, so the next sweep makes sure of it.
+      hung.resolve();
+      deleteObjectsImpl = async () => undefined;
+
+      expect(await sweep(keys)).toMatchObject({ deleted: 2, pending: 0 });
+      expect(await queued(keys)).toEqual([]);
     }, 30_000);
 
-    it('keeps the rows, and names the content whose photo is gone, when the database refuses afterwards; forgetting again finishes it', async () => {
+    it('keeps the queue rows of a bucket that fails, and drops those of a bucket that succeeds', async () => {
+      const first = await storedPhoto('Trip photo');
+      const second = await storedPhoto('Recipe photo');
+      const firstContent = await wrapper(first.fileId, 'file');
+      const secondContent = await wrapper(second.fileId, 'file');
+
+      await dataSource.query(`UPDATE ci.files SET bucket = 'archive' WHERE id = ANY($1::uuid[])`, [
+        [second.fileId, second.variantId],
+      ]);
+
+      deleteObjectsImpl = async (bucket) => {
+        if (bucket === 'archive') {
+          throw new Error('Failed to delete 1 object(s) from archive');
+        }
+      };
+
+      await contents.purge(owner, [firstContent, secondContent]);
+
+      expect(await queued([first.originalKey, first.variantKey])).toEqual([]);
+      expect(await queued(sorted([second.originalKey, second.variantKey]))).toHaveLength(2);
+    });
+
+    it('does not delete an object that a file row names again by the time the sweep runs', async () => {
+      const doomed = await storedPhoto('Trip photo');
+      const content = await wrapper(doomed.fileId, 'file');
+
+      deleteObjectsImpl = async () => {
+        throw new Error('down');
+      };
+
+      await contents.purge(owner, [content]);
+
+      // Another row comes to hold the original's key before the sweep.
+      const holder = await fileRow('Their copy', strangerId, { key: doomed.originalKey });
+
+      deleteObjectsImpl = async () => undefined;
+      objectCalls.length = 0;
+
+      expect(await sweep([doomed.originalKey, doomed.variantKey])).toEqual({
+        deleted: 1,
+        skipped: 1,
+        pending: 0,
+        errors: [],
+      });
+      expect(deletedKeys()).toEqual([doomed.variantKey]);
+      expect(await fileExists(holder.id)).toBe(true);
+    });
+
+    it('loses no bytes when the database refuses after the bytes step, and finishes on a second try', async () => {
       const doomed = await storedPhoto('Trip photo');
       const control = await storedPhoto('Recipe photo');
       const withPhoto = await wrapper(doomed.fileId, 'file');
@@ -1715,33 +1864,24 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
       await wrapper(control.fileId, 'file');
 
       // `ci.users.entity_id` references ci.entities with no ON DELETE action. Pointing it at a content node makes
-      // the delete of that node fail, after the objects have gone, as a table this teardown has never heard of
-      // would. The content rows are deleted before the file rows, so this refuses before the file rows are touched.
+      // the delete of that node fail, after the objects have been queued, as a table this teardown has never heard
+      // of would.
       await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [withPhoto, strangerId]);
       published.length = 0;
 
       const failure = await contents.purge(owner, [withPhoto, withoutPhoto]).catch((error: unknown) => error);
 
-      expect(failure).toBeInstanceOf(StoredObjectsDeletedError);
-
-      const gone = failure as StoredObjectsDeletedError;
-
-      // Only the content whose photo lost its bytes is named; the other lost nothing.
-      expect(gone.nodeIds).toEqual([withPhoto]);
-      expect(sqlState(gone.cause)).toBe('23503');
-      // The objects went, and went FIRST: the refusal came from the delete of the content node, which a purge that
-      // deleted rows before objects would have stopped at without ever asking the store.
-      expect(deletedKeys()).toEqual(sorted([doomed.originalKey, doomed.variantKey]));
-      // The rows did not: every table is as it was, the content still wraps the file, and nothing was announced.
+      // The plain refusal: nothing outside the database was touched.
+      expect(failure).not.toBeInstanceOf(StoredObjectsDeletedError);
+      expect(sqlState(failure)).toBe('23503');
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
+      expect(await queued([doomed.originalKey, doomed.variantKey])).toEqual([]);
       expect(await footprint(doomed)).toEqual(doomedBefore);
       expect(await contentExists(withPhoto)).toBe(true);
       expect(await contentExists(withoutPhoto)).toBe(true);
       expect(published).toEqual([]);
 
-      // Forgetting it again finds the same file and the same keys. The object store treats a key that is already
-      // gone as deleted, so the second delete is the same call, and then the rows go.
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [strangerId]);
-      objectCalls.length = 0;
 
       const purged = await contents.purge(owner, [withPhoto, withoutPhoto]);
 
@@ -1750,41 +1890,19 @@ describeWithDb(`purging what wraps a stored file, against Postgres (${availabili
       expect(await footprint(doomed)).toEqual(EMPTY);
     });
 
-    it('goes first even when it is the file’s own node that the database then refuses', async () => {
+    it('loses no bytes when it is the file’s own node that the database then refuses', async () => {
       const doomed = await storedPhoto('Trip photo');
       const content = await wrapper(doomed.fileId, 'file');
       const doomedBefore = await footprint(doomed);
 
-      // The content goes first and the file's rows last, so this refuses after the content node is deleted and the
-      // objects are gone. All of it is one transaction, and rolls back whole.
       await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [doomed.nodeId, strangerId]);
 
       const failure = await contents.purge(owner, [content]).catch((error: unknown) => error);
 
-      expect(failure).toBeInstanceOf(StoredObjectsDeletedError);
-      expect((failure as StoredObjectsDeletedError).nodeIds).toEqual([content]);
-      expect(deletedKeys()).toEqual(sorted([doomed.originalKey, doomed.variantKey]));
+      expect(sqlState(failure)).toBe('23503');
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
       expect(await footprint(doomed)).toEqual(doomedBefore);
       expect(await contentExists(content)).toBe(true);
-    });
-
-    it('names only the content whose photo lost its bytes, not the content whose file was kept', async () => {
-      const doomed = await storedPhoto('Trip photo');
-      const kept = await storedPhoto('Photo in a message');
-      const doomedContent = await wrapper(doomed.fileId, 'file');
-      const keptContent = await wrapper(kept.fileId, 'file');
-
-      await message(attachmentsOf(kept.fileId));
-      await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [doomedContent, strangerId]);
-
-      const failure = await contents
-        .purge(owner, [doomedContent, keptContent])
-        .catch((error: unknown) => error);
-
-      expect(failure).toBeInstanceOf(StoredObjectsDeletedError);
-      // The kept file lost nothing, so the content that wrapped it is not one that wraps a photo that will not open.
-      expect((failure as StoredObjectsDeletedError).nodeIds).toEqual([doomedContent]);
-      expect(deletedKeys()).toEqual(sorted([doomed.originalKey, doomed.variantKey]));
     });
 
     it('does the same for an event: it names the event, and keeps its content and its photos’ rows', async () => {

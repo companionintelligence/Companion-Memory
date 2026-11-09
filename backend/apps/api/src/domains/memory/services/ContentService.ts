@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
@@ -26,6 +26,7 @@ import {
   type KeysetCountOptions,
   type KeysetPage,
   type OwnedLink,
+  OWNED_TABLES,
   refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -37,7 +38,7 @@ import { BaseEntity } from '../entities/BaseEntity';
 import { ContentBaseEntity } from '../entities/ContentBaseEntity';
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { EventEntity } from '../entities/EventEntity';
-import { classifyExternalId } from '../externalIdKind';
+import { classifyExternalId, EXTERNAL_ID_UUID_SHAPE } from '../externalIdKind';
 import { ledgerPlatform } from '../identity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
@@ -52,7 +53,7 @@ import {
 } from './contentFacetsSql';
 import { type PurgedContentAggregates, purgeContentAggregates, purgeFilesWrappedBy } from './contentPurge';
 import { CtiAggregate, detailChanged } from './CtiAggregate';
-import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
+import { drainStoredObjectDeletes, STORED_OBJECTS, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { clearHbpeLinks, deleteEdges, deleteLedgerRows } from './purgeTeardown';
 import { nothingWrapped } from './wrappedFilePurge';
@@ -116,7 +117,40 @@ function contentLinks(rows: readonly CreateContentDto[]): OwnedLink[] {
       ownerColumn: 'user_id',
       ids: rows.map((row) => row.event?.id),
     },
+    fileLink(
+      rows.map((row) =>
+        wrappedFileId(row.external_id, row.external_id_kind ?? classifyExternalId(row.external_id)),
+      ),
+    ),
   ];
+}
+
+/**
+ * The stored file a content row would wrap, given its `external_id` and the kind it is written with, or
+ * `undefined` when it wraps none. The same rule the purge applies when it decides what a row wraps
+ * (`planWrappedFiles`): a uuid-shaped id whose kind is `'file'` or unclassified, and never one marked
+ * `'external_uri'`. Lower case, because a file's id is, and the cast to a uuid accepts capitals.
+ */
+function wrappedFileId(
+  externalId: string | null | undefined,
+  kind: string | null | undefined,
+): string | undefined {
+  if (!externalId || !EXTERNAL_ID_UUID_SHAPE.test(externalId) || (kind != null && kind !== 'file')) {
+    return undefined;
+  }
+
+  return externalId.toLowerCase();
+}
+
+/**
+ * The files a write would have content wrap, for {@link refuseForeignLinks}. A content row that wraps a
+ * file is what decides that the file goes when the content is deleted (`ContentService.remove`, `purge`),
+ * and the purge only ever takes the deleter's own files; but a row that wrapped somebody else's file
+ * would still show it, and keep it in use. So a writer may only point content at a file of its own. An
+ * id that names no file is left alone, as `refuseForeignLinks` leaves one.
+ */
+function fileLink(ids: ReadonlyArray<string | undefined>): OwnedLink {
+  return { field: 'external_id', ...OWNED_TABLES.files, ids };
 }
 
 /**
@@ -148,6 +182,8 @@ export class ContentService {
   private readonly aggregate: CtiAggregate<ContentEntity, ContentBaseEntity>;
 
   private readonly unledgeredCache = new Map<string, { values: string[]; expiresAt: number }>();
+
+  private readonly logger = new Logger(ContentService.name);
 
   constructor(
     @InjectRepository(ContentEntity)
@@ -1333,6 +1369,10 @@ export class ContentService {
   async update(context: ServiceContext, id: string, data: UpdateContentDto): Promise<Content | null> {
     const updateData: Partial<ContentEntity> = {};
 
+    if (data.external_id !== undefined || data.external_id_kind !== undefined) {
+      await this.refuseForeignFileOnUpdate(context, id, data);
+    }
+
     if (data.type !== undefined) {
       updateData.type = data.type;
     }
@@ -1450,6 +1490,47 @@ export class ContentService {
   }
 
   /**
+   * Refuses an update that would have this content wrap a file its owner does not own
+   * ({@link fileLink}). The owner is the row's, so that a system caller is held to the same rule; the
+   * half of the pair the update leaves alone is read from the row. A row that is not visible to the
+   * caller is left to `update`, which answers `null` for it.
+   */
+  private async refuseForeignFileOnUpdate(
+    context: ServiceContext,
+    id: string,
+    data: UpdateContentDto,
+  ): Promise<void> {
+    const row = await this.contentRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
+
+    if (!row) {
+      return;
+    }
+
+    const externalId = data.external_id !== undefined ? data.external_id : row.externalId;
+    const kind =
+      data.external_id_kind !== undefined
+        ? data.external_id_kind
+        : data.external_id !== undefined
+          ? (classifyExternalId(data.external_id) ?? null)
+          : row.externalIdKind;
+    const fileId = wrappedFileId(externalId, kind);
+
+    if (fileId === undefined) {
+      return;
+    }
+
+    // A row with no owner may wrap no one's file: the nil uuid owns nothing.
+    await refuseForeignLinks(
+      this.contentRepository.manager,
+      row.userId ?? '00000000-0000-0000-0000-000000000000',
+      [fileLink([fileId])],
+      'content update',
+    );
+  }
+
+  /**
    * The app's delete, which the Explorer drawer and the `deleteContent` mutation
    * call: the content row and its `ci.entities` base row are destroyed, and
    * nothing restores them. A `deleted` graph delta records it, which carries the
@@ -1457,24 +1538,30 @@ export class ContentService {
    *
    * **The stored file goes with it.** A photo or a document is two rows, and the
    * bytes are the part that IS the photo: the content row wraps a `ci.files` row
-   * through `external_id`. That file, its variants, their `File` nodes, their
-   * stored objects, and the edges, deltas, pipeline state, tags, categories and
-   * search rows keyed by any of them are deleted exactly as `memory.forget`'s
-   * {@link purge} deletes them ({@link purgeFilesWrappedBy}, the one sequence both
-   * paths run): when nothing else uses the file, and kept when something does (a
-   * message's attachment, another content row, a chat attachment, a live event;
-   * see {@link planWrappedFiles}). Only the owner's own files are taken, whoever
-   * asks. Content that wraps no file is deleted as it always was.
+   * through `external_id`. That file, its variants, their `File` nodes, and the
+   * edges, deltas, pipeline state, tags, categories and search rows keyed by any
+   * of them are deleted exactly as `memory.forget`'s {@link purge} deletes them
+   * ({@link purgeFilesWrappedBy}, the one sequence both paths run): when nothing
+   * else uses the file, and kept when something does (a message's attachment,
+   * another content row, a chat attachment, a live event; see
+   * {@link planWrappedFiles}). Only the owner's own files are taken, whoever asks.
    *
-   * **The edges and ledger rows that name the content go too.** An edge to a node
-   * that no longer exists points at nothing, and a ledger row for a record that is
-   * gone evidences nothing (the re-key path already has to step round them), so
-   * neither is kept. They are deleted in both directions, with the deltas that
-   * recorded the edges. What is kept is the node's own deltas, and the `deleted`
-   * one this writes, which is what separates this from a purge; the content's
-   * search rows and tags are left to the {@link ContentRemovedEvent} listeners as
-   * before. Records that merely MENTION the content (a receipt's document, an
-   * observation) are left alone, as the purge leaves them.
+   * The bytes are deleted after the transaction commits, never inside it
+   * ({@link drainStoredObjectDeletes}): a failure in the delete rolls the rows
+   * back with the bytes untouched, and a store that fails after the commit leaves
+   * the objects queued for the retry sweep. So the delete answers `true` once the
+   * rows are gone, and an object can outlive them until the sweep reaches it.
+   *
+   * **For a file-backed item, the edges and ledger rows that name the content go
+   * too.** An edge to a photo that no longer exists points at nothing, and its
+   * ledger row evidences nothing, so neither is kept. They are deleted in both
+   * directions, with the deltas that recorded the edges. Content that wraps none
+   * of the owner's files (a note, a link, a track) keeps its old behaviour
+   * exactly: its edges and ledger rows stay where they are. Every item keeps the
+   * node's own deltas and the `deleted` one this writes, which is what separates
+   * this from a purge; the content's search rows and tags are left to the
+   * {@link ContentRemovedEvent} listeners as before. Records that merely MENTION
+   * the content (a receipt's document, an observation) are left alone.
    *
    * HBPE's links to the row are cleared in the same transaction. They reference it
    * with no `ON DELETE` action, so deleting clustered content, which is nearly all
@@ -1482,66 +1569,56 @@ export class ContentService {
    *
    * Deleting again is safe: the content is gone, so the second call answers
    * `false` and changes nothing.
-   *
-   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the
-   *   rows then could not be. The content is still there, still wrapping a file
-   *   that no longer opens, and deleting it again finishes the job.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
-    let objectsGoneFor: string[] = [];
     let files = nothingWrapped();
-    let removed: boolean;
+    let queuedObjectIds: string[] = [];
 
-    try {
-      removed = await this.aggregate.remove(context, id, {
-        withinTx: async ({ manager, before }) => {
-          // Whose files may go is the content's owner's: the caller's, which the aggregate has already
-          // scoped the row to, or, for a system caller, the row's own. A row with no owner has no files
-          // that are anyone's to delete, and is deleted as it was.
-          const ownerId =
-            context.userId !== SYSTEM_USER ? context.userId : (before.userId ?? before.user?.id);
-          const teardown = async () => {
-            await clearHbpeLinks(manager, 'ci.content', [id]);
-            await deleteEdges(manager, [id]);
-            await deleteLedgerRows(manager, [id], 'content');
-          };
+    const removed = await this.aggregate.remove(context, id, {
+      withinTx: async ({ manager, before }) => {
+        // Whose files may go is the content's owner's: the caller's, which the aggregate has already
+        // scoped the row to, or, for a system caller, the row's own. A row with no owner has no files
+        // that are anyone's to delete, and is deleted as it was.
+        const ownerId = context.userId !== SYSTEM_USER ? context.userId : (before.userId ?? before.user?.id);
 
-          if (ownerId) {
-            files = await purgeFilesWrappedBy(
-              manager,
-              ownerId,
-              [id],
-              {
-                objects: this.storedObjects,
-                onObjectsDeleted: (named) => {
-                  objectsGoneFor = named;
-                },
-              },
-              teardown,
-            );
-          } else {
-            await teardown();
-          }
-
-          const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
-          await this.graphDeltaWriter.entityDeleted({
-            entityId: id,
-            entityType: 'Content',
-            name: base?.name ?? null,
-            ownerUserId: ownerId,
-            changeSource: 'ContentService.remove',
-            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+        if (ownerId) {
+          ({ files, queuedObjectIds } = await purgeFilesWrappedBy(
             manager,
-          });
-        },
-      });
-    } catch (error) {
-      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
-    }
+            ownerId,
+            [id],
+            { objects: this.storedObjects },
+            async (plan) => {
+              await clearHbpeLinks(manager, 'ci.content', [id]);
+
+              // Only a file-backed item loses its edges and ledger rows; any other is deleted as before.
+              if (plan.wrapping.includes(id)) {
+                await deleteEdges(manager, [id]);
+                await deleteLedgerRows(manager, [id], 'content');
+              }
+            },
+          ));
+        } else {
+          await clearHbpeLinks(manager, 'ci.content', [id]);
+        }
+
+        const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
+        await this.graphDeltaWriter.entityDeleted({
+          entityId: id,
+          entityType: 'Content',
+          name: base?.name ?? null,
+          ownerUserId: ownerId,
+          changeSource: 'ContentService.remove',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+      },
+    });
 
     if (!removed) {
       return false;
     }
+
+    await this.drainQueuedObjects(queuedObjectIds);
 
     await this.eventService.send(ContentRemovedEvent, {
       contentId: id,
@@ -1555,6 +1632,27 @@ export class ContentService {
   }
 
   /**
+   * Deletes the objects a committed delete or purge queued ({@link drainStoredObjectDeletes}). Never
+   * throws for the store: the rows are already gone, and what it could not delete stays queued for
+   * `StoredObjectDeletionSweepCron`, which is said here.
+   */
+  private async drainQueuedObjects(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+
+    const drained = await drainStoredObjectDeletes(this.contentRepository.manager, this.storedObjects, {
+      ids,
+    });
+
+    if (drained.pending > 0) {
+      this.logger.warn(
+        `${drained.pending} stored object(s) could not be deleted yet and are queued for the retry sweep: ${drained.errors.join('; ')}`,
+      );
+    }
+  }
+
+  /**
    * Permanently deletes content, with everything that only exists because of it.
    * This is `memory.forget`'s `archive_and_delete` for a `Content` node, and the
    * other end from {@link remove}: see {@link purgeContentAggregates} for what
@@ -1563,8 +1661,9 @@ export class ContentService {
    *
    * A photo's file goes with its content when nothing else uses it, and stays, reported
    * in `files.kept`, when something does: see {@link planWrappedFiles}. The files'
-   * objects are deleted from the object store inside the transaction, while the rows are
-   * locked, and before any row is.
+   * objects are queued in the transaction and deleted from the object store after it
+   * commits ({@link purgeFilesWrappedBy}); what the store cannot delete then stays queued
+   * for the retry sweep.
    *
    * Content attached to an event is purged like any other and the event is left
    * alone; purging the event is what takes its content with it
@@ -1572,37 +1671,22 @@ export class ContentService {
    *
    * Everything is one transaction. Search is told afterwards, and the ids that
    * were not the caller's, or no longer exist, are simply left out of the result.
+   * A failure leaves everything as it was, bytes included.
    *
-   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
-   *   then could not be. The content named in it is still there, still wrapping a file
-   *   that no longer opens, and purging it again finishes the job. Anything that failed
-   *   before that left everything as it was.
    * @returns the ids that were purged, and what was done about the files they wrapped.
    */
   async purge(context: UserServiceContext, ids: string[]): Promise<PurgedContentAggregates> {
     const requested = Array.from(new Set(ids));
 
     if (requested.length === 0) {
-      return { contentIds: [], files: nothingWrapped() };
+      return { contentIds: [], files: nothingWrapped(), queuedObjectIds: [] };
     }
 
-    // Named by the purge itself once the objects are gone, and read here rather than there
-    // because the commit that follows can fail too.
-    let objectsGoneFor: string[] = [];
-    let purged: PurgedContentAggregates;
+    const purged = await this.contentRepository.manager.transaction((manager) =>
+      purgeContentAggregates(manager, context.userId, requested, { objects: this.storedObjects }),
+    );
 
-    try {
-      purged = await this.contentRepository.manager.transaction((manager) =>
-        purgeContentAggregates(manager, context.userId, requested, {
-          objects: this.storedObjects,
-          onObjectsDeleted: (named) => {
-            objectsGoneFor = named;
-          },
-        }),
-      );
-    } catch (error) {
-      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
-    }
+    await this.drainQueuedObjects(purged.queuedObjectIds);
 
     // The index rows were deleted in the transaction. This tells anything else
     // that listens, and is what announces a removal everywhere else in the app.

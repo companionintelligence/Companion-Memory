@@ -39,8 +39,9 @@ import { AnswerInferenceCron } from '@ci/domains/smart-rotation/cron/AnswerInfer
  * and 53 by `DeterministicPersonMergeCron.drain` (hourly at xx:17:53,
  * `role: 'worker'`), and 58 by `MobileSearchDocumentDetailCron` (every 10
  * minutes at xx:x7:58, `role: 'worker'` — a subject below, not a pre-existing
- * entry). The next cron to want a second takes an unclaimed odd one (e.g. 2,
- * 7, 12).
+ * entry). 7 is claimed by `StoredObjectDeletionSweepCron.sweepOnSchedule`
+ * (hourly at xx:41:07, `role: 'worker'`). The next cron to want a second takes
+ * an unclaimed odd one (e.g. 2, 12).
  *
  * Not listed, deliberately: `DerivationCron.deriveNightly` (`25 40 4 * * *`)
  * and `OrphanCleanupCron.sweepOnSchedule` (`35 50 2 * * *`) reuse seconds 25
@@ -54,6 +55,7 @@ const PREEXISTING_OFFSETS: Record<string, string> = {
   '30': 'ImportStageListener.sweepOnSchedule',
   '40': 'DeadLetterReaperListener.reapOnSchedule',
   '50': 'RetrievalHealthCron.captureRetrievalHealth, ImportRetentionCron.runOnSchedule',
+  '7': 'StoredObjectDeletionSweepCron.sweepOnSchedule',
   '53': 'DeterministicPersonMergeCron.drain',
 };
 
