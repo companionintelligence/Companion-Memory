@@ -27,8 +27,8 @@ const RESULT: AccountDeletionResult = {
   userId: 'user-1',
   status: 'deleted',
   revocations: [
-    { connectionId: 'c1', providerId: 'google', tokenRevoked: true },
-    { connectionId: 'c2', providerId: 'google', tokenRevoked: false },
+    { connectionId: 'c1', providerId: 'google', outcome: 'revoked', tokenRevoked: true },
+    { connectionId: 'c2', providerId: 'google', outcome: 'failed', tokenRevoked: false },
   ],
   deletedCounts: { 'ci.communications': 3, 'ci.users': 1 },
   detachedCounts: { 'ci.ask_audit': 1 },

@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import config, { ConfigSchema, isGeocodingConfigured, resolveGeocodingPortalBaseUrl } from './configuration';
+import config, {
+  acceptsUnsignedPeerAsks,
+  ConfigSchema,
+  isGeocodingConfigured,
+  resolveGeocodingPortalBaseUrl,
+} from './configuration';
 
 /**
  * Covers the geocoding portalBaseUrl fallback (previously an inline `if` at
@@ -193,5 +198,74 @@ describe('peers.localPubEnabled', () => {
     for (const value of ['yes', '1', 'TRUE', 'on', '', ' true']) {
       expect(field.safeParse(value).success).toBe(false);
     }
+  });
+});
+
+/**
+ * `auth.hubForwardAuth.requireAudience` decides whether an unbound forward-auth triple (no audience,
+ * no nonce, replayable by any sibling app behind the Hub) can sign anyone in. The schema default,
+ * the shipped default and the env var are pinned together, so none of them drifts back to `auto`.
+ */
+describe('auth.hubForwardAuth.requireAudience', () => {
+  const field = ConfigSchema.shape.auth.shape.hubForwardAuth.shape.requireAudience;
+
+  function hubForwardAuthIn(file: string): Record<string, unknown> {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      auth?: { hubForwardAuth?: Record<string, unknown> };
+    };
+
+    return contents.auth?.hubForwardAuth ?? {};
+  }
+
+  it('defaults to "true" in the schema when nothing sets it', () => {
+    expect(field.parse(undefined)).toBe('true');
+  });
+
+  it('ships "true" and is set through CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE', () => {
+    expect(hubForwardAuthIn('default.json').requireAudience).toBe('true');
+    expect(hubForwardAuthIn('custom-environment-variables.json').requireAudience).toBe(
+      'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE',
+    );
+  });
+
+  it('still parses the legacy values, and nothing else', () => {
+    for (const value of ['auto', 'true', 'false']) {
+      expect(field.parse(value)).toBe(value);
+    }
+
+    for (const value of ['TRUE', 'yes', '', 'off']) {
+      expect(field.safeParse(value).success).toBe(false);
+    }
+  });
+});
+
+/**
+ * The boot-time warning for token-only peer asks. With an audience bound and the signature
+ * requirement off (its shipped default), `PeerAskController` serves a Portal-token ask that carries
+ * no signature, so the token alone authenticates it. The default is kept for peers that do not sign
+ * yet; the warning is what tells the operator.
+ */
+describe('acceptsUnsignedPeerAsks', () => {
+  it('ships with the signature requirement off', () => {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', 'default.json'), 'utf8')) as {
+      peers: { requireHttpSignature: unknown };
+    };
+
+    expect(contents.peers.requireHttpSignature).toBe(false);
+  });
+
+  it('is true once an audience is bound and signatures are not required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: false })).toBe(true);
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a' })).toBe(true);
+  });
+
+  it('is false when signatures are required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: true })).toBe(false);
+  });
+
+  it('is false with no audience, where the controller refuses every Portal-token ask anyway', () => {
+    expect(acceptsUnsignedPeerAsks({ requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '', requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '   ', requireHttpSignature: false })).toBe(false);
   });
 });

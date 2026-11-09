@@ -196,10 +196,11 @@ export const ConfigSchema = z.object({
       // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
       identitySecret: z.string().default(''),
       audience: z.string().default(''),
-      // `auto` (default) requires the bound assertion once the Hub has provided
-      // both values above, and accepts the unbound format until then. `true`
-      // always requires it; `false` always accepts the unbound format too.
-      requireAudience: z.enum(['auto', 'true', 'false']).default('auto'),
+      // `true` (default) requires the bound assertion, so Hub sign-in is off
+      // until the Hub has provided both values above. `auto` is kept so older
+      // env values parse, and means `true`. `false` is the legacy opt-in that
+      // also accepts the unbound format (unless only one value above is set).
+      requireAudience: z.enum(['auto', 'true', 'false']).default('true'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single
@@ -1857,6 +1858,32 @@ if (parsed.peers.allowCgnatEndpoints) {
       '100.64.0.0/10 (CGNAT space, including Tailscale). This box will treat that range as reachable ' +
       'peer infrastructure. Only enable this if you have deliberately linked your appliances over a ' +
       'private network you trust; RFC1918, loopback and link-local space remain blocked regardless.',
+  );
+}
+
+/**
+ * True when the inbound peer surface accepts a Portal-token ask that carries no
+ * message signature: `peers.audience` is bound (so Portal-token asks are served
+ * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
+ *
+ * That is the shipped default once an operator binds an audience. The bearer
+ * token alone then authenticates the ask, so a leaked token works for its whole
+ * lifetime and replay is not detected; only a signature binds the token to one
+ * request. The default stays off for interoperability with peers that do not
+ * sign yet, so this is surfaced rather than refused.
+ */
+export function acceptsUnsignedPeerAsks(
+  peers: { audience?: string; requireHttpSignature?: boolean } = parsed.peers,
+): boolean {
+  return Boolean(peers.audience?.trim()) && peers.requireHttpSignature !== true;
+}
+
+if (acceptsUnsignedPeerAsks()) {
+  console.warn(
+    '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
+      'that carry only a Portal token are accepted without an HTTP message signature, so a leaked ' +
+      'token is enough to ask as that peer and a replayed request is not detected. Turn on ' +
+      'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
   );
 }
 

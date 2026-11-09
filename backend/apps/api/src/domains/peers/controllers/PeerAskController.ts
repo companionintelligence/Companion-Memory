@@ -15,7 +15,7 @@ import {
 import { FeatureService } from '@ci/common/feature';
 import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
 import { LoggerService } from '@ci/common/logging';
-import type { RawBodyRequest } from '@ci/common/middleware/BodyParserMiddleware';
+import { type RawBodyRequest, transportHasBody } from '@ci/common/middleware/BodyParserMiddleware';
 import config from '@ci/configuration';
 import type { AskChannelProvenance } from '@ci/domains/asks';
 
@@ -73,7 +73,7 @@ export class PeerAskController {
     @Body() body: unknown,
   ): Promise<PeerAskResponse> {
     const identity = await this.authenticate(authorization, request);
-    const channel = await this.assertSignature(request, identity, request.rawBody);
+    const channel = await this.assertSignature(request, identity);
 
     // Rate-limit on the verified peer identity, BEFORE the peer-link lookup, so
     // an unlinked caller cannot hammer the endpoint for free.
@@ -128,8 +128,9 @@ export class PeerAskController {
     const identity = await this.authenticate(authorization, request);
     // The collect route creates nothing, so its channel facts have nowhere to
     // be recorded — but it is still verified, because a route with a weaker
-    // gate is how the poll endpoint would have become the way in.
-    await this.assertSignature(request, identity, undefined);
+    // gate is how the poll endpoint would have become the way in. A body sent
+    // on it anyway is held to the same binding as one sent to `ask`.
+    await this.assertSignature(request, identity);
 
     await this.rateLimitService.consumePoll(identity);
 
@@ -201,9 +202,17 @@ export class PeerAskController {
    *
    * Downstream routing still resolves a peer link by `(issuer, subject)` — the
    * OIDC identity — so this step does not REPLACE that, it constrains it. What
-   * it adds is the property the bearer token cannot have: a leaked token is no
-   * longer sufficient, because the request must also be signed by the key the
-   * owner recorded on that same link, over a digest of this exact body.
+   * it adds, for a request that is signed, is the property the bearer token
+   * cannot have: the request is bound to the key the owner recorded on that
+   * same link, over a digest of this exact body, with a nonce that makes a
+   * replay detectable.
+   *
+   * On the shipped defaults that is optional. `peers.requireHttpSignature` is
+   * off, so a request with no signature headers returns early below and the
+   * Portal token alone authenticates it: a leaked token is enough to ask as
+   * that peer, and a replay is not detected. Only with the flag on does every
+   * request have to carry a valid signature, and an unsigned one is refused.
+   * The boot-time warning in `configuration.ts` reports the default state.
    *
    * Making the KEY the primary identity (and the Portal token an optional
    * attestation, per UMA's FLOW.md) is the follow-up; it needs the thumbprint
@@ -232,7 +241,6 @@ export class PeerAskController {
   private async assertSignature(
     request: RawBodyRequest,
     identity: { issuer: string; subject: string },
-    rawBody: string | undefined,
   ): Promise<AskChannelProvenance | null> {
     const hasSignatureHeaders = request.headers['signature-input'] != null;
 
@@ -310,7 +318,10 @@ export class PeerAskController {
       signatureInput: header(request, 'signature-input'),
       signature: header(request, 'signature'),
       contentDigestHeader: header(request, 'content-digest'),
-      rawBody,
+      // Whether there IS a body comes from the transport, never from whether a
+      // parser happened to keep its bytes; see `transportHasBody`.
+      transportHasBody: transportHasBody(request.headers),
+      rawBody: request.rawBody,
       peerPublicJwk: peerKeyJwk,
     });
 

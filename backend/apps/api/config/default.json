@@ -97,7 +97,7 @@
       "secret": "",
       "identitySecret": "",
       "audience": "",
-      "requireAudience": "auto",
+      "requireAudience": "true",
       "maxSkewMs": 30000
     },
     "loginThrottle": {
