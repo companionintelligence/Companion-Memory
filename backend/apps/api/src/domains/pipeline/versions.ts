@@ -236,7 +236,16 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   /** v2 — the recipe gained the last-seen place name (weight 8). v3 — documents, as above. */
   [STAGE_IDS.INDEX_VECTOR_ITEM]: 3,
   [STAGE_IDS.INDEX_VECTOR_PERSON]: 2,
-  [STAGE_IDS.INDEX_VECTOR_FILE]: 2,
+  /**
+   * v3 (2026-11-07): the file name is also indexed split into its words
+   * (`fileNameWords`), so `lighthouse` finds `os-plan-lighthouse.jpg`.
+   * Postgres reads the whole name as one host/file token, so before this only
+   * the exact full name matched. The bump rewrites every file's tsvector. It
+   * touches no embedding, and no device document: the split words are
+   * `vectorOnly`, so the document upsert finds nothing changed and no phone is
+   * sent the row again.
+   */
+  [STAGE_IDS.INDEX_VECTOR_FILE]: 3,
   /**
    * v2 (2026-10-23) — browser activity became a device-indexed type. The
    * statement already wrote documents for the listed types; the bump re-runs

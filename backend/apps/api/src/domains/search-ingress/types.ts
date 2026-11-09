@@ -27,6 +27,14 @@ export interface UpsertEmbeddingDocumentDto {
 export interface WeightedText {
   text: string;
   weight: number;
+  /**
+   * Indexed into the tsvector only, left out of the device document
+   * ({@link searchDocumentText}). For extra spellings that exist so Postgres's
+   * parser finds a word (a file name split at its punctuation): a phone's FTS
+   * tokenizer splits them itself, and putting them in the document would
+   * rewrite, and resend to every phone, each document that carries one.
+   */
+  vectorOnly?: boolean;
 }
 
 export interface UpsertVectorDto {
