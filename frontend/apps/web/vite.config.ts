@@ -69,11 +69,30 @@ function brandTokens(): Plugin {
 // on native is provided by the on-device SQLite/local-first layer instead.
 const disablePwa = process.env.VITE_DISABLE_PWA === 'true';
 
-// Navigations the service worker must leave to the network instead of answering
-// with the app shell. `/static/` is the object store behind the same origin: a
-// file's Open button navigates a new tab to its presigned `/static/<bucket>/<key>`
-// URL, and served from the shell that tab showed the app's own 404 page.
-export const NAVIGATE_FALLBACK_DENYLIST = [/^\/api\//, /^\/static\//];
+/**
+ * The navigations the service worker answers: from the network, with the
+ * precached app shell only when the network fails (offline).
+ *
+ * From the network, not the shell straight from the cache, because a sign-in can
+ * sit in front of Memory. Behind a Companion Hub with its sign-in on, an
+ * unauthenticated page load is redirected to the Hub's sign-in. A browser that
+ * opened Memory before the sign-in was turned on held a service worker that
+ * answered every page load from the cache, so the redirect never happened. The
+ * cached app loaded, its API calls were redirected to the Hub's sign-in on
+ * another origin and blocked. The page stayed blank (Companion-Memory#3392).
+ *
+ * This route skips `/api/` and `/static/` navigations, so they never fall back
+ * to the shell. `/api/` ones go on to the API route below. `/static/` is the
+ * object store behind the same origin: a file's Open button navigates a new tab
+ * to its presigned `/static/<bucket>/<key>` URL. Served from the shell, that
+ * tab showed the app's own 404 page.
+ *
+ * Workbox copies this function into the generated service worker as source
+ * text, so it must not use anything from outside its own body.
+ */
+export function isAppNavigation({ request, url }: { request: Request; url: URL }): boolean {
+  return request.mode === 'navigate' && !/^\/(?:api|static)\//.test(url.pathname);
+}
 
 export default defineConfig({
   plugins: [
@@ -124,8 +143,25 @@ export default defineConfig({
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
           maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
 
-          navigateFallbackDenylist: NAVIGATE_FALLBACK_DENYLIST,
+          // No precached navigation route: isAppNavigation below answers page
+          // loads from the network and keeps the shell for offline only.
+          navigateFallback: null,
+          // The precache route is registered ahead of every runtimeCaching
+          // route. With Workbox's default directoryIndex ('index.html') it
+          // matched a page load of `/` as `/index.html` and answered it from
+          // the cache, so `/` (the start URL and the Hub's link) never reached
+          // isAppNavigation or the sign-in in front of Memory.
+          directoryIndex: null,
           runtimeCaching: [
+            {
+              // Nothing is cached per page: offline, every page gets the shell
+              // of the current precache, as before.
+              urlPattern: isAppNavigation,
+              handler: 'NetworkOnly',
+              options: {
+                precacheFallback: { fallbackURL: 'index.html' },
+              },
+            },
             {
               // Match any request that ends with .png, .jpg, .jpeg or .svg.
               // Treat these as static files that should be persisted in the
