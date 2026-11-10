@@ -7,14 +7,14 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
  *
  * ═══ WHICH IMPLEMENTATION, AND WHY NOT NODE'S ═══
  *
- * `@noble/post-quantum`, pinned to 0.4.1. Node's own ML-DSA arrived after the Node 22 this repo's
- * `.nvmrc` and CI use (22.23 throws on `generateKeyPairSync('ml-dsa-65')`), while the API image ships
- * a newer Node; relying on the native one would make behavior depend on which Node ran the code. noble
- * is the same everywhere.
+ * `@noble/post-quantum` 0.7. Node's own ML-DSA arrived after the Node 22 this repo's `.nvmrc` and CI
+ * use (22.23 throws on `generateKeyPairSync('ml-dsa-65')`), while the API image ships a newer Node;
+ * relying on the native one would make behavior depend on which Node ran the code. noble is the same
+ * everywhere.
  *
- * 0.4.1 is the last release that is both CommonJS and built on `@noble/hashes` 1.x, which is what a
- * CommonJS NestJS app under jest needs. 0.5 and later are ESM-only: do not accept a bump to them
- * without moving the app or the test runner to ESM first.
+ * noble 0.5 and later, and the `@noble/hashes` 2 and `@noble/curves` 2 it builds on, are ESM-only. The
+ * compiled CommonJS app loads them through Node's `require(esm)` (on by default since Node 22.12), and
+ * jest transforms them: they are listed in `transformIgnorePatterns` in `jest.config.mjs`.
  *
  * ═══ THE MODE ═══
  *
@@ -23,18 +23,14 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
  * `pq-and-wasm.md` records that the `*_internal` entry points, which skip the domain separator, fail
  * its golden vectors.
  *
- * ═══ A TRAP IN THE LIBRARY'S TYPES ═══
+ * ═══ THE CALLS ═══
  *
- * noble 0.4.1's RUNTIME signatures are
+ *     sign(message, secretKey, { context, extraEntropy })      verify(signature, message, publicKey, { context })
  *
- *     sign(secretKey, message, context = EMPTY, random?)      verify(publicKey, message, signature, context = EMPTY)
- *
- * but its `.d.ts` declares `sign(secretKey, message, random?)`. Following the types, a caller who
- * passes fresh randomness as the third argument hands it over as the CONTEXT, and produces signatures
- * that only verify under that context: a Rust verifier (empty context) rejects every one. The same
- * library also signs DETERMINISTICALLY unless `random` is passed. So this file describes the runtime
- * API itself, passes an explicit empty context everywhere, and supplies the randomness explicitly;
- * `mlDsa.spec.ts` pins all three behaviors.
+ * The order changed in 0.5: 0.4 took `sign(secretKey, message, context, random)` and
+ * `verify(publicKey, message, signature, context)`. Both calls here pass the empty context explicitly.
+ * Signing is hedged (32 fresh random bytes) unless the caller asks for the deterministic variant, which
+ * is `extraEntropy: false`. `mlDsa.spec.ts` pins the mode, the determinism and the third-party vectors.
  *
  * Interop was checked against an independent FIPS 204 implementation (see the spec's third-party
  * vectors), NOT against Rust-made ML-DSA bytes: upstream commits no ML-DSA fixture. See docs/identikey.md.
@@ -42,11 +38,11 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 
 export type MlDsaAlg = 'ml-dsa-44' | 'ml-dsa-65' | 'ml-dsa-87';
 
-/** What noble actually does at runtime, which is not what its `.d.ts` says (see above). */
+/** The part of noble's ML-DSA API this file uses (see THE CALLS above). */
 interface NobleMlDsa {
   keygen(seed: Uint8Array): { publicKey: Uint8Array; secretKey: Uint8Array };
-  sign(secretKey: Uint8Array, message: Uint8Array, context: Uint8Array, random?: Uint8Array): Uint8Array;
-  verify(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array, context: Uint8Array): boolean;
+  sign(message: Uint8Array, secretKey: Uint8Array, opts: { context: Uint8Array; extraEntropy: Uint8Array | false }): Uint8Array;
+  verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array, opts: { context: Uint8Array }): boolean;
 }
 
 interface Params {
@@ -57,9 +53,9 @@ interface Params {
 
 /** Byte lengths from FIPS 204 Table 2. They are checked BEFORE the implementation is called. */
 export const ML_DSA: Readonly<Record<MlDsaAlg, Params>> = {
-  'ml-dsa-44': { impl: ml_dsa44 as unknown as NobleMlDsa, publicKey: 1312, signature: 2420 },
-  'ml-dsa-65': { impl: ml_dsa65 as unknown as NobleMlDsa, publicKey: 1952, signature: 3309 },
-  'ml-dsa-87': { impl: ml_dsa87 as unknown as NobleMlDsa, publicKey: 2592, signature: 4627 },
+  'ml-dsa-44': { impl: ml_dsa44, publicKey: 1312, signature: 2420 },
+  'ml-dsa-65': { impl: ml_dsa65, publicKey: 1952, signature: 3309 },
+  'ml-dsa-87': { impl: ml_dsa87, publicKey: 2592, signature: 4627 },
 };
 
 /** The one context IdentiKey uses: none. */
@@ -78,7 +74,7 @@ export function verifyMlDsa(
   }
 
   try {
-    return params.impl.verify(publicKey, message, signature, NO_CONTEXT);
+    return params.impl.verify(signature, message, publicKey, { context: NO_CONTEXT });
   } catch {
     return false;
   }
@@ -100,9 +96,11 @@ export function mlDsaFromSeed(
   return {
     publicKey,
     // HEDGED signing (32 fresh random bytes mixed in, FIPS 204's default) unless the caller asks for
-    // the deterministic variant, which is for reproducible tests. Without a `random` argument noble
-    // would silently sign deterministically.
+    // the deterministic variant, which is for reproducible tests.
     sign: (message) =>
-      impl.sign(secretKey, message, NO_CONTEXT, options.deterministic ? undefined : randomBytes(32)),
+      impl.sign(message, secretKey, {
+        context: NO_CONTEXT,
+        extraEntropy: options.deterministic ? false : randomBytes(32),
+      }),
   };
 }

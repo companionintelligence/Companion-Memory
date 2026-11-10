@@ -261,18 +261,18 @@ Two direct dependencies, both MIT, both **pinned exactly** in `backend/apps/api/
 
 | Package | Version | Used for |
 | --- | --- | --- |
-| `@noble/post-quantum` | 0.4.1 | ML-DSA (pure JavaScript, so it does not depend on the Node version's OpenSSL) |
-| `@noble/hashes` | 1.8.0 | BLAKE3 (the version was already in the lockfile as a transitive dependency) |
+| `@noble/post-quantum` | 0.7.1 | ML-DSA (pure JavaScript, so it does not depend on the Node version's OpenSSL) |
+| `@noble/hashes` | 2.4.0 | BLAKE3 |
 
-Ed25519, P-256 and SHA-256 stay on `node:crypto`. The pins are deliberate. The current majors of both
-packages are ESM-only (`"type": "module"`, no CommonJS entry), and this package is CommonJS: its Jest
-config transforms only an explicit allow-list of ESM-only packages (`jest.config.mjs`), so moving to the
-next major is a change to that list and a runtime check, not a version bump an automated tool should make.
-`@noble/post-quantum` 0.4.1 also has a trap: its declared types say
-`sign(secretKey, message, random?)` but at run time the third argument is the context, and signing is
-**deterministic unless you pass randomness**. [`crypto/mlDsa.ts`](../backend/apps/api/src/domains/identikey/crypto/mlDsa.ts)
-wraps it behind a local interface, passes the empty context explicitly and hedges with 32 random bytes
-unless a test asks for determinism.
+Ed25519, P-256 and SHA-256 stay on `node:crypto`. Both packages, and the `@noble/curves` 2 that
+`@noble/post-quantum` imports, are ESM-only (`"type": "module"`), and this package is CommonJS. The
+compiled app loads them through Node's `require(esm)`, on by default since Node 22.12, and Jest transforms
+them because they are on the allow-list in `jest.config.mjs`. A new major is still a change to check, not a
+version bump to take on trust: 0.4 to 0.7 changed the argument order of `sign` and `verify`, which broke every
+ML-DSA call until [`crypto/mlDsa.ts`](../backend/apps/api/src/domains/identikey/crypto/mlDsa.ts) was moved to
+`sign(message, secretKey, { context, extraEntropy })` and `verify(signature, message, publicKey, { context })`.
+That file passes the empty context explicitly and hedges with 32 random bytes unless a test asks for
+determinism (`extraEntropy: false`).
 
 The suite was run on Node 22.23.4. The repository's `.nvmrc` says 22.15.1 and the production image's
 Dockerfile is on Node 26.13.0; this change was run on neither. ML-DSA and BLAKE3 are pure JavaScript, so
