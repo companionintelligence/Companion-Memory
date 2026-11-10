@@ -19,3 +19,21 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Release builds run R8 (minifyEnabled true in build.gradle). Keep what is reached
+# by reflection or by name over JNI, which R8 cannot see.
+
+# Capacitor finds each plugin class by its annotation and calls its @PluginMethod
+# methods by reflection. The annotation has to survive as well.
+-keepattributes *Annotation*
+-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
+
+# FcmStatusPlugin looks up FirebaseApp by name with Class.forName.
+-keep class com.google.firebase.FirebaseApp { *; }
+
+# SQLCipher and LiteRT are loaded with System.loadLibrary and bind Java classes by name.
+-keep class net.zetetic.** { *; }
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}
