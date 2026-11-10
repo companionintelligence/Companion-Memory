@@ -3,7 +3,6 @@ package com.companionintelligence.app;
 import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
-import android.os.Build;
 import android.view.Window;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.view.WindowCompat;
@@ -26,10 +25,10 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  *
  * <p>So the web side hands over its resolved body colour (the same value it already gives
  * the status bar) and this paints the window with it, and flips the navigation-bar icons
- * to dark-on-light or light-on-dark to match. {@code Window.setStatusBarColor} /
- * {@code setNavigationBarColor} are no-ops under edge-to-edge, which is why the window
- * background is what gets painted; the navigation-bar colour is still set below 35, where
- * the window is not edge-to-edge and the bar draws its own background.
+ * to dark-on-light or light-on-dark to match. {@code Window.setStatusBarColor} and
+ * {@code Window.setNavigationBarColor} are deprecated and no-ops under edge-to-edge, so the
+ * window background is what gets painted. The navigation bar gets no colour of its own: below
+ * Android 15 it keeps the system default, because the deprecated call is what Play flags.
  */
 @CapacitorPlugin(name = "SystemBars")
 public class SystemBarsPlugin extends Plugin {
@@ -55,14 +54,10 @@ public class SystemBarsPlugin extends Plugin {
         });
     }
 
-    @SuppressWarnings("deprecation")
     static void paint(Window window, int color) {
         window.setBackgroundDrawable(new ColorDrawable(color));
         boolean lightBackground = ColorUtils.calculateLuminance(color) > 0.5;
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightNavigationBars(lightBackground);
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-            window.setNavigationBarColor(color);
-        }
     }
 }
