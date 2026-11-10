@@ -72,7 +72,9 @@ export default {
       comment: "Within a domain, import modules directly; do not go through that domain's public barrel.",
       from: {
         path: '^src/domains/([^/]+)/',
-        pathNot: '\\.test\\.ts$',
+        // Tests may go through the barrel: a test of what it exports, or a worked example of the public
+        // API, has to. Both suffixes, because the domains name their tests either way.
+        pathNot: '\\.(test|spec)\\.ts$',
       },
       to: {
         path: '^src/domains/$1/index\\.ts$',
