@@ -15,7 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "VITE_DISABLE_PWA=true storybook build",
-    "graphql:generate": "graphql-codegen",
+    "graphql:generate": "NODE_OPTIONS=\"$NODE_OPTIONS --conditions=module-sync\" graphql-codegen",
     "graphql:watch": "graphql-codegen --watch",
     "brand:sync": "node scripts/sync-brand.mjs",
     "brand:check": "node scripts/sync-brand.mjs --check"
