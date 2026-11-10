@@ -20,8 +20,8 @@ export type Scalars = {
   Float: { input: number; output: number; }
   /** A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format. */
   DateTime: { input: any; output: any; }
-  /** The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf). */
-  JSON: { input: any; output: any; }
+  /** The `JSONObject` scalar type represents JSON objects as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf). */
+  JSONObject: { input: any; output: any; }
 };
 
 export type ActionConnection = Connection & {
@@ -180,7 +180,7 @@ export type AnswerType = Node & {
   __typename?: 'AnswerType';
   answer: Scalars['String']['output'];
   answerConfidence?: Maybe<Scalars['Float']['output']>;
-  answerEvidence?: Maybe<Scalars['JSON']['output']>;
+  answerEvidence?: Maybe<Scalars['JSONObject']['output']>;
   answerMethod: Scalars['String']['output'];
   answerRationale?: Maybe<Scalars['String']['output']>;
   answerSource?: Maybe<Scalars['String']['output']>;
@@ -514,8 +514,8 @@ export type CommunicationType = Node & Taggable & {
   direction: Scalars['String']['output'];
   from?: Maybe<PersonType>;
   id: Scalars['ID']['output'];
-  metadata: Scalars['JSON']['output'];
-  participantsMetadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
+  participantsMetadata: Scalars['JSONObject']['output'];
   preview?: Maybe<Scalars['String']['output']>;
   sourceId?: Maybe<Scalars['String']['output']>;
   sourceSystem?: Maybe<Scalars['String']['output']>;
@@ -595,14 +595,14 @@ export type ConnectionSyncJobType = Node & {
   connection?: Maybe<ConnectionType>;
   connectionId: Scalars['ID']['output'];
   createdAt: Scalars['DateTime']['output'];
-  cursor?: Maybe<Scalars['JSON']['output']>;
-  data: Scalars['JSON']['output'];
+  cursor?: Maybe<Scalars['JSONObject']['output']>;
+  data: Scalars['JSONObject']['output'];
   endpointName: Scalars['String']['output'];
-  error?: Maybe<Scalars['JSON']['output']>;
+  error?: Maybe<Scalars['JSONObject']['output']>;
   id: Scalars['ID']['output'];
   jobId?: Maybe<Scalars['ID']['output']>;
-  nextCursor?: Maybe<Scalars['JSON']['output']>;
-  properties?: Maybe<Scalars['JSON']['output']>;
+  nextCursor?: Maybe<Scalars['JSONObject']['output']>;
+  properties?: Maybe<Scalars['JSONObject']['output']>;
   status: Scalars['String']['output'];
   type: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
@@ -621,7 +621,7 @@ export type ConnectionType = Node & {
   provider: ProviderType;
   providerId: Scalars['ID']['output'];
   schedule?: Maybe<Scalars['String']['output']>;
-  syncState?: Maybe<Scalars['JSON']['output']>;
+  syncState?: Maybe<Scalars['JSONObject']['output']>;
   tokenExpiry?: Maybe<Scalars['DateTime']['output']>;
 };
 
@@ -662,7 +662,7 @@ export type ContentType = Node & Taggable & {
   playbackUrl?: Maybe<Scalars['String']['output']>;
   player?: Maybe<EmbedPlayerType>;
   previewUrl?: Maybe<Scalars['String']['output']>;
-  sourceData?: Maybe<Scalars['JSON']['output']>;
+  sourceData?: Maybe<Scalars['JSONObject']['output']>;
   sourceId?: Maybe<Scalars['String']['output']>;
   sourceSystem?: Maybe<Scalars['String']['output']>;
   sourceType?: Maybe<Scalars['String']['output']>;
@@ -719,7 +719,7 @@ export type CreateBrowserActivityInput = {
   isIncognito?: InputMaybe<Scalars['Boolean']['input']>;
   pageSummary?: InputMaybe<Scalars['String']['input']>;
   productivityScore?: InputMaybe<Scalars['Float']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   scrollDepthPercent?: InputMaybe<Scalars['Float']['input']>;
   sourceId?: InputMaybe<Scalars['String']['input']>;
   sourceSystem?: InputMaybe<Scalars['String']['input']>;
@@ -730,13 +730,13 @@ export type CreateBrowserActivityInput = {
 };
 
 export type CreateCommunicationInput = {
-  attachments?: InputMaybe<Array<Scalars['JSON']['input']>>;
+  attachments?: InputMaybe<Array<Scalars['JSONObject']['input']>>;
   communicationType: Scalars['String']['input'];
   content: Scalars['String']['input'];
   direction?: InputMaybe<Scalars['String']['input']>;
   durationSeconds?: InputMaybe<Scalars['Int']['input']>;
   fromEntityId?: InputMaybe<Scalars['String']['input']>;
-  participantsMetadata?: InputMaybe<Scalars['JSON']['input']>;
+  participantsMetadata?: InputMaybe<Scalars['JSONObject']['input']>;
   preview?: InputMaybe<Scalars['String']['input']>;
   sourceId?: InputMaybe<Scalars['String']['input']>;
   sourceSystem?: InputMaybe<Scalars['String']['input']>;
@@ -768,7 +768,7 @@ export type CreateConnectionInput = {
   providerId: Scalars['ID']['input'];
   refreshToken?: InputMaybe<Scalars['String']['input']>;
   schedule?: InputMaybe<Scalars['String']['input']>;
-  syncState?: InputMaybe<Scalars['JSON']['input']>;
+  syncState?: InputMaybe<Scalars['JSONObject']['input']>;
   tokenExpiry?: InputMaybe<Scalars['DateTime']['input']>;
 };
 
@@ -781,10 +781,10 @@ export type CreateConnectionPayload = {
 export type CreateConnectionSyncJobInput = {
   connectionId: Scalars['ID']['input'];
   endpointName: Scalars['String']['input'];
-  error?: InputMaybe<Scalars['JSON']['input']>;
+  error?: InputMaybe<Scalars['JSONObject']['input']>;
   id?: InputMaybe<Scalars['ID']['input']>;
   jobId?: InputMaybe<Scalars['ID']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   type: Scalars['String']['input'];
   userId: Scalars['ID']['input'];
 };
@@ -799,7 +799,7 @@ export type CreateContentInput = {
   eventId?: InputMaybe<Scalars['ID']['input']>;
   externalId?: InputMaybe<Scalars['String']['input']>;
   mimetype?: InputMaybe<Scalars['String']['input']>;
-  sourceData?: InputMaybe<Scalars['JSON']['input']>;
+  sourceData?: InputMaybe<Scalars['JSONObject']['input']>;
   sourceId?: InputMaybe<Scalars['String']['input']>;
   sourceSystem?: InputMaybe<Scalars['String']['input']>;
   sourceType?: InputMaybe<Scalars['String']['input']>;
@@ -821,10 +821,10 @@ export type CreateEventInput = {
   /** CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced. */
   isLocked?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
-  locationCoordinates?: InputMaybe<Scalars['JSON']['input']>;
+  locationCoordinates?: InputMaybe<Scalars['JSONObject']['input']>;
   locationEntityId?: InputMaybe<Scalars['ID']['input']>;
   locationName?: InputMaybe<Scalars['String']['input']>;
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   organizerEntityId?: InputMaybe<Scalars['ID']['input']>;
   participantEntityIds?: InputMaybe<Array<Scalars['ID']['input']>>;
   sharingLevel?: InputMaybe<Scalars['String']['input']>;
@@ -849,7 +849,7 @@ export type CreateItemInput = {
   /** Colour names, dominant first. */
   colors?: InputMaybe<Array<Scalars['String']['input']>>;
   /** {material: fraction} summing to at most 1. Percentages are accepted and converted. */
-  composition?: InputMaybe<Scalars['JSON']['input']>;
+  composition?: InputMaybe<Scalars['JSONObject']['input']>;
   condition?: InputMaybe<ItemCondition>;
   currency?: InputMaybe<Scalars['String']['input']>;
   currentValue?: InputMaybe<Scalars['Float']['input']>;
@@ -861,7 +861,7 @@ export type CreateItemInput = {
   /** Height, in millimetres. */
   heightMm?: InputMaybe<Scalars['Float']['input']>;
   /** Serial number, UPC, ISBN, order id, … */
-  identifierCodes?: InputMaybe<Scalars['JSON']['input']>;
+  identifierCodes?: InputMaybe<Scalars['JSONObject']['input']>;
   /** A digital item is refused a mass, a size and a volume. */
   isDigital?: InputMaybe<Scalars['Boolean']['input']>;
   /** Longest dimension, in millimetres. */
@@ -872,7 +872,7 @@ export type CreateItemInput = {
   massG?: InputMaybe<Scalars['Float']['input']>;
   /** What the object is made of. */
   materials?: InputMaybe<Array<Scalars['String']['input']>>;
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   model?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
   purchasePrice?: InputMaybe<Scalars['Float']['input']>;
@@ -952,14 +952,14 @@ export type CreatePlaceInput = {
   description?: InputMaybe<Scalars['String']['input']>;
   estimated?: InputMaybe<Scalars['Boolean']['input']>;
   geoFormat?: InputMaybe<Scalars['String']['input']>;
-  geolocation?: InputMaybe<Scalars['JSON']['input']>;
+  geolocation?: InputMaybe<Scalars['JSONObject']['input']>;
   latitude?: InputMaybe<Scalars['Float']['input']>;
-  locationBoundary?: InputMaybe<Scalars['JSON']['input']>;
+  locationBoundary?: InputMaybe<Scalars['JSONObject']['input']>;
   longitude?: InputMaybe<Scalars['Float']['input']>;
   name: Scalars['String']['input'];
   parentId?: InputMaybe<Scalars['String']['input']>;
   placeKind?: InputMaybe<Scalars['String']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   tracked?: InputMaybe<Scalars['Boolean']['input']>;
   type?: InputMaybe<Scalars['String']['input']>;
   uploaded?: InputMaybe<Scalars['Boolean']['input']>;
@@ -981,7 +981,7 @@ export type CreateRelationshipInput = {
   fromNodeId: Scalars['ID']['input'];
   fromNodeType: Scalars['String']['input'];
   isBidirectional?: InputMaybe<Scalars['Boolean']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   startDate?: InputMaybe<Scalars['DateTime']['input']>;
   strength?: InputMaybe<Scalars['Float']['input']>;
   toNodeId: Scalars['String']['input'];
@@ -1062,7 +1062,7 @@ export type CreateThingInput = {
   /** Colour names, dominant first. */
   colors?: InputMaybe<Array<Scalars['String']['input']>>;
   /** {material: fraction} summing to at most 1. Percentages are accepted and converted. */
-  composition?: InputMaybe<Scalars['JSON']['input']>;
+  composition?: InputMaybe<Scalars['JSONObject']['input']>;
   condition?: InputMaybe<ItemCondition>;
   currency?: InputMaybe<Scalars['String']['input']>;
   currentValue?: InputMaybe<Scalars['Float']['input']>;
@@ -1073,7 +1073,7 @@ export type CreateThingInput = {
   expiresAt?: InputMaybe<Scalars['DateTime']['input']>;
   /** Height, in millimetres. */
   heightMm?: InputMaybe<Scalars['Float']['input']>;
-  identifierCodes?: InputMaybe<Scalars['JSON']['input']>;
+  identifierCodes?: InputMaybe<Scalars['JSONObject']['input']>;
   /** A digital item is refused a mass, a size and a volume. */
   isDigital?: InputMaybe<Scalars['Boolean']['input']>;
   /** Longest dimension, in millimetres. */
@@ -1084,7 +1084,7 @@ export type CreateThingInput = {
   massG?: InputMaybe<Scalars['Float']['input']>;
   /** What the object is made of. */
   materials?: InputMaybe<Array<Scalars['String']['input']>>;
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   model?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
   purchasePrice?: InputMaybe<Scalars['Float']['input']>;
@@ -1257,7 +1257,7 @@ export type EventType = Node & Taggable & {
   /** The last instant this row's startTime/endTime changed. Null means never observed moving. */
   lastMovedAt?: Maybe<Scalars['DateTime']['output']>;
   location?: Maybe<PlaceType>;
-  locationCoordinates?: Maybe<Scalars['JSON']['output']>;
+  locationCoordinates?: Maybe<Scalars['JSONObject']['output']>;
   locationEntityId?: Maybe<Scalars['ID']['output']>;
   locationName?: Maybe<Scalars['String']['output']>;
   mediaContentType?: Maybe<Scalars['String']['output']>;
@@ -1265,7 +1265,7 @@ export type EventType = Node & Taggable & {
   mediaSize?: Maybe<Scalars['Float']['output']>;
   mediaUrl?: Maybe<Scalars['String']['output']>;
   mediaWidth?: Maybe<Scalars['Int']['output']>;
-  metadata?: Maybe<Scalars['JSON']['output']>;
+  metadata?: Maybe<Scalars['JSONObject']['output']>;
   organizer?: Maybe<PersonType>;
   organizerEntityId?: Maybe<Scalars['ID']['output']>;
   /** Parent event for sub-events / follow-ups. Children: filter by this id. */
@@ -1324,7 +1324,7 @@ export type FileChunkType = Node & {
   parserName: Scalars['String']['output'];
   parserVersion: Scalars['String']['output'];
   sectionTitle?: Maybe<Scalars['String']['output']>;
-  sourceLocator?: Maybe<Scalars['JSON']['output']>;
+  sourceLocator?: Maybe<Scalars['JSONObject']['output']>;
   updatedAt: Scalars['DateTime']['output'];
 };
 
@@ -1519,7 +1519,7 @@ export type GraphEdgeType = {
   fromEntityId: Scalars['ID']['output'];
   id: Scalars['ID']['output'];
   isActive: Scalars['Boolean']['output'];
-  properties?: Maybe<Scalars['JSON']['output']>;
+  properties?: Maybe<Scalars['JSONObject']['output']>;
   strength?: Maybe<Scalars['Float']['output']>;
   toEntityId: Scalars['ID']['output'];
   type: Scalars['String']['output'];
@@ -1530,7 +1530,7 @@ export type GraphEntityInput = {
   entityType: Scalars['String']['input'];
   key: Scalars['String']['input'];
   name?: InputMaybe<Scalars['String']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   sourceSystem: Scalars['String']['input'];
 };
 
@@ -1543,12 +1543,12 @@ export type GraphNodeType = {
   linkedId?: Maybe<Scalars['String']['output']>;
   linkedTable?: Maybe<Scalars['String']['output']>;
   name?: Maybe<Scalars['String']['output']>;
-  properties?: Maybe<Scalars['JSON']['output']>;
+  properties?: Maybe<Scalars['JSONObject']['output']>;
 };
 
 export type GraphRelationshipInput = {
   fromKey: Scalars['String']['input'];
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   toKey: Scalars['String']['input'];
   type: Scalars['String']['input'];
 };
@@ -1648,7 +1648,7 @@ export type ItemRelationshipInput = {
   fromSourceId: Scalars['String']['input'];
   fromSourceSystem: Scalars['String']['input'];
   fromSourceType: Scalars['String']['input'];
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   relation: Scalars['String']['input'];
   toSourceId: Scalars['String']['input'];
   toSourceSystem: Scalars['String']['input'];
@@ -1681,7 +1681,7 @@ export type ItemType = Node & Taggable & {
   /** Colour names, dominant first. */
   colors?: Maybe<Array<Scalars['String']['output']>>;
   /** {material: fraction}; {} when the proportions are unknown. */
-  composition: Scalars['JSON']['output'];
+  composition: Scalars['JSONObject']['output'];
   condition?: Maybe<ItemCondition>;
   createdAt: Scalars['DateTime']['output'];
   currency: Scalars['String']['output'];
@@ -1709,7 +1709,7 @@ export type ItemType = Node & Taggable & {
   massG?: Maybe<Scalars['Float']['output']>;
   /** What the object is made of. */
   materials?: Maybe<Array<Scalars['String']['output']>>;
-  metadata?: Maybe<Scalars['JSON']['output']>;
+  metadata?: Maybe<Scalars['JSONObject']['output']>;
   model?: Maybe<Scalars['String']['output']>;
   name?: Maybe<Scalars['String']['output']>;
   observations: Array<ObjectObservationType>;
@@ -1935,7 +1935,7 @@ export type MetricAnomalyType = {
   detector: Scalars['String']['output'];
   direction: Scalars['String']['output'];
   id: Scalars['String']['output'];
-  metadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
   metric: Scalars['String']['output'];
   score: Scalars['Float']['output'];
   value?: Maybe<Scalars['Float']['output']>;
@@ -1987,7 +1987,7 @@ export type MetricSuggestionType = {
   __typename?: 'MetricSuggestionType';
   acceptedAt?: Maybe<Scalars['String']['output']>;
   dismissedAt?: Maybe<Scalars['String']['output']>;
-  evidence: Scalars['JSON']['output'];
+  evidence: Scalars['JSONObject']['output'];
   id: Scalars['String']['output'];
   key: Scalars['String']['output'];
   priority?: Maybe<Scalars['Int']['output']>;
@@ -2948,7 +2948,7 @@ export type ObjectMergeCountsType = {
 
 export type ObjectObservationType = Node & {
   __typename?: 'ObjectObservationType';
-  attributes: Scalars['JSON']['output'];
+  attributes: Scalars['JSONObject']['output'];
   bbox?: Maybe<BoundingBoxType>;
   /** A human confirmed this link. Written only by confirmObservation. */
   confirmedByUser: Scalars['Boolean']['output'];
@@ -2966,7 +2966,7 @@ export type ObjectObservationType = Node & {
   labelSource?: Maybe<ObservationLabelSource>;
   /** The cropped thumbnail of the sighting, or the whole frame when there is no crop. */
   media?: Maybe<ContentType>;
-  metadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
   observedAt: Scalars['DateTime']['output'];
   place?: Maybe<PlaceType>;
   placeEntityId?: Maybe<Scalars['ID']['output']>;
@@ -3237,23 +3237,23 @@ export type PlaceNearType = {
 export type PlaceType = Node & Taggable & {
   __typename?: 'PlaceType';
   appearedAt?: Maybe<Scalars['DateTime']['output']>;
-  boundary?: Maybe<Scalars['JSON']['output']>;
+  boundary?: Maybe<Scalars['JSONObject']['output']>;
   description?: Maybe<Scalars['String']['output']>;
   entityType: Scalars['String']['output'];
   estimated?: Maybe<Scalars['Boolean']['output']>;
   geoFormat?: Maybe<Scalars['String']['output']>;
-  geolocation?: Maybe<Scalars['JSON']['output']>;
+  geolocation?: Maybe<Scalars['JSONObject']['output']>;
   id: Scalars['ID']['output'];
   incomingRelationships?: Maybe<Array<RelationshipType>>;
   latitude?: Maybe<Scalars['Float']['output']>;
-  locationBoundary?: Maybe<Scalars['JSON']['output']>;
+  locationBoundary?: Maybe<Scalars['JSONObject']['output']>;
   longitude?: Maybe<Scalars['Float']['output']>;
   name?: Maybe<Scalars['String']['output']>;
   outgoingRelationships?: Maybe<Array<RelationshipType>>;
   parent?: Maybe<PlaceType>;
   parentId?: Maybe<Scalars['ID']['output']>;
   placeKind?: Maybe<Scalars['String']['output']>;
-  properties: Scalars['JSON']['output'];
+  properties: Scalars['JSONObject']['output'];
   tags: Array<EntityTagType>;
   tracked?: Maybe<Scalars['Boolean']['output']>;
   type?: Maybe<Scalars['String']['output']>;
@@ -3369,7 +3369,7 @@ export type ProductModelType = Node & Taggable & {
   /** ci.content rows holding manuals. */
   manualContentIds?: Maybe<Array<Scalars['ID']['output']>>;
   manufacturer?: Maybe<Scalars['String']['output']>;
-  metadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
   modelNumber?: Maybe<Scalars['String']['output']>;
   /** Manufacturer list price in integer MINOR units of `currency`. */
   msrpMinor?: Maybe<Scalars['Int']['output']>;
@@ -3380,13 +3380,13 @@ export type ProductModelType = Node & Taggable & {
   sourceSystem?: Maybe<Scalars['String']['output']>;
   sourceType?: Maybe<Scalars['String']['output']>;
   /** Descriptive specifications. */
-  spec: Scalars['JSON']['output'];
+  spec: Scalars['JSONObject']['output'];
   subcategory?: Maybe<Scalars['String']['output']>;
   tags: Array<EntityTagType>;
   title: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
   /** Variant AXES only ({color, capacity, size}) — never descriptive specs. */
-  variantAttributes: Scalars['JSON']['output'];
+  variantAttributes: Scalars['JSONObject']['output'];
 };
 
 export type ProviderConnection = Connection & {
@@ -4290,7 +4290,7 @@ export type ReceiptLineItemType = {
   /** False for ebooks, subscriptions and gift cards. Only physical lines mint owned units. */
   isPhysical: Scalars['Boolean']['output'];
   lineNumber: Scalars['Int']['output'];
-  metadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
   mintedObjectId?: Maybe<Scalars['ID']['output']>;
   modelNumber?: Maybe<Scalars['String']['output']>;
   productId?: Maybe<Scalars['ID']['output']>;
@@ -4320,7 +4320,7 @@ export type ReceiptType = Node & Taggable & {
   lineItems: Array<ReceiptLineItemType>;
   merchantEntityId?: Maybe<Scalars['ID']['output']>;
   merchantName?: Maybe<Scalars['String']['output']>;
-  metadata: Scalars['JSON']['output'];
+  metadata: Scalars['JSONObject']['output'];
   orderNumber?: Maybe<Scalars['String']['output']>;
   /** Last four digits only. A full card number is never stored. */
   paymentLast4?: Maybe<Scalars['String']['output']>;
@@ -4366,7 +4366,7 @@ export type RelationshipType = Node & {
   fromNodeType: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   isBidirectional: Scalars['Boolean']['output'];
-  properties?: Maybe<Scalars['JSON']['output']>;
+  properties?: Maybe<Scalars['JSONObject']['output']>;
   startDate?: Maybe<Scalars['DateTime']['output']>;
   strength?: Maybe<Scalars['Float']['output']>;
   toNodeId: Scalars['ID']['output'];
@@ -4520,7 +4520,7 @@ export type ScheduleCandidateType = {
   id: Scalars['ID']['output'];
   l0Class?: Maybe<Scalars['String']['output']>;
   /** Saved how-you'd-do-it compose for this card, when the user has personalized it */
-  personalization?: Maybe<Scalars['JSON']['output']>;
+  personalization?: Maybe<Scalars['JSONObject']['output']>;
   /** The sentence shown to the user. Never empty. */
   rationale: Scalars['String']['output'];
   rationaleSources: Array<RationaleSourceType>;
@@ -4795,7 +4795,7 @@ export type TaskPendingChangeType = Node & {
   createdAt: Scalars['DateTime']['output'];
   id: Scalars['ID']['output'];
   kind: TaskPendingChangeKind;
-  patch: Scalars['JSON']['output'];
+  patch: Scalars['JSONObject']['output'];
   rationale?: Maybe<Scalars['String']['output']>;
   resolvedAt?: Maybe<Scalars['DateTime']['output']>;
   status: TaskPendingChangeStatus;
@@ -4893,7 +4893,7 @@ export type UnfurlType = {
   durationSeconds?: Maybe<Scalars['Int']['output']>;
   externalRef?: Maybe<Scalars['String']['output']>;
   fetchedAt: Scalars['DateTime']['output'];
-  payload: Scalars['JSON']['output'];
+  payload: Scalars['JSONObject']['output'];
   resolver: Scalars['String']['output'];
   siteName?: Maybe<Scalars['String']['output']>;
   status: Scalars['String']['output'];
@@ -4949,7 +4949,7 @@ export type UpdateConnectionInput = {
   needsReauth?: InputMaybe<Scalars['Boolean']['input']>;
   refreshToken?: InputMaybe<Scalars['String']['input']>;
   schedule?: InputMaybe<Scalars['String']['input']>;
-  syncState?: InputMaybe<Scalars['JSON']['input']>;
+  syncState?: InputMaybe<Scalars['JSONObject']['input']>;
   tokenExpiry?: InputMaybe<Scalars['DateTime']['input']>;
 };
 
@@ -4962,10 +4962,10 @@ export type UpdateConnectionPayload = {
 export type UpdateConnectionSyncJobInput = {
   completedAt?: InputMaybe<Scalars['DateTime']['input']>;
   endpointName?: InputMaybe<Scalars['String']['input']>;
-  error?: InputMaybe<Scalars['JSON']['input']>;
+  error?: InputMaybe<Scalars['JSONObject']['input']>;
   id: Scalars['ID']['input'];
   jobId?: InputMaybe<Scalars['ID']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   type?: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -4979,7 +4979,7 @@ export type UpdateContentInput = {
   externalId?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
   mimetype?: InputMaybe<Scalars['String']['input']>;
-  sourceData?: InputMaybe<Scalars['JSON']['input']>;
+  sourceData?: InputMaybe<Scalars['JSONObject']['input']>;
   sourceUrl?: InputMaybe<Scalars['String']['input']>;
   text?: InputMaybe<Scalars['String']['input']>;
   title?: InputMaybe<Scalars['String']['input']>;
@@ -5004,10 +5004,10 @@ export type UpdateEventInput = {
   /** CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced. */
   isLocked?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
-  locationCoordinates?: InputMaybe<Scalars['JSON']['input']>;
+  locationCoordinates?: InputMaybe<Scalars['JSONObject']['input']>;
   locationEntityId?: InputMaybe<Scalars['ID']['input']>;
   locationName?: InputMaybe<Scalars['String']['input']>;
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   organizerEntityId?: InputMaybe<Scalars['ID']['input']>;
   participantEntityIds?: InputMaybe<Array<Scalars['ID']['input']>>;
   sourceId?: InputMaybe<Scalars['ID']['input']>;
@@ -5037,7 +5037,7 @@ export type UpdateItemInput = {
   /** Colour names, dominant first. */
   colors?: InputMaybe<Array<Scalars['String']['input']>>;
   /** {material: fraction} summing to at most 1. Percentages are accepted and converted. */
-  composition?: InputMaybe<Scalars['JSON']['input']>;
+  composition?: InputMaybe<Scalars['JSONObject']['input']>;
   condition?: InputMaybe<ItemCondition>;
   currency?: InputMaybe<Scalars['String']['input']>;
   currentValue?: InputMaybe<Scalars['Float']['input']>;
@@ -5060,7 +5060,7 @@ export type UpdateItemInput = {
   massG?: InputMaybe<Scalars['Float']['input']>;
   /** What the object is made of. */
   materials?: InputMaybe<Array<Scalars['String']['input']>>;
-  metadata?: InputMaybe<Scalars['JSON']['input']>;
+  metadata?: InputMaybe<Scalars['JSONObject']['input']>;
   model?: InputMaybe<Scalars['String']['input']>;
   name: Scalars['String']['input'];
   purchasePrice?: InputMaybe<Scalars['Float']['input']>;
@@ -5150,15 +5150,15 @@ export type UpdatePlaceInput = {
   description?: InputMaybe<Scalars['String']['input']>;
   estimated?: InputMaybe<Scalars['Boolean']['input']>;
   geoFormat?: InputMaybe<Scalars['String']['input']>;
-  geolocation?: InputMaybe<Scalars['JSON']['input']>;
+  geolocation?: InputMaybe<Scalars['JSONObject']['input']>;
   id: Scalars['String']['input'];
   latitude?: InputMaybe<Scalars['Float']['input']>;
-  locationBoundary?: InputMaybe<Scalars['JSON']['input']>;
+  locationBoundary?: InputMaybe<Scalars['JSONObject']['input']>;
   longitude?: InputMaybe<Scalars['Float']['input']>;
   name: Scalars['String']['input'];
   parentId?: InputMaybe<Scalars['String']['input']>;
   placeKind?: InputMaybe<Scalars['String']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   tracked?: InputMaybe<Scalars['Boolean']['input']>;
   type?: InputMaybe<Scalars['String']['input']>;
   uploaded?: InputMaybe<Scalars['Boolean']['input']>;
@@ -5179,7 +5179,7 @@ export type UpdateRelationshipInput = {
   endDate?: InputMaybe<Scalars['DateTime']['input']>;
   id: Scalars['ID']['input'];
   isBidirectional?: InputMaybe<Scalars['Boolean']['input']>;
-  properties?: InputMaybe<Scalars['JSON']['input']>;
+  properties?: InputMaybe<Scalars['JSONObject']['input']>;
   startDate?: InputMaybe<Scalars['DateTime']['input']>;
   strength?: InputMaybe<Scalars['Float']['input']>;
 };
