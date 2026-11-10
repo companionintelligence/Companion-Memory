@@ -59,6 +59,7 @@ export function publicKeyFromDidKey(did: string): Uint8Array {
   if (!did.startsWith(DID_KEY_PREFIX)) {
     throw new DidKeyError('not a did:key');
   }
+
   const fingerprint = did.slice(DID_KEY_PREFIX.length);
   if (!FINGERPRINT_PATTERN.test(fingerprint)) {
     throw new DidKeyError('a did:key identifier is a multibase base58btc string');
@@ -71,8 +72,10 @@ export function publicKeyFromDidKey(did: string): Uint8Array {
     if (error instanceof MultibaseError) {
       throw new DidKeyError(error.message);
     }
+
     throw error;
   }
+
   if (decoded.length !== 34 || decoded[0] !== 0xed || decoded[1] !== 0x01) {
     throw new DidKeyError('only Ed25519 did:key identifiers (multicodec 0xed01, 32 bytes) are supported');
   }
@@ -108,14 +111,17 @@ export function parseDidKeyUrl(didUrl: string): { did: string; fragment?: string
   if (!didUrl.startsWith(DID_KEY_PREFIX)) {
     throw new DidKeyError('not a did:key URL');
   }
+
   const hash = didUrl.indexOf('#');
   const did = hash === -1 ? didUrl : didUrl.slice(0, hash);
   if (/[/?]/.test(did)) {
     throw new DidKeyError('a did:key URL here carries no path or query');
   }
+
   if (hash === -1) {
     return { did };
   }
+
   const fragment = didUrl.slice(hash + 1);
   if (fragment === '' || fragment.includes('#')) {
     throw new DidKeyError('malformed DID URL fragment');
@@ -136,6 +142,7 @@ export function resolveDidKey(didOrUrl: string): DidDocument {
   if (did !== `${DID_KEY_PREFIX}${fingerprint}`) {
     throw new DidKeyError('the did:key identifier is not canonical');
   }
+
   if (fragment !== undefined && fragment !== fingerprint) {
     throw new DidKeyError('a did:key has one verification method, named by its own fingerprint');
   }

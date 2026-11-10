@@ -86,7 +86,9 @@ export interface PwsErrorOptions {
 /** A failure that maps to one problem response. Thrown by operations, rendered by the handler. */
 export class PwsError extends Error {
   readonly status: number;
+
   readonly errors: ProblemDetail[] | undefined;
+
   readonly headers: Record<string, string>;
 
   constructor(

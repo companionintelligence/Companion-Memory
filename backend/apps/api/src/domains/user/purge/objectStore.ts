@@ -131,7 +131,9 @@ async function deleteStoredObjects(
       // should say which dependency to go and look at.
       const message = err instanceof Error ? err.message : String(err);
 
-      throw new Error(`Object store unavailable; the purge stopped before the rows: ${message}`);
+      throw new Error(`Object store unavailable; the purge stopped before the rows: ${message}`, {
+        cause: err,
+      });
     }
 
     deleted += keys.length;

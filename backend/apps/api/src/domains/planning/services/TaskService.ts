@@ -727,7 +727,7 @@ export class TaskService {
       return { task: null, change: null };
     }
 
-    let task: Task | null = null;
+    let task: Task | null;
 
     if (change.kind === 'complete') {
       task = await this.complete(context, change.taskId);

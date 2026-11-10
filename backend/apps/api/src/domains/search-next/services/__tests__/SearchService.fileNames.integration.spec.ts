@@ -5,8 +5,11 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
 import { RETRIEVAL_POLICY_DEFAULTS } from '@ci/domains/retrieval-policy';
-import { fileWeightedTexts, type FileSearchFields } from '@ci/domains/search-ingress/searchTexts';
-import { buildVectorUpsertStatement } from '@ci/domains/search-ingress/services/VectorService';
+import {
+  buildVectorUpsertStatement,
+  fileWeightedTexts,
+  type FileSearchFields,
+} from '@ci/domains/search-ingress';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { SearchService } from '../SearchService';

@@ -115,6 +115,7 @@ describe('multikey', () => {
 
       try {
         jwkFromMultikey(`z${base58btcEncode(compressed)}`);
+
         return false;
       } catch (error) {
         return error instanceof DidcommError && /not on the curve/.test(error.message);

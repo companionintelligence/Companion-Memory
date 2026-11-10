@@ -1,6 +1,6 @@
 import { isIP } from 'node:net';
 
-import { stripInvisible } from '@ci/domains/asks/canonical';
+import { stripInvisible } from '@ci/common/stripInvisible';
 
 import { isDidKeyId, wellFormedDidKeyJwk } from './didKeyId';
 

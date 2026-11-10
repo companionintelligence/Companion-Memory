@@ -322,7 +322,7 @@ export class WikidataResolver implements UnfurlResolver {
     }
 
     let qids = direct.filter((p) => p.qid).map((p) => p.qid!);
-    let entities = qids.length ? await this.entities(fetcher, qids) : [];
+    const entities = qids.length ? await this.entities(fetcher, qids) : [];
     if ('status' in entities) {
       return entities;
     }
@@ -348,7 +348,6 @@ export class WikidataResolver implements UnfurlResolver {
           return more;
         }
 
-        entities = [...entities, ...more];
         picked = pickEntity(more, work);
       }
     }

@@ -74,6 +74,7 @@ export function resolveEventLocationReopener(moduleRef: ModuleRef | undefined): 
       `No provider is bound to ${EVENT_LOCATION_REOPENER}. A source's location move cannot re-open the ` +
         `pipeline's decisions on the event's place without it (PipelineModule binds it). Cause: ` +
         `${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

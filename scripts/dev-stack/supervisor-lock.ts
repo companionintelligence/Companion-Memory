@@ -144,7 +144,7 @@ export function acquireSupervisorLock(
 
         released = true;
         // Only our own lock: never delete one a later supervisor has taken.
-        let current: LockHolder | null = null;
+        let current: LockHolder | null;
         try {
           current = parseHolder(fs.readFileSync(file, 'utf8'));
         } catch {

@@ -1308,7 +1308,7 @@ export function peerLinkIdFrom(value: string): string {
     return value;
   }
 
-  let decoded: { type: string; id: string } | null = null;
+  let decoded: { type: string; id: string } | null;
   try {
     decoded = GlobalUID.decode(value);
   } catch {

@@ -15,6 +15,7 @@ async function world(config: ConstructorParameters<typeof World>[0] = {}): Promi
   await w.createCollection(alice, S, C);
   await w.putResource(alice, S, C, 'a', { n: 'a' });
   await w.putResource(alice, S, C, 'b', { n: 'b' });
+
   return w;
 }
 
@@ -41,6 +42,7 @@ describe('signature layer: failures describe the request (400) and never depend 
       capabilityInvocation: formatCapabilityInvocation({ rootId: rootZcapId(url), action: 'GET' }),
     });
     edit(headers);
+
     return w.handler.handle({ method: 'GET', url, headers });
   }
 
@@ -95,6 +97,7 @@ describe('signature layer: failures describe the request (400) and never depend 
       expect(res.status).toBe(400);
       expect(res.type).toBe('invalid-authorization-header');
     }
+
     expect(
       (await w.send({ method: 'HEAD', path: `space/${S}/${C}/a`, as: alice, action: 'PUT' })).status,
     ).toBe(400);
@@ -139,8 +142,10 @@ describe('signature layer: failures describe the request (400) and never depend 
         created: Math.floor(w.now.getTime() / 1000),
         capabilityInvocation: formatCapabilityInvocation({ rootId: rootZcapId(url), action: 'GET' }),
       });
+
       return w.handler.handle({ method: 'GET', url, headers });
     };
+
     expect((await sign('did:web:example.com#key-1')).status).toBe(400);
     expect((await sign(`${alice.did}#z6MkwrongFragment`)).status).toBe(400);
     expect((await sign(alice.did)).status).toBe(400);
@@ -412,6 +417,7 @@ describe('delegation: what a capability authorizes', () => {
       for (const bad of [forged, widened]) {
         expect((await read(w, bad, app)).type).toBe('not-found');
       }
+
       // a later link with a bad proof, below an expired one
       const second = await w.delegate({
         from: bob, // not the controller of the (expired) parent
@@ -637,6 +643,7 @@ describe('delegation: what a capability authorizes', () => {
           actions: ['GET'],
         });
       }
+
       expect((await read(w, grant, people[3]!)).status).toBe(404);
     });
   });
@@ -847,6 +854,7 @@ describe('policies', () => {
     for (const body of [{ type: 'AuthenticatedCanRead' }, { type: '' }, {}, { type: 3 }]) {
       expect((await policy(w, `space/${S}/${C}/policy`, body)).type).toBe('invalid-request-body');
     }
+
     expect((await policy(w, `space/${S}/nothing/policy`, { type: 'PublicCanRead' })).status).toBe(404);
     expect((await policy(w, `space/${S}/${C}/ghost/policy`, { type: 'PublicCanRead' })).status).toBe(404);
   });
@@ -910,6 +918,7 @@ describe('routes, methods and transport', () => {
       expect(res.status).toBe(405);
       expect(res.header('allow')).toBe(allow);
     }
+
     const existing = await w.send({ method: 'PUT', path: `space/${S}/`, as: alice, json: {} });
     const missing = await w.send({ method: 'PUT', path: 'space/ghost/', as: bob, json: {} });
     const anonymous = await w.send({ method: 'PUT', path: 'space/ghost/', json: {} });
@@ -956,6 +965,7 @@ describe('routes, methods and transport', () => {
       const res = await w.send({ method: 'GET', path, as: alice, root: w.spaceUrl(S) });
       expect([path, res.status]).toEqual([path, 404]);
     }
+
     const bad = await w.send({ method: 'GET', path: 'space/has%20space/', as: alice });
     expect(bad.status).toBe(404);
   });
@@ -1100,6 +1110,7 @@ describe('a grant is compared with the URL as the router reads it', () => {
         expect([method, path, res.status]).toEqual([method, path, 404]);
       }
     }
+
     // nothing was read, written, deleted or made public
     expect(
       (await w.send({ method: 'GET', path: `space/${S}/other/x`, as: alice, root: w.spaceUrl(S) })).json,
@@ -1186,6 +1197,7 @@ describe('a malformed capability is the masked 404 for every target alike', () =
         expect(gone.text).toBe(there.text);
       }
     }
+
     expect(errors).toEqual([]);
   });
 });

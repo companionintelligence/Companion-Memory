@@ -29,15 +29,18 @@ export function extractIndexed(
   if (index.source !== 'content' || !isJsonMediaType(contentType)) {
     return undefined;
   }
+
   try {
     const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       return undefined;
     }
+
     // an own property only: an index named `__proto__` or `constructor` must not read the prototype
     const value = Object.hasOwn(parsed, index.name)
       ? (parsed as Record<string, unknown>)[index.name]
       : undefined;
+
     return value === undefined || value === null ? undefined : JSON.stringify(value);
   } catch {
     return undefined;
@@ -69,6 +72,7 @@ async function allResources(tx: PwsTx, spaceId: string, collectionId: string): P
     if (!page.hasMore || !last) {
       return all;
     }
+
     after = last.id;
   }
 }
@@ -89,6 +93,7 @@ export async function assertWriteIsUnique(
   if (unique.length === 0) {
     return;
   }
+
   const others = (await allResources(tx, args.spaceId, args.collectionId)).filter(
     (r) => r.id !== args.candidate.id,
   );
@@ -97,6 +102,7 @@ export async function assertWriteIsUnique(
     if (value === undefined) {
       continue;
     }
+
     if (others.some((other) => extractIndexed(index, other.contentType, other.bytes) === value)) {
       throw new PwsError('id-conflict', `The value of "${index.name}" is already held by another Resource.`);
     }
@@ -114,6 +120,7 @@ export async function assertDeclarationHolds(
   if (unique.length === 0) {
     return;
   }
+
   const resources = await allResources(tx, args.spaceId, args.collectionId);
   for (const index of unique) {
     const seen = new Set<string>();
@@ -122,12 +129,14 @@ export async function assertDeclarationHolds(
       if (value === undefined) {
         continue;
       }
+
       if (seen.has(value)) {
         throw new PwsError(
           'id-conflict',
           `Existing Resources already share a value of "${index.name}", so it cannot be declared unique.`,
         );
       }
+
       seen.add(value);
     }
   }

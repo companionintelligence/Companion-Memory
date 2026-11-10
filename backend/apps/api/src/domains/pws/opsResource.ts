@@ -15,11 +15,11 @@ import type { PwsResponse } from './http';
 import { assertWriteIsUnique } from './indexes';
 import { bump, etagOf, newValidator } from './models';
 import type { CollectionRecord, ResourceRecord, SpaceRecord } from './models';
-import { PwsError, invalidBody, notFound } from './problems';
 import { requireCollection } from './opsCollection';
 import { requireSpace } from './opsSpace';
-import { resourceMetaView } from './views';
+import { PwsError, invalidBody, notFound } from './problems';
 import { readLabelHeader, readResourceMetaBody } from './validate';
+import { resourceMetaView } from './views';
 
 interface Parents {
   space: SpaceRecord;
@@ -45,6 +45,7 @@ async function parents(
     policyChain: policyChain(space.id, collectionId, resourceId),
   });
   const collection = await requireCollection(ctx, spaceId, collectionId);
+
   return { space, collection, access };
 }
 
@@ -54,10 +55,12 @@ function readContent(ctx: OpContext): { contentType: string; bytes: Uint8Array }
   if (contentType === undefined || contentType.trim() === '') {
     throw new PwsError('missing-content-type', 'A Resource write needs a Content-Type header.');
   }
+
   const bytes = ctx.req.body;
   if (bytes.byteLength > ctx.env.maxUploadBytes) {
     throw new PwsError('payload-too-large', `A Resource may not exceed ${ctx.env.maxUploadBytes} bytes.`);
   }
+
   // The optional form-upload workflow is not implemented. Storing the multipart envelope as if it were
   // the file would hand an HTML-form client a Resource it never uploaded, so say so instead.
   if (/^multipart\/form-data\s*(;|$)/i.test(contentType)) {
@@ -66,6 +69,7 @@ function readContent(ctx: OpContext): { contentType: string; bytes: Uint8Array }
       'multipart/form-data uploads are not supported; upload the file itself as the request body and set its media type in Content-Type.',
     );
   }
+
   if (isJsonMediaType(contentType)) {
     try {
       JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
@@ -73,6 +77,7 @@ function readContent(ctx: OpContext): { contentType: string; bytes: Uint8Array }
       throw invalidBody('The body is not valid JSON for its declared content type.');
     }
   }
+
   return { contentType: contentType.trim(), bytes };
 }
 
@@ -90,6 +95,7 @@ function contentHeaders(
   if (ctx.env.resourceContentSecurityPolicy !== null) {
     headers['content-security-policy'] = ctx.env.resourceContentSecurityPolicy;
   }
+
   return headers;
 }
 
@@ -111,6 +117,7 @@ export async function createResource(
   if (await ctx.tx.getResource(spaceId, collectionId, id)) {
     throw new PwsError('id-conflict', 'The identifier chosen for the new Resource is already in use.');
   }
+
   await assertWriteIsUnique(ctx.tx, {
     spaceId,
     collectionId,
@@ -134,6 +141,7 @@ export async function createResource(
     metaValidator: newValidator(),
   };
   await ctx.tx.putResource(resource);
+
   return ctx.json(
     201,
     // `content-type` mirrors the stored type: the reference server returns it and its client reads it.
@@ -154,6 +162,7 @@ export async function readResource(
   if (!resource) {
     throw notFound();
   }
+
   const headers = contentHeaders(ctx, resource, access.via === 'policy');
   if (ctx.precondition(headers.etag) === 'not-modified') {
     // RFC 9110 section 15.4.5: a 304 repeats the Cache-Control the 200 would have carried.
@@ -162,7 +171,9 @@ export async function readResource(
       'cache-control': headers['cache-control'] as string,
     });
   }
+
   headers['content-length'] = String(resource.bytes.byteLength);
+
   return { status: 200, headers, body: resource.bytes };
 }
 
@@ -211,6 +222,7 @@ export async function putResource(
     metaValidator: existing ? bump(existing.metaValidator) : newValidator(),
   };
   await ctx.tx.putResource(resource);
+
   return emptyResponse(204, { etag: etagOf(resource.validator) });
 }
 
@@ -228,6 +240,7 @@ export async function deleteResource(
   if (existing) {
     await ctx.tx.deleteResource(spaceId, collectionId, resourceId);
   }
+
   return emptyResponse(204);
 }
 
@@ -243,10 +256,12 @@ export async function readResourceMeta(
   if (!resource) {
     throw notFound();
   }
+
   const etag = etagOf(resource.metaValidator);
   if (ctx.precondition(etag) === 'not-modified') {
     return emptyResponse(304, { etag });
   }
+
   return ctx.json(200, resourceMetaView(resource), { etag });
 }
 
@@ -265,6 +280,7 @@ export async function putResourceMeta(
   if (!existing) {
     throw notFound();
   }
+
   const input = readResourceMetaBody(ctx.jsonBody());
   ctx.precondition(etagOf(existing.metaValidator));
 
@@ -279,6 +295,8 @@ export async function putResourceMeta(
   if (input.custom && (input.custom.name !== undefined || input.custom.tags !== undefined)) {
     updated.custom = input.custom;
   }
+
   await ctx.tx.putResource(updated);
+
   return emptyResponse(204, { etag: etagOf(updated.metaValidator) });
 }

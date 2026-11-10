@@ -69,6 +69,7 @@ export function resolveEventStatusReopener(moduleRef: ModuleRef | undefined): Ev
       `No provider is bound to ${EVENT_STATUS_REOPENER}. A status change that calls an event off, or ` +
         `reinstates it, cannot settle the pipeline's decisions on whether it happened without it ` +
         `(PipelineModule binds it). Cause: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

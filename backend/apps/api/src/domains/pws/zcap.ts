@@ -77,6 +77,7 @@ export function parseRootZcapId(id: string): string | undefined {
   if (!id.startsWith(ROOT_PREFIX)) {
     return undefined;
   }
+
   const encoded = id.slice(ROOT_PREFIX.length);
   let target: string;
   try {
@@ -84,11 +85,14 @@ export function parseRootZcapId(id: string): string | undefined {
   } catch {
     return undefined;
   }
+
   if (encodeURIComponent(target) !== encoded) {
     return undefined;
   }
+
   try {
     const url = new URL(target);
+
     return url.protocol === 'https:' || url.protocol === 'http:' ? target : undefined;
   } catch {
     return undefined;
@@ -115,6 +119,7 @@ export function isValidTarget(target: string, base: string): boolean {
   if (target === base) {
     return true;
   }
+
   const prefixes: string[] = [];
   if (base.includes('?')) {
     prefixes.push(base.endsWith('?') || base.endsWith('&') ? base : `${base}&`);
@@ -122,6 +127,7 @@ export function isValidTarget(target: string, base: string): boolean {
     prefixes.push(base.endsWith('/') ? base : `${base}/`);
     prefixes.push(`${base}?`);
   }
+
   return prefixes.some((prefix) => target.startsWith(prefix));
 }
 
@@ -129,6 +135,7 @@ export function allowedActions(zcap: Zcap): string[] | undefined {
   if (!('allowedAction' in zcap) || zcap.allowedAction === undefined) {
     return undefined;
   }
+
   return [zcap.allowedAction].flat();
 }
 
@@ -137,6 +144,7 @@ export function actionsAttenuate(child: string[] | undefined, parent: string[] |
   if (parent === undefined) {
     return true;
   }
+
   return child !== undefined && child.every((action) => parent.includes(action));
 }
 
@@ -147,6 +155,7 @@ function controllersOf(zcap: Zcap): string[] {
 /** The invoker (or delegator) is a controller when the capability names its DID or its key id. */
 function isController(zcap: Zcap, did: string, keyId: string): boolean {
   const controllers = controllersOf(zcap);
+
   return controllers.includes(did) || controllers.includes(keyId);
 }
 
@@ -191,10 +200,12 @@ export function parseTime(value: unknown): number | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
+
   const match = RFC3339.exec(value);
   if (!match) {
     return undefined;
   }
+
   const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [
     number,
     number,
@@ -206,11 +217,13 @@ export function parseTime(value: unknown): number | undefined {
   if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) {
     return undefined;
   }
+
   const utc = Date.UTC(year, month - 1, day, hour, minute, second);
   const probe = new Date(utc);
   if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
     return undefined;
   }
+
   let offsetMinutes = 0;
   if (match[8] !== undefined) {
     const offsetHour = Number(match[9]);
@@ -218,9 +231,12 @@ export function parseTime(value: unknown): number | undefined {
     if (offsetHour > 23 || offsetMinute > 59) {
       return undefined;
     }
+
     offsetMinutes = (match[8] === '-' ? -1 : 1) * (offsetHour * 60 + offsetMinute);
   }
+
   const fraction = match[7] !== undefined ? Math.floor(Number(`0${match[7]}`) * 1000) : 0;
+
   return utc + fraction - offsetMinutes * 60_000;
 }
 
@@ -232,29 +248,37 @@ export function checkDelegatedZcap(value: unknown): DelegatedZcap {
   const fail = (message: string): never => {
     throw new ZcapError('malformed', message);
   };
+
   if (!isRecord(value)) {
     return fail('a capability must be an object');
   }
+
   const context = value['@context'];
   if (!Array.isArray(context) || context[0] !== ZCAP_CONTEXT) {
     return fail(`a delegated capability's "@context" must be an array starting with ${ZCAP_CONTEXT}`);
   }
+
   if (!isAbsoluteUri(value.id)) {
     return fail('"id" must be an absolute URI');
   }
+
   if (!isAbsoluteUri(value.parentCapability)) {
     return fail('"parentCapability" must be an absolute URI');
   }
+
   if (!isAbsoluteUri(value.invocationTarget)) {
     return fail('"invocationTarget" must be an absolute URI');
   }
+
   const controller = value.controller;
   if (typeof controller !== 'string' || controller.length === 0) {
     return fail('"controller" must be a DID string');
   }
+
   if (parseTime(value.expires) === undefined) {
     return fail('a delegated capability must have a valid "expires" date-time');
   }
+
   const action = value.allowedAction;
   if (
     action !== undefined &&
@@ -265,22 +289,28 @@ export function checkDelegatedZcap(value: unknown): DelegatedZcap {
   ) {
     return fail('"allowedAction" must be a string or a non-empty array of strings');
   }
+
   const proof = value.proof;
   if (!isRecord(proof)) {
     return fail('a delegated capability must have exactly one "proof" object');
   }
+
   if (proof.proofPurpose !== 'capabilityDelegation') {
     return fail('the proof must have proofPurpose "capabilityDelegation"');
   }
+
   if (proof.type !== 'DataIntegrityProof' || proof.cryptosuite !== 'eddsa-jcs-2022') {
     return fail('only eddsa-jcs-2022 delegation proofs are accepted');
   }
+
   if (typeof proof.verificationMethod !== 'string' || typeof proof.proofValue !== 'string') {
     return fail('the proof must carry a verificationMethod and a proofValue');
   }
+
   if (parseTime(proof.created) === undefined) {
     return fail('the proof must carry a valid "created" date-time');
   }
+
   if (
     !Array.isArray(proof.capabilityChain) ||
     proof.capabilityChain.length < 1 ||
@@ -288,6 +318,7 @@ export function checkDelegatedZcap(value: unknown): DelegatedZcap {
   ) {
     return fail('the proof must carry a non-empty "capabilityChain" of capability ids and capabilities');
   }
+
   return value as unknown as DelegatedZcap;
 }
 
@@ -298,6 +329,7 @@ export function decodeEmbeddedCapability(encoded: string): unknown {
   try {
     const compressed = base64urlDecode(encoded);
     const json = gunzipSync(compressed, { maxOutputLength: MAX_EMBEDDED_CAPABILITY_BYTES }).toString('utf8');
+
     return JSON.parse(json);
   } catch {
     throw new ZcapError(
@@ -317,7 +349,9 @@ export function formatCapabilityInvocation(
   if ('rootId' in args) {
     return `zcap id="${args.rootId}",action="${args.action}"`;
   }
+
   const encoded = gzipSync(Buffer.from(JSON.stringify(args.capability), 'utf8')).toString('base64url');
+
   return `zcap capability="${encoded}",action="${args.action}"`;
 }
 
@@ -350,7 +384,9 @@ function splitOutsideQuotes(text: string): string[] {
       start = i + 1;
     }
   }
+
   parts.push(text.slice(start));
+
   return parts;
 }
 
@@ -360,31 +396,37 @@ export function parseCapabilityInvocation(value: string): ParsedCapabilityInvoca
   if (!trimmed.startsWith('zcap ')) {
     throw new ZcapError('malformed', 'the Capability-Invocation scheme must be "zcap"');
   }
+
   const params = new Map<string, string>();
   for (const part of splitOutsideQuotes(trimmed.slice(5))) {
     const match = INVOCATION_PARAMS.exec(part.trim());
     if (!match || params.has(match[1] as string)) {
       throw new ZcapError('malformed', 'the Capability-Invocation header is malformed');
     }
+
     params.set(match[1] as string, match[2] as string);
   }
+
   for (const name of params.keys()) {
     if (name !== 'id' && name !== 'capability' && name !== 'action') {
       throw new ZcapError('malformed', `unknown Capability-Invocation parameter "${name}"`);
     }
   }
+
   const action = params.get('action');
   const id = params.get('id');
   const capability = params.get('capability');
   if (!action) {
     throw new ZcapError('malformed', 'the Capability-Invocation header must carry an "action"');
   }
+
   if ((id === undefined) === (capability === undefined)) {
     throw new ZcapError(
       'malformed',
       'the Capability-Invocation header must carry exactly one of "id" and "capability"',
     );
   }
+
   return id !== undefined
     ? { rootId: id, action }
     : { capability: decodeEmbeddedCapability(capability as string), action };
@@ -426,6 +468,7 @@ function dereference(
   if (tail.proof.capabilityChain.length + 1 > ctx.maxChainLength) {
     return deny('too-long', `the capability chain exceeds the maximum length of ${ctx.maxChainLength}`);
   }
+
   const ordered: DelegatedZcap[] = [tail];
   let current = tail;
   let required = current.proof.capabilityChain.length;
@@ -434,6 +477,7 @@ function dereference(
     if (chain.length !== required) {
       return deny('malformed', 'the capability chain length is incongruent');
     }
+
     const last = chain[chain.length - 1] as string | DelegatedZcap;
     for (const [index, entry] of chain.entries()) {
       const isLast = index === chain.length - 1;
@@ -444,33 +488,40 @@ function dereference(
           'the capability chain must be ids, ending in the embedded parent when delegated',
         );
       }
+
       const id = chainId(entry);
       if (!isAbsoluteUri(id)) {
         return deny('malformed', 'the capability chain holds an id that is not an absolute URI');
       }
     }
+
     if (chainId(last) !== current.parentCapability) {
       return deny('malformed', 'the last entry of the capability chain is not the parent capability');
     }
+
     if (chain.length === 1) {
       const rootId = chain[0] as string;
       const ids = [rootId, ...ordered.map((zcap) => zcap.id)];
       if (new Set(ids).size !== ids.length) {
         return deny('malformed', 'the capability chain contains a cycle');
       }
+
       return { ok: true, ordered, rootId };
     }
+
     let parent: DelegatedZcap;
     try {
       parent = checkDelegatedZcap(last);
     } catch (error) {
       return deny('malformed', error instanceof Error ? error.message : 'malformed capability');
     }
+
     const expectedIds = chain.slice(0, -1).map(chainId);
     const parentIds = parent.proof.capabilityChain.map(chainId);
     if (parentIds.length !== expectedIds.length || parentIds.some((id, index) => id !== expectedIds[index])) {
       return deny('malformed', 'the capability chain is inconsistent across delegated capabilities');
     }
+
     ordered.unshift(parent);
     current = parent;
     required -= 1;
@@ -495,6 +546,7 @@ export async function verifyDelegationChain(tail: DelegatedZcap, ctx: ChainConte
   if (!dereferenced.ok) {
     return dereferenced;
   }
+
   const root = ctx.rootCapability(dereferenced.rootId);
   if (!root) {
     return deny('root-not-accepted', 'the root capability of the chain is not one this server accepts here');
@@ -516,6 +568,7 @@ export async function verifyDelegationChain(tail: DelegatedZcap, ctx: ChainConte
         'a delegation proof names a key that does not resolve for capability delegation',
       );
     }
+
     if (!isController(parent, key.did, proof.verificationMethod)) {
       return deny(
         'delegator-not-controller',
@@ -539,20 +592,25 @@ export async function verifyDelegationChain(tail: DelegatedZcap, ctx: ChainConte
     if (!actionsAttenuate(allowedActions(zcap), allowedActions(parent))) {
       return deny('attenuation', 'a delegated capability allows an action its parent does not');
     }
+
     if (!isValidTarget(zcap.invocationTarget, parent.invocationTarget)) {
       return deny('attenuation', 'a delegated capability targets something its parent does not cover');
     }
+
     const expires = parseTime(zcap.expires) as number;
     if (parentExpires !== undefined && expires > parentExpires) {
       return deny('attenuation', 'a delegated capability outlives its parent');
     }
+
     if (!withinSkew(now, expires, ctx.skewSeconds)) {
       expired ??= 'a capability in the delegation chain has expired';
     }
+
     const delegated = parseTime(proof.created) as number;
     if (parentDelegated !== undefined && parentDelegated > delegated) {
       return deny('attenuation', 'a capability was delegated before its parent');
     }
+
     if (ctx.isRevoked && (await ctx.isRevoked(zcap.id))) {
       return deny('revoked', 'a capability in the delegation chain has been revoked');
     }
@@ -561,9 +619,11 @@ export async function verifyDelegationChain(tail: DelegatedZcap, ctx: ChainConte
     parentExpires = expires;
     parentDelegated = delegated;
   }
+
   if (expired !== undefined) {
     return deny('expired', expired);
   }
+
   return { ok: true, chain: [root, ...dereferenced.ordered] };
 }
 
@@ -599,12 +659,15 @@ export async function authorizeInvocation(
     if (!root) {
       return deny('root-not-accepted', 'the invoked root capability is not one this server accepts here');
     }
+
     if (!isValidTarget(requestTarget, root.invocationTarget)) {
       return deny('target-mismatch', 'the invoked capability does not cover the request target');
     }
+
     if (!isController(root, invoker.did, invoker.keyId)) {
       return deny('invoker-not-controller', 'the invoker does not control the invoked capability');
     }
+
     return { ok: true, via: 'root', capability: root, chain: [root] };
   }
 
@@ -614,29 +677,36 @@ export async function authorizeInvocation(
   } catch (error) {
     return deny('malformed', error instanceof Error ? error.message : 'malformed capability');
   }
+
   const verified = await verifyDelegationChain(tail, ctx);
   // An expired chain has otherwise verified, and is judged after everything about the invoker: only a
   // caller that holds the capability and signed with its key is told that it has expired.
   if (!verified.ok && verified.reason !== 'expired') {
     return verified;
   }
+
   if (!isValidTarget(requestTarget, tail.invocationTarget)) {
     return deny('target-mismatch', 'the invoked capability does not cover the request target');
   }
+
   const permitted = allowedActions(tail);
   if (permitted !== undefined && !permitted.includes(action)) {
     return deny('action-not-allowed', `the invoked capability does not allow ${action}`);
   }
+
   if (!isController(tail, invoker.did, invoker.keyId)) {
     return deny('invoker-not-controller', 'the invoker does not control the invoked capability');
   }
+
   const delegated = parseTime(tail.proof.created) as number;
   if (input.signatureCreated * 1000 < delegated - ctx.skewSeconds * 1000) {
     return deny('invoked-before-delegation', 'a delegated capability was invoked before it was delegated');
   }
+
   if (!verified.ok) {
     return verified;
   }
+
   return { ok: true, via: 'delegated', capability: tail, chain: verified.chain };
 }
 
@@ -665,8 +735,10 @@ export function chainFor(parent: string | DelegatedZcap): Array<string | Delegat
   if (typeof parent === 'string') {
     return [parent];
   }
+
   const chain = parent.proof.capabilityChain;
   const last = chain[chain.length - 1] as string | DelegatedZcap;
+
   return [...chain.slice(0, -1), chainId(last), parent];
 }
 
@@ -691,6 +763,7 @@ export async function delegateCapability(options: DelegateOptions): Promise<Dele
     },
     signer: options.signer,
   });
+
   return {
     ...(document as unknown as Omit<DelegatedZcap, 'proof'>),
     proof: proof as unknown as DelegationProof,

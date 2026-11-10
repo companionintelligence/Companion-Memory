@@ -82,10 +82,12 @@ function parseParameters(text: string): Map<string, string> {
     while (/[A-Za-z]/.test(text.charAt(i))) {
       i++;
     }
+
     const name = text.slice(nameStart, i);
     if (name === '' || text.charAt(i) !== '=') {
       throw syntax('malformed signature parameter');
     }
+
     i++;
 
     let value: string;
@@ -94,16 +96,19 @@ function parseParameters(text: string): Map<string, string> {
       if (close === -1) {
         throw syntax('unterminated quoted signature parameter');
       }
+
       value = text.slice(i + 1, close);
       if (value.includes('\\')) {
         throw syntax('quoted-pair escapes are not accepted in signature parameters');
       }
+
       i = close + 1;
     } else if (name === 'created' || name === 'expires') {
       const start = i;
       while (/[0-9]/.test(text.charAt(i))) {
         i++;
       }
+
       value = text.slice(start, i);
       if (value === '') {
         throw syntax(`the ${name} parameter is empty`);
@@ -115,15 +120,18 @@ function parseParameters(text: string): Map<string, string> {
     if (parameters.has(name)) {
       throw syntax(`duplicate ${name} parameter`);
     }
+
     parameters.set(name, value);
 
     skipSpaces();
     if (i === text.length) {
       break;
     }
+
     if (text.charAt(i) !== ',') {
       throw syntax('signature parameters are separated by commas');
     }
+
     i++;
     skipSpaces();
     if (i === text.length) {
@@ -138,6 +146,7 @@ function parseInteger(name: string, text: string | undefined): number | undefine
   if (text === undefined) {
     return undefined;
   }
+
   if (!/^[0-9]+$/.test(text) || text.length > MAX_INTEGER_DIGITS) {
     throw syntax(`the ${name} parameter must be a Unix timestamp in whole seconds`);
   }
@@ -151,6 +160,7 @@ export function parseAuthorizationSignature(value: string): ParsedSignature {
   if (space === -1 || value.slice(0, space).toLowerCase() !== 'signature') {
     throw syntax('the Authorization scheme must be Signature');
   }
+
   const parameters = parseParameters(value.slice(space + 1));
 
   for (const name of parameters.keys()) {
@@ -163,10 +173,12 @@ export function parseAuthorizationSignature(value: string): ParsedSignature {
   if (keyId === undefined || keyId === '') {
     throw syntax('keyId is required');
   }
+
   const signatureText = parameters.get('signature');
   if (signatureText === undefined || signatureText === '') {
     throw syntax('signature is required');
   }
+
   let signature: Uint8Array;
   try {
     signature = base64Decode(signatureText);
@@ -174,6 +186,7 @@ export function parseAuthorizationSignature(value: string): ParsedSignature {
     if (error instanceof MultibaseError) {
       throw syntax('signature is not strict base64');
     }
+
     throw error;
   }
 
@@ -185,12 +198,14 @@ export function parseAuthorizationSignature(value: string): ParsedSignature {
     if (headersText === '') {
       throw syntax('headers must not be empty');
     }
+
     headers = headersText.split(' ').map((name) => name.toLowerCase());
     for (const name of headers) {
       if (!(PSEUDO_HEADERS.has(name) || HEADER_NAME.test(name))) {
         throw syntax(`"${name}" is not a header name this profile signs`);
       }
     }
+
     if (new Set(headers).size !== headers.length) {
       throw syntax('headers lists a name twice');
     }
@@ -201,10 +216,12 @@ export function parseAuthorizationSignature(value: string): ParsedSignature {
   if (created !== undefined) {
     parsed.created = created;
   }
+
   const expires = parseInteger('expires', parameters.get('expires'));
   if (expires !== undefined) {
     parsed.expires = expires;
   }
+
   const algorithm = parameters.get('algorithm');
   if (algorithm !== undefined) {
     parsed.algorithm = algorithm.toLowerCase();
@@ -232,6 +249,7 @@ export function buildSigningString(args: {
   } catch {
     throw syntax('the request URL must be absolute');
   }
+
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw syntax('the request URL must be http or https');
   }
@@ -248,9 +266,11 @@ export function buildSigningString(args: {
         if (value === undefined) {
           throw syntax(`${name} is covered but the signature has no such parameter`);
         }
+
         lines.push(`${name}: ${value}`);
         break;
       }
+
       case '(request-target)':
         lines.push(`(request-target): ${args.method.toLowerCase()} ${url.pathname}${url.search}`);
         break;
@@ -261,13 +281,16 @@ export function buildSigningString(args: {
         if (name.startsWith('(')) {
           throw syntax(`unknown pseudo-header ${name}`);
         }
+
         const value = args.requestHeaders[name];
         if (value === undefined) {
           throw syntax(`the covered header ${name} is not in the request`);
         }
+
         if (/[\r\n]/.test(value)) {
           throw syntax(`the covered header ${name} holds a line break`);
         }
+
         lines.push(`${name}: ${value.trim()}`);
       }
     }
@@ -289,9 +312,11 @@ export function checkSignatureWindow(
   if (created !== undefined && created > nowSeconds + skewSeconds) {
     throw new HttpSignatureError('the signature was created in the future', 'constraint');
   }
+
   if (expires !== undefined && expires < nowSeconds - skewSeconds) {
     throw new HttpSignatureError('the signature has expired', 'constraint');
   }
+
   if (created !== undefined && expires !== undefined && expires < created) {
     throw new HttpSignatureError('the signature expires before it was created', 'constraint');
   }
@@ -334,6 +359,7 @@ export async function signRequest(args: {
   for (const [name, value] of Object.entries(args.headers)) {
     headers[name.toLowerCase()] = value;
   }
+
   headers['host'] = new URL(url).host;
   headers['capability-invocation'] = capabilityInvocation;
 
@@ -342,6 +368,7 @@ export async function signRequest(args: {
     if (headers['content-type'] === undefined) {
       throw new TypeError('a request with a body needs a content-type');
     }
+
     headers['digest'] = digestHeaderValue(body);
     covered.push('content-type', 'digest');
   } else if (headers['content-type'] !== undefined) {

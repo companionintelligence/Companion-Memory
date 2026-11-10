@@ -79,6 +79,7 @@ export function verifyEd25519(publicKey: Uint8Array, message: Uint8Array, signat
 /** A `Signer` over a seed held in this process. Production custody implements `Signer` itself. */
 export class LocalEd25519Signer implements Signer {
   readonly publicKey: Uint8Array;
+
   private readonly privateKey: KeyObject;
 
   constructor(

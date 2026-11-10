@@ -34,6 +34,7 @@ const LOW_ORDER_U = new Set<bigint>([
 
 function mod(value: bigint): bigint {
   const result = value % P;
+
   return result >= 0n ? result : result + P;
 }
 

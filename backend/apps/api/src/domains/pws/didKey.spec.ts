@@ -76,6 +76,7 @@ describe('did:key (Ed25519)', () => {
       expect(isDidKey(bad)).toBe(false);
       expect(() => publicKeyFromDidKey(bad)).toThrow(DidKeyError);
     }
+
     expect(() => didKeyFromPublicKey(new Uint8Array(31))).toThrow(DidKeyError);
   });
 

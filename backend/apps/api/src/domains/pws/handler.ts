@@ -23,9 +23,14 @@ import type { PwsRequest, PwsResponse } from './http';
 import { generateId } from './ids';
 import { DidRegistry, didKeyMethod } from './keys';
 import type { DidMethodSupport } from './keys';
-import { PwsError, methodNotAllowed, notFound } from './problems';
-import { deleteCollection, listResources, putCollection, readCollection } from './opsCollection';
-import { createCollection } from './opsCollection';
+import { linksetEndpoint, policyEndpoint, serviceDescriptionResponse, unimplementedGroup } from './opsAux';
+import {
+  deleteCollection,
+  listResources,
+  putCollection,
+  readCollection,
+  createCollection,
+} from './opsCollection';
 import {
   createResource,
   deleteResource,
@@ -35,13 +40,13 @@ import {
   readResourceMeta,
 } from './opsResource';
 import { createSpace, deleteSpace, listCollections, listSpaces, putSpace, readSpace } from './opsSpace';
-import { linksetEndpoint, policyEndpoint, serviceDescriptionResponse, unimplementedGroup } from './opsAux';
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from './pagination';
+import { PwsError, methodNotAllowed, notFound } from './problems';
 import { PwsUrls, parseRoute } from './routes';
 import type { Route } from './routes';
 import { serviceLink } from './serviceDescription';
-import { StampClock } from './stamp';
 import type { InstanceDisclosure } from './serviceDescription';
+import { StampClock } from './stamp';
 import type { PwsStore } from './store';
 import { DEFAULT_MAX_CHAIN_LENGTH } from './zcap';
 
@@ -165,6 +170,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
       error.status === 401
         ? { 'www-authenticate': SIGNATURE_CHALLENGE, ...error.headers }
         : { ...error.headers };
+
     return jsonResponse(error.status, error.toProblem(), headers, 'application/problem+json');
   }
 
@@ -172,7 +178,9 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
     if (error instanceof PwsError) {
       return problem(error);
     }
+
     config.onError?.(error);
+
     return problem(new PwsError('internal-error', 'The request could not be completed.'));
   }
 
@@ -186,13 +194,16 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
     if (!('cache-control' in headers)) {
       headers['cache-control'] = 'no-store';
     }
+
     let body = response.body;
     if (method === 'HEAD') {
       if (body && headers['content-length'] === undefined) {
         headers['content-length'] = String(body.byteLength);
       }
+
       body = undefined;
     }
+
     return { status: response.status, headers, ...(body ? { body } : {}) };
   }
 
@@ -205,6 +216,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
         if (read) {
           return listCollections(ctx, route.spaceId);
         }
+
         return ctx.method === 'POST' ? createCollection(ctx, route.spaceId) : deleteSpace(ctx, route.spaceId);
       case 'space-meta':
         return read ? readSpace(ctx, route.spaceId) : putSpace(ctx, route.spaceId);
@@ -218,6 +230,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
         if (read) {
           return listResources(ctx, route.spaceId, route.collectionId);
         }
+
         return ctx.method === 'POST'
           ? createResource(ctx, route.spaceId, route.collectionId)
           : deleteCollection(ctx, route.spaceId, route.collectionId);
@@ -239,6 +252,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
         if (read) {
           return readResource(ctx, route.spaceId, route.collectionId, route.resourceId);
         }
+
         return ctx.method === 'PUT'
           ? putResource(ctx, route.spaceId, route.collectionId, route.resourceId)
           : deleteResource(ctx, route.spaceId, route.collectionId, route.resourceId);
@@ -283,8 +297,10 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
     const allowed = allowedMethods(route);
     if (allowed && !allowed.includes(method)) {
       const refusal = methodNotAllowed(allowed);
+
       return jsonResponse(refusal.status, refusal.body, refusal.headers, 'application/problem+json');
     }
+
     if (route.kind === 'retired-collections') {
       // Only the operations that moved to the Space URL (list, add) follow it there. DELETE of this
       // path must never become a delete of the Space, so every other method was refused above.
@@ -301,6 +317,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
     if (route.kind === 'root') {
       return jsonResponse(200, { service: urls.serviceUrl() });
     }
+
     if (route.kind === 'service') {
       return serviceDescriptionResponse(env, req);
     }
@@ -319,6 +336,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
     if (authn.kind === 'anonymous' && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
       throw new PwsError('missing-authorization', 'This operation requires a capability invocation.');
     }
+
     return env.store.transaction((tx) => run(route, new OpContext(env, tx, req, route, authn, now)));
   }
 
@@ -331,6 +349,7 @@ export function createPwsHandler(config: PwsConfig): PwsHandler {
       } catch (error) {
         response = toResponse(error);
       }
+
       return decorate(request.method, response);
     },
     decorate,

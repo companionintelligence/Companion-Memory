@@ -120,6 +120,7 @@ describe('parseRoute', () => {
     ]) {
       expect(['unknown', 'redirect']).toContain(at(path).kind);
     }
+
     expect(at(`space/${S}/policy/meta`)).toEqual({ kind: 'unknown' });
     expect(at(`space/${S}/c/policy/meta`)).toEqual({ kind: 'unknown' });
   });

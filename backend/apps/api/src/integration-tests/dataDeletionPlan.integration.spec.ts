@@ -134,6 +134,10 @@ const OUTSIDE_THE_PURGE: ReadonlyMap<string, string> = new Map([
   ['ci.consumption_windows', 'rate-limit windows, swept when idle (ConsumptionSweepCron)'],
   ['ci.geocode_cache', 'appliance-wide geocoding cache keyed by query, shared by every account'],
   ['ci_search.index_skips', 'entity ids the indexer skipped; no account column, no foreign key'],
+  [
+    'ci.stored_object_deletions',
+    'object-store keys whose file rows are already deleted, removed by StoredObjectDeletionSweepCron once the bytes are gone; no account column',
+  ],
   ['hbpe.kind_l0_map', 'static classification table'],
   ['public.schema_migrations', 'migration bookkeeping'],
   ['public.spatial_ref_sys', 'PostGIS reference data'],

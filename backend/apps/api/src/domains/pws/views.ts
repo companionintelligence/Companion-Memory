@@ -33,6 +33,7 @@ export function spaceView(urls: PwsUrls, space: SpaceRecord): JsonObject {
 
 export function collectionView(urls: PwsUrls, collection: CollectionRecord): JsonObject {
   const { spaceId, id } = collection;
+
   return {
     id,
     url: urls.collectionPath(spaceId, id),

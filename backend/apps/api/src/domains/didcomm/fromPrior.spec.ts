@@ -1,3 +1,4 @@
+import { RUST_FROM_PRIOR_JWT } from './__tests__/rustVectors';
 import { DidcommError } from './errors';
 import { createFromPrior, verifyFromPrior } from './fromPrior';
 import { generateDidKeyIdentity, generateDidPeerIdentity, secretsOf } from './identity';
@@ -5,7 +6,6 @@ import { parsePrivateJwk } from './jwk';
 import { createCompactJws } from './jws';
 import { createDidResolver, firstOf, StaticDidResolver } from './resolver';
 import { InMemorySecretsResolver } from './secrets';
-import { RUST_FROM_PRIOR_JWT } from './__tests__/rustVectors';
 
 const resolver = createDidResolver();
 

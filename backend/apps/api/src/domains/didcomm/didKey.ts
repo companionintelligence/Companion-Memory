@@ -1,7 +1,7 @@
+import { type DidDocument, type DidResolver } from './didDocument';
 import { ed25519PublicKeyToX25519 } from './edwards';
 import { base64urlDecode, base64urlEncode } from './encoding';
 import { DidcommError } from './errors';
-import { type DidDocument, type DidResolver } from './didDocument';
 import { type PublicJwk } from './jwk';
 import { jwkFromMultikey, multikeyFromJwk } from './multikey';
 

@@ -66,6 +66,7 @@ export class OpContext {
     if (prior) {
       this.env.clock.observe(prior);
     }
+
     return this.env.clock.tick(this.now);
   }
 
@@ -89,12 +90,15 @@ export class OpContext {
     if (contentType === undefined) {
       throw new PwsError('missing-content-type', 'A Content-Type header is required.');
     }
+
     if (!isJsonMediaType(contentType)) {
       throw invalidBody('The request body must be application/json.');
     }
+
     if (this.req.body.byteLength > this.env.maxJsonBytes) {
       throw new PwsError('payload-too-large', 'The request body is too large.');
     }
+
     try {
       return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(this.req.body)) as unknown;
     } catch {
@@ -107,6 +111,7 @@ export class OpContext {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw invalidBody('The request body must be a JSON object.');
     }
+
     return value as JsonObject;
   }
 
@@ -127,6 +132,7 @@ export class OpContext {
     if (result === 'precondition-failed') {
       throw new PwsError('precondition-failed', 'The precondition of the request was not met.');
     }
+
     return result;
   }
 
@@ -152,12 +158,14 @@ export class OpContext {
     if (chain === undefined) {
       return false;
     }
+
     for (const scope of chain) {
       const policy = await this.tx.getPolicy(scope);
       if (policy !== undefined) {
         return policyGrantsRead(policy);
       }
     }
+
     return false;
   }
 
@@ -181,6 +189,7 @@ export class OpContext {
     if (decision.ok) {
       return { via: decision.via, ...(decision.invoker ? { invoker: decision.invoker } : {}) };
     }
+
     throw refusal(decision);
   }
 }

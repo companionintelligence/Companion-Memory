@@ -1,6 +1,5 @@
 import { World, alice, app, bob } from './__tests__/testKit';
-import { parseAuthorizationSignature } from './httpSignature';
-import { HttpSignatureError } from './httpSignature';
+import { parseAuthorizationSignature, HttpSignatureError } from './httpSignature';
 import { parseRoute, PwsUrls } from './routes';
 import { ZcapError, parseCapabilityInvocation } from './zcap';
 import type { DelegatedZcap } from './zcap';
@@ -8,11 +7,13 @@ import type { DelegatedZcap } from './zcap';
 /** A small seeded PRNG (mulberry32) so a failure is reproducible. */
 function prng(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -26,6 +27,7 @@ function junk(random: () => number, max = 40): string {
   for (let i = 0; i < length; i += 1) {
     out += chars[Math.floor(random() * chars.length)];
   }
+
   return out;
 }
 
@@ -43,6 +45,7 @@ function mutate(random: () => number, value: string): string {
       chars.splice(at, 0, ...junk(random, 4));
     }
   }
+
   return chars.join('');
 }
 
@@ -123,6 +126,7 @@ describe('the handler never answers 5xx, whatever it is sent', () => {
       } else {
         headers[name] = mutate(random, headers[name] as string);
       }
+
       const target = random() < 0.3 ? `${w.url('')}${junk(random, 30)}` : url;
       let response;
       try {
@@ -133,8 +137,9 @@ describe('the handler never answers 5xx, whatever it is sent', () => {
           ...(random() < 0.3 ? { body: new TextEncoder().encode(junk(random, 20)) } : {}),
         });
       } catch (error) {
-        throw new Error(`the handler threw for ${String(i)}: ${String(error)}`);
+        throw new Error(`the handler threw for ${String(i)}: ${String(error)}`, { cause: error });
       }
+
       statuses.add(response.status);
       expect(response.status).toBeLessThan(500);
       if (response.status >= 400 && response.body) {
@@ -145,6 +150,7 @@ describe('the handler never answers 5xx, whatever it is sent', () => {
         expect(typeof problem.type).toBe('string');
       }
     }
+
     // the corpus reaches more than one outcome, or it proves nothing
     expect(statuses.size).toBeGreaterThan(3);
   });
@@ -209,6 +215,7 @@ describe('the handler never answers 5xx to a structurally mutated capability', (
         paths(item, [...prefix, key], out);
       }
     }
+
     return out;
   }
 
@@ -216,11 +223,13 @@ describe('the handler never answers 5xx to a structurally mutated capability', (
     if (path.length === 0) {
       return root;
     }
+
     const clone = structuredClone(root) as Record<string | number, unknown>;
     let node = clone;
     for (const step of path.slice(0, -1)) {
       node = node[step] as Record<string | number, unknown>;
     }
+
     const last = path[path.length - 1] as string | number;
     const replacements: unknown[] = [null, 5, true, [], {}, 'x', [null], { id: null }];
     if (random() < 0.25) {
@@ -232,6 +241,7 @@ describe('the handler never answers 5xx to a structurally mutated capability', (
     } else {
       node[last] = replacements[Math.floor(random() * replacements.length)];
     }
+
     return clone;
   }
 
@@ -263,6 +273,7 @@ describe('the handler never answers 5xx to a structurally mutated capability', (
       const res = await w.send({ method: 'GET', path, as: bob, via: mutated });
       expect([i, res.status < 500]).toEqual([i, true]);
     }
+
     expect(errors).toEqual([]);
   });
 });

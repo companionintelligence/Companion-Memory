@@ -188,6 +188,7 @@ export class BlueBubblesApiClient {
     } catch (err) {
       throw new Error(
         `BlueBubbles request failed (${redactUrl(url.toString())}): ${describeFetchFailure(err, REQUEST_TIMEOUT_MS)}`,
+        { cause: err },
       );
     }
 

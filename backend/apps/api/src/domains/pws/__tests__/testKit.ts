@@ -11,8 +11,8 @@ import { didKeyFromPublicKey, keyIdFromDidKey } from '../didKey';
 import { LocalEd25519Signer, publicKeyFromSeed } from '../ed25519';
 import { createPwsHandler } from '../handler';
 import type { PwsConfig, PwsHandler } from '../handler';
-import { signRequest } from '../httpSignature';
 import type { PwsResponse } from '../http';
+import { signRequest } from '../httpSignature';
 import { MemoryPwsStore } from '../store';
 import { delegateCapability, formatCapabilityInvocation, rootZcapId } from '../zcap';
 import type { DelegatedZcap } from '../zcap';
@@ -31,6 +31,7 @@ export function identity(byte: number): Identity {
   const seed = new Uint8Array(32).fill(byte);
   const did = didKeyFromPublicKey(publicKeyFromSeed(seed));
   const keyId = keyIdFromDidKey(did);
+
   return { did, keyId, signer: new LocalEd25519Signer(keyId, seed) };
 }
 
@@ -97,8 +98,11 @@ const bytesOf = (value: Uint8Array | string): Uint8Array =>
 
 export class World {
   readonly store = new MemoryPwsStore();
+
   now = new Date(T0);
+
   readonly handler: PwsHandler;
+
   private counter = 0;
 
   constructor(config: Partial<PwsConfig> = {}) {
@@ -158,15 +162,18 @@ export class World {
     } else if (!headers.host) {
       headers.host = new URL(url).host;
     }
+
     for (const name of args.strip ?? []) {
       delete headers[name];
     }
+
     const sent =
       args.tamperedBody !== undefined
         ? bytesOf(args.tamperedBody)
         : args.unsignedBody !== undefined
           ? bytesOf(args.unsignedBody)
           : body;
+
     return new TestResponse(
       await this.handler.handle({ method: args.method, url, headers, ...(sent ? { body: sent } : {}) }),
     );

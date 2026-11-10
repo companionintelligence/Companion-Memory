@@ -201,6 +201,7 @@ export class StageRegistry {
         `Pipeline stage "${stageId}" is declared in STAGE_REGISTRY but no provider is bound to token ` +
           `"${token}". Add { provide: STAGE_REGISTRY['${stageId}'], useClass: <YourStage> } to a module's ` +
           `providers. Cause: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
 

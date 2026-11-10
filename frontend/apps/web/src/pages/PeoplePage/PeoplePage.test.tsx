@@ -932,12 +932,20 @@ describe('PeoplePage', () => {
       source: 'import',
     });
 
+    // Not PERSON_GLOBAL_ID: the People list's Ada Lovelace has that id, Apollo keeps one cache entry per
+    // id, and whichever query lands last would decide the card's name and numbers.
+    const adaQuillId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff7a1');
+
     renderWithProviders(<PeoplePage />, {
       mocks: mocks({
         candidates: [
           candidateEdge(
             [
-              mergePerson({ name: 'Ada Quill', identifiers: [phone('2125550118', '(212) 555-0118')] }),
+              mergePerson({
+                id: adaQuillId,
+                name: 'Ada Quill',
+                identifiers: [phone('2125550118', '(212) 555-0118')],
+              }),
               mergePerson({
                 id: DUPLICATE_GLOBAL_ID,
                 name: 'Bo Brightwater',
@@ -967,8 +975,8 @@ describe('PeoplePage', () => {
 
     await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
 
-    // The card, not the People list below it (which shares Ada's cache entry). Queried again on each
-    // try: the list re-renders while it loads, so a card held from before the last render is detached.
+    // The card, not the People list below it. Queried again on each try: the list re-renders while it
+    // loads, so a card held from before the last render is detached.
     await waitFor(() => {
       const heading = screen.getByText('Same phone number +1 (212) 555-0118, but names differ');
       const card = within(heading.closest('[data-merge-candidate]') as HTMLElement);
@@ -1023,6 +1031,9 @@ describe('PeoplePage', () => {
 
   it('groups a bare given name against several fuller people as a picker', async () => {
     const smithId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff6fe');
+    // Not PERSON_GLOBAL_ID, which the People list's Ada Lovelace has: sharing her cache entry, the bare
+    // name was renamed to "Ada Lovelace" whenever the list's query landed last, and no picker showed.
+    const bareWilliamId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff7a2');
     const clusterEvidence = [
       {
         __typename: 'MergeCandidateEvidenceType' as const,
@@ -1037,13 +1048,16 @@ describe('PeoplePage', () => {
         candidates: [
           candidateEdge(
             [
-              mergePerson({ name: 'william' }),
+              mergePerson({ id: bareWilliamId, name: 'william' }),
               mergePerson({ id: DUPLICATE_GLOBAL_ID, name: 'William Broza' }),
             ],
             { evidence: clusterEvidence },
           ),
           candidateEdge(
-            [mergePerson({ name: 'william' }), mergePerson({ id: smithId, name: 'William Smith' })],
+            [
+              mergePerson({ id: bareWilliamId, name: 'william' }),
+              mergePerson({ id: smithId, name: 'William Smith' }),
+            ],
             { id: 'candidate-2', evidence: clusterEvidence },
           ),
         ],

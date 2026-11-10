@@ -1,3 +1,4 @@
+import { ALICE_DID_DOC, BOB_DID_DOC } from './__tests__/vectors';
 import {
   type DidDocument,
   didcommEndpoints,
@@ -8,7 +9,6 @@ import {
 import { DidcommError } from './errors';
 import { generateKeyPair } from './jwk';
 import { multikeyFromJwk } from './multikey';
-import { ALICE_DID_DOC, BOB_DID_DOC } from './__tests__/vectors';
 
 const DID = 'did:example:carol';
 

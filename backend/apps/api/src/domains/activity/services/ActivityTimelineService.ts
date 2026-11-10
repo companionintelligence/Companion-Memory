@@ -427,7 +427,6 @@ export class ActivityTimelineService {
         OR event.location_name ILIKE ANY($${paramIndex})
       )`);
       params.push(filters.places.map((name) => `%${name}%`));
-      paramIndex += 1;
     }
 
     const rows = await this.dataSource.query<Array<{ date: string; count: number }>>(
