@@ -24,8 +24,8 @@
  * caller to authenticate without telling it what exists.
  */
 import type { Authn } from './authn';
-import { PwsError, notFound } from './problems';
 import type { PolicyDocument } from './models';
+import { PwsError, notFound } from './problems';
 import { authorizeInvocation, parseRootZcapId, ZCAP_CONTEXT } from './zcap';
 import type { ChainContext, DelegatedZcap, DenialReason, RootZcap, Zcap } from './zcap';
 
@@ -79,6 +79,7 @@ function mintedRoot(env: AccessEnv): (id: string) => RootZcap | undefined {
     if (target === undefined || !target.startsWith(env.scopeUrl)) {
       return undefined;
     }
+
     return { '@context': ZCAP_CONTEXT, id, controller: env.rootController, invocationTarget: target };
   };
 }
@@ -86,6 +87,7 @@ function mintedRoot(env: AccessEnv): (id: string) => RootZcap | undefined {
 function exactlyDelete(tail: Zcap): boolean {
   const actions =
     'allowedAction' in tail && tail.allowedAction !== undefined ? [tail.allowedAction].flat() : [];
+
   return actions.length === 1 && actions[0] === 'DELETE';
 }
 
@@ -125,6 +127,7 @@ export async function decide({ authn, env, rule, policyRead }: DecideInput): Pro
       if (permitted) {
         return { ok: true, via: result.via, invoker: authn.invoker.did };
       }
+
       reason = 'invoker-not-controller';
       detail = 'This operation is reserved to the Space controller.';
     } else {
@@ -137,6 +140,7 @@ export async function decide({ authn, env, rule, policyRead }: DecideInput): Pro
   if ((env.method === 'GET' || env.method === 'HEAD') && (await policyRead())) {
     return { ok: true, via: 'policy' };
   }
+
   return { ok: false, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}) };
 }
 

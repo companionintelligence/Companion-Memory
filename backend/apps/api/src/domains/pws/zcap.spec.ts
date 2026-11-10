@@ -28,6 +28,7 @@ const NOW = new Date('2026-11-05T12:00:00Z');
 const context = (overrides: Partial<ChainContext> = {}): ChainContext => ({
   rootCapability: (id) => {
     const target = parseRootZcapId(id);
+
     return target
       ? ({ '@context': ZCAP_CONTEXT, id, controller: alice.did, invocationTarget: target } satisfies RootZcap)
       : undefined;
@@ -158,8 +159,10 @@ describe('checkDelegatedZcap', () => {
     const zcap = await grant();
     const without = (member: string) => {
       const { [member]: _removed, ...rest } = zcap as unknown as Record<string, unknown>;
+
       return rest;
     };
+
     const proof = zcap.proof as unknown as Record<string, unknown>;
     const cases: unknown[] = [
       null,
@@ -254,8 +257,10 @@ describe('verifyDelegationChain', () => {
   it('names why it refused', async () => {
     const reason = async (zcap: DelegatedZcap, ctx = context()): Promise<string> => {
       const result = await verifyDelegationChain(zcap, ctx);
+
       return result.ok ? 'ok' : result.reason;
     };
+
     expect(await reason(await grant())).toBe('ok');
     expect(await reason(await grant(bob))).toBe('delegator-not-controller');
     expect(await reason({ ...(await grant()), controller: bob.did })).toBe('bad-proof');
@@ -355,6 +360,7 @@ describe('Capability-Invocation header: one pass, however hostile', () => {
     for (const value of [`zcap ${','.repeat(15000)}"`, `zcap x="${','.repeat(15000)}"`]) {
       expect(() => parseCapabilityInvocation(value)).toThrow(ZcapError);
     }
+
     // The lookahead split this replaced took about 500 ms for the pair; one pass takes a millisecond or two.
     expect(performance.now() - started).toBeLessThan(200);
   });

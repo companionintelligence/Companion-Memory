@@ -148,6 +148,7 @@ export function privateKeyObject(jwk: PrivateJwk): KeyObject {
 export function parsePublicJwk(value: unknown): PublicJwk {
   const jwk = parseShape(value, false) as PublicJwk;
   publicKeyObject(jwk);
+
   return jwk;
 }
 

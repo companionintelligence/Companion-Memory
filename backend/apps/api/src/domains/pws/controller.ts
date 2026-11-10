@@ -19,6 +19,7 @@ export async function requireControllerAcceptable(keys: DidRegistry, controller:
   if (!isDid(controller)) {
     throw invalidBody('The "controller" must be a DID.', '/controller');
   }
+
   if (!keys.supports(controller)) {
     throw invalidBody(
       `The DID method of "${controller.split(':', 3).slice(0, 2).join(':')}" is not supported as a Space controller (supported: ${keys
@@ -28,6 +29,7 @@ export async function requireControllerAcceptable(keys: DidRegistry, controller:
       '/controller',
     );
   }
+
   if (!(await keys.resolveDocument(controller))) {
     throw invalidBody('The "controller" DID does not resolve.', '/controller');
   }

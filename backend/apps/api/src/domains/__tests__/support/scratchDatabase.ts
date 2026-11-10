@@ -745,6 +745,7 @@ async function applyMigrations(dataSource: DataSource): Promise<number> {
         throw new Error(
           `Migration ${file} failed against the scratch database: ` +
             `${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
         );
       }
     }

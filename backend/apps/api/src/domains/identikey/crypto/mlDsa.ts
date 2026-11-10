@@ -41,8 +41,17 @@ export type MlDsaAlg = 'ml-dsa-44' | 'ml-dsa-65' | 'ml-dsa-87';
 /** The part of noble's ML-DSA API this file uses (see THE CALLS above). */
 interface NobleMlDsa {
   keygen(seed: Uint8Array): { publicKey: Uint8Array; secretKey: Uint8Array };
-  sign(message: Uint8Array, secretKey: Uint8Array, opts: { context: Uint8Array; extraEntropy: Uint8Array | false }): Uint8Array;
-  verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array, opts: { context: Uint8Array }): boolean;
+  sign(
+    message: Uint8Array,
+    secretKey: Uint8Array,
+    opts: { context: Uint8Array; extraEntropy: Uint8Array | false },
+  ): Uint8Array;
+  verify(
+    signature: Uint8Array,
+    message: Uint8Array,
+    publicKey: Uint8Array,
+    opts: { context: Uint8Array },
+  ): boolean;
 }
 
 interface Params {

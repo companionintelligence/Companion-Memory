@@ -29,8 +29,10 @@ function pathAndQuery(target: string | undefined): string {
   if (raw.startsWith('/')) {
     return raw;
   }
+
   try {
     const url = new URL(raw);
+
     return `${url.pathname}${url.search}`;
   } catch {
     return '/';
@@ -68,6 +70,7 @@ export function nodeListener(
       if (refused) {
         return;
       }
+
       size += chunk.length;
       if (size > options.maxBodyBytes) {
         refused = true;
@@ -83,8 +86,10 @@ export function nodeListener(
           ),
         );
         req.destroy();
+
         return;
       }
+
       chunks.push(chunk);
     });
 
@@ -92,6 +97,7 @@ export function nodeListener(
       if (refused) {
         return;
       }
+
       handler
         .handle({
           method: req.method ?? 'GET',

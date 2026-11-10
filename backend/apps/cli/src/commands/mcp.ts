@@ -168,7 +168,7 @@ export async function mcpServeCommand(
       continue;
     }
 
-    let parsed: { id?: string | number | null; method?: string } | null = null;
+    let parsed: { id?: string | number | null; method?: string };
     try {
       parsed = JSON.parse(line) as { id?: string | number | null; method?: string };
     } catch {

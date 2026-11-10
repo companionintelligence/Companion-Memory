@@ -7,7 +7,6 @@ import {
 } from './discoverFeatures';
 import { DidcommError } from './errors';
 import { createMessage, type DidcommMessage, nowSeconds, parseMessage, threadIdOf } from './message';
-import { type Delivery, prepareDelivery } from './routing';
 import {
   type PackContext,
   packEncrypted,
@@ -18,6 +17,7 @@ import {
 } from './pack';
 import { belongsToProtocol, messageName } from './piuri';
 import { type ReplayGuard } from './replayGuard';
+import { type Delivery, prepareDelivery } from './routing';
 import { buildPingResponse, TRUST_PING_PROTOCOL, wantsResponse } from './trustPing';
 
 /**
@@ -96,7 +96,9 @@ interface Registration {
 
 export class DidcommAgent {
   readonly did: string;
+
   private readonly context: PackContext;
+
   private readonly registrations: Registration[] = [];
 
   constructor(private readonly options: DidcommAgentOptions) {

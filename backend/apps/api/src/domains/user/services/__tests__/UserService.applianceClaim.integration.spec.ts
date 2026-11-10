@@ -70,7 +70,6 @@ if (!availability.available) {
 
 jest.setTimeout(60_000);
 
-
 /**
  * Deleting an account needs a grant revoker (`ACCOUNT_GRANT_REVOKER`, bound by PrivacyModule). These
  * accounts hold no provider grants, so this one records nothing and finds nothing to revoke; the

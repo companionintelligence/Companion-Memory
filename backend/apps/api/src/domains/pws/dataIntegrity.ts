@@ -72,9 +72,11 @@ export async function createEddsaJcs2022Proof(args: {
   if ('proof' in document) {
     throw new DataIntegrityError('the document to secure must not already carry a proof');
   }
+
   if ('proofValue' in proofOptions) {
     throw new DataIntegrityError('proof options must not carry a proofValue');
   }
+
   if (proofOptions.verificationMethod !== signer.id) {
     throw new DataIntegrityError('the proof names a verification method other than the signer');
   }
@@ -108,13 +110,16 @@ export function verifyEddsaJcs2022Proof(args: {
     if (proof.type !== 'DataIntegrityProof' || proof.cryptosuite !== 'eddsa-jcs-2022') {
       return false;
     }
+
     if ('proof' in document) {
       return false;
     }
+
     const { proofValue, ...proofConfig } = proof;
     if (typeof proofValue !== 'string' || !proofValue.startsWith('z')) {
       return false;
     }
+
     const signature = base58btcDecode(proofValue.slice(1));
 
     let securedDocument = document;
@@ -124,6 +129,7 @@ export function verifyEddsaJcs2022Proof(args: {
       if (documentContext === undefined) {
         return false;
       }
+
       const proofEntries = Array.isArray(proofContext) ? proofContext : [proofContext];
       const documentEntries = Array.isArray(documentContext) ? documentContext : [documentContext];
       for (const [i, entry] of proofEntries.entries()) {
@@ -132,6 +138,7 @@ export function verifyEddsaJcs2022Proof(args: {
           return false;
         }
       }
+
       securedDocument = { ...document, '@context': proofContext };
     }
 

@@ -55,7 +55,7 @@ export class McpExecutorService {
 
       this.logger.error(error, `Failed to parse generated query for tool ${tool.name}`);
 
-      throw new Error(`Internal error building query for tool ${tool.name}`);
+      throw new Error(`Internal error building query for tool ${tool.name}`, { cause: err });
     }
 
     const result = await execute({

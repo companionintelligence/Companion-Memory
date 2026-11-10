@@ -1078,6 +1078,7 @@ async function postUpload(form: FormData, headers: Record<string, string>): Prom
 
     throw new Error(
       'Could not reach the appliance. If you dropped a folder, use Choose folder — or upload the .zip.',
+      { cause: err },
     );
   }
 

@@ -170,7 +170,7 @@ class ApplePhotosFileImporter implements FileImporter {
       return { confidence: 0 };
     }
 
-    let isDir = false;
+    let isDir: boolean;
     try {
       isDir = (await stat(baseDir)).isDirectory();
     } catch {

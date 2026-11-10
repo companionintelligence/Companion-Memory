@@ -26,6 +26,7 @@ import { type AccountDeletionResult, DataDeletionService } from '../services/Dat
  * which proves nobody posted an empty body by accident and nothing else: any
  * credential that could reach the route could send it.
  */
+// eslint-disable-next-line no-useless-assignment -- read in a parameter decorator below, which the rule does not see
 const deleteAccountSchema = z.object({
   confirmEmail: z.string().min(1, 'Account deletion requires the account email in "confirmEmail"'),
   /**

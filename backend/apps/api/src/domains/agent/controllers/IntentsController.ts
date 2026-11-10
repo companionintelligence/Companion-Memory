@@ -176,7 +176,7 @@ function parseTier(tier: string | undefined): DispatchTier | undefined {
 
 /** Decode a path segment and map dotted intent ids onto the registry's underscored keys. */
 function resolveExecuteName(raw: string): string | null {
-  let name = raw;
+  let name: string;
   try {
     name = decodeURIComponent(raw);
   } catch {

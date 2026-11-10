@@ -362,7 +362,7 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
     return null;
   }
 
-  let legacyValue: string | null = null;
+  let legacyValue: string | null;
 
   try {
     const { value } = await legacy.get({ key });

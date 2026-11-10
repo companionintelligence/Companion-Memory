@@ -24,12 +24,15 @@ function sortedTypes(value: unknown, required: string, pointer: string): string[
   if (value === undefined) {
     return [required];
   }
+
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string' && entry.length > 0)) {
     throw invalidBody('"type" must be an array of strings.', pointer);
   }
+
   if (!value.includes(required)) {
     throw invalidBody(`"type" must include "${required}".`, pointer);
   }
+
   return [...new Set(value as string[])].sort();
 }
 
@@ -37,9 +40,11 @@ function optionalString(value: unknown, pointer: string): string | undefined {
   if (value === undefined) {
     return undefined;
   }
+
   if (typeof value !== 'string') {
     throw invalidBody('The value must be a string.', pointer);
   }
+
   return value;
 }
 
@@ -52,6 +57,7 @@ function optionalLabel(value: unknown, pointer: string): string | undefined {
       pointer,
     );
   }
+
   return text;
 }
 
@@ -68,14 +74,18 @@ export function readSpaceBody(body: unknown): SpaceInput {
   if (!isRecord(body)) {
     throw invalidBody('The request body must be a JSON object.');
   }
+
   const { id, controller } = body;
   if (id !== undefined && typeof id !== 'string') {
     throw invalidBody('"id" must be a string.', '/id');
   }
+
   if (controller !== undefined && typeof controller !== 'string') {
     throw invalidBody('"controller" must be a DID.', '/controller');
   }
+
   const name = optionalString(body.name, '/name');
+
   return {
     ...(id !== undefined ? { id } : {}),
     type: sortedTypes(body.type, 'Space', '/type'),
@@ -100,6 +110,7 @@ function nestedDeeperThan(value: unknown, remaining: number): boolean {
   if (children === undefined) {
     return false;
   }
+
   return remaining === 0 || children.some((child) => nestedDeeperThan(child, remaining - 1));
 }
 
@@ -110,20 +121,24 @@ export function readCustom(value: unknown, pointer: string): Custom {
   if (!isRecord(value)) {
     throw invalidBody('"custom" must be a JSON object.', pointer);
   }
+
   const name = optionalString(value.name, `${pointer}/name`);
   let tags: JsonObject | undefined;
   if (value.tags !== undefined) {
     if (!isRecord(value.tags)) {
       throw invalidBody('"tags" must be a JSON object.', `${pointer}/tags`);
     }
+
     if (nestedDeeperThan(value.tags, MAX_TAGS_DEPTH)) {
       throw invalidBody(
         `"tags" may not be nested more than ${MAX_TAGS_DEPTH} levels deep.`,
         `${pointer}/tags`,
       );
     }
+
     tags = value.tags as JsonObject;
   }
+
   return { ...(name !== undefined ? { name } : {}), ...(tags !== undefined ? { tags } : {}) };
 }
 
@@ -147,46 +162,56 @@ function readGenerator(value: unknown): Generator {
   if (!isRecord(value)) {
     throw invalidBody('"generator" must be an object.', pointer);
   }
+
   for (const member of Object.keys(value)) {
     if (!['id', 'origin', 'url', 'name'].includes(member)) {
       throw invalidBody(`"generator" has an unknown member "${member}".`, `${pointer}/${member}`);
     }
   }
+
   if (!isDid(value.id)) {
     throw invalidBody('"generator.id" must be a DID.', `${pointer}/id`);
   }
+
   const generator: Generator = { id: value.id };
   if (value.origin !== undefined) {
     if (typeof value.origin !== 'string') {
       throw invalidBody('"generator.origin" must be a Web origin.', `${pointer}/origin`);
     }
+
     let origin: URL;
     try {
       origin = new URL(value.origin);
     } catch {
       throw invalidBody('"generator.origin" must be a Web origin.', `${pointer}/origin`);
     }
+
     if (origin.origin !== value.origin || (origin.protocol !== 'https:' && origin.protocol !== 'http:')) {
       throw invalidBody(
         '"generator.origin" must be the ASCII serialization of a Web origin.',
         `${pointer}/origin`,
       );
     }
+
     generator.origin = value.origin;
   }
+
   if (value.url !== undefined) {
     if (generator.origin === undefined) {
       throw invalidBody('"generator.url" requires "generator.origin".', `${pointer}/url`);
     }
+
     if (typeof value.url !== 'string') {
       throw invalidBody('"generator.url" must be a string.', `${pointer}/url`);
     }
+
     let url: URL;
     try {
       url = new URL(value.url);
     } catch {
       throw invalidBody('"generator.url" must be an absolute http(s) URL.', `${pointer}/url`);
     }
+
     if (
       (url.protocol !== 'https:' && url.protocol !== 'http:') ||
       url.origin !== generator.origin ||
@@ -199,14 +224,18 @@ function readGenerator(value: unknown): Generator {
         `${pointer}/url`,
       );
     }
+
     generator.url = value.url;
   }
+
   if (value.name !== undefined) {
     if (typeof value.name !== 'string' || value.name.length === 0) {
       throw invalidBody('"generator.name" must be a non-empty string.', `${pointer}/name`);
     }
+
     generator.name = value.name;
   }
+
   return generator;
 }
 
@@ -228,17 +257,21 @@ function readPlaintext(value: unknown): { indexes?: PlaintextIndexDeclaration[] 
   if (!isRecord(value)) {
     throw invalidBody('"plaintext" must be an object.', pointer);
   }
+
   for (const member of Object.keys(value)) {
     if (member !== 'indexes') {
       throw invalidBody(`"plaintext" has an unknown member "${member}".`, `${pointer}/${member}`);
     }
   }
+
   if (value.indexes === undefined) {
     return {};
   }
+
   if (!Array.isArray(value.indexes)) {
     throw invalidBody('"plaintext.indexes" must be an array.', `${pointer}/indexes`);
   }
+
   const declared: PlaintextIndexDeclaration[] = [];
   const names = new Set<string>();
   for (const [index, entry] of value.indexes.entries()) {
@@ -251,21 +284,26 @@ function readPlaintext(value: unknown): { indexes?: PlaintextIndexDeclaration[] 
       if (entry.source !== undefined && entry.source !== 'content' && entry.source !== 'custom') {
         throw invalidBody('"source" must be "content" or "custom".', `${at}/source`);
       }
+
       if (entry.unique !== undefined && typeof entry.unique !== 'boolean') {
         throw invalidBody('"unique" must be a boolean.', `${at}/unique`);
       }
     } else {
       throw invalidBody('An index must be a name or an object with a name.', at);
     }
+
     if (typeof name !== 'string' || name.length === 0) {
       throw invalidBody('An index needs a non-empty "name".', `${at}/name`);
     }
+
     if (name === '__proto__') {
       throw invalidBody('The index name "__proto__" is not allowed.', `${at}/name`);
     }
+
     if (names.has(name)) {
       throw invalidBody(`The index name "${name}" is declared twice.`, `${at}/name`);
     }
+
     names.add(name);
     declared.push(
       typeof entry === 'string'
@@ -277,6 +315,7 @@ function readPlaintext(value: unknown): { indexes?: PlaintextIndexDeclaration[] 
           },
     );
   }
+
   return { indexes: declared };
 }
 
@@ -284,10 +323,12 @@ export function readCollectionBody(body: unknown): CollectionInput {
   if (!isRecord(body)) {
     throw invalidBody('The request body must be a JSON object.');
   }
+
   const { id } = body;
   if (id !== undefined && typeof id !== 'string') {
     throw invalidBody('"id" must be a string.', '/id');
   }
+
   const name = optionalString(body.name, '/name');
   const epoch = optionalLabel(body.epoch, '/epoch');
 
@@ -296,6 +337,7 @@ export function readCollectionBody(body: unknown): CollectionInput {
     if (!isRecord(body.backend) || typeof body.backend.id !== 'string' || body.backend.id.length === 0) {
       throw invalidBody('"backend" must be an object with an "id".', '/backend');
     }
+
     backend = { id: body.backend.id };
   }
 
@@ -329,6 +371,7 @@ export function readResourceMetaBody(body: unknown): ResourceMetaInput {
   if (!isRecord(body)) {
     throw invalidBody('The request body must be a JSON object.');
   }
+
   return {
     custom: body.custom === undefined ? undefined : readCustom(body.custom, '/custom'),
     epoch: optionalLabel(body.epoch, '/epoch'),
@@ -348,9 +391,11 @@ export function readLabelHeader(value: string | undefined, header: string): stri
   if (value === undefined) {
     return undefined;
   }
+
   if (!LABEL.test(value)) {
     throw invalidBody(`The ${header} header must be a non-empty label of visible ASCII characters.`);
   }
+
   return value;
 }
 

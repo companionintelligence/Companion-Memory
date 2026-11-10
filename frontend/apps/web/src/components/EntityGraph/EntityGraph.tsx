@@ -21,7 +21,7 @@ export function EntityGraph({ entityId, maxDepth = 1, nodeLimit = 25 }: Props) {
     skip: !entityId,
   });
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

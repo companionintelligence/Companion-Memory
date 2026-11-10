@@ -111,6 +111,7 @@ describe('Create Space: POST /spaces/', () => {
         expect(res.type).toBe('invalid-request-body');
         expect(res.json.detail).toMatch(/not supported as a Space controller/);
       }
+
       expect(await w.store.transaction((tx) => tx.countSpaces())).toBe(0);
     });
 
@@ -240,6 +241,7 @@ describe('Create Space: POST /spaces/', () => {
         expect(res.type).toBe('controller-mismatch');
         details.add(res.json.detail);
       }
+
       expect(details.size).toBe(3);
     });
   });
@@ -273,6 +275,7 @@ describe('List Spaces: GET /spaces/', () => {
     for (const id of ['s-1', 's-2', 's-3']) {
       await w.createSpace(alice, id);
     }
+
     const first = await w.send({ method: 'GET', path: 'spaces/?limit=2', as: alice });
     expect(first.json.items.map((i: { id: string }) => i.id)).toEqual(['s-1', 's-2']);
     const next = first.json.next as string;
@@ -290,8 +293,10 @@ describe('Space Metadata: GET and PUT /space/{s}/meta', () => {
   async function world(): Promise<World> {
     const w = new World();
     await w.createSpace(alice, SPACE, { name: 'Example space #1' });
+
     return w;
   }
+
   const meta = `space/${SPACE}/meta`;
 
   it('is readable by the controller, with an ETag, and 304 when unchanged', async () => {
@@ -320,6 +325,7 @@ describe('Space Metadata: GET and PUT /space/{s}/meta', () => {
       expect(res.status).toBe(404);
       expect(res.type).toBe('not-found');
     }
+
     expect(stranger.text).toBe(absent.text);
     expect(stranger.text).toBe(anonymous.text);
   });
@@ -442,6 +448,7 @@ describe('Space Metadata: GET and PUT /space/{s}/meta', () => {
       });
       expect(res.status).toBe(404);
     }
+
     const read = (await w.send({ method: 'GET', path: meta, as: alice })).json;
     expect(read.controller).toBe(alice.did);
     expect(read.name).toBe('Example space #1');
@@ -469,6 +476,7 @@ describe('Space Metadata: GET and PUT /space/{s}/meta', () => {
       expect(res.status).toBe(400);
       expect(res.type).toBe('invalid-request-body');
     }
+
     expect((await w.send({ method: 'GET', path: meta, as: alice })).json.controller).toBe(alice.did);
   });
 
@@ -494,8 +502,10 @@ describe('Delete Space: DELETE /space/{s}/', () => {
     await w.createSpace(alice, SPACE);
     await w.createCollection(alice, SPACE, 'docs');
     await w.putResource(alice, SPACE, 'docs', 'a', { n: 1 });
+
     return w;
   }
+
   const url = `space/${SPACE}/`;
 
   it('is controller-only for strangers: 404, nothing deleted', async () => {
@@ -545,6 +555,7 @@ describe('Delete Space: DELETE /space/{s}/', () => {
       });
       expect((await w.send({ method: 'DELETE', path: url, as: app, via: grant })).status).toBe(404);
     }
+
     const deeper = await w.delegate({
       from: alice,
       to: app,

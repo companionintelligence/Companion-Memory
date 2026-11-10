@@ -91,7 +91,6 @@ function response(): Response {
   return { cookie: jest.fn(), clearCookie: jest.fn() } as unknown as Response;
 }
 
-
 /**
  * Deleting an account needs a grant revoker (`ACCOUNT_GRANT_REVOKER`, bound by PrivacyModule). These
  * accounts hold no provider grants, so this one records nothing and finds nothing to revoke; the
@@ -136,7 +135,11 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
     await dataSource.initialize();
 
     // Nothing observing UserCreated is under test, and no listener may run against this database.
-    userService = new UserService(dataSource.getRepository(UserEntity), { send: async () => [] } as never, noGrantsToRevoke);
+    userService = new UserService(
+      dataSource.getRepository(UserEntity),
+      { send: async () => [] } as never,
+      noGrantsToRevoke,
+    );
     federatedIdentityService = new FederatedIdentityService(
       dataSource.getRepository(FederatedIdentityEntity),
       quietLogger() as never,

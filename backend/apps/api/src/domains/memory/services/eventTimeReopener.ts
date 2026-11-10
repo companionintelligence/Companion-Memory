@@ -73,6 +73,7 @@ export function resolveEventTimeReopener(moduleRef: ModuleRef | undefined): Even
       `No provider is bound to ${EVENT_TIME_REOPENER}. A time move cannot re-open the ` +
         `pipeline's decisions on the event's time without it (PipelineModule binds it). Cause: ` +
         `${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

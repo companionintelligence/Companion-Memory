@@ -1,10 +1,3 @@
-import { type ContentEncryption } from './contentEncryption';
-import { parseDidDocument, relationshipKeys } from './didDocument';
-import { base64urlDecode, base64urlEncode } from './encoding';
-import { DidcommError } from './errors';
-import { computeApv, decryptJwe, encryptJwe, type GeneralJwe, isAuthcrypt, parseJwe } from './jwe';
-import { generateKeyPair, type KeyCurve, parsePrivateJwk, parsePublicJwk, type PublicJwk } from './jwk';
-import { parseJws, verifyJwsSignature } from './jws';
 import {
   RUST_ENCRYPTED_ANON_XC20P_1,
   RUST_ENCRYPTED_ANON_XC20P_2,
@@ -23,6 +16,13 @@ import {
   ENCRYPTED_SIGNED_1PU_P256_A256CBC,
   PLAINTEXT,
 } from './__tests__/vectors';
+import { type ContentEncryption } from './contentEncryption';
+import { parseDidDocument, relationshipKeys } from './didDocument';
+import { base64urlDecode, base64urlEncode } from './encoding';
+import { DidcommError } from './errors';
+import { computeApv, decryptJwe, encryptJwe, type GeneralJwe, isAuthcrypt, parseJwe } from './jwe';
+import { generateKeyPair, type KeyCurve, parsePrivateJwk, parsePublicJwk, type PublicJwk } from './jwk';
+import { parseJws, verifyJwsSignature } from './jws';
 
 const aliceDoc = parseDidDocument(ALICE_DID_DOC);
 const aliceKey = (kid: string): PublicJwk => {
@@ -37,6 +37,7 @@ const aliceKey = (kid: string): PublicJwk => {
 
   return key.jwk;
 };
+
 const bob = (kid: string) => parsePrivateJwk(BOB_SECRETS.find((secret) => secret.kid === kid));
 
 function decryptAll(vector: Record<string, unknown>, sender?: PublicJwk): Buffer[] {
@@ -438,8 +439,10 @@ describe('parseJwe and decryptJwe reject malformed or hostile input', () => {
     const flip = (text: string): string => {
       const bytes = base64urlDecode(text, 'x');
       bytes[0] ^= 1;
+
       return base64urlEncode(bytes);
     };
+
     const key = bob('did:example:bob#key-x25519-1');
 
     it.each([

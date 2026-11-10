@@ -503,7 +503,6 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
           }
 
           if (q === -1) {
-            p = buf.length;
             break;
           } // value continues in the next chunk
 
@@ -516,7 +515,6 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
         if (state === 'skiptag') {
           const g = buf.indexOf(GT, p);
           if (g === -1) {
-            p = buf.length;
             break;
           }
 

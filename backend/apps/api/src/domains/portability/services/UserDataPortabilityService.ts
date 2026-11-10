@@ -449,7 +449,7 @@ export class UserDataPortabilityService {
     await queryRunner.startTransaction();
 
     let rowsImported = 0;
-    let filesRestored = 0;
+    let filesRestored: number;
 
     try {
       await this.setReplicationRole(queryRunner, 'replica');

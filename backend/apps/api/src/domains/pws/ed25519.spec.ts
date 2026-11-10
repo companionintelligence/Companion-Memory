@@ -85,6 +85,7 @@ describe('verifyEd25519 refuses what is not a plain valid signature', () => {
     for (let i = 63; i >= 32; i--) {
       scalar = (scalar << 8n) | BigInt(sig[i] ?? 0);
     }
+
     scalar += 2n ** 252n + 27742317777372353535851937790883648493n;
     const out = Uint8Array.from(sig);
     for (let i = 32; i < 64; i++) {

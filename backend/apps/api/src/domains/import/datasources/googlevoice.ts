@@ -402,7 +402,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
       return { confidence: 0 };
     }
 
-    let isDir = false;
+    let isDir: boolean;
     try {
       isDir = (await stat(full)).isDirectory();
     } catch {

@@ -267,7 +267,7 @@ export async function systemExtract(
   options: SystemExtractOptions = {},
 ): Promise<SystemExtractResult> {
   const repair: NameRepairOptions = { sweep: options.exclusiveDest ?? false };
-  let detail = '';
+  let detail: string;
 
   if (systemUnzipAvailable()) {
     const r = await runExtractor('unzip', unzipExtractArgs(archive, destDir));

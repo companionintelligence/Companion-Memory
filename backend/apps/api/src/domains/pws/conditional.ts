@@ -24,10 +24,12 @@ export function parseEtagList(header: string | undefined): EtagList | undefined 
   if (header === undefined) {
     return undefined;
   }
+
   const trimmed = header.trim();
   if (trimmed === '*') {
     return { star: true, tags: [] };
   }
+
   const tags: EtagList['tags'] = [];
   for (const part of trimmed.split(',')) {
     const match = ETAG.exec(part.trim());
@@ -35,6 +37,7 @@ export function parseEtagList(header: string | undefined): EtagList | undefined 
       tags.push({ weak: match[1] !== undefined, value: match[2] ?? '' });
     }
   }
+
   return { star: false, tags };
 }
 

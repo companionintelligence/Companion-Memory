@@ -356,7 +356,7 @@ export class MemoryGraphQLClient {
     }
 
     const text = await response.text();
-    let body: GraphQLResponseBody<T> | null = null;
+    let body: GraphQLResponseBody<T> | null;
 
     try {
       body = text.length > 0 ? (JSON.parse(text) as GraphQLResponseBody<T>) : null;
