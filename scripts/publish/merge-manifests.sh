@@ -26,6 +26,8 @@ set -euo pipefail
 #   REGISTRY_PASSWORD    Registry login password                 (required, unless GITHUB_TOKEN is set)
 #   GITHUB_TOKEN         Token used as registry password fallback (e.g. inside GitHub Actions)
 #   GITHUB_ACTOR         Username paired with GITHUB_TOKEN        (default: github-actions)
+#   REGISTRY_ATTEMPTS    Tries per manifest write and inspect     (default: 3)
+#   REGISTRY_RETRY_DELAY Seconds before retry n, times n          (default: 60)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -122,7 +124,7 @@ for REPO in "${IMAGE_REMOTE[@]}"; do
     if [[ -n "${REGISTRY_OUTPUT}" ]]; then printf '%s\n' "${REGISTRY_OUTPUT}"; fi
     if [[ -n "${REGISTRY_ERRORS}" ]]; then printf '%s\n' "${REGISTRY_ERRORS}" >&2; fi
   else
-    printf '%s\n%s\n' "${REGISTRY_OUTPUT}" "${REGISTRY_ERRORS}" >&2
+    registry_report
     echo "  ✗ manifest create failed" >&2
     FAILED=$((FAILED + 1))
     continue
@@ -145,7 +147,7 @@ for REPO in "${IMAGE_REMOTE[@]}"; do
       MANIFEST="${REGISTRY_OUTPUT}"
     else
       MANIFEST=''
-      printf '%s\n' "${REGISTRY_ERRORS}" >&2
+      registry_report
     fi
     for ARCH in ${ARCHES}; do
       if ! echo "${MANIFEST}" | jq -e --arg arch "${ARCH}" \

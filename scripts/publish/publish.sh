@@ -35,6 +35,9 @@ set -euo pipefail
 #                        merge-manifests.sh reads these (DIGESTS_DIR) so the
 #                        release manifest names exactly what this run pushed,
 #                        not whatever the tag points at by then.
+#   REGISTRY_ATTEMPTS    Tries per image push                        (default: 3)
+#   REGISTRY_RETRY_DELAY Seconds before retry n, times n             (default: 60)
+#                        See registry-retry.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -661,7 +664,7 @@ main() {
         fi
       else
         log "✗"
-        printf '%s\n%s\n' "${REGISTRY_OUTPUT}" "${REGISTRY_ERRORS}" >&2
+        registry_report
         PUSH_FAILED=$((PUSH_FAILED + 1))
       fi
     done
