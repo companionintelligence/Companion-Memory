@@ -683,6 +683,17 @@ describe('NotePage — a failed save is sent again on its own', () => {
     });
   }
 
+  /** Moves the clock 50 ms at a time until `done()` holds, for at most `limitMs`. */
+  async function advanceUntil(done: () => boolean, limitMs: number) {
+    for (let stepped = 0; stepped < limitMs && !done(); stepped += 50) {
+      await advance(50);
+    }
+  }
+
+  // Each failed save asks for a fresh connection check once, so the count says how many failures
+  // the page has handled, and a retry's wait starts from the latest.
+  const refreshes = () => common.requestConnectionRefresh.mock.calls.length;
+
   async function typeAndFail(text = typed) {
     await screen.findByTestId('chat-menu');
     type(text);
@@ -713,17 +724,16 @@ describe('NotePage — a failed save is sent again on its own', () => {
     expect(common.requestConnectionRefresh).toHaveBeenCalled();
 
     await advance(2000);
-    // The first retry failed too, so the next wait is twice as long.
-    await advance(2000);
+    // The first retry fails too, so the next wait is twice as long. It starts when that failure is
+    // handled, which on a loaded machine can be well past the 2 s mark.
+    await advanceUntil(() => refreshes() >= 2, 5000);
+    expect(common.requestConnectionRefresh).toHaveBeenCalledTimes(2);
+
+    await advance(3000);
     expect(landed).not.toHaveBeenCalled();
 
-    // The 4 s wait starts when the first retry's failure comes back. On a loaded machine that can
-    // be well past the 2 s mark (the clock also runs in real time), so a fixed 3 s more could stop
-    // short of it. Step the clock until the save lands instead.
-    for (let stepped = 0; stepped < 10_000 && landed.mock.calls.length === 0; stepped += 250) {
-      await advance(250);
-    }
-
+    // Due 4 s after that failure. Step past it, but not as far as a wait of 8 s would need.
+    await advanceUntil(() => landed.mock.calls.length > 0, 2500);
     expect(landed).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
     expect(document.querySelector('time')).toBeInTheDocument();
@@ -911,6 +921,10 @@ describe('NotePage — a failed save is sent again on its own', () => {
     type(newer);
     await advance(AUTOSAVE_THROTTLE_MS + 50);
     await waitFor(() => expect(common.captureNote).toHaveBeenCalledTimes(2));
+    // The 4 s wait for the second retry starts when the guarded save's 502 is handled, not when it
+    // was captured. Wait for that before moving the clock.
+    await advanceUntil(() => refreshes() >= 2, 5000);
+    expect(common.requestConnectionRefresh).toHaveBeenCalledTimes(2);
 
     await advance(4000);
 
