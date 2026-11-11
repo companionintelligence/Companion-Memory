@@ -717,8 +717,14 @@ describe('NotePage — a failed save is sent again on its own', () => {
     await advance(2000);
     expect(landed).not.toHaveBeenCalled();
 
-    await advance(3000);
-    await waitFor(() => expect(landed).toHaveBeenCalledTimes(1));
+    // The 4 s wait starts when the first retry's failure comes back. On a loaded machine that can
+    // be well past the 2 s mark (the clock also runs in real time), so a fixed 3 s more could stop
+    // short of it. Step the clock until the save lands instead.
+    for (let stepped = 0; stepped < 10_000 && landed.mock.calls.length === 0; stepped += 250) {
+      await advance(250);
+    }
+
+    expect(landed).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument());
     expect(document.querySelector('time')).toBeInTheDocument();
   });

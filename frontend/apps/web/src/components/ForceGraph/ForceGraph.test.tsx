@@ -115,19 +115,19 @@ function overlappingPairs(boxes: ReturnType<typeof labelBoxes>) {
   return pairs;
 }
 
+/** Frames the component has asked for that haven't run yet (counted by the stub in beforeEach). */
+let pendingFrames = 0;
+
 /** Runs the requestAnimationFrame-driven simulation to completion. */
 async function settle() {
   await waitFor(() => {
     expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
   });
 
-  // The simulation caps at MAX_TICKS; give it room to reach the settle + polish step.
-  await waitFor(
-    () => {
-      expect(overlappingPairs(labelBoxes())).toEqual([]);
-    },
-    { timeout: 4000, interval: 25 },
-  );
+  // The simulation stops asking for frames once it has settled and run its label polish. Wait for
+  // that rather than for a fixed time: on a loaded 4-core runner it took longer than the 4 s this
+  // used to allow, and the test then failed on a layout that was still moving.
+  await waitFor(() => expect(pendingFrames).toBe(0), { timeout: 15_000, interval: 25 });
 }
 
 describe('ForceGraph', () => {
@@ -143,10 +143,34 @@ describe('ForceGraph', () => {
     // Assigned directly rather than via vi.stubGlobal: `vi.unstubAllGlobals` would also drop the
     // ResizeObserver and IntersectionObserver that src/test/setup.ts stubs once for every file,
     // breaking every test after the first.
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
-      setTimeout(() => callback(performance.now()), 0)) as unknown as typeof requestAnimationFrame;
-    globalThis.cancelAnimationFrame = ((handle: number) =>
-      clearTimeout(handle)) as unknown as typeof cancelAnimationFrame;
+    //
+    // pendingFrames drops only after a callback returns, so a step that asks for the next frame
+    // never lets it touch zero in between.
+    pendingFrames = 0;
+    const scheduled = new Set<ReturnType<typeof setTimeout>>();
+
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      pendingFrames += 1;
+      const handle = setTimeout(() => {
+        scheduled.delete(handle);
+        try {
+          callback(performance.now());
+        } finally {
+          pendingFrames -= 1;
+        }
+      }, 0);
+
+      scheduled.add(handle);
+
+      return handle;
+    }) as unknown as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((handle: ReturnType<typeof setTimeout>) => {
+      if (scheduled.delete(handle)) {
+        pendingFrames -= 1;
+      }
+
+      clearTimeout(handle);
+    }) as unknown as typeof cancelAnimationFrame;
   });
 
   afterEach(() => {
