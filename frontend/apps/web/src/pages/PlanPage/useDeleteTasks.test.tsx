@@ -146,7 +146,9 @@ describe('useDeleteTasks', () => {
       mocks: [listMock([{ id: 't1', title: 'Write the migration' }]), deleteMock('t1', null)],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    // The row first, so "leaves the row" checks a row that was there, not a list still loading.
+    await screen.findByText('Write the migration');
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not delete this task/i)),

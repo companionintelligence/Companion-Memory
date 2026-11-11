@@ -286,9 +286,10 @@ describe('AsksPage', () => {
 
     await screen.findByText('For you (2)');
 
-    // The peer-handled ask joins against myPeerLinks and gets a real photo.
+    // The peer-handled ask joins against myPeerLinks and gets a real photo. That is its own query
+    // and can land after the inbox, so Ada shows initials until it does.
+    await waitFor(() => expect(screen.getByRole('img', { name: 'ada' }).tagName).toBe('IMG'));
     const photo = screen.getByRole('img', { name: 'ada' });
-    expect(photo.tagName).toBe('IMG');
     expect(photo).toHaveAttribute('src', '/static/avatars/ada.png');
 
     // The local, opaque-id ask has nothing to resolve a photo from — it still

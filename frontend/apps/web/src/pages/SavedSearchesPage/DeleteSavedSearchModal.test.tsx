@@ -199,8 +199,9 @@ describe('DeleteSavedSearchModal', () => {
       ],
     });
 
+    // Two queries, which land in either order.
     await screen.findByText('yours: 7');
-    expect(screen.getByText('starters: 4')).toBeInTheDocument();
+    await screen.findByText('starters: 4');
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
