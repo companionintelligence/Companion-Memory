@@ -101,6 +101,23 @@ RETRIEVAL_RERANK_QUESTIONS: Dict[str, DecisionQuestion] = {
     ),
 }
 
+L0_EVENT_QUESTIONS: Dict[str, DecisionQuestion] = {
+    "l0_class": DecisionQuestion(
+        type="choice",
+        instructions="What is the primary behavioral activity category of this event?",
+        criteria={
+            "WORK": "meeting, sync, project, standup, review, interview, demo, work, call, presentation",
+            "EXERCISE": "workout, gym, run, cycling, swim, tennis, yoga, hike, training, fitness",
+            "SOCIAL": "dinner, lunch with, coffee with, party, drinks, hangout, birthday, celebration",
+            "ERRAND": "grocery, shopping, pharmacy, appointment, dentist, doctor, dmv, bank, dry cleaning",
+            "LEISURE": "movie, gaming, read, concert, museum, relax, gaming, walk, show",
+            "TRANSIT": "flight, train, airport, commute, drive, uber, travel, bus",
+            "SLEEP": "sleep, nap, rest, bedtime",
+            "UNKNOWN": "other, misc, unknown",
+        },
+    ),
+}
+
 
 class LocalDecisionEngine:
     """
@@ -137,7 +154,12 @@ class LocalDecisionEngine:
                 )
 
             elif q.type == "choice":
-                choices = list(q.criteria.keys()) if isinstance(q.criteria, dict) else ["opt1", "opt2"]
+                if isinstance(q.criteria, dict):
+                    choices = list(q.criteria.keys())
+                elif isinstance(q.criteria, list):
+                    choices = [str(c) for c in q.criteria]
+                else:
+                    choices = ["opt1", "opt2"]
                 scores: Dict[str, float] = {}
                 
                 # Semantic lexical scoring

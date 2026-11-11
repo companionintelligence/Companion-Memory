@@ -147,3 +147,83 @@ def test_unsloth_trainer_export():
         assert meta_path.exists()
         loaded = json.loads(meta_path.read_text())
         assert loaded["model_type"] == "decision-laya-unsloth"
+
+
+def test_qwen_labeler_l0_fastpath(monkeypatch):
+    """Ensure confident decision model resolves L0 without invoking Qwen LLM."""
+    from ci.hbpe.config import settings
+    from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
+
+    monkeypatch.setattr(settings, "enable_decision_models", True)
+    monkeypatch.setattr(settings, "decision_confidence_threshold", 0.70)
+
+    class MockQwenShouldNotCall:
+        def generate(self, *args, **kwargs):
+            raise AssertionError("Qwen.generate should not be called when decision model is confident!")
+
+    import ci.hbpe.inference.qwen as qwen_mod
+    monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwenShouldNotCall())
+
+    labeler = QwenLabeler()
+    # "Sprint review and roadmap sync" matches WORK keywords
+    l0 = labeler._resolve_l0("Sprint review and roadmap sync", "Engineering project sync")
+    assert l0 == "WORK"
+
+
+def test_qwen_labeler_l0_fallback_when_disabled(monkeypatch):
+    """Ensure Qwen LLM is called when decision models are disabled."""
+    from ci.hbpe.config import settings
+    from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
+
+    monkeypatch.setattr(settings, "enable_decision_models", False)
+
+    qwen_called = False
+
+    class MockQwen:
+        def generate(self, *args, **kwargs):
+            nonlocal qwen_called
+            qwen_called = True
+            return json.dumps({"l0": "EXERCISE"})
+
+    import ci.hbpe.inference.qwen as qwen_mod
+    monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwen())
+
+    labeler = QwenLabeler()
+    l0 = labeler._resolve_l0("Morning 5k run", None)
+    assert l0 == "EXERCISE"
+    assert qwen_called is True
+
+
+def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
+    """Test batch L0 resolution where high-confidence items skip Qwen and ambiguous ones use Qwen."""
+    from ci.hbpe.config import settings
+    from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
+
+    monkeypatch.setattr(settings, "enable_decision_models", True)
+    monkeypatch.setattr(settings, "decision_confidence_threshold", 0.75)
+
+    qwen_calls = []
+
+    class MockQwenBatch:
+        def batch_generate(self, prompts, **kwargs):
+            qwen_calls.append(len(prompts))
+            return [json.dumps({"l0": "LEISURE"}) for _ in prompts]
+
+    import ci.hbpe.inference.qwen as qwen_mod
+    monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwenBatch())
+
+    labeler = QwenLabeler()
+    titles = [
+        "Weekly engineering standup meeting",  # WORK (high confidence in local engine)
+        "Something obscure without keywords",  # Fallback to Qwen
+        "Morning gym workout and fitness",     # EXERCISE (high confidence)
+    ]
+    descriptions = [None, None, None]
+
+    results = labeler._batch_resolve_l0(titles, descriptions)
+    assert results[0] == "WORK"
+    assert results[1] == "LEISURE"  # From MockQwen
+    assert results[2] == "EXERCISE"
+    # Qwen should have only been called for 1 item (the obscure one)!
+    assert qwen_calls == [1]
+
