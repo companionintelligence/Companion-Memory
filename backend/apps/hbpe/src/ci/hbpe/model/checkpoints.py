@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 
 from ci.hbpe.config import settings
+from ci.hbpe.model.train_io import atomic_write_text
 
 ARCH_STAMP = "architecture.json"
 ONNX_EXPORT_REPORT = "onnx_export_report.json"
@@ -81,7 +82,8 @@ def write_architecture_stamp(user_id: str) -> Path:
 
     d = user_ckpt_dir(user_id, create=True)
     path = d / ARCH_STAMP
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(
             {
                 "fingerprint": architecture_fingerprint(),

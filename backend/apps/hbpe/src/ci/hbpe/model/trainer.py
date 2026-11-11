@@ -35,6 +35,12 @@ from ci.hbpe.model.checkpoints import (
     write_architecture_stamp,
 )
 from ci.hbpe.model.dataset import TokenStreamDataset
+from ci.hbpe.model.train_io import (
+    atomic_torch_save,
+    resolve_device,
+    seed_everything,
+    select_monitor_loss,
+)
 from ci.hbpe.model.transformer import HMTModel, L0MAEModel
 from ci.hbpe.model.vocab import (
     EOD_IDX,
@@ -84,12 +90,8 @@ def train_l0_mae(
 
     Returns the path to the saved checkpoint.
     """
-    if device is None:
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+    device = resolve_device(device)
+    seed_everything()
     log.info(
         "Training L0 MAE on device=%s  train=%d val=%d days",
         device,
@@ -118,16 +120,22 @@ def train_l0_mae(
         )
         scheduler.step()
 
-        improved = val_loss < best_val_loss - 1e-4
+        monitor, monitor_name = select_monitor_loss(train_loss, val_loss, len(val_ds))
+        if epoch == 1 and monitor_name == "train":
+            log.warning(
+                "No validation days for %s: early stopping watches train loss", user_id
+            )
+        improved = monitor < best_val_loss - 1e-4
         if improved:
-            best_val_loss = val_loss
+            best_val_loss = monitor
             patience_counter = 0
-            torch.save(
+            atomic_torch_save(
                 {
                     "epoch": epoch,
                     "model_state": model.state_dict(),
                     "vocab_size": len(vocab),
                     "val_loss": best_val_loss,
+                    "monitor": monitor_name,
                     "architecture": architecture_fingerprint(),
                 },
                 ckpt_path,
@@ -154,6 +162,11 @@ def train_l0_mae(
                 log.info("Early stopping at epoch %d", epoch)
                 break
 
+    if not ckpt_path.exists():
+        raise RuntimeError(
+            f"L0 MAE training produced no checkpoint for {user_id} "
+            "(every epoch loss was non-finite or no epoch improved)"
+        )
     log.info(
         "L0 MAE pre-training complete. Best val loss=%.4f  checkpoint=%s",
         best_val_loss,
@@ -274,12 +287,8 @@ def train_hmt_joint(
 
     Returns path to saved hmt_checkpoint.pt.
     """
-    if device is None:
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+    device = resolve_device(device)
+    seed_everything()
 
     l0_vocab = build_l0_vocab()
     l1_vocab = build_l1_vocab(user_id)
@@ -334,10 +343,15 @@ def train_hmt_joint(
         )
         scheduler.step()
 
-        if vl_loss < best_val - 1e-4:
-            best_val = vl_loss
+        monitor, monitor_name = select_monitor_loss(tr_loss, vl_loss, len(val_ds))
+        if epoch == 1 and monitor_name == "train":
+            log.warning(
+                "No validation days for %s: early stopping watches train loss", user_id
+            )
+        if monitor < best_val - 1e-4:
+            best_val = monitor
             patience_ctr = 0
-            torch.save(
+            atomic_torch_save(
                 {
                     "epoch": epoch,
                     "model_state": model.state_dict(),
@@ -346,6 +360,7 @@ def train_hmt_joint(
                     "l1_vocab_fingerprint": l1_fp,
                     "architecture": architecture_fingerprint(),
                     "val_loss": best_val,
+                    "monitor": monitor_name,
                 },
                 ckpt_path,
             )
@@ -372,6 +387,11 @@ def train_hmt_joint(
                 log.info("Early stopping at epoch %d", epoch)
                 break
 
+    if not ckpt_path.exists():
+        raise RuntimeError(
+            f"HMT joint training produced no checkpoint for {user_id} "
+            "(every epoch loss was non-finite or no epoch improved)"
+        )
     log.info(
         "HMT joint fine-tuning complete. Best val=%.4f  ckpt=%s", best_val, ckpt_path
     )
