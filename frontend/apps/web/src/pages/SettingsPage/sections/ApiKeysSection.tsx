@@ -57,9 +57,10 @@ interface CreateApiKeyResponse extends ApiKeyResponse {
  * Scopes a user-created key can carry, labelled for the create dialog.
  *
  * Enforcement is deny-by-default on a NON-EMPTY selection: a scoped key may only reach routes that
- * declare one of its scopes. Leaving every box unchecked omits `scopes` from the request, which the
- * API reads as the grandfathered "full access" case — and stays the default, because endpoints
- * without a declared scope (bulk ingest, GraphQL) refuse scoped keys outright.
+ * declare one of its scopes. "All areas" omits `scopes` from the request, which the API reads as the
+ * grandfathered unscoped case. It has to stay on offer, because endpoints without a declared scope
+ * (bulk ingest, GraphQL) refuse scoped keys outright. But it is a box the user ticks, not what an
+ * untouched dialog mints: with nothing ticked, Create stays disabled.
  *
  * Paths are the ones a client actually calls, which are `/api/`-prefixed across the board — the
  * gateway rewrites `^/api/(.*)` to `/$1`, so `/api/mcp` and `/api/memory` reach controllers mounted
@@ -109,9 +110,9 @@ const CAPABILITY_OPTIONS = [
   },
   {
     value: API_KEY_CAPABILITY_FULL,
-    // NOT "Full access". On this screen that phrase already means something else — the badge on a
-    // key with no scopes, i.e. full *surface* — and one row can carry both. Two different powers
-    // under one phrase, side by side, is the ambiguity worth spending words to avoid.
+    // NOT "Full access". That phrase reads as "every area" too (the badge on a key with no scopes
+    // says "All areas"), and one row can carry both. Two different powers under one phrase, side by
+    // side, is the ambiguity worth spending words to avoid.
     //
     // CI-Hub uses this same wording for the same stored value, so a user who grants an agent access
     // to both appliances meets one vocabulary rather than two dialects.
@@ -188,6 +189,9 @@ export function ApiKeysSection() {
   const [createName, setCreateName] = useState('');
   const [createExpiresAt, setCreateExpiresAt] = useState<Date | undefined>(undefined);
   const [createScopes, setCreateScopes] = useState<string[]>([]);
+  // "All areas" is its own explicit choice. An empty selection used to mean it silently, so a name
+  // and a click on Create minted a key that reaches every endpoint.
+  const [createAllAreas, setCreateAllAreas] = useState(false);
   const [createCapability, setCreateCapability] = useState<ApiKeyCapability>(DEFAULT_API_KEY_CAPABILITY);
   const [createLoading, setCreateLoading] = useState(false);
 
@@ -255,16 +259,33 @@ export function ApiKeysSection() {
       setCreateName('');
       setCreateExpiresAt(undefined);
       setCreateScopes([]);
+      setCreateAllAreas(false);
       // Reset the level too — a 'full' chosen for one key must not silently carry into the next.
       setCreateCapability(DEFAULT_API_KEY_CAPABILITY);
     }
   };
 
   const toggleCreateScope = (scope: string) => {
+    // Picking an area means "only these", so it ends an earlier "All areas".
+    setCreateAllAreas(false);
     setCreateScopes((current) =>
       current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope],
     );
   };
+
+  const toggleCreateAllAreas = () => {
+    const next = !createAllAreas;
+
+    setCreateAllAreas(next);
+
+    // "All areas" and a list of areas are two different answers, so picking it clears the list.
+    if (next) {
+      setCreateScopes([]);
+    }
+  };
+
+  // Create needs an answer to "where can this key reach": some areas, or all of them.
+  const hasAreaChoice = createAllAreas || createScopes.length > 0;
 
   // The one scope combination that looks valid and is not: the server confines a scope-limited key
   // off the GraphQL data plane, and gates the native intent tools behind `intents`. So `mcp` on its
@@ -276,10 +297,11 @@ export function ApiKeysSection() {
   // requires it, and one that declares nothing requires what its shape implies (GraphQL mutations and
   // non-GET verbs write, queries and GETs read). So read-only now means read-only for an unscoped key
   // too; what scopes add on top is confinement to particular areas, which is worth saying.
-  const readWithoutScopes = createCapability === API_KEY_CAPABILITY_READ && createScopes.length === 0;
+  const readWithoutScopes = createCapability === API_KEY_CAPABILITY_READ && createAllAreas;
 
   const handleCreate = async () => {
-    if (!createName.trim()) {
+    // Enter in the name field reaches here too, so the disabled button is not the only guard.
+    if (!createName.trim() || !hasAreaChoice) {
       return;
     }
 
@@ -290,8 +312,8 @@ export function ApiKeysSection() {
         body.expires_at = createExpiresAt.toISOString();
       }
 
-      // Omitted when empty so the key keeps the grandfathered full-access meaning.
-      if (createScopes.length > 0) {
+      // Omitted for "All areas", which the API reads as an unscoped key.
+      if (!createAllAreas && createScopes.length > 0) {
         body.scopes = createScopes;
       }
 
@@ -549,7 +571,7 @@ export function ApiKeysSection() {
                     ) : key.scopes.length === 0 ? (
                       <Badge variant="outline" className="text-xs">
                         <KeyRound />
-                        Full access
+                        All areas
                       </Badge>
                     ) : (
                       key.scopes.map((scope) => (
@@ -653,6 +675,22 @@ export function ApiKeysSection() {
             <div className="grid gap-2">
               <Label>Access</Label>
               <div className="space-y-2 rounded-md border p-3">
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="apiKeyScope-all"
+                    aria-describedby="apiKeyScope-all-description"
+                    checked={createAllAreas}
+                    onCheckedChange={toggleCreateAllAreas}
+                  />
+                  <div className="grid gap-0.5 text-sm leading-none">
+                    <Label htmlFor="apiKeyScope-all" className="cursor-pointer font-medium">
+                      All areas
+                    </Label>
+                    <span id="apiKeyScope-all-description" className="text-muted-foreground text-xs">
+                      Every endpoint your account can reach, including bulk ingest and GraphQL
+                    </span>
+                  </div>
+                </div>
                 {SCOPE_OPTIONS.map((scope) => (
                   // The description is wired up with aria-describedby rather than folded into the
                   // label: an aria-label naming the checkbox would suppress it entirely, leaving
@@ -684,9 +722,11 @@ export function ApiKeysSection() {
                   the exact outcome the warning exists to prevent. */}
               <div role="status" className="grid gap-2">
                 <p className="text-muted-foreground text-xs">
-                  {createScopes.length === 0
-                    ? 'No selection grants full access — the key can reach every endpoint your account can.'
-                    : 'The key is limited to the selected areas and is refused everywhere else, including bulk ingest and GraphQL.'}
+                  {createAllAreas
+                    ? 'The key can reach every endpoint your account can, at the level you pick below.'
+                    : createScopes.length === 0
+                      ? 'Pick the areas this key can reach, or All areas.'
+                      : 'The key is limited to the selected areas and is refused everywhere else, including bulk ingest and GraphQL.'}
                 </p>
                 {/* MCP without Intents authenticates and opens a session, then advertises zero tools
                     — which agents report as "this server has no tools" rather than as a permissions
@@ -694,7 +734,7 @@ export function ApiKeysSection() {
                     debug an empty tool list. */}
                 {mcpWithoutIntents ? (
                   <p className="text-xs font-medium text-amber-600 dark:text-amber-500">
-                    MCP alone advertises no tools. Add Intents, or leave every box unchecked for full access.
+                    MCP alone advertises no tools. Add Intents, or pick All areas.
                   </p>
                 ) : null}
                 {readWithoutScopes ? (
@@ -745,7 +785,7 @@ export function ApiKeysSection() {
             <Button variant="outline" onClick={() => handleCreateOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!createName.trim() || createLoading}>
+            <Button onClick={handleCreate} disabled={!createName.trim() || !hasAreaChoice || createLoading}>
               {createLoading ? 'Creating…' : 'Create'}
             </Button>
           </Dialog.Footer>
