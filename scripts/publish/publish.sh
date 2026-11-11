@@ -119,6 +119,8 @@ done
 
 # shellcheck source=scripts/publish/images.sh
 source "${SCRIPT_DIR}/images.sh"
+# shellcheck source=scripts/publish/registry-retry.sh
+source "${SCRIPT_DIR}/registry-retry.sh"
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -638,7 +640,8 @@ main() {
       logn "  ${LOCAL_IMAGE}:latest → ${REMOTE} … "
 
       docker image tag "${LOCAL_IMAGE}:latest" "${REMOTE}"
-      if PUSH_OUTPUT=$(docker image push "${REMOTE}" 2>&1); then
+      if registry_retry "push ${REMOTE}" docker image push "${REMOTE}"; then
+        PUSH_OUTPUT="${REGISTRY_OUTPUT}"$'\n'"${REGISTRY_ERRORS}"
         log "✓"
         PUSH_COUNT=$((PUSH_COUNT + 1))
 
@@ -658,7 +661,7 @@ main() {
         fi
       else
         log "✗"
-        echo "$PUSH_OUTPUT" >&2
+        printf '%s\n%s\n' "${REGISTRY_OUTPUT}" "${REGISTRY_ERRORS}" >&2
         PUSH_FAILED=$((PUSH_FAILED + 1))
       fi
     done
