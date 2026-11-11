@@ -440,13 +440,27 @@ def train_hmt_joint_parallel(
     device: str | torch.device | None = None,
     progress_cb: ProgressCallback | None = None,
     checkpoint_dir: Path | None = None,
+    l1_vocab: Vocab | None = None,
 ) -> Path:
     """
     Parallel batched joint fine-tuning of HMTModel (L0 + L1).
     """
     dev = resolve_optimal_device(str(device) if device else None)
     l0_vocab = build_l0_vocab()
-    l1_vocab = build_l1_vocab(user_id)
+    if l1_vocab is None:
+        try:
+            l1_vocab = build_l1_vocab(user_id)
+        except Exception:
+            # When decoupled from PostgreSQL, build L1 vocab dynamically from dataset
+            l1_tokens = sorted({
+                t["token_id"]
+                for ds in (train_dataset, val_dataset)
+                for day in ds
+                for t in day
+                if t.get("level") == "L1" and t.get("token_id")
+            })
+            from ci.hbpe.model.vocab import _SPECIAL, _make_vocab
+            l1_vocab = _make_vocab(_SPECIAL + l1_tokens)
 
     log.info(
         "Parallel HMT joint fine-tune on device=%s, batch_size=%d (L0=%d, L1=%d)",
@@ -596,7 +610,10 @@ def train_hmt_joint_parallel(
                 },
                 ckpt_path,
             )
-            write_architecture_stamp(user_id)
+            try:
+                write_architecture_stamp(user_id)
+            except Exception:
+                pass
             log.info(
                 "Epoch %d/%d (%.1fs) train=%.4f val=%.4f ✓ saved",
                 epoch,
