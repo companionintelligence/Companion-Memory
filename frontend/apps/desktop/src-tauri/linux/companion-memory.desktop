@@ -1,0 +1,21 @@
+{{!--
+  The Tauri bundler's own template (tauri-bundler 2.10.4) with one change:
+  `%u` after Exec. Without it the desktop launcher drops the URL, so the
+  `companion://oidc/callback?code=...` link the browser hands back after
+  "Sign in with Companion account" starts the app with no arguments and the
+  sign-in never finishes. Used for the deb and rpm, see tauri.linux.conf.json.
+--}}
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} %u
+StartupWMClass={{exec}}
+Icon={{icon}}
+Name={{name}}
+Terminal=false
+Type=Application
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}

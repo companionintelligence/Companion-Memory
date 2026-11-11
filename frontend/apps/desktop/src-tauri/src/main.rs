@@ -776,4 +776,30 @@ mod tests {
         let verbose = ShellLogger { level: log::LevelFilter::Trace };
         assert!(verbose.enabled(&metadata(log::Level::Trace)));
     }
+
+    /// On Linux the browser returns sign-in as `companion://oidc/callback?code=...`
+    /// through the installed launcher. Tauri's default launcher says `Exec=<bin>`
+    /// with no `%u`, so the app started with no URL and sign-in never finished.
+    /// Both Linux packages have to use our template, and it has to keep the `%u`.
+    #[test]
+    fn the_linux_launcher_hands_the_sign_in_link_to_the_app() {
+        let template = include_str!("../linux/companion-memory.desktop");
+        assert!(
+            template.lines().any(|line| line == "Exec={{exec}} %u"),
+            "the launcher must pass the opened URL to the app as %u"
+        );
+        assert!(
+            template.lines().any(|line| line == "MimeType={{mime_type}}"),
+            "without MimeType the companion:// scheme has no handler at all"
+        );
+
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.linux.conf.json")).expect("tauri.linux.conf.json parses");
+        for package in ["deb", "rpm"] {
+            assert_eq!(
+                config["bundle"]["linux"][package]["desktopTemplate"], "linux/companion-memory.desktop",
+                "the {package} package would fall back to Tauri's launcher, which drops the URL"
+            );
+        }
+    }
 }
