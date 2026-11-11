@@ -3,6 +3,14 @@
   "productName": "Companion Memory",
   "mainBinaryName": "ci-server-desktop",
   "bundle": {
-    "targets": ["deb", "rpm"]
+    "targets": ["deb", "rpm"],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/companion-memory.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/companion-memory.desktop"
+      }
+    }
   }
 }

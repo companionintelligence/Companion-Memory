@@ -213,6 +213,15 @@ This needed two things neither `docker-compose.yml` nor
   `http://127.0.0.1:8642`, and the callback would never arrive. Setting
   `APP_BASE_URL` explicitly skips that derivation.
 
+The browser hands the result back through the `companion://` scheme
+(`companion://oidc/callback?code=...`), and the OS passes that URL to the app
+as a launch argument. On Linux that only works if the installed launcher's
+`Exec` line ends in `%u`, and Tauri's default launcher doesn't. So the deb and
+rpm use our own template, `src-tauri/linux/companion-memory.desktop`. Without
+it the browser's "Open Companion Memory" starts the app with no URL and sign-in
+never finishes. A test in `src/main.rs` checks both the template and the config
+that points at it.
+
 ## A note on the `!override` compose tag
 
 `docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
@@ -245,7 +254,8 @@ Not silently missing — just out of scope for this first pass:
   and offers manual Start/Stop only.
 - mDNS discovery of other appliances on the LAN (not applicable — this app
   only ever manages its own local stack).
-- A deep-link URL scheme / pairing flow (not applicable, for the same reason).
+- Deep-link pairing like the Hub's (not applicable, for the same reason). The
+  `companion://` scheme itself is used, for sign-in; see above.
 - Sentry crash reporting for the desktop shell itself.
 - ARM Linux and Windows-ARM build legs (`desktop-build.yml`/
   `desktop-release.yml` currently build x86_64 Linux/Windows and both macOS
