@@ -41,6 +41,7 @@ from ci.hbpe.model.checkpoints import (
     user_ckpt_dir,
     write_architecture_stamp,
 )
+from ci.hbpe.model.train_io import atomic_write
 from ci.hbpe.model.transformer import HMTModel, L0MAEModel
 from ci.hbpe.model.vocab import (
     EOD_IDX,
@@ -118,10 +119,12 @@ class TokenStreamFileDataset(Dataset):
 def collate_l0_mae_batch(
     day_token_list: list[list[dict]],
     vocab: Vocab,
+    seed: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[set[int]]] | None:
     """
     Collate a list of day sequences into a padded batch (B, T_max) for L0MAEModel.
     """
+    rng = random.Random(seed) if seed is not None else random
     token_id_tensors = []
     bucket_tensors = []
     target_tensors = []
@@ -139,7 +142,7 @@ def collate_l0_mae_batch(
             continue
 
         n_mask = max(1, round(len(maskable) * MASK_RATE))
-        mask_positions = set(random.sample(maskable, n_mask))
+        mask_positions = set(rng.sample(maskable, n_mask))
         batch_mask_positions.append(mask_positions)
 
         targets = list(ids)
@@ -287,6 +290,7 @@ def train_l0_mae_parallel(
     model = L0MAEModel(vocab_size=len(vocab)).to(dev)
     optimiser = AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimiser, T_max=n_epochs, eta_min=lr / 10)
+    scaler = torch.amp.GradScaler("cuda", enabled=(dev.type == "cuda"))
 
     # Autocast setup
     use_autocast = dev.type in ("cuda", "mps")
@@ -336,9 +340,11 @@ def train_l0_mae_parallel(
                 loss = _batched_masked_ce_loss(logits, t_targets, batch_mask_positions)
 
             if not torch.isnan(loss) and not torch.isinf(loss):
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimiser)
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimiser.step()
+                scaler.step(optimiser)
+                scaler.update()
                 total_loss += loss.item()
                 n_batches += 1
 
@@ -392,16 +398,14 @@ def train_l0_mae_parallel(
         if val_loss < best_val_loss - 1e-4:
             best_val_loss = val_loss
             patience_counter = 0
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state": model.state_dict(),
-                    "vocab_size": len(vocab),
-                    "val_loss": best_val_loss,
-                    "architecture": architecture_fingerprint(),
-                },
-                ckpt_path,
-            )
+            payload = {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "vocab_size": len(vocab),
+                "val_loss": best_val_loss,
+                "architecture": architecture_fingerprint(),
+            }
+            atomic_write(ckpt_path, lambda tmp: torch.save(payload, tmp))
             log.info(
                 "Epoch %d/%d (%.1fs) train=%.4f val=%.4f ✓ saved",
                 epoch,
@@ -488,6 +492,7 @@ def train_hmt_joint_parallel(
 
     optimiser = AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimiser, T_max=n_epochs, eta_min=lr / 10)
+    scaler = torch.amp.GradScaler("cuda", enabled=(dev.type == "cuda"))
 
     use_autocast = dev.type in ("cuda", "mps")
     autocast_dtype = torch.float16 if dev.type == "cuda" else torch.bfloat16
@@ -538,9 +543,11 @@ def train_hmt_joint_parallel(
                 )
 
             if not torch.isnan(loss) and not torch.isinf(loss):
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimiser)
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimiser.step()
+                scaler.step(optimiser)
+                scaler.update()
                 total_loss += loss.item()
                 n_batches += 1
 
@@ -598,18 +605,16 @@ def train_hmt_joint_parallel(
         if val_loss < best_val - 1e-4:
             best_val = val_loss
             patience_ctr = 0
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state": model.state_dict(),
-                    "l0_vocab_size": len(l0_vocab),
-                    "l1_vocab_size": len(l1_vocab),
-                    "l1_vocab_fingerprint": l1_fp,
-                    "architecture": architecture_fingerprint(),
-                    "val_loss": best_val,
-                },
-                ckpt_path,
-            )
+            hmt_payload = {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "l0_vocab_size": len(l0_vocab),
+                "l1_vocab_size": len(l1_vocab),
+                "l1_vocab_fingerprint": l1_fp,
+                "architecture": architecture_fingerprint(),
+                "val_loss": best_val,
+            }
+            atomic_write(ckpt_path, lambda tmp: torch.save(hmt_payload, tmp))
             try:
                 write_architecture_stamp(user_id)
             except Exception:
