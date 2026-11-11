@@ -10,6 +10,13 @@ export const SPLASH_MARK_SIZE =
   'aspect-square w-[min(88vw,34rem)] md:w-[min(44vw,40rem)] lg:w-[min(48vw,48rem)]';
 /** Compact enough on a phone that Log in sits on-screen under the wordmark. */
 export const CONNECT_MARK_SIZE = 'aspect-square w-[min(72vw,20rem)]';
+/**
+ * The desktop sign-in mark. A desktop window is short in CSS pixels once the
+ * system's text scaling zooms the page (1.3 makes a 1280x800 window about
+ * 985x615), so the mark is capped by height too and the sign-in button stays
+ * in view under it.
+ */
+export const DESKTOP_MARK_SIZE = 'aspect-square w-[min(72vw,20rem,32vh)]';
 /** The mark's own teal (#00a9a7), as a soft halo — the logo's "glow". */
 const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(0,169,167,0.5)]';
 /**

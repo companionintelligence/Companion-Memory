@@ -6,7 +6,7 @@ import { Link } from 'react-router-dom';
 import { OidcButton } from '@/components/OidcButton';
 import { QrCode } from '@/components/QrCode';
 import { useAuth } from '@/hooks';
-import { BrainMark, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
+import { BrainMark, DESKTOP_MARK_SIZE, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
 
 /**
  * What the browser round-trip came back with, in words. `useAuth` turns the
@@ -62,73 +62,79 @@ export function DesktopSignInPage() {
 
   return (
     <SplashShell>
-      <div className="relative z-10 flex h-full flex-col items-center justify-center gap-8 overflow-y-auto px-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <Reveal delay={0} className="flex shrink-0 flex-col items-center">
-          <BrainMark />
-          <p className="-mt-4 text-sm font-semibold text-muted-foreground md:-mt-10">Companion Memory</p>
-        </Reveal>
+      {/* The scroller and the centred column are two elements on purpose. With
+          `justify-center` on the scroller itself, a column taller than the window
+          (phone setup open, an invitation field, a short window) overflows at both
+          ends, and the top part can't be scrolled back into view. */}
+      <div className="relative z-10 h-full overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center gap-8 px-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
+          <Reveal delay={0} className="flex shrink-0 flex-col items-center">
+            <BrainMark sizeClass={DESKTOP_MARK_SIZE} />
+            <p className="-mt-3 text-sm font-semibold text-muted-foreground">Companion Memory</p>
+          </Reveal>
 
-        <Reveal delay={120} className="flex w-full max-w-sm flex-col items-center gap-4">
-          <h1 className="text-center text-2xl font-bold tracking-tight">Sign in to your memory</h1>
+          <Reveal delay={120} className="flex w-full max-w-sm flex-col items-center gap-4">
+            <h1 className="text-center text-2xl font-bold tracking-tight">Sign in to your memory</h1>
 
-          {signInError && (
-            <p role="alert" className="text-center text-sm text-destructive">
-              {signInError.message}
-            </p>
-          )}
-
-          {inviteVisible && (
-            <label className="flex w-full flex-col gap-1 text-sm">
-              <span className="text-muted-foreground">Invitation</span>
-              <Input
-                value={inviteCode}
-                onChange={(event) => setInviteCode(event.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="Paste the invitation from this Memory's owner"
-              />
-            </label>
-          )}
-
-          <div className="flex w-full flex-col gap-2">
-            <OidcButton label="Sign in with Companion account" signupCode={inviteCode} />
-            <p className="text-center text-xs text-muted-foreground">Opens your browser to sign in.</p>
-          </div>
-
-          <div className="flex w-full flex-col items-center gap-1">
-            <Button asChild variant="link" className="text-muted-foreground">
-              <Link to="/login">Use email and password instead</Link>
-            </Button>
-
-            {!inviteVisible && (
-              <Button variant="link" className="text-muted-foreground" onClick={() => setShowInvite(true)}>
-                I have an invitation
-              </Button>
+            {signInError && (
+              <p role="alert" className="text-center text-sm text-destructive">
+                {signInError.message}
+              </p>
             )}
 
-            {/* Pairing, not sign-in. The code carries this appliance's address so a
+            {inviteVisible && (
+              <label className="flex w-full flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">Invitation</span>
+                <Input
+                  value={inviteCode}
+                  onChange={(event) => setInviteCode(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste the invitation from this Memory's owner"
+                />
+              </label>
+            )}
+
+            <div className="flex w-full flex-col gap-2">
+              <OidcButton label="Sign in with Companion account" signupCode={inviteCode} />
+              <p className="text-center text-xs text-muted-foreground">Opens your browser to sign in.</p>
+            </div>
+
+            <div className="flex w-full flex-col items-center gap-1">
+              <Button asChild variant="link" className="text-muted-foreground">
+                <Link to="/login">Use email and password instead</Link>
+              </Button>
+
+              {!inviteVisible && (
+                <Button variant="link" className="text-muted-foreground" onClick={() => setShowInvite(true)}>
+                  I have an invitation
+                </Button>
+              )}
+
+              {/* Pairing, not sign-in. The code carries this appliance's address so a
                 phone can reach it; it cannot sign this machine in, because the
                 OAuth result comes back through a deep link to THIS device. A
                 scan-to-sign-in-here flow would need device authorization on the
                 server, which does not exist yet. */}
-            <Button
-              variant="link"
-              className="text-muted-foreground"
-              onClick={() => setShowPairing((shown) => !shown)}
-            >
-              {showPairing ? 'Hide phone setup' : 'Set up your phone'}
-            </Button>
-          </div>
+              <Button
+                variant="link"
+                className="text-muted-foreground"
+                onClick={() => setShowPairing((shown) => !shown)}
+              >
+                {showPairing ? 'Hide phone setup' : 'Set up your phone'}
+              </Button>
+            </div>
 
-          {showPairing && (
-            <QrCode
-              value={applianceUrl}
-              fallback={applianceUrl}
-              caption="Scan in the Companion Memory app on your phone to connect it to this Memory."
-              mark
-            />
-          )}
-        </Reveal>
+            {showPairing && (
+              <QrCode
+                value={applianceUrl}
+                fallback={applianceUrl}
+                caption="Scan in the Companion Memory app on your phone to connect it to this Memory."
+                mark
+              />
+            )}
+          </Reveal>
+        </div>
       </div>
     </SplashShell>
   );
