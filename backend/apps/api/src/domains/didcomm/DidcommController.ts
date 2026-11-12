@@ -1,4 +1,4 @@
-import { Body, Controller, NotFoundException, Post } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Post } from '@nestjs/common';
 
 import { FeatureService } from '@ci/common/feature';
 
@@ -36,12 +36,22 @@ export class DidcommController {
     return this.agent;
   }
 
+  @Get('did')
+  async getDid(): Promise<{ did: string }> {
+    if (!(await this.features.isFeatureEnabled('didcomm.messaging'))) {
+      throw new NotFoundException();
+    }
+
+    return { did: this.getAgentDid() };
+  }
+
   @Post('message')
   async handleMessage(@Body() body: Record<string, unknown> | string): Promise<{
     handled: boolean;
     messageId?: string;
     type?: string;
     repliesCount?: number;
+    replies?: Array<{ to: string; type: string; packed: Record<string, unknown> }>;
     error?: string;
   }> {
     if (!(await this.features.isFeatureEnabled('didcomm.messaging'))) {
@@ -57,11 +67,16 @@ export class DidcommController {
         messageId: result.message.id,
         type: result.message.type,
         repliesCount: result.replies.length,
+        replies: result.replies.map((reply) => ({
+          to: reply.to,
+          type: reply.message.type,
+          packed: JSON.parse(reply.packed) as Record<string, unknown>,
+        })),
       };
     } catch (err) {
       return {
         handled: false,
-        error: (err as Error).message || 'DIDCOMM_RECEIVE_FAILED',
+        error: err instanceof Error && err.message ? err.message : 'DIDCOMM_RECEIVE_FAILED',
       };
     }
   }

@@ -26,7 +26,7 @@ export function isValidCimdClientId(clientId: string): boolean {
     return false;
   }
 
-  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') {
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.hash !== '') {
     return false;
   }
 
@@ -35,8 +35,15 @@ export function isValidCimdClientId(clientId: string): boolean {
     return false;
   }
 
-  const host = url.hostname.toLowerCase();
-  if (host === 'localhost' || PRIVATE_HOST_SUFFIXES.some((s) => host.endsWith(s))) {
+  const rawHost = url.hostname.toLowerCase();
+  const unwrappedHost = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost;
+  const host = unwrappedHost.replace(/\.+$/, '');
+  if (
+    !host ||
+    host === 'localhost' ||
+    PRIVATE_HOST_SUFFIXES.some((s) => host.endsWith(s)) ||
+    host.endsWith('.arpa')
+  ) {
     return false;
   }
 
@@ -72,6 +79,14 @@ export function validateCimdDocument(
     return { valid: false, reason: 'CIMD redirect_uris must be a non-empty array' };
   }
 
+  if (
+    obj.token_endpoint_auth_method === 'client_secret_basic' ||
+    obj.token_endpoint_auth_method === 'client_secret_post' ||
+    obj.token_endpoint_auth_method === 'client_secret_jwt'
+  ) {
+    return { valid: false, reason: 'CIMD clients must not declare symmetric client_secret auth methods' };
+  }
+
   for (const uri of obj.redirect_uris) {
     if (typeof uri !== 'string') {
       return { valid: false, reason: 'CIMD redirect_uris entries must be strings' };
@@ -79,7 +94,35 @@ export function validateCimdDocument(
 
     try {
       const parsed = new URL(uri);
-      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:' && !parsed.protocol.endsWith(':')) {
+      if (parsed.hash !== '') {
+        return { valid: false, reason: 'CIMD redirect_uris must not contain URL fragments' };
+      }
+
+      const scheme = parsed.protocol.toLowerCase();
+      if (
+        scheme === 'javascript:' ||
+        scheme === 'data:' ||
+        scheme === 'vbscript:' ||
+        scheme === 'file:' ||
+        scheme === 'blob:' ||
+        scheme === 'about:' ||
+        scheme === 'ftp:' ||
+        scheme === 'ftps:' ||
+        scheme === 'ws:' ||
+        scheme === 'wss:'
+      ) {
+        return { valid: false, reason: `Disallowed redirect_uri scheme: ${scheme}` };
+      }
+
+      if (scheme === 'http:') {
+        const redirectHost = parsed.hostname
+          .toLowerCase()
+          .replace(/^\[|\]$/g, '')
+          .replace(/\.+$/, '');
+        if (redirectHost !== 'localhost' && redirectHost !== '127.0.0.1' && redirectHost !== '::1') {
+          return { valid: false, reason: 'Plain HTTP redirect_uri is only permitted for loopback hosts' };
+        }
+      } else if (scheme !== 'https:' && !/^[a-z][a-z0-9+.-]*:$/.test(scheme)) {
         return { valid: false, reason: 'Invalid redirect_uri scheme' };
       }
     } catch {

@@ -7,6 +7,5 @@ import { PwsController } from './PwsController';
 @Module({
   imports: [FeatureModule],
   controllers: [PwsController],
-  exports: [PwsController],
 })
 export class PwsModule {}

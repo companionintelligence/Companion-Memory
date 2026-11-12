@@ -7,6 +7,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { requestOrigin } from '@ci/common/http/requestOrigin';
 import { GraphNodeEntity, GraphQueryService } from '@ci/domains/memory';
 
+import { SolidProtocolGuard } from '../guards/SolidProtocolGuard';
 import { negotiateRdf, type Quad } from '../rdf';
 import { ContainerService } from '../services/ContainerService';
 import { EntityProjectionService } from '../services/EntityProjectionService';
@@ -37,7 +38,7 @@ const MAX_MEMBERS = 1000;
  * exists. Everything is additionally gated behind the `solid.protocol` flag.
  */
 @Controller('solid/storage')
-@UseGuards(JwtOrApiKeyAuthGuard)
+@UseGuards(SolidProtocolGuard, JwtOrApiKeyAuthGuard)
 export class StorageController {
   constructor(
     private readonly features: FeatureService,

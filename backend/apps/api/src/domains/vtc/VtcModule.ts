@@ -7,6 +7,5 @@ import { VtcController } from './VtcController';
 @Module({
   imports: [FeatureModule],
   controllers: [VtcController],
-  exports: [VtcController],
 })
 export class VtcModule {}

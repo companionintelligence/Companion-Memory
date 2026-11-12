@@ -143,7 +143,7 @@ export function computeAuditMerkleRoot(saids: readonly string[]): string | null 
  * Builds an inclusion proof for the audit SAID at `index` within `saids`.
  */
 export function buildAuditMerkleProof(saids: readonly string[], index: number): AuditMerkleProofStep[] {
-  if (index < 0 || index >= saids.length) {
+  if (!Number.isInteger(index) || index < 0 || index >= saids.length) {
     throw new RangeError(`Merkle index ${index} out of bounds for batch size ${saids.length}`);
   }
 
@@ -182,13 +182,21 @@ export function verifyAuditMerkleProof(
   proof: readonly AuditMerkleProofStep[],
   expectedRoot: string,
 ): boolean {
-  if (!CESR_SHA256_SAID_PATTERN.test(expectedRoot)) {
+  if (
+    !CESR_SHA256_SAID_PATTERN.test(said) ||
+    !CESR_SHA256_SAID_PATTERN.test(expectedRoot) ||
+    !Array.isArray(proof)
+  ) {
     return false;
   }
 
   let current = hashMerkleLeaf(said);
   for (const step of proof) {
-    if (!CESR_SHA256_SAID_PATTERN.test(step.digest)) {
+    if (
+      !step ||
+      (step.position !== 'left' && step.position !== 'right') ||
+      !CESR_SHA256_SAID_PATTERN.test(step.digest)
+    ) {
       return false;
     }
 

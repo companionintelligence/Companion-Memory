@@ -333,4 +333,25 @@ describe('BodyParserMiddleware NDJSON streaming bypass', () => {
       parsersInvoked: true,
     });
   });
+
+  it('leaves raw streams untouched for Portable Web Spaces (/pws and /pws/*)', () => {
+    for (const url of ['/pws', '/pws/service', '/pws/space/s-1/notes/n-1']) {
+      for (const contentType of ['application/json', 'application/octet-stream']) {
+        expect(runMiddleware(url, contentType).parsersInvoked).toBe(false);
+      }
+    }
+  });
+
+  it('configures DIDComm JSON media types on /didcomm routes only', () => {
+    runMiddleware('/didcomm/message', 'application/didcomm-encrypted+json');
+    expect((json as jest.Mock).mock.calls[0]?.[0]?.type).toEqual([
+      'application/json',
+      'application/didcomm-encrypted+json',
+      'application/didcomm-signed+json',
+      'application/didcomm-plain+json',
+    ]);
+
+    runMiddleware('/api/health', 'application/json');
+    expect((json as jest.Mock).mock.calls[0]?.[0]?.type).toBe('application/json');
+  });
 });

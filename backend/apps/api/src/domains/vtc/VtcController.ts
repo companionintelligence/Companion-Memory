@@ -26,12 +26,22 @@ export class VtcController {
       throw new NotFoundException();
     }
 
-    if (!body?.credential || typeof body.credential !== 'object') {
+    if (!body?.credential || typeof body.credential !== 'object' || Array.isArray(body.credential)) {
       return { valid: false, reason: 'MALFORMED_CREDENTIAL' };
     }
 
     try {
       const parsed = parseDtgCredential(body.credential);
+
+      const nowMs = Date.now();
+      const clockSkewMs = 60_000;
+      if (parsed.validFrom.getTime() > nowMs + clockSkewMs) {
+        return { valid: false, reason: 'NOT_YET_VALID' };
+      }
+
+      if (parsed.validUntil && parsed.validUntil.getTime() + clockSkewMs <= nowMs) {
+        return { valid: false, reason: 'EXPIRED' };
+      }
 
       // Verify data integrity proof
       const keyResolver = createKeyResolver();
