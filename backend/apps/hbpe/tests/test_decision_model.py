@@ -233,3 +233,14 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
     assert results[2] == "EXERCISE"
     # Qwen should have only been called for 1 item (the obscure one)!
     assert qwen_calls == [1]
+
+
+def test_decision_models_are_off_unless_enabled(monkeypatch):
+    """The keyword fallback must not label events unless someone opts in."""
+    from ci.hbpe.config import Settings
+
+    monkeypatch.delenv("HBPE_ENABLE_DECISION_MODELS", raising=False)
+    assert Settings().enable_decision_models is False
+
+    monkeypatch.setenv("HBPE_ENABLE_DECISION_MODELS", "true")
+    assert Settings().enable_decision_models is True

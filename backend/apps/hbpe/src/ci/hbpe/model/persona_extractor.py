@@ -13,20 +13,18 @@ import glob
 import io
 import json
 import logging
-import os
 import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ci.hbpe.model.unsloth_decision_trainer import (
     DecisionDatasetItem,
     UnslothDecisionTrainConfig,
     UnslothDecisionTrainer,
-    compute_brier_score,
-    compute_calibration_error,
 )
+
 try:
     from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES, normalise_l0
 except ImportError:
@@ -46,11 +44,12 @@ except ImportError:
         cleaned = raw.strip().upper().rstrip(".,;:!")
         return cleaned if cleaned in _L0_SET else "UNKNOWN"
 
+
 log = logging.getLogger(__name__)
 
 UnslothDecisionItem = DecisionDatasetItem
 
-PERSONA_DECISION_QUESTIONS: Dict[str, Dict[str, Any]] = {
+PERSONA_DECISION_QUESTIONS: dict[str, dict[str, Any]] = {
     "intent": {
         "type": "choice",
         "instructions": "Determine primary intent or classification for this entry",
@@ -105,13 +104,78 @@ _URGENCY_HIGH_PATTERNS = [
     r"\bnow\b",
 ]
 
-_L0_KEYWORDS: Dict[str, List[str]] = {
-    "WORK": ["sprint", "meeting", "roadmap", "engineering", "project", "sync", "code", "review", "smoke signal", "pr", "bug", "deploy"],
-    "EXERCISE": ["gym", "run", "workout", "fitness", "cycling", "swim", "training", "exercise", "walk"],
-    "SOCIAL": ["party", "dinner", "drinks", "hangout", "lunch with", "coffee", "meet up", "birthday", "celebrate"],
-    "ERRAND": ["apartment", "shopping", "dentist", "doctor", "kiva", "bank", "buy", "store", "groceries", "chores"],
-    "LEISURE": ["movie", "game", "gaming", "music", "concert", "read", "book", "relax", "show", "nyc", "night"],
-    "TRANSIT": ["flight", "airport", "drive", "uber", "trip", "travel", "commute", "train"],
+_L0_KEYWORDS: dict[str, list[str]] = {
+    "WORK": [
+        "sprint",
+        "meeting",
+        "roadmap",
+        "engineering",
+        "project",
+        "sync",
+        "code",
+        "review",
+        "smoke signal",
+        "pr",
+        "bug",
+        "deploy",
+    ],
+    "EXERCISE": [
+        "gym",
+        "run",
+        "workout",
+        "fitness",
+        "cycling",
+        "swim",
+        "training",
+        "exercise",
+        "walk",
+    ],
+    "SOCIAL": [
+        "party",
+        "dinner",
+        "drinks",
+        "hangout",
+        "lunch with",
+        "coffee",
+        "meet up",
+        "birthday",
+        "celebrate",
+    ],
+    "ERRAND": [
+        "apartment",
+        "shopping",
+        "dentist",
+        "doctor",
+        "kiva",
+        "bank",
+        "buy",
+        "store",
+        "groceries",
+        "chores",
+    ],
+    "LEISURE": [
+        "movie",
+        "game",
+        "gaming",
+        "music",
+        "concert",
+        "read",
+        "book",
+        "relax",
+        "show",
+        "nyc",
+        "night",
+    ],
+    "TRANSIT": [
+        "flight",
+        "airport",
+        "drive",
+        "uber",
+        "trip",
+        "travel",
+        "commute",
+        "train",
+    ],
     "SLEEP": ["sleep", "nap", "bedtime", "rest"],
 }
 
@@ -140,9 +204,15 @@ def _infer_urgency(text: str) -> int:
 
 def _infer_privacy(text: str) -> int:
     lower = text.lower()
-    if any(kw in lower for kw in ["password", "secret", "ssn", "credit card", "private key"]):
+    if any(
+        kw in lower
+        for kw in ["password", "secret", "ssn", "credit card", "private key"]
+    ):
         return 2
-    if any(kw in lower for kw in ["call me", "phone", "email", "address", "doctor", "dentist"]):
+    if any(
+        kw in lower
+        for kw in ["call me", "phone", "email", "address", "doctor", "dentist"]
+    ):
         return 1
     return 0
 
@@ -154,7 +224,7 @@ class PersonaDatasetAuditResult:
     tasks: int = 0
     saved_places: int = 0
     commitments_detected: int = 0
-    sources_scanned: List[str] = field(default_factory=list)
+    sources_scanned: list[str] = field(default_factory=list)
 
 
 class PersonaDataExtractor:
@@ -169,15 +239,23 @@ class PersonaDataExtractor:
     def audit(self) -> PersonaDatasetAuditResult:
         """Scan and count available records without heavy parsing."""
         result = PersonaDatasetAuditResult()
-        
+
         # 1. Chat impostor files
-        chat_pattern = str(self.export_dir / "_test-staging" / "impostors" / "chat" / "Groups" / "*" / "messages.json")
+        chat_pattern = str(
+            self.export_dir
+            / "_test-staging"
+            / "impostors"
+            / "chat"
+            / "Groups"
+            / "*"
+            / "messages.json"
+        )
         chat_files = glob.glob(chat_pattern)
         if chat_files:
             result.sources_scanned.append("chat_impostors")
             for cf in chat_files:
                 try:
-                    with open(cf, "r", encoding="utf-8") as f:
+                    with open(cf, encoding="utf-8") as f:
                         data = json.load(f)
                         result.chat_messages += len(data.get("messages", []))
                 except Exception:
@@ -191,12 +269,18 @@ class PersonaDataExtractor:
                 with zipfile.ZipFile(takeout_zip, "r") as z:
                     names = z.namelist()
                     if "Takeout/Tasks/Tasks.json" in names:
-                        raw = json.loads(z.read("Takeout/Tasks/Tasks.json").decode("utf-8"))
+                        raw = json.loads(
+                            z.read("Takeout/Tasks/Tasks.json").decode("utf-8")
+                        )
                         for tl in raw.get("items", []):
                             result.tasks += len(tl.get("items", []))
                     for name in names:
                         if name.startswith("Takeout/Saved/") and name.endswith(".csv"):
-                            lines = z.read(name).decode("utf-8", errors="ignore").splitlines()
+                            lines = (
+                                z.read(name)
+                                .decode("utf-8", errors="ignore")
+                                .splitlines()
+                            )
                             result.saved_places += max(0, len(lines) - 1)
             except Exception:
                 pass
@@ -204,15 +288,23 @@ class PersonaDataExtractor:
         result.total_items = result.chat_messages + result.tasks + result.saved_places
         return result
 
-    def extract_decision_items(self) -> List[UnslothDecisionItem]:
+    def extract_decision_items(self) -> list[UnslothDecisionItem]:
         """Extract and calibrate all items into UnslothDecisionItems."""
-        items: List[UnslothDecisionItem] = []
+        items: list[UnslothDecisionItem] = []
 
         # 1. Chat messages
-        chat_pattern = str(self.export_dir / "_test-staging" / "impostors" / "chat" / "Groups" / "*" / "messages.json")
+        chat_pattern = str(
+            self.export_dir
+            / "_test-staging"
+            / "impostors"
+            / "chat"
+            / "Groups"
+            / "*"
+            / "messages.json"
+        )
         for cf in glob.glob(chat_pattern):
             try:
-                with open(cf, "r", encoding="utf-8") as f:
+                with open(cf, encoding="utf-8") as f:
                     data = json.load(f)
                     for msg in data.get("messages", []):
                         text = (msg.get("text") or "").strip()
@@ -224,8 +316,12 @@ class PersonaDataExtractor:
                         urgency = _infer_urgency(text)
                         privacy = _infer_privacy(text)
                         l0 = _infer_l0(text)
-                        intent = "store_task" if is_comm else ("store_fact" if len(text) > 40 else "conversational")
-                        
+                        intent = (
+                            "store_task"
+                            if is_comm
+                            else ("store_fact" if len(text) > 40 else "conversational")
+                        )
+
                         items.append(
                             UnslothDecisionItem(
                                 state=state,
@@ -248,7 +344,9 @@ class PersonaDataExtractor:
             try:
                 with zipfile.ZipFile(takeout_zip, "r") as z:
                     if "Takeout/Tasks/Tasks.json" in z.namelist():
-                        raw = json.loads(z.read("Takeout/Tasks/Tasks.json").decode("utf-8"))
+                        raw = json.loads(
+                            z.read("Takeout/Tasks/Tasks.json").decode("utf-8")
+                        )
                         for tl in raw.get("items", []):
                             list_title = tl.get("title", "Tasks")
                             for task in tl.get("items", []):
@@ -260,7 +358,7 @@ class PersonaDataExtractor:
                                 l0 = _infer_l0(title + " " + notes)
                                 if l0 == "UNKNOWN":
                                     l0 = "ERRAND"
-                                
+
                                 items.append(
                                     UnslothDecisionItem(
                                         state=state,
@@ -281,7 +379,7 @@ class PersonaDataExtractor:
                             list_name = Path(name).stem
                             content = z.read(name).decode("utf-8", errors="ignore")
                             reader = csv.reader(io.StringIO(content))
-                            header = next(reader, None)
+                            next(reader, None)  # skip the CSV header row
                             for row in reader:
                                 if row and row[0].strip():
                                     place_name = row[0].strip()
@@ -306,7 +404,7 @@ class PersonaDataExtractor:
 
     def create_train_eval_splits(
         self, eval_ratio: float = 0.20, seed: int = 42
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Split extracted decision items into train and eval dictionaries."""
         import random
 
@@ -331,7 +429,7 @@ def train_persona_decision_model(
     base_model_name: str = "Convai/Laya-320M",
     epochs: int = 1,
     lora_r: int = 16,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     End-to-end pipeline: extracts persona dataset, executes Unsloth decision trainer,
     and returns evaluation metrics and metadata.
@@ -340,7 +438,9 @@ def train_persona_decision_model(
     train_data, eval_data = extractor.create_train_eval_splits()
 
     if not train_data:
-        raise ValueError(f"No valid persona decision records extracted from {export_dir}")
+        raise ValueError(
+            f"No valid persona decision records extracted from {export_dir}"
+        )
 
     config = UnslothDecisionTrainConfig(
         base_model_name=base_model_name,
