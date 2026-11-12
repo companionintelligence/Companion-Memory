@@ -114,9 +114,9 @@ flowchart LR
 ```
 
 ### Appliance Hardware Allocation
-- **`core-3`** (`100.126.23.45`, AMD Radeon 8060S gfx1151): Fast Decision Model fine-tuning (ModernBERT-320M, 16-rank LoRA).
-- **`core-4`** (`100.121.17.113`, AMD gfx1151): Clef Action Commitment Model and HBPE parallel batch training.
-- **`beta-max`** (`100.115.174.32`, NVIDIA RTX): Qwen3.5-0.8B Decision Model & multi-task embedding training.
+- **`core-3`** (AMD Radeon 8060S gfx1151): Fast Decision Model fine-tuning (ModernBERT-320M, 16-rank LoRA).
+- **`core-4`** (AMD gfx1151): Clef Action Commitment Model and HBPE parallel batch training.
+- **`beta-max`** (NVIDIA RTX): Qwen3.5-0.8B Decision Model & multi-task embedding training.
 
 ---
 
@@ -143,7 +143,7 @@ flowchart LR
    - Deployed dev container to `core-3`, `core-4`, and `beta-max` over Tailscale.
    - Verified live in Fleet QA with 7.2ms forward pass latency ([PR #471](https://github.com/companionintelligence/CI-Engineering/pull/471)).
 2. **Milestone 2: Persona Dataset Curation Pipeline (Next)**
-   - Implement `backend/apps/hbpe/src/ci/hbpe/dataset/persona_extractor.py` to process `/Users/liam/devel/liam-test-data-export` into calibrated JSONL training pairs.
+   - Implement `backend/apps/hbpe/src/ci/hbpe/dataset/persona_extractor.py` to process the local persona export (its path comes from `HBPE_PERSONA_EXPORT_DIR`) into calibrated JSONL training pairs.
 3. **Milestone 3: Local Hub Training Runs (TR-DEC-01 & TR-DEC-02)**
    - Submit training manifests for L0 activity classification and action commitment gating to `core-3` and `core-4`.
    - Validate calibration metrics against Hub evaluation gate.
