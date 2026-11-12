@@ -2,6 +2,7 @@ package com.companionintelligence.localhub
 
 import android.Manifest
 import android.content.Intent
+import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.util.Base64
@@ -30,6 +31,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.json.JSONArray
 
 /**
  * Android native half of the Local Hub sidecar. See `src/definitions.ts` for the JS-facing
@@ -528,6 +530,80 @@ class LocalHubPlugin : Plugin() {
         call.resolve(ret)
     }
 
+    @PluginMethod
+    fun publishWidgetSnapshot(call: PluginCall) {
+        val snapshot = call.getObject("snapshot")
+        if (snapshot == null || snapshot.optInt("version", -1) != 1) {
+            call.reject("publishWidgetSnapshot requires a version 1 JSON snapshot")
+            return
+        }
+        val encoded = snapshot.toString()
+        if (encoded.toByteArray(Charsets.UTF_8).size > 32_768) {
+            call.reject("Widget snapshot exceeds the 32 KiB limit")
+            return
+        }
+
+        widgetPreferences().edit().putString(WIDGET_SNAPSHOT_KEY, encoded).apply()
+        val refresh = Intent(WIDGETS_UPDATE_ACTION).setPackage(getContext().packageName)
+        getContext().sendBroadcast(refresh)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun readWidgetActions(call: PluginCall) {
+        val stored = try {
+            JSONArray(widgetPreferences().getString(WIDGET_ACTIONS_KEY, "[]") ?: "[]")
+        } catch (_: Exception) {
+            JSONArray()
+        }
+        val actions = JSONArray()
+        for (index in 0 until stored.length()) {
+            val row = stored.optJSONObject(index) ?: continue
+            if (row.optString("id").isBlank() ||
+                row.optString("type") != "completeTask" ||
+                row.optString("taskId").isBlank() ||
+                row.optString("createdAt").isBlank()
+            ) continue
+            actions.put(row)
+        }
+        val result = JSObject()
+        result.put("actions", actions)
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun acknowledgeWidgetActions(call: PluginCall) {
+        val idsArray = call.getArray("ids") ?: JSONArray()
+        val ids = (0 until idsArray.length()).map { idsArray.optString(it) }.filter { it.isNotBlank() }.toSet()
+        if (ids.isEmpty()) {
+            call.resolve()
+            return
+        }
+        val preferences = widgetPreferences()
+        val stored = try {
+            JSONArray(preferences.getString(WIDGET_ACTIONS_KEY, "[]") ?: "[]")
+        } catch (_: Exception) {
+            JSONArray()
+        }
+        val remaining = JSONArray()
+        for (index in 0 until stored.length()) {
+            val row = stored.optJSONObject(index) ?: continue
+            if (row.optString("id") !in ids) remaining.put(row)
+        }
+        preferences.edit().putString(WIDGET_ACTIONS_KEY, remaining.toString()).apply()
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun clearWidgetSnapshot(call: PluginCall) {
+        widgetPreferences().edit().remove(WIDGET_SNAPSHOT_KEY).remove(WIDGET_ACTIONS_KEY).apply()
+        getContext().sendBroadcast(Intent(WIDGETS_UPDATE_ACTION).setPackage(getContext().packageName))
+        call.resolve()
+    }
+
+    private fun widgetPreferences() =
+        getContext().applicationContext.getSharedPreferences(WIDGET_PREFERENCES, Context.MODE_PRIVATE)
+
     /**
      * Lazy, not a field initializer: a `Plugin` is constructed before Capacitor attaches its
      * `Context`, so `context` is only safe to read once a method has actually been called.
@@ -614,6 +690,10 @@ class LocalHubPlugin : Plugin() {
     }
 
     companion object {
+        private const val WIDGET_PREFERENCES = "companion_widget_data"
+        private const val WIDGET_SNAPSHOT_KEY = "snapshot"
+        private const val WIDGET_ACTIONS_KEY = "pendingActions"
+        private const val WIDGETS_UPDATE_ACTION = "com.companionintelligence.app.WIDGETS_UPDATE"
         /** How long a claim waits for a background run to stop; it closes the run's stream, so normally milliseconds. */
         private const val CLAIM_TIMEOUT_MS = 10_000L
         const val ALIAS_LOCATION = "location"

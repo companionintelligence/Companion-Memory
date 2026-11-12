@@ -14,6 +14,7 @@
  */
 
 import { isNativePlatform } from './apiBase';
+import type { CompanionWidgetSnapshot, WidgetAction } from './widgetSnapshots';
 
 /** A live sidecar's address plus the bearer token every one of its routes requires. */
 export interface LocalHubSession {
@@ -48,6 +49,10 @@ interface LocalHubPlugin {
   stop(): Promise<void>;
   getStatus(): Promise<{ running: boolean; baseUrl?: string }>;
   discoverLanAppliances?(options?: DiscoverLanAppliancesOptions): Promise<DiscoverLanAppliancesResult>;
+  publishWidgetSnapshot?(options: { snapshot: CompanionWidgetSnapshot }): Promise<void>;
+  readWidgetActions?(): Promise<{ actions: WidgetAction[] }>;
+  acknowledgeWidgetActions?(options: { ids: string[] }): Promise<void>;
+  clearWidgetSnapshot?(): Promise<void>;
 }
 
 /** The `LocalHub` plugin off the runtime Capacitor bridge, or undefined when absent. */
@@ -122,4 +127,24 @@ export async function discoverLanAppliances(
   } catch {
     return { appliances: [], supported: false };
   }
+}
+
+export async function publishWidgetSnapshot(snapshot: CompanionWidgetSnapshot): Promise<void> {
+  if (!isNativePlatform()) return;
+  await localHubPlugin()?.publishWidgetSnapshot?.({ snapshot });
+}
+
+export async function readWidgetActions(): Promise<WidgetAction[]> {
+  if (!isNativePlatform()) return [];
+  return (await localHubPlugin()?.readWidgetActions?.())?.actions ?? [];
+}
+
+export async function acknowledgeWidgetActions(ids: string[]): Promise<void> {
+  if (!isNativePlatform() || ids.length === 0) return;
+  await localHubPlugin()?.acknowledgeWidgetActions?.({ ids });
+}
+
+export async function clearWidgetSnapshot(): Promise<void> {
+  if (!isNativePlatform()) return;
+  await localHubPlugin()?.clearWidgetSnapshot?.();
 }

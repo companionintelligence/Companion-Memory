@@ -7,6 +7,7 @@ import {
   CloudSun,
   FolderSearch2,
   History,
+  LayoutDashboard,
   LifeBuoy,
   ListTodo,
   Lock,
@@ -59,6 +60,7 @@ export interface RailDestination {
 }
 
 export const RAIL_DESTINATIONS: readonly RailDestination[] = [
+  { id: 'widgets', to: '/widgets', label: 'Widgets', icon: LayoutDashboard },
   // Planning: Tasks (the kanban board) and Calendar (the week grid + brief),
   // one destination with two sub-views — see PlanningSubmenu, rendered for
   // this id the same way MemorySubmenu is rendered for 'memory' below. No

@@ -2,6 +2,8 @@ import { WebPlugin } from '@capacitor/core';
 
 import type {
   BackgroundUploadState,
+  CompanionWidgetAction,
+  CompanionWidgetSnapshot,
   DiscoverLanAppliancesResult,
   LocalHubPlugin,
   LocalHubSecureGetResult,
@@ -19,6 +21,16 @@ import type {
  * of a clear, intentional error.
  */
 export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
+  async publishWidgetSnapshot(_options: { snapshot: CompanionWidgetSnapshot }): Promise<void> {}
+
+  async readWidgetActions(): Promise<{ actions: CompanionWidgetAction[] }> {
+    return { actions: [] };
+  }
+
+  async acknowledgeWidgetActions(_options: { ids: string[] }): Promise<void> {}
+
+  async clearWidgetSnapshot(): Promise<void> {}
+
   async start(): Promise<LocalHubStartResult> {
     throw this.unavailable('LocalHub is only available in the native app.');
   }

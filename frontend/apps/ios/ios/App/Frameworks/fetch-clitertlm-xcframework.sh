@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-VERSION="0.18.0"
+VERSION="0.18.1"
 URL="https://github.com/google-ai-edge/LiteRT-LM/releases/download/v${VERSION}/CLiteRTLM.xcframework.zip"
 # From LiteRT-LM's Package.swift at this tag — verified against the actual download.
-CHECKSUM="d765b99592d4ec3d0c9e2bd69469454af06c834861340672da1891c0c121c347"
+CHECKSUM="5c51905e38c77ccc611dc2f8c2af6cf5144621046f1dde6518aab83f78488937"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${SCRIPT_DIR}/CLiteRTLM.xcframework"

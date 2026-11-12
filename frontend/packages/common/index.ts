@@ -140,11 +140,17 @@ export {
   discoverLanAppliances,
   localHubPlugin,
   localHubSession,
+  publishWidgetSnapshot,
+  readWidgetActions,
+  acknowledgeWidgetActions,
+  clearWidgetSnapshot,
   type DiscoveredLanAppliance,
   type DiscoverLanAppliancesOptions,
   type DiscoverLanAppliancesResult,
   type LocalHubSession,
 } from './src/utils/localHub';
+export { buildWidgetSnapshot, parseWidgetDestination, WIDGET_SNAPSHOT_VERSION } from './src/utils/widgetSnapshots';
+export type { CompanionWidgetSnapshot, WidgetAction, WidgetSnapshotInput, WidgetTask } from './src/utils/widgetSnapshots';
 export {
   cancelLocalLlmDownload,
   deleteLocalLlmModel,
@@ -257,6 +263,7 @@ export {
   SECURE_STORE_KEYS,
   addAppStateListener,
   addAppUrlOpenListener,
+  getLaunchUrl,
   addBackButtonListener,
   claimNativeReplica,
   clearNativeReplicaSync,
@@ -267,7 +274,6 @@ export {
   exitApp,
   getBackgroundUpload,
   getCurrentDeviceLocation,
-  getLaunchUrl,
   getNativeCurrentLocation,
   getNativeLocationAuthorization,
   hasNotificationPermission,

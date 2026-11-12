@@ -38,8 +38,61 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="companion" android:host="oidc" />
                 <data android:scheme="companion" android:host="auth" />
+                <data android:scheme="companion" android:host="widget" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".PlannerWidgetProvider"
+            android:label="@string/widget_plan_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.companionintelligence.app.WIDGETS_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_plan_info" />
+        </receiver>
+        <receiver
+            android:name=".InsightWidgetProvider"
+            android:label="@string/widget_insight_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.companionintelligence.app.WIDGETS_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_insight_info" />
+        </receiver>
+        <receiver
+            android:name=".QuestionWidgetProvider"
+            android:label="@string/widget_questions_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.companionintelligence.app.WIDGETS_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_questions_info" />
+        </receiver>
+        <receiver
+            android:name=".StatsWidgetProvider"
+            android:label="@string/widget_stats_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.companionintelligence.app.WIDGETS_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_stats_info" />
+        </receiver>
+        <receiver
+            android:name=".JobsWidgetProvider"
+            android:label="@string/widget_jobs_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.companionintelligence.app.WIDGETS_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_jobs_info" />
+        </receiver>
+        <receiver android:name=".WidgetTaskActionReceiver" android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -25,6 +25,8 @@ import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import { AppLockGate } from '@/components/AppLock/AppLockGate';
 import { MediaLinkRefresh } from '@/components/MediaLinkRefresh';
+import { WidgetDeepLinkRouter } from '@/components/WidgetDeepLinkRouter';
+import { WidgetSnapshotSync } from '@/components/WidgetSnapshotSync';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
@@ -96,6 +98,7 @@ const TagsPage = lazy(() => import('@/pages/TagsPage'));
 // Pulls SchedulePage in with it — SchedulePage is not routed on its own.
 const TodayPage = lazy(() => import('@/pages/TodayPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
+const WidgetDashboardPage = lazy(() => import('@/pages/WidgetDashboardPage'));
 
 function RedirectInsightsSummary() {
   const { id } = useParams<{ id: string }>();
@@ -204,6 +207,7 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
+                          <WidgetSnapshotSync />
                           {/* Re-signs photo and video links that expired while cached. */}
                           <MediaLinkRefresh />
                           {/* Inside Apollo: it reads the signed-in person's time format and
@@ -265,6 +269,7 @@ function AppRoutes() {
 
   return (
     <>
+      <WidgetDeepLinkRouter />
       <Routes location={backgroundLocation ?? location}>
         <Route
           path="/"
@@ -354,6 +359,15 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         >
+          <Route
+            path="/widgets"
+            element={
+              <ProtectedRoute>
+                <WidgetDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Intelligence */}
           <Route
             path="/brief/summaries/:id"
