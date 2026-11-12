@@ -17,6 +17,8 @@
  * Nothing here is registered with Nest, exposed over HTTP or written to the database yet. See
  * `docs/vtc.md` for what exists, what does not, and how it is meant to be wired.
  */
+export { VtcController } from './VtcController';
+export { VtcModule } from './VtcModule';
 export * from './auditChain';
 export * from './community';
 export * from './contexts';
