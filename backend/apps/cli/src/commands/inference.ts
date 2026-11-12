@@ -7,23 +7,29 @@ import type {
 } from '../graphqlClient';
 import { csv, json, stamp, table } from '../output';
 import type {
-  DecisionEngineKind,
-  DecisionType,
-  ModelRoutingPlanRequest,
-  ModelRoutingTierInfo,
+  ChoiceCandidateScore,
+  DecisionEngineMode,
+  DecisionPrimitive,
+  DecisionRequest,
+  ModelTier,
   RankCandidateInput,
-  RankedCandidateSummary,
+  RankedCandidate,
+  ReasoningLevel,
+  RoutingRequest,
+  ScoreCriterion,
+  ScoreCriterionResult,
+  TierProfile,
 } from '../wire';
 
 export interface InferenceTiersOptions {
   plan?: boolean;
   inputTokens?: string;
-  outputTokens?: string;
   reasoning?: string;
-  sensitive?: boolean;
-  streaming?: boolean;
-  preferOnDevice?: boolean;
   toolDepth?: string;
+  largeContext?: boolean;
+  /** The privacy pin. Sent as `localOnly`, the field the planner reads. */
+  sensitive?: boolean;
+  forceTier?: string;
   json?: boolean;
 }
 
@@ -57,13 +63,14 @@ export interface InferenceForecastOptions {
   json?: boolean;
 }
 
-const VALID_REASONING = new Set(['light', 'moderate', 'deep']);
-const VALID_DECISION_TYPES = new Set<DecisionType>(['noul', 'choice', 'score']);
-const VALID_ENGINES = new Set<DecisionEngineKind>(['auto', 'contrastive', 'generative', 'hybrid']);
+const VALID_REASONING = new Set<ReasoningLevel>(['light', 'moderate', 'deep']);
+const VALID_TIERS = new Set<ModelTier>(['on_device', 'private_cloud']);
+const VALID_PRIMITIVES = new Set<DecisionPrimitive>(['noul', 'choice', 'score']);
+const VALID_ENGINES = new Set<DecisionEngineMode>(['auto', 'contrastive', 'generative', 'hybrid']);
 
 /**
- * Inspect model routing tiers and System 1 ActionVectorArena status, or simulate
- * a routing plan when `--plan` (or workload parameters) are provided.
+ * Show the two routing tiers and the ActionVectorArena's size, or plan which
+ * tier one task runs on when `--plan` (or any task characteristic) is given.
  */
 export async function inferenceTiersCommand(
   ctx: CliContext,
@@ -72,16 +79,15 @@ export async function inferenceTiersCommand(
   const wantsPlan =
     Boolean(options.plan) ||
     options.inputTokens !== undefined ||
-    options.outputTokens !== undefined ||
     options.reasoning !== undefined ||
+    options.toolDepth !== undefined ||
+    Boolean(options.largeContext) ||
     Boolean(options.sensitive) ||
-    Boolean(options.streaming) ||
-    Boolean(options.preferOnDevice) ||
-    options.toolDepth !== undefined;
+    options.forceTier !== undefined;
 
   if (wantsPlan) {
-    const planReq = buildPlanRequest(options);
-    const plan = await ctx.client.planModelRouting(planReq);
+    const request = buildPlanRequest(options);
+    const plan = await ctx.client.planModelRouting(request);
 
     if (options.json) {
       json(ctx.term, plan);
@@ -89,105 +95,69 @@ export async function inferenceTiersCommand(
       return;
     }
 
-    ctx.term.out(`tier        ${plan.tier}`);
-    ctx.term.out(`provider    ${plan.provider}`);
-    ctx.term.out(`model       ${plan.model}`);
-    ctx.term.out(`latency     ~${plan.estimatedLatencyMs}ms`);
-    ctx.term.out(`reason      ${plan.reason}`);
-    if (plan.fallback) {
-      ctx.term.out(`fallback    ${plan.fallback.tier} (${plan.fallback.provider}/${plan.fallback.model})`);
+    ctx.term.out(`tier        ${plan.tier} (${plan.profile.title})`);
+    ctx.term.out(`reasoning   ${plan.reasoningLevel}`);
+    ctx.term.out(`context     ${plan.profile.maxContextTokens.toLocaleString('en-US')} tokens`);
+    ctx.term.out(`leaves box  ${plan.profile.external ? 'yes' : 'no'}`);
+
+    if (plan.downgraded) {
+      ctx.term.out('downgraded  yes: the task wanted the private-cloud tier and was kept on the appliance');
     }
 
+    plan.reasons.forEach((reason, index) => {
+      ctx.term.out(`${index === 0 ? 'why' : '   '}         ${reason}`);
+    });
+
     return;
   }
 
-  const info = await ctx.client.getModelRoutingTiers();
+  const [info, arena] = await Promise.all([
+    ctx.client.getModelRoutingTiers(),
+    ctx.client.getModelRoutingArena(),
+  ]);
 
   if (options.json) {
-    json(ctx.term, info);
+    json(ctx.term, { ...info, arena });
 
     return;
   }
 
   ctx.term.out(
-    table<ModelRoutingTierInfo>(info.tiers, [
+    table<TierProfile>(info.tiers, [
       { header: 'TIER', value: (t) => t.tier },
-      { header: 'LATENCY', value: (t) => t.latency },
-      { header: 'COST', value: (t) => t.cost },
-      { header: 'PRIVACY', value: (t) => t.privacy },
-      {
-        header: 'DEFAULT MODELS',
-        value: (t) =>
-          Object.entries(t.defaultModels)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(', '),
-      },
+      { header: 'TITLE', value: (t) => t.title },
+      { header: 'CONTEXT', align: 'right', value: (t) => t.maxContextTokens.toLocaleString('en-US') },
+      { header: 'OFFLINE', value: (t) => (t.offline ? 'yes' : 'no') },
+      { header: 'LEAVES BOX', value: (t) => (t.external ? 'yes' : 'no') },
     ]),
   );
-
   ctx.term.out('');
-  const categories = Object.entries(info.arena.byCategory)
-    .map(([k, v]) => `${k}:${v}`)
-    .join(', ');
-
-  ctx.term.out(
-    `arena       ${info.arena.size} vectors (${info.arena.dimension}d)` +
-      `${info.arena.builtAt ? ` built ${stamp(info.arena.builtAt)}` : ''}` +
-      `${categories ? ` [${categories}]` : ''}`,
-  );
+  ctx.term.out(`arena       ${arena.size} cached candidate vector${arena.size === 1 ? '' : 's'}`);
 }
 
 /**
- * Run a Dual-Engine decision (`noul`, `choice`, or `score`) across System 1
- * (`contrastive`), System 2 (`generative`), or `hybrid`/`auto`.
+ * Run one Dual-Engine decision primitive (`noul`, `choice`, or `score`) on
+ * System 1 (`contrastive`), System 2 (`generative`), or `hybrid`/`auto`.
  */
 export async function inferenceDecideCommand(
   ctx: CliContext,
   options: InferenceDecideOptions,
 ): Promise<void> {
-  const type = (options.type ?? 'noul').trim() as DecisionType;
+  const primitive = (options.type ?? 'noul').trim() as DecisionPrimitive;
 
-  if (!VALID_DECISION_TYPES.has(type)) {
+  if (!VALID_PRIMITIVES.has(primitive)) {
     throw new CliError('--type must be noul, choice, or score.');
   }
 
-  const engine = (options.engine ?? 'auto').trim() as DecisionEngineKind;
-
-  if (!VALID_ENGINES.has(engine)) {
-    throw new CliError('--engine must be auto, contrastive, generative, or hybrid.');
-  }
-
+  const engine = parseEngine(options.engine);
   const state = options.state?.trim();
 
   if (!state) {
     throw new CliError('--state is required.');
   }
 
-  let candidates: string[] | undefined;
-
-  if (type === 'noul' && !options.action?.trim()) {
-    throw new CliError('--action is required when --type is noul.');
-  }
-
-  if (type === 'choice') {
-    candidates = csv(options.candidates);
-    if (!candidates || candidates.length < 2) {
-      throw new CliError('--candidates must provide at least 2 comma-separated choices when --type is choice.');
-    }
-  }
-
-  if (type === 'score' && !options.criteria?.trim()) {
-    throw new CliError('--criteria is required when --type is score.');
-  }
-
-  const result = await ctx.client.decideModelRouting({
-    type,
-    state,
-    ...(options.action ? { action: options.action.trim() } : {}),
-    ...(candidates ? { candidates } : {}),
-    ...(options.criteria ? { criteria: options.criteria.trim() } : {}),
-    engine,
-  });
+  const request = buildDecisionRequest(primitive, state, engine, options);
+  const result = await ctx.client.decideModelRouting(request);
 
   if (options.json) {
     json(ctx.term, result);
@@ -195,57 +165,71 @@ export async function inferenceDecideCommand(
     return;
   }
 
-  ctx.term.out(`type        ${result.type}`);
-  ctx.term.out(`engine      ${result.engine} (${result.tier})`);
-  ctx.term.out(`confidence  ${(result.confidence * 100).toFixed(1)}%`);
+  ctx.term.out(`primitive   ${result.primitive}`);
+  ctx.term.out(`engine      ${result.engineUsed}`);
+
+  if (result.engineUsed === 'disabled') {
+    ctx.term.out('            both engines are switched off in Settings: what follows is a neutral default');
+  }
+
+  switch (result.primitive) {
+    case 'noul':
+      ctx.term.out(
+        `decision    ${result.decision ? 'yes: the action applies' : 'no: the action does not apply'}`,
+      );
+      ctx.term.out(`probability ${percent(result.probability)}`);
+      ctx.term.out(`margin      ${result.margin.toFixed(4)}`);
+      break;
+
+    case 'choice':
+      ctx.term.out(
+        `selected    ${result.selectedId == null ? '(none)' : `[${result.selectedId}] ${result.selectedLabel ?? ''}`}`,
+      );
+      ctx.term.out(`confidence  ${percent(result.confidence)}`);
+      ctx.term.out(`margin      ${result.margin.toFixed(4)}`);
+
+      if (result.escalatedToGenerative) {
+        ctx.term.out('escalated   yes: System 1 was not sure enough, so System 2 was asked too');
+      }
+
+      ctx.term.out('');
+      ctx.term.out(
+        table<ChoiceCandidateScore>(result.candidates, [
+          { header: 'ID', value: (c) => c.id },
+          { header: 'CANDIDATE', value: (c) => c.label },
+          { header: 'PROB', align: 'right', value: (c) => percent(c.probability) },
+          { header: 'SIMILARITY', align: 'right', value: (c) => c.similarity.toFixed(4) },
+        ]),
+      );
+      break;
+
+    case 'score':
+      ctx.term.out(`score       ${percent(result.compositeScore)}`);
+      ctx.term.out('');
+      ctx.term.out(
+        table<ScoreCriterionResult>(result.criteria, [
+          { header: 'CRITERION', value: (c) => c.name },
+          { header: 'PROB', align: 'right', value: (c) => percent(c.probability) },
+          { header: 'WEIGHT', align: 'right', value: (c) => String(c.weight) },
+        ]),
+      );
+      break;
+  }
+
   ctx.term.out(`latency     ${result.latencyMs}ms`);
-
-  if (result.noul !== undefined) {
-    ctx.term.out(`noul        ${result.noul ? 'true (abstain / do not act)' : 'false (proceed)'}`);
-  }
-
-  if (result.selectedIndex !== undefined) {
-    const label = candidates?.[result.selectedIndex];
-
-    ctx.term.out(`selected    [${result.selectedIndex}]${label ? ` ${label}` : ''}`);
-  }
-
-  if (result.score !== undefined) {
-    ctx.term.out(`score       ${result.score.toFixed(4)}`);
-  }
-
-  if (result.contrastiveScore !== undefined) {
-    ctx.term.out(`system1     ${result.contrastiveScore.toFixed(4)}`);
-  }
-
-  if (result.generativeScore !== undefined) {
-    ctx.term.out(`system2     ${result.generativeScore.toFixed(4)}`);
-  }
-
-  if (result.reasoning) {
-    ctx.term.out(`reasoning   ${result.reasoning}`);
-  }
 }
 
 /**
  * Rank candidate actions/items against a query using System 1 / System 2.
  */
-export async function inferenceRankCommand(
-  ctx: CliContext,
-  options: InferenceRankOptions,
-): Promise<void> {
+export async function inferenceRankCommand(ctx: CliContext, options: InferenceRankOptions): Promise<void> {
   const query = options.query?.trim();
 
   if (!query) {
     throw new CliError('--query is required.');
   }
 
-  const engine = (options.engine ?? 'auto').trim() as DecisionEngineKind;
-
-  if (!VALID_ENGINES.has(engine)) {
-    throw new CliError('--engine must be auto, contrastive, generative, or hybrid.');
-  }
-
+  const engine = parseEngine(options.engine);
   const rawList = [...(options.candidate ?? []), ...(csv(options.candidates) ?? [])];
 
   if (rawList.length === 0) {
@@ -279,18 +263,22 @@ export async function inferenceRankCommand(
     return;
   }
 
-  ctx.term.out(`engine   ${result.engine} (${result.latencyMs}ms)`);
+  ctx.term.out(
+    `engine   ${result.engineUsed} (${result.latencyMs}ms; arena ${result.arenaHitCount} cached, ` +
+      `${result.arenaMissCount} embedded)`,
+  );
   ctx.term.out('');
   ctx.term.out(
-    table<RankedCandidateSummary & { rank: number }>(
-      result.ranked.map((item, idx) => ({ ...item, rank: idx + 1 })),
+    table<RankedCandidate>(
+      result.items,
       [
         { header: 'RANK', align: 'right', value: (r) => String(r.rank) },
         { header: 'ID', value: (r) => r.id },
         { header: 'SCORE', align: 'right', value: (r) => r.score.toFixed(4) },
-        { header: 'SOURCE', value: (r) => r.source },
+        { header: 'PROB', align: 'right', value: (r) => percent(r.probability) },
         { header: 'TEXT', value: (r) => r.text },
       ],
+      '(nothing ranked)',
     ),
   );
 }
@@ -447,32 +435,127 @@ export async function inferenceForecastCommand(
   );
 }
 
-function buildPlanRequest(options: InferenceTiersOptions): ModelRoutingPlanRequest {
-  const inputTokens = parseOptionalPositiveInt(options.inputTokens, '--input-tokens');
-  const outputTokens = parseOptionalPositiveInt(options.outputTokens, '--output-tokens');
+/**
+ * Flags to the planner's request. Every field here is one
+ * `routingRequestSchema` reads: that schema strips the rest, so a flag sent
+ * under any other name does nothing and says nothing.
+ */
+function buildPlanRequest(options: InferenceTiersOptions): RoutingRequest {
+  const estimatedInputTokens = parseOptionalPositiveInt(options.inputTokens, '--input-tokens');
   const toolDepth = parseOptionalPositiveInt(options.toolDepth, '--tool-depth');
 
-  let reasoningDepth: 'light' | 'moderate' | 'deep' | undefined;
+  let reasoningLevel: ReasoningLevel | undefined;
 
   if (options.reasoning !== undefined) {
-    const r = options.reasoning.trim();
+    const level = options.reasoning.trim() as ReasoningLevel;
 
-    if (!VALID_REASONING.has(r)) {
+    if (!VALID_REASONING.has(level)) {
       throw new CliError('--reasoning must be light, moderate, or deep.');
     }
 
-    reasoningDepth = r as 'light' | 'moderate' | 'deep';
+    reasoningLevel = level;
+  }
+
+  let forceTier: ModelTier | undefined;
+
+  if (options.forceTier !== undefined) {
+    // `on-device` is how the tier is spoken; `on_device` is how the API spells it.
+    const tier = options.forceTier.trim().replace(/-/g, '_') as ModelTier;
+
+    if (!VALID_TIERS.has(tier)) {
+      throw new CliError('--force-tier must be on_device or private_cloud.');
+    }
+
+    forceTier = tier;
   }
 
   return {
-    ...(inputTokens !== undefined ? { estimatedInputTokens: inputTokens } : {}),
-    ...(outputTokens !== undefined ? { estimatedOutputTokens: outputTokens } : {}),
-    ...(reasoningDepth !== undefined ? { reasoningDepth } : {}),
-    ...(options.sensitive ? { requiresSensitiveData: true } : {}),
-    ...(options.streaming ? { requiresStreaming: true } : {}),
-    ...(options.preferOnDevice ? { preferOnDevice: true } : {}),
-    ...(toolDepth !== undefined ? { toolCallDepth: toolDepth } : {}),
+    ...(estimatedInputTokens !== undefined ? { estimatedInputTokens } : {}),
+    ...(reasoningLevel !== undefined ? { reasoningLevel } : {}),
+    ...(toolDepth !== undefined ? { toolDepth } : {}),
+    ...(options.largeContext ? { requiresLargeContext: true } : {}),
+    ...(options.sensitive ? { localOnly: true } : {}),
+    ...(forceTier !== undefined ? { forceTier } : {}),
   };
+}
+
+/** The body `POST /model-routing/decide` takes for this primitive, with its own flag checked. */
+function buildDecisionRequest(
+  primitive: DecisionPrimitive,
+  state: string,
+  engine: DecisionEngineMode,
+  options: InferenceDecideOptions,
+): DecisionRequest {
+  switch (primitive) {
+    case 'noul': {
+      const action = options.action?.trim();
+
+      if (!action) {
+        throw new CliError('--action is required when --type is noul.');
+      }
+
+      return { primitive, state, action, engine };
+    }
+
+    case 'choice': {
+      const candidates = csv(options.candidates);
+
+      if (!candidates || candidates.length < 2) {
+        throw new CliError(
+          '--candidates must provide at least 2 comma-separated choices when --type is choice.',
+        );
+      }
+
+      return { primitive, state, candidates, engine };
+    }
+
+    case 'score':
+      return { primitive, state, criteria: parseCriteria(options.criteria), engine };
+  }
+}
+
+/**
+ * `--criteria "urgent:needs doing today,social"` → one criterion per entry.
+ *
+ * The server scores a rubric, not a sentence: each criterion is a named
+ * positive pole, scored as `noul(state, pole)` against `not <pole>`. An entry
+ * without a `name:` is named after its pole, the same way `rank` reads
+ * `--candidate id:text`.
+ */
+function parseCriteria(raw: string | undefined): ScoreCriterion[] {
+  const entries = csv(raw);
+
+  if (!entries) {
+    throw new CliError(
+      '--criteria is required when --type is score: comma-separated poles, each optionally name:pole.',
+    );
+  }
+
+  return entries.map((entry) => {
+    const colon = entry.indexOf(':');
+    const name = colon > 0 ? entry.slice(0, colon).trim() : entry;
+    const positive = colon > 0 ? entry.slice(colon + 1).trim() : entry;
+
+    if (!positive) {
+      throw new CliError(`--criteria entry "${entry}" names no pole to score.`);
+    }
+
+    return { name, positive };
+  });
+}
+
+function parseEngine(raw: string | undefined): DecisionEngineMode {
+  const engine = (raw ?? 'auto').trim() as DecisionEngineMode;
+
+  if (!VALID_ENGINES.has(engine)) {
+    throw new CliError('--engine must be auto, contrastive, generative, or hybrid.');
+  }
+
+  return engine;
+}
+
+function percent(probability: number): string {
+  return `${(probability * 100).toFixed(1)}%`;
 }
 
 function parseOptionalPositiveInt(raw: string | undefined, flagName: string): number | undefined {

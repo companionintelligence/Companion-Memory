@@ -15,7 +15,11 @@ import {
 import { ModelTierRouter } from '../services/ModelTierRouter';
 import type { RoutingDecision, TierProfile } from '../types';
 
-const routingRequestSchema = z
+// The three request schemas are exported for `__tests__/cliWireContract.test.ts`,
+// which checks that the requests the `ci` CLI sends parse with nothing stripped.
+// `.strip()` means a misnamed field is dropped, not refused, so only that check
+// can tell a working flag from a silent one.
+export const routingRequestSchema = z
   .object({
     estimatedInputTokens: z.number().int().nonnegative().optional(),
     reasoningLevel: z.enum(['light', 'moderate', 'deep']).optional(),
@@ -69,13 +73,13 @@ const scoreDecisionSchema = z.object({
   temperature: z.number().positive().optional(),
 });
 
-const decideRequestSchema = z.discriminatedUnion('primitive', [
+export const decideRequestSchema = z.discriminatedUnion('primitive', [
   noulDecisionSchema,
   choiceDecisionSchema,
   scoreDecisionSchema,
 ]);
 
-const rankRequestSchema = z
+export const rankRequestSchema = z
   .object({
     query: z.string().min(1),
     candidates: z

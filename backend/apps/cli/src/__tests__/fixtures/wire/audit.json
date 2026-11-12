@@ -1,0 +1,64 @@
+{
+  "deltas": {
+    "query": {
+      "entityId": "0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+      "changeType": "updated",
+      "since": "2026-11-01",
+      "until": "2026-11-12T00:00:00Z",
+      "limit": 50
+    },
+    "response": {
+      "success": true,
+      "data": {
+        "entityId": "0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+        "deltas": [
+          {
+            "deltaId": "0193a3c4-0000-7000-8000-000000000001",
+            "nodeType": "entity",
+            "entityId": "0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+            "relationshipId": null,
+            "entityType": "Person",
+            "relationshipType": null,
+            "changeType": "updated",
+            "changedFields": {
+              "email": {
+                "old": null,
+                "new": "ada@example.com"
+              }
+            },
+            "fieldChanges": [
+              {
+                "field": "email",
+                "oldValue": null,
+                "newValue": "ada@example.com"
+              }
+            ],
+            "changeSource": "enrichment",
+            "changeReason": "contact merged from an import",
+            "summaryId": null,
+            "changedAt": "2026-11-10T09:00:00.000Z",
+            "entity": {
+              "entityId": "0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+              "entityType": "Person",
+              "name": "Ada Lovelace"
+            },
+            "fromEntity": null,
+            "toEntity": null
+          }
+        ],
+        "stats": {
+          "total": 1,
+          "firstChangedAt": "2026-11-10T09:00:00.000Z",
+          "lastChangedAt": "2026-11-10T09:00:00.000Z",
+          "created": 0,
+          "updated": 1,
+          "archived": 0,
+          "deleted": 0,
+          "merged": 0,
+          "entity": 1,
+          "relationship": 0
+        }
+      }
+    }
+  }
+}
