@@ -300,6 +300,135 @@ export class MemoryGraphQLClient {
   }
 
   // ---------------------------------------------------------------------------
+  // HBPE training, calibration, and behavioral forecasting
+  // ---------------------------------------------------------------------------
+
+  triggerHbpe(): Promise<string> {
+    return this.mutate<{ triggerHbpe: string }>(
+      'triggerHbpe',
+      `mutation TriggerHbpe { triggerHbpe }`,
+    ).then((data) => data.triggerHbpe);
+  }
+
+  rebuildPlaces(): Promise<string> {
+    return this.mutate<{ rebuildPlaces: string }>(
+      'rebuildPlaces',
+      `mutation RebuildPlaces { rebuildPlaces }`,
+    ).then((data) => data.rebuildPlaces);
+  }
+
+  predictionCalibration(limit?: number): Promise<PredictionCalibrationSummary | null> {
+    return this.query<{ predictionCalibration: PredictionCalibrationSummary | null }>(
+      'predictionCalibration',
+      `query PredictionCalibration($limit: Int) {
+        predictionCalibration(limit: $limit) {
+          basis
+          latest { ${CALIBRATION_SCORE_FIELDS} }
+          history { ${CALIBRATION_SCORE_FIELDS} }
+        }
+      }`,
+      limit !== undefined ? { limit } : undefined,
+    ).then((data) => data.predictionCalibration);
+  }
+
+  forecast(horizon = '24h'): Promise<ForecastSummary | null> {
+    return this.query<{ forecast: ForecastSummary | null }>(
+      'forecast',
+      `query Forecast($horizon: String) {
+        forecast(horizon: $horizon) {
+          horizon
+          generatedAt
+          systemStatus
+          modelVersion
+          stillLearning
+          pipelineEtaSeconds
+          pipelineDetail
+          buckets {
+            bucketIndex
+            startTime
+            predictedL0
+            l0Probs { label probability }
+            l1Probs { label probability }
+            q10
+            q50
+            q90
+          }
+        }
+      }`,
+      { horizon },
+    ).then((data) => data.forecast);
+  }
+
+  weekForecast(includeToday = false): Promise<WeekForecastSummary | null> {
+    return this.query<{ weekForecast: WeekForecastSummary | null }>(
+      'weekForecast',
+      `query WeekForecast($includeToday: Boolean) {
+        weekForecast(includeToday: $includeToday) {
+          horizon
+          generatedAt
+          days {
+            date
+            dow
+            clusters {
+              clusterId
+              name
+              l0Class
+              pOccur
+              scheduled
+              daypartProbs { label probability }
+            }
+          }
+        }
+      }`,
+      { includeToday },
+    ).then((data) => data.weekForecast);
+  }
+
+  dueForecast(): Promise<DueForecastSummary | null> {
+    return this.query<{ dueForecast: DueForecastSummary | null }>(
+      'dueForecast',
+      `query DueForecast {
+        dueForecast {
+          generatedAt
+          due {
+            clusterId
+            name
+            l0Class
+            lastSeen
+            daysSinceLast
+            medianIntervalDays
+            dueInDays
+            window
+            overdue
+            scheduledDate
+            confidence
+          }
+        }
+      }`,
+    ).then((data) => data.dueForecast);
+  }
+
+  placeForecast(k = 5, horizonHours = 4): Promise<PlaceForecastItemSummary[]> {
+    return this.query<{ placeForecast: PlaceForecastItemSummary[] }>(
+      'placeForecast',
+      `query PlaceForecast($k: Int, $horizonHours: Int) {
+        placeForecast(k: $k, horizonHours: $horizonHours) {
+          clusterId
+          lat
+          lng
+          visits
+          share
+          lastSeen
+          label
+          probability
+          backoffLevel
+        }
+      }`,
+      { k, horizonHours },
+    ).then((data) => data.placeForecast);
+  }
+
+  // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
 
@@ -612,4 +741,105 @@ export interface AskAuditSummary {
 export interface AskDisclosureHistoryPayload {
   rows: AskAuditSummary[];
   truncated: boolean;
+}
+
+const CALIBRATION_SCORE_FIELDS = `
+  scoredAt brier l0Top1Acc l1Top3Acc ece coverage driftFlag nBuckets modelVersion
+`;
+
+export interface CalibrationScoreSummary {
+  scoredAt: string;
+  brier: number | null;
+  l0Top1Acc: number | null;
+  l1Top3Acc: number | null;
+  ece: number | null;
+  coverage: number | null;
+  driftFlag: boolean;
+  nBuckets: number | null;
+  modelVersion: string | null;
+}
+
+export interface PredictionCalibrationSummary {
+  basis: string;
+  latest: CalibrationScoreSummary | null;
+  history: CalibrationScoreSummary[];
+}
+
+export interface ProbabilityEntrySummary {
+  label: string;
+  probability: number;
+}
+
+export interface ForecastBucketSummary {
+  bucketIndex: number;
+  startTime: string;
+  predictedL0: string | null;
+  l0Probs: ProbabilityEntrySummary[];
+  l1Probs: ProbabilityEntrySummary[];
+  q10: number;
+  q50: number;
+  q90: number;
+}
+
+export interface ForecastSummary {
+  horizon: string;
+  generatedAt: string;
+  systemStatus: string;
+  modelVersion: string | null;
+  stillLearning: boolean;
+  pipelineEtaSeconds: number | null;
+  pipelineDetail: string | null;
+  buckets: ForecastBucketSummary[];
+}
+
+export interface WeekForecastClusterSummary {
+  clusterId: string;
+  name: string;
+  l0Class: string;
+  pOccur: number;
+  scheduled: boolean;
+  daypartProbs: ProbabilityEntrySummary[];
+}
+
+export interface WeekForecastDaySummary {
+  date: string;
+  dow: string;
+  clusters: WeekForecastClusterSummary[];
+}
+
+export interface WeekForecastSummary {
+  horizon: string;
+  generatedAt: string;
+  days: WeekForecastDaySummary[];
+}
+
+export interface DueItemSummary {
+  clusterId: string;
+  name: string;
+  l0Class: string;
+  lastSeen: string;
+  daysSinceLast: number;
+  medianIntervalDays: number;
+  dueInDays: number;
+  window: number[];
+  overdue: boolean;
+  scheduledDate: string | null;
+  confidence: number;
+}
+
+export interface DueForecastSummary {
+  generatedAt: string;
+  due: DueItemSummary[];
+}
+
+export interface PlaceForecastItemSummary {
+  clusterId: string | null;
+  lat: number;
+  lng: number;
+  visits: number;
+  share: number;
+  lastSeen: string | null;
+  label: string | null;
+  probability: number;
+  backoffLevel: string | null;
 }

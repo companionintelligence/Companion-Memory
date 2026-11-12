@@ -68,7 +68,7 @@ export async function memoryConfigureCommand(
 
   ctx.term.out('Memory inference endpoint updated.');
   renderEndpoint(ctx, endpoint);
-  ctx.term.out('Run `ci-import memory check` before choosing a model.');
+  ctx.term.out('Run `ci memory check` before choosing a model.');
 }
 
 function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
