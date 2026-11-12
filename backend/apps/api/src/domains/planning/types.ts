@@ -19,6 +19,7 @@ export interface CreateTaskDto {
   estimatedMinutes?: number | null;
   sourceKind?: string;
   sourceRef?: string | null;
+  l0Class?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -35,6 +36,7 @@ export interface UpdateTaskDto {
   deferUntil?: string | null;
   estimatedMinutes?: number | null;
   actualMinutes?: number;
+  l0Class?: string | null;
   metadata?: Record<string, unknown>;
 }
 

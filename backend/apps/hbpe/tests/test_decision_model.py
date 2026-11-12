@@ -233,3 +233,76 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
     assert results[2] == "EXERCISE"
     # Qwen should have only been called for 1 item (the obscure one)!
     assert qwen_calls == [1]
+
+
+def test_decision_api_routes(monkeypatch):
+    """Test the FastAPI /decision/ingress, /decision/rerank, and /decision/l0 endpoints."""
+    from fastapi.testclient import TestClient
+
+    from ci.hbpe.api import app
+    from ci.hbpe.config import settings
+
+    monkeypatch.setattr(settings, "sidecar_auth_secret", "s3cret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer s3cret"}
+    user_id = "3b0c9c7e-6a52-4a52-8c53-0d3b2c2b1e11"
+
+    # 1. /decision/ingress
+    ingress_resp = client.post(
+        "/decision/ingress",
+        params={"user_id": user_id},
+        json={"text": "Remember to submit the tax return by tomorrow at 5pm."},
+        headers=headers,
+    )
+    assert ingress_resp.status_code == 200
+    ingress_data = ingress_resp.json()
+    assert ingress_data["user_id"] == user_id
+    assert ingress_data["is_commitment"] is True
+    assert ingress_data["commitment_probability"] > 0.5
+    assert ingress_data["intent"] in ["store_task", "store_fact"]
+
+    # 2. /decision/rerank
+    rerank_resp = client.post(
+        "/decision/rerank",
+        params={"user_id": user_id},
+        json={
+            "query": "When is my dentist appointment?",
+            "passages": [
+                {
+                    "id": "p-irrelevant",
+                    "text": "Bought groceries and coffee beans yesterday morning.",
+                },
+                {
+                    "id": "p-relevant",
+                    "text": "Dentist appointment scheduled for today at 3pm with Dr. Patel.",
+                },
+            ],
+        },
+        headers=headers,
+    )
+    assert rerank_resp.status_code == 200
+    rerank_data = rerank_resp.json()
+    assert rerank_data["user_id"] == user_id
+    assert len(rerank_data["results"]) == 2
+    assert rerank_data["results"][0]["id"] == "p-relevant"
+    assert (
+        rerank_data["results"][0]["score"]
+        >= rerank_data["results"][1]["score"]
+    )
+
+    # 3. /decision/l0
+    l0_resp = client.post(
+        "/decision/l0",
+        params={"user_id": user_id},
+        json={
+            "title": "Morning gym workout and 5k run",
+            "description": "Strength training and cardio",
+        },
+        headers=headers,
+    )
+    assert l0_resp.status_code == 200
+    l0_data = l0_resp.json()
+    assert l0_data["user_id"] == user_id
+    assert l0_data["l0_class"] == "EXERCISE"
+    assert l0_data["confidence"] > 0.5
+

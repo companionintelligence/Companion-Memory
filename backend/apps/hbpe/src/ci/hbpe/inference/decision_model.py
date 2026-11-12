@@ -391,3 +391,119 @@ def get_decision_client() -> DecisionModelClient:
         if _GLOBAL_CLIENT is None:
             _GLOBAL_CLIENT = DecisionModelClient()
         return _GLOBAL_CLIENT
+
+
+def score_memory_ingress(text: str) -> dict[str, Any]:
+    """
+    Evaluate an incoming message or note against the System 1 memory ingress
+    decision suite (intent, commitment detection, and privacy sensitivity).
+    """
+    results = get_decision_client().evaluate(text, MEMORY_INGRESS_QUESTIONS)
+    intent_res = results.get("intent")
+    commit_res = results.get("is_commitment")
+    sens_res = results.get("sensitivity")
+
+    return {
+        "intent": str(intent_res.value) if intent_res else "conversational",
+        "intent_confidence": round(float(intent_res.probability), 4)
+        if intent_res
+        else 0.0,
+        "intent_distribution": {
+            k: round(v, 4) for k, v in (intent_res.distribution.items() if intent_res else {})
+        },
+        "is_commitment": bool(commit_res.value) if commit_res else False,
+        "commitment_probability": round(
+            float(commit_res.distribution.get("true", commit_res.probability)), 4
+        )
+        if commit_res
+        else 0.0,
+        "sensitivity": int(sens_res.value) if sens_res else 0,
+        "sensitivity_distribution": {
+            k: round(v, 4) for k, v in (sens_res.distribution.items() if sens_res else {})
+        },
+        "calibrated": bool(
+            (intent_res.calibrated if intent_res else True)
+            and (commit_res.calibrated if commit_res else True)
+        ),
+    }
+
+
+def score_retrieval_relevance(query: str, memory_snippet: str) -> float:
+    """
+    Fast non-autoregressive relevance score for hybrid search reranking.
+    Returns P(is_relevant=True) in [0.0, 1.0].
+    """
+    state = f"User query: {query}\nMemory snippet: {memory_snippet}"
+    results = get_decision_client().evaluate(state, RETRIEVAL_RERANK_QUESTIONS)
+    rel = results.get("is_relevant")
+    if not rel:
+        return 0.5
+    return round(float(rel.distribution.get("true", rel.probability)), 4)
+
+
+def rerank_passages(
+    query: str, passages: list[dict[str, str]]
+) -> list[dict[str, Any]]:
+    """
+    Score and rerank candidate retrieval passages using System 1 relevance and
+    temporal freshness heads. Returns passages ordered by descending score.
+    """
+    client = get_decision_client()
+    scored: list[dict[str, Any]] = []
+
+    for item in passages:
+        passage_id = str(item.get("id", ""))
+        text = str(item.get("text", ""))
+        state = f"User query: {query}\nMemory snippet: {text}"
+        res = client.evaluate(state, RETRIEVAL_RERANK_QUESTIONS)
+        rel = res.get("is_relevant")
+        fresh = res.get("temporal_freshness")
+
+        rel_prob = (
+            float(rel.distribution.get("true", rel.probability)) if rel else 0.5
+        )
+        fresh_score = int(fresh.value) if fresh else 1
+        # Combine calibrated relevance probability with a small freshness tie-breaker
+        composite = round(0.85 * rel_prob + 0.15 * (fresh_score / 2.0), 4)
+
+        scored.append(
+            {
+                "id": passage_id,
+                "score": composite,
+                "is_relevant": bool(rel.value) if rel else False,
+                "relevance_probability": round(rel_prob, 4),
+                "temporal_freshness": fresh_score,
+                "calibrated": bool(rel.calibrated) if rel else True,
+            }
+        )
+
+    scored.sort(key=lambda r: r["score"], reverse=True)
+    return scored
+
+
+def classify_l0_event(
+    title: str, description: str | None = None
+) -> dict[str, Any]:
+    """
+    Classify an event or task into one of the 8 canonical L0_CLASSES using the
+    System 1 Fast Decision Model (or calibrated local fallback).
+    """
+    state = f"Title: {title}"
+    if description:
+        state += f" | Description: {description[:250]}"
+    results = get_decision_client().evaluate(state, L0_EVENT_QUESTIONS)
+    l0_res = results.get("l0_class")
+    if not l0_res:
+        return {
+            "l0_class": "UNKNOWN",
+            "confidence": 0.0,
+            "distribution": {"UNKNOWN": 1.0},
+            "calibrated": False,
+        }
+    return {
+        "l0_class": str(l0_res.value),
+        "confidence": round(float(l0_res.probability), 4),
+        "distribution": {k: round(v, 4) for k, v in l0_res.distribution.items()},
+        "calibrated": bool(l0_res.calibrated),
+    }
+

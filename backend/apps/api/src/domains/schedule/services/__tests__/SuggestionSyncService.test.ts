@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ActionEntity } from '@ci/domains/intelligence';
 import { flexWindow, PersonalizationService, PlacementService } from '@ci/domains/personalization';
+import { TaskEntity } from '@ci/domains/planning/entities/TaskEntity';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
@@ -46,14 +47,17 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
   let candidateService: { upsert: jest.Mock };
   let personalization: { getProfile: jest.Mock };
   let hbpe: { getDueList: jest.Mock };
+  let tasks: { find: jest.Mock };
 
   async function setup(
     actionRows: ActionEntity[] = [],
     summaryRows: SummaryEntity[] = [],
     dueRows: unknown[] = [],
+    taskRows: Partial<TaskEntity>[] = [],
   ) {
     actions = { find: jest.fn(async () => actionRows) };
     summaries = { find: jest.fn(async () => summaryRows) };
+    tasks = { find: jest.fn(async () => taskRows) };
     candidates = { find: jest.fn(async () => []), save: jest.fn(async (e) => e) };
     candidateService = { upsert: jest.fn(async (_c, proposals) => proposals) };
     // autoSchedule off keeps the auto-accept leg out of these projection tests.
@@ -66,6 +70,7 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
         { provide: getRepositoryToken(ActionEntity), useValue: actions },
         { provide: getRepositoryToken(SummaryEntity), useValue: summaries },
         { provide: getRepositoryToken(EventCandidateEntity), useValue: candidates },
+        { provide: getRepositoryToken(TaskEntity), useValue: tasks },
         { provide: CandidateService, useValue: candidateService },
         { provide: PersonalizationService, useValue: personalization },
         {
@@ -430,6 +435,65 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
     expect(due[0].dedupe_key).toBe('due:clu-1:2026-08-20');
     expect(due[0].title).toBe('Standup');
     expect(due[0].l1_cluster_id).toBe('clu-1');
+  });
+
+  it('projects proposed planning tasks onto the slate with classified L0 and retires them once accepted or archived', async () => {
+    await setup(
+      [],
+      [],
+      [],
+      [
+        {
+          id: 'task-prop-1',
+          userId: 'user-1',
+          title: 'Schedule dentist appointment and pick up prescription',
+          description: 'Call Dr. Patel office',
+          notes: 'Mentioned in Tuesday SMS thread.',
+          status: 'proposed',
+          priority: 2,
+          parentId: null,
+          dueAt: null,
+          estimatedMinutes: 45,
+          l0Class: null,
+        },
+      ],
+    );
+
+    await service.sync(ctx);
+
+    const taskProposals = proposals().filter(
+      (p: { generator: string }) => p.generator === 'adapter/task',
+    );
+    expect(taskProposals).toHaveLength(1);
+    expect(taskProposals[0]).toMatchObject({
+      title: 'Schedule dentist appointment and pick up prescription',
+      dedupe_key: 'task:task-prop-1',
+      generator: 'adapter/task',
+      l0_class: 'ERRAND',
+      duration_minutes: 45,
+      rationale_sources: [{ kind: 'task', id: 'task-prop-1' }],
+    });
+
+    // Now simulate the task being accepted or archived so it is no longer in status='proposed'
+    await setup([], [], [], []);
+    const staleCandidate = {
+      id: 'cand-task-1',
+      userId: 'user-1',
+      status: 'open',
+      generator: 'adapter/task',
+      dedupeKey: 'task:task-prop-1',
+    } as EventCandidateEntity;
+    candidates.find.mockResolvedValue([staleCandidate]);
+
+    await service.sync(ctx);
+
+    expect(candidates.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'cand-task-1',
+        status: 'declined',
+        feedbackReason: 'source_dismissed',
+      }),
+    );
   });
 });
 

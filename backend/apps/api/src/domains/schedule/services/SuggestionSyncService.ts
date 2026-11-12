@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -11,6 +11,8 @@ import {
   PersonalizationService,
   PlacementService,
 } from '@ci/domains/personalization';
+import { classifyTaskL0 } from '@ci/domains/planning/engine/taskL0Classifier';
+import { TaskEntity } from '@ci/domains/planning/entities/TaskEntity';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
@@ -214,12 +216,16 @@ export class SuggestionSyncService {
     private readonly placement: PlacementService,
     private readonly hbpe: HbpeService,
     private readonly logger: LoggerService,
+    @Optional()
+    @InjectRepository(TaskEntity)
+    private readonly taskRepository?: Repository<TaskEntity>,
   ) {
     this.logger.setContext(SuggestionSyncService.name);
   }
 
   /**
-   * Refresh the slate from current actions and insights.
+   * Refresh the slate from current actions, insights, renewal due-list, and
+   * proposed planning tasks.
    *
    * @returns how many candidates were written or refreshed.
    */
@@ -232,6 +238,7 @@ export class SuggestionSyncService {
       ...(await this.fromActions(context, windowStart, windowEnd)),
       ...(await this.fromInsights(context, windowStart, windowEnd)),
       ...(await this.fromDue(context, windowStart, windowEnd)),
+      ...(await this.fromProposedTasks(context, windowStart, windowEnd)),
     ];
 
     if (proposed.length === 0) {
@@ -447,11 +454,61 @@ export class SuggestionSyncService {
   }
 
   /**
+   * Proposed planning tasks (`ci.tasks` with `status = 'proposed'`) → slate.
+   *
+   * Bridges the Planning proposal pipeline (`TodoScanService` / `InboxScanService`)
+   * into the Schedule candidate slate (`ci.event_candidates`) so proposed tasks
+   * also appear as schedulable candidates with `l0_class` and provenance.
+   */
+  private async fromProposedTasks(
+    context: UserServiceContext,
+    windowStart: Date,
+    windowEnd: Date,
+  ): Promise<CreateCandidateDto[]> {
+    if (!this.taskRepository) {
+      return [];
+    }
+
+    const tasks = await this.taskRepository.find({
+      where: { userId: context.userId, status: 'proposed' },
+      order: { priority: 'ASC', createdAt: 'DESC' },
+      take: MAX_PER_SOURCE,
+    });
+
+    return tasks
+      .filter((task) => task.parentId == null && Boolean(task.title?.trim()))
+      .map((task) => {
+        const l0 =
+          task.l0Class && task.l0Class !== 'UNKNOWN'
+            ? task.l0Class
+            : classifyTaskL0(task.title, task.description, task.notes);
+        const detail = task.description ?? task.notes ?? null;
+
+        return {
+          title: task.title.trim(),
+          description: detail ?? undefined,
+          rationale: firstSentence(task.notes ?? task.description) || 'Proposed in your planning inbox.',
+          rationale_sources: [{ kind: 'task' as const, id: task.id }],
+          window_start: windowStart,
+          window_end: task.dueAt && task.dueAt > windowStart ? task.dueAt : windowEnd,
+          time_flex: (task.dueAt ? 'day' : 'week') as 'day' | 'week',
+          duration_minutes:
+            task.estimatedMinutes ?? estimateActivityDurationMinutes(task.title, detail),
+          ...(l0 !== 'UNKNOWN' ? { l0_class: l0 } : {}),
+          dedupe_key: `task:${task.id}`,
+          generator: 'adapter/task',
+          confidence: priorityToFit(task.priority),
+        };
+      });
+  }
+
+  /**
    * Retire open candidates whose source has since been dismissed elsewhere.
    *
-   * Dismissing an action in the feed and then finding it still sitting on the
-   * schedule would read as the system ignoring you. Only `open` rows are
-   * touched: anything the user already acted on keeps its own verdict.
+   * Dismissing an action in the feed (or accepting/declining a proposed task on
+   * the Plan board) and then finding it still sitting on the schedule would
+   * read as the system ignoring you. Only `open` rows are touched: anything the
+   * user already acted on keeps its own verdict.
    */
   private async retireStale(context: UserServiceContext): Promise<void> {
     const open = await this.candidateRepository.find({
@@ -467,20 +524,40 @@ export class SuggestionSyncService {
     const actionIds = adapted
       .filter((c) => c.dedupeKey.startsWith('action:'))
       .map((c) => c.dedupeKey.slice('action:'.length));
+    const taskIds = adapted
+      .filter((c) => c.dedupeKey.startsWith('task:'))
+      .map((c) => c.dedupeKey.slice('task:'.length));
 
-    if (actionIds.length === 0) {
-      return;
+    const stale: EventCandidateEntity[] = [];
+
+    if (actionIds.length > 0) {
+      const liveActions = await this.actionRepository.find({
+        where: { dismissed: false, user: { id: context.userId } },
+        select: { id: true },
+      });
+      const liveActionIds = new Set(liveActions.map((a) => a.id));
+
+      stale.push(
+        ...adapted.filter(
+          (c) =>
+            c.dedupeKey.startsWith('action:') && !liveActionIds.has(c.dedupeKey.slice('action:'.length)),
+        ),
+      );
     }
 
-    const live = await this.actionRepository.find({
-      where: { dismissed: false, user: { id: context.userId } },
-      select: { id: true },
-    });
-    const liveIds = new Set(live.map((a) => a.id));
+    if (taskIds.length > 0 && this.taskRepository) {
+      const liveProposedTasks = await this.taskRepository.find({
+        where: { userId: context.userId, status: 'proposed' },
+        select: { id: true },
+      });
+      const liveTaskIds = new Set(liveProposedTasks.map((t) => t.id));
 
-    const stale = adapted.filter(
-      (c) => c.dedupeKey.startsWith('action:') && !liveIds.has(c.dedupeKey.slice('action:'.length)),
-    );
+      stale.push(
+        ...adapted.filter(
+          (c) => c.dedupeKey.startsWith('task:') && !liveTaskIds.has(c.dedupeKey.slice('task:'.length)),
+        ),
+      );
+    }
 
     for (const candidate of stale) {
       candidate.status = 'declined';

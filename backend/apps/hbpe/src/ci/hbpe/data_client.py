@@ -330,13 +330,10 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-# Structural-emptiness guard: as of migration 20260828120000, ci.tasks carries
-# l0_class / l1_cluster_id columns but nothing in the repo ever writes them
-# (see the comment on TaskEntity.l0Class / l1ClusterId). Without this guard,
-# every scheduled pass runs the WHERE-gated query below once per user per day
-# in the serialize window and it is *always* empty — a real DB round trip
-# spent proving a structural fact that does not change until a writer ships.
-# Cached for the life of the process so it costs one query, not one per call.
+# Structural-emptiness guard: TaskService populates ci.tasks.l0_class on task
+# creation, update, and completion via classifyTaskL0 (taskL0Classifier.ts).
+# On fresh databases before any classified task exists, this probe avoids
+# running the per-day query across empty tables.
 _completed_tasks_precondition_checked: bool = False
 _completed_tasks_precondition_populated: bool = True
 

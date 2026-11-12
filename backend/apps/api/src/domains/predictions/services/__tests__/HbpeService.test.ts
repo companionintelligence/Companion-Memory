@@ -115,6 +115,13 @@ describe('HbpeService', () => {
     ['ingestForage', (s: HbpeService) => s.ingestForage(CTX, []), '/forage/ingest'],
     ['forageSample', (s: HbpeService) => s.forageSample(CTX), '/forage/sample'],
     ['forageReset', (s: HbpeService) => s.forageReset(CTX), '/forage/ask'],
+    ['scoreMemoryIngress', (s: HbpeService) => s.scoreMemoryIngress(CTX, 'Buy milk'), '/decision/ingress'],
+    [
+      'rerankPassages',
+      (s: HbpeService) => s.rerankPassages(CTX, 'dentist', [{ id: 'p1', text: 'Dentist at 3pm' }]),
+      '/decision/rerank',
+    ],
+    ['classifyL0Event', (s: HbpeService) => s.classifyL0Event(CTX, 'Morning run'), '/decision/l0'],
   ])('%s names the caller, and only the caller', async (_name, call, pathname) => {
     await call(service);
 
