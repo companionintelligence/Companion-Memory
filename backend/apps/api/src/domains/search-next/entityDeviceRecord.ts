@@ -48,8 +48,10 @@
  * `detail` and `occurred_at` -- in batches, without re-running the tsvector.
  *
  * 4: a place's time became its latest visit, not its promotion time.
+ * 5: a photo's or video's time (content, and a file through its content row) became when it was
+ *    taken, its media event's start, not when it was imported; an undated one has none.
  */
-export const DEVICE_RECORD_VERSION = 4;
+export const DEVICE_RECORD_VERSION = 5;
 
 /**
  * Fixed namespace for the conversation uuid (`uuid_generate_v5`). Arbitrary but

@@ -164,6 +164,13 @@ export type SemanticSearchScope = {
   includeTypes?: IndexableEntity[];
   excludeTypes?: IndexableEntity[];
   /**
+   * Keep only the content rows that are a photo or a video (`ci.content.type = 'media'`); rows of
+   * every other type are untouched. A photo's search has to stop at its content row, the one that
+   * carries its media event (and so its date), and a Drive document or a YouTube like is content
+   * too. Bound into the statement text, not a parameter, so no caller's numbering moves.
+   */
+  mediaContentOnly?: boolean;
+  /**
    * Cosine-distance floor, overriding {@link SEMANTIC_DISTANCE_THRESHOLD}.
    * Smaller = stricter. Callers that need a tighter relevance bar than plain
    * search (evidence retrieval, where a merely-word-adjacent row is worse than
@@ -231,6 +238,8 @@ type BaseSearchOptions = {
    * tie-break; the default is rank. Lexical modes only, like `since` / `until`.
    */
   sort?: 'relevance' | 'recent';
+  /** See {@link SemanticSearchScope.mediaContentOnly}. */
+  mediaContentOnly?: boolean;
   /**
    * Hybrid fusion strategy:
    * - `'weighted'` (default): 50/50 normalized score average.
@@ -451,7 +460,7 @@ export interface SearchPage {
  * term, which a tool that demanded one turned into a validation error
  * (measured live 2026-09-16: the model sent `query: ""` and the turn died).
  */
-type CountOptions = { query?: string; since?: Date; until?: Date } & (
+type CountOptions = { query?: string; since?: Date; until?: Date; mediaContentOnly?: boolean } & (
   | { includeTypes: IndexableEntity[]; excludeTypes?: never }
   | { excludeTypes: IndexableEntity[]; includeTypes?: never }
   | { includeTypes?: never; excludeTypes?: never }
@@ -658,7 +667,7 @@ export class SearchService {
   private buildKeywordCountPlan(
     userId: string,
     query: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 3);
@@ -693,7 +702,7 @@ export class SearchService {
   /** `count(*)` of every indexed row in scope, no text match — "how many photos do I have". */
   private buildScopeCountPlan(
     userId: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 2);
@@ -1567,28 +1576,29 @@ export class SearchService {
   }
 
   private buildTypeFilter(
-    options: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    options: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
     paramOffset: number,
     tableAlias?: string,
   ): { clause: string; param: string[] | null } {
     const column = tableAlias ? `${tableAlias}.entity_type` : 'entity_type';
+    const media = options.mediaContentOnly ? `\n        ${mediaContentClause(tableAlias)}` : '';
 
     if (options.includeTypes && options.includeTypes.length > 0) {
       return {
-        clause: `AND ${column} = ANY($${paramOffset})`,
+        clause: `AND ${column} = ANY($${paramOffset})${media}`,
         param: options.includeTypes,
       };
     }
 
     if (options.excludeTypes && options.excludeTypes.length > 0) {
       return {
-        clause: `AND ${column} != ALL($${paramOffset})`,
+        clause: `AND ${column} != ALL($${paramOffset})${media}`,
         param: options.excludeTypes,
       };
     }
 
     return {
-      clause: '',
+      clause: media.trim(),
       param: null,
     };
   }
@@ -1596,6 +1606,22 @@ export class SearchService {
 
 function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
+}
+
+/**
+ * {@link SemanticSearchScope.mediaContentOnly} as SQL: a content row must be a photo or a video,
+ * any other row passes.
+ *
+ * The index row's columns are named only OUTSIDE the subquery. Several statements call this with
+ * no table alias, and inside a correlated subquery an unqualified name binds to the subquery's own
+ * table first: `ci.content` has an `entity_type` column of its own, so `EXISTS (... WHERE
+ * entity_type ...)` would quietly compare the wrong one.
+ */
+export function mediaContentClause(tableAlias?: string): string {
+  const type = tableAlias ? `${tableAlias}.entity_type` : 'entity_type';
+  const id = tableAlias ? `${tableAlias}.entity_id` : 'entity_id';
+
+  return `AND (${type} <> 'content' OR ${id} IN (SELECT mc.id FROM ci.content mc WHERE mc.type = 'media'))`;
 }
 
 /**
