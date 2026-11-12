@@ -81,7 +81,11 @@ import { MessagingSendTool } from './tools/MessagingSendTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
 import { PlacesNextTool } from './tools/PlacesNextTool';
-import { PlanningCompleteTaskTool } from './tools/PlanningCompleteTaskTool';
+import {
+  PlanningAcceptProposedTaskTool,
+  PlanningCompleteTaskTool,
+  PlanningDeclineProposedTaskTool,
+} from './tools/PlanningCompleteTaskTool';
 import { PlanningCreateTaskTool } from './tools/PlanningCreateTaskTool';
 import { PlanningFindTasksTool } from './tools/PlanningFindTasksTool';
 import { PlanningPlannedBlocksTool } from './tools/PlanningPlannedBlocksTool';
@@ -139,6 +143,8 @@ const nativeToolInstances = [
   PlanningUpdateTaskTool,
   PlanningScheduleTaskTool,
   PlanningPlannedBlocksTool,
+  PlanningAcceptProposedTaskTool,
+  PlanningDeclineProposedTaskTool,
 ];
 
 /**

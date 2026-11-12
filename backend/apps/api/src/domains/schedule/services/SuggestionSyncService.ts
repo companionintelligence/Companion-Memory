@@ -11,8 +11,7 @@ import {
   PersonalizationService,
   PlacementService,
 } from '@ci/domains/personalization';
-import { classifyTaskL0 } from '@ci/domains/planning/engine/taskL0Classifier';
-import { TaskEntity } from '@ci/domains/planning/entities/TaskEntity';
+import { classifyTaskL0, TaskEntity } from '@ci/domains/planning';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 

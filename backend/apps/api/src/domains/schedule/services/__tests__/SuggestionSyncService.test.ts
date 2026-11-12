@@ -5,7 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ActionEntity } from '@ci/domains/intelligence';
 import { flexWindow, PersonalizationService, PlacementService } from '@ci/domains/personalization';
-import { TaskEntity } from '@ci/domains/planning/entities/TaskEntity';
+import { TaskEntity } from '@ci/domains/planning';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 

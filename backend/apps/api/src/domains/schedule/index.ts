@@ -7,7 +7,7 @@ import { ActionEntity } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
 import { PersonalizationModule } from '@ci/domains/personalization';
-import { TaskEntity } from '@ci/domains/planning/entities/TaskEntity';
+import { TaskEntity } from '@ci/domains/planning';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 

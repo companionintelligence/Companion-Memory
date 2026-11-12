@@ -2,9 +2,20 @@ import { Injectable, Optional } from '@nestjs/common';
 
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
 import { PersonService, UserContextService } from '@ci/domains/memory';
+import { HbpeService } from '@ci/domains/predictions';
 
 export type DecisionEngineMode = 'auto' | 'contrastive' | 'generative' | 'hybrid';
-export type DecisionEngineUsed = 'contrastive' | 'generative' | 'hybrid' | 'disabled';
+export type DecisionEngineUsed = 'contrastive' | 'generative' | 'hybrid' | 'hbpe_system1' | 'disabled';
+
+export interface IngressCommitmentScore {
+  isCommitment: boolean;
+  probability: number;
+  intent: string;
+  sensitivity: number;
+  engineUsed: DecisionEngineUsed;
+  nonActionableReason?: 'automated_otp' | 'marketing_blast' | 'below_threshold';
+  latencyMs: number;
+}
 
 export interface ScoreCriterion {
   name: string;
@@ -265,6 +276,7 @@ export class ContrastiveDecisionService {
     @Optional() private readonly embeddingService?: EmbeddingGenerationService,
     @Optional() private readonly personService?: PersonService,
     @Optional() private readonly userContextService?: UserContextService,
+    @Optional() private readonly hbpeService?: HbpeService,
   ) {}
 
   setGenerativeEvaluator(evaluator: GenerativeDecisionEvaluator | undefined): void {
@@ -594,18 +606,46 @@ export class ContrastiveDecisionService {
     let engineUsed: DecisionEngineUsed = 'contrastive';
 
     if (effectiveMode === 'generative' || effectiveMode === 'hybrid') {
-      const gen = await this.runGenerativeChoice(
-        query,
-        candidates.map((c) => ({ id: c.id, label: c.text })),
-      );
-      if (effectiveMode === 'generative') {
-        engineUsed = 'generative';
-        finalProbs = candidates.map((c) => gen.probabilities[c.id] ?? 0);
-        scores = finalProbs.slice();
-      } else {
-        engineUsed = 'hybrid';
-        finalProbs = candidates.map((c, idx) => 0.5 * probs[idx] + 0.5 * (gen.probabilities[c.id] ?? 0));
-        scores = candidates.map((c, idx) => 0.5 * sims[idx] + 0.5 * (gen.probabilities[c.id] ?? 0));
+      let usedHbpeRerank = false;
+
+      if (effectiveMode === 'hybrid' && this.hbpeService) {
+        try {
+          const hbpeRes = await this.hbpeService.rerankPassages(
+            { userId: options.userId ?? 'system' },
+            query,
+            candidates.map((c) => ({ id: c.id, text: c.text })),
+          );
+
+          if (Array.isArray(hbpeRes?.results) && hbpeRes.results.length > 0) {
+            const hbpeMap = new Map(hbpeRes.results.map((r) => [r.id, r]));
+            engineUsed = 'hbpe_system1';
+            finalProbs = candidates.map(
+              (c, idx) => 0.5 * probs[idx] + 0.5 * (hbpeMap.get(c.id)?.relevance_probability ?? probs[idx]),
+            );
+            scores = candidates.map(
+              (c, idx) => 0.5 * sims[idx] + 0.5 * (hbpeMap.get(c.id)?.score ?? sims[idx]),
+            );
+            usedHbpeRerank = true;
+          }
+        } catch {
+          // Fall through to generative fallback when HBPE sidecar is offline
+        }
+      }
+
+      if (!usedHbpeRerank) {
+        const gen = await this.runGenerativeChoice(
+          query,
+          candidates.map((c) => ({ id: c.id, label: c.text })),
+        );
+        if (effectiveMode === 'generative') {
+          engineUsed = 'generative';
+          finalProbs = candidates.map((c) => gen.probabilities[c.id] ?? 0);
+          scores = finalProbs.slice();
+        } else {
+          engineUsed = 'hybrid';
+          finalProbs = candidates.map((c, idx) => 0.5 * probs[idx] + 0.5 * (gen.probabilities[c.id] ?? 0));
+          scores = candidates.map((c, idx) => 0.5 * sims[idx] + 0.5 * (gen.probabilities[c.id] ?? 0));
+        }
       }
     }
 
@@ -625,6 +665,114 @@ export class ContrastiveDecisionService {
       items: ranked,
       arenaHitCount,
       arenaMissCount,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
+  /**
+   * Unified System 1 ingress commitment pre-filter (`<10 ms`).
+   *
+   * Evaluates whether an inbound communication or memory fragment contains an
+   * actionable personal commitment before invoking the 60-second System 2 scan
+   * LLM (`InboxScanService`, `TodoScanService`):
+   *  1. Deterministic negative filter for unmistakable automated OTP / 2FA codes
+   *     and marketing blasts that contain no human commitment cues.
+   *  2. Python HBPE System 1 `/decision/ingress` (`HbpeService.scoreMemoryIngress`)
+   *     when the sidecar is available.
+   *  3. In-process Contrastive `noul` (`ActionVectorArena`) + commitment cue boost
+   *     fallback when offline.
+   */
+  async scoreIngressCommitment(
+    text: string,
+    options: { userId?: string; threshold?: number } = {},
+  ): Promise<IngressCommitmentScore> {
+    const startedAt = Date.now();
+    const threshold = options.threshold ?? 0.25;
+    const trimmed = text.trim();
+
+    if (!trimmed) {
+      return {
+        isCommitment: false,
+        probability: 0,
+        intent: 'conversational',
+        sensitivity: 0,
+        engineUsed: 'contrastive',
+        nonActionableReason: 'below_threshold',
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+
+    const effectiveMode = await this.resolveEffectiveEngine(options.userId, 'auto');
+    if (effectiveMode === 'disabled') {
+      return {
+        isCommitment: true,
+        probability: 0.5,
+        intent: 'store_task',
+        sensitivity: 0,
+        engineUsed: 'disabled',
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+
+    const nonActionable = detectAutomatedNonActionable(trimmed);
+    if (nonActionable) {
+      return {
+        isCommitment: false,
+        probability: 0.02,
+        intent: 'conversational',
+        sensitivity: 0,
+        engineUsed: 'contrastive',
+        nonActionableReason: nonActionable,
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+
+    if (this.hbpeService) {
+      try {
+        const res = await this.hbpeService.scoreMemoryIngress(
+          { userId: options.userId ?? 'system' },
+          trimmed,
+        );
+        if (res && typeof res.commitment_probability === 'number') {
+          const isCommitment = res.is_commitment || res.commitment_probability >= threshold;
+
+          return {
+            isCommitment,
+            probability: res.commitment_probability,
+            intent: res.intent || (isCommitment ? 'store_task' : 'conversational'),
+            sensitivity: res.sensitivity ?? 0,
+            engineUsed: 'hbpe_system1',
+            ...(!isCommitment ? { nonActionableReason: 'below_threshold' as const } : {}),
+            latencyMs: Date.now() - startedAt,
+          };
+        }
+      } catch {
+        // Fall through to in-process contrastive evaluation when HBPE sidecar is unreachable.
+      }
+    }
+
+    const noulRes = await this.noul(
+      trimmed,
+      'actionable personal task commitment deadline request todo appointment follow up',
+      {
+        userId: options.userId,
+        negatedAction: 'automated promotional newsletter marketing blast chatter status update',
+        engine: 'contrastive',
+        threshold,
+      },
+    );
+
+    const cueBoost = hasCommitmentCue(trimmed) ? 0.25 : 0;
+    const probability = Math.min(1, noulRes.probability + cueBoost);
+    const isCommitment = probability >= threshold;
+
+    return {
+      isCommitment,
+      probability,
+      intent: isCommitment ? 'store_task' : 'conversational',
+      sensitivity: 0,
+      engineUsed: 'contrastive',
+      ...(!isCommitment ? { nonActionableReason: 'below_threshold' as const } : {}),
       latencyMs: Date.now() - startedAt,
     };
   }
@@ -814,4 +962,29 @@ function tokenOverlapScore(a: string, b: string): number {
   }
 
   return shared / Math.sqrt(tokensA.size * tokensB.size);
+}
+
+const COMMITMENT_CUE_RE =
+  /\b(please|need to|have to|must|don't forget|remind me|todo|to-do|by friday|by tomorrow|by monday|due|invoice|schedule|book|call|email|reply|respond|send|finish|submit|renew|appointment|meeting|follow up|action required)\b/i;
+
+const OTP_PATTERN_RE =
+  /\b(verification code|security code|one-time passcode|one-time password|otp|login code|sign-in code|2fa code|authentication code)\b[\s\S]{0,80}\b\d{4,8}\b|\b\d{4,8}\b[\s\S]{0,60}\b(is your [\w\s-]*code|verification code|security code)\b/i;
+
+const MARKETING_BLAST_RE =
+  /\b(unsubscribe from (this|these) (emails?|lists?|marketing|messages?)|view (this email )?in (your )?browser|update your email preferences|no longer wish to receive these emails|promotional offer|terms and conditions apply)\b/i;
+
+function hasCommitmentCue(text: string): boolean {
+  return COMMITMENT_CUE_RE.test(text);
+}
+
+function detectAutomatedNonActionable(text: string): 'automated_otp' | 'marketing_blast' | null {
+  if (OTP_PATTERN_RE.test(text) && !/\b(schedule|appointment|invoice|meeting|call me)\b/i.test(text)) {
+    return 'automated_otp';
+  }
+
+  if (MARKETING_BLAST_RE.test(text) && !/\b(invoice due|action required|please reply|confirm your appointment)\b/i.test(text)) {
+    return 'marketing_blast';
+  }
+
+  return null;
 }

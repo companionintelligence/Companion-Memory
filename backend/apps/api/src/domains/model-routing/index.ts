@@ -16,6 +16,7 @@ import { Module } from '@nestjs/common';
 
 import { EmbeddingModule } from '@ci/common/embeddings';
 import { MemoryModule } from '@ci/domains/memory';
+import { PredictionsModule } from '@ci/domains/predictions';
 
 import { ModelRoutingController } from './controllers/ModelRoutingController';
 import {
@@ -30,6 +31,7 @@ import {
   type DecisionEngineUsed,
   type DecisionOptions,
   type GenerativeDecisionEvaluator,
+  type IngressCommitmentScore,
   type NoulDecisionResult,
   type RankCandidateInput,
   type RankDecisionResult,
@@ -42,7 +44,7 @@ import { ModelTierRouter, TIER_PROFILES } from './services/ModelTierRouter';
 import type { ModelTier, ReasoningLevel, RoutingDecision, RoutingRequest, TierProfile } from './types';
 
 @Module({
-  imports: [EmbeddingModule, MemoryModule],
+  imports: [EmbeddingModule, MemoryModule, PredictionsModule],
   controllers: [ModelRoutingController],
   providers: [ModelTierRouter, ContrastiveDecisionService],
   exports: [ModelTierRouter, ContrastiveDecisionService],
@@ -65,6 +67,7 @@ export type {
   DecisionEngineUsed,
   DecisionOptions,
   GenerativeDecisionEvaluator,
+  IngressCommitmentScore,
   ModelTier,
   NoulDecisionResult,
   RankCandidateInput,
