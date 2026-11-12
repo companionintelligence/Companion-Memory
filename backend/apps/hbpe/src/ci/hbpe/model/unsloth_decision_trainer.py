@@ -11,18 +11,15 @@ using Unsloth FastDecisionModel and DecisionTrainer:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
-import math
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ci.hbpe.inference.decision_model import (
     MEMORY_INGRESS_QUESTIONS,
-    RETRIEVAL_RERANK_QUESTIONS,
-    DecisionQuestion,
 )
 from ci.hbpe.model.train_io import atomic_write, seed_everything
 
@@ -32,10 +29,10 @@ log = logging.getLogger(__name__)
 @dataclass
 class DecisionDatasetItem:
     state: str
-    questions: Dict[str, Dict[str, Any]]
-    answers: Dict[str, Any]
+    questions: dict[str, dict[str, Any]]
+    answers: dict[str, Any]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "state": self.state,
             "questions": self.questions,
@@ -64,10 +61,10 @@ def format_memory_event_to_decision_item(
 
 
 def build_decision_dataset_from_events(
-    events: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Convert raw Companion Memory event dictionaries into Unsloth decision dataset items."""
-    dataset: List[Dict[str, Any]] = []
+    dataset: list[dict[str, Any]] = []
 
     for ev in events:
         text = ev.get("text", "") or ev.get("content", "")
@@ -93,8 +90,8 @@ def build_decision_dataset_from_events(
 
 
 def compute_brier_score(
-    predictions: List[Dict[str, float]],
-    ground_truth: List[str],
+    predictions: list[dict[str, float]],
+    ground_truth: list[str],
 ) -> float:
     """
     Compute multi-class Brier score.
@@ -105,7 +102,7 @@ def compute_brier_score(
         return 0.0
 
     total_error = 0.0
-    for probs, true_class in zip(predictions, ground_truth):
+    for probs, true_class in zip(predictions, ground_truth, strict=True):
         for choice, prob in probs.items():
             target = 1.0 if choice == true_class else 0.0
             total_error += (prob - target) ** 2
@@ -114,8 +111,8 @@ def compute_brier_score(
 
 
 def compute_calibration_error(
-    predicted_probs: List[float],
-    true_labels: List[bool],
+    predicted_probs: list[float],
+    true_labels: list[bool],
     num_bins: int = 10,
 ) -> float:
     """
@@ -134,7 +131,8 @@ def compute_calibration_error(
         bin_upper = (b + 1) * bin_size
 
         indices = [
-            i for i, p in enumerate(predicted_probs)
+            i
+            for i, p in enumerate(predicted_probs)
             if bin_lower <= p < bin_upper or (b == num_bins - 1 and p == 1.0)
         ]
 
@@ -167,21 +165,21 @@ class UnslothDecisionTrainConfig:
 class UnslothDecisionTrainer:
     """
     Trainer coordinator for Decision Models.
-    
+
     If Unsloth is installed, configures and runs FastDecisionModel / DecisionTrainer.
     If running in a CPU-only test environment, performs validation and exports
     a mock verified decision checkpoint with calibrated metadata.
     """
 
-    def __init__(self, config: Optional[UnslothDecisionTrainConfig] = None) -> None:
+    def __init__(self, config: UnslothDecisionTrainConfig | None = None) -> None:
         self.config = config or UnslothDecisionTrainConfig()
 
     def train_and_export(
         self,
-        train_dataset: List[Dict[str, Any]],
-        eval_dataset: List[Dict[str, Any]],
+        train_dataset: list[dict[str, Any]],
+        eval_dataset: list[dict[str, Any]],
         output_dir: str | Path,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         seed_everything(self.config.seed)
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -194,13 +192,11 @@ class UnslothDecisionTrainer:
             self.config.load_in_4bit,
         )
 
-        try:
-            # Check for native unsloth library
-            from unsloth import FastDecisionModel, DecisionTrainer  # type: ignore
-            has_unsloth = True
-        except ImportError:
-            has_unsloth = False
-            log.info("Unsloth library not present in environment; running CPU verification pipeline")
+        # Check for the native unsloth library without importing it
+        if importlib.util.find_spec("unsloth") is None:
+            log.info(
+                "Unsloth library not present in environment; running CPU verification pipeline"
+            )
 
         # Mock / CPU calibration evaluation
         eval_brier = 0.08
@@ -223,7 +219,9 @@ class UnslothDecisionTrainer:
 
         # Atomically write decision metadata and adapter configuration
         meta_file = out_path / "decision_model_meta.json"
-        atomic_write(meta_file, lambda tmp: tmp.write_text(json.dumps(metadata, indent=2)))
+        atomic_write(
+            meta_file, lambda tmp: tmp.write_text(json.dumps(metadata, indent=2))
+        )
 
         log.info("Decision model training and export complete at %s", out_path)
         return metadata

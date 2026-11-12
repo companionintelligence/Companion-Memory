@@ -13,12 +13,28 @@ import { useFeatures } from '@/common/feature';
 import { PageContent } from '@/components/layout';
 import { starterPromptsFor } from '@/pages/ChatPage/starterPrompts';
 
-const WIDGET_TASKS = gql("query WidgetBoardTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }");
-const WIDGET_FORECAST = gql("query WidgetBoardForecast { forecast(horizon: \"24h\") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }");
-const WIDGET_METRICS = gql("query WidgetBoardMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { nMessages nPlaces kmTraveled } }");
+const WIDGET_TASKS = gql(
+  'query WidgetBoardTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
+);
+const WIDGET_FORECAST = gql(
+  'query WidgetBoardForecast { forecast(horizon: "24h") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
+);
+const WIDGET_METRICS = gql(
+  'query WidgetBoardMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { nMessages nPlaces kmTraveled } }',
+);
 
 interface TaskData {
-  tasks?: { edges?: Array<{ node: { id?: string; title?: string; status?: string; dueAt?: string | null; scheduledFor?: string | null } }> };
+  tasks?: {
+    edges?: Array<{
+      node: {
+        id?: string;
+        title?: string;
+        status?: string;
+        dueAt?: string | null;
+        scheduledFor?: string | null;
+      };
+    }>;
+  };
 }
 
 interface ForecastData {
@@ -44,30 +60,51 @@ interface JobsData {
 
 function localDay(): string {
   const now = new Date();
-  return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function timeLabel(value: string | null): string {
-  if (!value) return 'Waiting for sync';
+  if (!value) {
+    return 'Waiting for sync';
+  }
+
   const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return 'Updated recently';
+  if (Number.isNaN(date.valueOf())) {
+    return 'Updated recently';
+  }
+
   return `Updated ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 
 function taskDueLabel(value: string | null): string {
-  if (!value) return 'No due date';
+  if (!value) {
+    return 'No due date';
+  }
+
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   const date = dateOnly
     ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
     : new Date(value);
-  if (Number.isNaN(date.valueOf())) return 'Date unavailable';
+  if (Number.isNaN(date.valueOf())) {
+    return 'Date unavailable';
+  }
 
   const today = new Date();
   const targetDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).valueOf();
   const currentDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).valueOf();
   const dayOffset = Math.round((targetDay - currentDay) / 86_400_000);
-  if (dayOffset === 0) return 'Today';
-  if (dayOffset === 1) return 'Tomorrow';
+  if (dayOffset === 0) {
+    return 'Today';
+  }
+
+  if (dayOffset === 1) {
+    return 'Tomorrow';
+  }
 
   return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
@@ -124,7 +161,9 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
     <>
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Your data, at a glance</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+            Your data, at a glance
+          </p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">Widgets</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             A live overview of your plan, questions, predictions, activity and background work.
@@ -146,7 +185,9 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
                   {snapshot.plan.tasks.slice(0, 3).map((task) => (
                     <li key={task.id} className="flex items-start justify-between gap-3 text-sm">
                       <span className="line-clamp-2">{task.title}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">{taskDueLabel(task.dueAt)}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {taskDueLabel(task.dueAt)}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -176,17 +217,25 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
           <OpenLink to={paths.chat}>Ask Memory</OpenLink>
         </WidgetCard>
 
-        <WidgetCard label="Prediction" icon={ChartNoAxesCombined} freshness={timeLabel(snapshot.insight.forecastGeneratedAt)}>
+        <WidgetCard
+          label="Prediction"
+          icon={ChartNoAxesCombined}
+          freshness={timeLabel(snapshot.insight.forecastGeneratedAt)}
+        >
           {forecastAvailable ? (
             <>
-              <p className="text-xl font-semibold leading-snug">{snapshot.insight.prediction ?? 'Forecast is updating'}</p>
+              <p className="text-xl font-semibold leading-snug">
+                {snapshot.insight.prediction ?? 'Forecast is updating'}
+              </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 {snapshot.insight.confidence === null
                   ? 'Confidence not available'
                   : `${Math.round(snapshot.insight.confidence * 100)}% likely`}
                 {snapshot.insight.stillLearning ? ' · still learning' : ''}
               </p>
-              <p className="mt-2 text-xs text-muted-foreground">Forecast status: {snapshot.insight.systemStatus}</p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Forecast status: {snapshot.insight.systemStatus}
+              </p>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">No current forecast is available.</p>
@@ -206,7 +255,9 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
                 <p className="text-xs text-muted-foreground">places</p>
               </div>
               <div>
-                <p className="text-2xl font-semibold tabular-nums">{snapshot.insight.kilometers.toFixed(1)}</p>
+                <p className="text-2xl font-semibold tabular-nums">
+                  {snapshot.insight.kilometers.toFixed(1)}
+                </p>
                 <p className="text-xs text-muted-foreground">km</p>
               </div>
             </div>
@@ -276,8 +327,10 @@ export default function WidgetDashboardPage() {
         // An unavailable queue is shown as unsynced, never as zero work.
       }
     };
+
     void refresh();
     const timer = window.setInterval(() => void refresh(), 15 * 60_000);
+
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -303,6 +356,7 @@ export default function WidgetDashboardPage() {
   const planPath = isFeatureEnabled('planning.page') ? '/plan/tasks' : '/plan/calendar';
   const forecastPath = isFeatureEnabled('forecast.page') ? '/forecast' : '/memory';
   const jobsPath = isFeatureEnabled('jobs.page') ? '/jobs' : '/settings';
+
   return (
     <PageContent className="gap-5 pb-8 sm:gap-6">
       <WidgetDashboardView

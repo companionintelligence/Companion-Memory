@@ -25,8 +25,6 @@ import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import { AppLockGate } from '@/components/AppLock/AppLockGate';
 import { MediaLinkRefresh } from '@/components/MediaLinkRefresh';
-import { WidgetDeepLinkRouter } from '@/components/WidgetDeepLinkRouter';
-import { WidgetSnapshotSync } from '@/components/WidgetSnapshotSync';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
@@ -35,6 +33,8 @@ import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import { RequireOnboarded } from '@/components/RequireOnboarded';
 import { ThemeProvider, BackgroundProvider } from '@/components/ThemePicker';
 import { UnsentCapturesSignOutDialog } from '@/components/UnsentCapturesSignOutDialog';
+import { WidgetDeepLinkRouter } from '@/components/WidgetDeepLinkRouter';
+import { WidgetSnapshotSync } from '@/components/WidgetSnapshotSync';
 import {
   AuthProvider,
   CaptureModalProvider,

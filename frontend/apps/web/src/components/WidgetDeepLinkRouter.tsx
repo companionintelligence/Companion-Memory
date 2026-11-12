@@ -13,7 +13,10 @@ export function WidgetDeepLinkRouter() {
   useEffect(() => {
     let disposed = false;
     const open = (rawUrl: string) => {
-      if (disposed) return;
+      if (disposed) {
+        return;
+      }
+
       const destination = parseWidgetDestination(rawUrl);
 
       if (destination === 'plan') {
@@ -33,7 +36,9 @@ export function WidgetDeepLinkRouter() {
       removeListener = remove;
     });
     void getLaunchUrl().then((url) => {
-      if (url) open(url);
+      if (url) {
+        open(url);
+      }
     });
 
     return () => {

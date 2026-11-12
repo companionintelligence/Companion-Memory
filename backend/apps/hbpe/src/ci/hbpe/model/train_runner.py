@@ -16,14 +16,15 @@ from pathlib import Path
 
 from ci.hbpe.model.parallel_trainer import (
     DEFAULT_LR,
-    DEFAULT_LR_FINETUNE,
     TokenStreamFileDataset,
     TrainingProgress,
     train_hmt_joint_parallel,
     train_l0_mae_parallel,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 log = logging.getLogger("hbpe-train-runner")
 
 
@@ -35,7 +36,9 @@ def sse_event_emitter(progress: TrainingProgress) -> None:
         "epoch": progress.epoch,
         "totalEpochs": progress.n_epochs,
         "trainLoss": round(progress.train_loss, 4),
-        "valLoss": round(progress.val_loss, 4) if progress.val_loss is not None else None,
+        "valLoss": round(progress.val_loss, 4)
+        if progress.val_loss is not None
+        else None,
         "learningRate": progress.learning_rate,
         "elapsedSeconds": round(progress.elapsed_seconds, 1),
         "etaSeconds": round(progress.eta_seconds, 1),
@@ -52,7 +55,11 @@ def run_headless_job(manifest_path: Path, dataset_path: Path, output_dir: Path) 
 
     raw_uid = manifest.get("userId")
     try:
-        user_id = str(uuid.UUID(raw_uid)) if raw_uid else "00000000-0000-0000-0000-000000000000"
+        user_id = (
+            str(uuid.UUID(raw_uid))
+            if raw_uid
+            else "00000000-0000-0000-0000-000000000000"
+        )
     except (ValueError, TypeError):
         user_id = "00000000-0000-0000-0000-000000000000"
 
@@ -125,9 +132,21 @@ def run_headless_job(manifest_path: Path, dataset_path: Path, output_dir: Path) 
 
 def main():
     parser = argparse.ArgumentParser(description="HBPE Headless Training Runner")
-    parser.add_argument("--manifest", type=Path, required=True, help="Path to TrainingJobManifest JSON")
-    parser.add_argument("--dataset", type=Path, required=True, help="Path to serialized token stream JSONL")
-    parser.add_argument("--output", type=Path, required=True, help="Output directory for model checkpoints")
+    parser.add_argument(
+        "--manifest", type=Path, required=True, help="Path to TrainingJobManifest JSON"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        required=True,
+        help="Path to serialized token stream JSONL",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output directory for model checkpoints",
+    )
     args = parser.parse_args()
 
     run_headless_job(args.manifest, args.dataset, args.output)

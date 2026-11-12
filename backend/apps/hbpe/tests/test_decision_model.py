@@ -8,14 +8,10 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from ci.hbpe.inference.decision_model import (
     MEMORY_INGRESS_QUESTIONS,
     RETRIEVAL_RERANK_QUESTIONS,
     DecisionModelClient,
-    DecisionQuestion,
-    DecisionResult,
     LocalDecisionEngine,
 )
 from ci.hbpe.model.unsloth_decision_trainer import (
@@ -93,7 +89,11 @@ def test_unsloth_dataset_formatting():
 
 def test_build_decision_dataset_from_events():
     events = [
-        {"text": "Doctor visit tomorrow at 10am", "intent": "store_task", "actionable": True},
+        {
+            "text": "Doctor visit tomorrow at 10am",
+            "intent": "store_task",
+            "actionable": True,
+        },
         {"text": "My favorite color is navy blue", "intent": "store_fact"},
         {"text": "", "intent": "conversational"},  # Empty ignored
         {"content": "Just saying hello", "intent": "conversational"},
@@ -159,14 +159,19 @@ def test_qwen_labeler_l0_fastpath(monkeypatch):
 
     class MockQwenShouldNotCall:
         def generate(self, *args, **kwargs):
-            raise AssertionError("Qwen.generate should not be called when decision model is confident!")
+            raise AssertionError(
+                "Qwen.generate should not be called when decision model is confident!"
+            )
 
     import ci.hbpe.inference.qwen as qwen_mod
+
     monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwenShouldNotCall())
 
     labeler = QwenLabeler()
     # "Sprint review and roadmap sync" matches WORK keywords
-    l0 = labeler._resolve_l0("Sprint review and roadmap sync", "Engineering project sync")
+    l0 = labeler._resolve_l0(
+        "Sprint review and roadmap sync", "Engineering project sync"
+    )
     assert l0 == "WORK"
 
 
@@ -186,6 +191,7 @@ def test_qwen_labeler_l0_fallback_when_disabled(monkeypatch):
             return json.dumps({"l0": "EXERCISE"})
 
     import ci.hbpe.inference.qwen as qwen_mod
+
     monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwen())
 
     labeler = QwenLabeler()
@@ -210,13 +216,14 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
             return [json.dumps({"l0": "LEISURE"}) for _ in prompts]
 
     import ci.hbpe.inference.qwen as qwen_mod
+
     monkeypatch.setattr(qwen_mod, "get_qwen", lambda: MockQwenBatch())
 
     labeler = QwenLabeler()
     titles = [
         "Weekly engineering standup meeting",  # WORK (high confidence in local engine)
         "Something obscure without keywords",  # Fallback to Qwen
-        "Morning gym workout and fitness",     # EXERCISE (high confidence)
+        "Morning gym workout and fitness",  # EXERCISE (high confidence)
     ]
     descriptions = [None, None, None]
 
@@ -226,4 +233,3 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
     assert results[2] == "EXERCISE"
     # Qwen should have only been called for 1 item (the obscure one)!
     assert qwen_calls == [1]
-

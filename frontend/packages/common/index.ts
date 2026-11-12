@@ -149,8 +149,17 @@ export {
   type DiscoverLanAppliancesResult,
   type LocalHubSession,
 } from './src/utils/localHub';
-export { buildWidgetSnapshot, parseWidgetDestination, WIDGET_SNAPSHOT_VERSION } from './src/utils/widgetSnapshots';
-export type { CompanionWidgetSnapshot, WidgetAction, WidgetSnapshotInput, WidgetTask } from './src/utils/widgetSnapshots';
+export {
+  buildWidgetSnapshot,
+  parseWidgetDestination,
+  WIDGET_SNAPSHOT_VERSION,
+} from './src/utils/widgetSnapshots';
+export type {
+  CompanionWidgetSnapshot,
+  WidgetAction,
+  WidgetSnapshotInput,
+  WidgetTask,
+} from './src/utils/widgetSnapshots';
 export {
   cancelLocalLlmDownload,
   deleteLocalLlmModel,

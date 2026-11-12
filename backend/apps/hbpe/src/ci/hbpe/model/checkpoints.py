@@ -94,7 +94,7 @@ def write_architecture_stamp(user_id: str) -> Path:
                 "dropout": DROPOUT,
             },
             indent=2,
-        )
+        ),
     )
     return path
 
