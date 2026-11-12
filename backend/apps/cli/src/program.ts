@@ -10,6 +10,13 @@ import { asksOutboxCommand } from './commands/asks/outbox';
 import { asksSendCommand } from './commands/asks/send';
 import { asksSendPeerCommand } from './commands/asks/sendPeer';
 import { asksShowCommand } from './commands/asks/show';
+import {
+  auditDeadLettersCommand,
+  auditDeltasCommand,
+  auditJobsCommand,
+  auditPipelineCommand,
+} from './commands/audit';
+import { loginCommand, logoutCommand, readStoredCredentials, whoamiCommand } from './commands/auth';
 import { backfillCommand } from './commands/backfill';
 import { dataSourcesCommand } from './commands/datasources';
 import { doctorCommand } from './commands/doctor';
@@ -28,6 +35,12 @@ import { grantsShowCommand } from './commands/grants/show';
 import { grantsUpdateCommand } from './commands/grants/update';
 import { importCommand } from './commands/import';
 import { inboxCommand } from './commands/inbox';
+import {
+  inferenceDecideCommand,
+  inferenceForecastCommand,
+  inferenceRankCommand,
+  inferenceTiersCommand,
+} from './commands/inference';
 import { mcpInitHooksCommand, mcpServeCommand } from './commands/mcp';
 import { memoryCheckCommand, memoryConfigureCommand, memoryStatusCommand } from './commands/memory';
 import { peersAddCommand } from './commands/peers/add';
@@ -38,6 +51,11 @@ import { pushCommand } from './commands/push';
 import { recognizeCommand } from './commands/recognize';
 import { runsCommand } from './commands/runs';
 import { statsCommand } from './commands/stats';
+import {
+  trainCalibrationCommand,
+  trainRebuildPlacesCommand,
+  trainRunCommand,
+} from './commands/train';
 import type { CliContext } from './context';
 import { MemoryGraphQLClient } from './graphqlClient';
 import type { Term } from './output';
@@ -72,9 +90,11 @@ export function resolveTarget(
   options: GlobalOptions,
   env: NodeJS.ProcessEnv = process.env,
 ): { baseUrl: string; apiKey: string | null } {
+  const stored = readStoredCredentials(env);
+
   return {
-    baseUrl: options.server ?? env.CI_SERVER_URL ?? DEFAULT_SERVER_URL,
-    apiKey: options.apiKey ?? env.CI_API_KEY ?? env.CI_SERVER_API_KEY ?? null,
+    baseUrl: options.server ?? env.CI_SERVER_URL ?? stored?.serverUrl ?? DEFAULT_SERVER_URL,
+    apiKey: options.apiKey ?? env.CI_API_KEY ?? env.CI_SERVER_API_KEY ?? stored?.apiKey ?? null,
   };
 }
 
@@ -211,6 +231,159 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--abort-on-error', 'stop at the first failing leg instead of carrying on')
     .option('--json', 'machine-readable output')
     .action((stages: string[], options) => backfillCommand(context(), stages, options));
+
+  // ---------------------------------------------------------------------------
+  // Authentication — headless login, credential persistence, and whoami
+  // ---------------------------------------------------------------------------
+
+  program
+    .command('login')
+    .description('Authenticate with the appliance and save credentials to ~/.config/ci/credentials.json')
+    .option('--key <apiKey>', 'verify and save an existing API key')
+    .option('--username <email>', 'account email for password authentication')
+    .option('--password <password>', 'account password for minting a CLI API key')
+    .option('--key-name <name>', 'label for a newly minted API key [ci-cli]')
+    .option('--capability <level>', 'capability for a newly minted API key: read, write, full [full]')
+    .option('--json', 'machine-readable output')
+    .action((options) => loginCommand(context(), options));
+
+  program
+    .command('logout')
+    .description('Remove saved CLI credentials (and optionally revoke the active key on the appliance)')
+    .option('--revoke', 'revoke the active API key on the appliance before removing local credentials')
+    .option('--json', 'machine-readable output')
+    .action((options) => logoutCommand(context(), options));
+
+  program
+    .command('whoami')
+    .description('Show the authenticated account and appliance URL for the active API key')
+    .option('--json', 'machine-readable output')
+    .action((options) => whoamiCommand(context(), options));
+
+  // ---------------------------------------------------------------------------
+  // Training — HBPE behavioral pipeline, walk-forward calibration, and place models
+  // ---------------------------------------------------------------------------
+
+  const train = program
+    .command('train')
+    .description('Trigger HBPE behavioral training, inspect calibration, or rebuild place models');
+
+  train
+    .command('run')
+    .description('Enqueue the HBPE bootstrap/nightly training and LoRA pipeline on hbpe-service')
+    .option('--json', 'machine-readable output')
+    .action((options) => trainRunCommand(context(), options));
+
+  train
+    .command('calibration')
+    .description('Show walk-forward HBPE prediction calibration (Brier, ECE, top-k accuracy, drift)')
+    .option('--limit <n>', 'number of historical calibration snapshots to include')
+    .option('--json', 'machine-readable output')
+    .action((options) => trainCalibrationCommand(context(), options));
+
+  train
+    .command('rebuild-places')
+    .description('Rebuild stay-point clusters and recency-decayed Markov place transitions')
+    .option('--json', 'machine-readable output')
+    .action((options) => trainRebuildPlacesCommand(context(), options));
+
+  // ---------------------------------------------------------------------------
+  // Inference — Dual-Engine (System 1 / System 2) routing, decisions, ranking, and HBPE forecasts
+  // ---------------------------------------------------------------------------
+
+  const inference = program
+    .command('inference')
+    .description('Run Dual-Engine (System 1/2) routing, decisions, ranking, and HBPE forecasts');
+
+  inference
+    .command('tiers')
+    .description('Show inference routing tiers and System 1 ActionVectorArena status, or simulate a routing plan')
+    .option('--plan', 'simulate a routing decision across on-device vs private-cloud tiers')
+    .option('--input-tokens <n>', 'estimated input tokens for routing simulation')
+    .option('--output-tokens <n>', 'estimated output tokens for routing simulation')
+    .option('--reasoning <depth>', 'reasoning depth: light, moderate, deep')
+    .option('--sensitive', 'mark workload as requiring sensitive personal data')
+    .option('--streaming', 'require token streaming')
+    .option('--prefer-on-device', 'prefer on-device execution when feasible')
+    .option('--tool-depth <n>', 'expected number of sequential tool calls')
+    .option('--json', 'machine-readable output')
+    .action((options) => inferenceTiersCommand(context(), options));
+
+  inference
+    .command('decide')
+    .description('Execute a Dual-Engine decision (noul, choice, or score) via System 1 / System 2')
+    .option('--type <kind>', 'decision type: noul (default), choice, or score')
+    .requiredOption('--state <text>', 'current state or context description')
+    .option('--action <text>', 'proposed action to evaluate (required when --type is noul)')
+    .option('--candidates <list>', 'comma-separated choices (required when --type is choice)')
+    .option('--criteria <text>', 'scoring criteria (required when --type is score)')
+    .option('--engine <engine>', 'engine: auto (default), contrastive, generative, or hybrid')
+    .option('--json', 'machine-readable output')
+    .action((options) => inferenceDecideCommand(context(), options));
+
+  inference
+    .command('rank')
+    .description('Rank candidate actions or items against a query using System 1 / System 2')
+    .requiredOption('--query <text>', 'query or context to rank candidates against')
+    .option('--candidate <item>', 'candidate in id:text or plain text format (repeatable)', collect, [])
+    .option('--candidates <list>', 'comma-separated candidate texts')
+    .option('--top-k <n>', 'maximum number of ranked candidates to return')
+    .option('--engine <engine>', 'engine: auto (default), contrastive, generative, or hybrid')
+    .option('--json', 'machine-readable output')
+    .action((options) => inferenceRankCommand(context(), options));
+
+  inference
+    .command('forecast')
+    .description('Query live HBPE behavioral forecasts (day-ahead histogram, week, due list, or next places)')
+    .option('--horizon <window>', 'day-ahead forecast horizon: 24h (default) or 48h')
+    .option('--week', 'fetch 7-day cluster occurrence forecast instead of 15-min buckets')
+    .option('--include-today', 'include today in --week forecast')
+    .option('--due', 'fetch periodic behaviors coming due or overdue')
+    .option('--places', 'fetch likely next places from the stay-point transition model')
+    .option('--limit <n>', 'max buckets or place predictions to display')
+    .option('--horizon-hours <n>', 'lookahead hours for --places [4]')
+    .option('--json', 'machine-readable output')
+    .action((options) => inferenceForecastCommand(context(), options));
+
+  // ---------------------------------------------------------------------------
+  // Audit — Entity evolution deltas, 37-stage pipeline ledger, dead-letter queue, and jobs
+  // ---------------------------------------------------------------------------
+
+  const audit = program
+    .command('audit')
+    .description('Inspect entity change deltas, 37-stage pipeline coverage, dead-letter queues, and jobs');
+
+  audit
+    .command('deltas')
+    .argument('<entityId>', 'UUID of the entity to inspect')
+    .description('Show chronological field-level evolution deltas for an entity')
+    .option('--change-type <type>', 'filter by change type: created, updated, archived, deleted, merged')
+    .option('--from <iso>', 'start of time window (ISO-8601)')
+    .option('--to <iso>', 'end of time window (ISO-8601)')
+    .option('--limit <n>', 'maximum deltas to return')
+    .option('--json', 'machine-readable output')
+    .action((entityId: string, options) => auditDeltasCommand(context(), entityId, options));
+
+  audit
+    .command('pipeline')
+    .description('Show 37-stage ci.pipeline_state coverage, failures, and quarantined items')
+    .option('--json', 'machine-readable output')
+    .action((options) => auditPipelineCommand(context(), options));
+
+  audit
+    .command('dead-letters')
+    .description('List dead-lettered pipeline jobs and failure reasons')
+    .option('--queue <name>', 'filter by PgBoss queue name')
+    .option('--stage <name>', 'filter by pipeline stage name')
+    .option('--limit <n>', 'maximum dead-letter records to return')
+    .option('--json', 'machine-readable output')
+    .action((options) => auditDeadLettersCommand(context(), options));
+
+  audit
+    .command('jobs')
+    .description('Show PgBoss job queues, active/failed job counts, and registered cron schedules')
+    .option('--json', 'machine-readable output')
+    .action((options) => auditJobsCommand(context(), options));
 
   // ---------------------------------------------------------------------------
   // Memory inference — the endpoint and first-run reachability check

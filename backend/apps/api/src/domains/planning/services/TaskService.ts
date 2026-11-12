@@ -18,6 +18,7 @@ import { EventService } from '@ci/domains/events';
 import { LiveChangesService } from '@ci/domains/live-changes';
 import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
+import { classifyTaskL0 } from '../engine/taskL0Classifier';
 import { type Task, TaskEntity } from '../entities/TaskEntity';
 import {
   type TaskPendingChange,
@@ -167,10 +168,16 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId);
     }
 
+    const l0Class =
+      data.l0Class !== undefined
+        ? data.l0Class
+        : classifyTaskL0(data.title, data.description, data.notes);
+
     const record = this.taskRepository.create({
       ...data,
       id: data.id || uuidv7(),
       userId: context.userId,
+      l0Class,
     });
 
     const entity = await this.taskRepository.save(record);
@@ -356,7 +363,27 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId, id);
     }
 
+    // The Plan UI's "Notes" field reads and writes `description`, while scan
+    // automation (`appendNotes`) writes to `notes`. When a caller updates or
+    // clears `description` without explicitly setting `notes`, fold `notes`
+    // into `description` so the user's edit replaces or clears the displayed
+    // text cleanly rather than leaving stale automation notes behind.
+    if (data.description !== undefined && data.notes === undefined && record.notes != null) {
+      record.notes = null;
+    }
+
     Object.assign(record, withoutUndefined(data));
+
+    if (
+      data.l0Class === undefined &&
+      (data.title !== undefined ||
+        data.description !== undefined ||
+        data.notes !== undefined ||
+        !record.l0Class ||
+        record.l0Class === 'UNKNOWN')
+    ) {
+      record.l0Class = classifyTaskL0(record.title, record.description, record.notes);
+    }
 
     const entity = await this.taskRepository.save(record);
 
@@ -419,6 +446,10 @@ export class TaskService {
 
     record.status = 'done';
     record.completedAt = record.completedAt ?? new Date();
+
+    if (!record.l0Class || record.l0Class === 'UNKNOWN') {
+      record.l0Class = classifyTaskL0(record.title, record.description, record.notes);
+    }
 
     if (actualMinutes != null) {
       record.actualMinutes = actualMinutes;

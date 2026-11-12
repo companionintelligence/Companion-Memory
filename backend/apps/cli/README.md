@@ -1,9 +1,12 @@
 # `@ci/cli`
 
-`ci` — the Companion Intelligence appliance at the command line. Twenty-eight
-commands in three groups, over two protocols: the import spine and the
-appliance-wide `stats`, `doctor` and `backfill` over REST; `peers`, `grants` and
-`asks` over GraphQL.
+`ci` — the Companion Intelligence appliance at the command line. Covers
+setup (`memory`, `mcp`), authentication (`login`, `logout`, `whoami`), the
+import spine (`datasources`, `recognize`, `import`, `inbox`, `runs`, `push`,
+`stats`, `doctor`, `backfill`), AI training (`train`), Dual-Engine inference and
+HBPE forecasting (`inference`), pipeline and entity evolution auditing
+(`audit`), worktree coordination (`fleet`), and interpersonal memory (`peers`,
+`grants`, `asks`) over REST and GraphQL.
 
 **The reference is [`docs/cli/ci.md`](../../../docs/cli/ci.md)** — every command,
 its flags, and why it behaves the way it does. This file is about the package.

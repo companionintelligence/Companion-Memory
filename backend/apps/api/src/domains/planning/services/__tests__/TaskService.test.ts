@@ -287,6 +287,27 @@ describe('TaskService', () => {
 
       expect(created.parentId).toBe('parent-1');
     });
+
+    it('populates l0Class automatically from the task title and description', async () => {
+      await service.create(ALICE, {
+        title: 'Schedule dentist appointment and pick up prescription',
+      } as never);
+
+      const [created] = repository.create.mock.calls[0] as [Partial<TaskEntity>];
+
+      expect(created.l0Class).toBe('ERRAND');
+    });
+
+    it('honours an explicit l0Class when supplied by the caller', async () => {
+      await service.create(ALICE, {
+        title: 'Miscellaneous task',
+        l0Class: 'LEISURE',
+      } as never);
+
+      const [created] = repository.create.mock.calls[0] as [Partial<TaskEntity>];
+
+      expect(created.l0Class).toBe('LEISURE');
+    });
   });
 
   describe('update', () => {
@@ -433,6 +454,15 @@ describe('TaskService', () => {
       expect(result?.description).toBeNull();
       expect(result?.priority).toBe(3);
     });
+
+    it('clears automation notes when the user edits or clears description without specifying notes', async () => {
+      await setup([makeTask({ description: null, notes: 'Appended by inbox scan' })]);
+
+      const result = await service.update(ALICE, 'task-1', { description: 'User edited note' });
+
+      expect(result?.description).toBe('User edited note');
+      expect(result?.notes).toBeNull();
+    });
   });
 
   describe('complete', () => {
@@ -453,6 +483,14 @@ describe('TaskService', () => {
       await setup([makeTask()]);
 
       expect((await service.complete(ALICE, 'task-1', 45))?.actualMinutes).toBe(45);
+    });
+
+    it('populates l0Class on completion when the task row lacked one', async () => {
+      await setup([makeTask({ title: 'Morning gym workout and 5k run', l0Class: null })]);
+
+      const completed = await service.complete(ALICE, 'task-1');
+
+      expect(completed?.l0Class).toBe('EXERCISE');
     });
 
     it('is idempotent — re-completing keeps the original instant', async () => {

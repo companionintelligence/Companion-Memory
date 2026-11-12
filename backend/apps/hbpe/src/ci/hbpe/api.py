@@ -30,6 +30,7 @@ from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from ci.hbpe.pipeline.histogram_api import build_histogram
 from ci.telemetry import init_telemetry
@@ -352,3 +353,77 @@ async def trigger_pipeline(
     except Exception as e:
         log.exception("Failed to manually trigger HBPE pipeline")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── System 1 Fast Decision Model Endpoints ───────────────────────────────────
+
+
+class DecisionIngressRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=8000)
+
+
+class DecisionPassageItem(BaseModel):
+    id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=8000)
+
+
+class DecisionRerankRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000)
+    passages: list[DecisionPassageItem] = Field(default_factory=list, max_length=100)
+
+
+class DecisionL0Request(BaseModel):
+    title: str = Field(..., min_length=1, max_length=1000)
+    description: str | None = Field(default=None, max_length=4000)
+
+
+@app.post("/decision/ingress")
+async def decision_ingress(
+    body: DecisionIngressRequest,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Evaluate an incoming message or note using the System 1 Fast Decision Model
+    (or calibrated local fallback) for intent, actionable commitment, and
+    privacy sensitivity.
+    """
+    user_id = require_user_id(user_id)
+    from ci.hbpe.inference.decision_model import score_memory_ingress
+
+    scores = score_memory_ingress(body.text)
+    return {"user_id": user_id, **scores}
+
+
+@app.post("/decision/rerank")
+async def decision_rerank(
+    body: DecisionRerankRequest,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Rerank retrieval candidate passages using the System 1 Fast Decision Model's
+    relevance (`is_relevant`) and temporal freshness (`temporal_freshness`) heads.
+    """
+    user_id = require_user_id(user_id)
+    from ci.hbpe.inference.decision_model import rerank_passages
+
+    results = rerank_passages(
+        body.query, [{"id": p.id, "text": p.text} for p in body.passages]
+    )
+    return {"user_id": user_id, "results": results}
+
+
+@app.post("/decision/l0")
+async def decision_l0(
+    body: DecisionL0Request,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Classify an event or task into one of the 8 canonical L0_CLASSES using the
+    System 1 Fast Decision Model.
+    """
+    user_id = require_user_id(user_id)
+    from ci.hbpe.inference.decision_model import classify_l0_event
+
+    result = classify_l0_event(body.title, body.description)
+    return {"user_id": user_id, **result}
+

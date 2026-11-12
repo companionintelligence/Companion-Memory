@@ -65,8 +65,8 @@ this file.
 
 | Setting | Flag | Environment | Default |
 |---|---|---|---|
-| Appliance URL | `--server` | `CI_SERVER_URL` | `http://localhost:3030` |
-| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | none |
+| Appliance URL | `--server` | `CI_SERVER_URL` | `~/.config/ci/credentials.json` or `http://localhost:3030` |
+| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | `~/.config/ci/credentials.json` (via `ci login`) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, unknown stage), **1** a failure the appliance owns (5xx, an
@@ -406,6 +406,45 @@ Two implementation notes worth knowing:
   `search_index` backfill runs for hours, and a plain fetch waiting on the first
   byte would die on undici's 300-second headers timeout. The stream writes
   headers immediately and heartbeats every ten seconds.
+
+---
+
+## Authentication, Training, Dual-Engine Inference, and Audit
+
+### `login`, `logout`, `whoami`
+
+Headless authentication and credential persistence in `~/.config/ci/credentials.json` (mode `0600`, respecting `CI_CONFIG_DIR` and `XDG_CONFIG_HOME`):
+
+- `ci login --key <apiKey>`: verifies an existing API key against `GET /keys/check` (and resolves `{ me }` via GraphQL) before saving `{ serverUrl, apiKey }` to disk.
+- `ci login --username <email> --password <password> [--key-name <label>] [--capability <read|write|full>]`: fetches a cookie-less native CSRF token (`GET /authenticate/csrf`), authenticates (`POST /authenticate`), mints a scoped API key (`POST /keys`), and persists it locally.
+- `ci logout [--revoke]`: deletes `~/.config/ci/credentials.json` and, when `--revoke` is passed, revokes the active key on the appliance (`DELETE /keys/current`).
+- `ci whoami [--json]`: queries `{ me { id name email } }` and prints the authenticated user and target appliance URL.
+
+### `train run` / `train calibration` / `train rebuild-places`
+
+Operates the HBPE behavioral model and LoRA training pipeline over GraphQL (`ForecastResolver`):
+
+- `ci train run`: triggers `triggerHbpe`, enqueuing `hbpe-scheduled` (`fn:nightly:<userId>:manual`) on `hbpe-service` (which automatically executes cold-start `bootstrap` training when no checkpoint exists or the 6-step nightly pipeline + `hbpe-lora-train`).
+- `ci train calibration [--limit <n>]`: queries `predictionCalibration(limit)` and renders walk-forward Brier score, Expected Calibration Error (ECE), L0 Top-1 / L1 Top-3 accuracy, coverage, and drift flags.
+- `ci train rebuild-places`: triggers `rebuildPlaces` to re-cluster stay points and recompute recency-decayed Markov transition probabilities.
+
+### `inference tiers` / `inference decide` / `inference rank` / `inference forecast`
+
+Exercises both the Dual-Engine (System 1 / System 2) routing & decision endpoints (`ModelRoutingController`) and the HBPE behavioral forecasting resolvers (`ForecastResolver`):
+
+- `ci inference tiers [--plan] [--input-tokens <n>] [--reasoning <light|moderate|deep>] [--sensitive] [--prefer-on-device]`: lists `on-device` vs. `private-cloud` routing tiers and System 1 `ActionVectorArena` vector counts by category, or simulates a routing plan via `POST /model-routing/plan`.
+- `ci inference decide --state <text> [--type <noul|choice|score>] [--action <text>] [--candidates <c1,c2,...>] [--criteria <text>] [--engine <auto|contrastive|generative|hybrid>]`: executes a System 1 (`ActionVectorArena` cosine similarity), System 2 (generative LLM), or hybrid decision via `POST /model-routing/decide`.
+- `ci inference rank --query <text> --candidate <id:text> [--top-k <n>] [--engine <auto|contrastive|generative|hybrid>]`: ranks candidate actions/items via `POST /model-routing/rank`.
+- `ci inference forecast [--horizon <24h|48h>] [--week] [--due] [--places]`: queries live HBPE day-ahead 15-minute histograms, 7-day cluster occurrence forecasts, periodic renewal due lists, or stay-point next-place predictions.
+
+### `audit deltas` / `audit pipeline` / `audit dead-letters` / `audit jobs`
+
+Provides end-to-end auditability over entity evolution, the 37-stage enrichment ledger, dead-letter queues, and PgBoss jobs:
+
+- `ci audit deltas <entityId> [--change-type <created|updated|archived|deleted|merged>] [--from <iso>] [--to <iso>] [--limit <n>]`: inspects field-level `before`/`after` evolution history (`GET /audit/deltas`).
+- `ci audit pipeline`: renders the 37-stage `ci.pipeline_state` coverage, pending, failed, quarantined, and stale counts (`GET /pipeline/state`).
+- `ci audit dead-letters [--queue <name>] [--stage <name>] [--limit <n>]`: lists dead-lettered pipeline jobs and failure stack/error messages (`GET /pipeline/dead-letters`).
+- `ci audit jobs`: displays PgBoss engine health, per-queue active/queued/retry/failed/completed job counts, and registered cron schedules (`GET /jobs/dashboard`).
 
 ---
 

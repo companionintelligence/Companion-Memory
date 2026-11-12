@@ -125,3 +125,43 @@ export interface ForageTrialResponse {
   attention: ForageItem[];
   reads: ForageRead[];
 }
+
+export interface MemoryIngressDecisionResponse {
+  user_id: string;
+  intent: string;
+  intent_confidence: number;
+  intent_distribution: Record<string, number>;
+  is_commitment: boolean;
+  commitment_probability: number;
+  sensitivity: number;
+  sensitivity_distribution: Record<string, number>;
+  calibrated: boolean;
+}
+
+export interface DecisionPassageInput {
+  id: string;
+  text: string;
+}
+
+export interface DecisionRerankItem {
+  id: string;
+  score: number;
+  is_relevant: boolean;
+  relevance_probability: number;
+  temporal_freshness: number;
+  calibrated: boolean;
+}
+
+export interface DecisionRerankResponse {
+  user_id: string;
+  results: DecisionRerankItem[];
+}
+
+export interface L0ClassificationResponse {
+  user_id: string;
+  l0_class: string;
+  confidence: number;
+  distribution: Record<string, number>;
+  calibrated: boolean;
+}
+

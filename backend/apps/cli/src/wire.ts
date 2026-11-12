@@ -482,3 +482,242 @@ export interface IngestStatus {
   };
   at: string;
 }
+
+// ---------------------------------------------------------------------------
+// GET /authenticate/csrf, POST /authenticate, POST /keys, GET /keys/check,
+// DELETE /keys/current
+// Mirrors SessionController and ApiKeyController in domains/auth/controllers/
+// ---------------------------------------------------------------------------
+
+export interface AuthCsrfResponse {
+  csrfToken: string;
+}
+
+export interface AuthTokenResponse {
+  accessToken: string;
+}
+
+export interface ApiKeyCreatedResponse {
+  id: string;
+  name: string;
+  key: string;
+  keyPrefix: string;
+  capability: string;
+  scope: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export interface ApiKeyCheckResponse {
+  valid: boolean;
+  userId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// GET /model-routing/tiers, POST /model-routing/plan, POST /model-routing/decide,
+// POST /model-routing/rank, GET /model-routing/arena
+// Mirrors ModelRoutingController in domains/model-routing/controllers/ModelRoutingController.ts
+// ---------------------------------------------------------------------------
+
+export type InferenceTierName = 'on-device' | 'private-cloud';
+
+export interface ModelRoutingTierInfo {
+  tier: InferenceTierName;
+  description: string;
+  latency: string;
+  cost: string;
+  privacy: string;
+  defaultModels: Record<string, string>;
+}
+
+export interface ArenaStatusSummary {
+  size: number;
+  dimension: number;
+  builtAt: string | null;
+  byCategory: Record<string, number>;
+}
+
+export interface ModelRoutingTiersResponse {
+  tiers: ModelRoutingTierInfo[];
+  arena: ArenaStatusSummary;
+}
+
+export interface ModelRoutingPlanRequest {
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  reasoningDepth?: 'light' | 'moderate' | 'deep';
+  requiresSensitiveData?: boolean;
+  requiresStreaming?: boolean;
+  preferOnDevice?: boolean;
+  toolCallDepth?: number;
+}
+
+export interface ModelRoutingPlanResponse {
+  tier: InferenceTierName;
+  provider: string;
+  model: string;
+  reason: string;
+  fallback?: {
+    tier: InferenceTierName;
+    provider: string;
+    model: string;
+  };
+  estimatedLatencyMs: number;
+}
+
+export type DecisionType = 'noul' | 'choice' | 'score';
+export type DecisionEngineKind = 'auto' | 'contrastive' | 'generative' | 'hybrid';
+
+export interface DecisionRequest {
+  type: DecisionType;
+  state: string;
+  action?: string;
+  candidates?: string[];
+  criteria?: string;
+  engine?: DecisionEngineKind;
+  context?: Record<string, unknown>;
+}
+
+export interface DecisionResponse {
+  type: DecisionType;
+  engine: 'contrastive' | 'generative' | 'hybrid';
+  tier: InferenceTierName;
+  latencyMs: number;
+  confidence: number;
+  noul?: boolean;
+  selectedIndex?: number;
+  score?: number;
+  reasoning?: string;
+  contrastiveScore?: number;
+  generativeScore?: number;
+}
+
+export interface RankCandidateInput {
+  id: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RankRequest {
+  query: string;
+  candidates: RankCandidateInput[];
+  topK?: number;
+  engine?: DecisionEngineKind;
+}
+
+export interface RankedCandidateSummary {
+  id: string;
+  text: string;
+  score: number;
+  source: 'contrastive' | 'generative' | 'hybrid';
+  metadata?: Record<string, unknown>;
+}
+
+export interface RankResponse {
+  ranked: RankedCandidateSummary[];
+  engine: 'contrastive' | 'generative' | 'hybrid';
+  latencyMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// GET /audit/deltas, GET /pipeline/state, GET /pipeline/dead-letters,
+// GET /jobs/dashboard
+// Mirrors AuditController, PipelineController, and JobsController
+// ---------------------------------------------------------------------------
+
+export type DeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
+
+export interface EntityDeltaSummary {
+  id: string;
+  entityId: string;
+  entityType: string;
+  changeType: DeltaChangeType;
+  changedFields: Record<string, { before?: unknown; after?: unknown }>;
+  sourceType: string;
+  sourceId: string | null;
+  confidence: number | null;
+  occurredAt: string;
+}
+
+export interface EntityDeltasResponse {
+  entityId: string;
+  count: number;
+  deltas: EntityDeltaSummary[];
+}
+
+export interface PipelineStageSummary {
+  stage: string;
+  done: number;
+  pending: number;
+  failed: number;
+  quarantined: number;
+  stale: number;
+  avgAttempts: number;
+  coverage: number;
+}
+
+export interface PipelineStateResponse {
+  stages: PipelineStageSummary[];
+  summary: {
+    totalItems: number;
+    fullyProcessed: number;
+    withFailures: number;
+    quarantined: number;
+  };
+}
+
+export interface DeadLetterSummary {
+  id: string;
+  queueName: string;
+  jobId: string | null;
+  entityId: string | null;
+  entityType: string | null;
+  stage: string | null;
+  errorMessage: string;
+  attempts: number;
+  createdAt: string;
+  replayedAt: string | null;
+}
+
+export interface DeadLettersResponse {
+  count: number;
+  items: DeadLetterSummary[];
+}
+
+export interface JobQueueSummary {
+  name: string;
+  domain: string;
+  description: string;
+  counts: {
+    created: number;
+    retry: number;
+    active: number;
+    completed: number;
+    failed: number;
+  };
+}
+
+export interface CronScheduleSummary {
+  name: string;
+  cron: string;
+  domain: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface JobsDashboardResponse {
+  generatedAt: string;
+  engine: {
+    enabled: boolean;
+    started: boolean;
+  };
+  summary: {
+    totalQueues: number;
+    activeJobs: number;
+    queuedJobs: number;
+    failedJobs: number;
+    registeredCrons: number;
+  };
+  queues: JobQueueSummary[];
+  crons: CronScheduleSummary[];
+}

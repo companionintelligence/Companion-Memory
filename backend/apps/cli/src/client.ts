@@ -2,16 +2,32 @@ import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
 
 import type {
+  ApiKeyCheckResponse,
+  ApiKeyCreatedResponse,
+  AuthCsrfResponse,
+  AuthTokenResponse,
   DataSourceSummary,
+  DeadLettersResponse,
+  DecisionRequest,
+  DecisionResponse,
+  DeltaChangeType,
   DoctorCheckSummary,
   DoctorReport,
   DropSummary,
+  EntityDeltasResponse,
   InboxBatchResult,
   InboxScan,
   IngestStatus,
+  JobsDashboardResponse,
+  ModelRoutingPlanRequest,
+  ModelRoutingPlanResponse,
+  ModelRoutingTiersResponse,
   OrchestrateStage,
   OrchestrateSummary,
   PathRecognition,
+  PipelineStateResponse,
+  RankRequest,
+  RankResponse,
   RetryFailedPushResult,
   RunDetail,
   RunSummary,
@@ -91,10 +107,11 @@ export interface ClientOptions {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   form?: FormData;
   query?: Record<string, string | number | undefined>;
+  headers?: Record<string, string>;
 }
 
 /**
@@ -205,6 +222,89 @@ export class ImportApiClient {
 
   updateLlmEndpoint(settings: LlmEndpointUpdate): Promise<LlmEndpointConfig> {
     return this.request('/llm/endpoint', { method: 'PATCH', body: settings });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Authentication and API keys
+  // ---------------------------------------------------------------------------
+
+  getCsrfToken(): Promise<AuthCsrfResponse> {
+    return this.request('/authenticate/csrf');
+  }
+
+  authenticate(body: { username: string; password: string }, csrfToken: string): Promise<AuthTokenResponse> {
+    return this.request('/authenticate', {
+      method: 'POST',
+      body,
+      headers: { 'x-csrf-token': csrfToken },
+    });
+  }
+
+  createApiKey(
+    body: { name: string; capability?: 'read' | 'write' | 'full'; expiresInDays?: number },
+    bearerToken: string,
+  ): Promise<ApiKeyCreatedResponse> {
+    return this.request('/keys', {
+      method: 'POST',
+      body,
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }
+
+  checkApiKey(): Promise<ApiKeyCheckResponse> {
+    return this.request('/keys/check');
+  }
+
+  revokeCurrentApiKey(): Promise<{ ok: boolean; revokedId?: string }> {
+    return this.request('/keys/current', { method: 'DELETE' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dual-engine inference & model routing
+  // ---------------------------------------------------------------------------
+
+  getModelRoutingTiers(): Promise<ModelRoutingTiersResponse> {
+    return this.request('/model-routing/tiers');
+  }
+
+  planModelRouting(body: ModelRoutingPlanRequest): Promise<ModelRoutingPlanResponse> {
+    return this.request('/model-routing/plan', { method: 'POST', body });
+  }
+
+  decideModelRouting(body: DecisionRequest): Promise<DecisionResponse> {
+    return this.request('/model-routing/decide', { method: 'POST', body });
+  }
+
+  rankModelRouting(body: RankRequest): Promise<RankResponse> {
+    return this.request('/model-routing/rank', { method: 'POST', body });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audit, pipeline state, and jobs dashboard
+  // ---------------------------------------------------------------------------
+
+  getAuditDeltas(query: {
+    entityId: string;
+    changeType?: DeltaChangeType;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }): Promise<EntityDeltasResponse> {
+    return this.request('/audit/deltas', { query });
+  }
+
+  getPipelineState(): Promise<PipelineStateResponse> {
+    return this.request('/pipeline/state');
+  }
+
+  getDeadLetters(
+    query: { queue?: string; stage?: string; limit?: number } = {},
+  ): Promise<DeadLettersResponse> {
+    return this.request('/pipeline/dead-letters', { query });
+  }
+
+  getJobsDashboard(): Promise<JobsDashboardResponse> {
+    return this.request('/jobs/dashboard');
   }
 
   // ---------------------------------------------------------------------------
@@ -351,9 +451,9 @@ export class ImportApiClient {
       }
     }
 
-    const headers: Record<string, string> = { accept: 'application/json' };
+    const headers: Record<string, string> = { accept: 'application/json', ...options.headers };
 
-    if (this.options.apiKey) {
+    if (this.options.apiKey && !headers.authorization) {
       headers['x-api-key'] = this.options.apiKey;
     }
 
