@@ -51,11 +51,7 @@ import { pushCommand } from './commands/push';
 import { recognizeCommand } from './commands/recognize';
 import { runsCommand } from './commands/runs';
 import { statsCommand } from './commands/stats';
-import {
-  trainCalibrationCommand,
-  trainRebuildPlacesCommand,
-  trainRunCommand,
-} from './commands/train';
+import { trainCalibrationCommand, trainRebuildPlacesCommand, trainRunCommand } from './commands/train';
 import type { CliContext } from './context';
 import { MemoryGraphQLClient } from './graphqlClient';
 import type { Term } from './output';
@@ -297,15 +293,16 @@ export function buildProgram(deps: ProgramDeps): Command {
 
   inference
     .command('tiers')
-    .description('Show inference routing tiers and System 1 ActionVectorArena status, or simulate a routing plan')
-    .option('--plan', 'simulate a routing decision across on-device vs private-cloud tiers')
-    .option('--input-tokens <n>', 'estimated input tokens for routing simulation')
-    .option('--output-tokens <n>', 'estimated output tokens for routing simulation')
-    .option('--reasoning <depth>', 'reasoning depth: light, moderate, deep')
-    .option('--sensitive', 'mark workload as requiring sensitive personal data')
-    .option('--streaming', 'require token streaming')
-    .option('--prefer-on-device', 'prefer on-device execution when feasible')
+    .description(
+      'Show the on-device and private-cloud routing tiers and the ActionVectorArena size, or plan a task’s tier',
+    )
+    .option('--plan', 'plan which tier a task runs on (any of the options below implies it)')
+    .option('--input-tokens <n>', 'estimated prompt + context size, in tokens')
+    .option('--reasoning <level>', 'reasoning level: light, moderate, deep')
     .option('--tool-depth <n>', 'expected number of sequential tool calls')
+    .option('--large-context', 'the task needs a large context window')
+    .option('--sensitive', 'privacy pin: the task must not leave the appliance (overrides everything else)')
+    .option('--force-tier <tier>', 'override the tier: on_device or private_cloud (--sensitive still wins)')
     .option('--json', 'machine-readable output')
     .action((options) => inferenceTiersCommand(context(), options));
 
@@ -316,7 +313,10 @@ export function buildProgram(deps: ProgramDeps): Command {
     .requiredOption('--state <text>', 'current state or context description')
     .option('--action <text>', 'proposed action to evaluate (required when --type is noul)')
     .option('--candidates <list>', 'comma-separated choices (required when --type is choice)')
-    .option('--criteria <text>', 'scoring criteria (required when --type is score)')
+    .option(
+      '--criteria <list>',
+      'comma-separated poles to score, each optionally name:pole (required when --type is score)',
+    )
     .option('--engine <engine>', 'engine: auto (default), contrastive, generative, or hybrid')
     .option('--json', 'machine-readable output')
     .action((options) => inferenceDecideCommand(context(), options));
@@ -335,7 +335,7 @@ export function buildProgram(deps: ProgramDeps): Command {
   inference
     .command('forecast')
     .description('Query live HBPE behavioral forecasts (day-ahead histogram, week, due list, or next places)')
-    .option('--horizon <window>', 'day-ahead forecast horizon: 24h (default) or 48h')
+    .option('--horizon <window>', 'day-ahead forecast horizon; 24h is the only one HBPE serves')
     .option('--week', 'fetch 7-day cluster occurrence forecast instead of 15-min buckets')
     .option('--include-today', 'include today in --week forecast')
     .option('--due', 'fetch periodic behaviors coming due or overdue')
@@ -346,12 +346,12 @@ export function buildProgram(deps: ProgramDeps): Command {
     .action((options) => inferenceForecastCommand(context(), options));
 
   // ---------------------------------------------------------------------------
-  // Audit — Entity evolution deltas, 37-stage pipeline ledger, dead-letter queue, and jobs
+  // Audit — Entity evolution deltas, the pipeline ledger, dead-letter queue, and jobs
   // ---------------------------------------------------------------------------
 
   const audit = program
     .command('audit')
-    .description('Inspect entity change deltas, 37-stage pipeline coverage, dead-letter queues, and jobs');
+    .description('Inspect entity change deltas, pipeline stage coverage, dead-letter queues, and jobs');
 
   audit
     .command('deltas')
@@ -360,13 +360,13 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--change-type <type>', 'filter by change type: created, updated, archived, deleted, merged')
     .option('--from <iso>', 'start of time window (ISO-8601)')
     .option('--to <iso>', 'end of time window (ISO-8601)')
-    .option('--limit <n>', 'maximum deltas to return')
+    .option('--limit <n>', 'maximum deltas to return (at most 250) [120]')
     .option('--json', 'machine-readable output')
     .action((entityId: string, options) => auditDeltasCommand(context(), entityId, options));
 
   audit
     .command('pipeline')
-    .description('Show 37-stage ci.pipeline_state coverage, failures, and quarantined items')
+    .description('Show per-stage ci.pipeline_state coverage, failures, and quarantined rows')
     .option('--json', 'machine-readable output')
     .action((options) => auditPipelineCommand(context(), options));
 
@@ -375,13 +375,13 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('List dead-lettered pipeline jobs and failure reasons')
     .option('--queue <name>', 'filter by PgBoss queue name')
     .option('--stage <name>', 'filter by pipeline stage name')
-    .option('--limit <n>', 'maximum dead-letter records to return')
+    .option('--limit <n>', 'maximum dead-letter records to return (at most 200)')
     .option('--json', 'machine-readable output')
     .action((options) => auditDeadLettersCommand(context(), options));
 
   audit
     .command('jobs')
-    .description('Show PgBoss job queues, active/failed job counts, and registered cron schedules')
+    .description('Show pg-boss job counts and queues, and the cron schedules with their last runs')
     .option('--json', 'machine-readable output')
     .action((options) => auditJobsCommand(context(), options));
 

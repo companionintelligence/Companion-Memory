@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { DataSource } from 'typeorm';
 
 import type { RequestContext } from '@ci/common/context';
@@ -8,7 +11,7 @@ import type { CommunicationService, GraphQueryService } from '@ci/domains/memory
 import type { HbpeService, ForecastResponse } from '@ci/domains/predictions';
 
 import type { AgentMemoryService } from '../../services/AgentMemoryService';
-import { ForecastContextService } from '../../services/ForecastContextService';
+import { ForecastContextService, HBPE_SLOT_MINUTES } from '../../services/ForecastContextService';
 import type { MemoryCompactionService } from '../../services/MemoryCompactionService';
 import type { RecallService } from '../../services/RecallService';
 import { MemoryController } from '../MemoryController';
@@ -87,7 +90,32 @@ function forecast(): ForecastResponse {
   };
 }
 
-function makeHarness() {
+/**
+ * A day as HBPE's `/histogram` actually serves it: 96 slots, 15 minutes apart
+ * (`BUCKET_MINUTES` in hbpe/buckets.py), from a UTC midnight. `slotAt` decides
+ * each slot's distribution by its index.
+ */
+function hbpeDay(slotAt: (index: number) => Record<string, number>): ForecastResponse {
+  const start = Date.parse('2026-08-27T00:00:00.000Z');
+
+  return {
+    horizon: '24h',
+    generated_at: '2026-08-26T08:55:00.000Z',
+    system_status: 'OK',
+    buckets: Array.from({ length: 96 }, (_, index) => ({
+      bucket_index: index,
+      start_time: new Date(start + index * 15 * 60 * 1000).toISOString(),
+      l0_probs: slotAt(index),
+      l1_probs: {},
+      l2_probs: null,
+      q10: 0,
+      q50: 0.5,
+      q90: 1,
+    })),
+  };
+}
+
+function makeHarness(forecastPayload: () => ForecastResponse = forecast) {
   const userContextService = new UserContextService(
     undefined as unknown as GraphQueryService,
     undefined as unknown as DataSource,
@@ -98,7 +126,7 @@ function makeHarness() {
     .spyOn(userContextService, 'getUserContextForLLM')
     .mockImplementation(async () => userContextAt(totalEntities));
 
-  const hbpeService = { getForecast: jest.fn(async () => forecast()) } as unknown as HbpeService;
+  const hbpeService = { getForecast: jest.fn(async () => forecastPayload()) } as unknown as HbpeService;
   const featureService = { isFeatureEnabled: jest.fn(async () => true) } as unknown as FeatureService;
   const dataSource = {
     query: jest.fn(async () => [{ timezone: 'UTC' }]),
@@ -184,5 +212,65 @@ describe('MemoryController L0 GET /memory/context', () => {
     // Proof that the fixture really does move with the clock, so the byte-equality
     // assertion above is testing the fix and not an inert fixture.
     expect(atT1).not.toBe(atT0);
+  });
+});
+
+describe('the forecast block covers the day it is headed with', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  /**
+   * The slot width is a cross-language fact: HBPE decides it, the API only
+   * reads start times. Asserting it against the TypeScript constant alone would
+   * be vacuous, so the right-hand side is parsed out of the sidecar's source.
+   */
+  it('renders slots at the width HBPE emits them', () => {
+    const buckets = readFileSync(resolve(__dirname, '../../../../../../hbpe/src/ci/hbpe/buckets.py'), 'utf8');
+    const match = /^BUCKET_MINUTES = (\d+)$/m.exec(buckets);
+
+    expect(match).not.toBeNull();
+    expect(HBPE_SLOT_MINUTES).toBe(Number(match?.[1]));
+  });
+
+  it('puts all 24 hours of the L0 Day Ahead block in, one line per hour', async () => {
+    const harness = makeHarness(() => hbpeDay(() => ({ SLEEP: 1 })));
+    const { block } = await harness.controller.context({ userId: USER_ID } as RequestContext);
+    const hourLines = block.split('\n').filter((line) => line.startsWith('- ') && line.includes('SLEEP'));
+
+    // 24 slots of 15 minutes used to be the whole block: midnight to 6 AM.
+    expect(hourLines).toHaveLength(24);
+    expect(hourLines[0]).toBe('- 12:00 AM–1:00 AM: SLEEP 100%');
+    expect(hourLines[6]).toBe('- 6:00 AM–7:00 AM: SLEEP 100%');
+    expect(hourLines[23]).toBe('- 11:00 PM–12:00 AM: SLEEP 100%');
+  });
+
+  it('reports the share of the hour each label holds, not its first quarter', async () => {
+    // 09:00–10:00 is slots 36–39: WORK for three quarters, LEISURE for one.
+    const harness = makeHarness(() =>
+      hbpeDay((index): Record<string, number> => (index >= 36 && index <= 38 ? { WORK: 1 } : { LEISURE: 1 })),
+    );
+    const block = await harness.forecastContextService.getRestOfDayBlock(
+      { userId: USER_ID },
+      new Date('2026-08-27T00:00:00.000Z'),
+      { stable: true },
+    );
+
+    expect(block).toContain('- 9:00 AM–10:00 AM: WORK 75%');
+    expect(block).toContain('- 10:00 AM–11:00 AM: LEISURE 100%');
+  });
+
+  it('drops a slot from the rest of the day once its 15 minutes are over', async () => {
+    const harness = makeHarness(() => hbpeDay(() => ({ WORK: 1 })));
+    // 09:20: the 09:00 slot ended at 09:15, the 09:15 slot runs to 09:30.
+    const block = await harness.forecastContextService.getRestOfDayBlock(
+      { userId: USER_ID },
+      new Date('2026-08-27T09:20:00.000Z'),
+    );
+    const hourLines = block.split('\n').filter((line) => line.startsWith('- '));
+
+    expect(hourLines[0]).toBe('- 9:15 AM–10:00 AM: WORK 100%');
+    expect(hourLines.at(-1)).toBe('- 11:00 PM–12:00 AM: WORK 100%');
   });
 });

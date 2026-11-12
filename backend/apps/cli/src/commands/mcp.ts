@@ -19,18 +19,106 @@ export interface HostHookBundle {
   lifecycleHooks: Record<string, unknown>;
 }
 
+export interface McpInitHooksIO {
+  /** HTTP implementation for the API-root probe; defaults to global `fetch`. */
+  fetchImpl?: typeof fetch;
+  /** Per-probe timeout. */
+  probeTimeoutMs?: number;
+}
+
+/** Where the API's own routes are, and how that was decided. */
+export interface ApiRoot {
+  url: string;
+  /** `assumed`: neither probe answered like the API, so `url` is `--server` unchanged. */
+  via: 'api' | 'gateway' | 'assumed';
+}
+
+const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Find the API's routes from the URL the CLI was given.
+ *
+ * Every other command treats `--server` as the API itself (`localhost:3030`
+ * by default). A hook config is different: it is pasted into an agent host and
+ * runs later, and a production appliance publishes only its gateway (`:8642`
+ * or a public hostname). The gateway serves the API under `/api/` and the web
+ * app everywhere else, so an unprefixed `GET /memory/context` there is
+ * answered by the SPA with `index.html` and a 200. A SessionStart hook does
+ * `curl -f` on it, injects the page into the agent's context, and reports
+ * success.
+ *
+ * `GET /health` tells the two apart without a key. The API answers JSON with
+ * `status: "ok"` (it is the liveness probe, so it does not fail when a
+ * dependency is down); the gateway's SPA answers HTML.
+ */
+export async function resolveApiRoot(
+  baseUrl: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<ApiRoot> {
+  const base = baseUrl.replace(/\/+$/, '');
+
+  if (await answersAsApi(`${base}/health`, fetchImpl, timeoutMs)) {
+    return { url: base, via: 'api' };
+  }
+
+  if (await answersAsApi(`${base}/api/health`, fetchImpl, timeoutMs)) {
+    return { url: `${base}/api`, via: 'gateway' };
+  }
+
+  return { url: base, via: 'assumed' };
+}
+
+async function answersAsApi(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<boolean> {
+  try {
+    const response = await fetchImpl(url, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const body = (await response.json()) as { status?: unknown } | null;
+
+    return body?.status === 'ok';
+  } catch {
+    // Unreachable, timed out, or not JSON (the SPA's index.html): not the API.
+    return false;
+  }
+}
+
 /**
  * `ci mcp init-hooks` — emit ready-to-paste MCP server + lifecycle hook
  * configurations (`knowl` zero-touch lifecycle pattern) for Claude Code,
  * Cursor, and Gemini / Antigravity.
+ *
+ * The hook URLs are built on {@link resolveApiRoot}, not on `--server` as
+ * given, so they carry `/api` exactly when the URL is the gateway.
  */
-export async function mcpInitHooksCommand(ctx: CliContext, options: McpInitHooksOptions = {}): Promise<void> {
+export async function mcpInitHooksCommand(
+  ctx: CliContext,
+  options: McpInitHooksOptions = {},
+  io: McpInitHooksIO = {},
+): Promise<void> {
   const hostFilter = (options.host ?? 'all').trim().toLowerCase();
   if (!['all', 'claude-code', 'cursor', 'gemini'].includes(hostFilter)) {
     throw new CliError('--host must be one of: all, claude-code, cursor, gemini');
   }
 
   const baseUrl = ctx.client.baseUrl.replace(/\/+$/, '');
+  const apiRoot = await resolveApiRoot(baseUrl, io.fetchImpl ?? fetch, io.probeTimeoutMs ?? PROBE_TIMEOUT_MS);
+
+  if (apiRoot.via === 'assumed') {
+    // stderr, so `--json` stays one parseable document on stdout.
+    ctx.term.err(
+      `[ci mcp] Neither ${baseUrl}/health nor ${baseUrl}/api/health answered like the API, so the hook URLs ` +
+        `assume ${baseUrl} is the API itself. Behind the gateway they need /api: re-run with the appliance up.`,
+    );
+  }
+
+  const memoryUrl = `${apiRoot.url}/memory`;
   const envBlock = {
     CI_SERVER_URL: baseUrl,
     CI_API_KEY: ctx.client.apiKey ?? '${CI_API_KEY}',
@@ -58,7 +146,7 @@ export async function mcpInitHooksCommand(ctx: CliContext, options: McpInitHooks
               hooks: [
                 {
                   type: 'command',
-                  command: `curl -fsSL -H "x-api-key: \${CI_API_KEY}" "${baseUrl}/memory/context"`,
+                  command: `curl -fsSL -H "x-api-key: \${CI_API_KEY}" "${memoryUrl}/context"`,
                 },
               ],
             },
@@ -69,7 +157,7 @@ export async function mcpInitHooksCommand(ctx: CliContext, options: McpInitHooks
               hooks: [
                 {
                   type: 'command',
-                  command: `git diff --name-only HEAD | jq -R -s '{changedPaths: (split("\\n") | map(select(length > 0)))}' | curl -fsSL -X POST -H "content-type: application/json" -H "x-api-key: \${CI_API_KEY}" -d @- "${baseUrl}/memory/drift"`,
+                  command: `git diff --name-only HEAD | jq -R -s '{changedPaths: (split("\\n") | map(select(length > 0)))}' | curl -fsSL -X POST -H "content-type: application/json" -H "x-api-key: \${CI_API_KEY}" -d @- "${memoryUrl}/drift"`,
                 },
               ],
             },
@@ -103,10 +191,10 @@ export async function mcpInitHooksCommand(ctx: CliContext, options: McpInitHooks
         },
       },
       lifecycleHooks: {
-        sessionStart: `${baseUrl}/memory/context`,
-        preTurnRecall: `${baseUrl}/memory/recall`,
-        postTurnWrite: `${baseUrl}/memory/turn`,
-        postCommitDrift: `${baseUrl}/memory/drift`,
+        sessionStart: `${memoryUrl}/context`,
+        preTurnRecall: `${memoryUrl}/recall`,
+        postTurnWrite: `${memoryUrl}/turn`,
+        postCommitDrift: `${memoryUrl}/drift`,
       },
     },
   ];
@@ -196,7 +284,13 @@ export async function mcpServeCommand(
         body: line,
       });
 
-      if (response.status === 404 && !sessionId && endpoint === `${baseUrl}/mcp`) {
+      // The gateway serves the SPA at `/mcp`, and nginx answers a POST to a
+      // static file with 405, not 404. Both mean "not the API: try /api/mcp".
+      if (
+        (response.status === 404 || response.status === 405) &&
+        !sessionId &&
+        endpoint === `${baseUrl}/mcp`
+      ) {
         const fallbackEndpoint = `${baseUrl}/api/mcp`;
         const fallbackResponse = await fetchImpl(fallbackEndpoint, {
           method: 'POST',

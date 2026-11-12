@@ -4,13 +4,13 @@ import { basename } from 'node:path';
 import type {
   ApiKeyCheckResponse,
   ApiKeyCreatedResponse,
+  ArenaStats,
+  AuditDeltasQuery,
   AuthCsrfResponse,
   AuthTokenResponse,
   DataSourceSummary,
-  DeadLettersResponse,
   DecisionRequest,
   DecisionResponse,
-  DeltaChangeType,
   DoctorCheckSummary,
   DoctorReport,
   DropSummary,
@@ -19,16 +19,17 @@ import type {
   InboxScan,
   IngestStatus,
   JobsDashboardResponse,
-  ModelRoutingPlanRequest,
-  ModelRoutingPlanResponse,
   ModelRoutingTiersResponse,
   OrchestrateStage,
   OrchestrateSummary,
   PathRecognition,
+  PipelineDeadLettersResponse,
   PipelineStateResponse,
   RankRequest,
   RankResponse,
   RetryFailedPushResult,
+  RoutingDecision,
+  RoutingRequest,
   RunDetail,
   RunSummary,
   SourceCatalogEntry,
@@ -127,10 +128,12 @@ interface RequestOptions {
  * equivalent: they are the same `ImportRunService.startRun` call, in the same
  * process, against the same queue.
  *
- * The paths carry no `/api` prefix because the API has no global one. The
- * streaming orchestration call carries `/api` literally because that route
- * declares it itself; ingest status lives on the authenticated `/v1` lifecycle
- * surface.
+ * The paths carry no `/api` prefix because the API has no global one: they are
+ * the API's own routes, which is what `--server` names (`localhost:3030` by
+ * default). The gateway publishes the same routes under `/api/` and strips the
+ * prefix before forwarding, so a gateway URL is not a `--server` this client
+ * can use (the SPA answers the unprefixed paths). Ingest status lives on the
+ * authenticated `/v1` lifecycle surface.
  */
 export class ImportApiClient {
   private readonly fetchImpl: typeof fetch;
@@ -267,7 +270,11 @@ export class ImportApiClient {
     return this.request('/model-routing/tiers');
   }
 
-  planModelRouting(body: ModelRoutingPlanRequest): Promise<ModelRoutingPlanResponse> {
+  getModelRoutingArena(): Promise<ArenaStats> {
+    return this.request('/model-routing/arena');
+  }
+
+  planModelRouting(body: RoutingRequest): Promise<RoutingDecision> {
     return this.request('/model-routing/plan', { method: 'POST', body });
   }
 
@@ -283,14 +290,8 @@ export class ImportApiClient {
   // Audit, pipeline state, and jobs dashboard
   // ---------------------------------------------------------------------------
 
-  getAuditDeltas(query: {
-    entityId: string;
-    changeType?: DeltaChangeType;
-    from?: string;
-    to?: string;
-    limit?: number;
-  }): Promise<EntityDeltasResponse> {
-    return this.request('/audit/deltas', { query });
+  getAuditDeltas(query: AuditDeltasQuery): Promise<EntityDeltasResponse> {
+    return this.request('/audit/deltas', { query: { ...query } });
   }
 
   getPipelineState(): Promise<PipelineStateResponse> {
@@ -299,7 +300,7 @@ export class ImportApiClient {
 
   getDeadLetters(
     query: { queue?: string; stage?: string; limit?: number } = {},
-  ): Promise<DeadLettersResponse> {
+  ): Promise<PipelineDeadLettersResponse> {
     return this.request('/pipeline/dead-letters', { query });
   }
 
@@ -373,7 +374,7 @@ export class ImportApiClient {
     stages: OrchestrateStage[] | undefined,
     options: { abortOnError?: boolean; onLine?: (line: Record<string, unknown>) => void } = {},
   ): Promise<OrchestrateSummary> {
-    const url = new URL('/api/maintenance/orchestrate', this.options.baseUrl);
+    const url = new URL('/maintenance/orchestrate', this.options.baseUrl);
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       accept: 'application/x-ndjson',
@@ -402,7 +403,7 @@ export class ImportApiClient {
       throw new ApiError(
         response.status,
         await describeFailure(response, Boolean(this.options.apiKey)),
-        '/api/maintenance/orchestrate',
+        '/maintenance/orchestrate',
       );
     }
 
@@ -418,7 +419,7 @@ export class ImportApiClient {
           totalDurationMs: line.totalDurationMs,
         } as OrchestrateSummary;
       } else if (line.type === 'error') {
-        throw new ApiError(500, String(line.error), '/api/maintenance/orchestrate');
+        throw new ApiError(500, String(line.error), '/maintenance/orchestrate');
       } else {
         options.onLine?.(line);
       }
@@ -431,7 +432,7 @@ export class ImportApiClient {
       throw new ApiError(
         502,
         'The orchestration stream ended before it reported a result — the appliance may have restarted.',
-        '/api/maintenance/orchestrate',
+        '/maintenance/orchestrate',
       );
     }
 

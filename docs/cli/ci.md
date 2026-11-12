@@ -194,6 +194,23 @@ Preserves the `Mcp-Session-Id` header across requests, unpacks both
 `DELETE` to close the remote MCP session when stdin closes. See
 [`docs/mcp/clients.md`](../mcp/clients.md).
 
+The fallback also fires on a **405**: the gateway serves the web app at `/mcp`,
+and nginx answers a POST to a static file with 405 rather than 404.
+
+### `mcp init-hooks [--host <all|claude-code|cursor|gemini>] [--json]`
+
+Prints ready-to-paste MCP server and lifecycle-hook configs: a `SessionStart`
+hook that fetches `/memory/context` and a `Stop` hook that posts the changed
+files to `/memory/drift` (detection only; it does not mark anything).
+
+The hooks run later, from wherever they are pasted, so their URLs must reach the
+API's own routes. Before printing, the command asks `GET <server>/health` and
+then `GET <server>/api/health`, and uses whichever answers as the API: the API's
+own port keeps `/memory/...`, a gateway URL gets `/api/memory/...`. Without that
+the gateway's web app answers `/memory/context` with its `index.html` and a 200,
+which a `curl -f` hook would hand to the agent as context. When neither probe
+answers, the URLs use `--server` as given and a warning goes to stderr.
+
 ### `datasources [--catalog] [--json]`
 
 The registered importers — **71** of them (`datasources/index.ts` is the barrel;
@@ -392,7 +409,7 @@ drop without saying so.
 
 ### `backfill [stages...] [--list] [--abort-on-error] [--json]`
 
-The post-import enrichment chain, via `POST /api/maintenance/orchestrate`.
+The post-import enrichment chain, via `POST /maintenance/orchestrate` (`/api/maintenance/orchestrate` through the gateway).
 Fail-soft by default — a geocoder that cannot reach its provider should not cost
 you the embeddings.
 
@@ -432,19 +449,22 @@ Operates the HBPE behavioral model and LoRA training pipeline over GraphQL (`For
 
 Exercises both the Dual-Engine (System 1 / System 2) routing & decision endpoints (`ModelRoutingController`) and the HBPE behavioral forecasting resolvers (`ForecastResolver`):
 
-- `ci inference tiers [--plan] [--input-tokens <n>] [--reasoning <light|moderate|deep>] [--sensitive] [--prefer-on-device]`: lists `on-device` vs. `private-cloud` routing tiers and System 1 `ActionVectorArena` vector counts by category, or simulates a routing plan via `POST /model-routing/plan`.
-- `ci inference decide --state <text> [--type <noul|choice|score>] [--action <text>] [--candidates <c1,c2,...>] [--criteria <text>] [--engine <auto|contrastive|generative|hybrid>]`: executes a System 1 (`ActionVectorArena` cosine similarity), System 2 (generative LLM), or hybrid decision via `POST /model-routing/decide`.
-- `ci inference rank --query <text> --candidate <id:text> [--top-k <n>] [--engine <auto|contrastive|generative|hybrid>]`: ranks candidate actions/items via `POST /model-routing/rank`.
-- `ci inference forecast [--horizon <24h|48h>] [--week] [--due] [--places]`: queries live HBPE day-ahead 15-minute histograms, 7-day cluster occurrence forecasts, periodic renewal due lists, or stay-point next-place predictions.
+- `ci inference tiers`: lists the `on_device` and `private_cloud` tier profiles (title, context window, offline, whether the tier leaves the appliance) from `GET /model-routing/tiers`, and how many candidate vectors the `ActionVectorArena` holds (`GET /model-routing/arena`, which reports only that count).
+- `ci inference tiers [--plan] [--input-tokens <n>] [--reasoning <light|moderate|deep>] [--tool-depth <n>] [--large-context] [--sensitive] [--force-tier <on_device|private_cloud>]`: plans which tier one task runs on (`POST /model-routing/plan`) and prints the tier, the reasons, and whether the task was `downgraded`. `--sensitive` is the privacy pin (`localOnly`): it keeps the task on the appliance whatever else is asked, including `--force-tier private_cloud`. Any of these options implies `--plan`. The planner strips fields it does not know, so the CLI sends only the ones it reads.
+- `ci inference decide --state <text> [--type <noul|choice|score>] [--action <text>] [--candidates <c1,c2,...>] [--criteria <pole,name:pole,...>] [--engine <auto|contrastive|generative|hybrid>]`: runs one decision primitive via `POST /model-routing/decide`. `noul` needs `--action` and answers whether it applies, with its probability; `choice` needs at least two `--candidates` and prints each one's probability; `score` needs `--criteria`, a comma-separated rubric of poles (each optionally `name:pole`), and prints the weighted score and each criterion's probability. `engine disabled` means both engines are switched off in Settings and the answer is a neutral default.
+- `ci inference rank --query <text> --candidate <id:text> [--top-k <n>] [--engine <auto|contrastive|generative|hybrid>]`: ranks candidate actions/items via `POST /model-routing/rank`, with each one's score and probability and how many candidate embeddings the arena already held.
+- `ci inference forecast [--horizon 24h] [--week] [--due] [--places]`: queries live HBPE day-ahead 15-minute histograms (`24h` is the only horizon HBPE serves), 7-day cluster occurrence forecasts, periodic renewal due lists, or stay-point next-place predictions.
+
+The requests these commands send and the responses their tests render are the files under `backend/apps/cli/src/__tests__/fixtures/wire/`. The API's `cliWireContract.test.ts` suites check those files against the real route schemas and controllers, so the CLI's tests cannot drift from the server unnoticed again.
 
 ### `audit deltas` / `audit pipeline` / `audit dead-letters` / `audit jobs`
 
-Provides end-to-end auditability over entity evolution, the 37-stage enrichment ledger, dead-letter queues, and PgBoss jobs:
+Provides end-to-end auditability over entity evolution, the enrichment ledger, dead-letter queues, and pg-boss jobs:
 
-- `ci audit deltas <entityId> [--change-type <created|updated|archived|deleted|merged>] [--from <iso>] [--to <iso>] [--limit <n>]`: inspects field-level `before`/`after` evolution history (`GET /audit/deltas`).
-- `ci audit pipeline`: renders the 37-stage `ci.pipeline_state` coverage, pending, failed, quarantined, and stale counts (`GET /pipeline/state`).
-- `ci audit dead-letters [--queue <name>] [--stage <name>] [--limit <n>]`: lists dead-lettered pipeline jobs and failure stack/error messages (`GET /pipeline/dead-letters`).
-- `ci audit jobs`: displays PgBoss engine health, per-queue active/queued/retry/failed/completed job counts, and registered cron schedules (`GET /jobs/dashboard`).
+- `ci audit deltas <entityId> [--change-type <created|updated|archived|deleted|merged>] [--from <iso>] [--to <iso>] [--limit <n>]`: lists the entity's field-level changes, newest first (`GET /audit/deltas`, at most 250 per call). `--from` / `--to` go out as the route's `since` / `until`.
+- `ci audit pipeline`: renders each stage's `ci.pipeline_state` coverage, with done, skipped, pending, running, failed, quarantined, and stale counts (`GET /pipeline/state`). The counts are ledger rows, not source rows: a stage that has never run shows 0.
+- `ci audit dead-letters [--queue <name>] [--stage <name>] [--limit <n>]`: lists one page of dead-lettered pipeline jobs, newest first, with the first line of each error (`GET /pipeline/dead-letters`, at most 200 per page; `--json` carries the payloads and full errors).
+- `ci audit jobs`: displays pg-boss job counts (pending, active, retry, failed, dead-lettered, completed, cancelled), each queue with its live jobs and retry policy, and every cron schedule with its last run, last success, and state (`GET /jobs/dashboard`).
 
 ---
 

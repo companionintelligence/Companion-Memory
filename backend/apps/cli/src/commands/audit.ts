@@ -1,12 +1,14 @@
 import { CliError, type CliContext } from '../context';
 import { json, stamp, table } from '../output';
-import type {
-   CronScheduleSummary,
-  DeadLetterSummary,
-  DeltaChangeType,
-  EntityDeltaSummary,
-  JobQueueSummary,
-  PipelineStageSummary,
+import {
+  MAX_AUDIT_DELTAS,
+  MAX_DEAD_LETTER_PAGE,
+  type CronScheduleSummary,
+  type DeltaChangeType,
+  type EntityDeltaSummary,
+  type JobQueueSummary,
+  type PipelineDeadLetter,
+  type StageCoverage,
 } from '../wire';
 
 export interface AuditDeltasOptions {
@@ -32,16 +34,14 @@ export interface AuditJobsOptions {
   json?: boolean;
 }
 
-const VALID_CHANGE_TYPES = new Set<DeltaChangeType>([
-  'created',
-  'updated',
-  'archived',
-  'deleted',
-  'merged',
-]);
+const VALID_CHANGE_TYPES = new Set<DeltaChangeType>(['created', 'updated', 'archived', 'deleted', 'merged']);
 
 /**
- * Inspect the chronological field-level evolution ledger (`GET /audit/deltas`) for an entity.
+ * Inspect the field-level change ledger for one entity (`GET /audit/deltas`).
+ *
+ * `--from` / `--to` are sent as `since` / `until`, the names the route reads.
+ * Its query schema drops keys it does not know, so a window under any other
+ * name came back unfiltered and looked like an answer.
  */
 export async function auditDeltasCommand(
   ctx: CliContext,
@@ -66,12 +66,14 @@ export async function auditDeltasCommand(
     changeType = raw;
   }
 
-  const limit = parseOptionalPositiveInt(options.limit, '--limit');
+  const since = parseOptionalInstant(options.from, '--from');
+  const until = parseOptionalInstant(options.to, '--to');
+  const limit = parseOptionalPositiveInt(options.limit, '--limit', MAX_AUDIT_DELTAS);
   const response = await ctx.client.getAuditDeltas({
     entityId: trimmedId,
     ...(changeType ? { changeType } : {}),
-    ...(options.from ? { from: options.from } : {}),
-    ...(options.to ? { to: options.to } : {}),
+    ...(since ? { since } : {}),
+    ...(until ? { until } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
 
@@ -81,23 +83,25 @@ export async function auditDeltasCommand(
     return;
   }
 
-  ctx.term.out(`entity  ${response.entityId} (${response.count} delta${response.count === 1 ? '' : 's'})`);
+  const { deltas, stats } = response.data;
+
+  ctx.term.out(
+    `entity  ${response.data.entityId} (${stats.total} delta${stats.total === 1 ? '' : 's'}, newest first)`,
+  );
   ctx.term.out(
     table<EntityDeltaSummary>(
-      response.deltas,
+      deltas,
       [
-        { header: 'WHEN', value: (d) => stamp(d.occurredAt) },
+        { header: 'WHEN', value: (d) => stamp(d.changedAt) },
         { header: 'CHANGE', value: (d) => d.changeType },
-        { header: 'TYPE', value: (d) => d.entityType },
-        { header: 'SOURCE', value: (d) => d.sourceType },
         {
-          header: 'CONF',
-          align: 'right',
-          value: (d) => (d.confidence != null ? `${(d.confidence * 100).toFixed(0)}%` : '-'),
+          header: 'TYPE',
+          value: (d) => (d.nodeType === 'relationship' ? d.relationshipType : d.entityType) ?? d.nodeType,
         },
+        { header: 'SOURCE', value: (d) => d.changeSource ?? '-' },
         {
           header: 'CHANGED FIELDS',
-          value: (d) => Object.keys(d.changedFields ?? {}).join(', ') || '-',
+          value: (d) => d.fieldChanges.map((change) => change.field).join(', ') || '-',
         },
       ],
       '(no audit deltas recorded for this entity)',
@@ -106,7 +110,10 @@ export async function auditDeltasCommand(
 }
 
 /**
- * Inspect the 37-stage `ci.pipeline_state` coverage and quarantine ledger (`GET /pipeline/state`).
+ * Per-stage coverage of the `ci.pipeline_state` ledger (`GET /pipeline/state`).
+ *
+ * `total` counts LEDGER ROWS, not source rows: a stage that has never run
+ * shows 0 rows and 0%, which is not the same as "0% of your data".
  */
 export async function auditPipelineCommand(
   ctx: CliContext,
@@ -120,25 +127,29 @@ export async function auditPipelineCommand(
     return;
   }
 
-  const s = state.summary;
+  const { stages } = state;
+
+  const sum = (key: 'failed' | 'quarantined' | 'stale') => stages.reduce((total, s) => total + s[key], 0);
 
   ctx.term.out(
-    `items   total=${s.totalItems}  fully_processed=${s.fullyProcessed}  ` +
-      `with_failures=${s.withFailures}  quarantined=${s.quarantined}`,
+    `stages  ${stages.length}  failed=${sum('failed')}  quarantined=${sum('quarantined')}  stale=${sum('stale')}`,
   );
   ctx.term.out('');
   ctx.term.out(
-    table<PipelineStageSummary>(
-      state.stages,
+    table<StageCoverage>(
+      stages,
       [
-        { header: 'STAGE', value: (r) => r.stage },
-        { header: 'COVERAGE', align: 'right', value: (r) => `${(r.coverage * 100).toFixed(1)}%` },
-        { header: 'DONE', align: 'right', value: (r) => String(r.done) },
-        { header: 'PENDING', align: 'right', value: (r) => String(r.pending) },
-        { header: 'FAILED', align: 'right', value: (r) => String(r.failed) },
-        { header: 'QUARANTINED', align: 'right', value: (r) => String(r.quarantined) },
-        { header: 'STALE', align: 'right', value: (r) => String(r.stale) },
-        { header: 'AVG ATTEMPTS', align: 'right', value: (r) => r.avgAttempts.toFixed(1) },
+        { header: 'STAGE', value: (s) => s.stage },
+        { header: 'VERSION', align: 'right', value: (s) => String(s.stageVersion) },
+        { header: 'COVERAGE', align: 'right', value: (s) => `${(s.coverage * 100).toFixed(1)}%` },
+        { header: 'ROWS', align: 'right', value: (s) => String(s.total) },
+        { header: 'DONE', align: 'right', value: (s) => String(s.done) },
+        { header: 'SKIPPED', align: 'right', value: (s) => String(s.skipped) },
+        { header: 'PENDING', align: 'right', value: (s) => String(s.pending) },
+        { header: 'RUNNING', align: 'right', value: (s) => String(s.running) },
+        { header: 'FAILED', align: 'right', value: (s) => String(s.failed) },
+        { header: 'QUARANTINED', align: 'right', value: (s) => String(s.quarantined) },
+        { header: 'STALE', align: 'right', value: (s) => String(s.stale) },
       ],
       '(no pipeline stages recorded)',
     ),
@@ -146,37 +157,40 @@ export async function auditPipelineCommand(
 }
 
 /**
- * Inspect dead-lettered pipeline jobs (`GET /pipeline/dead-letters`).
+ * One page of dead-lettered pipeline jobs, newest first
+ * (`GET /pipeline/dead-letters`). The route returns a page, not a count.
  */
 export async function auditDeadLettersCommand(
   ctx: CliContext,
   options: AuditDeadLettersOptions = {},
 ): Promise<void> {
-  const limit = parseOptionalPositiveInt(options.limit, '--limit');
-  const response = await ctx.client.getDeadLetters({
+  const limit = parseOptionalPositiveInt(options.limit, '--limit', MAX_DEAD_LETTER_PAGE);
+  const page = await ctx.client.getDeadLetters({
     ...(options.queue ? { queue: options.queue } : {}),
     ...(options.stage ? { stage: options.stage } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
 
   if (options.json) {
-    json(ctx.term, response);
+    json(ctx.term, page);
 
     return;
   }
 
-  ctx.term.out(`dead letters  ${response.count}`);
+  const { deadLetters } = page;
+
+  ctx.term.out(`dead letters  ${deadLetters.length} shown, newest first`);
   ctx.term.out(
-    table<DeadLetterSummary>(
-      response.items,
+    table<PipelineDeadLetter>(
+      deadLetters,
       [
-        { header: 'WHEN', value: (d) => stamp(d.createdAt) },
-        { header: 'QUEUE', value: (d) => d.queueName },
+        { header: 'FAILED', value: (d) => stamp(d.failedAt) },
+        { header: 'QUEUE', value: (d) => d.queue },
+        { header: 'EVENT', value: (d) => d.eventName },
         { header: 'STAGE', value: (d) => d.stage ?? '-' },
         { header: 'ENTITY', value: (d) => d.entityId ?? '-' },
-        { header: 'ATTEMPTS', align: 'right', value: (d) => String(d.attempts) },
         { header: 'REPLAYED', value: (d) => (d.replayedAt ? stamp(d.replayedAt) : '-') },
-        { header: 'ERROR', value: (d) => d.errorMessage.slice(0, 60) },
+        { header: 'ERROR', value: (d) => firstLine(d.error).slice(0, 60) },
       ],
       '(no dead-lettered jobs)',
     ),
@@ -184,7 +198,7 @@ export async function auditDeadLettersCommand(
 }
 
 /**
- * Inspect PgBoss job queues and registered cron schedules (`GET /jobs/dashboard`).
+ * pg-boss job counts, queues and the Nest `@Cron` schedules (`GET /jobs/dashboard`).
  */
 export async function auditJobsCommand(ctx: CliContext, options: AuditJobsOptions = {}): Promise<void> {
   const dashboard = await ctx.client.getJobsDashboard();
@@ -195,24 +209,30 @@ export async function auditJobsCommand(ctx: CliContext, options: AuditJobsOption
     return;
   }
 
+  const s = dashboard.summary;
+
   ctx.term.out(
-    `engine  enabled=${dashboard.engine.enabled}  started=${dashboard.engine.started}  ` +
-      `queues=${dashboard.summary.totalQueues}  active=${dashboard.summary.activeJobs}  ` +
-      `queued=${dashboard.summary.queuedJobs}  failed=${dashboard.summary.failedJobs}  ` +
-      `crons=${dashboard.summary.registeredCrons}`,
+    `jobs  pending=${s.pending}  active=${s.active}  retry=${s.retry}  failed=${s.failed}  ` +
+      `dead-lettered=${s.deadLettered}  completed=${s.completed}  cancelled=${s.cancelled}`,
   );
+
+  // Live counts come per queue NAME, for the busiest ten; every other queue has none in flight.
+  const live = new Map(dashboard.queueDistribution.map((entry) => [entry.queue, entry.count]));
+
   ctx.term.out('');
   ctx.term.out(
     table<JobQueueSummary>(
       dashboard.queues,
       [
         { header: 'QUEUE', value: (q) => q.name },
-        { header: 'DOMAIN', value: (q) => q.domain },
-        { header: 'ACTIVE', align: 'right', value: (q) => String(q.counts.active) },
-        { header: 'QUEUED', align: 'right', value: (q) => String(q.counts.created) },
-        { header: 'RETRY', align: 'right', value: (q) => String(q.counts.retry) },
-        { header: 'FAILED', align: 'right', value: (q) => String(q.counts.failed) },
-        { header: 'COMPLETED', align: 'right', value: (q) => String(q.counts.completed) },
+        { header: 'LIVE', align: 'right', value: (q) => String(live.get(q.name) ?? 0) },
+        { header: 'POLICY', value: (q) => q.policy ?? '-' },
+        {
+          header: 'RETRIES',
+          align: 'right',
+          value: (q) => (q.retryLimit == null ? 'default' : String(q.retryLimit)),
+        },
+        { header: 'DEAD LETTER', value: (q) => q.deadLetter ?? '-' },
       ],
       '(no queues registered)',
     ),
@@ -222,16 +242,66 @@ export async function auditJobsCommand(ctx: CliContext, options: AuditJobsOption
     ctx.term.out('');
     ctx.term.out(
       table<CronScheduleSummary>(dashboard.crons, [
-        { header: 'CRON NAME', value: (c) => c.name },
+        { header: 'CRON', value: (c) => c.name },
         { header: 'SCHEDULE', value: (c) => c.cron },
-        { header: 'DOMAIN', value: (c) => c.domain },
-        { header: 'ENABLED', value: (c) => (c.enabled ? 'yes' : 'no') },
+        { header: 'ROLE', value: (c) => c.role },
+        { header: 'LAST RUN', value: (c) => stamp(c.lastRunAt) || 'never' },
+        { header: 'LAST SUCCESS', value: (c) => stamp(c.lastSuccessAt) || 'never' },
+        { header: 'STATE', value: cronState },
       ]),
     );
   }
 }
 
-function parseOptionalPositiveInt(raw: string | undefined, flagName: string): number | undefined {
+/**
+ * One word for a schedule's state, in the order that matters. `running` alone
+ * is not health: a schedule that throws on every tick stays started, and a
+ * disabled one keeps ticking with its body gated off.
+ */
+function cronState(cron: CronScheduleSummary): string {
+  if (cron.disabled) {
+    return 'disabled';
+  }
+
+  if (cron.overdue) {
+    return 'OVERDUE';
+  }
+
+  if (!cron.servedHere) {
+    return `in ${cron.role}`;
+  }
+
+  return cron.running ? 'running' : 'stopped';
+}
+
+function firstLine(text: string): string {
+  const newline = text.indexOf('\n');
+
+  return newline === -1 ? text : text.slice(0, newline);
+}
+
+/** An ISO-8601 instant, refused here rather than by the server's 400. */
+function parseOptionalInstant(raw: string | undefined, flagName: string): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const value = raw.trim();
+
+  if (!value || Number.isNaN(Date.parse(value))) {
+    throw new CliError(
+      `${flagName} must be an ISO-8601 date or time, e.g. 2026-11-01 or 2026-11-01T09:00:00Z.`,
+    );
+  }
+
+  return value;
+}
+
+function parseOptionalPositiveInt(
+  raw: string | undefined,
+  flagName: string,
+  max: number,
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -240,6 +310,10 @@ function parseOptionalPositiveInt(raw: string | undefined, flagName: string): nu
 
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new CliError(`${flagName} must be a positive integer.`);
+  }
+
+  if (parsed > max) {
+    throw new CliError(`${flagName} can be at most ${max}; the server refuses more in one page.`);
   }
 
   return parsed;

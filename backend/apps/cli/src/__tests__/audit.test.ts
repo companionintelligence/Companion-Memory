@@ -5,126 +5,104 @@ import {
   auditPipelineCommand,
 } from '../commands/audit';
 import { CliError } from '../context';
+import type {
+  AuditDeltasQuery,
+  EntityDeltasResponse,
+  JobsDashboardResponse,
+  PipelineDeadLettersResponse,
+  PipelineStateResponse,
+} from '../wire';
 
 import { harness } from './support/harness';
+import { wireFixture } from './support/wireFixtures';
+
+/**
+ * Queries and responses come from `fixtures/wire/{audit,pipeline,jobs}.json`,
+ * which the API's `cliWireContract.test.ts` suites check against the real
+ * controllers. The hand-built responses these tests used before matched
+ * `wire.ts` and nothing the server sends: all four commands crashed on a real
+ * appliance, and `deltas` dropped its time window on the way out.
+ */
+const audit = wireFixture('audit.json');
+const pipeline = wireFixture('pipeline.json');
+const jobs = wireFixture('jobs.json');
 
 describe('ci audit', () => {
-  it('renders chronological entity evolution deltas', async () => {
+  it('sends the time window as since/until and reads the { success, data } envelope', async () => {
+    let sent: AuditDeltasQuery | undefined;
     const ctx = harness({
-      getAuditDeltas: async (q) => ({
-        entityId: q.entityId,
-        count: 1,
-        deltas: [
-          {
-            id: 'd_1',
-            entityId: q.entityId,
-            entityType: 'person',
-            changeType: 'updated',
-            changedFields: { email: { before: null, after: 'ada@example.com' } },
-            sourceType: 'enrichment',
-            sourceId: 's_1',
-            confidence: 0.95,
-            occurredAt: '2026-11-12T09:00:00.000Z',
-          },
-        ],
-      }),
+      getAuditDeltas: async (query) => {
+        sent = query;
+
+        return audit.deltas.response as EntityDeltasResponse;
+      },
     });
 
-    await auditDeltasCommand(ctx, 'ent-123', { changeType: 'updated' });
-    expect(ctx.term.text()).toContain('ent-123 (1 delta)');
-    expect(ctx.term.text()).toContain('email');
+    await auditDeltasCommand(ctx, '0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b', {
+      changeType: 'updated',
+      from: '2026-11-01',
+      to: '2026-11-12T00:00:00Z',
+      limit: '50',
+    });
 
-    await expect(
-      auditDeltasCommand(ctx, 'ent-123', { changeType: 'not-a-type' }),
-    ).rejects.toBeInstanceOf(CliError);
+    expect(sent).toEqual(audit.deltas.query);
+    expect(ctx.term.text()).toContain('0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b (1 delta, newest first)');
+    expect(ctx.term.text()).toMatch(/2026-11-10 09:00\s+updated\s+Person\s+enrichment\s+email/);
   });
 
-  it('renders the 37-stage pipeline coverage table', async () => {
+  it('refuses what the route would refuse, before asking it', async () => {
+    const ctx = harness({});
+    const entityId = '0193a3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b';
+
+    await expect(auditDeltasCommand(ctx, entityId, { changeType: 'not-a-type' })).rejects.toBeInstanceOf(
+      CliError,
+    );
+    await expect(auditDeltasCommand(ctx, entityId, { from: 'last tuesday' })).rejects.toThrow(/--from/);
+    await expect(auditDeltasCommand(ctx, entityId, { limit: '251' })).rejects.toThrow(/at most 250/);
+  });
+
+  it('renders the per-stage ledger from `stages`, the only field the route sends', async () => {
     const ctx = harness({
-      getPipelineState: async () => ({
-        summary: {
-          totalItems: 1000,
-          fullyProcessed: 950,
-          withFailures: 10,
-          quarantined: 2,
-        },
-        stages: [
-          {
-            stage: 'embed',
-            done: 988,
-            pending: 10,
-            failed: 2,
-            quarantined: 0,
-            stale: 0,
-            avgAttempts: 1.0,
-            coverage: 0.988,
-          },
-        ],
-      }),
+      getPipelineState: async () => pipeline.state.response as PipelineStateResponse,
     });
 
     await auditPipelineCommand(ctx);
-    expect(ctx.term.text()).toContain('total=1000  fully_processed=950');
-    expect(ctx.term.text()).toContain('embed');
-    expect(ctx.term.text()).toContain('98.8%');
+
+    expect(ctx.term.text()).toContain('stages  1  failed=7  quarantined=1  stale=40');
+    expect(ctx.term.text()).toMatch(/embed\s+3\s+98\.8%\s+1000\s+960\s+28\s+3\s+1\s+7\s+1\s+40/);
   });
 
-  it('renders dead-lettered pipeline jobs and PgBoss job queues', async () => {
+  it('lists a page of dead letters from `deadLetters`, first line of each error only', async () => {
+    let sent: unknown;
     const ctx = harness({
-      getDeadLetters: async () => ({
-        count: 1,
-        items: [
-          {
-            id: 'dl_1',
-            queueName: 'enrichment-pipeline',
-            jobId: 'j_1',
-            entityId: 'e_1',
-            entityType: 'item',
-            stage: 'summarize',
-            errorMessage: 'LLM endpoint timeout after 30000ms',
-            attempts: 3,
-            createdAt: '2026-11-12T07:00:00.000Z',
-            replayedAt: null,
-          },
-        ],
-      }),
-      getJobsDashboard: async () => ({
-        generatedAt: '2026-11-12T10:00:00.000Z',
-        engine: { enabled: true, started: true },
-        summary: {
-          totalQueues: 1,
-          activeJobs: 2,
-          queuedJobs: 5,
-          failedJobs: 0,
-          registeredCrons: 1,
-        },
-        queues: [
-          {
-            name: 'hbpe-scheduled',
-            domain: 'predictions',
-            description: 'Nightly HBPE pipeline',
-            counts: { created: 5, retry: 0, active: 2, completed: 40, failed: 0 },
-          },
-        ],
-        crons: [
-          {
-            name: 'hbpe-nightly',
-            cron: '0 3 * * *',
-            domain: 'predictions',
-            description: 'Nightly HBPE run',
-            enabled: true,
-          },
-        ],
-      }),
+      getDeadLetters: async (query) => {
+        sent = query;
+
+        return pipeline.deadLetters.response as PipelineDeadLettersResponse;
+      },
     });
 
-    await auditDeadLettersCommand(ctx);
-    expect(ctx.term.text()).toContain('enrichment-pipeline');
-    expect(ctx.term.text()).toContain('LLM endpoint timeout');
+    await auditDeadLettersCommand(ctx, { queue: 'enrichment-pipeline', stage: 'summarize', limit: '20' });
 
-    ctx.term.lines.length = 0;
+    expect(sent).toEqual(pipeline.deadLetters.query);
+    expect(ctx.term.text()).toContain('dead letters  1 shown, newest first');
+    expect(ctx.term.text()).toMatch(/enrichment-pipeline\s+pipeline\.stage\.summarize\s+summarize/);
+    expect(ctx.term.text()).toContain('LLM endpoint timed out after 30000ms');
+    expect(ctx.term.text()).not.toContain('SummaryClient.request');
+
+    await expect(auditDeadLettersCommand(ctx, { limit: '201' })).rejects.toThrow(/at most 200/);
+  });
+
+  it('renders job counts, queues with their live jobs, and cron health', async () => {
+    const ctx = harness({
+      getJobsDashboard: async () => jobs.dashboard.response as JobsDashboardResponse,
+    });
+
     await auditJobsCommand(ctx);
-    expect(ctx.term.text()).toContain('hbpe-scheduled');
-    expect(ctx.term.text()).toContain('0 3 * * *');
+
+    expect(ctx.term.text()).toContain('jobs  pending=5  active=2  retry=1  failed=3  dead-lettered=1');
+    expect(ctx.term.text()).toMatch(/hbpe-scheduled\s+7\s+standard\s+2\s+dead-letter/);
+    expect(ctx.term.text()).toMatch(/PythonFunctionCrons\.hbpeNightly\s+0 3 \* \* \*\s+worker/);
+    expect(ctx.term.text()).toMatch(/2026-11-12 03:00\s+running/);
   });
 });
