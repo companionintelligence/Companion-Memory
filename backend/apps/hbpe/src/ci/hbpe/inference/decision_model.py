@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 log = logging.getLogger(__name__)
 
@@ -34,10 +34,10 @@ QuestionType = Literal["choice", "noul", "score"]
 class DecisionQuestion:
     type: QuestionType
     instructions: str
-    criteria: Optional[Dict[str, str] | List[str]] = None
+    criteria: dict[str, str] | list[str] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "type": self.type,
             "instructions": self.instructions,
         }
@@ -49,12 +49,12 @@ class DecisionQuestion:
 @dataclass
 class DecisionResult:
     question_type: QuestionType
-    value: Union[str, bool, int]
+    value: str | bool | int
     probability: float
-    distribution: Dict[str, float] = field(default_factory=dict)
+    distribution: dict[str, float] = field(default_factory=dict)
     calibrated: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.question_type,
             "value": self.value,
@@ -66,7 +66,7 @@ class DecisionResult:
 
 # ── Standard Companion Memory Decision Question Suites ──────────────────────────
 
-MEMORY_INGRESS_QUESTIONS: Dict[str, DecisionQuestion] = {
+MEMORY_INGRESS_QUESTIONS: dict[str, DecisionQuestion] = {
     "intent": DecisionQuestion(
         type="choice",
         instructions="What is the primary user intent for this context?",
@@ -89,7 +89,7 @@ MEMORY_INGRESS_QUESTIONS: Dict[str, DecisionQuestion] = {
     ),
 }
 
-RETRIEVAL_RERANK_QUESTIONS: Dict[str, DecisionQuestion] = {
+RETRIEVAL_RERANK_QUESTIONS: dict[str, DecisionQuestion] = {
     "is_relevant": DecisionQuestion(
         type="noul",
         instructions="Is this memory snippet directly relevant and useful to the query context?",
@@ -101,7 +101,7 @@ RETRIEVAL_RERANK_QUESTIONS: Dict[str, DecisionQuestion] = {
     ),
 }
 
-L0_EVENT_QUESTIONS: Dict[str, DecisionQuestion] = {
+L0_EVENT_QUESTIONS: dict[str, DecisionQuestion] = {
     "l0_class": DecisionQuestion(
         type="choice",
         instructions="What is the primary behavioral activity category of this event?",
@@ -122,7 +122,7 @@ L0_EVENT_QUESTIONS: Dict[str, DecisionQuestion] = {
 class LocalDecisionEngine:
     """
     High-speed embedded fallback decision engine.
-    
+
     Runs non-autoregressive decision scoring locally without needing an external
     vLLM/OpenAI server, computing calibrated probability distributions in a single pass.
     """
@@ -130,16 +130,26 @@ class LocalDecisionEngine:
     def evaluate(
         self,
         state: str,
-        questions: Dict[str, DecisionQuestion],
-    ) -> Dict[str, DecisionResult]:
-        results: Dict[str, DecisionResult] = {}
+        questions: dict[str, DecisionQuestion],
+    ) -> dict[str, DecisionResult]:
+        results: dict[str, DecisionResult] = {}
         state_lower = state.lower().strip()
 
         for q_name, q in questions.items():
             if q.type == "noul":
                 # Boolean question
                 # Baseline scoring keywords
-                indicators = ["todo", "remind", "remember to", "i will", "don't forget", "appointment", "deadline", "pick up", "schedule"]
+                indicators = [
+                    "todo",
+                    "remind",
+                    "remember to",
+                    "i will",
+                    "don't forget",
+                    "appointment",
+                    "deadline",
+                    "pick up",
+                    "schedule",
+                ]
                 hits = sum(1 for ind in indicators if ind in state_lower)
                 # Calibrated sigmoid activation
                 logit = (hits - 0.5) * 2.2
@@ -160,8 +170,8 @@ class LocalDecisionEngine:
                     choices = [str(c) for c in q.criteria]
                 else:
                     choices = ["opt1", "opt2"]
-                scores: Dict[str, float] = {}
-                
+                scores: dict[str, float] = {}
+
                 # Semantic lexical scoring
                 for choice in choices:
                     score = 0.5
@@ -197,20 +207,37 @@ class LocalDecisionEngine:
                 )
 
             elif q.type == "score":
-                levels = q.criteria if isinstance(q.criteria, list) else ["low", "medium", "high"]
+                levels = (
+                    q.criteria
+                    if isinstance(q.criteria, list)
+                    else ["low", "medium", "high"]
+                )
                 n_levels = len(levels)
                 # Compute ordinal distribution
-                urgency_words = ["urgent", "asap", "immediately", "today", "critical", "important"]
+                urgency_words = [
+                    "urgent",
+                    "asap",
+                    "immediately",
+                    "today",
+                    "critical",
+                    "important",
+                ]
                 has_urgent = any(w in state_lower for w in urgency_words)
-                
+
                 if has_urgent and n_levels > 1:
                     raw_probs = [0.1] * (n_levels - 1) + [0.1 + 0.8]
                 else:
-                    raw_probs = [0.7] + [0.3 / (n_levels - 1)] * (n_levels - 1) if n_levels > 1 else [1.0]
+                    raw_probs = (
+                        [0.7] + [0.3 / (n_levels - 1)] * (n_levels - 1)
+                        if n_levels > 1
+                        else [1.0]
+                    )
 
                 sum_p = sum(raw_probs)
                 dist_list = [p / sum_p for p in raw_probs]
-                dist_map = {f"level_{i}_{levels[i]}": dist_list[i] for i in range(n_levels)}
+                dist_map = {
+                    f"level_{i}_{levels[i]}": dist_list[i] for i in range(n_levels)
+                }
                 top_idx = max(range(n_levels), key=lambda i: dist_list[i])
 
                 results[q_name] = DecisionResult(
@@ -232,7 +259,7 @@ class DecisionModelClient:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         model_name: str = "decision-laya",
         timeout_seconds: float = 5.0,
         enable_local_fallback: bool = True,
@@ -246,13 +273,13 @@ class DecisionModelClient:
     def evaluate(
         self,
         state: str,
-        questions: Dict[str, DecisionQuestion | Dict[str, Any]],
-    ) -> Dict[str, DecisionResult]:
+        questions: dict[str, DecisionQuestion | dict[str, Any]],
+    ) -> dict[str, DecisionResult]:
         """
         Evaluate a state against typed questions in a single forward pass.
         """
         # Normalize questions to DecisionQuestion instances
-        typed_questions: Dict[str, DecisionQuestion] = {}
+        typed_questions: dict[str, DecisionQuestion] = {}
         for k, v in questions.items():
             if isinstance(v, DecisionQuestion):
                 typed_questions[k] = v
@@ -266,7 +293,9 @@ class DecisionModelClient:
         if not self.base_url:
             if self.enable_local_fallback:
                 return self.local_engine.evaluate(state, typed_questions)
-            raise ValueError("No DECISION_MODEL_URL configured and local fallback disabled")
+            raise ValueError(
+                "No DECISION_MODEL_URL configured and local fallback disabled"
+            )
 
         payload = {
             "model": self.model_name,
@@ -302,11 +331,11 @@ class DecisionModelClient:
 
     def _parse_response(
         self,
-        data: Dict[str, Any],
-        questions: Dict[str, DecisionQuestion],
-    ) -> Dict[str, DecisionResult]:
+        data: dict[str, Any],
+        questions: dict[str, DecisionQuestion],
+    ) -> dict[str, DecisionResult]:
         decisions_raw = data.get("decisions", {})
-        results: Dict[str, DecisionResult] = {}
+        results: dict[str, DecisionResult] = {}
 
         for q_name, q in questions.items():
             raw = decisions_raw.get(q_name)
@@ -331,7 +360,10 @@ class DecisionModelClient:
                     question_type="noul",
                     value=val,
                     probability=prob,
-                    distribution={"true": prob if val else 1.0 - prob, "false": 1.0 - prob if val else prob},
+                    distribution={
+                        "true": prob if val else 1.0 - prob,
+                        "false": 1.0 - prob if val else prob,
+                    },
                     calibrated=data.get("calibrated", True),
                 )
             elif q.type == "score":
@@ -350,7 +382,7 @@ class DecisionModelClient:
 
 # Global singleton instance
 _CLIENT_LOCK = threading.Lock()
-_GLOBAL_CLIENT: Optional[DecisionModelClient] = None
+_GLOBAL_CLIENT: DecisionModelClient | None = None
 
 
 def get_decision_client() -> DecisionModelClient:

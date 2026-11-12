@@ -386,9 +386,10 @@ class QwenLabeler:
         if settings.enable_decision_models:
             try:
                 from ci.hbpe.inference.decision_model import (
-                    DecisionModelClient,
                     L0_EVENT_QUESTIONS,
+                    DecisionModelClient,
                 )
+
                 client = DecisionModelClient(
                     base_url=settings.decision_model_endpoint,
                     enable_local_fallback=True,
@@ -404,9 +405,12 @@ class QwenLabeler:
                 ):
                     return normalise_l0(str(l0_choice.value))
             except Exception as e:
-                log.warning("Decision model L0 evaluation failed, falling back to LLM: %s", e)
+                log.warning(
+                    "Decision model L0 evaluation failed, falling back to LLM: %s", e
+                )
 
         from ci.hbpe.inference.qwen import get_qwen
+
         l0_raw = get_qwen().generate(
             _build_l0_message(title, description),
             system_message=_SYSTEM,
@@ -432,9 +436,10 @@ class QwenLabeler:
         if settings.enable_decision_models:
             try:
                 from ci.hbpe.inference.decision_model import (
-                    DecisionModelClient,
                     L0_EVENT_QUESTIONS,
+                    DecisionModelClient,
                 )
+
                 client = DecisionModelClient(
                     base_url=settings.decision_model_endpoint,
                     enable_local_fallback=True,
@@ -451,7 +456,9 @@ class QwenLabeler:
                     ):
                         resolved[i] = normalise_l0(str(choice.value))
             except Exception as e:
-                log.warning("Batch decision model evaluation failed, falling back to LLM: %s", e)
+                log.warning(
+                    "Batch decision model evaluation failed, falling back to LLM: %s", e
+                )
 
         # Gather remaining indices that need Qwen generation
         unresolved_indices = [i for i, r in enumerate(resolved) if r is None]

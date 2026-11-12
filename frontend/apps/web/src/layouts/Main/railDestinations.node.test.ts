@@ -15,6 +15,7 @@ describe('visibleRailDestinations', () => {
     const visible = visibleRailDestinations(() => true);
 
     expect(visible.map((destination) => destination.id)).toEqual([
+      'widgets',
       'plan',
       'memory',
       'saved-searches',
@@ -250,11 +251,11 @@ describe('Approvals and Activity', () => {
 describe('railClusters', () => {
   const ids = (clusters: RailDestination[][]) => clusters.map((cluster) => cluster.map((d) => d.id));
 
-  it('puts Planning, Memory and Saved Searches above Sources, Jobs, Approvals and Forecast', () => {
+  it('puts Widgets, Planning, Memory and Saved Searches above Sources, Jobs, Approvals and Forecast', () => {
     const rows = visibleRailDestinations(() => true).filter((d) => d.id !== 'self');
 
     expect(ids(railClusters(rows))).toEqual([
-      ['plan', 'memory', 'saved-searches'],
+      ['widgets', 'plan', 'memory', 'saved-searches'],
       ['sources', 'jobs', 'approvals', 'forecast'],
     ]);
   });
@@ -265,7 +266,7 @@ describe('railClusters', () => {
     );
 
     expect(ids(railClusters(rows))).toEqual([
-      ['plan', 'memory', 'saved-searches'],
+      ['widgets', 'plan', 'memory', 'saved-searches'],
       ['sources', 'approvals'],
     ]);
   });

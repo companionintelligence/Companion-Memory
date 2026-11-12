@@ -23,9 +23,9 @@ import logging
 import math
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
 
 import torch
 import torch.nn as nn
@@ -120,7 +120,9 @@ def collate_l0_mae_batch(
     day_token_list: list[list[dict]],
     vocab: Vocab,
     seed: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[set[int]]] | None:
+) -> (
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[set[int]]] | None
+):
     """
     Collate a list of day sequences into a padded batch (B, T_max) for L0MAEModel.
     """
@@ -176,7 +178,17 @@ def collate_hmt_joint_batch(
     day_token_list: list[list[dict]],
     l0_vocab: Vocab,
     l1_vocab: Vocab,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+) -> (
+    tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]
+    | None
+):
     """
     Collate a list of day sequences into a padded joint batch (B, T_max) for HMTModel.
     """
@@ -323,7 +335,7 @@ def train_l0_mae_parallel(
         total_loss = 0.0
         n_batches = 0
 
-        for step, batch in enumerate(train_loader):
+        for _step, batch in enumerate(train_loader):
             if batch is None:
                 continue
 
@@ -335,7 +347,9 @@ def train_l0_mae_parallel(
 
             optimiser.zero_grad()
 
-            with torch.autocast(device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast):
+            with torch.autocast(
+                device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast
+            ):
                 logits = model(t_ids, t_buckets, t_pad)  # (B, T, V)
                 loss = _batched_masked_ce_loss(logits, t_targets, batch_mask_positions)
 
@@ -364,9 +378,13 @@ def train_l0_mae_parallel(
                 t_pad = t_pad.to(dev)
                 t_targets = t_targets.to(dev)
 
-                with torch.autocast(device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast):
+                with torch.autocast(
+                    device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast
+                ):
                     logits = model(t_ids, t_buckets, t_pad)
-                    loss = _batched_masked_ce_loss(logits, t_targets, batch_mask_positions)
+                    loss = _batched_masked_ce_loss(
+                        logits, t_targets, batch_mask_positions
+                    )
 
                 val_loss_total += loss.item()
                 val_batches += 1
@@ -375,7 +393,7 @@ def train_l0_mae_parallel(
         scheduler.step()
 
         elapsed = time.time() - start_time
-        sec_per_epoch = (time.time() - epoch_start)
+        sec_per_epoch = time.time() - epoch_start
         eta = sec_per_epoch * (n_epochs - epoch)
 
         if progress_cb:
@@ -405,7 +423,9 @@ def train_l0_mae_parallel(
                 "val_loss": best_val_loss,
                 "architecture": architecture_fingerprint(),
             }
-            atomic_write(ckpt_path, lambda tmp: torch.save(payload, tmp))
+            atomic_write(
+                ckpt_path, lambda tmp, payload=payload: torch.save(payload, tmp)
+            )
             log.info(
                 "Epoch %d/%d (%.1fs) train=%.4f val=%.4f ✓ saved",
                 epoch,
@@ -430,7 +450,11 @@ def train_l0_mae_parallel(
                 log.info("Early stopping triggered at epoch %d", epoch)
                 break
 
-    log.info("L0 MAE pretraining complete. Best val loss=%.4f -> %s", best_val_loss, ckpt_path)
+    log.info(
+        "L0 MAE pretraining complete. Best val loss=%.4f -> %s",
+        best_val_loss,
+        ckpt_path,
+    )
     return ckpt_path
 
 
@@ -456,14 +480,17 @@ def train_hmt_joint_parallel(
             l1_vocab = build_l1_vocab(user_id)
         except Exception:
             # When decoupled from PostgreSQL, build L1 vocab dynamically from dataset
-            l1_tokens = sorted({
-                t["token_id"]
-                for ds in (train_dataset, val_dataset)
-                for day in ds
-                for t in day
-                if t.get("level") == "L1" and t.get("token_id")
-            })
+            l1_tokens = sorted(
+                {
+                    t["token_id"]
+                    for ds in (train_dataset, val_dataset)
+                    for day in ds
+                    for t in day
+                    if t.get("level") == "L1" and t.get("token_id")
+                }
+            )
             from ci.hbpe.model.vocab import _SPECIAL, _make_vocab
+
             l1_vocab = _make_vocab(_SPECIAL + l1_tokens)
 
     log.info(
@@ -481,14 +508,20 @@ def train_hmt_joint_parallel(
     mae_ckpt = ckpt_dir / L0_MAE_CKPT
 
     if mae_ckpt.exists():
-        mae_state = torch.load(mae_ckpt, map_location=dev, weights_only=True)["model_state"]
+        mae_state = torch.load(mae_ckpt, map_location=dev, weights_only=True)[
+            "model_state"
+        ]
         model_state = model.state_dict()
         transferred = {
-            k: v for k, v in mae_state.items() if k in model_state and model_state[k].shape == v.shape
+            k: v
+            for k, v in mae_state.items()
+            if k in model_state and model_state[k].shape == v.shape
         }
         model_state.update(transferred)
         model.load_state_dict(model_state)
-        log.info("Transferred %d backbone tensors from L0 MAE checkpoint", len(transferred))
+        log.info(
+            "Transferred %d backbone tensors from L0 MAE checkpoint", len(transferred)
+        )
 
     optimiser = AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimiser, T_max=n_epochs, eta_min=lr / 10)
@@ -522,7 +555,7 @@ def train_hmt_joint_parallel(
         total_loss = 0.0
         n_batches = 0
 
-        for step, batch in enumerate(train_loader):
+        for _step, batch in enumerate(train_loader):
             if batch is None:
                 continue
 
@@ -536,7 +569,9 @@ def train_hmt_joint_parallel(
 
             optimiser.zero_grad()
 
-            with torch.autocast(device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast):
+            with torch.autocast(
+                device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast
+            ):
                 l0_logits, l1_logits = model(t_ids, t_buckets, t_levels, t_pad)
                 loss = _batched_joint_loss(
                     l0_logits, l1_logits, t_l0_targets, t_l1_targets, t_levels
@@ -569,7 +604,9 @@ def train_hmt_joint_parallel(
                 t_l0_targets = t_l0_targets.to(dev)
                 t_l1_targets = t_l1_targets.to(dev)
 
-                with torch.autocast(device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast):
+                with torch.autocast(
+                    device_type=dev.type, dtype=autocast_dtype, enabled=use_autocast
+                ):
                     l0_logits, l1_logits = model(t_ids, t_buckets, t_levels, t_pad)
                     loss = _batched_joint_loss(
                         l0_logits, l1_logits, t_l0_targets, t_l1_targets, t_levels
@@ -614,7 +651,10 @@ def train_hmt_joint_parallel(
                 "architecture": architecture_fingerprint(),
                 "val_loss": best_val,
             }
-            atomic_write(ckpt_path, lambda tmp: torch.save(hmt_payload, tmp))
+            atomic_write(
+                ckpt_path,
+                lambda tmp, hmt_payload=hmt_payload: torch.save(hmt_payload, tmp),
+            )
             try:
                 write_architecture_stamp(user_id)
             except Exception:
@@ -662,7 +702,9 @@ def _batched_masked_ce_loss(
     for b, mask_pos in enumerate(batch_mask_positions):
         if not mask_pos:
             continue
-        idx_tensor = torch.tensor(sorted(mask_pos), dtype=torch.long, device=logits.device)
+        idx_tensor = torch.tensor(
+            sorted(mask_pos), dtype=torch.long, device=logits.device
+        )
         b_logits = logits[b, idx_tensor, :]  # (N_masked, V)
         b_targets = targets[b, idx_tensor]  # (N_masked)
         loss_b = nn.functional.cross_entropy(b_logits, b_targets)

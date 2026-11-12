@@ -130,21 +130,33 @@ export async function discoverLanAppliances(
 }
 
 export async function publishWidgetSnapshot(snapshot: CompanionWidgetSnapshot): Promise<void> {
-  if (!isNativePlatform()) return;
+  if (!isNativePlatform()) {
+    return;
+  }
+
   await localHubPlugin()?.publishWidgetSnapshot?.({ snapshot });
 }
 
 export async function readWidgetActions(): Promise<WidgetAction[]> {
-  if (!isNativePlatform()) return [];
+  if (!isNativePlatform()) {
+    return [];
+  }
+
   return (await localHubPlugin()?.readWidgetActions?.())?.actions ?? [];
 }
 
 export async function acknowledgeWidgetActions(ids: string[]): Promise<void> {
-  if (!isNativePlatform() || ids.length === 0) return;
+  if (!isNativePlatform() || ids.length === 0) {
+    return;
+  }
+
   await localHubPlugin()?.acknowledgeWidgetActions?.({ ids });
 }
 
 export async function clearWidgetSnapshot(): Promise<void> {
-  if (!isNativePlatform()) return;
+  if (!isNativePlatform()) {
+    return;
+  }
+
   await localHubPlugin()?.clearWidgetSnapshot?.();
 }

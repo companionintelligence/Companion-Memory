@@ -15,10 +15,18 @@ import {
 
 import { useAuth } from '@/hooks';
 
-const WIDGET_TASKS = gql("query CompanionWidgetTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }");
-const WIDGET_FORECAST = gql("query CompanionWidgetForecast { forecast(horizon: \"24h\") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }");
-const WIDGET_DAILY_METRICS = gql("query CompanionWidgetDailyMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { date nMessages nPlaces kmTraveled } }");
-const WIDGET_COMPLETE_TASK = gql("mutation CompanionWidgetCompleteTask($id: ID!) { completeTask(id: $id) { id status } }");
+const WIDGET_TASKS = gql(
+  'query CompanionWidgetTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
+);
+const WIDGET_FORECAST = gql(
+  'query CompanionWidgetForecast { forecast(horizon: "24h") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
+);
+const WIDGET_DAILY_METRICS = gql(
+  'query CompanionWidgetDailyMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { date nMessages nPlaces kmTraveled } }',
+);
+const WIDGET_COMPLETE_TASK = gql(
+  'mutation CompanionWidgetCompleteTask($id: ID!) { completeTask(id: $id) { id status } }',
+);
 
 interface TaskQuery {
   tasks?: {
@@ -84,7 +92,10 @@ export function WidgetSnapshotSync() {
   const inFlightRef = useRef(false);
 
   const sync = useCallback(async () => {
-    if (!isNativePlatform() || !authenticated || initializing || inFlightRef.current) return;
+    if (!isNativePlatform() || !authenticated || initializing || inFlightRef.current) {
+      return;
+    }
+
     inFlightRef.current = true;
 
     try {
@@ -93,8 +104,13 @@ export function WidgetSnapshotSync() {
       const handledActionIds: string[] = [];
 
       for (const action of actions.slice(0, 10)) {
-        if (!hasActiveSession()) return;
-        if (action.type !== 'completeTask' || !action.id || !action.taskId) continue;
+        if (!hasActiveSession()) {
+          return;
+        }
+
+        if (action.type !== 'completeTask' || !action.id || !action.taskId) {
+          continue;
+        }
 
         try {
           await client.mutate({
@@ -110,7 +126,10 @@ export function WidgetSnapshotSync() {
       if (handledActionIds.length > 0) {
         await acknowledgeWidgetActions(handledActionIds).catch(() => undefined);
       }
-      if (!hasActiveSession()) return;
+
+      if (!hasActiveSession()) {
+        return;
+      }
 
       const now = new Date();
       const today = [
@@ -134,7 +153,10 @@ export function WidgetSnapshotSync() {
       const forecastResult = results[1];
       const metricsResult = results[2];
       const jobsResult = results[3];
-      if (!hasActiveSession()) return;
+      if (!hasActiveSession()) {
+        return;
+      }
+
       const tasksData = tasksResult?.status === 'fulfilled' ? tasksResult.value.data : undefined;
       const forecastData = forecastResult?.status === 'fulfilled' ? forecastResult.value.data : undefined;
       const metricsData = metricsResult?.status === 'fulfilled' ? metricsResult.value.data : undefined;
@@ -144,17 +166,20 @@ export function WidgetSnapshotSync() {
         hasSnapshotDataRef.current = true;
         receivedFreshData = true;
       }
+
       if (forecastData?.forecast) {
         sourceRef.current.forecast = forecastData.forecast;
         hasSnapshotDataRef.current = true;
         receivedFreshData = true;
       }
+
       if (metricsData?.dailyMetrics) {
         sourceRef.current.metrics = metricsData.dailyMetrics;
         sourceRef.current.metricsUpdatedAt = new Date().toISOString();
         hasSnapshotDataRef.current = true;
         receivedFreshData = true;
       }
+
       if (jobsResult && jobsResult.status === 'fulfilled' && jobsResult.value?.summary) {
         sourceRef.current.jobs = jobsResult.value;
         sourceRef.current.jobsUpdatedAt = new Date().toISOString();
@@ -168,7 +193,9 @@ export function WidgetSnapshotSync() {
         );
         // A sign-out can race the native write. Clear again after it settles so an
         // older authenticated request cannot repopulate the app-group cache.
-        if (!hasActiveSession()) await clearWidgetSnapshot().catch(() => undefined);
+        if (!hasActiveSession()) {
+          await clearWidgetSnapshot().catch(() => undefined);
+        }
       }
     } finally {
       inFlightRef.current = false;
@@ -176,7 +203,9 @@ export function WidgetSnapshotSync() {
   }, [authenticated, client, initializing]);
 
   useEffect(() => {
-    if (!isNativePlatform() || initializing) return;
+    if (!isNativePlatform() || initializing) {
+      return;
+    }
 
     if (!authenticated) {
       sourceRef.current = {};
@@ -191,14 +220,19 @@ export function WidgetSnapshotSync() {
     const interval = window.setInterval(refresh, 15 * 60_000);
     let removeAppStateListener: (() => void) | undefined;
     void addAppStateListener((active) => {
-      if (active) refresh();
+      if (active) {
+        refresh();
+      }
     }).then((remove) => {
       removeAppStateListener = remove;
     });
 
     const onVisibilityChange = () => {
-      if (!document.hidden) refresh();
+      if (!document.hidden) {
+        refresh();
+      }
     };
+
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {

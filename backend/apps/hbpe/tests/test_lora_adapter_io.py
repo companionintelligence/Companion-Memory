@@ -51,7 +51,11 @@ def test_strict_load_rejects_a_different_base(tmp_path):
     lora.apply_lora(m)
     path = tmp_path / "a.pt"
     lora.save_adapter(
-        m, path, meta=adapter_meta(architecture="x", l1_vocab_fingerprint=None, base_digest="d1")
+        m,
+        path,
+        meta=adapter_meta(
+            architecture="x", l1_vocab_fingerprint=None, base_digest="d1"
+        ),
     )
     with pytest.raises(AdapterMismatch):
         lora.load_adapter(_model(), path, strict=True, expect={"base_digest": "d2"})

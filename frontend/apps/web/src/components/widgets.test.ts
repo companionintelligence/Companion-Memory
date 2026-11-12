@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-
 import { buildWidgetSnapshot, parseWidgetDestination } from '@ci/common';
+import { describe, expect, it } from 'vitest';
 
 describe('native widget snapshot', () => {
   it('limits and sanitizes task content, excludes completed tasks, and sorts by date', () => {

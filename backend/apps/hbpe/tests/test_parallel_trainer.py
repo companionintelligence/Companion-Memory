@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-import torch
-
 from ci.hbpe.model.parallel_trainer import (
     TokenStreamFileDataset,
     collate_hmt_joint_batch,
@@ -16,10 +13,18 @@ from ci.hbpe.model.parallel_trainer import (
     train_l0_mae_parallel,
 )
 from ci.hbpe.model.train_runner import run_headless_job
-from ci.hbpe.model.vocab import build_l0_vocab, build_l1_vocab
+from ci.hbpe.model.vocab import build_l0_vocab
 
-
-L0_SAMPLES = ["WORK", "EXERCISE", "SOCIAL", "ERRAND", "LEISURE", "TRANSIT", "SLEEP", "UNKNOWN"]
+L0_SAMPLES = [
+    "WORK",
+    "EXERCISE",
+    "SOCIAL",
+    "ERRAND",
+    "LEISURE",
+    "TRANSIT",
+    "SLEEP",
+    "UNKNOWN",
+]
 
 
 def _generate_synthetic_day(day_idx: int, n_tokens: int = 10) -> list[dict]:
@@ -28,11 +33,19 @@ def _generate_synthetic_day(day_idx: int, n_tokens: int = 10) -> list[dict]:
     for i in range(1, n_tokens - 1):
         if i % 3 == 0:
             tokens.append(
-                {"level": "L1", "token_id": f"action_{i % 5}", "bucket_idx": min(47, i * 2)}
+                {
+                    "level": "L1",
+                    "token_id": f"action_{i % 5}",
+                    "bucket_idx": min(47, i * 2),
+                }
             )
         else:
             tokens.append(
-                {"level": "L0", "token_id": L0_SAMPLES[i % len(L0_SAMPLES)], "bucket_idx": min(47, i * 2)}
+                {
+                    "level": "L0",
+                    "token_id": L0_SAMPLES[i % len(L0_SAMPLES)],
+                    "bucket_idx": min(47, i * 2),
+                }
             )
     tokens.append({"level": "EOD", "token_id": "EOD", "bucket_idx": 47})
     return tokens
@@ -83,15 +96,18 @@ def test_collate_l0_mae_batch():
 
 def test_collate_hmt_joint_batch():
     from ci.hbpe.model.vocab import _SPECIAL, _make_vocab
+
     l0_vocab = build_l0_vocab()
-    l1_vocab = _make_vocab(_SPECIAL + ["action_0", "action_1", "action_2", "action_3", "action_4"])
+    l1_vocab = _make_vocab(
+        [*_SPECIAL, "action_0", "action_1", "action_2", "action_3", "action_4"]
+    )
 
     day1 = _generate_synthetic_day(1, n_tokens=10)
     day2 = _generate_synthetic_day(2, n_tokens=16)
 
     batch = collate_hmt_joint_batch([day1, day2], l0_vocab, l1_vocab)
     assert batch is not None
-    t_ids, t_buckets, t_levels, t_pad, t_l0_targets, t_l1_targets = batch
+    t_ids, _t_buckets, t_levels, t_pad, t_l0_targets, t_l1_targets = batch
 
     assert t_ids.shape[0] == 2
     assert t_levels.shape == t_ids.shape
