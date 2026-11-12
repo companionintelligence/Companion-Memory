@@ -237,6 +237,7 @@ export class ToolsModule {}
 
 // Exports
 export { ToolRegistry, outcomeOf } from './registry/ToolRegistry';
+export { withAbsoluteItemLinks } from './tools/absoluteItemLinks';
 export { PendingActionService } from './services/PendingActionService';
 export { PendingActionConfirmService } from './services/PendingActionConfirmService';
 export {

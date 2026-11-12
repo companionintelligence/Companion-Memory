@@ -15,6 +15,7 @@ import {
 import { Context, type RequestContext } from '@ci/common/context';
 import { INTENTS_SCOPE, READ_CAPABILITY, RequireCapability, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
+import config from '@ci/configuration';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   DISPATCH_TIERS,
@@ -27,6 +28,7 @@ import {
   type IntentManifest,
   type ManifestIntent,
   type ToolResult,
+  withAbsoluteItemLinks,
 } from '@ci/domains/tools';
 
 /**
@@ -138,7 +140,7 @@ export class IntentsController {
       throw new NotFoundException(`Unknown intent: ${name}`);
     }
 
-    return this.registry.executeTool(
+    const result = await this.registry.executeTool(
       toolName,
       {
         ...context,
@@ -152,6 +154,10 @@ export class IntentsController {
       },
       body ?? {},
     );
+
+    // Every caller of this route is served from another origin than the app, so
+    // a site-relative link would be completed against the caller's own host.
+    return withAbsoluteItemLinks(result, config.auth.oidc.publicBaseUrl);
   }
 }
 

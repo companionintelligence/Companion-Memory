@@ -5,6 +5,7 @@ import { ContextService } from '@ci/common/context';
 import { INTENTS_SCOPE, type ApiKeyCapability } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, apiKeyCapabilityOf, isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   type IntentDefinition,
@@ -21,6 +22,7 @@ import {
   outcomeOf,
   type ToolInvocationOutcome,
   toolErrorMessage,
+  withAbsoluteItemLinks,
 } from '@ci/domains/tools';
 
 import type { McpRegisteredTool, McpToolDefinition } from '../types';
@@ -247,7 +249,14 @@ export class McpToolService implements OnModuleInit {
       );
     }
 
-    return result.data;
+    // A signed-in app (the phone's on-device model) keeps site-relative links: it
+    // never shows them and its window is 1k-4k tokens. Every other MCP client is
+    // on another origin, and completed `/content/<id>` with its own host.
+    if ((context.req as ApiKeyScopedRequest).apiKeyManagedBy === 'sign_in') {
+      return result.data;
+    }
+
+    return withAbsoluteItemLinks(result, config.auth.oidc.publicBaseUrl).data;
   }
 
   /**
