@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical"
+    android:padding="14dp">
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="JOBS"
+        android:textColor="#70E1D8"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Active" android:textColor="#9EADB6" android:textSize="11sp" />
+            <TextView android:id="@+id/jobs_active" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="3" android:textColor="#F5F8FA" android:textSize="21sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Pending" android:textColor="#9EADB6" android:textSize="11sp" />
+            <TextView android:id="@+id/jobs_pending" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="12" android:textColor="#F5F8FA" android:textSize="16sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Needs attention" android:textColor="#9EADB6" android:textSize="11sp" />
+            <TextView android:id="@+id/jobs_attention" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="2" android:textColor="#FFB86C" android:textSize="21sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Completed" android:textColor="#9EADB6" android:textSize="11sp" />
+            <TextView android:id="@+id/jobs_completed" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="42" android:textColor="#F5F8FA" android:textSize="16sp" />
+        </LinearLayout>
+    </LinearLayout>
+    <TextView
+        android:id="@+id/jobs_freshness"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Preview · sync from Memory"
+        android:textColor="#9EADB6"
+        android:textSize="10sp" />
+</LinearLayout>

@@ -15,7 +15,7 @@ PODS:
   - CapacitorCordova (8.6.0)
   - CapacitorLocalNotifications (8.3.1):
     - Capacitor
-  - CapacitorMlkitBarcodeScanning (8.2.1):
+  - CapacitorMlkitBarcodeScanning (8.2.2):
     - Capacitor
     - GoogleMLKit/BarcodeScanning (~> 8.0.0)
   - CapacitorPushNotifications (8.1.3):
@@ -179,14 +179,14 @@ SPEC CHECKSUMS:
   CapacitorCommunitySqlite: 785553c54e52da62d058238d4571db5692c022c4
   CapacitorCordova: 922f0a94dae286165215f0c7cf16fbde662d5ee4
   CapacitorLocalNotifications: e0747a329ddde3074d52dc74a003688af90e42be
-  CapacitorMlkitBarcodeScanning: 1070a9d56dd84c08a7354d12354293daeee28100
+  CapacitorMlkitBarcodeScanning: 43ac9fce0c369f823f364e3cc0f8012024cf6f6a
   CapacitorPushNotifications: a31b62e18764ab855537dfcdade1e6ecf5aba29f
   CapacitorSecureStoragePlugin: d083ff28d9ba5bc74924b9bcf9754ea605016b63
   CapacitorSplashScreen: 7bf61c2001557ff9e195e601c6b87344480d3c65
   CapacitorStatusBar: ff844df1f126da6c4fbc4028272425fa3a91e7e3
-  CiCapacitorAppLock: 1bcfb9599da9bfbf2d515eee83b00ec9b806271b
-  CiCapacitorLocalHub: 4e13757378cfd11530b1f541580774a40b61ab9f
-  CiCapacitorSpeech: 5f3efbc77893c90c8ebc5be07a496c5fb617790a
+  CiCapacitorAppLock: 5f016286369522c4f28afdefb00f155f9ef5a33d
+  CiCapacitorLocalHub: 31d6382239f23829b466e97ff934e22d8d7e4add
+  CiCapacitorSpeech: c186847fc27adaf0d5f574734cfe0423357e6ece
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
   GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539
   GoogleMLKit: ddd51d7dff36ff28defa69afedd9cdce684fd857
