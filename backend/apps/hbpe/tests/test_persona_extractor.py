@@ -11,6 +11,7 @@ from pathlib import Path
 
 try:
     import pytest
+
     has_pytest = True
 except ImportError:
     has_pytest = False
@@ -18,7 +19,6 @@ except ImportError:
 
 from ci.hbpe.model.persona_extractor import (
     PersonaDataExtractor,
-    PersonaDatasetAuditResult,
     _infer_commitment,
     _infer_l0,
     _infer_urgency,
@@ -34,13 +34,17 @@ PERSONAL_EXPORT_DIR = os.environ.get("HBPE_PERSONA_EXPORT_DIR", "")
 def skip_without_export(fn):
     if not PERSONAL_EXPORT_DIR or not Path(PERSONAL_EXPORT_DIR).exists():
         if has_pytest:
-            return pytest.mark.skip(reason="Set HBPE_PERSONA_EXPORT_DIR to run tests against a persona export")(fn)
+            return pytest.mark.skip(
+                reason="Set HBPE_PERSONA_EXPORT_DIR to run tests against a persona export"
+            )(fn)
         return lambda *args, **kwargs: None
     return fn
 
 
 def test_keyword_heuristics():
-    assert _infer_commitment("Hey man I'm gonna be in DC this week, let's meet!") is True
+    assert (
+        _infer_commitment("Hey man I'm gonna be in DC this week, let's meet!") is True
+    )
     assert _infer_commitment("What was that movie again?") is False
 
     assert _infer_l0("Sprint planning meeting") == "WORK"
