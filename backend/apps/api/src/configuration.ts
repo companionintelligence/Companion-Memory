@@ -1307,6 +1307,32 @@ export const ConfigSchema = z.object({
      */
     'solid.protocol': booleanStringSchema,
     /**
+     * Master gate for RFC 9728 OAuth 2.0 Protected Resource Metadata (MCP 2026-07-28 discovery).
+     * Off by default — endpoints return 404 until explicitly enabled.
+     */
+    'mcp.prm': booleanStringSchema,
+    /**
+     * Master gate for Portable Web Spaces (PWS) storage facade (`/pws/*`):
+     * W3C CCG v0.5 permissioned storage hierarchy (Space > Collection > Resource)
+     * with zCap object capabilities. Off by default (routes 404).
+     */
+    'pws.storage': booleanStringSchema,
+    /**
+     * Master gate for IdentiKey challenge/response auth protocol (identikey-auth Phase 1):
+     * Verifier endpoints for Ed25519/P-256 single-use challenge verification. Off by default (routes 404).
+     */
+    'auth.identikey': booleanStringSchema,
+    /**
+     * Master gate for Verifiable Trust Community (OpenVTC) credentials & status lists:
+     * W3C VC 2.0 / DTG Credentials verification. Off by default (routes 404).
+     */
+    'vtc.credentials': booleanStringSchema,
+    /**
+     * Master gate for DIDComm Messaging v2.1:
+     * Pack/unpack envelopes and mediator routing. Off by default (routes 404).
+     */
+    'didcomm.messaging': booleanStringSchema,
+    /**
      * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
      * authenticates per request with a pasted API key (see docs/graphql-api.md),
      * so it cannot sit behind the auth guard — which is why it was served

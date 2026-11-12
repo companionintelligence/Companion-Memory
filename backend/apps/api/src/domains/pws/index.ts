@@ -17,6 +17,8 @@
  * Nothing here is registered with Nest, bound to a port or written to the database. See
  * `docs/pws.md` for what exists, what was verified against what, and what wiring it takes.
  */
+export { PwsController } from './PwsController';
+export { PwsModule } from './PwsModule';
 export { createPwsHandler } from './handler';
 export type { PwsConfig, PwsHandler } from './handler';
 export type { PwsRequest, PwsResponse } from './http';

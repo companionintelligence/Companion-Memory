@@ -276,6 +276,11 @@
     "derivation.engines": true,
     "ingest.selfHeal": true,
     "solid.protocol": false,
+    "mcp.prm": false,
+    "pws.storage": false,
+    "auth.identikey": false,
+    "vtc.credentials": false,
+    "didcomm.messaging": false,
     "tools.pendingActions": true,
     "graphql.ide": true
   },

@@ -4,6 +4,7 @@ import { GraphQLModule } from '@ci/domains/graphql';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { McpController } from './controllers/McpController';
+import { ProtectedResourceMetadataController } from './controllers/ProtectedResourceMetadataController';
 import { GraphQLToolAdapter } from './services/GraphQLToolAdapter';
 import { McpExecutorService } from './services/McpExecutorService';
 import { McpServerService } from './services/McpServerService';
@@ -15,7 +16,7 @@ import { McpToolService } from './services/McpToolService';
 // `intents://catalog` MCP resource.
 @Module({
   imports: [GraphQLModule, ToolsModule],
-  controllers: [McpController],
+  controllers: [McpController, ProtectedResourceMetadataController],
   providers: [GraphQLToolAdapter, McpExecutorService, McpToolService, McpServerService],
   exports: [McpServerService],
 })

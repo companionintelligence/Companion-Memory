@@ -1,3 +1,4 @@
+import { buildAuditMerkleProof, computeAuditMerkleRoot, verifyAuditMerkleProof } from '../auditSaid';
 import { AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskQuery, RecordAskAuditDto } from '../types';
 
@@ -130,7 +131,7 @@ describe('AskAuditEntity.toEgressType', () => {
 });
 
 describe('AskAuditService SAID anchoring', () => {
-  it('computes and verifies deterministic SAID for an audit record', () => {
+  it('computes and verifies deterministic CESR I SAID for an audit record', () => {
     const { service } = makeService();
     const payload = dto({
       askId: 'ask-1',
@@ -141,13 +142,51 @@ describe('AskAuditService SAID anchoring', () => {
 
     const said = service.computeSaid(payload);
     expect(said).toBeDefined();
-    // Plain base64url of SHA-256, with no CESR code: it is not a KERI SAID (see auditSaid.ts).
-    expect(said).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(said).toMatch(/^I[A-Za-z0-9_-]{43}$/);
 
     expect(service.verifySaid(payload, said)).toBe(true);
 
     // Tampered payload fails verification
     const tampered = { ...payload, disclosedCount: 99 };
     expect(service.verifySaid(tampered, said)).toBe(false);
+  });
+
+  it('computes and verifies Merkle batch anchoring proofs for audit SAIDs', () => {
+    const { service } = makeService();
+    const saids = ['ask-1', 'ask-2', 'ask-3'].map((askId) =>
+      service.computeSaid(dto({ askId, disclosedEntities: [askId], disclosedCount: 1 })),
+    );
+
+    const root = computeAuditMerkleRoot(saids);
+    expect(root).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+
+    for (let i = 0; i < saids.length; i += 1) {
+      const proof = buildAuditMerkleProof(saids, i);
+      expect(verifyAuditMerkleProof(saids[i]!, proof, root!)).toBe(true);
+      expect(verifyAuditMerkleProof('I0000000000000000000000000000000000000000000', proof, root!)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('builds and verifies ISO/IEC TS 27560 + DPV v2 consent receipts', () => {
+    const { service } = makeService();
+    const payload = dto({
+      askId: 'ask-consent-1',
+      consentBasis: 'owner_approved',
+      peerHandle: 'alice@example.ts.net',
+      responderUserId: 'user-owner-1',
+      disclosedEntities: ['doc-1'],
+      disclosedCount: 1,
+    });
+
+    const receipt = service.buildConsentReceipt(payload, { issuedAt: '2026-11-11T23:00:00.000Z' });
+    expect(receipt.schemaVersion).toBe('iso-27560:2023+dpv:v2');
+    expect(receipt.legalBasis).toBe('dpv:ExplicitConsent');
+    expect(receipt.purposes).toContain('dpv:RequestedServiceProvision');
+    expect(receipt.d).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(service.verifyConsentReceipt(receipt)).toBe(true);
+
+    expect(service.verifyConsentReceipt({ ...receipt, disclosedCount: 99 })).toBe(false);
   });
 });

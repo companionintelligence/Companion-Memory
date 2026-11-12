@@ -46,3 +46,13 @@ export {
   verifyConnectRequest,
 } from './connect-request-auth';
 export type { ConnectRequestParts, ConnectVerifyResult } from './connect-request-auth';
+export { canonicalizeJcs, DEFAULT_JCS_MAX_DEPTH, JcsError } from './jcs';
+export { attenuateCapabilityToken, mintRootCapabilityToken, verifyCapabilityToken } from './capabilityToken';
+export type {
+  CapabilityBlock,
+  CapabilityCaveat,
+  CapabilityToken,
+  MintCapabilityOptions,
+  VerifyCapabilityRequirement,
+  VerifyCapabilityResult,
+} from './capabilityToken';

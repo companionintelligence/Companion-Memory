@@ -6,6 +6,8 @@
  * configuration or touches the database; the wiring is a later phase behind its own flag.
  */
 
+export { IdentikeyController } from './IdentikeyController';
+export { IdentikeyModule } from './IdentikeyModule';
 export { IdentiKeyError, MIN_NONCE_LENGTH, type IdentiKeyErrorCode } from './errors';
 
 export {

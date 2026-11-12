@@ -404,7 +404,12 @@
     "grounded.prompts": "ENABLE_GROUNDED_PROMPTS",
     "derivation.engines": "ENABLE_DERIVATION_ENGINES",
     "ingest.selfHeal": "ENABLE_INGEST_SELF_HEAL",
-    "solid.protocol": "ENABLE_SOLID_PROTOCOL"
+    "solid.protocol": "ENABLE_SOLID_PROTOCOL",
+    "mcp.prm": "ENABLE_MCP_PRM",
+    "pws.storage": "ENABLE_PWS_STORAGE",
+    "auth.identikey": "ENABLE_AUTH_IDENTIKEY",
+    "vtc.credentials": "ENABLE_VTC_CREDENTIALS",
+    "didcomm.messaging": "ENABLE_DIDCOMM_MESSAGING"
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"
