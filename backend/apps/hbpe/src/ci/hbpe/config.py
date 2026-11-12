@@ -196,9 +196,13 @@ class Settings(BaseSettings):
     )
 
     # ── Non-Autoregressive Decision Models (Laya, Clef, FastDecisionModel) ────
+    # Off unless asked for. With no HBPE_DECISION_MODEL_ENDPOINT the client falls
+    # back to LocalDecisionEngine, which scores keyword matches, and QwenLabeler
+    # stores that L0 answer without asking Qwen. Turn this on only with a trained
+    # model serving the endpoint.
     enable_decision_models: bool = Field(
         default_factory=lambda: (
-            os.getenv("HBPE_ENABLE_DECISION_MODELS", "true").lower()
+            os.getenv("HBPE_ENABLE_DECISION_MODELS", "false").lower()
             in ("1", "true", "yes", "on")
         )
     )

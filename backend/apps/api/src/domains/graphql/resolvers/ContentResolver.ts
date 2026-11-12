@@ -327,11 +327,13 @@ export class ContentResolver {
   async event(@Context() context: RequestContext, @Parent() parent: ContentType): Promise<EventType | null> {
     const serviceContext = toServiceContext(context);
 
-    if (parent.__source.event?.id == null) {
+    const eventId = parent.__source.eventId ?? parent.__source.event?.id;
+
+    if (eventId == null) {
       return null;
     }
 
-    const event = await this.eventLoader.load(serviceContext, parent.__source.event.id);
+    const event = await this.eventLoader.load(serviceContext, eventId);
 
     return event ? EventType.toType(event) : null;
   }

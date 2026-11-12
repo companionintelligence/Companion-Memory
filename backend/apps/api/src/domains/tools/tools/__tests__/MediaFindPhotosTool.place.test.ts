@@ -125,12 +125,11 @@ describe('media.findPhotos for a named place', () => {
 
       const result = await tool.execute(CONTEXT, { query: 'rabbit' });
 
-      expect(search.run).toHaveBeenCalledWith(expect.anything(), {
-        query: 'rabbit',
-        maxResults: undefined,
-        countOnly: undefined,
-        entityTypes: ['file'],
-      });
+      expect(search.run).toHaveBeenCalledWith(
+        expect.anything(),
+        { query: 'rabbit', maxResults: undefined, countOnly: undefined, entityTypes: ['content'] },
+        { mediaContentOnly: true },
+      );
       expect(result.data?.mode).toBe('keyword');
     }
   });
