@@ -195,6 +195,17 @@ class Settings(BaseSettings):
         )
     )
 
+    # ── Non-Autoregressive Decision Models (Laya, Clef, FastDecisionModel) ────
+    enable_decision_models: bool = Field(
+        default_factory=lambda: os.getenv("HBPE_ENABLE_DECISION_MODELS", "true").lower() in ("1", "true", "yes", "on")
+    )
+    decision_model_endpoint: str | None = Field(
+        default_factory=lambda: os.getenv("HBPE_DECISION_MODEL_ENDPOINT") or None
+    )
+    decision_confidence_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_DECISION_CONFIDENCE_THRESHOLD", "0.75"))
+    )
+
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))
