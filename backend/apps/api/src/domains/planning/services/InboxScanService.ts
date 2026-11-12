@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -6,6 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -85,6 +86,7 @@ export class InboxScanService {
     private readonly plannedBlockService: PlannedBlockService,
     private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
+    @Optional() private readonly decisionService?: ContrastiveDecisionService,
   ) {
     this.logger.setContext(InboxScanService.name);
   }
@@ -167,6 +169,11 @@ export class InboxScanService {
 
         for (const message of page) {
           if (claimedComms.has(message.id) || reviewed.has(message.id) || inboxMessageIsEmpty(message)) {
+            continue;
+          }
+
+          if (await this.isSystem1NonActionable(context, message)) {
+            this.remember(userId, [message.id]);
             continue;
           }
 
@@ -517,6 +524,32 @@ export class InboxScanService {
     }
 
     this.reviewedIds.set(userId, reviewed);
+  }
+
+  /**
+   * System 1 `<10 ms` pre-filter (`ContrastiveDecisionService.scoreIngressCommitment`).
+   * Drops unmistakable non-commitments (automated OTP codes, marketing blasts, or
+   * low-probability chatter) before spending a 60-second System 2 LLM call.
+   */
+  private async isSystem1NonActionable(
+    context: UserServiceContext,
+    message: CommunicationEntity,
+  ): Promise<boolean> {
+    if (!this.decisionService) {
+      return false;
+    }
+
+    try {
+      const text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
+      const score = await this.decisionService.scoreIngressCommitment(text, {
+        userId: context.userId,
+        threshold: 0.25,
+      });
+
+      return !score.isCommitment;
+    } catch {
+      return false;
+    }
   }
 }
 

@@ -8,6 +8,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import {
   ContrastiveDecisionService,
   type ChoiceDecisionResult,
+  type IngressCommitmentScore,
   type NoulDecisionResult,
   type RankDecisionResult,
   type ScoreDecisionResult,
@@ -94,6 +95,13 @@ export const rankRequestSchema = z
     topK: z.number().int().positive().optional(),
     engine: engineEnum,
     temperature: z.number().positive().optional(),
+  })
+  .strip();
+
+const ingressRequestSchema = z
+  .object({
+    text: z.string().min(1),
+    threshold: z.number().min(0).max(1).optional(),
   })
   .strip();
 
@@ -213,5 +221,27 @@ export class ModelRoutingController {
   @Get('arena')
   getArena(): { size: number } {
     return this.decisionService.getArenaStats();
+  }
+
+  /**
+   * Evaluate an inbound message or memory fragment with the unified System 1
+   * ingress commitment pre-filter (HBPE `/decision/ingress` + Contrastive `noul`).
+   */
+  @Post('ingress')
+  @RequireCapability(READ_CAPABILITY)
+  async scoreIngress(
+    @Context() context: RequestContext,
+    @Body() body: unknown,
+  ): Promise<IngressCommitmentScore> {
+    const parsed = ingressRequestSchema.safeParse(body ?? {});
+
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+
+    return this.decisionService.scoreIngressCommitment(parsed.data.text, {
+      userId: context?.userId,
+      threshold: parsed.data.threshold,
+    });
   }
 }

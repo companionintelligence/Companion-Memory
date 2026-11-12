@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
@@ -6,6 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -82,6 +83,7 @@ export class TodoScanService {
     private readonly dataSource: DataSource,
     private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
+    @Optional() private readonly decisionService?: ContrastiveDecisionService,
   ) {
     this.logger.setContext(TodoScanService.name);
   }
@@ -119,7 +121,8 @@ export class TodoScanService {
       }),
     );
     const claimedEntities = claimedSourceIds(tracked, 'sourceEntityId');
-    const fresh = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const unclaimed = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const fresh = await this.filterSystem1ActionableHits(context, unclaimed);
 
     if (fresh.length === 0) {
       this.logger.debug('Todo scan found no unprocessed memory hits', { userId, seen: hits.length });
@@ -402,6 +405,34 @@ export class TodoScanService {
     const outcome = interpretClassify(content, batch.length, () => undefined);
 
     return outcome.ok ? { candidates: outcome.candidates } : null;
+  }
+
+  private async filterSystem1ActionableHits(
+    context: UserServiceContext,
+    hits: readonly MemoryHit[],
+  ): Promise<MemoryHit[]> {
+    if (!this.decisionService) {
+      return [...hits];
+    }
+
+    const actionable: MemoryHit[] = [];
+
+    for (const hit of hits) {
+      try {
+        const score = await this.decisionService.scoreIngressCommitment(hit.text, {
+          userId: context.userId,
+          threshold: 0.25,
+        });
+
+        if (score.isCommitment) {
+          actionable.push(hit);
+        }
+      } catch {
+        actionable.push(hit);
+      }
+    }
+
+    return actionable;
   }
 }
 

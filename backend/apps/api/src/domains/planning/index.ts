@@ -22,6 +22,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventsModule } from '@ci/domains/events';
 import { LlmCoreModule } from '@ci/domains/llm/core.module';
 import { CommunicationEntity, EventEntity, MemoryModule } from '@ci/domains/memory';
+import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { PersonalizationModule } from '@ci/domains/personalization';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserEntity, UserModule } from '@ci/domains/user';
@@ -82,6 +83,7 @@ import { TaskModule, TaskService } from './task.module';
     EventsModule,
     UserModule,
     MemoryModule,
+    ModelRoutingModule,
     SearchNextModule,
     LlmCoreModule,
     PersonalizationModule,
@@ -152,6 +154,7 @@ export {
 export { PLANNING_PREFS_DEFAULTS };
 
 export { isValidTimezone, localDateInTZ, todayInTZ, zonedWallTimeToUTC } from '@ci/common/time/zoned';
+export { classifyTaskL0, type TaskL0Class } from './engine/taskL0Classifier';
 
 export type { TaskStatus } from './taskStatus';
 export type { ReminderStatus, ReminderSource } from './reminderStatus';
