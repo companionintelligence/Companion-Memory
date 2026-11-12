@@ -227,7 +227,7 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(count).not.toHaveBeenCalled();
   });
 
-  it('media.findPhotos passes countOnly through with the file scope fixed, query optional', async () => {
+  it('media.findPhotos passes countOnly through with the photo content scope fixed, query optional', async () => {
     const count = jest.fn().mockResolvedValue(5);
     const { tool: search } = makeTool({ search: { count } });
     const photos = new MediaFindPhotosTool(search, noPlaces(), logger());
@@ -241,14 +241,16 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(count).toHaveBeenNthCalledWith(
       1,
       { userId: CONTEXT.userId },
-      { query: 'rabbit', includeTypes: ['file'] },
+      { query: 'rabbit', includeTypes: ['content'], mediaContentOnly: true },
     );
+    // Says what was counted, and how many photos a subject word can see at all.
+    expect(withQuery.data?.summary).toMatch(/^5 photos and videos match "rabbit"/);
 
     expect(all.success).toBe(true);
     expect(count).toHaveBeenNthCalledWith(
       2,
       { userId: CONTEXT.userId },
-      { query: undefined, includeTypes: ['file'] },
+      { query: undefined, includeTypes: ['content'], mediaContentOnly: true },
     );
   });
 

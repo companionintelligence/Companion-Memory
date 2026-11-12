@@ -137,7 +137,19 @@ export type SearchResult =
 export type SearchResultItem = WithoutOwner<SearchResult> & {
   type: IndexableEntity;
   link?: string;
+  /**
+   * When a photo or video was taken (its media event's start, ISO 8601), on a content hit or a
+   * file hit through its content row. Absent for anything else and for an undated photo. The only
+   * date on a photo hit that means anything: `createdAt` is when it was imported.
+   */
+  takenAt?: string;
 };
+
+/** What a domain-scoped intent can ask of {@link DatabaseSearchTool.run} beyond the model's own input. */
+export interface DatabaseSearchScope {
+  /** Content hits must be photos or videos (`ci.content.type = 'media'`). See SearchService. */
+  mediaContentOnly?: boolean;
+}
 
 /** `T` minus its `user` relation, member by member when `T` is a union (plain `Omit` keeps only the shared keys). */
 type WithoutOwner<T> = T extends unknown ? Omit<T, 'user'> : never;
@@ -442,9 +454,14 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
    * calendar.findEvents, media.findPhotos) can reuse it with a fixed entity-type scope instead of
    * re-implementing search. Input is assumed already validated by the caller.
    */
-  async run(context: ToolExecutionContext, input: DatabaseSearchInput): Promise<SearchToolResult> {
+  async run(
+    context: ToolExecutionContext,
+    input: DatabaseSearchInput,
+    scope: DatabaseSearchScope = {},
+  ): Promise<SearchToolResult> {
     const serviceContext = toServiceContext(context);
     const includeTypes = input.entityTypes as IndexableEntity[];
+    const mediaContentOnly = scope.mediaContentOnly === true;
 
     if (input.countOnly) {
       // A count is a `count(*)` against the full-text index: no cap, no rows,
@@ -460,14 +477,17 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         this.searchService.count(serviceContext, {
           query,
           includeTypes,
+          ...(mediaContentOnly ? { mediaContentOnly } : {}),
           ...(input.since != null ? { since: new Date(input.since) } : {}),
           ...(input.until != null ? { until: new Date(input.until) } : {}),
         }),
-        includeTypes?.includes('file') ? this.fileService.describedImageCoverage(serviceContext) : undefined,
+        includeTypes?.includes('file') || mediaContentOnly
+          ? this.fileService.describedImageCoverage(serviceContext)
+          : undefined,
       ]);
 
       return {
-        summary: describeCount(totalMatches, query, includeTypes, coverage),
+        summary: describeCount(totalMatches, query, includeTypes, coverage, mediaContentOnly),
         totalMatches,
         truncated: false,
         limit: 0,
@@ -487,6 +507,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       mode: timed ? 'keyword' : input.searchMode,
       includeTypes,
       maxResults: input.maxResults,
+      ...(mediaContentOnly ? { mediaContentOnly } : {}),
       ...(input.since != null ? { since: new Date(input.since) } : {}),
       ...(input.until != null ? { until: new Date(input.until) } : {}),
       ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
@@ -501,6 +522,72 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       limit: page.limit,
       mode: page.modeTaken,
       items,
+    };
+  }
+
+  /**
+   * When each photo or video hit was taken: the start of the media event its content row links,
+   * for a content hit, or for a file hit through the content row its link opens (the first, as
+   * `itemLink` takes). Not media, undated, or its event deleted: no date. Two lookups per page,
+   * and none when it holds no photo.
+   */
+  private async photoTakenAt(
+    context: UserServiceContext,
+    results: EntityIdentifier<IndexableEntity>[],
+    resultMap: ReadonlyMap<string, SearchResult>,
+    contentIdsByFile: ReadonlyMap<string, readonly string[]>,
+  ): Promise<(result: EntityIdentifier<IndexableEntity>) => string | undefined> {
+    const contentIdOf = (result: EntityIdentifier<IndexableEntity>): string | undefined =>
+      result.type === 'content'
+        ? result.id
+        : result.type === 'file'
+          ? contentIdsByFile.get(result.id)?.[0]
+          : undefined;
+
+    // A content hit is already hydrated; a file's content row is not.
+    const contentById = new Map<string, Content>();
+    const missing: string[] = [];
+
+    for (const result of results) {
+      const contentId = contentIdOf(result);
+
+      if (contentId == null || contentById.has(contentId) || missing.includes(contentId)) {
+        continue;
+      }
+
+      const hydrated = resultMap.get(makeCompositeKey('content', contentId)) as Content | undefined;
+
+      if (hydrated) {
+        contentById.set(contentId, hydrated);
+      } else if (result.type === 'file') {
+        missing.push(contentId);
+      }
+    }
+
+    const fetched = missing.length > 0 ? await this.contentService.findByIds(context, missing) : [];
+
+    for (const row of fetched) {
+      if (row) {
+        contentById.set(row.id, row);
+      }
+    }
+
+    const eventIdByContent = new Map(
+      [...contentById.values()].flatMap((row) =>
+        row.type === 'media' && row.eventId ? [[row.id, row.eventId] as const] : [],
+      ),
+    );
+    const events = await this.eventService.findByIds(context, [...new Set(eventIdByContent.values())]);
+    const startById = new Map(
+      events.flatMap((event) => (event ? [[event.id, event.startTime] as const] : [])),
+    );
+
+    return (result) => {
+      const contentId = contentIdOf(result);
+      const eventId = contentId != null ? eventIdByContent.get(contentId) : undefined;
+      const start = eventId != null ? startById.get(eventId) : undefined;
+
+      return start != null ? new Date(start).toISOString() : undefined;
     };
   }
 
@@ -630,6 +717,8 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         ? await this.contentService.findIdsByFileIds(context, hydratedFileIds)
         : new Map<string, string[]>();
 
+    const takenAtOf = await this.photoTakenAt(context, results, resultMap, contentIdsByFile);
+
     const orderedResults = results.flatMap((result): SearchResultItem[] => {
       const entity = resultMap.get(makeCompositeKey(result.type, result.id));
 
@@ -638,8 +727,16 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       }
 
       const link = itemLink(result.type, result.id, contentIdsByFile);
+      const takenAt = takenAtOf(result);
 
-      return [{ ...stripOwnerRecord(entity), type: result.type, ...(link && { link }) }];
+      return [
+        {
+          ...stripOwnerRecord(entity),
+          type: result.type,
+          ...(link && { link }),
+          ...(takenAt && { takenAt }),
+        },
+      ];
     });
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
@@ -668,7 +765,11 @@ function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
 }
 
-function scopeLabel(includeTypes: IndexableEntity[] | undefined): string {
+function scopeLabel(includeTypes: IndexableEntity[] | undefined, mediaContentOnly = false): string {
+  if (mediaContentOnly) {
+    return 'photos and videos';
+  }
+
   return includeTypes && includeTypes.length > 0 ? `${includeTypes.join('/')} entries` : 'entries';
 }
 
@@ -682,10 +783,11 @@ export function describeCount(
   query: string | undefined,
   includeTypes?: IndexableEntity[],
   coverage?: { images: number; described: number },
+  mediaContentOnly = false,
 ): string {
   const what = query
-    ? `${totalMatches} ${scopeLabel(includeTypes)} match "${query}"`
-    : `${totalMatches} ${scopeLabel(includeTypes)} in Memory`;
+    ? `${totalMatches} ${scopeLabel(includeTypes, mediaContentOnly)} match "${query}"`
+    : `${totalMatches} ${scopeLabel(includeTypes, mediaContentOnly)} in Memory`;
   const base = `${what} (exact count from the search index; no items returned).`;
 
   if (!coverage) {

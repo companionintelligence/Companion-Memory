@@ -14,6 +14,19 @@
  * `events_location_entity_idx` makes the lookup an index probe; the shared index statement
  * also advances the stored time whenever an event at the place is indexed, so it keeps up
  * with new visits without re-indexing the place.
+ *
+ * A photo's or a video's time is when it was taken: the start of the media event its content row
+ * links (`ci.content.event_id`), which the import (from EXIF or the container) and a phone
+ * capture both set. The content row's `created_at` is when it was imported, and an import lands
+ * a whole library in minutes, so under that rule "most recent" was import order (seen
+ * 2026-11-11: 1,900 photos from a Drive import, all one evening, 2019 shots sorted beside
+ * 2026 ones). A file follows its content row to the same event (the rows ContentService
+ * `findIdsByFileIds` treats as its wrapper: kind 'file', or none on older rows). Never
+ * `ci.files.event_id`: that is the event a file was captured alongside (a screenshot's
+ * desktop-activity tick), not when a photo was taken. A photo or video with no media event has no time (NULL: last under "most
+ * recent", outside any window), not its import time, which would put every undated photo above
+ * every dated one; only a taken-at source dates a photo. Content and files that are not media (a
+ * Drive document, a YouTube like, a PDF) keep their own time.
  */
 export function entityTimeSql(alias?: string): string {
   const type = alias ? `${alias}.entity_type` : 'entity_type';
@@ -23,8 +36,20 @@ export function entityTimeSql(alias?: string): string {
     WHEN 'communication' THEN (SELECT c.time FROM ci.communications c WHERE c.id = ${id})
     WHEN 'event' THEN (SELECT e.start_time FROM ci.events e WHERE e.event_id = ${id})
     WHEN 'note' THEN (SELECT n.created_at FROM ci.notes n WHERE n.id = ${id})
-    WHEN 'content' THEN (SELECT ct.created_at FROM ci.content ct WHERE ct.id = ${id})
-    WHEN 'file' THEN (SELECT COALESCE(f.external_created_at, f.created_at) FROM ci.files f WHERE f.id = ${id})
+    WHEN 'content' THEN (
+      SELECT CASE WHEN ct.type = 'media'
+                  THEN (SELECT me.start_time FROM ci.events me WHERE me.event_id = ct.event_id)
+                  ELSE ct.created_at END
+        FROM ci.content ct WHERE ct.id = ${id})
+    WHEN 'file' THEN (
+      SELECT COALESCE(
+               (SELECT min(fe.start_time)
+                  FROM ci.content fc JOIN ci.events fe ON fe.event_id = fc.event_id
+                 WHERE fc.user_id = f.user_id AND fc.external_id = f.id::text
+                   AND (fc.external_id_kind = 'file' OR fc.external_id_kind IS NULL)),
+               CASE WHEN f.content_type ~* '^(image|video)/' THEN NULL
+                    ELSE COALESCE(f.external_created_at, f.created_at) END)
+        FROM ci.files f WHERE f.id = ${id})
     WHEN 'file-chunk' THEN (SELECT fc.created_at FROM ci.file_chunks fc WHERE fc.id = ${id})
     WHEN 'message' THEN (SELECT m.created_at FROM ci.messages m WHERE m.message_id = ${id})
     WHEN 'thread' THEN (SELECT COALESCE(t.last_message_at, t.created_at) FROM ci.threads t WHERE t.thread_id = ${id})

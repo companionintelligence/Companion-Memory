@@ -260,7 +260,9 @@ export class ContentService {
       sourceSystem: item.source_system ?? undefined,
       sourceId: item.source_id ?? undefined,
       connectionId: item.connection_id ?? undefined,
+      // Both mappings of `event_id`, from the one value, so the save cannot be handed two.
       event,
+      eventId: event?.id,
       userId: context.userId,
     });
   }

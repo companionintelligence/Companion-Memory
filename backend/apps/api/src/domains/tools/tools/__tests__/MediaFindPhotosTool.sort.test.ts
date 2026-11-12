@@ -47,8 +47,20 @@ describe('media.findPhotos sort', () => {
 
     expect(search.run).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ query: 'squirrel', entityTypes: ['file'], sort: 'recent' }),
+      expect.objectContaining({ query: 'squirrel', entityTypes: ['content'], sort: 'recent' }),
+      { mediaContentOnly: true },
     );
+  });
+
+  // Only the content row links the media event that says when a photo was taken; a file's own
+  // time is when it was imported, so "newest first" over files was import order.
+  it('searches photo and video content rows, not files', async () => {
+    const { tool, search } = makeTool();
+
+    await tool.execute(CONTEXT, { query: 'squirrel' });
+
+    expect(search.run.mock.calls[0][1]).toMatchObject({ entityTypes: ['content'] });
+    expect(search.run.mock.calls[0][2]).toEqual({ mediaContentOnly: true });
   });
 
   it('accepts the one-element array a small model writes, as the search tool does', async () => {
@@ -56,7 +68,9 @@ describe('media.findPhotos sort', () => {
 
     await tool.execute(CONTEXT, { query: 'squirrel', sort: ['recent'] });
 
-    expect(search.run).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ sort: 'recent' }));
+    expect(search.run).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ sort: 'recent' }), {
+      mediaContentOnly: true,
+    });
   });
 
   it('leaves the order to the search when no sort is asked for', async () => {
