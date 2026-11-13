@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import { LoadMoreFailed } from '@/components/InfiniteList';
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
 import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import { formatEnumLabel } from '@/lib/utils';
 
@@ -78,13 +79,6 @@ const TimelineRow = memo(function TimelineRow({
     </div>
   );
 });
-
-/**
- * This list is the map's side panel, laid straight over the satellite imagery,
- * where bare text is hard to read. Its errors sit on the same card as the map's
- * own "Couldn't load the map" (MapStatusOverlay).
- */
-const PANEL_CARD_CLASS = 'rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur';
 
 interface TimelineViewProps {
   activeEntityId?: string | null;
@@ -182,9 +176,12 @@ export function TimelineView({
     );
   }
 
+  // This list is the map's side panel, laid straight over the satellite
+  // imagery, where bare text is hard to read. Its errors sit on the same card
+  // as the map's own "Couldn't load the map" (MapStatusOverlay).
   if (error && timelineData.length === 0) {
     return (
-      <div className={cn('m-3', PANEL_CARD_CLASS)}>
+      <div className={cn('m-3', MAP_CARD_CLASS)}>
         <ErrorState onRetry={refetch} className="px-4 py-6" />
       </div>
     );
@@ -274,7 +271,7 @@ export function TimelineView({
         {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
 
         {pageFailed && (
-          <div className={cn('ml-8 mt-4', PANEL_CARD_CLASS)}>
+          <div className={cn('ml-8 mt-4', MAP_CARD_CLASS)}>
             <LoadMoreFailed
               noun="events"
               message={error.message}

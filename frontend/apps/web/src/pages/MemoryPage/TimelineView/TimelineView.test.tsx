@@ -2,6 +2,8 @@ import { fireEvent, render, screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
+
 import type { EntityItem } from '../useEntityService';
 
 const mocks = vi.hoisted(() => ({
@@ -142,7 +144,7 @@ describe('TimelineView', () => {
 
     renderTimeline('/memory?view=map');
 
-    expect(screen.getByRole('alert').parentElement).toHaveClass('bg-card/95', 'border', 'rounded-lg');
+    expect(screen.getByRole('alert').parentElement).toHaveClass(MAP_CARD_CLASS);
   });
 
   it('keeps the map side panel blank when there are no timeline rows', () => {
@@ -274,10 +276,8 @@ describe('TimelineView', () => {
 
     renderTimeline('/memory?view=map');
 
-    expect(screen.getByText("Couldn't load more events: timed out").parentElement?.parentElement).toHaveClass(
-      'bg-card/95',
-      'border',
-      'rounded-lg',
+    expect(screen.getByText("Couldn't load more events: timed out").closest('.rounded-lg')).toHaveClass(
+      MAP_CARD_CLASS,
     );
   });
 

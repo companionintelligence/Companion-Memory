@@ -21,6 +21,7 @@ import { listLocalPins } from '@/api/powersync/localList';
 import { getReplicaDatabase } from '@/api/powersync/session';
 import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map, MapAttribution } from '@/components/Map';
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
 import { useMapIsolation } from '@/components/Map/mapIsolation';
 import { type MarkerVariant } from '@/components/Map/Marker';
 import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
@@ -1086,7 +1087,7 @@ function MapStatusOverlay({
         ref={isolate}
         role="status"
         aria-live="polite"
-        className="pointer-events-auto relative max-w-sm rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur"
+        className={cn('pointer-events-auto relative max-w-sm', MAP_CARD_CLASS)}
       >
         {!loading && (
           <Button
