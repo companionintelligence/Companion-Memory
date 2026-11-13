@@ -758,7 +758,7 @@ describe('DeadLetterReaperListener', () => {
 
     /**
      * The shape every dead letter has had since pg-boss 12: the copy is a new
-     * job that has not run, so its `output` is NULL, and the failed job's output
+     * job that has not run, so its `output` is NULL. The failed job's output
      * and queue ride along as `source_output` and `source_name`. Reading
      * `output` alone filed every one of these as `dead-letter` with the "no
      * recorded output" placeholder.
@@ -795,6 +795,23 @@ describe('DeadLetterReaperListener', () => {
       const [letter] = await lettersFor([id]);
       expect(letter.queue).toBe('file-preview-generation');
       expect(letter.error).toContain('job failed by timeout in active state');
+    });
+
+    it.each([
+      ['a blank `source_name`', ''],
+      ['a `source_name` that is the dead-letter queue itself', DEAD_LETTER_QUEUE],
+    ])('keeps `dead-letter` for %s when the failure names no queue', async (_label, sourceName) => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded' },
+        sourceName,
+        sourceOutput: { message: 'boom' },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe(DEAD_LETTER_QUEUE);
+      expect(letter.error).toBe('boom');
     });
 
     it.each([

@@ -47,7 +47,8 @@ import { pipelineDeadLetterReapPayloadSchema } from '../types';
  * Polling `pgboss.job` avoids that entirely and is better on its own merits:
  *
  *  - it captures EVERY event name, not the ones somebody remembered to register;
- *  - it captures `job.output`, which carries the actual error and stack. The
+ *  - it captures the failed job's output (`source_output` on the copy since
+ *    pg-boss 12), which carries the actual error and stack. The
  *    dispatch path cannot: `executeJob` hands the listener `job.data` only, so a
  *    subscribing reaper would record a failure with no failure in it;
  *  - it never completes or deletes anything, so pg-boss's own copy stays
@@ -202,8 +203,8 @@ export class DeadLetterReaperListener {
     //    fanned it out to every queue listening for the event: a `file.uploaded`
     //    that failed only its preview re-ran all six of its listeners. A blank,
     //    non-string or `dead-letter` value falls back to `source_name`, as does
-    //    an output with no queue (pg-boss's own expiry writes one, and so did
-    //    every failure before this field existed). A copy with neither (made by
+    //    an output with no queue (pg-boss's own expiry writes one; so did every
+    //    failure before this field existed). A copy with neither (made by
     //    pg-boss 10) falls back to `j.name` and still replays by listener
     //    registration.
     //  - `payload` is `j.data` VERBATIM. Never wrapped, never enriched — a dead
