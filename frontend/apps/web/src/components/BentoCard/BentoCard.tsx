@@ -108,12 +108,14 @@ export function BentoCard({
           {/* The clamp only counts lines in block flow. Insight and summary
               descriptions are a flex column, which is its own formatting
               context, so their text ran on uncut (13 lines and more); the
-              column is laid out as a plain block here. Parts marked
+              column is laid out as a plain block here. A table, or a code
+              block that scrolls (as `prose` makes it), is its own formatting
+              context too, so the row leaves both out. Parts marked
               `data-row-extra` belong to the full card only. */}
           <div
             className={cn(
               'mt-0.5 line-clamp-2 text-sm leading-snug text-muted-foreground',
-              '[&>div]:block [&_[data-row-extra]]:hidden',
+              '[&>div]:block [&_[data-row-extra]]:hidden [&_pre]:hidden [&_table]:hidden',
               '[&_p]:m-0 [&_p]:inline [&_p+p]:hidden',
               '[&_ul]:hidden [&_ol]:hidden [&_h1]:hidden [&_h2]:hidden [&_h3]:hidden',
               '[&_.inline-flex]:hidden [&_img]:hidden',
