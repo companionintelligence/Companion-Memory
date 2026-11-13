@@ -291,7 +291,7 @@ export function reciprocalRankFusion<T extends { id: string; type: IndexableEnti
 function buildTimeFilter(
   options: { since?: Date; until?: Date },
   paramOffset: number,
-  alias?: string,
+  alias: string,
 ): { clause: string; params: string[] } {
   const clauses: string[] = [];
   const params: string[] = [];
@@ -311,7 +311,7 @@ function buildTimeFilter(
 }
 
 /** The ORDER BY a lexical page runs: rank, or each row's own time newest first with rank as the tie-break. */
-function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias?: string): string {
+function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias: string): string {
   return sort === 'recent' ? `${entityTimeSql(alias)} DESC NULLS LAST, score DESC` : 'score DESC';
 }
 
@@ -670,8 +670,8 @@ export class SearchService {
     scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 3);
-    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0));
+    const typeFilter = this.buildTypeFilter(scope, 3, 'v');
+    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
       WITH q AS (
@@ -679,11 +679,11 @@ export class SearchService {
       )
       SELECT count(*) AS total_matches
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
         ${timeFilter.clause}
     `;
@@ -705,13 +705,13 @@ export class SearchService {
     scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 2);
-    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0));
+    const typeFilter = this.buildTypeFilter(scope, 2, 'v');
+    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
       SELECT count(*) AS total_matches
-      FROM ci_search.vectors
-      WHERE user_id = $1
+      FROM ci_search.vectors v
+      WHERE v.user_id = $1
         ${typeFilter.clause}
         ${timeFilter.clause}
     `;
@@ -1447,8 +1447,8 @@ export class SearchService {
   private async keywordSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
-    const typeFilter = this.buildTypeFilter(options, 3);
-    const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0));
+    const typeFilter = this.buildTypeFilter(options, 3, 'v');
+    const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0), 'v');
     const { weights } = await this.rankingLiterals();
 
     // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
@@ -1460,19 +1460,19 @@ export class SearchService {
         SELECT ${KEYWORD_TSQUERY_SQL} AS tq
       )
       SELECT
-        entity_id,
-        entity_type,
-        ts_rank('${weights}', vector, q.tq) as score,
+        v.entity_id,
+        v.entity_type,
+        ts_rank('${weights}', v.vector, q.tq) as score,
         count(*) OVER () AS total_matches
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
         ${timeFilter.clause}
-      ORDER BY ${lexicalOrderSql(options.sort)}
+      ORDER BY ${lexicalOrderSql(options.sort, 'v')}
       LIMIT ${maxResults}
     `;
 

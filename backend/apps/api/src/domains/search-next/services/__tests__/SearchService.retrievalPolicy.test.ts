@@ -65,7 +65,7 @@ describe('SearchService under the fail-open baseline — SQL is unchanged', () =
     await service.search(CONTEXT, { query: 'dog breed info' });
 
     const [sql] = query.mock.calls[0] as [string];
-    expect(sql).toContain("ts_rank('{0.1, 0.2, 0.4, 1.0}', vector, q.tq)");
+    expect(sql).toContain("ts_rank('{0.1, 0.2, 0.4, 1.0}', v.vector, q.tq)");
   });
 
   it('boosted search still multiplies by (1 + 0.5 * similarity)', async () => {
@@ -105,7 +105,7 @@ describe('SearchService under a promoted v2', () => {
     await service.search(CONTEXT, { query: 'dog breed info' });
 
     const [sql] = query.mock.calls[0] as [string];
-    expect(sql).toContain("ts_rank('{0.05, 0.25, 0.5, 0.9}', vector, q.tq)");
+    expect(sql).toContain("ts_rank('{0.05, 0.25, 0.5, 0.9}', v.vector, q.tq)");
     expect(sql).not.toContain('{0.1, 0.2, 0.4, 1.0}');
   });
 
@@ -174,7 +174,7 @@ describe('SearchService — a policy that would produce unsafe SQL', () => {
     await service.search(CONTEXT, { query: 'dog breed info' });
 
     const [sql] = query.mock.calls[0] as [string];
-    expect(sql).toContain("ts_rank('{0.1, 0.2, 0.4, 1.0}', vector, q.tq)");
+    expect(sql).toContain("ts_rank('{0.1, 0.2, 0.4, 1.0}', v.vector, q.tq)");
     expect(sql).not.toContain('NaN');
   });
 });
