@@ -35,15 +35,27 @@ describe('prefixTermOf', () => {
   });
 
   it('keeps letters and digits only, so no tsquery syntax reaches the query', () => {
-    expect(prefixTermOf("O'Br")).toBe('obr');
-    expect(prefixTermOf('jor:* | !x')).toBe('x');
+    expect(prefixTermOf('jor:* | !xy')).toBe('xy');
     expect(prefixTermOf('Zoë')).toBe('zoë');
+    expect(prefixTermOf('3M')).toBe('3m');
+  });
+
+  it('takes the part after an apostrophe or hyphen, as Postgres splits the word', () => {
+    // "O'Brien" is indexed as `o` and `brien`, "Jean-Pierre" with a `pierr` part.
+    expect(prefixTermOf("O'Br")).toBe('br');
+    expect(prefixTermOf('Jean-Pi')).toBe('pi');
   });
 
   it('is null when nothing usable is left', () => {
     expect(prefixTermOf('')).toBeNull();
     expect(prefixTermOf('   ')).toBeNull();
-    expect(prefixTermOf('coffee :*')).toBeNull();
+    expect(prefixTermOf(':*')).toBeNull();
+  });
+
+  it('is null for a single letter, which would match nearly every row', () => {
+    expect(prefixTermOf('J')).toBeNull();
+    expect(prefixTermOf('Jordan H')).toBeNull();
+    expect(prefixTermOf('Jo')).toBe('jo');
   });
 });
 

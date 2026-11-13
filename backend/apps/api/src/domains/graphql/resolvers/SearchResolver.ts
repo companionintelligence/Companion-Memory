@@ -1124,7 +1124,7 @@ export class SearchResolver {
     const viaMedia = await eventsForMatchingMedia(
       { searchService: this.searchService, contentService: this.contentService },
       context,
-      { query, maxResults: options.maxResults, semantic },
+      { query, maxResults: options.maxResults, semantic, prefix },
     );
 
     return mergeIdentifiers(direct, viaMedia);

@@ -191,6 +191,14 @@ describeWithDatabase(`SearchService scoping against a live Postgres (${availabil
 
       expect(both[0]?.id).toBe(jordanHale);
     });
+
+    it('prefix: finds the part of a name after an apostrophe, as Postgres indexes it', async () => {
+      const obrien = await seedVector(userA, 'person', "Pat O'Brien");
+
+      const results = await service.search(contextA, { query: "O'Br", mode: 'keyword', prefix: true });
+
+      expect(results.map(({ id }) => id)).toEqual([obrien]);
+    });
   });
 
   describe('semanticSearch (mode: semantic)', () => {

@@ -501,16 +501,27 @@ const DEFAULT_MAX_RESULTS = 25;
 const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery`;
 
 /**
- * The last word of a query, reduced to letters and digits and lower-cased, for
- * a `to_tsquery('simple', ... || ':*')` prefix match; `null` when nothing is
- * left. Only letters and digits survive, so the bound value can never carry
- * tsquery syntax of its own.
+ * Shortest half-typed word matched as a prefix. One letter matches a lexeme in
+ * nearly every indexed row, and the keyword query ranks every match before its
+ * LIMIT, so a menu searching on each keystroke would rank the whole corpus on
+ * the first one.
+ */
+const MIN_PREFIX_LENGTH = 2;
+
+/**
+ * The last run of letters and digits in a query, lower-cased, for a
+ * `to_tsquery('simple', ... || ':*')` prefix match; `null` when it is shorter
+ * than {@link MIN_PREFIX_LENGTH}. The last RUN, not the last word with its
+ * punctuation squeezed out: Postgres indexes "O'Brien" as `o` and `brien` and
+ * "Jean-Pierre" with a `pierr` part, so "O'Br" has to look for `br` and
+ * "Jean-Pi" for `pi`. Only letters and digits survive, so the bound value can
+ * never carry tsquery syntax of its own.
  */
 export function prefixTermOf(query: string): string | null {
-  const words = query.trim().split(/\s+/);
-  const last = (words[words.length - 1] ?? '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+  const runs = query.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const last = (runs[runs.length - 1] ?? '').toLowerCase();
 
-  return last.length > 0 ? last : null;
+  return last.length >= MIN_PREFIX_LENGTH ? last : null;
 }
 
 @Injectable()
