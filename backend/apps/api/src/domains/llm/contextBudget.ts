@@ -161,6 +161,12 @@ export function resolveContextBudget(
      * that leaves it. A `CI_LLM_NUM_CTX` window is a decision and never grows.
      */
     toolDefinitionBytes?: number;
+    /**
+     * False when the backend fixes the window itself and ignores `num_ctx` (an
+     * OpenAI-compatible server). The window then never grows for the tools;
+     * they come out of it like out of a configured one.
+     */
+    windowCanGrow?: boolean;
   } = {},
 ): ContextBudget {
   const env = options.env ?? process.env;
@@ -178,7 +184,9 @@ export function resolveContextBudget(
   const toolBytes = Math.max(0, Math.floor(options.toolDefinitionBytes ?? 0));
   const reservedToolTokens = Math.ceil(toolBytes / TOOL_DEFINITION_BYTES_PER_TOKEN);
   const maxContextTokens =
-    fromHub == null ? windowBesideTools(plannedContextTokens, reservedToolTokens) : plannedContextTokens;
+    fromHub == null && options.windowCanGrow !== false
+      ? windowBesideTools(plannedContextTokens, reservedToolTokens)
+      : plannedContextTokens;
   // The rest of the plan is made on what the tools leave, exactly as a turn
   // without tools plans its whole window.
   const conversationTokens = maxContextTokens - reservedToolTokens;

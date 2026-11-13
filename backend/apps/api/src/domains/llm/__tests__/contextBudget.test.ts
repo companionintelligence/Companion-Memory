@@ -193,6 +193,20 @@ describe('resolveContextBudget with tool definitions', () => {
     expect(budget.promptBudgetBytes).toBe(2048);
   });
 
+  it('never grows a window the backend fixes itself, but still holds the tools out of it', () => {
+    // An OpenAI-compatible server runs the window it reports and ignores `num_ctx`.
+    const budget = resolveContextBudget({
+      env: {},
+      measuredContextTokens: 8192,
+      toolDefinitionBytes: TOOL_BYTES,
+      windowCanGrow: false,
+    });
+
+    expect(budget.maxContextTokens).toBe(8192);
+    expect(budget.reservedToolTokens).toBe(toolTokens);
+    expect(budget.promptBudgetBytes).toBe(2048);
+  });
+
   it('stops at the top rung however long the tool list is', () => {
     const budget = resolveContextBudget({ env: {}, toolDefinitionBytes: 200_000 });
 

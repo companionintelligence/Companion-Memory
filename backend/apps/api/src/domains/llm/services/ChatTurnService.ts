@@ -679,6 +679,7 @@ export class ChatTurnService {
       toolDefinitionBytes: payload.enableTools
         ? (this.ollamaService.toolDefinitionBytes?.(requestContext) ?? 0)
         : 0,
+      windowCanGrow: this.ollamaService.chatWindowCanGrow?.() ?? true,
     });
 
     // Which messages re-send their attachments is settled over the whole thread, BEFORE admission,
