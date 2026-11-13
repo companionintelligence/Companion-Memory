@@ -52,10 +52,10 @@ pub struct LocalModelResolution {
 
 /// What stack_manager::write_env_file's `.env` needs changed after this
 /// resolution: an LLM_API_BASE/LLM_API_KEY override when (and only when) the
-/// Apple bridge is handling chat, and a chat model when the user's own Ollama
+/// Apple bridge is handling chat, or a chat model when the user's own Ollama
 /// does not have DEFAULT_CHAT_MODEL. Every other outcome relies on
-/// CI-Server's existing OLLAMA_HOST default already pointing at 11434 — see
-/// the module doc comment.
+/// CI-Server's existing OLLAMA_HOST default already pointing at 11434 (see
+/// the module doc comment).
 #[derive(Debug, Clone, Default)]
 pub struct LlmEnvOverride {
     pub llm_api_base: Option<String>,
@@ -176,9 +176,10 @@ impl LocalModelHandles {
     ///
     /// Applies the resulting env override itself, on the fresh-resolution
     /// path only — never on a cache hit, since stack_manager::
-    /// apply_llm_env_override is a plain append and every later call
-    /// (a manual "Start Stack" from the tray, say) would otherwise duplicate
-    /// the same LLM_API_BASE/LLM_API_KEY lines into `.env` on every restart.
+    /// apply_llm_env_override appends LLM_API_BASE/LLM_API_KEY and every later
+    /// call (a manual "Start Stack" from the tray, say) would otherwise
+    /// duplicate those lines into `.env` on every restart. (Its chat-model
+    /// rewrite replaces lines instead, so that half is safe to repeat.)
     ///
     /// Blocking (network calls, subprocess spawns, potentially a
     /// several-hundred-MB download) — call via spawn_blocking, matching every

@@ -312,8 +312,9 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
 
 /// Appends the LLM_API_BASE/LLM_API_KEY override
 /// local_model::LocalModelHandles::resolve_once resolved (Apple-on-device-
-/// for-chat only — every other outcome relies on the existing OLLAMA_HOST
-/// default and calls this with an empty override, a harmless no-op).
+/// for-chat only). The HostOllama branch may instead carry a chat model (see
+/// below). Every other outcome relies on the existing OLLAMA_HOST default
+/// and calls this with an empty override, a harmless no-op.
 /// Additive rather than rewriting write_env_file's own content: it never
 /// writes these two keys itself, so there's no duplicate-key risk, and this
 /// keeps "the no-secrets baseline env" and "the local-model resolution
@@ -325,11 +326,13 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
 ///
 /// The one exception to "additive" is a chat model (a user's own Ollama
 /// without DEFAULT_CHAT_MODEL): write_env_file already wrote
-/// LLM_DEFAULT_CHAT_MODEL, so that line is replaced rather than repeated, and
-/// LLM_UTILITY_MODEL is set beside it. The api's background model defaults to
-/// the same compiled-in tag as chat, not to LLM_DEFAULT_CHAT_MODEL, so
-/// changing only the chat model would leave background work asking for the
-/// missing one.
+/// LLM_DEFAULT_CHAT_MODEL, so that line is replaced rather than repeated.
+/// LLM_UTILITY_MODEL is deliberately left unset. The api's utility calls
+/// already move to the chat model when the utility model is not served (its
+/// residency planner, or utilityModelTheEndpointServes when that is off).
+/// Setting the key would also mark the utility model as an operator's choice,
+/// which sends image turns to it even when a user has picked another chat
+/// model.
 pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::LlmEnvOverride) -> Result<(), String> {
     let env_path = paths.compose_dir.join(".env");
 
@@ -352,18 +355,16 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
         .map_err(|e| format!("Failed to append LLM override to {}: {e}", env_path.display()))
 }
 
-/// `.env` contents with both model keys naming `model`, each exactly once.
+/// `.env` contents with LLM_DEFAULT_CHAT_MODEL naming `model`, exactly once.
 fn with_chat_model(env_contents: &str, model: &str) -> String {
-    const KEYS: [&str; 2] = ["LLM_DEFAULT_CHAT_MODEL", "LLM_UTILITY_MODEL"];
+    const KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
 
     let mut contents: String = env_contents
         .lines()
-        .filter(|line| !KEYS.iter().any(|key| line.split_once('=').is_some_and(|(name, _)| name == *key)))
+        .filter(|line| !line.split_once('=').is_some_and(|(name, _)| name == KEY))
         .map(|line| format!("{line}\n"))
         .collect();
-    for key in KEYS {
-        contents.push_str(&format!("{key}={model}\n"));
-    }
+    contents.push_str(&format!("{KEY}={model}\n"));
     contents
 }
 
@@ -1286,11 +1287,11 @@ mod tests {
 
     /// With a user's own Ollama that lacks the default model, the app names one
     /// it has. The chat model line write_env_file wrote must be replaced, not
-    /// repeated, and the background model set beside it, since the api's
-    /// background model does not follow LLM_DEFAULT_CHAT_MODEL. Everything
-    /// else in the file stays as written, and running it twice changes nothing.
+    /// repeated. LLM_UTILITY_MODEL stays unset (see apply_llm_env_override).
+    /// Everything else in the file stays as written. Running it twice changes
+    /// nothing.
     #[test]
-    fn a_chat_model_override_replaces_the_default_once_and_names_the_background_model_too() {
+    fn a_chat_model_override_replaces_the_default_once() {
         let dir = tempfile::tempdir().unwrap();
         let paths = scratch_paths(&dir);
         fs::create_dir_all(&paths.compose_dir).unwrap();
@@ -1315,13 +1316,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(values("LLM_DEFAULT_CHAT_MODEL"), vec!["qwen3.5:122b"]);
-        assert_eq!(values("LLM_UTILITY_MODEL"), vec!["qwen3.5:122b"]);
+        assert!(values("LLM_UTILITY_MODEL").is_empty(), "the utility model is left to the api");
         assert!(values("LLM_API_BASE").is_empty(), "no endpoint was asked for");
 
         let untouched = |contents: &str| {
             contents
                 .lines()
-                .filter(|line| !line.starts_with("LLM_DEFAULT_CHAT_MODEL=") && !line.starts_with("LLM_UTILITY_MODEL="))
+                .filter(|line| !line.starts_with("LLM_DEFAULT_CHAT_MODEL="))
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         };
