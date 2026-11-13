@@ -42,6 +42,12 @@ import { CHAT_CONTEXT_LADDER } from './residency/footprint';
  * 1 byte/token, and a multiplier there admits 3x the window and overflows. So
  * the budget here is deliberately conservative: 1 byte = 1 token of headroom.
  * It under-fills English threads. It never overflows.
+ *
+ * The tool definitions a turn offers are the one exception. They are counted
+ * at {@link TOOL_DEFINITION_BYTES_PER_TOKEN}, a measured average and not a
+ * bound, because at a byte per token today's list alone would claim a 32k
+ * window. A tokenizer that packs that JSON worse than the measured model can
+ * still overflow the window by the difference.
  */
 
 /** Env var CI-Hub exports with the hardware-appropriate `num_ctx`. */
@@ -69,7 +75,7 @@ const MIN_PROMPT_BUDGET_BYTES = 2_048;
 /**
  * Bytes of tool-definition JSON per token, for the tool list a turn offers.
  *
- * The one place this module divides by a ratio, and only for text this
+ * The one place this module divides by a ratio. It does so only for text this
  * appliance writes itself: the tools' names, descriptions and JSON schemas,
  * ASCII and punctuation-dense. Counted at a byte per token (the bound used for
  * everything else), the 35 tools offered today (31,386 bytes) would claim a
@@ -82,10 +88,13 @@ export const TOOL_DEFINITION_BYTES_PER_TOKEN = 4;
  * The least window a turn with tools keeps for everything else (system prompt,
  * history, answer) once the tool definitions are in: the default window a turn
  * without tools gets. Planned without the tools, the 8k default left gemma4:e4b
- * a few hundred tokens to answer in, and most such turns stopped on "length"
- * with nothing written.
+ * a few hundred tokens to answer in. Most such turns stopped on "length" with
+ * nothing written.
  */
 const MIN_WINDOW_BESIDE_TOOLS = TIER_PROFILES.on_device.maxContextTokens;
+
+/** {@link CHAT_CONTEXT_LADDER}, smallest rung first, for {@link windowBesideTools}. */
+const CHAT_CONTEXT_RUNGS_ASCENDING: readonly number[] = [...CHAT_CONTEXT_LADDER].sort((a, b) => a - b);
 
 /** How many times a context-overflow failure may halve the history budget. */
 export const MAX_CONTEXT_SHRINK_LEVEL = 2;
@@ -107,7 +116,9 @@ export interface ContextBudget {
   /**
    * Hard upper bound on the BYTES of admitted conversation messages. Because
    * `tokens <= bytes`, staying under this keeps the prompt under
-   * `maxContextTokens - reservedToolTokens - reservedOutputTokens - reservedSystemTokens`.
+   * `maxContextTokens - reservedToolTokens - reservedOutputTokens - reservedSystemTokens`,
+   * as far as `reservedToolTokens` (an estimate) holds. When the tools leave
+   * less than the reserves need, the floor of 2,048 bytes applies regardless.
    */
   promptBudgetBytes: number;
   source: ContextBudgetSource;
@@ -181,7 +192,12 @@ export function resolveContextBudget(
   const plannedContextTokens = fromHub ?? measured ?? TIER_PROFILES.on_device.maxContextTokens;
   const source: ContextBudgetSource =
     fromHub != null ? NUM_CTX_ENV_VAR : measured != null ? 'residency-planner' : 'tier-profile';
-  const toolBytes = Math.max(0, Math.floor(options.toolDefinitionBytes ?? 0));
+  // Same rule as `measuredContextTokens`: a value that is not a finite number
+  // is absent, so a NaN cannot poison every reserve and the prompt budget.
+  const toolBytes =
+    typeof options.toolDefinitionBytes === 'number' && Number.isFinite(options.toolDefinitionBytes)
+      ? Math.max(0, Math.floor(options.toolDefinitionBytes))
+      : 0;
   const reservedToolTokens = Math.ceil(toolBytes / TOOL_DEFINITION_BYTES_PER_TOKEN);
   const maxContextTokens =
     fromHub == null && options.windowCanGrow !== false
@@ -229,15 +245,15 @@ export function resolveContextBudget(
  * that much (the top rung when none does). Never smaller than `planned`.
  *
  * A grown window is stable from turn to turn: the planner reports the window
- * the model is resident at, and that rung already leaves enough, so it is used
- * as it is the next time.
+ * the model is resident at. That rung already leaves enough, so it is used as
+ * it is the next time.
  */
 function windowBesideTools(planned: number, toolTokens: number): number {
   if (toolTokens === 0 || planned - toolTokens >= MIN_WINDOW_BESIDE_TOOLS) {
     return planned;
   }
 
-  const rungs = [...CHAT_CONTEXT_LADDER].sort((a, b) => a - b);
+  const rungs = CHAT_CONTEXT_RUNGS_ASCENDING;
   const rung = rungs.find((ctx) => ctx - toolTokens >= MIN_WINDOW_BESIDE_TOOLS) ?? rungs[rungs.length - 1];
 
   return Math.max(planned, rung);

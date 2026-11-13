@@ -154,13 +154,13 @@ describe('resolveContextBudget with tool definitions', () => {
     expect(budget.reservedOutputTokens).toBeGreaterThanOrEqual(2048);
   });
 
-  it("grows a planner's window the same way, and the grown window is stable on the next turn", () => {
+  it("grows a planner's window the same way and keeps the grown window on the next turn", () => {
     const grown = resolveContextBudget({
       env: {},
       measuredContextTokens: 8192,
       toolDefinitionBytes: TOOL_BYTES,
     });
-    // Next turn the model is resident at the grown window, and the planner reports that.
+    // Next turn the model is resident at the grown window. The planner reports that.
     const next = resolveContextBudget({
       env: {},
       measuredContextTokens: grown.maxContextTokens,
@@ -205,6 +205,13 @@ describe('resolveContextBudget with tool definitions', () => {
     expect(budget.maxContextTokens).toBe(8192);
     expect(budget.reservedToolTokens).toBe(toolTokens);
     expect(budget.promptBudgetBytes).toBe(2048);
+  });
+
+  it('treats a tool size that is not a finite number as no tools', () => {
+    const without = resolveContextBudget({ env: {} });
+
+    expect(resolveContextBudget({ env: {}, toolDefinitionBytes: Number.NaN })).toEqual(without);
+    expect(resolveContextBudget({ env: {}, toolDefinitionBytes: Number.POSITIVE_INFINITY })).toEqual(without);
   });
 
   it('stops at the top rung however long the tool list is', () => {
