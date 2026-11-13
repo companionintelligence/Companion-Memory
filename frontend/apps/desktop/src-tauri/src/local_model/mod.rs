@@ -31,7 +31,7 @@ pub mod apple_bridge;
 
 use std::path::Path;
 use std::process::Child;
-use std::sync::Mutex;
+use std::sync::{Mutex, TryLockError};
 
 use serde::Serialize;
 
@@ -69,9 +69,41 @@ pub struct LlmEnvOverride {
 /// once this is Done instead of re-resolving (which would mean
 /// re-probing/possibly re-downloading, and — see resolve_once's doc comment —
 /// re-appending the same `.env` override lines).
+///
+/// A failure is kept too, for the callers that were waiting on it. Two callers
+/// reach resolve_once moments apart at every start (main.rs's startup task and
+/// the splash's start_stack_command), so forgetting a failure meant the second
+/// one, queued behind the first, started the whole resolution over straight
+/// away: on Linux without Ollama, a second download of about 1 GB that failed
+/// the same way. A caller that arrives after a failure has settled (the
+/// splash's Retry, once the network is back) tries again.
 enum ResolutionState {
     NotStarted,
     Done,
+    Failed(String),
+}
+
+impl ResolutionState {
+    /// Runs `resolve` unless an earlier call already settled the outcome. A
+    /// success is kept for good. A failure is handed to a caller that was
+    /// `queued` behind the attempt that failed. A later caller retries it.
+    /// `resolve` is told when it is that retry, so it can clear up after the
+    /// failed attempt first.
+    fn settle(&mut self, queued: bool, resolve: impl FnOnce(bool) -> Result<(), String>) -> Result<(), String> {
+        let retrying = match self {
+            ResolutionState::Done => return Ok(()),
+            ResolutionState::Failed(reason) if queued => return Err(reason.clone()),
+            ResolutionState::Failed(_) => true,
+            ResolutionState::NotStarted => false,
+        };
+
+        let outcome = resolve(retrying);
+        *self = match &outcome {
+            Ok(()) => ResolutionState::Done,
+            Err(reason) => ResolutionState::Failed(reason.clone()),
+        };
+        outcome
+    }
 }
 
 /// Holds whatever child processes this module itself spawned, so main.rs can
@@ -150,6 +182,10 @@ impl LocalModelHandles {
         let child = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).take();
         if let Some(mut child) = child {
             let _ = child.kill();
+            // Reaped, not only signalled. A retry in resolve_once probes and
+            // binds 11434 straight after this. The killed process holds that
+            // port until it has exited.
+            let _ = child.wait();
         }
         #[cfg(target_os = "macos")]
         {
@@ -165,7 +201,9 @@ impl LocalModelHandles {
     }
 
     /// Runs the resolution + startup flow described in the module doc
-    /// comment exactly once, no matter how many callers invoke it — both
+    /// comment until it has succeeded once, however many callers invoke it.
+    /// A caller queued behind a failed attempt gets that attempt's error; a
+    /// later caller tries again (see ResolutionState). Both
     /// main.rs's own startup task *and* the bootstrap page's own
     /// start_stack_command call reach this (see main.rs), and the second one
     /// in must block here rather than race the first straight to
@@ -185,21 +223,30 @@ impl LocalModelHandles {
     /// several-hundred-MB download) — call via spawn_blocking, matching every
     /// other stack_manager entry point.
     pub fn resolve_once(&self, paths: &crate::stack_manager::StackPaths, apple_bridge_binary: &Path) -> Result<(), String> {
-        let mut resolution = self.resolution.lock().unwrap_or_else(|p| p.into_inner());
-        if matches!(&*resolution, ResolutionState::Done) {
-            return Ok(());
-        }
+        // Whether another caller was resolving when this one arrived: if so,
+        // this one takes that attempt's outcome, a failure included.
+        let (mut resolution, queued) = match self.resolution.try_lock() {
+            Ok(guard) => (guard, false),
+            Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), false),
+            Err(TryLockError::WouldBlock) => (self.resolution.lock().unwrap_or_else(|p| p.into_inner()), true),
+        };
+        resolution.settle(queued, |retrying| {
+            // A retry after a failure first stops whatever that attempt left
+            // running (an Ollama it started but could not pull with, say), or it
+            // would find that Ollama answering on 11434 and take it for the user's.
+            if retrying {
+                self.shutdown();
+            }
+            let (status, env) = resolve_and_start(&paths.data_dir, &paths.logs_dir, apple_bridge_binary, self)?;
+            log::info!("Local model resolved: {:?} — {}", status.chat_backend, status.detail);
+            *self.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(status);
 
-        let (status, env) = resolve_and_start(&paths.data_dir, &paths.logs_dir, apple_bridge_binary, self)?;
-        log::info!("Local model resolved: {:?} — {}", status.chat_backend, status.detail);
-        *self.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(status);
+            if let Err(e) = crate::stack_manager::apply_llm_env_override(paths, &env) {
+                log::error!("Failed to apply local-model env override: {e}");
+            }
 
-        if let Err(e) = crate::stack_manager::apply_llm_env_override(paths, &env) {
-            log::error!("Failed to apply local-model env override: {e}");
-        }
-
-        *resolution = ResolutionState::Done;
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -337,5 +384,69 @@ mod tests {
 
         assert_eq!(backend, ChatBackend::HostOllama);
         assert_eq!(probes.get(), 0, "the Apple bridge should not have been probed at all");
+    }
+
+    /// The splash's start call arrives moments after main.rs's own and waits
+    /// on the same gate. When the first resolution failed, the second used to
+    /// run it all again: on Linux without Ollama, that was a second 1 GB
+    /// download failing the same way, at every launch.
+    #[test]
+    fn a_failed_resolution_is_not_started_over_by_a_caller_queued_behind_it() {
+        let attempts = std::cell::Cell::new(0);
+        let mut state = ResolutionState::NotStarted;
+
+        let first = state.settle(false, |_| {
+            attempts.set(attempts.get() + 1);
+            Err("ollama-linux-amd64.tar.zst did not contain ollama".to_string())
+        });
+        let second = state.settle(true, |_| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        });
+
+        assert_eq!(first, Err("ollama-linux-amd64.tar.zst did not contain ollama".to_string()));
+        assert_eq!(second, first, "the queued caller should hear the first caller's failure");
+        assert_eq!(attempts.get(), 1);
+    }
+
+    /// The splash offers Retry when a start fails. A first launch with no
+    /// network fails both the Ollama download and the image pulls, so a Retry
+    /// once the network is back has to fetch the model server too, not only
+    /// start Memory without one. The retry is told it is one, which is what
+    /// makes resolve_once stop the failed attempt's Ollama first.
+    #[test]
+    fn a_later_caller_retries_a_failed_resolution() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let mut state = ResolutionState::NotStarted;
+
+        let first = state.settle(false, |retrying| {
+            attempts.borrow_mut().push(retrying);
+            Err("Failed to download ollama-linux-amd64.tar.zst".to_string())
+        });
+        let retry = state.settle(false, |retrying| {
+            attempts.borrow_mut().push(retrying);
+            Ok(())
+        });
+
+        assert!(first.is_err());
+        assert_eq!(retry, Ok(()));
+        assert_eq!(*attempts.borrow(), vec![false, true], "only the second attempt is a retry");
+        assert_eq!(state.settle(false, |_| panic!("a success is kept")), Ok(()));
+    }
+
+    #[test]
+    fn a_successful_resolution_is_not_run_twice() {
+        let attempts = std::cell::Cell::new(0);
+        let mut state = ResolutionState::NotStarted;
+
+        for queued in [false, true, false] {
+            let outcome = state.settle(queued, |_| {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            });
+            assert_eq!(outcome, Ok(()));
+        }
+
+        assert_eq!(attempts.get(), 1);
     }
 }
