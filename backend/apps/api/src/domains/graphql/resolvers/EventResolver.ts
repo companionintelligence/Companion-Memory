@@ -40,6 +40,77 @@ import { Paginator } from '../utils/Paginator';
 /** Widest window eventsInRange will serve — a quarter, enough for the month view. */
 const MAX_RANGE_DAYS = 92;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * An event's link to a person or place, as the row stores it: a bare uuid.
+ *
+ * The link fields are typed `ID`, and `createPerson` and `createPlace` answer
+ * with a global id (base64 "person:<uuid>"), so that is what a client passes
+ * back. It went to the database as is and failed the uuid cast in
+ * `refuseForeignLinks`, which `formatError` reports as "Internal server error".
+ * A global id of the right type is unwrapped, a bare uuid passes as it always
+ * has, an empty id is still "no link", and anything else is the caller's
+ * mistake, answered with a 400 that names the field.
+ */
+function linkedEntityId<T extends string | undefined>(field: string, value: T, type: 'person' | 'place'): T {
+  if (!value || UUID_PATTERN.test(value)) {
+    return value;
+  }
+
+  let decoded: { type: string; id: string } | null = null;
+
+  try {
+    decoded = GlobalUID.decode(value);
+  } catch {
+    // Not a global id either; refused below.
+  }
+
+  if (decoded?.type === type && UUID_PATTERN.test(decoded.id)) {
+    return decoded.id as T;
+  }
+
+  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got "${value}"`);
+}
+
+function linkedPersonIds(field: string, values: string[] | undefined): string[] | undefined {
+  return values?.map((value) => linkedEntityId(field, value, 'person'));
+}
+
+/**
+ * Refuse `locationCoordinates` that are not a GeoJSON Point before the writer.
+ *
+ * The field is a free JSON object, stored in a `geography(Point, 4326)` column
+ * that reads GeoJSON. `{ lat, lng }` failed in PostGIS ("unknown GeoJSON type")
+ * and answered "Internal server error", and a latitude past 90 was stored
+ * wrapped round to another place without a word.
+ */
+function assertGeoJsonPoint(value: unknown): void {
+  if (value == null) {
+    return;
+  }
+
+  const point = value as { type?: unknown; coordinates?: unknown };
+  const coordinates = Array.isArray(point.coordinates) ? (point.coordinates as unknown[]) : null;
+  const [longitude, latitude] = coordinates ?? [];
+
+  if (
+    point.type === 'Point' &&
+    coordinates?.length === 2 &&
+    typeof longitude === 'number' &&
+    typeof latitude === 'number' &&
+    Math.abs(longitude) <= 180 &&
+    Math.abs(latitude) <= 90
+  ) {
+    return;
+  }
+
+  throw new BadRequestException(
+    '`locationCoordinates` must be a GeoJSON Point, { "type": "Point", "coordinates": [longitude, latitude] }, ' +
+      'with longitude from -180 to 180 and latitude from -90 to 90',
+  );
+}
+
 /**
  * The `ci.events` row a node's batched fields must be looked up by.
  *
@@ -95,9 +166,9 @@ export class EventResolver {
       duration_minutes: input.durationMinutes,
       location_name: input.locationName,
       location_coordinates: input.locationCoordinates,
-      location_entity_id: input.locationEntityId,
-      participant_entity_ids: input.participantEntityIds,
-      organizer_entity_id: input.organizerEntityId,
+      location_entity_id: linkedEntityId('locationEntityId', input.locationEntityId, 'place'),
+      participant_entity_ids: linkedPersonIds('participantEntityIds', input.participantEntityIds),
+      organizer_entity_id: linkedEntityId('organizerEntityId', input.organizerEntityId, 'person'),
       source_type: input.sourceType,
       // External identities are adopted, not minted: the caller owns its
       // namespace; the registry canonicalizes the system spelling
@@ -121,6 +192,7 @@ export class EventResolver {
     @Args('input') input: CreateEventInput,
   ): Promise<EventType> {
     this.assertTimeOrder(input.startTime, input.endTime);
+    assertGeoJsonPoint(input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 
@@ -142,7 +214,10 @@ export class EventResolver {
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
     input: CreateEventInput[],
   ): Promise<EventType[]> {
-    input.forEach((i) => this.assertTimeOrder(i.startTime, i.endTime));
+    input.forEach((i) => {
+      this.assertTimeOrder(i.startTime, i.endTime);
+      assertGeoJsonPoint(i.locationCoordinates);
+    });
 
     const serviceContext = toServiceContext(context);
 
@@ -161,6 +236,7 @@ export class EventResolver {
     @Args('input') input: UpdateEventInput,
   ): Promise<EventType | null> {
     this.assertTimeOrder(input.startTime, input.endTime);
+    assertGeoJsonPoint(input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 
@@ -176,9 +252,9 @@ export class EventResolver {
       duration_minutes: input.durationMinutes,
       location_name: input.locationName,
       location_coordinates: input.locationCoordinates,
-      location_entity_id: input.locationEntityId,
-      participant_entity_ids: input.participantEntityIds,
-      organizer_entity_id: input.organizerEntityId,
+      location_entity_id: linkedEntityId('locationEntityId', input.locationEntityId, 'place'),
+      participant_entity_ids: linkedPersonIds('participantEntityIds', input.participantEntityIds),
+      organizer_entity_id: linkedEntityId('organizerEntityId', input.organizerEntityId, 'person'),
       source_type: input.sourceType,
       // External identities are adopted, not minted: the caller owns its
       // namespace; the registry canonicalizes the system spelling

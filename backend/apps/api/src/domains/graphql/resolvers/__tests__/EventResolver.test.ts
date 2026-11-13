@@ -286,3 +286,107 @@ describe('EventResolver time ordering', () => {
     expect(eventService.create).toHaveBeenCalled();
   });
 });
+
+describe('EventResolver links and coordinates', () => {
+  const START = new Date('2026-09-10T10:00:00Z');
+  const PERSON = '01a1d486-4136-77cf-8428-f1b56f741102';
+  const PLACE = '01a1d486-2dfd-739f-ad39-c0ddfda293c9';
+
+  // createPerson and createPlace answer with global ids, and the link fields are
+  // typed `ID`. Passed through as is, a global id failed the uuid cast in
+  // refuseForeignLinks and formatError reported "Internal server error".
+  it('takes the global ids createPerson and createPlace return, and stores their uuids', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.create.mockResolvedValue([makeEvent()]);
+
+    await resolver.createEvent(viewerCtx, {
+      title: 'Lunch',
+      startTime: START,
+      participantEntityIds: [GlobalUID.encode('person', PERSON), PERSON],
+      organizerEntityId: GlobalUID.encode('person', PERSON),
+      locationEntityId: GlobalUID.encode('place', PLACE),
+    });
+
+    expect(eventService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        participant_entity_ids: [PERSON, PERSON],
+        organizer_entity_id: PERSON,
+        location_entity_id: PLACE,
+      }),
+    );
+  });
+
+  it.each([
+    ['an id that is neither a uuid nor a global id', 'not-an-id'],
+    ["a place's global id", GlobalUID.encode('place', PLACE)],
+    ['a global id with no uuid in it', GlobalUID.encode('person', 'dana')],
+  ])('answers 400 naming the field for %s', async (_label, id) => {
+    const { resolver, eventService } = makeResolver();
+
+    await expect(
+      resolver.createEvent(viewerCtx, { title: 'Lunch', startTime: START, participantEntityIds: [id] }),
+    ).rejects.toThrow(
+      new BadRequestException(`\`participantEntityIds\` takes a person id or its uuid; got "${id}"`),
+    );
+    expect(eventService.create).not.toHaveBeenCalled();
+  });
+
+  it('applies the same to updateEvent', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.update.mockResolvedValue(makeEvent());
+
+    await resolver.updateEvent(viewerCtx, {
+      id: GlobalUID.encode('event', '11111111-1111-1111-1111-111111111111'),
+      title: 'Lunch',
+      participantEntityIds: [GlobalUID.encode('person', PERSON)],
+    });
+
+    expect(eventService.update).toHaveBeenCalledWith(
+      expect.anything(),
+      '11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({ participant_entity_ids: [PERSON] }),
+    );
+  });
+
+  it.each([
+    ['{ lat, lng }', { lat: 47.6, lng: -122.3 }],
+    ['a latitude past 90', { type: 'Point', coordinates: [-122.3, 200] }],
+    ['a longitude past 180', { type: 'Point', coordinates: [200, 47.6] }],
+    ['a third coordinate', { type: 'Point', coordinates: [-122.3, 47.6, 10] }],
+    ['coordinates that are not numbers', { type: 'Point', coordinates: ['-122.3', '47.6'] }],
+    ['another GeoJSON type', { type: 'LineString', coordinates: [[-122.3, 47.6]] }],
+  ])('answers 400 for locationCoordinates as %s', async (_label, locationCoordinates) => {
+    const { resolver, eventService } = makeResolver();
+
+    await expect(
+      resolver.createEvent(viewerCtx, {
+        title: 'Lunch',
+        startTime: START,
+        locationCoordinates: locationCoordinates as never,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      resolver.createEvents(viewerCtx, [
+        { title: 'Lunch', startTime: START, locationCoordinates: locationCoordinates as never },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(eventService.create).not.toHaveBeenCalled();
+  });
+
+  it('stores a GeoJSON Point as before', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.create.mockResolvedValue([makeEvent()]);
+
+    await resolver.createEvent(viewerCtx, {
+      title: 'Lunch',
+      startTime: START,
+      locationCoordinates: { type: 'Point', coordinates: [-122.3, 47.6] },
+    });
+
+    expect(eventService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ location_coordinates: { type: 'Point', coordinates: [-122.3, 47.6] } }),
+    );
+  });
+});
