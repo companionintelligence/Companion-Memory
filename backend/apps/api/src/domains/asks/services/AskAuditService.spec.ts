@@ -1,4 +1,9 @@
-import { buildAuditMerkleProof, computeAuditMerkleRoot, verifyAuditMerkleProof } from '../auditSaid';
+import {
+  buildAuditMerkleProof,
+  computeAuditMerkleRoot,
+  computeAuditSaid,
+  verifyAuditMerkleProof,
+} from '../auditSaid';
 import { AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskQuery, RecordAskAuditDto } from '../types';
 
@@ -151,22 +156,81 @@ describe('AskAuditService SAID anchoring', () => {
     expect(service.verifySaid(tampered, said)).toBe(false);
   });
 
-  it('computes and verifies Merkle batch anchoring proofs for audit SAIDs', () => {
+  it('computes identical CESR I SHA2-256 SAIDs regardless of object key order and preserves Unicode', () => {
+    const a: RecordAskAuditDto = {
+      askId: 'ask-jcs-1',
+      askerUserId: 'asker-1',
+      responderUserId: 'responder-1',
+      query: { queryType: 'notes', prompt: 'café résumé 日本語' },
+      outcome: 'answered',
+      disclosedEntities: ['e1'],
+      disclosedCount: 1,
+    };
+    const b: RecordAskAuditDto = {
+      outcome: 'answered',
+      disclosedCount: 1,
+      disclosedEntities: ['e1'],
+      query: { prompt: 'café résumé 日本語', queryType: 'notes' },
+      responderUserId: 'responder-1',
+      askerUserId: 'asker-1',
+      askId: 'ask-jcs-1',
+    };
+
+    const saidA = computeAuditSaid(a);
+    const saidB = computeAuditSaid(b);
+    expect(saidA).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(saidA).toBe(saidB);
+  });
+
+  it('computes and verifies Merkle batch anchoring proofs for odd/even batch sizes and rejects tampered proofs', () => {
     const { service } = makeService();
-    const saids = ['ask-1', 'ask-2', 'ask-3'].map((askId) =>
-      service.computeSaid(dto({ askId, disclosedEntities: [askId], disclosedCount: 1 })),
-    );
+    expect(computeAuditMerkleRoot([])).toBeNull();
 
-    const root = computeAuditMerkleRoot(saids);
-    expect(root).toMatch(/^I[A-Za-z0-9_-]{43}$/);
-
-    for (let i = 0; i < saids.length; i += 1) {
-      const proof = buildAuditMerkleProof(saids, i);
-      expect(verifyAuditMerkleProof(saids[i]!, proof, root!)).toBe(true);
-      expect(verifyAuditMerkleProof('I0000000000000000000000000000000000000000000', proof, root!)).toBe(
-        false,
+    for (const batchSize of [1, 2, 3, 5, 7]) {
+      const saids = Array.from({ length: batchSize }, (_, idx) =>
+        service.computeSaid(
+          dto({ askId: `ask-${batchSize}-${idx}`, disclosedEntities: [`e-${idx}`], disclosedCount: 1 }),
+        ),
       );
+      const root = computeAuditMerkleRoot(saids);
+      expect(root).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+
+      for (let i = 0; i < saids.length; i += 1) {
+        const proof = buildAuditMerkleProof(saids, i);
+        expect(verifyAuditMerkleProof(saids[i]!, proof, root!)).toBe(true);
+        expect(verifyAuditMerkleProof('I0000000000000000000000000000000000000000000', proof, root!)).toBe(
+          false,
+        );
+        expect(verifyAuditMerkleProof('not-a-said', proof, root!)).toBe(false);
+        if (proof.length > 0) {
+          // Index 0 always pairs with a distinct sibling when batchSize >= 2
+          if (i === 0) {
+            const flipped = [
+              {
+                ...proof[0]!,
+                position: (proof[0]!.position === 'left' ? 'right' : 'left') as 'left' | 'right',
+              },
+              ...proof.slice(1),
+            ];
+            expect(verifyAuditMerkleProof(saids[i]!, flipped, root!)).toBe(false);
+          }
+
+          expect(
+            verifyAuditMerkleProof(
+              saids[i]!,
+              [{ position: 'middle' as 'left', digest: proof[0]!.digest }],
+              root!,
+            ),
+          ).toBe(false);
+        }
+      }
     }
+
+    const three = ['a', 'b', 'c'].map((id) => service.computeSaid(dto({ askId: id })));
+    expect(() => buildAuditMerkleProof(three, -1)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, 1.5)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, 3)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, Number.NaN)).toThrow(RangeError);
   });
 
   it('builds and verifies ISO/IEC TS 27560 + DPV v2 consent receipts', () => {

@@ -1,11 +1,16 @@
-import { Body, Controller, NotFoundException, Post, Req } from '@nestjs/common';
+import { Body, Controller, NotFoundException, Post, Req, ServiceUnavailableException } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { FeatureService } from '@ci/common/feature';
 
+import { IdentiKeyError } from './errors';
 import { fingerprintToBase58 } from './identity/keys';
-import { ChallengeIssuer, InMemoryNonceStore } from './identity/nonceStore';
+import { ChallengeIssuer, InMemoryNonceStore, type IssuedChallenge } from './identity/nonceStore';
 import { verifyResponse } from './identity/verify';
+
+const SAFE_HOST_PATTERN = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/;
+const MAX_RESPONSE_BASE64_CHARS = 65_536;
+const STRICT_BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
  * Controller for IdentiKey challenge/response auth protocol (identikey-auth Phase 1).
@@ -17,24 +22,48 @@ export class IdentikeyController {
 
   constructor(private readonly features: FeatureService) {}
 
+  private resolveAudience(req: Request): string {
+    const rawHost = req.get('host')?.trim() ?? '';
+
+    return SAFE_HOST_PATTERN.test(rawHost) ? rawHost : 'localhost';
+  }
+
+  private async issueChallengeSafe(audience: string): Promise<IssuedChallenge> {
+    const issuer = new ChallengeIssuer({
+      audience,
+      ttlSeconds: 300,
+    });
+    const now = Math.floor(Date.now() / 1000);
+
+    try {
+      return await issuer.issue(this.nonceStore, now);
+    } catch (error) {
+      if (error instanceof IdentiKeyError && error.code === 'store-full') {
+        throw new ServiceUnavailableException('IdentiKey challenge store is temporarily full');
+      }
+
+      throw error;
+    }
+  }
+
   @Post('challenge')
   async createChallenge(@Req() req: Request): Promise<{ challengeBase64: string; challenge: unknown }> {
     if (!(await this.features.isFeatureEnabled('auth.identikey'))) {
       throw new NotFoundException();
     }
 
-    const host = req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || 'localhost';
-    const issuer = new ChallengeIssuer({
-      audience: host,
-      ttlSeconds: 300,
-    });
-
-    const now = Math.floor(Date.now() / 1000);
-    const issued = await issuer.issue(this.nonceStore, now);
+    const host = this.resolveAudience(req);
+    const issued = await this.issueChallengeSafe(host);
 
     return {
       challengeBase64: Buffer.from(issued.bytes).toString('base64'),
-      challenge: issued.challenge,
+      challenge: {
+        version: issued.challenge.version,
+        audience: issued.challenge.audience,
+        issuedAt: issued.challenge.issuedAt,
+        expiresAt: issued.challenge.expiresAt,
+        nonceBase64: Buffer.from(issued.challenge.nonce).toString('base64'),
+      },
     };
   }
 
@@ -42,17 +71,23 @@ export class IdentikeyController {
   async verifyChallenge(
     @Req() req: Request,
     @Body() body: { responseBase64?: string },
-  ): Promise<{ ok: boolean; fingerprint?: string; code?: string }> {
+  ): Promise<{ ok: boolean; fingerprint?: string; reason?: string }> {
     if (!(await this.features.isFeatureEnabled('auth.identikey'))) {
       throw new NotFoundException();
     }
 
-    if (!body?.responseBase64 || typeof body.responseBase64 !== 'string') {
-      return { ok: false, code: 'malformed-cbor' };
+    const encoded = typeof body?.responseBase64 === 'string' ? body.responseBase64.trim() : '';
+    if (
+      encoded.length === 0 ||
+      encoded.length > MAX_RESPONSE_BASE64_CHARS ||
+      encoded.length % 4 !== 0 ||
+      !STRICT_BASE64_PATTERN.test(encoded)
+    ) {
+      return { ok: false, reason: 'AUTHENTICATION_FAILED' };
     }
 
-    const responseBytes = new Uint8Array(Buffer.from(body.responseBase64, 'base64'));
-    const host = req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || 'localhost';
+    const responseBytes = new Uint8Array(Buffer.from(encoded, 'base64'));
+    const host = this.resolveAudience(req);
     const now = Math.floor(Date.now() / 1000);
 
     const result = await verifyResponse(responseBytes, {
@@ -64,7 +99,7 @@ export class IdentikeyController {
     });
 
     if (!result.ok) {
-      return { ok: false, code: result.code };
+      return { ok: false, reason: 'AUTHENTICATION_FAILED' };
     }
 
     return {

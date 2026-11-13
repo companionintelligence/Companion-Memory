@@ -7,6 +7,5 @@ import { IdentikeyController } from './IdentikeyController';
 @Module({
   imports: [FeatureModule],
   controllers: [IdentikeyController],
-  exports: [IdentikeyController],
 })
 export class IdentikeyModule {}

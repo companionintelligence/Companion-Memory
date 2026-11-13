@@ -86,6 +86,29 @@ function importPrivateDerB64(b64: string): KeyObject {
   return createPrivateKey({ key: Buffer.from(b64, 'base64url'), format: 'der', type: 'pkcs8' });
 }
 
+const MAX_CAPABILITY_DEPTH = 16;
+
+function isWithinResourcePrefix(candidate: string, parentPrefix: string): boolean {
+  if (
+    !candidate ||
+    candidate.includes('\\') ||
+    candidate.includes('\0') ||
+    /(?:^|\/)\.\.(?:\/|$)/.test(candidate)
+  ) {
+    return false;
+  }
+
+  if (!parentPrefix || parentPrefix === '/') {
+    return candidate.startsWith('/');
+  }
+
+  if (parentPrefix.endsWith('/')) {
+    return candidate === parentPrefix || candidate.startsWith(parentPrefix);
+  }
+
+  return candidate === parentPrefix || candidate.startsWith(`${parentPrefix}/`);
+}
+
 function blockSigningBytes(
   block: Omit<CapabilityBlock, 'signatureB64'>,
   prevSignatureB64: string | null,
@@ -108,12 +131,25 @@ export function mintRootCapabilityToken(
   authorityPrivateKey: KeyObject,
   options: MintCapabilityOptions,
 ): CapabilityToken {
+  if (!options.subject || typeof options.subject !== 'string') {
+    throw new Error('Capability token subject is required');
+  }
+
+  if (!Number.isFinite(Date.parse(options.expiresAt))) {
+    throw new RangeError('Capability token expiresAt must be a valid ISO-8601 timestamp');
+  }
+
+  const resourcePrefix = options.resourcePrefix ?? '/';
+  if (!isWithinResourcePrefix(resourcePrefix, '/')) {
+    throw new Error('Capability token resourcePrefix must be a normalized absolute path');
+  }
+
   const { publicKey: nextPub, privateKey: nextPriv } = generateKeyPairSync('ed25519');
   const unsigned: Omit<CapabilityBlock, 'signatureB64'> = {
     subject: options.subject,
     scopes: [...new Set(options.scopes)].sort(),
-    resourcePrefix: options.resourcePrefix ?? '/',
-    expiresAt: options.expiresAt,
+    resourcePrefix,
+    expiresAt: new Date(Date.parse(options.expiresAt)).toISOString(),
     nextPublicKeyDerB64: exportPublicDerB64(nextPub),
     ...(options.note !== undefined ? { note: options.note } : {}),
   };
@@ -124,6 +160,13 @@ export function mintRootCapabilityToken(
     blocks: [{ ...unsigned, signatureB64: sig }],
     holderPrivateKeyDerB64: exportPrivateDerB64(nextPriv),
   };
+}
+
+/** Strips the holder attenuation private key so the token cannot be attenuated further. */
+export function sealCapabilityToken(token: CapabilityToken): CapabilityToken {
+  const { holderPrivateKeyDerB64: _stripped, ...sealed } = token;
+
+  return sealed;
 }
 
 /**
@@ -143,22 +186,46 @@ export function attenuateCapabilityToken(
     throw new Error('Capability token has no root block');
   }
 
+  if (token.blocks.length >= MAX_CAPABILITY_DEPTH) {
+    throw new Error('Capability token exceeded maximum attenuation depth');
+  }
+
   const prev = token.blocks[token.blocks.length - 1]!;
   const signingKey = importPrivateDerB64(token.holderPrivateKeyDerB64);
+  if (exportPublicDerB64(createPublicKey(signingKey)) !== prev.nextPublicKeyDerB64) {
+    throw new Error('Holder private key does not match the tip block nextPublicKey');
+  }
+
   const { publicKey: nextPub, privateKey: nextPriv } = generateKeyPairSync('ed25519');
+
+  if (
+    caveat.resourcePrefix !== undefined &&
+    !isWithinResourcePrefix(caveat.resourcePrefix, prev.resourcePrefix)
+  ) {
+    throw new Error('Capability attenuation cannot widen resourcePrefix');
+  }
 
   const narrowedScopes = caveat.scopes
     ? [...new Set(caveat.scopes)].filter((s) => prev.scopes.includes(s)).sort()
     : [...prev.scopes];
 
   const narrowedResourcePrefix =
-    caveat.resourcePrefix && caveat.resourcePrefix.startsWith(prev.resourcePrefix)
-      ? caveat.resourcePrefix
-      : prev.resourcePrefix;
+    caveat.resourcePrefix !== undefined ? caveat.resourcePrefix : prev.resourcePrefix;
 
   const prevExpMs = Date.parse(prev.expiresAt);
-  const caveatExpMs = caveat.expiresAt ? Date.parse(caveat.expiresAt) : prevExpMs;
-  const effectiveExpMs = Number.isFinite(caveatExpMs) && caveatExpMs < prevExpMs ? caveatExpMs : prevExpMs;
+  let effectiveExpMs = prevExpMs;
+  if (caveat.expiresAt !== undefined) {
+    const caveatExpMs = Date.parse(caveat.expiresAt);
+    if (!Number.isFinite(caveatExpMs)) {
+      throw new RangeError('Capability caveat expiresAt must be a valid ISO-8601 timestamp');
+    }
+
+    if (caveatExpMs > prevExpMs) {
+      throw new Error('Capability attenuation cannot extend expiresAt');
+    }
+
+    effectiveExpMs = caveatExpMs;
+  }
 
   const unsigned: Omit<CapabilityBlock, 'signatureB64'> = {
     subject: prev.subject,
@@ -185,7 +252,14 @@ export function verifyCapabilityToken(
   rootPublicKey: KeyObject,
   required: VerifyCapabilityRequirement = {},
 ): VerifyCapabilityResult {
-  if (!token || token.version !== 'ci-cap-v1' || !Array.isArray(token.blocks) || token.blocks.length === 0) {
+  if (
+    !token ||
+    typeof token !== 'object' ||
+    token.version !== 'ci-cap-v1' ||
+    !Array.isArray(token.blocks) ||
+    token.blocks.length === 0 ||
+    token.blocks.length > MAX_CAPABILITY_DEPTH
+  ) {
     return { valid: false, reason: 'malformed capability token' };
   }
 
@@ -197,7 +271,22 @@ export function verifyCapabilityToken(
   let subject = '';
 
   for (let i = 0; i < token.blocks.length; i += 1) {
-    const block = token.blocks[i]!;
+    const block = token.blocks[i];
+    if (
+      !block ||
+      typeof block !== 'object' ||
+      typeof block.subject !== 'string' ||
+      !Array.isArray(block.scopes) ||
+      block.scopes.some((s) => typeof s !== 'string') ||
+      typeof block.resourcePrefix !== 'string' ||
+      typeof block.expiresAt !== 'string' ||
+      typeof block.nextPublicKeyDerB64 !== 'string' ||
+      typeof block.signatureB64 !== 'string' ||
+      (block.note !== undefined && typeof block.note !== 'string')
+    ) {
+      return { valid: false, reason: `malformed capability block ${i}` };
+    }
+
     const { signatureB64, ...unsigned } = block;
     let ok: boolean;
     try {
@@ -221,6 +310,10 @@ export function verifyCapabilityToken(
     }
 
     if (i === 0) {
+      if (!isWithinResourcePrefix(block.resourcePrefix, '/')) {
+        return { valid: false, reason: 'root block has invalid resourcePrefix' };
+      }
+
       subject = block.subject;
       effectiveScopes = [...block.scopes];
       effectivePrefix = block.resourcePrefix;
@@ -234,7 +327,7 @@ export function verifyCapabilityToken(
         return { valid: false, reason: `block ${i} attempted to widen scopes` };
       }
 
-      if (!block.resourcePrefix.startsWith(effectivePrefix)) {
+      if (!isWithinResourcePrefix(block.resourcePrefix, effectivePrefix)) {
         return { valid: false, reason: `block ${i} attempted to widen resourcePrefix` };
       }
 
@@ -265,7 +358,7 @@ export function verifyCapabilityToken(
     return { valid: false, reason: `missing required scope: ${required.scope}` };
   }
 
-  if (required.resource && !required.resource.startsWith(effectivePrefix)) {
+  if (required.resource && !isWithinResourcePrefix(required.resource, effectivePrefix)) {
     return {
       valid: false,
       reason: `resource ${required.resource} outside allowed prefix ${effectivePrefix}`,

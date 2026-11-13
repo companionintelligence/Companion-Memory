@@ -44,12 +44,18 @@ export class ProtectedResourceMetadataController {
   }
 
   private buildMetadata(req: Request): ProtectedResourceMetadata {
-    const proto = req.get('x-forwarded-proto')?.split(',')[0]?.trim() || req.protocol || 'http';
-    const host = req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || 'localhost';
-    const resource = `${proto}://${host}/mcp`;
-    const portalBase =
-      (config.ciPortal as { baseUrl?: string } | undefined)?.baseUrl?.replace(/\/+$/, '') ||
-      'https://portal.ci.computer';
+    const publicBaseUrl = config.auth?.oidc?.publicBaseUrl?.trim().replace(/\/+$/, '');
+    let origin = publicBaseUrl;
+    if (!origin) {
+      const proto = req.get('x-forwarded-proto')?.split(',')[0]?.trim() || req.protocol || 'http';
+      const host = req.get('host')?.trim() || 'localhost';
+      origin = `${proto}://${host}`;
+    }
+
+    const resource = `${origin}/mcp`;
+    const configuredServer =
+      config.ciPortal?.url?.trim() || config.auth?.oidc?.issuerUrl?.trim() || 'https://portal.ci.computer';
+    const portalBase = configuredServer.replace(/\/+$/, '');
 
     return {
       resource,

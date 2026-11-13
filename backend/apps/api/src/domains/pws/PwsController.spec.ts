@@ -22,43 +22,68 @@ describe('PwsController', () => {
     await expect(controller.handle(fakeReq, fakeRes)).rejects.toThrow(NotFoundException);
   });
 
-  it('serves PWS service description when pws.storage is enabled', async () => {
+  it('serves PWS service description when pws.storage is enabled and resists host poisoning', async () => {
     const mockFeatures = {
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
     } as never;
     const controller = new PwsController(mockFeatures);
 
-    const headersSent: Record<string, string> = {};
-    let statusSent = 0;
-    let bodySent: Buffer | undefined;
+    async function dispatchService(host: string, forwardedHost?: string) {
+      const headersSent: Record<string, string> = {};
+      let statusSent = 0;
+      let bodySent: Buffer | undefined;
 
-    const fakeReq = {
-      method: 'GET',
-      originalUrl: '/pws/service',
-      url: '/pws/service',
-      headers: {},
-      get: (h: string) => (h === 'host' ? 'example.com' : undefined),
-      protocol: 'https',
-    } as unknown as Request;
+      const fakeReq = {
+        method: 'GET',
+        originalUrl: '/pws/service',
+        url: '/pws/service',
+        headers: {},
+        get: (h: string) => {
+          const lower = h.toLowerCase();
+          if (lower === 'host') {
+            return host;
+          }
 
-    const fakeRes = {
-      setHeader: (k: string, v: string) => {
-        headersSent[k.toLowerCase()] = v;
-      },
-      status: (s: number) => {
-        statusSent = s;
-      },
-      end: (b?: Buffer) => {
-        bodySent = b;
-      },
-    } as unknown as Response;
+          if (lower === 'x-forwarded-host') {
+            return forwardedHost;
+          }
 
-    await controller.handle(fakeReq, fakeRes);
+          return undefined;
+        },
+        protocol: 'https',
+      } as unknown as Request;
 
-    expect(statusSent).toBe(200);
-    expect(headersSent['content-type']).toContain('application/json');
-    expect(bodySent).toBeDefined();
-    const parsed = JSON.parse(bodySent!.toString('utf8'));
-    expect(parsed.specs).toBeDefined();
+      const fakeRes = {
+        setHeader: (k: string, v: string) => {
+          headersSent[k.toLowerCase()] = v;
+        },
+        status: (s: number) => {
+          statusSent = s;
+        },
+        end: (b?: Buffer) => {
+          bodySent = b;
+        },
+      } as unknown as Response;
+
+      await controller.handle(fakeReq, fakeRes);
+
+      return {
+        statusSent,
+        headersSent,
+        parsed: JSON.parse(bodySent!.toString('utf8')) as Record<string, unknown>,
+      };
+    }
+
+    const alpha = await dispatchService('alpha.example', 'evil-poison.attacker');
+    expect(alpha.statusSent).toBe(200);
+    expect(alpha.headersSent['content-type']).toContain('application/json');
+    expect(alpha.parsed.specs).toBeDefined();
+    expect(JSON.stringify(alpha.parsed)).toContain('https://alpha.example/pws/');
+    expect(JSON.stringify(alpha.parsed)).not.toContain('evil-poison.attacker');
+
+    const beta = await dispatchService('beta.example');
+    expect(beta.statusSent).toBe(200);
+    expect(JSON.stringify(beta.parsed)).toContain('https://beta.example/pws/');
+    expect(JSON.stringify(beta.parsed)).not.toContain('alpha.example');
   });
 });

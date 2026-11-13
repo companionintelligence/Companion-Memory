@@ -7,6 +7,5 @@ import { DidcommController } from './DidcommController';
 @Module({
   imports: [FeatureModule],
   controllers: [DidcommController],
-  exports: [DidcommController],
 })
 export class DidcommModule {}

@@ -187,6 +187,16 @@ export class BodyParserMiddleware implements NestMiddleware {
       return next();
     }
 
+    const requestPaths = [routePath, `${req.baseUrl ?? ''}${req.path ?? ''}`].map((path) =>
+      path.toLowerCase(),
+    );
+
+    // Portable Web Spaces verifies Digest: mh=... over raw request bytes and handles
+    // arbitrary binary/text/JSON payloads up to 25MB directly inside createNodeRequestHandler.
+    if (requestPaths.some((path) => path === '/pws' || path.startsWith('/pws/'))) {
+      return next();
+    }
+
     // Use the route's own limit, then the GraphQL / v1 bulk-ingest limits,
     // else default to 100kb.
     const bodyLimit =
@@ -198,9 +208,10 @@ export class BodyParserMiddleware implements NestMiddleware {
     // Case-insensitive and on the parsed path too, for the same reasons as
     // `isGraphqlRequest`: express routes `/Agent/v1/ask` and an absolute-form
     // request line to the same handler.
-    const isSignedPeerRoute = [routePath, `${req.baseUrl ?? ''}${req.path ?? ''}`]
-      .map((path) => path.toLowerCase())
-      .some((path) => path === SIGNED_PEER_PREFIX || path.startsWith(`${SIGNED_PEER_PREFIX}/`));
+    const isSignedPeerRoute = requestPaths.some(
+      (path) => path === SIGNED_PEER_PREFIX || path.startsWith(`${SIGNED_PEER_PREFIX}/`),
+    );
+    const isDidcommRoute = requestPaths.some((path) => path === '/didcomm' || path.startsWith('/didcomm/'));
 
     // Only `json()` keeps the bytes, so a body of any other type on the signed
     // surface would reach the signature check with nothing to digest. Every
@@ -218,6 +229,14 @@ export class BodyParserMiddleware implements NestMiddleware {
     // matching one actually parses the body. `next` is called exactly once at the end.
     json({
       limit: bodyLimit,
+      type: isDidcommRoute
+        ? [
+            'application/json',
+            'application/didcomm-encrypted+json',
+            'application/didcomm-signed+json',
+            'application/didcomm-plain+json',
+          ]
+        : 'application/json',
       ...(isSignedPeerRoute
         ? {
             verify: (request: Request, _response: Response, buffer: Buffer) => {

@@ -1,11 +1,6 @@
-import { generateKeyPairSync } from 'node:crypto';
-
 import { NotFoundException } from '@nestjs/common';
 
-import { DTG_CONTEXT_V1, W3C_CREDENTIALS_V2 } from './contexts';
-import { secureDocument } from './dataIntegrity';
-import { didKeyFromPublicKey, didKeyVerificationMethod } from './didKey';
-import { LocalSigner, rawPublicKey } from './ed25519';
+import { createSignedDtgCredential } from './__tests__/vtcTestHelper';
 import { VtcController } from './VtcController';
 
 describe('VtcController', () => {
@@ -23,36 +18,94 @@ describe('VtcController', () => {
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
     } as never;
     const controller = new VtcController(mockFeatures);
-
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    const rawPub = rawPublicKey(publicKey);
-    const did = didKeyFromPublicKey(rawPub);
-    const vm = didKeyVerificationMethod(did);
-    const signer = new LocalSigner(vm, privateKey);
-
-    const unsignedDoc = {
-      '@context': [W3C_CREDENTIALS_V2, DTG_CONTEXT_V1],
-      id: 'urn:uuid:7c2a4f9e-3b1d-4a56-9d0e-1f2a3b4c5d6e',
-      type: ['VerifiableCredential', 'DTGCredential', 'MembershipCredential'],
-      issuer: did,
-      issuerScope: 'public',
-      validFrom: '2026-05-14T10:00:00Z',
-      validUntil: '2026-06-13T10:00:00Z',
-      credentialSubject: { id: 'did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2' },
-    };
-
-    const signedDoc = await secureDocument(unsignedDoc, signer, {
-      created: new Date('2026-05-14T10:00:00Z'),
-    });
+    const subject = 'did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2';
+    const { did, signedDoc } = await createSignedDtgCredential({ subject });
 
     const result = await controller.verifyCredential({
       credential: signedDoc,
-      expectedSubject: 'did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2',
+      expectedSubject: subject,
     });
 
     expect(result.valid).toBe(true);
     expect(result.issuer).toBe(did);
-    expect(result.subject).toBe('did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2');
+    expect(result.subject).toBe(subject);
     expect(result.subtype).toBe('MembershipCredential');
+  });
+
+  it('enforces temporal validity and rejects expired or not-yet-valid credentials', async () => {
+    const mockFeatures = {
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    } as never;
+    const controller = new VtcController(mockFeatures);
+
+    const expired = await createSignedDtgCredential({
+      validFrom: new Date(Date.now() - 2 * 86_400_000),
+      validUntil: new Date(Date.now() - 10 * 60_000),
+    });
+    expect(await controller.verifyCredential({ credential: expired.signedDoc })).toEqual({
+      valid: false,
+      reason: 'EXPIRED',
+    });
+
+    const future = await createSignedDtgCredential({
+      validFrom: new Date(Date.now() + 10 * 60_000),
+      validUntil: new Date(Date.now() + 2 * 86_400_000),
+    });
+    expect(await controller.verifyCredential({ credential: future.signedDoc })).toEqual({
+      valid: false,
+      reason: 'NOT_YET_VALID',
+    });
+  });
+
+  it('rejects tampered payloads, subject mismatch, unresolvable did:keri, and malformed inputs', async () => {
+    const mockFeatures = {
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    } as never;
+    const controller = new VtcController(mockFeatures);
+    const { signedDoc } = await createSignedDtgCredential({});
+
+    // Tampered subject fails proof verification
+    const tampered = {
+      ...signedDoc,
+      credentialSubject: { id: 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH' },
+    };
+    expect((await controller.verifyCredential({ credential: tampered })).valid).toBe(false);
+
+    // Subject mismatch when expectedSubject differs
+    expect(
+      await controller.verifyCredential({
+        credential: signedDoc,
+        expectedSubject: 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH',
+      }),
+    ).toEqual({ valid: false, reason: 'SUBJECT_MISMATCH' });
+
+    // Non-object / array inputs return MALFORMED_CREDENTIAL
+    expect(await controller.verifyCredential({ credential: null })).toEqual({
+      valid: false,
+      reason: 'MALFORMED_CREDENTIAL',
+    });
+    expect(await controller.verifyCredential({ credential: [] })).toEqual({
+      valid: false,
+      reason: 'MALFORMED_CREDENTIAL',
+    });
+
+    // Unpinned domain/challenge proof properties refused by default verifier
+    expect(
+      await controller.verifyCredential({
+        credential: {
+          ...signedDoc,
+          proof: { ...(signedDoc.proof as Record<string, unknown>), domain: 'evil.example' },
+        },
+      }),
+    ).toEqual({ valid: false, reason: 'PROOF_UNSUPPORTED' });
+
+    // did:keri: issuer fails closed because live KERI resolver is intentionally not registered
+    const keriRes = await controller.verifyCredential({
+      credential: {
+        ...signedDoc,
+        issuer: 'did:keri:EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      },
+    });
+    expect(keriRes.valid).toBe(false);
   });
 });
