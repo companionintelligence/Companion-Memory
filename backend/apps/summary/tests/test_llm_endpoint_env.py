@@ -395,3 +395,21 @@ def test_embedding_model_takes_only_hubs_names_for_the_indexed_model(
 
     monkeypatch.setenv("EMBEDDING_MODEL", "mxbai-embed-large")
     assert resolve_embedding_model() == "mxbai-embed-large"
+
+
+def test_an_empty_llm_api_base_means_the_default_endpoint(monkeypatch):
+    """
+    Memory Desktop's compose passes `LLM_API_BASE: ${LLM_API_BASE:-}` and sets
+    nothing, so the service gets an empty string. That used to win over the
+    default, and every summary failed with "Connection error.".
+    """
+    from ci.summary.config import DEFAULT_LLM_API_BASE, Settings
+
+    monkeypatch.setenv("CI_LLM_HOST_REWRITE", "off")
+
+    for blank in ("", "   "):
+        monkeypatch.setenv("LLM_API_BASE", blank)
+        assert Settings().llm_api_base == DEFAULT_LLM_API_BASE
+
+    monkeypatch.setenv("LLM_API_BASE", "http://ci-hub:5002/api/inference/pool/v1")
+    assert Settings().llm_api_base == "http://ci-hub:5002/api/inference/pool/v1"

@@ -286,6 +286,18 @@ class Settings(BaseSettings):
         default_factory=lambda: int(os.getenv("SUMMARY_OUTPUT_RETRIES", "3"))
     )
 
+    @field_validator("llm_api_base", mode="before")
+    @classmethod
+    def _blank_llm_api_base_is_unset(cls, value):
+        # Compose passes `LLM_API_BASE: ${LLM_API_BASE:-}`, so where nothing
+        # sets the variable (Memory Desktop) it arrives as an empty string, and
+        # pydantic-settings takes an empty env value over the default factory.
+        # The service then had no endpoint at all: every summary failed with
+        # "Connection error." while Ollama answered at the default address.
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return _default_llm_api_base()
+        return value
+
     @field_validator("llm_api_key", mode="before")
     @classmethod
     def _default_llm_api_key(cls, value):
