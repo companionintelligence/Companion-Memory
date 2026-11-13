@@ -127,6 +127,10 @@ describe('FeedModal — mobile action chat', () => {
 
     expect(await screen.findByTestId('chat-with-agent')).toHaveAttribute('data-size', 'icon');
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+
+    // A title with one long word (a pasted address) has to be able to wrap, or
+    // it pushes the buttons past the edge just the same.
+    expect(screen.getByText('Pack lunch')).toHaveClass('min-w-0', 'break-words');
   });
 
   it('shows the action once when the thread the server opened already starts with it', async () => {
