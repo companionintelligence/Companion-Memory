@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bindPowerSyncDatabase } from '@/api/powersync/session';
 
+import { DeviceKeyNotSavedError } from './deviceKeyNotSaved';
 import { MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 import { AuthProvider, useAuth } from './useAuth';
 
@@ -1905,6 +1906,49 @@ describe('useAuth', () => {
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       localStorage.removeItem('ci.apiKey');
+    }
+  });
+
+  it('desktop: gives the new key back when the keychain will not save it', async () => {
+    // A Linux desktop with no default keyring: the server makes the key, the keychain refuses it.
+    const { appState } = await beginNativeOidcSignIn();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (command: string) => {
+        switch (command) {
+          case 'take_pending_deep_link_command':
+            return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+          case 'plugin:ci-auth|secure_get':
+            return { value: null };
+          case 'plugin:ci-auth|secure_set':
+            throw new Error('No default keyring');
+          default:
+            return null;
+        }
+      }),
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        return jsonResponse({ accessToken: 'desktop-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-d', key: 'unsaved-key' });
+      }
+
+      return emptyResponse(true, 204);
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].error).toBeInstanceOf(DeviceKeyNotSavedError));
+
+      const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revoke?.[1]?.method).toBe('DELETE');
+      expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'unsaved-key' });
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiKey()).toBeNull();
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }
   });
 

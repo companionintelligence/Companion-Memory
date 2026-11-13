@@ -36,6 +36,7 @@ import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
 import { forgetFeatures } from '@/common/feature/rememberedFeatures';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
 
+import { DeviceKeyNotSavedError } from './deviceKeyNotSaved';
 import { forgetUser, MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 
 const authChannel = new BroadcastChannel('auth');
@@ -356,7 +357,8 @@ function bumpNativeCredentialEpoch(): void {
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
 async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<string | null> {
   const origin = memoryOrigin || getApiBaseUrl();
-  const keysUrl = /^https?:\/\//i.test(origin) ? `${origin.replace(/\/+$/, '')}/api/keys` : '/api/keys';
+  const base = /^https?:\/\//i.test(origin) ? origin.replace(/\/+$/, '') : '';
+  const keysUrl = `${base}/api/keys`;
   const created = await fetchJson<CreateApiKeyResponse>(keysUrl, {
     method: 'POST',
     skipApiKey: true,
@@ -377,9 +379,26 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     return null;
   }
 
-  await secureStorageSet(API_KEY_STORAGE, created.key);
-  await secureStorageSet(API_KEY_ID_STORAGE, created.id);
-  await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
+  try {
+    await secureStorageSet(API_KEY_STORAGE, created.key);
+    await secureStorageSet(API_KEY_ID_STORAGE, created.id);
+    await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
+  } catch (error) {
+    // The key is live on the server, but this device could not keep it: nothing would ever use
+    // it, and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
+    // Service) left one such full-access key behind on every try. Give it back first.
+    await revokeDeviceKey(created.key, `${base}/api/keys/current`);
+
+    // A write that got partway kept the key just revoked; nothing may read that back.
+    if ((await storedDeviceKey()) === created.key) {
+      await secureStorageRemove(API_KEY_STORAGE).catch(() => undefined);
+      await secureStorageRemove(API_KEY_ID_STORAGE).catch(() => undefined);
+      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE).catch(() => undefined);
+    }
+
+    throw new DeviceKeyNotSavedError(error);
+  }
+
   setApiKey(created.key);
 
   return created.key;
@@ -471,9 +490,9 @@ async function storedDeviceKey(): Promise<string | null> {
  * effort and bounded, because signing out must finish whether or not the appliance answers;
  * a key that could not be revoked here is still listed under Settings > API keys.
  */
-async function revokeDeviceKey(key: string): Promise<void> {
+async function revokeDeviceKey(key: string, url = '/api/keys/current'): Promise<void> {
   try {
-    await fetchJson('/api/keys/current', {
+    await fetchJson(url, {
       method: 'DELETE',
       skipApiKey: true,
       headers: { 'x-api-key': key },
