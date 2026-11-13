@@ -46,6 +46,17 @@ class LocalSearchTest {
     }
 
     @Test
+    fun an_agent_s_chats_with_the_owner_never_answer_a_page_or_a_count() {
+        val page = LocalSearch.pageStatement(LocalSearchArgs(query = "email"))!!
+        val browse = LocalSearch.pageStatement(LocalSearchArgs(query = "", sort = "recent"))!!
+
+        // From `detail`, not the generated column the web layer adds: this can run first.
+        assertTrue(page.sql.contains("json_extract(d.detail, '$.agent_turn') IS NULL"))
+        assertTrue(browse.sql.contains("json_extract(d.detail, '$.agent_turn') IS NULL"))
+        assertFalse(page.sql.contains("d.agent_turn"))
+    }
+
+    @Test
     fun the_scope_is_the_lean_kinds_the_call_names_and_nothing_else() {
         assertEquals(listOf("event", "person"), LocalSearch.scope(LocalSearchArgs(entityTypes = listOf("Event", "person", "answer", "event"))))
         assertEquals(LocalSearch.LEAN_ENTITY_TYPES, LocalSearch.scope(LocalSearchArgs(entityTypes = listOf("browser-activity"))))

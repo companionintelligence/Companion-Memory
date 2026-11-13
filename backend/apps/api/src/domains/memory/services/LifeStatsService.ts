@@ -738,6 +738,8 @@ export class LifeStatsService {
         WHERE c.user_id = $1
           AND ($2::timestamptz IS NULL OR c.time >= $2)
           AND ($3::timestamptz IS NULL OR c.time < $3)
+          -- Chats with the owner's own agents are not a channel the owner talks to people on.
+          AND c.category IS DISTINCT FROM 'agent-turn'
         GROUP BY 1
         ORDER BY COUNT(*) DESC
         LIMIT $4`,

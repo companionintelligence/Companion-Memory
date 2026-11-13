@@ -162,6 +162,10 @@ describe('toLocalDocument', () => {
 });
 
 describe('localSearchStatement', () => {
+  it("never answers with an agent's chats with the owner: the header search has no How filter", () => {
+    expect(localSearchStatement({ query: 'email' })!.sql).toContain('d.agent_turn IS NULL');
+  });
+
   it('ranks by bm25 with the title over the body, scoped to the resolved types', () => {
     const statement = localSearchStatement({ query: 'harbour grill', includeTypes: ['event', 'place'] });
 

@@ -18,6 +18,7 @@ import {
 } from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
 import {
+  AGENT_TURN_MESSAGE_CATEGORY,
   CommunicationService,
   ConceptService,
   ContentService,
@@ -787,6 +788,8 @@ export class SearchResolver {
         // Always fetch a deep candidate pool so the in-memory Paginator can page
         // past the first client window (>= `first` guarantees a full page).
         maxResults: Math.max(first, QUERY_CANDIDATE_LIMIT),
+        // Agents' conversation turns only when How names the agent (see showAgentTurnsFrom).
+        showAgentTurnsFrom: connectors ?? [],
       });
     } else if (tags != null) {
       candidateSource = 'tags';
@@ -935,6 +938,16 @@ export class SearchResolver {
 
     let entries = await this.resolveToEntries(serviceContext, identifiers);
 
+    // Agents' conversation turns (POST /memory/turn) stay out until How names the agent. The query
+    // and timed paths already leave them out in SQL; this catches the tags path.
+    if (connectors == null) {
+      entries = entries.filter(
+        (entry) =>
+          entry.type !== 'communication' ||
+          (entry.entity as { category?: string | null }).category !== AGENT_TURN_MESSAGE_CATEGORY,
+      );
+    }
+
     // How (when not the timed path, which pushes it down to SQL): keep the
     // entries whose row came from one of the named sources. A kind with no
     // source column cannot match and drops out, exactly as the timed path
@@ -1080,17 +1093,21 @@ export class SearchResolver {
       excludeTypes,
       semantic,
       maxResults,
+      showAgentTurnsFrom,
     }: {
       query: string;
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       semantic?: boolean;
       maxResults?: number;
+      /** See SearchService's `showAgentTurnsFrom`. Absent: no agent-turn rule. */
+      showAgentTurnsFrom?: readonly string[];
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const options = {
       query,
       maxResults: maxResults ?? 25,
+      ...(showAgentTurnsFrom ? { showAgentTurnsFrom } : {}),
     };
     // Conceptual ranking on request; otherwise SearchService picks a mode by heuristic.
     if (semantic) {

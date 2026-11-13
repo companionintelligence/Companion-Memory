@@ -110,6 +110,9 @@ export const DOCUMENTS_GENERATED_COLUMNS: ReadonlyArray<{ name: string; ddl: str
   'lat',
   'lng',
   'preview_id',
+  // `true` on a message an agent stored as one side of its chat with the owner (entityDeviceRecord
+  // version 6). No index: a few hundred rows, read only to leave them out.
+  'agent_turn',
 ].map((name) => ({
   name,
   ddl: `${name} ${name === 'lat' || name === 'lng' ? 'REAL' : 'TEXT'} GENERATED ALWAYS AS (json_extract(detail, '$.${name}')) VIRTUAL`,
