@@ -258,3 +258,148 @@ describe('ChatTurnService.execute providers', () => {
     expect(published).not.toContainEqual({ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
   });
 });
+
+/**
+ * Stop keeps what streamed. `canceled` is stored in `is_deleted`, which every read leaves out, so a stopped reply
+ * marked canceled vanished on reload while the database still held its text.
+ */
+describe('ChatTurnService.execute — a reply stopped part way', () => {
+  /** A stream that yields `chunks`, then has the person press Stop before it ends. */
+  function stoppedStream(
+    broker: ChatGenerationBroker,
+    chunks: Array<{ message: { content?: string; thinking?: string } }>,
+    accumulated: Array<{ role: string; content: string; tool_calls?: unknown[] }>,
+  ) {
+    const generator = (async function* () {
+      for (const chunk of chunks) {
+        yield chunk;
+      }
+
+      broker.abort(payload.threadId);
+    })();
+
+    Object.defineProperty(generator, 'messages', { get: () => accumulated });
+    Object.defineProperty(generator, 'error', { get: () => undefined });
+
+    return generator;
+  }
+
+  function build(
+    stream: (broker: ChatGenerationBroker) => ReturnType<typeof stoppedStream>,
+  ): ReturnType<typeof buildService> & { messageService: { create: jest.Mock } } {
+    const messageService = {
+      findByThreadId: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+    const chatStream = jest.fn();
+    const built = buildService(chatStream, messageService);
+
+    chatStream.mockImplementation(async () => stream(built.broker));
+
+    return { ...built, messageService };
+  }
+
+  it('keeps the part that streamed when the stream accumulated no message', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { thinking: 'hmm' } }, { message: { content: 'The first half' } }],
+        [],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '<think>hmm</think>The first half', canceled: false }),
+    );
+  });
+
+  it('keeps the cut-off reply when the stream accumulated it', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'The first half' } }],
+        [{ role: 'assistant', content: 'The first half' }],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'The first half', canceled: false }),
+    );
+  });
+
+  it('keeps the last row of a stopped tool turn that has text', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'Found it, here' } }],
+        [
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+          { role: 'tool', content: '[]' },
+          { role: 'assistant', content: 'Found it, here' },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: 'Found it, here', canceled: false }),
+    );
+  });
+
+  it('still hides a stopped reply that has nothing in it', async () => {
+    const { service, messageService } = build((broker) => stoppedStream(broker, [], []));
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '', canceled: true }),
+    );
+  });
+
+  it('still hides an empty last row of a stopped tool turn', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'Let me look' } }],
+        [
+          {
+            role: 'assistant',
+            content: 'Let me look',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+          { role: 'tool', content: '[]' },
+          { role: 'assistant', content: '' },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'Let me look', canceled: false }),
+    );
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: '', canceled: true }),
+    );
+  });
+});

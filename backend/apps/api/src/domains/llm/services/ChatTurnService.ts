@@ -584,6 +584,12 @@ export class ChatTurnService {
    * input messages back — so the in-flight turn-context message cannot be
    * persisted here. Keep it that way: messages are re-read from Postgres every
    * turn, so a persisted snapshot would accumulate one copy per turn.
+   *
+   * A stopped turn keeps what it streamed. `canceled` is stored in the same
+   * `is_deleted` column a deleted message uses, and every read leaves those
+   * rows out, so marking the cut-off reply canceled made the part the person
+   * watched arrive vanish on reload. Only a cut-off row with nothing in it is
+   * marked, as before.
    */
   private async persistTurn(
     context: ServiceContext,
@@ -594,20 +600,25 @@ export class ChatTurnService {
     streamedText: string,
     streamedThink: string,
   ): Promise<void> {
+    const stoppedEmpty = (content: string | null | undefined) => aborted && !content?.trim();
+
     if (generated.length === 0) {
+      const content = persistedAssistantContent(streamedThink, streamedText);
+
       await this.messageService.update(context, payload.assistantMessageId, {
-        content: persistedAssistantContent(streamedThink, streamedText),
-        canceled: aborted,
+        content,
+        canceled: stoppedEmpty(content),
       });
 
       return;
     }
 
     const [first, ...rest] = generated;
+    const firstContent = first.content || streamedText;
 
     await this.messageService.update(context, payload.assistantMessageId, {
-      content: first.content || streamedText,
-      canceled: aborted && rest.length === 0,
+      content: firstContent,
+      canceled: rest.length === 0 && stoppedEmpty(firstContent),
       toolCalls: (first.tool_calls as unknown[] as Record<string, unknown>[]) ?? null,
     });
 
@@ -620,7 +631,7 @@ export class ChatTurnService {
           model,
           role: message.role,
           content: message.content,
-          canceled: aborted && i === rest.length - 1,
+          canceled: i === rest.length - 1 && stoppedEmpty(message.content),
           threadId: payload.threadId,
           ...(message.tool_calls && {
             toolCalls: message.tool_calls as unknown[] as Record<string, unknown>[],
