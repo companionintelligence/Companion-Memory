@@ -9,6 +9,7 @@ import {
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { UPDATE_TASK } from './EditTaskModal';
+import { CREATE_TASK } from './NewTaskForm';
 import { PlanPage } from './PlanPage';
 import { SELECT_HOLD_MS } from './Task';
 import { addLocalDays, dueAtFromLocalDate, localDateOf } from './taskSections';
@@ -111,18 +112,6 @@ const DECLINE_PENDING = gql(`
   mutation DeclineTaskPendingChange($id: ID!) {
     declineTaskPendingChange(id: $id) {
       success
-    }
-  }
-`);
-
-const CREATE_TASK = gql(`
-  mutation CreateTask($input: CreateTaskInput!) {
-    createTask(input: $input) {
-      success
-      task {
-        id
-        ...TaskRowFragment
-      }
     }
   }
 `);
