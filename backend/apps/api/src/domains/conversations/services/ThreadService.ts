@@ -275,7 +275,14 @@ export class ThreadService {
   }
 
   async softRemove(context: ServiceContext, id: string): Promise<boolean> {
-    // Update is_archived instead of using TypeORM's softDelete
+    // Update is_archived instead of using TypeORM's softDelete.
+    //
+    // `generation_status` goes back to idle in the same write. The turn this
+    // stops would set it itself, but through `update`, which no longer matches
+    // an archived thread, so a chat deleted mid-reply kept `running`. The model
+    // queues (`countPendingGenerations`, and HBPE's labeler reading the same
+    // column) took that for someone waiting on the model and held all
+    // background AI work for every account until the row aged out.
     const result = await this.threadRepository.update(
       {
         id,
@@ -287,6 +294,7 @@ export class ThreadService {
       },
       {
         isArchived: true,
+        generationStatus: 'idle',
       },
     );
 
