@@ -171,6 +171,13 @@ export {
 } from './policy';
 export { AUDIT_SAID_PLACEHOLDER, computeAuditSaid, verifyAuditSaid } from './auditSaid';
 export {
+  ISO_27560_DPV_SCHEMA_VERSION,
+  buildIso27560ConsentReceipt,
+  verifyIso27560ConsentReceipt,
+  type BuildConsentReceiptOptions,
+  type Iso27560ConsentReceipt,
+} from './consentReceipt';
+export {
   ASK_ARCHETYPES,
   askGrammarSchema,
   dataClassesIn,

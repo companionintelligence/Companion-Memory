@@ -14,6 +14,7 @@ import {
   Plug,
   Lock,
   Shield,
+  ShieldCheck,
   Smartphone,
   LockKeyhole,
 } from '@ci/shadcn/icons';
@@ -50,6 +51,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'api-keys', label: 'API keys', icon: KeyRound },
   { id: 'oauth', label: 'OAuth credentials', icon: Key },
   { id: 'privacy', label: 'Privacy', icon: Lock },
+  { id: 'protocols', label: 'Trust & protocols', icon: ShieldCheck },
   { id: 'data', label: 'Your data', icon: HardDrive },
 ];
 

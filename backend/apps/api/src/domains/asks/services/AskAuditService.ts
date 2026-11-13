@@ -202,6 +202,15 @@ export class AskAuditService {
     return { rows: rows.slice(0, limit).map(AskAuditEntity.toEgressType), truncated };
   }
 
+  /** Loads a single disclosure audit row when owned by the responder; null otherwise. */
+  async findByIdForResponder(context: UserServiceContext, auditId: string): Promise<AskAudit | null> {
+    const entity = await this.auditRepository.findOne({
+      where: { id: auditId, responderUserId: context.userId },
+    });
+
+    return entity ? AskAuditEntity.toEgressType(entity) : null;
+  }
+
   /**
    * The caller's disclosure history folded BY RELATIONSHIP.
    *

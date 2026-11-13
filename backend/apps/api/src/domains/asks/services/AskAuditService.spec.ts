@@ -253,4 +253,32 @@ describe('AskAuditService SAID anchoring', () => {
 
     expect(service.verifyConsentReceipt({ ...receipt, disclosedCount: 99 })).toBe(false);
   });
+
+  it('scopes findByIdForResponder to both audit id and responder userId', async () => {
+    const entity = new AskAuditEntity();
+    entity.id = '11111111-1111-4111-8111-111111111111';
+    entity.askId = '22222222-2222-4222-8222-222222222222';
+    entity.askerUserId = 'asker-1';
+    entity.responderUserId = 'responder-1';
+    entity.peerLinkId = null;
+    entity.peerHandle = null;
+    entity.query = QUERY;
+    entity.disclosedEntities = [];
+    entity.disclosedCount = 2;
+    entity.consentBasis = 'owner_approved';
+    entity.outcome = 'answered';
+    entity.createdAt = new Date('2026-11-12T00:00:00Z');
+
+    const findOne = jest.fn().mockResolvedValue(entity);
+    const service = new AskAuditService({ findOne } as never, { setContext: jest.fn() } as never);
+
+    const found = await service.findByIdForResponder({ userId: 'responder-1' }, entity.id);
+    expect(findOne).toHaveBeenCalledWith({
+      where: { id: entity.id, responderUserId: 'responder-1' },
+    });
+    expect(found?.disclosedCount).toBe(2);
+
+    findOne.mockResolvedValueOnce(null);
+    expect(await service.findByIdForResponder({ userId: 'other-user' }, entity.id)).toBeNull();
+  });
 });

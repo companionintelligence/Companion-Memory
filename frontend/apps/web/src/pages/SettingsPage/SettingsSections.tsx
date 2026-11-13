@@ -39,6 +39,9 @@ const OAuthSection = lazy(() => import('./sections/OAuthSection').then((m) => ({
 const PrivacySection = lazy(() =>
   import('./sections/PrivacySection').then((m) => ({ default: m.PrivacySection })),
 );
+const TrustProtocolsSection = lazy(() =>
+  import('./sections/TrustProtocolsSection').then((m) => ({ default: m.TrustProtocolsSection })),
+);
 const DataPortabilitySection = lazy(() =>
   import('./sections/DataPortabilitySection').then((m) => ({ default: m.DataPortabilitySection })),
 );
@@ -73,6 +76,8 @@ function sectionElement(section: string): ReactNode {
       return <OAuthSection />;
     case 'privacy':
       return <PrivacySection />;
+    case 'protocols':
+      return <TrustProtocolsSection />;
     case 'data':
       return <DataPortabilitySection />;
     default:

@@ -202,6 +202,13 @@ enum AskAuditOutcome {
   expired
 }
 
+type AskAuditReceiptPayload {
+  askId: ID
+  auditId: ID!
+  auditSaid: String!
+  receipt: AskConsentReceiptType!
+}
+
 type AskAuditType {
   askId: ID
   askerId: ID
@@ -229,6 +236,21 @@ type AskChannelType {
   covered: [String!]!
   keyThumbprint: String!
   verifiedAt: DateTime!
+}
+
+type AskConsentReceiptType {
+  consentBasis: String
+  d: String!
+  disclosedCount: Int!
+  issuedAt: String!
+  legalBasis: String!
+  outcome: String!
+  piiPrincipalId: String
+  processing: [String!]!
+  purposes: [String!]!
+  recipient: String
+  recordId: String!
+  schemaVersion: String!
 }
 
 input AskDisclosureHistoryInput {
@@ -2875,6 +2897,7 @@ type Query {
   answers(after: String, before: String, first: Int, last: Int): AnswerConnection!
   ask(id: ID!): AskType
   askAnswer(id: ID!): AskAnswerType
+  askAuditReceipt(id: ID!): AskAuditReceiptPayload
   askDisclosureHistory(input: AskDisclosureHistoryInput): AskDisclosureHistoryPayload!
   askDisclosureSummary(input: AskDisclosureSummaryInput): AskDisclosureSummaryPayload!
   askGrant(id: ID!): AskGrantType

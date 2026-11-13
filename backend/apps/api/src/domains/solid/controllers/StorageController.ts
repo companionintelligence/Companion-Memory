@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Options, Param, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -61,7 +61,31 @@ export class StorageController {
 
     const origin = this.webIds.resolveOrigin(requestOrigin(req));
     const quads = this.container.build(members, origin, authUserId, { truncated });
-    this.respond(req, res, quads);
+    this.respond(req, res, quads, true);
+  }
+
+  /** Solid LDP capability discovery for the entity container (flag-gated, owner-scoped). */
+  @Options(':userId/entity')
+  async optionsEntityContainer(
+    @Param('userId') userId: string,
+    @Context() context: RequestContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.authorizeOwner(userId, context);
+    this.setLdpHeaders(res, true);
+    res.status(204).end();
+  }
+
+  /** Solid LDP capability discovery for an entity resource (flag-gated, owner-scoped). */
+  @Options(':userId/entity/:entityId')
+  async optionsEntity(
+    @Param('userId') userId: string,
+    @Context() context: RequestContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.authorizeOwner(userId, context);
+    this.setLdpHeaders(res, false);
+    res.status(204).end();
   }
 
   @Get(':userId/entity/:entityId')
@@ -132,7 +156,22 @@ export class StorageController {
     }
   }
 
-  private respond(req: Request, res: Response, quads: Quad[]): void {
+  private setLdpHeaders(res: Response, isContainer: boolean): void {
+    if (typeof res.setHeader !== 'function') {
+      return;
+    }
+
+    const typeLinks = isContainer
+      ? '<http://www.w3.org/ns/ldp#BasicContainer>; rel="type", <http://www.w3.org/ns/ldp#Resource>; rel="type"'
+      : '<http://www.w3.org/ns/ldp#RDFSource>; rel="type", <http://www.w3.org/ns/ldp#Resource>; rel="type"';
+    res.setHeader('Vary', 'Accept');
+    res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+    res.setHeader('Link', typeLinks);
+    res.setHeader('WAC-Allow', 'user="read"');
+  }
+
+  private respond(req: Request, res: Response, quads: Quad[], isContainer = false): void {
+    this.setLdpHeaders(res, isContainer);
     const serialization = negotiateRdf(req.headers.accept);
     res.type(serialization.mediaType).send(serialization.serialize(quads));
   }

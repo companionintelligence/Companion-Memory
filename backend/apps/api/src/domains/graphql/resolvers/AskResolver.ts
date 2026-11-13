@@ -57,6 +57,7 @@ import {
   SendPeerAskPayload,
 } from '../types/AskPayloads';
 import {
+  AskAuditReceiptPayload,
   AskAuditType,
   AskBroadcastType,
   AskDisclosureHistoryPayload,
@@ -1002,6 +1003,35 @@ export class AskResolver {
     );
 
     return { rows: rows.map(AskAuditType.toType), truncated };
+  }
+
+  /** Build the deterministic CESR SAID and ISO/IEC TS 27560 consent receipt for a responder audit entry. */
+  @Query(() => AskAuditReceiptPayload, { nullable: true })
+  async askAuditReceipt(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<AskAuditReceiptPayload | null> {
+    if (!(await this.enabled())) {
+      return null;
+    }
+
+    let decoded: { type: string; id: string };
+    try {
+      decoded = GlobalUID.decode(id);
+    } catch {
+      return null;
+    }
+
+    if (
+      decoded.type !== 'ask-audit' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded.id)
+    ) {
+      return null;
+    }
+
+    const audit = await this.auditService.findByIdForResponder(toServiceContext(context), decoded.id);
+
+    return audit ? AskAuditReceiptPayload.fromAudit(audit) : null;
   }
 
   /**
