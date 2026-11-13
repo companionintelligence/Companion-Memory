@@ -4,6 +4,8 @@ import { createHookContext } from '@ci/common';
 import L, { type LatLngExpression } from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
+import { centerBesidePanel, fitPadding } from './framing';
+
 type ReturnType = [
   {
     locations: LatLngExpression[];
@@ -52,17 +54,14 @@ function useMap({ autoCenterMarkers = true }: MapOptions = {}): ReturnType {
       }
 
       if (visibleMarkers.length === 1) {
-        map.panTo(visibleMarkers[0].getLatLng());
+        map.panTo(centerBesidePanel(map, visibleMarkers[0].getLatLng(), map.getZoom(), panelInset));
 
         return;
       }
 
       const bounds = L.latLngBounds(visibleMarkers.map((marker) => marker.getLatLng()));
 
-      map.fitBounds(bounds, {
-        paddingTopLeft: [50 + panelInset, 50],
-        paddingBottomRight: [50, 50],
-      });
+      map.fitBounds(bounds, fitPadding(panelInset, 50));
     },
     [map, markers],
   );

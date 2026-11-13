@@ -6,13 +6,13 @@ import { Route } from '@ci/shadcn/icons';
 import L from 'leaflet';
 import { CircleMarker, Polyline, Tooltip, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 
+import { fitPadding } from '@/components/Map/framing';
 import { gql } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { boundsToBbox, clampBboxSpan } from '../bbox';
 import { useEntityService } from '../useEntityService';
 
-import { fitPadding } from './pinSet';
 import { describeTrace, traceRadius, traceSegments, type TracePoint } from './trace';
 
 /**

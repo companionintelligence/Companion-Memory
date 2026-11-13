@@ -21,6 +21,7 @@ import { listLocalPins } from '@/api/powersync/localList';
 import { getReplicaDatabase } from '@/api/powersync/session';
 import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map, MapAttribution } from '@/components/Map';
+import { centerBesidePanel, fitPadding } from '@/components/Map/framing';
 import { useMapIsolation } from '@/components/Map/mapIsolation';
 import { type MarkerVariant } from '@/components/Map/Marker';
 import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
@@ -53,14 +54,7 @@ import { AreaLayer, useSearchAreas, type AreaMode } from './AreaLayer';
 import { clusterDiameterPx, mergeCollidingClusters, type PixelCluster } from './clusterOverlap';
 import { LocationAlwaysBanner } from './LocationAlwaysBanner';
 import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
-import {
-  fitActionFor,
-  fitPadding,
-  fitSignature,
-  mostRecentDatedPin,
-  pinsInBounds,
-  routePoints,
-} from './pinSet';
+import { fitActionFor, fitSignature, mostRecentDatedPin, pinsInBounds, routePoints } from './pinSet';
 import { PositionTraceLayer, TraceToggleControl } from './TraceLayer';
 import { HOME_MAP_ZOOM, useHomeMapCenter } from './useHomeMapCenter';
 import './memory-map.css';
@@ -622,12 +616,15 @@ function ClusterMarker({
   cluster,
   onSelect,
   onZoom,
+  panelInset = 0,
 }: {
   position: [number, number];
   count: number;
   cluster: Cluster;
   onSelect: (pin: Pin) => void;
   onZoom: () => void;
+  /** How much of the map's left edge a panel covers; the popup auto-pans clear of it. */
+  panelInset?: number;
 }) {
   const map = useLeafletMap();
   const icon = useMemo(() => makeClusterIcon(count), [count]);
@@ -650,7 +647,14 @@ function ClusterMarker({
 
   return (
     <LeafletMarker position={position} icon={icon} eventHandlers={eventHandlers} zIndexOffset={300}>
-      <Popup className="custom-popup memory-map-cluster-popup" minWidth={288} maxWidth={320}>
+      <Popup
+        className="custom-popup memory-map-cluster-popup"
+        minWidth={288}
+        maxWidth={320}
+        // Leaflet keeps a popup 5px inside the map. Counting the panel too
+        // stops a group beside it opening its popup half under the timeline.
+        autoPanPaddingTopLeft={[panelInset + 5, 5]}
+      >
         <ClusterPopupContent cluster={cluster} onSelect={handleSelect} onZoom={onZoom} />
       </Popup>
     </LeafletMarker>
@@ -664,7 +668,9 @@ function zoomToCluster(map: L.Map, cluster: Cluster, panelInset: number) {
   // All members share (nearly) the same point — zooming can't separate them, so
   // just step in towards them.
   if (bounds.getNorthEast().equals(bounds.getSouthWest())) {
-    map.setView(points[0], Math.min(map.getZoom() + 2, 18));
+    const zoom = Math.min(map.getZoom() + 2, 18);
+
+    map.setView(centerBesidePanel(map, points[0], zoom, panelInset), zoom);
 
     return;
   }
@@ -786,6 +792,7 @@ function ClusteredMarkers({
             cluster={cluster}
             onSelect={onSelect}
             onZoom={() => zoomToCluster(map, cluster, panelInset)}
+            panelInset={panelInset}
           />
         );
       })}
@@ -1147,6 +1154,20 @@ function MapStatusOverlay({
   );
 }
 
+/** The part of the map a panel `panelInset` px wide over its left edge leaves uncovered. */
+function uncoveredBounds(map: L.Map, panelInset: number): L.LatLngBounds {
+  if (panelInset <= 0) {
+    return map.getBounds();
+  }
+
+  const size = map.getSize();
+
+  return L.latLngBounds(
+    map.containerPointToLatLng([panelInset, size.y]),
+    map.containerPointToLatLng([size.x, 0]),
+  );
+}
+
 /**
  * Fit the viewport to the pins whenever a NEW set arrives — pins are often
  * scattered far from the default centre (different cities, countries), which is
@@ -1191,7 +1212,9 @@ function FitBoundsToPins({
     // while its siblings are off it, and framing the union then would zoom
     // the person out of the box they were working on. A saved search that
     // arrives from elsewhere has none of its boxes on screen, so it frames.
-    const viewport = map.getBounds().pad(0.05);
+    // Only what the panel leaves uncovered counts: a box sitting under it is
+    // not on screen for the person, and has to be framed like any other.
+    const viewport = uncoveredBounds(map, panelInset).pad(0.05);
     const areaInView =
       areaBound &&
       areas.some(([minLon, minLat, maxLon, maxLat]) =>
@@ -1212,7 +1235,7 @@ function FitBoundsToPins({
 
       map.fitBounds(L.latLngBounds(points), { ...fitPadding(panelInset), maxZoom: 13 });
     } else if (action === 'area' && areaBounds != null) {
-      map.fitBounds(areaBounds, { paddingTopLeft: [panelInset, 0] });
+      map.fitBounds(areaBounds, fitPadding(panelInset, 0));
     }
 
     // Adopted even when nothing moved: this set (and this area) is now the one

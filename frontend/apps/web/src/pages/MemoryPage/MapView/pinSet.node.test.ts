@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   fitActionFor,
-  fitPadding,
   fitSignature,
   mostRecentDatedPin,
   pinsInBounds,
@@ -252,15 +251,5 @@ describe('fitActionFor', () => {
     expect(
       fitActionFor({ signature: '4:a:d', fitted: '9:a:z', areaBound: false, previousAreaBound: false }),
     ).toBe('pins');
-  });
-});
-
-describe('fitPadding', () => {
-  it('leaves 60px all round when nothing covers the map', () => {
-    expect(fitPadding()).toEqual({ paddingTopLeft: [60, 60], paddingBottomRight: [60, 60] });
-  });
-
-  it('adds the width of a panel over the left edge to the left side only', () => {
-    expect(fitPadding(300)).toEqual({ paddingTopLeft: [360, 60], paddingBottomRight: [60, 60] });
   });
 });

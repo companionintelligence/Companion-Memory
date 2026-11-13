@@ -110,25 +110,6 @@ export function fitSignature(pins: PinPoint[]): string {
   return `${pins.length}:${pins[0].id}:${pins[pins.length - 1].id}`;
 }
 
-/** Room, in px, that framing leaves between the pins and the edge of the map. */
-export const FIT_PADDING_PX = 60;
-
-/**
- * Padding for Leaflet's `fitBounds` that frames pins in the part of the map
- * you can see: `FIT_PADDING_PX` all round, plus `panelInset` on the left for a
- * panel lying over the map's left edge (the desktop timeline). A plain
- * `padding` fitted to the map's full width, which put pins under the panel.
- */
-export function fitPadding(panelInset = 0): {
-  paddingTopLeft: [number, number];
-  paddingBottomRight: [number, number];
-} {
-  return {
-    paddingTopLeft: [FIT_PADDING_PX + panelInset, FIT_PADDING_PX],
-    paddingBottomRight: [FIT_PADDING_PX, FIT_PADDING_PX],
-  };
-}
-
 /** What the viewport does when a pin set arrives — see {@link fitActionFor}. */
 export type FitAction = 'pins' | 'area' | 'none';
 
