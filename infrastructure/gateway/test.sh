@@ -124,4 +124,11 @@ grep -E '^[[:space:]]*proxy_pass ' "$nginx_conf" | sed -E 's#.*proxy_pass https?
     || fail "proxy_pass names $host, not one of the upstreams above (a name of its own is resolved once, at start)"
 done
 
+# ── nginx.conf: a Companion sign-in's credentials stay out of the access log.
+# Its start and callback carry them in the query, and the access log writes the
+# whole request line. /oauth/callback turns its own log off for the same reason.
+grep -q '^  access_log /var/log/nginx/access.log combined if=$loggable_request;$' "$nginx_conf" \
+  || fail "the access log no longer skips the sign-in routes"
+grep -Fq '"~^/api/authenticate/oidc\b"   0;' "$nginx_conf" || fail "the sign-in routes are logged again"
+
 echo "gateway: ok"
