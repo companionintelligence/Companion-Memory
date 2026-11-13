@@ -232,6 +232,24 @@ describe('Chat', () => {
     await waitFor(() => expect(container.textContent).toContain('Let me look that up.'));
   });
 
+  it('shows the last character of the thinking block once the answer starts', async () => {
+    const encoder = new FrameEncoder();
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encodeFrame(Channel.THINK, 'Checking what was requested.'));
+        controller.enqueue(encoder.encodeFrame(Channel.TEXT, 'Hi there\n\n'));
+        controller.close();
+      },
+    });
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Hi there'));
+    expect(container.textContent).toContain('Checking what was requested.');
+  });
+
   /**
    * A turn whose stream dies — the on-device model failing right after a tool call was the case that motivated this.
    * The notice always says the reply is incomplete; it adds the reason only when the failure carries one.
