@@ -50,15 +50,19 @@ pub struct LocalModelResolution {
     pub detail: String,
 }
 
-/// The only thing stack_manager::write_env_file needs from this whole
+/// What stack_manager::write_env_file's `.env` needs changed after this
 /// resolution: an LLM_API_BASE/LLM_API_KEY override when (and only when) the
-/// Apple bridge is handling chat. Every other outcome relies on CI-Server's
-/// existing OLLAMA_HOST default already pointing at 11434 — see the module
-/// doc comment.
+/// Apple bridge is handling chat, and a chat model when the user's own Ollama
+/// does not have DEFAULT_CHAT_MODEL. Every other outcome relies on
+/// CI-Server's existing OLLAMA_HOST default already pointing at 11434 — see
+/// the module doc comment.
 #[derive(Debug, Clone, Default)]
 pub struct LlmEnvOverride {
     pub llm_api_base: Option<String>,
     pub llm_api_key: Option<String>,
+    /// Replaces DEFAULT_CHAT_MODEL as the model chat and background work ask
+    /// for. See ollama_sidecar::host_ollama_chat_model.
+    pub chat_model: Option<String>,
 }
 
 /// Whether resolve_once has run yet — a second caller returns immediately
@@ -208,9 +212,6 @@ fn resolve_and_start(
 
     let chat_backend = choose_chat_backend(host_ollama_running, || apple_chat_available(apple_bridge_binary));
 
-    // `mut` only on macOS: the Apple-bridge arm just below is the sole writer,
-    // and it is compiled out on every other host.
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut env = LlmEnvOverride::default();
     if chat_backend == ChatBackend::AppleOnDevice {
         #[cfg(target_os = "macos")]
@@ -246,10 +247,18 @@ fn resolve_and_start(
              about since it isn't the one that started it.",
             ollama_sidecar::OLLAMA_PORT
         );
+
+        // Nothing is pulled into an Ollama this app does not own. If it lacks
+        // the default model, name one it has instead: asking for a model it
+        // does not serve failed every background job.
+        env.chat_model = ollama_sidecar::host_ollama_chat_model(ollama_sidecar::OLLAMA_PORT);
     }
 
     let detail = match chat_backend {
-        ChatBackend::HostOllama => "Chat + embeddings: your own local Ollama.".to_string(),
+        ChatBackend::HostOllama => match &env.chat_model {
+            Some(model) => format!("Chat + embeddings: your own local Ollama, chat on {model}."),
+            None => "Chat + embeddings: your own local Ollama.".to_string(),
+        },
         ChatBackend::AppleOnDevice => {
             format!("Chat: Apple on-device model. Embeddings: bundled {}.", ollama_sidecar::DEFAULT_EMBED_MODEL)
         }

@@ -515,6 +515,108 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct TagsResponse {
+    #[serde(default)]
+    models: Vec<TagsModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagsModel {
+    name: String,
+}
+
+/// The models an Ollama has, in the order `/api/tags` lists them.
+fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/tags"))
+        .send()
+        .map_err(|e| format!("Failed to list models: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Listing models failed: HTTP {}", response.status()));
+    }
+    let tags: TagsResponse = response.json().map_err(|e| format!("Unreadable model list: {e}"))?;
+
+    Ok(tags.models.into_iter().map(|model| model.name).collect())
+}
+
+/// Ollama reads a bare name as its `:latest` tag.
+fn same_model(served: &str, wanted: &str) -> bool {
+    let full = |name: &str| if name.contains(':') { name.to_string() } else { format!("{name}:latest") };
+
+    full(served) == full(wanted)
+}
+
+/// Mirrors the name rule the api uses to keep embedders and other non-chat
+/// models out of chat (backend/apps/api/src/domains/llm/services/
+/// servedModels.ts, NON_CHAT_NAME). Ollama publishes no labels, so the name
+/// is all there is.
+fn is_chat_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if ["embed", "rerank", "whisper", "kokoro", "minilm"].iter().any(|part| name.contains(part)) {
+        return false;
+    }
+
+    !name.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "tts" || word == "bge")
+}
+
+/// The chat model to ask a user's own Ollama for, when it is not
+/// DEFAULT_CHAT_MODEL: None when it serves the default (nothing to change)
+/// or serves no chat model at all (nothing better to name). Otherwise the
+/// first chat model it lists, which is the one the api's chat already falls
+/// back to, so chat and background work end up on the same model.
+fn choose_host_chat_model(served: &[String]) -> Option<String> {
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    served.iter().find(|name| is_chat_model_name(name)).cloned()
+}
+
+/// What to write as the chat model when reusing the user's own Ollama.
+///
+/// This app pulls nothing into an Ollama it does not own, and it used to name
+/// DEFAULT_CHAT_MODEL regardless. Where that Ollama lacked it, chat quietly
+/// ran on whatever it listed first while every background job failed with
+/// "Invalid model specified: gemma4:e4b". Logged either way, with the command
+/// that gets the default model, and the same for the embedding model search
+/// needs, which has no substitute: the index is built with it.
+pub fn host_ollama_chat_model(port: u16) -> Option<String> {
+    let served = match served_model_names(port) {
+        Ok(served) => served,
+        Err(e) => {
+            log::warn!("Could not ask your Ollama which models it has ({e}); asking it for {DEFAULT_CHAT_MODEL}.");
+            return None;
+        }
+    };
+
+    if !served.iter().any(|name| same_model(name, DEFAULT_EMBED_MODEL)) {
+        log::warn!(
+            "Your Ollama does not have {DEFAULT_EMBED_MODEL}, which search needs. \
+             Run `ollama pull {DEFAULT_EMBED_MODEL}` to add it."
+        );
+    }
+
+    let chosen = choose_host_chat_model(&served);
+    match &chosen {
+        Some(model) => log::warn!(
+            "Your Ollama does not have {DEFAULT_CHAT_MODEL}; chat and background work will use {model}, \
+             the first chat model it lists. Run `ollama pull {DEFAULT_CHAT_MODEL}` to use the default."
+        ),
+        None if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) => {}
+        None => log::warn!(
+            "Your Ollama has no chat model; chat and background work will fail until it has one. \
+             Run `ollama pull {DEFAULT_CHAT_MODEL}` to add the default."
+        ),
+    }
+
+    chosen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +707,53 @@ mod tests {
 
         let nobody = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(nobody));
+    }
+
+    /// A user's own Ollama gets nothing pulled into it, so the app names a
+    /// model it has. The default stays when it is there (bare or `:latest`
+    /// spellings included), embedders are never picked for chat, and an Ollama
+    /// with no chat model leaves the default in place rather than naming an
+    /// embedder.
+    #[test]
+    fn a_users_own_ollama_is_asked_for_a_chat_model_it_has() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(choose_host_chat_model(&names(&["qwen3.5:122b", DEFAULT_CHAT_MODEL])), None);
+        assert_eq!(
+            choose_host_chat_model(&names(&["nomic-embed-text:latest", "qwen3.5:122b", "qwen3.5:4b"])),
+            Some("qwen3.5:122b".to_string()),
+        );
+        assert_eq!(
+            choose_host_chat_model(&names(&["bge-m3:latest", "mxbai-embed-large:latest", "llama3.2:latest"])),
+            Some("llama3.2:latest".to_string()),
+        );
+        assert_eq!(choose_host_chat_model(&names(&["nomic-embed-text:latest"])), None);
+        assert_eq!(choose_host_chat_model(&[]), None);
+
+        assert!(same_model("nomic-embed-text:latest", DEFAULT_EMBED_MODEL));
+        assert!(!same_model("gemma4:e2b", DEFAULT_CHAT_MODEL));
+        assert!(is_chat_model_name("gemma4:e4b"));
+        assert!(!is_chat_model_name("snowflake-arctic-embed2:latest"));
+        assert!(!is_chat_model_name("kokoro-tts:latest"));
+    }
+
+    /// The model list comes from Ollama's own `/api/tags`, in its order.
+    #[test]
+    fn served_model_names_reads_ollamas_tag_list() {
+        let port = serve(|request| {
+            respond(
+                request,
+                200,
+                r#"{"models":[{"name":"qwen3.5:122b","size":1},{"name":"nomic-embed-text:latest","size":2}]}"#,
+            )
+        });
+        assert_eq!(
+            served_model_names(port).unwrap(),
+            vec!["qwen3.5:122b".to_string(), "nomic-embed-text:latest".to_string()]
+        );
+
+        let broken = serve(|request| respond(request, 500, "internal server error"));
+        assert!(served_model_names(broken).is_err());
     }
 
     /// The wire shape Ollama's own `/api/pull` expects. `model` is the current

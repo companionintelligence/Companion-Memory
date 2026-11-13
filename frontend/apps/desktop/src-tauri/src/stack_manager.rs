@@ -322,11 +322,27 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
 /// (re)created, not on every request. resolve_once itself only calls this
 /// once (see its doc comment), so calling it twice is not a concern in
 /// practice, but it would still duplicate lines if it ever were.
+///
+/// The one exception to "additive" is a chat model (a user's own Ollama
+/// without DEFAULT_CHAT_MODEL): write_env_file already wrote
+/// LLM_DEFAULT_CHAT_MODEL, so that line is replaced rather than repeated, and
+/// LLM_UTILITY_MODEL is set beside it. The api's background model defaults to
+/// the same compiled-in tag as chat, not to LLM_DEFAULT_CHAT_MODEL, so
+/// changing only the chat model would leave background work asking for the
+/// missing one.
 pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::LlmEnvOverride) -> Result<(), String> {
+    let env_path = paths.compose_dir.join(".env");
+
+    if let Some(model) = &llm_env.chat_model {
+        let current =
+            fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
+        fs::write(&env_path, with_chat_model(&current, model))
+            .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))?;
+    }
+
     let (Some(api_base), Some(api_key)) = (&llm_env.llm_api_base, &llm_env.llm_api_key) else {
         return Ok(());
     };
-    let env_path = paths.compose_dir.join(".env");
     let addition = format!("LLM_API_BASE={api_base}\nLLM_API_KEY={api_key}\n");
     use std::io::Write;
     fs::OpenOptions::new()
@@ -334,6 +350,21 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
         .open(&env_path)
         .and_then(|mut file| file.write_all(addition.as_bytes()))
         .map_err(|e| format!("Failed to append LLM override to {}: {e}", env_path.display()))
+}
+
+/// `.env` contents with both model keys naming `model`, each exactly once.
+fn with_chat_model(env_contents: &str, model: &str) -> String {
+    const KEYS: [&str; 2] = ["LLM_DEFAULT_CHAT_MODEL", "LLM_UTILITY_MODEL"];
+
+    let mut contents: String = env_contents
+        .lines()
+        .filter(|line| !KEYS.iter().any(|key| line.split_once('=').is_some_and(|(name, _)| name == *key)))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    for key in KEYS {
+        contents.push_str(&format!("{key}={model}\n"));
+    }
+    contents
 }
 
 /// Extra host-tool search dirs Docker Desktop/Docker Engine installers don't
@@ -1251,6 +1282,50 @@ mod tests {
         assert!(contents.contains("OIDC_ISSUER_URL="));
         assert!(!contents.to_lowercase().contains("secret"));
         assert!(!contents.to_lowercase().contains("password"));
+    }
+
+    /// With a user's own Ollama that lacks the default model, the app names one
+    /// it has. The chat model line write_env_file wrote must be replaced, not
+    /// repeated, and the background model set beside it, since the api's
+    /// background model does not follow LLM_DEFAULT_CHAT_MODEL. Everything
+    /// else in the file stays as written, and running it twice changes nothing.
+    #[test]
+    fn a_chat_model_override_replaces_the_default_once_and_names_the_background_model_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let before = fs::read_to_string(&env_path).unwrap();
+
+        let llm_env = crate::local_model::LlmEnvOverride {
+            chat_model: Some("qwen3.5:122b".to_string()),
+            ..Default::default()
+        };
+        apply_llm_env_override(&paths, &llm_env).unwrap();
+        apply_llm_env_override(&paths, &llm_env).unwrap();
+        let after = fs::read_to_string(&env_path).unwrap();
+
+        let values = |key: &str| {
+            after
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .filter(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values("LLM_DEFAULT_CHAT_MODEL"), vec!["qwen3.5:122b"]);
+        assert_eq!(values("LLM_UTILITY_MODEL"), vec!["qwen3.5:122b"]);
+        assert!(values("LLM_API_BASE").is_empty(), "no endpoint was asked for");
+
+        let untouched = |contents: &str| {
+            contents
+                .lines()
+                .filter(|line| !line.starts_with("LLM_DEFAULT_CHAT_MODEL=") && !line.starts_with("LLM_UTILITY_MODEL="))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(untouched(&after), untouched(&before));
     }
 
     /// Every key write_env_file generates, in one list.
