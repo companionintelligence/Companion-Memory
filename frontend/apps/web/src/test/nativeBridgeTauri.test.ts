@@ -62,6 +62,53 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     unsubscribe();
   });
 
+  it('hands a link that started the app to every listener, not only the one that asked first', async () => {
+    // The widget router and the sign-in callback both listen. When the widget router asked
+    // first, the sign-in link went to it and the sign-in never finished.
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce('companion://oidc/callback?code=cold-start')
+      .mockResolvedValue(null);
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    // Both subscribe in the same commit's effects, without waiting for each other.
+    const widgetRouter = vi.fn();
+    const signIn = vi.fn();
+    const [unsubscribeWidget, unsubscribeSignIn] = await Promise.all([
+      addAppUrlOpenListener(widgetRouter),
+      addAppUrlOpenListener(signIn),
+    ]);
+
+    expect(widgetRouter).toHaveBeenCalledTimes(1);
+    expect(widgetRouter).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
+    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(signIn).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    unsubscribeWidget();
+    unsubscribeSignIn();
+  });
+
+  it('does not hand the link that started the app again to a listener that subscribes later', async () => {
+    // The widget router subscribes again on every navigation. Handing it the same link each time
+    // would send the person back to that link's page after every click.
+    const invoke = vi.fn().mockResolvedValue('companion://widget/plan');
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const first = vi.fn();
+    const unsubscribeFirst = await addAppUrlOpenListener(first);
+    const later = vi.fn();
+    const unsubscribeLater = await addAppUrlOpenListener(later);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledWith('companion://widget/plan');
+    expect(later).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    unsubscribeFirst();
+    unsubscribeLater();
+  });
+
   it('does not call the handler when nothing was pending', async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };
@@ -93,6 +140,27 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     expect(handler).toHaveBeenCalledWith('companion://oidc/callback?code=after-rejection');
 
     unsubscribe();
+    consoleError.mockRestore();
+  });
+
+  it('asks again on the next subscribe after a take that failed', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const invoke = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValue('companion://oidc/callback?code=second-try');
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const first = vi.fn();
+    const unsubscribeFirst = await addAppUrlOpenListener(first);
+    const second = vi.fn();
+    const unsubscribeSecond = await addAppUrlOpenListener(second);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledWith('companion://oidc/callback?code=second-try');
+
+    unsubscribeFirst();
+    unsubscribeSecond();
     consoleError.mockRestore();
   });
 
