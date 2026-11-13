@@ -107,6 +107,11 @@ type DirectedPhrase = {
   asSource: string;
   /** Focus entity is the edge target. */
   asTarget: string;
+  /**
+   * `asSource` on the account owner's own page, for a phrase that names the
+   * page's person as "them": there that person is the reader.
+   */
+  asSourceOnOwnPage?: string;
 };
 
 /**
@@ -135,20 +140,27 @@ const RELATIONSHIP_PHRASES: Record<string, DirectedPhrase> = {
   LEARNED_FROM: { asSource: 'You learned from', asTarget: 'Learned from you' },
   CARES_FOR: { asSource: 'You care for', asTarget: 'Cares for you' },
   // `A CLIENT_OF B` is "A is B's client" and `A EMERGENCY_CONTACT_FOR B` is
-  // "A is B's emergency contact". Both used to be the wrong way round: on your
-  // own page, the person you are a client of read "Your client". "Them" is the
-  // page's person, so these read right on anyone's page.
-  CLIENT_OF: { asSource: 'Has them as a client', asTarget: 'Client' },
-  EMERGENCY_CONTACT_FOR: { asSource: 'Has them as emergency contact', asTarget: 'Emergency contact' },
+  // "A is B's emergency contact". "Them" is the page's person, which on the
+  // owner's own page is "you".
+  CLIENT_OF: {
+    asSource: 'Has them as a client',
+    asSourceOnOwnPage: 'Has you as a client',
+    asTarget: 'Client',
+  },
+  EMERGENCY_CONTACT_FOR: {
+    asSource: 'Has them as emergency contact',
+    asSourceOnOwnPage: 'Has you as emergency contact',
+    asTarget: 'Emergency contact',
+  },
   SUPPORTS: { asSource: 'You support', asTarget: 'Supports you' },
   EMPLOYS: { asSource: 'You employ', asTarget: 'Employs you' },
   LIVES_WITH: { asSource: 'Lives with you', asTarget: 'Lives with you' },
   MET_WITH: { asSource: 'You met', asTarget: 'Met you' },
   SPOUSE: { asSource: 'Spouse', asTarget: 'Spouse' },
   // The card names the NEIGHBOR's role toward the page it is on, with no
-  // "you" or "your": everywhere else "you" is the account owner, so on your
-  // child's page your own card read "Your parent · This is you!". When the
-  // page is the parent (the edge's source), the neighbor is its child.
+  // "you" or "your", since on someone else's page the neighbor can be the
+  // owner's own card. When the page is the parent (the edge's source), the
+  // neighbor is its child.
   PARENT_OF: { asSource: 'Child', asTarget: 'Parent' },
   CHILD_OF: { asSource: 'Parent', asTarget: 'Child' },
   SIBLING_OF: { asSource: 'Sibling', asTarget: 'Sibling' },
@@ -234,6 +246,8 @@ export function formatRelationshipPhrase(
   relationshipType: string,
   options: {
     focusIsSource: boolean;
+    /** The page is the account owner's own Person (`is_self`). */
+    focusIsOwner?: boolean;
     relationshipProperties?: Record<string, unknown>;
   },
 ): string | null {
@@ -253,7 +267,11 @@ export function formatRelationshipPhrase(
 
   const directed = RELATIONSHIP_PHRASES[key];
   if (directed) {
-    return options.focusIsSource ? directed.asSource : directed.asTarget;
+    if (!options.focusIsSource) {
+      return directed.asTarget;
+    }
+
+    return (options.focusIsOwner ? directed.asSourceOnOwnPage : undefined) ?? directed.asSource;
   }
 
   return formatEnumLabel(raw);

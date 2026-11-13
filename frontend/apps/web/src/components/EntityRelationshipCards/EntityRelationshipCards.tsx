@@ -386,6 +386,8 @@ export function EntityRelationshipCards({
     const entityAllowlist = entityTypes
       ? new Set(entityTypes.map((type) => normalizeGraphEntityType(type)))
       : null;
+    // The owner's own Person carries `is_self`; on that page a phrase's "them" is the reader.
+    const focusIsOwner = nodeById.get(entityId)?.properties?.is_self === true;
 
     return data.links
       .filter((link) => link.source === entityId || link.target === entityId)
@@ -410,6 +412,7 @@ export function EntityRelationshipCards({
           otherEntityProperties,
           relationshipPhrase: formatRelationshipPhrase(link.relationship_type, {
             focusIsSource: link.source === entityId,
+            focusIsOwner,
             relationshipProperties,
           }),
           summary: pickCardSummary({

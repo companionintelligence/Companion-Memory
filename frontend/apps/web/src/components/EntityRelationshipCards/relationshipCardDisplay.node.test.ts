@@ -64,6 +64,21 @@ describe('formatRelationshipPhrase', () => {
     );
   });
 
+  it('says "you" for the page\'s person on the owner\'s own page', () => {
+    // You CLIENT_OF your accountant: on your own Self page their card has you as a client.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe(
+      'Has you as a client',
+    );
+    expect(
+      formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: true, focusIsOwner: true }),
+    ).toBe('Has you as emergency contact');
+    // Phrases that never name the page's person read the same on any page.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: false, focusIsOwner: true })).toBe(
+      'Client',
+    );
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe('Child');
+  });
+
   it('hides leftover associated-with edges that have no original type', () => {
     expect(formatRelationshipPhrase('ASSOCIATED_WITH', { focusIsSource: true })).toBeNull();
   });
