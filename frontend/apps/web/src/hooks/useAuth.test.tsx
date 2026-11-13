@@ -6,6 +6,7 @@ import {
   getApiKey,
   needsNativeCloudConnect,
   setApiBaseUrl,
+  setApiKey,
 } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
@@ -1905,6 +1906,54 @@ describe('useAuth', () => {
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       localStorage.removeItem('ci.apiKey');
+    }
+  });
+
+  it('desktop: names the key it mints at sign-in after the desktop app, not the phone', async () => {
+    // What the sign-in button kept before it opened the browser; the shell hands the callback
+    // over through take_pending_deep_link_command, as it does for a link that started the app.
+    const { appState } = await beginNativeOidcSignIn();
+    const keychain = new Map<string, string>();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+        switch (command) {
+          case 'take_pending_deep_link_command':
+            return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+          case 'plugin:ci-auth|secure_get':
+            return { value: keychain.get(args?.key ?? '') ?? null };
+          case 'plugin:ci-auth|secure_set':
+            keychain.set(args?.key ?? '', args?.value ?? '');
+
+            return null;
+          default:
+            return null;
+        }
+      }),
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        return jsonResponse({ accessToken: 'desktop-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-d', key: 'desktop-key' });
+      }
+
+      return emptyResponse();
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      const mint = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys'));
+      const body = JSON.parse(String(mint?.[1]?.body)) as { name: string; sign_in: boolean };
+      expect(body.name).toMatch(/^Companion desktop · \d{4}-\d{2}-\d{2}$/);
+      expect(body.sign_in).toBe(true);
+      expect(keychain.get('memory:ci.apiKey')).toBe('desktop-key');
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      setApiKey(null);
     }
   });
 

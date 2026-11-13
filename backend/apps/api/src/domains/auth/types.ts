@@ -88,9 +88,11 @@ export const SIGN_IN_PROVENANCE: ApiKeyProvenance = 'sign_in';
 export const CONNECT_KEY_NAME_PREFIX = 'app:';
 
 /**
- * The name the phone and desktop apps give the key they mint for themselves at sign-in
- * (`useAuth.ts`), unchanged since the apps first minted keys. App builds before v2026.9.14 send
- * nothing else with it, and builds before {@link SIGN_IN_PROVENANCE} existed send no `sign_in`.
+ * The name the phone apps give the key they mint for themselves at sign-in (`useAuth.ts`),
+ * unchanged since the apps first minted keys. App builds before v2026.9.14 send nothing else with
+ * it, and builds before {@link SIGN_IN_PROVENANCE} existed send no `sign_in`. The desktop app used
+ * it too until it named its key "Companion desktop · <date>"; that name always comes with a
+ * capability and `sign_in`, so it needs no match here.
  */
 export const PHONE_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
 
