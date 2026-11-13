@@ -156,7 +156,8 @@ export class FileDocumentParseListener {
 
       // The parser refused this file (too large, an archive bomb, out of time
       // or memory). Retrying would send the same bytes back for the same
-      // answer, up to three more times; the failure is recorded on the file.
+      // answer on every retry in DOCUMENT_PARSING_RETRY, half an hour of them;
+      // the failure is recorded on the file.
       if (err instanceof UnparseableDocumentError) {
         return;
       }
