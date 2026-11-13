@@ -344,6 +344,22 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
       );
     });
 
+    it("tags the desktop app's key by `sign_in` alone: its name is not the phone's", async () => {
+      mockApiKeyService.create.mockResolvedValue({ id: 'k5', name: 'Companion desktop', key: 'raw' });
+
+      await request(app.getHttpServer())
+        .post('/keys')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .send({ name: 'Companion desktop · 2026-11-13', capability: 'full', sign_in: true })
+        .expect(201);
+
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        expect.objectContaining({ name: 'Companion desktop · 2026-11-13' }),
+        SIGN_IN_PROVENANCE,
+      );
+    });
+
     it('tags a key an app build from before `sign_in` mints, by the name every build gives it', async () => {
       mockApiKeyService.create.mockResolvedValue({ id: 'k3', name: 'Companion mobile', key: 'raw' });
 
