@@ -5,10 +5,12 @@ import { ThemeToggle } from '@/components/ThemePicker';
 
 export function Centered() {
   return (
-    // `h-dvh`, not `min-h-dvh`: the app pins the body (usePreventOverscroll), so this column is the
-    // only thing that can scroll. Allowed to grow past the window, it never did, and a form taller
-    // than a short window (sign-up at 125% text size) lost its last buttons below the edge.
-    <div className="safe-area-inset flex h-dvh w-full flex-col overflow-y-auto px-6 pb-6 md:px-10 md:pb-10">
+    // The app pins the body (usePreventOverscroll), so this column is the only thing that can
+    // scroll, and it needs a fixed height to do it. With `min-h-dvh` it grew with the form, so
+    // sign-up at 125% text size lost its last buttons below the window. `--vv-height` is the
+    // visible height, which on iOS also leaves out the keyboard (`dvh` does not). The phone
+    // column in layouts/Main is sized the same way.
+    <div className="safe-area-inset flex h-[var(--vv-height,100dvh)] w-full flex-col overflow-y-auto px-6 pb-6 md:px-10 md:pb-10">
       <div className="flex justify-end">
         <ThemeToggle />
       </div>
