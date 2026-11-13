@@ -155,7 +155,9 @@ def resolve_embedding_api_key(embedding_base: str | None = None) -> str:
     if explicit:
         return explicit
 
-    llm_base = os.getenv("LLM_API_BASE", "").strip()
+    # A blank LLM_API_BASE means the default chat endpoint, as it does for
+    # Settings, so compare against where chat really goes.
+    llm_base = os.getenv("LLM_API_BASE", "").strip() or settings.llm_api_base
     llm_key = os.getenv("LLM_API_KEY", "").strip()
     base = (
         embedding_base
@@ -254,6 +256,11 @@ def _llm_model_from_env() -> str:
     )
 
 
+def _is_blank(value: object) -> bool:
+    """An env value that means "not set": None, empty or only whitespace."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -289,12 +296,13 @@ class Settings(BaseSettings):
     @field_validator("llm_api_base", mode="before")
     @classmethod
     def _blank_llm_api_base_is_unset(cls, value):
-        # Compose passes `LLM_API_BASE: ${LLM_API_BASE:-}`, so where nothing
-        # sets the variable (Memory Desktop) it arrives as an empty string, and
-        # pydantic-settings takes an empty env value over the default factory.
-        # The service then had no endpoint at all: every summary failed with
-        # "Connection error." while Ollama answered at the default address.
-        if value is None or (isinstance(value, str) and not value.strip()):
+        # docker-compose.production.yml passes `LLM_API_BASE: ${LLM_API_BASE:-}`,
+        # so where nothing sets the variable (Memory Desktop) it arrives as an
+        # empty string. pydantic-settings takes an empty env value over the
+        # default factory, which left the service with no endpoint at all:
+        # every summary failed with "Connection error." while Ollama answered
+        # at the default address.
+        if _is_blank(value):
             return _default_llm_api_base()
         return value
 
@@ -304,7 +312,7 @@ class Settings(BaseSettings):
         # An empty/blank LLM_API_KEY (e.g. exported but unset for a local Ollama
         # setup) must not reach the OpenAI client, which rejects empty keys.
         # Fall back to the "ollama" dummy, which Ollama ignores.
-        if value is None or (isinstance(value, str) and not value.strip()):
+        if _is_blank(value):
             return "ollama"
         return value
 
