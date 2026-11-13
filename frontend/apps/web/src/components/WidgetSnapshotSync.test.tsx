@@ -43,6 +43,9 @@ function deferred<T>() {
 describe('WidgetSnapshotSync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations, so drop the previous test's query queue.
+    harness.client.query.mockReset();
+    harness.fetchJson.mockReset();
     harness.auth = { authenticated: true, initializing: false };
   });
 

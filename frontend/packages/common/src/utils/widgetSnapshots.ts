@@ -1,6 +1,7 @@
 export const WIDGET_SNAPSHOT_VERSION = 1 as const;
 const MAX_WIDGET_COUNT = 1_000_000_000;
 const MAX_WIDGET_KILOMETERS = 1_000_000_000;
+const DAY_MS = 86_400_000;
 
 export interface WidgetTask {
   id: string;
@@ -166,12 +167,25 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
     })
     .slice(0, 3);
 
-  const forecastBucket =
-    input.forecast?.buckets?.find((bucket) => {
-      const startTime = safeDate(bucket.startTime);
+  // The 24h forecast is one typical day binned by UTC time of day, dated from
+  // the next UTC midnight, so every bucket starts after `now` and "the first
+  // bucket after now" was always the 00:00 UTC one. Compare times of day: take
+  // the bucket that starts soonest at or after now's, wrapping past midnight.
+  let forecastBucket = input.forecast?.buckets?.[0];
+  let soonestWait = Number.POSITIVE_INFINITY;
+  for (const bucket of input.forecast?.buckets ?? []) {
+    const startTime = safeDate(bucket.startTime);
+    if (startTime === null) {
+      continue;
+    }
 
-      return startTime !== null && new Date(startTime).getTime() >= now.getTime();
-    }) ?? input.forecast?.buckets?.[0];
+    const wait = (((new Date(startTime).getTime() - now.getTime()) % DAY_MS) + DAY_MS) % DAY_MS;
+    if (wait < soonestWait) {
+      soonestWait = wait;
+      forecastBucket = bucket;
+    }
+  }
+
   const predictedClass = safeLabel(forecastBucket?.predictedL0, 48);
   const matchingProbability =
     forecastBucket?.l0Probs?.find((entry) => entry.label === predictedClass)?.probability ?? null;

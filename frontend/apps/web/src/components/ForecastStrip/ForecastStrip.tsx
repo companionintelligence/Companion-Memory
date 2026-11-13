@@ -358,7 +358,13 @@ export function forecastStatusLabel(systemStatus: string): string | null {
     return null;
   }
 
-  return STATUS_LABELS[systemStatus] ?? (systemStatus.includes(':') ? STATUS_LABELS['NIGHTLY:queued'] : null);
+  // Own keys only: a plain index would hand back Object.prototype's
+  // `constructor` or `toString` for a status spelled that way.
+  if (Object.hasOwn(STATUS_LABELS, systemStatus)) {
+    return STATUS_LABELS[systemStatus];
+  }
+
+  return systemStatus.includes(':') ? STATUS_LABELS['NIGHTLY:queued'] : null;
 }
 
 export function formatEta(seconds: number): string {

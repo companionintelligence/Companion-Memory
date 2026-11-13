@@ -99,4 +99,9 @@ describe('forecastStatusLabel', () => {
     expect(forecastStatusLabel('NIGHTLY:some_new_step')).toBe('Updating your predictions...');
     expect(forecastStatusLabel('UNKNOWN')).toBeNull();
   });
+
+  it('does not read a status named like an Object.prototype member off the prototype', () => {
+    expect(forecastStatusLabel('constructor')).toBeNull();
+    expect(forecastStatusLabel('__proto__')).toBeNull();
+  });
 });
