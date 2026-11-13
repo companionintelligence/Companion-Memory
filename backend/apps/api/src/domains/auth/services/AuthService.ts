@@ -104,8 +104,9 @@ export class AuthService {
     const expiresAt = new Date(now + SESSION_EXPIRES_IN);
 
     const hashedToken = this.digest(token);
-    const hashedIp = this.digest(meta.ip);
-    const hashedUserAgent = this.digest(meta.userAgent);
+    // NULL when the request had none; findSession matches a missing value with IsNull().
+    const hashedIp = this.digest(meta.ip) ?? null;
+    const hashedUserAgent = this.digest(meta.userAgent) ?? null;
 
     const session = this.sessionRepository.create({
       id: sessionId,
@@ -336,11 +337,10 @@ export class AuthService {
   ): Promise<{ session: SessionEntity; graceMatch: boolean }> {
     const now = new Date();
     // A request with no User-Agent header (or no address) has nothing to digest.
-    // A session signed in that way stored NULL in the column (issueSessionToken
-    // writes the same `undefined`), so that is what to match: a session bound to a
-    // User-Agent still needs that one, and one bound to none needs none. Handing
-    // TypeORM the `undefined` itself made it refuse the query ("Undefined value
-    // encountered in property 'SessionEntity.user_agent'"), which answered 500.
+    // issueSessionToken stores NULL for it, so that is what to match: a session bound
+    // to a User-Agent still needs that one; one bound to none needs none. TypeORM
+    // refuses an `undefined` where value outright ("Undefined value encountered in
+    // property 'SessionEntity.user_agent'"), which answered 500.
     const hashedIp = this.digest(data.ip) ?? IsNull();
     const hashedUserAgent = this.digest(data.userAgent) ?? IsNull();
     const hashedToken = this.digest(token);
