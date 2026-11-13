@@ -39,6 +39,16 @@ describe('useRefetchOnReturn', () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('refetches when the browser comes back online', () => {
+    const refetch = vi.fn();
+    renderHook(() => useRefetchOnReturn(refetch));
+    vi.advanceTimersByTime(2_000);
+
+    window.dispatchEvent(new Event('online'));
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a focus that arrives while the tab is hidden', () => {
     const refetch = vi.fn();
     renderHook(() => useRefetchOnReturn(refetch));

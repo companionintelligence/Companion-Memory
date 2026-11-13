@@ -31,9 +31,10 @@ interface QueryShape {
   weekForecast?: { generatedAt: string; days: RhythmDay[] } | null;
 }
 
-function setResult(data: QueryShape | undefined, error?: Error) {
+function setResult(data: QueryShape | undefined, error?: Error, previousData?: QueryShape) {
   mockedUseQuery.mockReturnValue({
     data,
+    previousData,
     loading: false,
     error,
     refetch,
@@ -204,6 +205,64 @@ describe('useScheduleService — failure', () => {
     const { result } = renderHook(() => useScheduleService(window.start, window.end));
 
     expect(result.current.error).toBe(true);
+    expect(result.current.events).toEqual([]);
+  });
+
+  /** A one-hour event starting `hours` after the start of `day`. */
+  function eventAt(id: string, day: Date, hours: number) {
+    const start = new Date(day.getTime() + hours * 3_600_000);
+
+    return { id, startTime: start.toISOString(), endTime: new Date(start.getTime() + 3_600_000).toISOString() };
+  }
+
+  it('keeps the week on screen when a refresh fails outright', () => {
+    // A dropped connection comes back from Apollo as `data: undefined`, not as
+    // the last answer; the grid used to go blank about 15 s into an outage.
+    const window = currentWindow();
+    const standup = eventAt('standup', window.start, 33);
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [standup], weekForecast: null });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([standup]);
+    expect(result.current.error).toBe(true);
+  });
+
+  it('carries over only the kept events that fall in this window', () => {
+    // Paging while offline: what resolved last is the week before.
+    const window = currentWindow();
+    const lastWeek = eventAt('last-week', addDays(window.start, -7), 10);
+    const overlapping = eventAt('overnight', window.start, -0.5);
+    const inside = eventAt('inside', window.start, 50);
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [lastWeek, overlapping, inside] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events.map((event) => event.id)).toEqual(['overnight', 'inside']);
+  });
+
+  it('keeps them through the retry that follows, until it answers', () => {
+    // Back online, the refetch clears the error before it has data; the week
+    // must not blink empty in between.
+    const window = currentWindow();
+    const standup = eventAt('standup', window.start, 33);
+
+    setResult(undefined, undefined, { eventsInRange: [standup] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([standup]);
+  });
+
+  it('shows what a refresh that worked returned, even when that is nothing', () => {
+    const window = currentWindow();
+
+    setResult({ eventsInRange: [] }, undefined, { eventsInRange: [eventAt('deleted', window.start, 33)] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
     expect(result.current.events).toEqual([]);
   });
 });

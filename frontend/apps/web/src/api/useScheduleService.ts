@@ -19,6 +19,8 @@ import type { ProbabilityEntry } from './useForecastService';
  */
 const REFRESH_INTERVAL_MS = 30_000;
 
+const NO_EVENTS: ScheduleEvent[] = [];
+
 /**
  * The key HorizonGrid looks the rhythm lane up by.
  *
@@ -161,7 +163,7 @@ interface QueryData {
  * the page still has something true to show without it.
  */
 export function useScheduleService(from: Date, to: Date): ScheduleResult {
-  const { data, loading, error, refetch, networkStatus } = useQuery<QueryData>(GET_SCHEDULE, {
+  const { data, previousData, loading, error, refetch, networkStatus } = useQuery<QueryData>(GET_SCHEDULE, {
     variables: { from: from.toISOString(), to: to.toISOString() },
     pollInterval: REFRESH_INTERVAL_MS,
     skipPollAttempt: () => typeof document !== 'undefined' && document.hidden,
@@ -175,9 +177,36 @@ export function useScheduleService(from: Date, to: Date): ScheduleResult {
     errorPolicy: 'all',
   });
 
-  const forecast = data?.weekForecast ?? null;
+  // A refresh that fails outright (the connection dropped) does not leave the
+  // last answer in place: under `errorPolicy: 'all'` Apollo reports a network
+  // error as `data: undefined`. Drawing that emptied a week that was on screen a
+  // moment ago, under a line saying what is shown may be incomplete. So while
+  // the latest read has failed, or the retry after it is still on its way, keep
+  // what the last read that worked returned.
+  const kept = error || !data ? previousData : undefined;
+  const forecast = data?.weekForecast ?? kept?.weekForecast ?? null;
   const fromMs = from.getTime();
   const toMs = to.getTime();
+
+  const freshEvents = data?.eventsInRange;
+  const keptEvents = kept?.eventsInRange;
+
+  // `previousData` is whatever resolved last, which after paging while offline
+  // is the week before. Only its events that fall in this window carry over,
+  // by the same overlap rule the server reads with.
+  const events = useMemo(() => {
+    if (freshEvents) {
+      return freshEvents;
+    }
+
+    if (!keptEvents) {
+      return NO_EVENTS;
+    }
+
+    return keptEvents.filter(
+      (event) => Date.parse(event.startTime) < toMs && Date.parse(event.endTime ?? event.startTime) >= fromMs,
+    );
+  }, [freshEvents, keptEvents, fromMs, toMs]);
 
   // The forecast is not window-scoped, so what comes back is keyed to the seven
   // days from today whatever was asked for. Days outside the window would just
@@ -217,7 +246,7 @@ export function useScheduleService(from: Date, to: Date): ScheduleResult {
     networkStatus === NetworkStatus.setVariables || (networkStatus === NetworkStatus.loading && data == null);
 
   return {
-    events: data?.eventsInRange ?? [],
+    events,
     rhythm,
     generatedAt: forecast?.generatedAt ?? null,
     rhythmCoversWindow,
