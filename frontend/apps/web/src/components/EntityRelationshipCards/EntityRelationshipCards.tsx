@@ -538,7 +538,11 @@ export function EntityRelationshipCards({
         </p>
         <div className="flex min-w-0 items-baseline justify-between gap-2">
           {card.relationshipPhrase ? (
-            <p className="min-w-0 truncate text-xs text-muted-foreground">{card.relationshipPhrase}</p>
+            // Wraps like the name above instead of cutting to one line: at the
+            // narrowest card "Has you as emergency contact" read "Has you as em…".
+            <p className="line-clamp-3 min-w-0 text-xs leading-snug text-muted-foreground">
+              {card.relationshipPhrase}
+            </p>
           ) : (
             <span />
           )}

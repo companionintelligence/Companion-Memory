@@ -183,7 +183,8 @@ describe('EntityRelationshipCards', () => {
       error: null,
     });
     const { unmount } = renderCards();
-    expect(screen.getByText('Has you as a client')).toBeInTheDocument();
+    // Wraps instead of cutting to one line, so a long phrase stays readable on a narrow card.
+    expect(screen.getByText('Has you as a client')).toHaveClass('line-clamp-3');
     unmount();
 
     useNodeGraphServiceMock.mockReturnValue({ data: clientOf({}), loading: false, error: null });
