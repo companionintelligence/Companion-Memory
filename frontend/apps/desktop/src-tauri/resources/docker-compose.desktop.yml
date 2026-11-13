@@ -32,7 +32,7 @@
 #
 # api also gets OIDC_ISSUER_URL/APP_BASE_URL, which no other compose file sets
 # (map-valued `environment:` merges by key across -f files, unlike the
-# list-valued keys above, so this only *adds* two keys to production.yml's
+# list-valued keys above, so this only *adds* its keys to production.yml's
 # own environment block, it doesn't replace it). Both are needed for
 # "Sign in with CI-Portal" (OidcController.initiate/callback) to work at all
 # here:
@@ -52,8 +52,8 @@
 #
 # OAUTH_CALLBACK_URL is where a service (Google and the others) sends the
 # person back after they connect it with their own OAuth app. The api builds
-# it from OAUTH_CALLBACK_URL, else from APP_PUBLIC_URL, and no compose file
-# sets either, so on Desktop the OAuth Setup dialog asked people to register
+# it from OAUTH_CALLBACK_URL, else from APP_PUBLIC_URL. No compose file sets
+# either, so on Desktop the OAuth Setup dialog asked people to register
 # "undefined/oauth/callback" and the redirect_uri sent to the provider was the
 # same, which every provider refuses. The gateway serves /oauth/callback, so
 # it is APP_BASE_URL plus that path. OPENID_CALLBACK_URL does the same for the
