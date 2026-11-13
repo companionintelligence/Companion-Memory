@@ -137,6 +137,14 @@ describe('TimelineView', () => {
     expect(refetch).toHaveBeenCalledOnce();
   });
 
+  it('puts the first-page error on a card, since the panel lies over the map imagery', () => {
+    mocks.useEntityService.mockReturnValue(baseService({ error: new Error('offline') }));
+
+    renderTimeline('/memory?view=map');
+
+    expect(screen.getByRole('alert').parentElement).toHaveClass('bg-card/95', 'border', 'rounded-lg');
+  });
+
   it('keeps the map side panel blank when there are no timeline rows', () => {
     mocks.useEntityService.mockReturnValue(baseService());
 

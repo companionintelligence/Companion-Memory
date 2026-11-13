@@ -176,7 +176,14 @@ export function TimelineView({
   }
 
   if (error && timelineData.length === 0) {
-    return <ErrorState onRetry={refetch} />;
+    // This list is the map's side panel, laid straight over the satellite
+    // imagery: bare, the error was hard to read. Same card as the map's own
+    // "Couldn't load the map" (MapStatusOverlay).
+    return (
+      <div className="m-3 rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+        <ErrorState onRetry={refetch} className="px-4 py-6" />
+      </div>
+    );
   }
 
   if (timelineData.length === 0) {
