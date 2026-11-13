@@ -22,6 +22,22 @@ function place(id: string, lng: number) {
     description: null,
     placeKind: 'address',
     properties: { address: null, lat: 33.695, lng, source: 'reverse_geocode' },
+    latitude: null,
+    longitude: null,
+  };
+}
+
+/** A place made by hand with New place: its point is only in the typed coordinates. */
+function handMadePlace(id: string, latitude: number) {
+  return {
+    __typename: 'PlaceType' as const,
+    id,
+    name: 'Corner Cafe',
+    description: null,
+    placeKind: null,
+    properties: {},
+    latitude,
+    longitude: -122.4194,
   };
 }
 
@@ -84,6 +100,22 @@ describe('PlaceDuplicatesCard', () => {
     // Each member shows its coordinates so an identically named pair can be told apart.
     expect(screen.getByText(/33\.69500, -117\.74800/)).toBeInTheDocument();
     expect(screen.getByText(/33\.69500, -117\.74900/)).toBeInTheDocument();
+  });
+
+  it('shows the coordinates of places made by hand, which keep nothing in properties', async () => {
+    const handMade = {
+      ...GROUP,
+      value: 'Corner Cafe',
+      places: [handMadePlace(PLACE_A, 37.7749), handMadePlace(PLACE_B, 37.776)],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [duplicatesMock([handMade])],
+    });
+
+    expect(await screen.findByText('37.77490, -122.41940')).toBeInTheDocument();
+    expect(screen.getByText('37.77600, -122.41940')).toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
   });
 
   it('shows one clearly actionable group at a time on mobile', async () => {

@@ -26,6 +26,8 @@ export const GET_PLACE_DUPLICATES = gql(`
           description
           placeKind
           properties
+          latitude
+          longitude
         }
       }
     }
@@ -76,8 +78,10 @@ type PlaceProperties = {
 /** The one-line summary under a place's name: address, else coordinates, plus where it came from. */
 function describePlace(place: DuplicatePlace): string {
   const properties = (place.properties ?? {}) as PlaceProperties;
-  const lat = properties.latitude ?? properties.lat;
-  const lng = properties.longitude ?? properties.lng;
+  // The typed coordinates first: a place made by hand keeps its point only
+  // there, with nothing in `properties`, and would otherwise read as a dash.
+  const lat = place.latitude ?? properties.latitude ?? properties.lat;
+  const lng = place.longitude ?? properties.longitude ?? properties.lng;
   const where =
     properties.address?.trim() ||
     (lat != null && lng != null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : null);
