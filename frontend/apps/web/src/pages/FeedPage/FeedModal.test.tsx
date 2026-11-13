@@ -55,7 +55,9 @@ vi.mock('@/components/Chat', () => ({
 }));
 
 vi.mock('@/components/ChatWithAgent', () => ({
-  ChatWithAgentMenu: ({ size }: { size?: string }) => <div data-testid="chat-with-agent" data-size={size ?? 'icon'} />,
+  ChatWithAgentMenu: ({ size }: { size?: string }) => (
+    <div data-testid="chat-with-agent" data-size={size ?? 'icon'} />
+  ),
 }));
 
 function setViewport(mobile: boolean) {
