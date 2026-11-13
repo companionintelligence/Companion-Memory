@@ -940,13 +940,17 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
 
 /// What the tray's Stop Stack runs: `stop`, not `down`.
 ///
-/// `down` also removes the project's networks, and the next `up` creates them
+/// `down` also removes the project's networks. The next `up` creates them
 /// again on whatever subnet Docker hands out, which is often a different one.
-/// Every request reaches the api from the `ci` network's gateway address, and a
+/// Every request reaches the api from the `ci` network's gateway address and a
 /// session only renews from the address it signed in from, so a moved subnet
 /// signed the window and every browser out at their next renewal ("Invalid
 /// session"). `stop` keeps the containers and their networks, so Start Stack
 /// brings the same addresses back. Volumes are kept either way.
+///
+/// The start path's self-heal still runs `down`, see with_stale_container_retry.
+/// It only runs after an `up` has already failed on a stale container or on a
+/// network that is gone, and in that second case the subnet is new anyway.
 const STOP_ARGS: [&str; 1] = ["stop"];
 
 pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
@@ -1404,8 +1408,8 @@ mod tests {
         // compose_up_blocking.
         assert_eq!(UP_ARGS, ["up", "-d", "--remove-orphans", "--scale", "powersync=0"]);
 
-        // Stop Stack must not be `down`: that removes the networks, and a `ci`
-        // network created again on another subnet signs every session out.
+        // Stop Stack must not be `down`. That removes the networks, so the next
+        // `up` can create `ci` on another subnet and sign every session out.
         assert_eq!(STOP_ARGS, ["stop"]);
     }
 
