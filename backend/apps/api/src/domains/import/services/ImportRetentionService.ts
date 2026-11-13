@@ -90,6 +90,13 @@ interface DiscardCandidate extends RetentionCandidate {
    * A run that has one, failed or cancelled, stores it by retrying that stage.
    */
   readonly noMediaStage: boolean;
+  /**
+   * An earlier discard already claimed this run (`cancelled` with
+   * {@link DISCARD_CLAIM_ERROR}) and stopped before it finished. Its owner has
+   * already said they want it gone, so the claim takes it again even though
+   * the stamp made it unpushable.
+   */
+  readonly discardClaimed: boolean;
 }
 
 /** A claimed discard, and whether it takes the run's scratch tree with it. */
@@ -142,9 +149,11 @@ export interface DiscardedRun extends RunRetirement, MediaAlreadyStored {
   readonly label: string | null;
   /**
    * The run's scratch tree was deleted with it: the copy of the uploaded
-   * archive that a failed unpack leaves behind. Only ever true for a run that
-   * had no parse to push and whose sources were all uploads, or whose one
-   * source was an inbox unit that is back in the inbox or never left it.
+   * archive that a failed unpack leaves behind, or the unstored files of a run
+   * of uploads started without a media stage. Only ever true for a run whose
+   * sources were all uploads and that had no parse to push or no media stage,
+   * or whose one source was an inbox unit that is back in the inbox or never
+   * left it.
    */
   readonly scratchTreeReclaimed: boolean;
   /**
@@ -173,6 +182,16 @@ const SCRATCH_TREE_REASON =
 const UNSTORED_MEDIA_REASON =
   'Staged media rows still name bytes that nothing has stored, so those rows are the only record ' +
   'that the files exist. Run the media stage for this run before it can be retired.';
+
+/**
+ * {@link UNSTORED_MEDIA_REASON} for a run started without a media stage. Stages
+ * are fixed when a run starts, so telling its owner to run one names a remedy
+ * that does not exist.
+ */
+const UNSTORED_MEDIA_NO_STAGE_REASON =
+  'Staged media rows still name bytes that nothing has stored, so those rows are the only record ' +
+  'that the files exist. This run was started without a media stage, so nothing will store them. ' +
+  'They may be the only copy, so the files and the run are kept.';
 
 /**
  * What a half-finished discard leaves on the run row.
@@ -264,8 +283,9 @@ export interface RetentionSweepResult {
  *    tree's path is `<scratchDir>/<userId>/<runId>`, so the run row is the
  *    only index into it: delete the row and the archive is unattributable
  *    forever. Both passes skip such runs and log the directory. The one way
- *    such a tree goes is its owner's discard of a run with nothing to push
- *    whose sources were all uploads (a failed unpack, typically): see
+ *    such a tree goes is its owner's discard of a run whose sources were all
+ *    uploads and that had nothing to push (a failed unpack, typically) or no
+ *    media stage to store its files: see
  *    {@link ImportRetentionService.claimForDiscard}.
  *  - **No source row's bytes, ever.** A retirement takes the retired run's
  *    spent `staged_sources` rows — `ON DELETE SET NULL` would otherwise orphan
@@ -560,9 +580,21 @@ export class ImportRetentionService {
     const returnedToInbox =
       candidate.returnUnit == null ? null : await this.returnToInbox(candidate, candidate.returnUnit);
 
-    // Before the row goes: the row is the only index into the tree. A crash or
-    // a failed delete here leaves a `cancelled` run that still holds its tree,
-    // and discarding it again finishes the job (the claim accepts it again).
+    // Counted BEFORE the payload goes. `staged_items.metadata` is the only
+    // thing left that names those files, so once `deletePayload` has run the
+    // question has no answer anywhere.
+    const kept = await this.mediaAlreadyStored(candidate.id);
+
+    // The payload goes BEFORE the tree. A parse-only run's unstored media rows
+    // name bytes in that tree. Stopped between the two, this leaves a tree no
+    // row names, which the claim accepts again. The other order would leave
+    // rows naming bytes that are gone, which every later discard and every
+    // sweep refuses as unstored media for good.
+    const stagedRowsDeleted = await this.deletePayload(candidate.id);
+
+    // Before the run row goes: the row is the only index into the tree. A crash
+    // or a failed delete here leaves a `cancelled` run that still holds its
+    // tree, so discarding it again finishes the job (the claim accepts it again).
     if (candidate.reclaimScratch && !(await this.scratch.reclaim(candidate.userId, candidate.id))) {
       throw new InternalServerErrorException(
         `Import run ${runId}: its scratch files could not be removed, so the run was kept. Try the discard again.` +
@@ -570,11 +602,7 @@ export class ImportRetentionService {
       );
     }
 
-    // Counted BEFORE the payload goes. `staged_items.metadata` is the only
-    // thing left that names those files, so once `deletePayload` has run the
-    // question has no answer anywhere.
-    const kept = await this.mediaAlreadyStored(candidate.id);
-    const retired = await this.retire(candidate.id);
+    const retired: RunRetirement = { stagedRowsDeleted, ...(await this.retireRun(candidate.id)) };
 
     // `warn`, not `log`: this is the one path that destroys a parse nothing else
     // would have taken, and the counts are the only record that it existed.
@@ -688,10 +716,11 @@ export class ImportRetentionService {
                   AND NOT EXISTS (SELECT 1 FROM ci_import.staged_sources s
                                    WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly",
                 NOT EXISTS (SELECT 1 FROM ci_import.import_stages ms
-                             WHERE ms.run_id = r.id AND ms.kind = 'media') AS "noMediaStage"
+                             WHERE ms.run_id = r.id AND ms.kind = 'media') AS "noMediaStage",
+                (r.status = 'cancelled' AND r.error IS NOT DISTINCT FROM $4) AS "discardClaimed"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
-        [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS]],
+        [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS], DISCARD_CLAIM_ERROR],
       );
 
       if (candidate.finishedAt == null || !candidate.quiet) {
@@ -704,26 +733,38 @@ export class ImportRetentionService {
 
       // A parse-only run of uploads (`ci import x.zip --stages unpack,parse`)
       // stages its plain files as media rows whose bytes are in its own scratch
-      // tree, and nothing can run the media stage on it afterwards: stages are
-      // fixed when a run starts. Refusing left it on the Sync card until
+      // tree. Nothing can run the media stage on it afterwards, because stages
+      // are fixed when a run starts. Refusing left it on the Sync card until
       // someone pushed every row. When every source was an upload, those bytes
       // are this appliance's copy of what the person uploaded and is now
-      // throwing away, so the discard takes the rows and the tree together and
-      // nothing is left naming bytes that are gone, or holding bytes nothing
-      // names. Still refused: a run fed by the inbox, whose tree may hold the
-      // only copy of the person's files, and a run that HAS a media stage
-      // (failed or cancelled), which stores those files by retrying it.
+      // throwing away, so the discard takes the rows and the tree together.
+      // Nothing is left naming bytes that are gone, or holding bytes nothing
+      // names. Only while the Sync card offers the run, or when a discard of it
+      // already began: a run that was pushed keeps its history like any other.
+      // Still refused: a run fed by the inbox, whose tree may hold the only
+      // copy of the person's files. Also a run that HAS a media stage (failed
+      // or cancelled), which stores those files by retrying it.
       const takesUnstoredUploads =
-        candidate.unstoredMedia && candidate.noMediaStage && candidate.uploadsOnly && holdsTree;
+        candidate.unstoredMedia &&
+        candidate.noMediaStage &&
+        candidate.uploadsOnly &&
+        holdsTree &&
+        (candidate.pushable || candidate.discardClaimed);
 
       // The byte guards come before the "not pushable" answer, because that
       // answer promises the sweep will collect the run, and the sweep refuses
       // a run for exactly these two reasons. A run that failed in a worker
       // still owns its scratch tree (the failure path never reclaims it, and
       // `UnpackStage` moves the upload into it), so it is told about the tree
-      // rather than promised a collection that never comes.
+      // rather than promised a collection that never comes. A run with no media
+      // stage is not told to run one: it cannot.
       if (candidate.unstoredMedia && !takesUnstoredUploads) {
-        throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
+        throw new ConflictException(
+          candidate.noMediaStage
+            ? `Import run ${runId}: ${UNSTORED_MEDIA_NO_STAGE_REASON}` +
+                (holdsTree ? ` (${this.scratch.dirFor(candidate.userId, candidate.id)})` : '')
+            : `Import run ${runId}: ${UNSTORED_MEDIA_REASON}`,
+        );
       }
 
       // The trees a discard takes, both from a run with no parse to push (a
@@ -740,7 +781,8 @@ export class ImportRetentionService {
       //    discard is refused.
       //
       // A pushable run's tree is not what its discard is about, so it is still
-      // refused.
+      // refused. The one exception is the parse-only run of uploads above,
+      // whose tree holds the bytes its unstored media rows name.
       const inbox =
         holdsTree && !candidate.pushable && !candidate.uploadsOnly
           ? await this.inboxReturnFor(manager, candidate)
@@ -919,6 +961,8 @@ export class ImportRetentionService {
    * {@link ImportRetentionService.discardRun} must do exactly the same thing —
    * a second delete path would be a second chance to forget the batching, or
    * the `staged_sources` half, or the transaction the two source deletes need.
+   * The discard calls these same two halves itself, with its scratch reclaim
+   * between them, so a run's rows never outlive the bytes they name.
    * The payload goes first so the `DELETE` on `import_runs` cascades over an
    * empty tail rather than issuing one 780k-row statement.
    *
