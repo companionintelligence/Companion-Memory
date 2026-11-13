@@ -35,7 +35,7 @@ interface RenderedPort {
 }
 
 interface Rendered {
-  services: Record<string, { ports?: RenderedPort[] }>;
+  services: Record<string, { ports?: RenderedPort[]; environment?: Record<string, string | null> }>;
 }
 
 const composeAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
@@ -107,6 +107,25 @@ test('rendered as the desktop app runs it, the gateway listens on 127.0.0.1:8642
     config.services.gateway.ports?.map(({ host_ip, target, published }) => ({ host_ip, target, published })),
     [{ host_ip: '127.0.0.1', target: 8642, published: '8642' }],
   );
+});
+
+test('rendered as the desktop app runs it, the api sends OAuth services back to the gateway', (t) => {
+  if (!composeAvailable) {
+    t.skip('docker compose is not installed');
+
+    return;
+  }
+
+  // APP_BASE_URL as stack_manager.rs writes it into the desktop `.env`. Unset, the
+  // api built "undefined/oauth/callback" and no service could be connected.
+  const config = render(
+    t,
+    ['docker-compose.yml', 'docker-compose.production.yml', DESKTOP_OVERLAY],
+    ['production'],
+    { CI_SERVER_IMAGE_TAG: '2026.10.2', APP_BASE_URL: 'http://127.0.0.1:8642' },
+  );
+
+  assert.equal(config.services.api.environment?.OAUTH_CALLBACK_URL, 'http://127.0.0.1:8642/oauth/callback');
 });
 
 /** Every `ports:` entry of the data services, in every compose file in the repo root. */
