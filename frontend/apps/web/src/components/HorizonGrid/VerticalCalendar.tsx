@@ -266,15 +266,17 @@ function ClusterBlock({
           height: `${Math.max(item.widthPct, (18 / GRID_HEIGHT_PX) * 100)}%`,
           left: `calc(${(lane / laneCount) * 100}% + 2px)`,
           width: `calc(${(1 / laneCount) * 100}% - 4px)`,
-          backgroundColor: color,
+          // The same tint every other chip uses, so the count can be plain
+          // foreground text. On the solid hue it was drawn with
+          // `text-background mix-blend-difference`, which on the light theme's
+          // slate came out at 1.3:1, and the count is all this chip shows.
+          backgroundColor: chipFill(color),
           borderColor: chipBorder(color),
           borderLeftWidth: '3px',
           borderLeftColor: color,
         }}
       >
-        <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">
-          {count}
-        </span>
+        <span className="px-1.5 font-semibold tabular-nums">{count}</span>
       </div>
     </EventPeek>
   );

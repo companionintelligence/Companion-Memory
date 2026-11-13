@@ -742,6 +742,37 @@ describe('VerticalCalendar — moving an event without a drag', () => {
   });
 
   /**
+   * The count is all an overlap chip shows. It used to sit on the solid hue as
+   * `text-background mix-blend-difference`, which on the light theme's slate
+   * came out at 1.3:1.
+   */
+  it('draws the overlap count as plain text on the same tint as every other chip', () => {
+    const tick = (id: string, minute: number) =>
+      event({
+        id,
+        title: `Tab ${id}`,
+        sourceSystem: 'ci-browser-extension',
+        startTime: new Date(2026, 7, 3, 9, minute).toISOString(),
+        endTime: new Date(2026, 7, 3, 9, minute + 5).toISOString(),
+      });
+
+    render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[tick('a', 0), tick('b', 2), tick('c', 4)]}
+        rhythm={[]}
+      />,
+    );
+
+    const chip = screen.getByRole('listitem', { name: '3 overlapping activities' });
+    const count = within(chip).getByText('3');
+
+    expect(chip.getAttribute('style')).toContain('color-mix(in oklab');
+    expect(count.className).not.toMatch(/mix-blend|text-background/);
+  });
+
+  /**
    * A folded event has no chip of its own to grab or to tap, so on a busy day
    * the cluster was a dead end: read the list, and that was all.
    */
