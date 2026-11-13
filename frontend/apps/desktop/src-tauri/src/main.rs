@@ -611,13 +611,95 @@ fn is_openable_external_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
+/// How long a browser launcher gets to fail before the open counts as done.
+///
+/// An `xdg-open` that cannot run the browser exits non-zero within a moment.
+/// One that started the browser in the foreground (a BROWSER program that only
+/// returns when the browser closes) is still running after this. That is a
+/// browser that opened.
+#[cfg(target_os = "linux")]
+const BROWSER_LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Open `url` in the default browser. Fail when the launcher says it could not.
+///
+/// On Linux tauri_plugin_opener starts `xdg-open` detached and returns Ok as soon
+/// as the process exists. So a launcher that then failed to run the browser (a
+/// BROWSER pointing at a missing program, an http handler whose desktop entry is
+/// gone) left Sign in with Companion account doing nothing: the system showed
+/// its own error, desktop.log said "opened" and the window said nothing, because
+/// its "Could not open your browser" message only shows when this command fails.
+/// The same launchers are tried in the same order (open::commands, which the
+/// plugin uses). The first one that starts gets BROWSER_LAUNCH_GRACE to fail.
+/// When none starts, the error names every launcher tried and why it failed.
+#[cfg(target_os = "linux")]
+fn open_in_browser(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Stdio;
+
+    let mut not_started = Vec::new();
+    for mut command in open::commands(url) {
+        let launcher = command.get_program().to_string_lossy().into_owned();
+        // Detached from the app's process group and its output, as the plugin's
+        // own launch is, so a browser started in the foreground outlives Quit.
+        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+
+        match command.spawn() {
+            Ok(child) => return launcher_outcome(child, &launcher, BROWSER_LAUNCH_GRACE),
+            Err(e) => not_started.push(format!("{launcher}: {e}")),
+        }
+    }
+
+    if not_started.is_empty() {
+        return Err("no browser launcher could be started".to_string());
+    }
+
+    Err(not_started.join("; "))
+}
+
+/// macOS and Windows already report a launch that failed: the plugin waits for
+/// `open` there and ShellExecute answers directly.
+#[cfg(not(target_os = "linux"))]
+fn open_in_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    app.opener().open_url(url, None::<String>).map_err(|e| e.to_string())
+}
+
+/// What a started launcher did within `grace`: its exit status if it ended,
+/// otherwise success. A launcher still running is left to finish on a thread
+/// that waits for it, so it does not stay behind as a zombie.
+#[cfg(target_os = "linux")]
+fn launcher_outcome(
+    mut child: std::process::Child,
+    launcher: &str,
+    grace: std::time::Duration,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + grace;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("{launcher} could not open the browser ({status})")),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(format!("{launcher}: {e}")),
+        }
+    }
+}
+
 /// Open an arbitrary URL in the system's default browser. The one caller today is
 /// "Sign in with CI Portal" (see OidcButton.tsx): OAuth must run in a browser the
 /// user already trusts and may already be signed into, not this app's own webview.
 /// Restricted to http(s) so a compromised webview can't use this as a generic
 /// local-file/other-scheme open primitive.
+///
+/// Async because open_in_browser can wait out BROWSER_LAUNCH_GRACE. A
+/// synchronous command runs on the main thread, which would freeze the window.
 #[tauri::command]
-fn open_external_url_command(
+async fn open_external_url_command(
     app: tauri::AppHandle,
     state: tauri::State<'_, StackPathsState>,
     url: String,
@@ -636,7 +718,10 @@ fn open_external_url_command(
         return Err("open_external_url_command only accepts http(s) URLs".to_string());
     }
 
-    let result = app.opener().open_url(&url, None::<String>).map_err(|e| e.to_string());
+    let result = tokio::task::spawn_blocking(move || open_in_browser(&app, &url))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))
+        .and_then(|opened| opened);
 
     match &result {
         Ok(()) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("opened {label}")),
@@ -725,6 +810,29 @@ mod tests {
         // A prefix that merely starts the same way is not the scheme.
         assert!(!is_openable_external_url("https:/example.com"));
         assert!(!is_openable_external_url("httpsx://example.com"));
+    }
+
+    /// The launcher's exit is what tells the window whether a browser opened:
+    /// an early non-zero exit is the failure the sign-in button must show. A
+    /// launcher still running after the grace period is a browser that
+    /// started in the foreground, not a failure.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launcher_that_fails_within_the_grace_period_is_reported() {
+        let grace = std::time::Duration::from_secs(5);
+        let spawn = |script: &str| {
+            std::process::Command::new("sh").args(["-c", script]).spawn().expect("sh starts")
+        };
+
+        assert_eq!(launcher_outcome(spawn("exit 0"), "xdg-open", grace), Ok(()));
+
+        let failed = launcher_outcome(spawn("exit 3"), "xdg-open", grace).unwrap_err();
+        assert!(failed.starts_with("xdg-open could not open the browser"), "{failed}");
+
+        let started = std::time::Instant::now();
+        let short = std::time::Duration::from_millis(200);
+        assert_eq!(launcher_outcome(spawn("sleep 5"), "xdg-open", short), Ok(()));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "it must not wait for the browser to close");
     }
 
     /// The panic hook exists because a packaged .app has no stderr, so this
