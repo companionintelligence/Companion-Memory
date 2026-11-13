@@ -71,17 +71,42 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
       .mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };
 
+    // Both subscribe in the same commit's effects, without waiting for each other.
     const widgetRouter = vi.fn();
     const signIn = vi.fn();
-    const unsubscribeWidget = await addAppUrlOpenListener(widgetRouter);
-    const unsubscribeSignIn = await addAppUrlOpenListener(signIn);
+    const [unsubscribeWidget, unsubscribeSignIn] = await Promise.all([
+      addAppUrlOpenListener(widgetRouter),
+      addAppUrlOpenListener(signIn),
+    ]);
 
+    expect(widgetRouter).toHaveBeenCalledTimes(1);
     expect(widgetRouter).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
+    expect(signIn).toHaveBeenCalledTimes(1);
     expect(signIn).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
     expect(invoke).toHaveBeenCalledTimes(1);
 
     unsubscribeWidget();
     unsubscribeSignIn();
+  });
+
+  it('does not hand the link that started the app again to a listener that subscribes later', async () => {
+    // The widget router subscribes again on every navigation. Handing it the same link each time
+    // would send the person back to that link's page after every click.
+    const invoke = vi.fn().mockResolvedValue('companion://widget/plan');
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const first = vi.fn();
+    const unsubscribeFirst = await addAppUrlOpenListener(first);
+    const later = vi.fn();
+    const unsubscribeLater = await addAppUrlOpenListener(later);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledWith('companion://widget/plan');
+    expect(later).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    unsubscribeFirst();
+    unsubscribeLater();
   });
 
   it('does not call the handler when nothing was pending', async () => {
