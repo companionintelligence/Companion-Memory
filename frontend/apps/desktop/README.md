@@ -112,7 +112,10 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is, unchanged. Nothing else in this list applies.
+   as-is, unchanged. Nothing else in this list applies. On Linux, when it
+   answers on `127.0.0.1` only (how Ollama's own service binds unless you set
+   `OLLAMA_HOST`), the containers cannot reach it, so the app puts the same
+   bridge relay described under option 3 in front of it while the app runs.
 2. **Apple on-device (macOS only)** — if Apple Intelligence is available
    (Apple Silicon, macOS 26+, enabled in System Settings), chat is served by
    Apple's on-device `FoundationModels` framework via a small bundled Swift

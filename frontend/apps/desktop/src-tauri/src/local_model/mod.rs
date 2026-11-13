@@ -71,8 +71,9 @@ enum ResolutionState {
 }
 
 /// Holds whatever child processes this module itself spawned, so main.rs can
-/// tear them down on quit. Never holds a handle for an instance we detected
-/// but don't own (the user's own pre-existing Ollama).
+/// tear them down on quit. Never holds the process of an instance we detected
+/// but don't own (the user's own pre-existing Ollama), only, on Linux, the
+/// relay this app may put in front of it.
 ///
 /// Both `ollama_child` and `ollama_relay` are populated by
 /// `ollama_sidecar::ensure_available` itself, directly, as soon as each
@@ -83,8 +84,9 @@ enum ResolutionState {
 /// would leave that window unguarded.
 pub struct LocalModelHandles {
     ollama_child: Mutex<Option<Child>>,
-    /// Linux only in practice: the bridge-gateway relay in front of the
-    /// loopback-bound Ollama sidecar. Held for the same reason as
+    /// Linux only in practice: the bridge-gateway relay in front of a
+    /// loopback-bound Ollama, either the sidecar or the user's own (see
+    /// ollama_sidecar::reach_host_ollama). Held for the same reason as
     /// `ollama_child` — it owns a listening socket that must be released on
     /// quit, or a relaunch cannot bind the gateway address again.
     ollama_relay: Mutex<Option<bridge_relay::RelayHandle>>,
@@ -231,21 +233,18 @@ fn resolve_and_start(
         let instance = ollama_sidecar::ensure_available(data_dir, logs_dir, need_chat_model, handles)?;
         log::info!("Local Ollama instance answering on port {}", instance.port);
     } else {
-        // Reusing an already-answering instance we did not start — nothing to
-        // register in `handles` (we own neither the process nor, on Linux, a
-        // relay for it: see ensure_available's own "somebody else's Ollama"
-        // comment). Logged, not silent, because this is exactly the case
-        // where container reachability now depends entirely on how THAT
-        // instance happens to be bound, and there is nothing else here that
-        // will say so.
+        // Reusing an already-answering instance we did not start. We never own
+        // its process. On Linux we may own a relay in front of it, when it
+        // answers on loopback only and the containers could not otherwise
+        // reach it; reach_host_ollama decides and registers that relay in
+        // `handles` itself, so quitting the app removes it.
         #[cfg(target_os = "linux")]
         log::info!(
-            "An Ollama instance is already answering on port {} — reusing it as-is, no bridge relay \
-             started. If the appliance's containers report model errors, this is the instance to check: \
-             it needs to be reachable from the docker bridge gateway, which this app made no decision \
-             about since it isn't the one that started it.",
+            "An Ollama instance is already answering on port {} — reusing it; checking that the \
+             appliance's containers can reach it.",
             ollama_sidecar::OLLAMA_PORT
         );
+        ollama_sidecar::reach_host_ollama(handles);
     }
 
     let detail = match chat_backend {
