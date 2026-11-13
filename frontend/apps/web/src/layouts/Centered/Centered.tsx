@@ -5,7 +5,10 @@ import { ThemeToggle } from '@/components/ThemePicker';
 
 export function Centered() {
   return (
-    <div className="safe-area-inset flex min-h-dvh w-full flex-col overflow-y-auto px-6 pb-6 md:px-10 md:pb-10">
+    // `h-dvh`, not `min-h-dvh`: the app pins the body (usePreventOverscroll), so this column is the
+    // only thing that can scroll. Allowed to grow past the window, it never did, and a form taller
+    // than a short window (sign-up at 125% text size) lost its last buttons below the edge.
+    <div className="safe-area-inset flex h-dvh w-full flex-col overflow-y-auto px-6 pb-6 md:px-10 md:pb-10">
       <div className="flex justify-end">
         <ThemeToggle />
       </div>
