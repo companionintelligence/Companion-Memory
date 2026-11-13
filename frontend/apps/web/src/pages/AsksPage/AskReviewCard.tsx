@@ -167,11 +167,15 @@ export function AskReviewCard({
           row, so the decision the owner is looking at reads at a glance
           instead of as a stacked block. Decline stays below, beside the
           share-with-less options it belongs with — it is the alternative to
-          the primary action, not a second one competing with it here. */}
+          the primary action, not a second one competing with it here.
+          The name and badges ask for 12rem before the button gets its line:
+          with no basis they shrank instead, and at phone width the button
+          sat over the "no standing grant" badge. Now the button wraps under
+          the name. */}
       <div className="flex flex-wrap items-center gap-3">
         <PersonAvatar name={askerName} avatarUrl={askerAvatarUrl} size="sm" />
 
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-2">
           <span className="font-medium truncate">{askerName}</span>
           <Badge variant={decision === 'unreviewed' ? 'outline' : 'secondary'} className="text-xs">
             {tier}

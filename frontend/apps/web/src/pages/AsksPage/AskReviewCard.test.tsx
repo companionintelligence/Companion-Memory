@@ -128,3 +128,16 @@ describe('AskReviewCard — peer text cannot speak in the app’s voice', () => 
     expect(lineWith('Would search:').peer).toHaveTextContent('relationship');
   });
 });
+
+describe('AskReviewCard — header at phone width', () => {
+  // jsdom has no layout, so this pins the class that does the work: without a basis the name's block shrank to what
+  // the button left over, and at 390 px the button covered the end of the "no standing grant" badge.
+  it('gives the name and badges a basis, so the button wraps under them instead of covering a badge', () => {
+    renderCard();
+
+    const asker = screen.getByText('no standing grant').closest('div');
+
+    expect(asker).toHaveTextContent('Ana');
+    expect(asker).toHaveClass('min-w-0', 'flex-1', 'basis-48', 'flex-wrap');
+  });
+});
