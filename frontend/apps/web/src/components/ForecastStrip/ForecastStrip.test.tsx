@@ -4,7 +4,7 @@ import type { ForecastBucket, ForecastResponse } from '@/api/useForecastService'
 import { classColor, normalizeClass } from '@/lib/activityPalette';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { ForecastStrip } from './ForecastStrip';
+import { ForecastStrip, forecastStatusLabel } from './ForecastStrip';
 
 /**
  * The strip paints `predictedL0` rather than argmax(l0Probs). The two differ on
@@ -82,5 +82,21 @@ describe('ForecastStrip class selection', () => {
     const { container } = renderStrip([withoutField]);
 
     expect(slotColors(container)).toContain(classColor(normalizeClass('UNKNOWN')));
+  });
+});
+
+describe('forecastStatusLabel', () => {
+  it('has nothing to add for READY', () => {
+    expect(forecastStatusLabel('READY')).toBeNull();
+  });
+
+  it('puts a known status or step into words', () => {
+    expect(forecastStatusLabel('COLD_START')).toBe('Waiting to initialize...');
+    expect(forecastStatusLabel('NIGHTLY:label')).toBe('Labeling new events...');
+  });
+
+  it('reads a step it does not know as an update, and drops anything else rather than print it raw', () => {
+    expect(forecastStatusLabel('NIGHTLY:some_new_step')).toBe('Updating your predictions...');
+    expect(forecastStatusLabel('UNKNOWN')).toBeNull();
   });
 });
