@@ -1380,83 +1380,54 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
 
   describe('the cascade from each deleted staged item', () => {
     /**
-     * Staged rows to plan against. The planner picks by cost, so a near-empty
-     * table proves nothing: a sequential scan wins there with or without an
-     * index. This is enough pages for a scan of every edge to be the wrong
-     * answer, and seeds in about a second.
-     */
-    const SEEDED_ITEMS = 20_000;
-
-    /**
      * `EXPLAIN` the statement Postgres's foreign-key trigger runs on
-     * `staged_relationships` for one deleted staged item, against a run of
-     * {@link SEEDED_ITEMS} items that each carry an item-to-entity edge and an
-     * item-to-item edge (the shape of mail and its attachments).
+     * `staged_relationships` for every staged item a discard deletes.
+     * `GENERIC_PLAN` because the trigger runs a prepared statement with `$1`
+     * bound per item.
      *
-     * The seed, the ANALYZE and the plan all happen in one transaction that is
-     * rolled back, so sibling suites sharing the database never see the rows or
-     * the statistics. `GENERIC_PLAN` because the trigger runs a prepared
-     * statement with `$1` bound per deleted item.
+     * Sequential scans are switched off for the one transaction, so the plan
+     * answers "which index can serve this lookup", whatever the table holds. A
+     * cost-based answer would need the table seeded and analyzed, and ANALYZE
+     * writes `reltuples` in place even inside a rolled-back transaction, which
+     * leaks into every suite sharing this database (see
+     * RecallProbeService.integration.spec.ts). With no usable index the plan is
+     * still a (disabled) sequential scan, which is what the cascade did before.
      */
     async function cascadePlan(column: 'item_id' | 'related_item_id'): Promise<string> {
-      const { run } = await harness.startRunForDrop(await harness.stageDrop('mail.zip'), [
-        'unpack',
-        'parse',
-        'push',
-      ]);
       const runner = dataSource.createQueryRunner();
 
-      await runner.connect();
-      await runner.startTransaction();
-
       try {
-        await runner.query(
-          `INSERT INTO ci_import.staged_items (run_id, user_id, data_source, content_hash)
-           SELECT $1::uuid, $2::uuid, 'gmail', 'planner-' || g FROM generate_series(1, $3::int) g`,
-          [run.id, userId, SEEDED_ITEMS],
-        );
+        await runner.connect();
+        await runner.startTransaction();
+        await runner.query(`SET LOCAL enable_seqscan = off`);
 
-        const [entity] = await runner.query<Array<{ id: string }>>(
-          `INSERT INTO ci_import.staged_entities (run_id, user_id, type, name)
-           VALUES ($1::uuid, $2::uuid, 'Person', 'Ada') RETURNING id`,
-          [run.id, userId],
-        );
-
-        await runner.query(
-          `INSERT INTO ci_import.staged_relationships (run_id, item_id, entity_id, relation)
-           SELECT $1::uuid, id, $2::uuid, 'from' FROM ci_import.staged_items WHERE run_id = $1::uuid`,
-          [run.id, entity.id],
-        );
-        await runner.query(
-          `INSERT INTO ci_import.staged_relationships (run_id, item_id, related_item_id, relation)
-           SELECT $1::uuid, id, next_id, 'attachment'
-             FROM (SELECT id, lead(id) OVER (ORDER BY id) AS next_id
-                     FROM ci_import.staged_items WHERE run_id = $1::uuid) pairs
-            WHERE next_id IS NOT NULL`,
-          [run.id],
-        );
-        await runner.query(`ANALYZE ci_import.staged_relationships`);
-
-        const plan = await runner.query<Array<{ 'QUERY PLAN': string }>>(
+        const plan = (await runner.query(
           `EXPLAIN (GENERIC_PLAN)
            DELETE FROM ONLY ci_import.staged_relationships WHERE $1::uuid OPERATOR(pg_catalog.=) ${column}`,
-        );
+        )) as Array<{ 'QUERY PLAN': string }>;
 
         return plan.map((line) => line['QUERY PLAN']).join('\n');
       } finally {
-        await runner.rollbackTransaction();
-        await runner.release();
+        try {
+          if (runner.isTransactionActive) {
+            await runner.rollbackTransaction();
+          }
+        } finally {
+          await runner.release();
+        }
       }
     }
 
-    it('finds the item-to-entity and item-to-item edges by item_id through an index', async () => {
+    it('finds the edges an item starts by item_id through an index, not a scan of every edge', async () => {
       const plan = await cascadePlan('item_id');
 
       expect(plan).toContain('staged_relationships_item_idx');
       expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
     });
 
-    it('finds the edges pointing at the item by related_item_id through an index', async () => {
+    it('finds the edges pointing at an item by related_item_id through its own index', async () => {
+      // Not the unique (item_id, related_item_id, relation) index: related_item_id
+      // is its second column, so serving this lookup walks the whole index.
       const plan = await cascadePlan('related_item_id');
 
       expect(plan).toContain('staged_relationships_related_item_idx');
