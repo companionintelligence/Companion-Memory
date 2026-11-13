@@ -9,7 +9,11 @@ import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normaliz
 
 import type { ObjectObservation, ObservationResolutionMethod } from '../entities/ObjectObservationEntity';
 
-import { isSentBackToReview, ObjectObservationService, touchObjectLastSeen } from './ObjectObservationService';
+import {
+  isSentBackToReview,
+  ObjectObservationService,
+  touchObjectLastSeen,
+} from './ObjectObservationService';
 
 /**
  * Confidence declared by each rung of the ladder.
@@ -238,8 +242,15 @@ export class ObjectResolutionService {
       resolutionConfidence: candidate.confidence,
     });
 
-    if (candidate.objectId != null) {
-      await this.touchLastSeen(context, candidate.objectId, observation);
+    // What the row says now, as in ObjectObservationService.confirm: `resolve`
+    // returns a sighting a person answered since the read above unchanged, and
+    // that answer, not this match, says which thing it is.
+    if (
+      candidate.objectId != null &&
+      updated?.resolvedObjectId === candidate.objectId &&
+      updated.resolutionMethod !== 'user'
+    ) {
+      await touchObjectLastSeen(this.dataSource, context.userId, candidate.objectId, updated);
     }
 
     return { ...candidate, applied: true, observation: updated };
@@ -614,14 +625,5 @@ export class ObjectResolutionService {
       productId: null,
       reason: `exactly one owned unit is named "${label}"`,
     };
-  }
-
-  /** Denormalize the sighting onto the unit it resolved to; see {@link touchObjectLastSeen}. */
-  private async touchLastSeen(
-    context: UserServiceContext,
-    objectId: string,
-    observation: ObjectObservation,
-  ): Promise<void> {
-    await touchObjectLastSeen(this.dataSource, context.userId, objectId, observation);
   }
 }

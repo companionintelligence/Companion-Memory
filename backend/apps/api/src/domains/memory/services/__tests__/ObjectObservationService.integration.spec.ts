@@ -7,7 +7,7 @@ import { databaseAvailability, resolveConnection } from '../../../__tests__/supp
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
 import { platformIdentity } from '../../identity';
-import { ObjectObservationService } from '../ObjectObservationService';
+import { ObjectObservationService, touchObjectLastSeen } from '../ObjectObservationService';
 
 /**
  * The SQL-shaped guarantees `ObjectObservationService.spec.ts` can only assert
@@ -603,6 +603,11 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
         await expect(service.confirm(owner, sightingId, true, { resolvedObjectId: theirs })).rejects.toThrow(
           /belongs to another account/,
         );
+        // The write's own account check, reached without the refusal in front of it.
+        await touchObjectLastSeen(dataSource, owner.userId, theirs, {
+          observedAt: new Date('2026-05-06T09:00:00.000Z'),
+          placeEntityId: null,
+        });
         expect(await lastSeen(theirs)).toBeNull();
       } finally {
         await dataSource.query('DELETE FROM ci.objects WHERE user_id = $1', [someoneElse.userId]);
@@ -611,16 +616,30 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
       }
     });
 
-    it('never walks it backwards for an older sighting, and a retraction leaves it alone', async () => {
+    it('never walks it backwards for an older sighting', async () => {
       const mug = await insertThing('Blue mug');
       const newer = await sighting('mug', '2026-05-04T09:00:00.000Z');
       const older = await sighting('cup', '2026-04-01T09:00:00.000Z');
 
       await service.confirm(owner, newer, true, { resolvedObjectId: mug });
       await service.confirm(owner, older, true, { resolvedObjectId: mug });
-      await service.confirm(owner, newer, false);
 
       expect(await lastSeen(mug)).toEqual(new Date('2026-05-04T09:00:00.000Z'));
+    });
+
+    it('leaves it alone for a retraction, though the sighting stays linked', async () => {
+      const mug = await insertThing('Blue mug');
+      const sightingId = await sighting('mug', '2026-05-07T09:00:00.000Z');
+
+      // Linked by a machine, which does not move it here, so a retraction that did would show.
+      await service.resolve(owner, sightingId, {
+        resolvedObjectId: mug,
+        resolutionMethod: 'embedding',
+        resolutionConfidence: 0.6,
+      });
+      await service.confirm(owner, sightingId, false);
+
+      expect(await lastSeen(mug)).toBeNull();
     });
   });
 
