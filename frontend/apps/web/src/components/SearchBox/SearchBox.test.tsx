@@ -246,6 +246,17 @@ describe('SearchBox', () => {
     expect(onResultSelect).not.toHaveBeenCalled();
   });
 
+  it('keeps the notice off an empty input, even with noMatches', () => {
+    renderWithProviders(<SearchBox displayResults openOnFocus results={RESULTS} noMatches />);
+
+    const input = screen.getByRole('textbox');
+    fireEvent.pointerDown(input);
+    fireEvent.focus(input);
+
+    expect(screen.getByText('Result One')).toBeInTheDocument();
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+  });
+
   it('leaves the rows alone without noMatches', () => {
     renderWithProviders(<SearchBox displayResults results={RESULTS} />);
 

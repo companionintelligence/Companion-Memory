@@ -232,9 +232,15 @@ interface Props {
    * The search answered and nothing matched, but `results` still holds the
    * caller's own action rows (the header's "Clear search query" and "Search
    * Memory for …"). Says "No results found." under them: with any rows at all
-   * the empty state below the list is never reached.
+   * the empty state below the list is never reached. Only while the input
+   * holds a query, since the caller's own query can lag the input.
    */
   noMatches?: boolean;
+  /**
+   * A caption over that notice, as a row's `heading` is over the row (the
+   * header says "From this phone" when the phone's own index answered).
+   */
+  noMatchesHeading?: ReactNode;
 }
 
 function SearchBox(
@@ -270,6 +276,7 @@ function SearchBox(
     engageRef,
     fullWidthOnPhone = false,
     noMatches = false,
+    noMatchesHeading,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
 ) {
@@ -769,7 +776,16 @@ function SearchBox(
                   </div>
                 </Fragment>
               ))}
-              {noMatches && <p className="px-4 pt-2 pb-1 text-sm text-muted-foreground">No results found.</p>}
+              {noMatches && hasQuery && (
+                <>
+                  {noMatchesHeading != null && (
+                    <div className="px-4 pt-2 pb-1 text-xs text-muted-foreground">{noMatchesHeading}</div>
+                  )}
+                  <p role="status" className="px-4 pt-2 pb-1 text-sm text-muted-foreground">
+                    No results found.
+                  </p>
+                </>
+              )}
             </div>
             <ScrollBar />
           </ScrollArea>
