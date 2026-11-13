@@ -888,6 +888,22 @@ describe('UserDataPortabilityService', () => {
         );
       });
 
+      it('restores an empty file, which the export writes as one empty chunk', async () => {
+        const result = await importing([
+          manifest({ version: 2 }),
+          { ...chunk, data: '' },
+          { type: 'end', rows: 0, files: 1 },
+        ]);
+
+        expect(result.filesRestored).toBe(1);
+        expect(fileService.putObject).toHaveBeenCalledWith(
+          expect.anything(),
+          config.staticfiles.bucket,
+          expect.any(String),
+          Buffer.alloc(0),
+        );
+      });
+
       it('refuses an end record whose counts do not match the archive', async () => {
         await expect(
           importing([manifest({ version: 2 }), chunk, { type: 'end', rows: 0, files: 2 }]),

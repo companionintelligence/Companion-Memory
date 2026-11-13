@@ -417,7 +417,8 @@ export class UserDataPortabilityService {
           const ordered = Array.from({ length: pending.total }, (_, index) => {
             const part = pending.parts.get(index);
 
-            if (!part) {
+            // An empty file is one chunk of "" (falsy), which is still there.
+            if (part === undefined) {
               throw new BadRequestException(`Missing file chunk ${index} for ${record.id}`);
             }
 
