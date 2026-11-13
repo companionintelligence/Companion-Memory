@@ -201,7 +201,10 @@ export class LocalEventService extends EventService implements BeforeApplication
     return null;
   }
 
-  // Same reason: by the time a caller could ask, the job has already run.
+  // Same reason: send() resolves once the listener has returned, so no job is
+  // left to find. A deferred listener's external run (a python-function on its
+  // sidecar) may still be going, and this cannot see it, so a caller relying on
+  // this to refuse a duplicate gets no protection here.
   async hasLiveJob(): Promise<boolean> {
     return false;
   }

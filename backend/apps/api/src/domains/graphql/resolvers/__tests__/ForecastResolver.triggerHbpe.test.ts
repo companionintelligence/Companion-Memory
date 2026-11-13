@@ -11,9 +11,11 @@ import { ForecastResolver } from '../ForecastResolver';
  * still waiting or already running. This fake `EventService` reimplements the
  * two mechanisms that decide it against an in-memory job table: pg-boss's
  * partial unique index on (queue, singleton_key) `WHERE state='created' AND
- * policy='short'`, gated on the REAL `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`
- * (so this fails if that policy is ever removed, exactly the bug this queue
- * had), and `hasLiveJob`, which also sees a job that has started.
+ * policy='short'`, gated on the REAL `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`,
+ * and `hasLiveJob`, which also sees a job that has started. `hasLiveJob` answers
+ * first, so only the simultaneous-trigger test reaches the dedup; that test is
+ * the one that fails if the policy is ever removed, exactly the bug this queue
+ * had.
  */
 function makePgBossLikeEventService() {
   const jobs: { queue: string; key: string; state: 'created' | 'active' | 'completed' }[] = [];
@@ -73,8 +75,8 @@ function buildResolver(pythonFunctionService: PythonFunctionService): ForecastRe
 }
 
 describe('ForecastResolver.triggerHbpe already_running', () => {
-  it('reports already_running on a second manual trigger while the first is still pending, given real pg-boss dedup', async () => {
-    const { eventService } = makePgBossLikeEventService();
+  it('reports already_running on a second manual trigger while the first is still pending', async () => {
+    const { eventService, jobs } = makePgBossLikeEventService();
     const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
     const pythonFunctionService = new PythonFunctionService(eventService, logger);
     const resolver = buildResolver(pythonFunctionService);
@@ -85,6 +87,23 @@ describe('ForecastResolver.triggerHbpe already_running', () => {
 
     expect(first).toBe('triggered');
     expect(second).toBe('already_running');
+    expect(jobs).toHaveLength(1);
+  });
+
+  it('refuses a simultaneous second trigger through the real pg-boss dedup', async () => {
+    // Both calls pass hasLiveJob before either one sends, so only the queue's
+    // `short` policy can refuse the second. This is the case that fails if that
+    // policy is ever removed.
+    const { eventService, jobs } = makePgBossLikeEventService();
+    const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
+    const resolver = buildResolver(new PythonFunctionService(eventService, logger));
+    const context = { userId: 'user-1' } as RequestContext;
+
+    const results = await Promise.all([resolver.triggerHbpe(context), resolver.triggerHbpe(context)]);
+
+    expect(results.sort()).toEqual(['already_running', 'triggered']);
+    expect(eventService.hasLiveJob).toHaveBeenCalledTimes(2);
+    expect(jobs).toHaveLength(1);
   });
 
   it('lets a different user trigger independently', async () => {
