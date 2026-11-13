@@ -29,20 +29,23 @@ pub struct BundledImageTag(pub String);
 
 /// A deep link that arrived before the frontend had a listener up — the cold-start
 /// case (app not yet running when the OS delivers the URL) and, defensively, any
-/// warm-start delivery that raced page load. `main.tsx`'s deep-link wiring drains
-/// this via take_pending_deep_link_command on mount, THEN subscribes to the live
-/// `companion-deep-link` DOM event for anything that arrives after — the same
-/// two-mechanism shape iOS's getLaunchUrl (cold start) + appUrlOpen (live) already
-/// uses, just adapted to Tauri's own event surface instead of Capacitor's.
+/// warm-start delivery that raced page load. The web app's addAppUrlOpenListener
+/// (nativeBridge.ts) subscribes to the live `companion-deep-link` DOM event first,
+/// then takes this once per page load via take_pending_deep_link_command and
+/// dispatches it as that same event, so every listener mounted at that moment gets
+/// it. It is the two-mechanism shape iOS's getLaunchUrl (cold start) + appUrlOpen
+/// (live) already uses, adapted to Tauri's own event surface instead of Capacitor's.
 #[derive(Default)]
 struct PendingDeepLink(Mutex<Option<String>>);
 
 /// Deliver a deep-link URL to the frontend: dispatch it live if a window exists
 /// (covers the warm-start case, where the page — and hopefully its listener — is
 /// already up), and ALWAYS also record it in PendingDeepLink so
-/// take_pending_deep_link_command can hand it to a listener that mounts later,
-/// whether that's because this delivery raced page load or because it arrived
-/// before any window existed at all (true cold start).
+/// take_pending_deep_link_command can hand it to the listeners of a page that
+/// loads later, whether that's because this delivery raced page load or because
+/// it arrived before any window existed at all (true cold start). The page takes
+/// it once, when its first listener subscribes, so a link that reached a live
+/// listener stays here until the next page load takes it.
 ///
 /// Two callers, both in .setup() below. The on_open_url listener takes every
 /// link that arrives while the app runs: macOS/iOS's RunEvent::Opened and the
@@ -111,7 +114,7 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
 /// emits "deep-link://new-url" at once. That is before .setup() registers the
 /// on_open_url listener, so the event reached nobody: a Companion sign-in
 /// finished in the browser after the app was quit started the app and was
-/// dropped, and the window stayed on the sign-in screen. The plugin keeps the
+/// dropped. The window stayed on the sign-in screen. The plugin keeps the
 /// link it read in get_current(), so it is taken from there instead.
 ///
 /// macOS is left out: it delivers through RunEvent::Opened, which only fires

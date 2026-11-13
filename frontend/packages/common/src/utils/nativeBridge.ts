@@ -1159,7 +1159,7 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
 /**
  * Whether this page has asked `take_pending_deep_link_command` yet, per Tauri bridge object.
  *
- * The shell keeps one pending link and gives it to the first caller, and a page mounts more than
+ * The shell keeps one pending link and gives it to the first caller. A page mounts more than
  * one listener at once: useAuth's sign-in callback and WidgetDeepLinkRouter. When the widget
  * router asked first, a sign-in link that started the app went to a listener that ignores it and
  * the window stayed on the sign-in screen. So the page takes the link once and dispatches it as a
@@ -1182,9 +1182,11 @@ function deliverPendingDeepLinkOnce(): Promise<void> {
     // the one seen in practice: the capability granting this command IPC reachability
     // must list the origin the webview navigated to). Keep the same `null` fallback so
     // callers are unaffected, but log the failure instead of silently discarding it.
+    // A failed take handed nothing over, so the next listener that subscribes asks again.
     delivery = tauriInvoke<string | null>('take_pending_deep_link_command')
       .catch((err: unknown) => {
         console.error('take_pending_deep_link_command failed', err);
+        pendingDeepLinkDeliveries.delete(bridge);
 
         return null;
       })
@@ -1216,10 +1218,10 @@ function deliverPendingDeepLinkOnce(): Promise<void> {
  *   `companion-deep-link` DOM event `main.rs` dispatches, then (b) has the page take
  *   the URL that arrived before any listener was up (true cold start, or a warm-start
  *   delivery that raced page load) once and dispatch it as that same event, so every
- *   listener mounted alongside this one gets it (see deliverPendingDeepLinkOnce). A plain `window.addEventListener` — no
- *   `@tauri-apps/api` import needed, matching this file's Capacitor-free-import
- *   philosophy, because `main.rs` dispatches a standard DOM CustomEvent rather than a
- *   Tauri-specific one.
+ *   listener mounted alongside this one gets it (see deliverPendingDeepLinkOnce). A
+ *   plain `window.addEventListener` — no `@tauri-apps/api` import needed, matching
+ *   this file's Capacitor-free-import philosophy, because `main.rs` dispatches a
+ *   standard DOM CustomEvent rather than a Tauri-specific one.
  */
 export async function addAppUrlOpenListener(handler: (url: string) => void): Promise<() => void> {
   const app = plugins()?.App;

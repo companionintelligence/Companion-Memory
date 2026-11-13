@@ -143,6 +143,27 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     consoleError.mockRestore();
   });
 
+  it('asks again on the next subscribe after a take that failed', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const invoke = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValue('companion://oidc/callback?code=second-try');
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const first = vi.fn();
+    const unsubscribeFirst = await addAppUrlOpenListener(first);
+    const second = vi.fn();
+    const unsubscribeSecond = await addAppUrlOpenListener(second);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledWith('companion://oidc/callback?code=second-try');
+
+    unsubscribeFirst();
+    unsubscribeSecond();
+    consoleError.mockRestore();
+  });
+
   it("delivers a live companion-deep-link DOM event dispatched after mount (main.rs's window.eval path)", async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };
