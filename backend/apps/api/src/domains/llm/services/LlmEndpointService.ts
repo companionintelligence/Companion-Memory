@@ -78,6 +78,15 @@ interface ResolvedLlmEndpoint {
 }
 
 const DEFAULT_OLLAMA_PORT = 11434;
+
+/**
+ * The key `configuration.ts` falls back to when LLM_API_KEY is empty, and the
+ * one `.env.default` and the local compose files set. It stands in where a
+ * client wants some key, and it is still sent, but nobody set it: counted as a
+ * credential, it made every appliance report a key it did not have, in
+ * Settings > Model and in `ci memory status`.
+ */
+const PLACEHOLDER_API_KEY = 'ollama';
 const DEFAULT_OPENAI_PORT = 8000;
 
 function inferHostGateway(): string {
@@ -288,7 +297,7 @@ export class LlmEndpointService implements OnModuleInit {
       hostGateway: this.resolved.hostGateway,
       locked: this.resolved.locked,
       endpoint: safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost),
-      apiKeyConfigured: this.resolved.apiKey.length > 0,
+      apiKeyConfigured: this.resolved.apiKey.length > 0 && this.resolved.apiKey !== PLACEHOLDER_API_KEY,
     };
   }
 
