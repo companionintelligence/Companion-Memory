@@ -243,6 +243,24 @@ describe('extractUploadedArchive streaming (large-archive) path', () => {
     expect(fs.statSync(path.join(d, 'zeros', 'zeros.bin')).size).toBe(200_000);
   });
 
+  it('refuses to write through a link a previous attempt left in the destination', async () => {
+    // `unzip` replaces a link on a file's own path but follows one in a parent
+    // directory, so this is the streaming twin of the adm-zip test above. A
+    // small zip that unpacks past the threshold now lands here too.
+    const d = dir();
+    const outside = path.join(d, 'outside');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(path.join(d, 'export'));
+    fs.symlinkSync(outside, path.join(d, 'export', 'link'));
+    const archive = path.join(d, 'export.zip');
+    fs.writeFileSync(archive, zipWith({ 'zeros.bin': '\0'.repeat(200_000), 'link/pwned.txt': 'x' }));
+
+    await expect(extractUploadedArchive(archive, { largeArchiveThreshold: 100_000 })).rejects.toThrow(
+      /through a link/,
+    );
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it('the threshold boundary is inclusive (size == threshold streams)', async () => {
     const d = dir();
     const archive = path.join(d, 'boundary.zip');
