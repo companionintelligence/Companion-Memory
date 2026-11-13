@@ -3,6 +3,8 @@ import { type ReactNode } from 'react';
 import { Badge, Button, Card } from '@ci/shadcn';
 import { Pencil } from '@ci/shadcn/icons';
 
+import { webAddress } from '@/lib/webAddress';
+
 import type { PersonDraftSource } from './personDraft';
 import { phoneHref } from './phoneHref';
 
@@ -152,15 +154,22 @@ export function PersonProfileCard({ person, onEdit }: Props) {
 
   if (person.website) {
     rows.push(
+      // A contact card keeps its URL as typed, often a bare `www.example.com`.
+      // As an `href` that opened one of Memory's own pages, so only a web
+      // address is a link (see webAddress).
       <Row key="website" label="Website">
-        <a
-          href={person.website}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="truncate hover:underline"
-        >
-          {person.website}
-        </a>
+        {webAddress(person.website) ? (
+          <a
+            href={person.website}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="truncate hover:underline"
+          >
+            {person.website}
+          </a>
+        ) : (
+          person.website
+        )}
       </Row>,
     );
   }

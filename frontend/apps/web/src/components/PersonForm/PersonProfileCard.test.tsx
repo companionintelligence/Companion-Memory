@@ -123,6 +123,21 @@ describe('PersonProfileCard', () => {
     expect(screen.queryByText('Job')).not.toBeInTheDocument();
   });
 
+  it('links a web address as the website and shows anything else as text', () => {
+    // A vCard keeps its URL as typed. As an href, `www.example.com` resolved
+    // against Memory's own origin and opened /people/www.example.com.
+    const { rerender } = render(<PersonProfileCard person={PERSON} />);
+
+    expect(screen.getByRole('link', { name: 'https://dana.example.com' })).toHaveAttribute(
+      'href',
+      'https://dana.example.com',
+    );
+
+    rerender(<PersonProfileCard person={{ name: 'Dana', website: 'www.example.com' }} />);
+    expect(screen.getByText('www.example.com')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
   it('drops addresses with no lines rather than rendering an empty row', () => {
     render(<PersonProfileCard person={{ name: 'Nobody', addresses: [{ label: 'home' }] }} />);
 
