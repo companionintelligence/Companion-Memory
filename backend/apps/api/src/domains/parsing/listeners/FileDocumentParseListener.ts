@@ -16,6 +16,21 @@ import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../services/DocumentE
 import { DocumentParserService } from '../services/DocumentParserService';
 import { ParseStatus } from '../types';
 
+/**
+ * The document-parsing queue's retries: long enough to outlast a parser restart.
+ *
+ * Every queue's default is 3 retries 10 s apart with backoff, so a job used its
+ * last retry about two minutes after the first failure. A document uploaded
+ * while the summary service (the parser) was stopped for an update or caught in
+ * a crash loop failed for good 15 s before the service came back, and nothing
+ * parses it again on its own. pg-boss waits between `retryDelay * 2^(n-1)` and
+ * `retryDelay * 2^n` seconds before retry `n`, so these five retries 30 s apart
+ * span about 15 to 30 minutes. A file the parser refuses outright
+ * (UnparseableDocumentError) is not retried at all, so this only stretches
+ * failures that may clear on their own.
+ */
+export const DOCUMENT_PARSING_RETRY = { retryLimit: 5, retryDelay: 30 } as const;
+
 @Injectable()
 export class FileDocumentParseListener {
   constructor(
@@ -31,7 +46,7 @@ export class FileDocumentParseListener {
     this.logger.setContext(FileDocumentParseListener.name);
   }
 
-  @OnEvent(FileUploadedEvent, { queue: 'document-parsing' })
+  @OnEvent(FileUploadedEvent, { queue: 'document-parsing', queueOptions: { ...DOCUMENT_PARSING_RETRY } })
   async parseDocument(payload: FileUploadedPayload) {
     const context = toServiceContext({ userId: payload.userId });
 
