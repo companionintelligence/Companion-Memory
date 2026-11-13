@@ -4,6 +4,7 @@ import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { isUuidInput } from '@ci/common/persistence';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
@@ -40,8 +41,6 @@ import { Paginator } from '../utils/Paginator';
 /** Widest window eventsInRange will serve — a quarter, enough for the month view. */
 const MAX_RANGE_DAYS = 92;
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * An event's link to a person or place, as the row stores it: a bare uuid.
  *
@@ -50,11 +49,12 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * back. It went to the database as is and failed the uuid cast in
  * `refuseForeignLinks`, which `formatError` reports as "Internal server error".
  * A global id of the right type is unwrapped, a bare uuid passes as it always
- * has, an empty id is still "no link", and anything else is the caller's
- * mistake, answered with a 400 that names the field.
+ * has, an empty id is left to the writer (no link in the single-id fields, a
+ * 400 from `refuseForeignLinks` in the list), and anything else is the
+ * caller's mistake, answered with a 400 that names the field.
  */
 function linkedEntityId<T extends string | undefined>(field: string, value: T, type: 'person' | 'place'): T {
-  if (!value || UUID_PATTERN.test(value)) {
+  if (!value || isUuidInput(value)) {
     return value;
   }
 
@@ -66,11 +66,13 @@ function linkedEntityId<T extends string | undefined>(field: string, value: T, t
     // Not a global id either; refused below.
   }
 
-  if (decoded?.type === type && UUID_PATTERN.test(decoded.id)) {
+  if (decoded?.type === type && isUuidInput(decoded.id)) {
     return decoded.id as T;
   }
 
-  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got "${value}"`);
+  const shown = value.length > 64 ? `${value.slice(0, 64)}...` : value;
+
+  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got "${shown}"`);
 }
 
 function linkedPersonIds(field: string, values: string[] | undefined): string[] | undefined {

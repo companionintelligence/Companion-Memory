@@ -16,7 +16,7 @@ export { summarizeDatabaseError } from './databaseErrorSummary';
 export type { DatabaseErrorSummary } from './databaseErrorSummary';
 export { appendRecordSources } from './recordSources';
 export type { RecordSourceRow } from './recordSources';
-export { OWNED_TABLES, refuseForeignLinks } from './refuseForeignLinks';
+export { isUuidInput, OWNED_TABLES, refuseForeignLinks } from './refuseForeignLinks';
 export type { OwnedLink } from './refuseForeignLinks';
 export {
   INGEST_MERGE_KINDS,

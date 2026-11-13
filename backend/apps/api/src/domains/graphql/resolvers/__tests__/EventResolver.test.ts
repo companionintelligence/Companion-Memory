@@ -332,6 +332,24 @@ describe('EventResolver links and coordinates', () => {
     expect(eventService.create).not.toHaveBeenCalled();
   });
 
+  it('passes a bare uuid through in any spelling Postgres reads, as before', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.create.mockResolvedValue([makeEvent()]);
+    const spellings = [PERSON.toUpperCase(), PERSON.replaceAll('-', ''), `{${PERSON}}`];
+
+    await resolver.createEvent(viewerCtx, {
+      title: 'Lunch',
+      startTime: START,
+      participantEntityIds: spellings,
+      organizerEntityId: '',
+    });
+
+    expect(eventService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ participant_entity_ids: spellings, organizer_entity_id: '' }),
+    );
+  });
+
   it('applies the same to updateEvent', async () => {
     const { resolver, eventService } = makeResolver();
     eventService.update.mockResolvedValue(makeEvent());
