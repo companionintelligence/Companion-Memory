@@ -49,6 +49,30 @@ describe('useRefetchOnReturn', () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('refetches on coming back online even right after a focus', () => {
+    // The focus refetch went out before the network was back.
+    const refetch = vi.fn();
+    renderHook(() => useRefetchOnReturn(refetch));
+    vi.advanceTimersByTime(2_000);
+
+    window.dispatchEvent(new Event('focus'));
+    vi.advanceTimersByTime(300);
+    window.dispatchEvent(new Event('online'));
+
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores coming back online while hidden', () => {
+    const refetch = vi.fn();
+    renderHook(() => useRefetchOnReturn(refetch));
+    vi.advanceTimersByTime(2_000);
+    setVisibility('hidden');
+
+    window.dispatchEvent(new Event('online'));
+
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
   it('ignores a focus that arrives while the tab is hidden', () => {
     const refetch = vi.fn();
     renderHook(() => useRefetchOnReturn(refetch));

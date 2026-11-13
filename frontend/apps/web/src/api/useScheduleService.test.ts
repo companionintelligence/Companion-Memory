@@ -1,3 +1,4 @@
+import { NetworkStatus } from '@apollo/client';
 import { useQuery } from '@apollo/client/react';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,13 +32,19 @@ interface QueryShape {
   weekForecast?: { generatedAt: string; days: RhythmDay[] } | null;
 }
 
-function setResult(data: QueryShape | undefined, error?: Error, previousData?: QueryShape) {
+function setResult(
+  data: QueryShape | undefined,
+  error?: Error,
+  previousData?: QueryShape,
+  networkStatus?: number,
+) {
   mockedUseQuery.mockReturnValue({
     data,
     previousData,
     loading: false,
     error,
     refetch,
+    networkStatus,
   } as unknown as ReturnType<typeof useQuery>);
 }
 
@@ -258,6 +265,42 @@ describe('useScheduleService — failure', () => {
     const { result } = renderHook(() => useScheduleService(window.start, window.end));
 
     expect(result.current.events).toEqual([standup]);
+  });
+
+  it('keeps the last forecast through a failed read, but not over an answer that has none', () => {
+    const window = currentWindow();
+    const forecast = { generatedAt: GENERATED_AT, days: [rhythmDay(keyInside(window))] };
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [], weekForecast: forecast });
+    const offline = renderHook(() => useScheduleService(window.start, window.end));
+    expect(offline.result.current.generatedAt).toBe(GENERATED_AT);
+
+    // The forecast resolver answers null when the engine is off or cold.
+    setResult({ eventsInRange: null, weekForecast: null }, new Error('events failed'), {
+      eventsInRange: [],
+      weekForecast: forecast,
+    });
+    const answered = renderHook(() => useScheduleService(window.start, window.end));
+    expect(answered.result.current.generatedAt).toBeNull();
+  });
+
+  it('carries nothing over while paging to another window with nothing wrong', () => {
+    // The next week is loading for the first time; the page shows it loading.
+    const window = currentWindow();
+    const forecast = { generatedAt: GENERATED_AT, days: [rhythmDay(keyInside(window))] };
+
+    setResult(
+      undefined,
+      undefined,
+      { eventsInRange: [eventAt('overnight', window.start, -0.5)], weekForecast: forecast },
+      NetworkStatus.setVariables,
+    );
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([]);
+    expect(result.current.rhythm).toEqual([]);
+    expect(result.current.fetching).toBe(true);
   });
 
   it('shows what a refresh that worked returned, even when that is nothing', () => {

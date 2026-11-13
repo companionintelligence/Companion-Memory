@@ -39,14 +39,27 @@ export function useRefetchOnReturn(refetch: () => void): void {
       refetchRef.current();
     };
 
+    // Not throttled against the other two. On waking a laptop the focus or
+    // visibility refetch often goes out before the network is back and fails,
+    // and `online` lands a moment later; swallowing it as the same return
+    // would leave the page on that failure until the next poll.
+    const onOnline = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+
+      last = Date.now();
+      refetchRef.current();
+    };
+
     document.addEventListener('visibilitychange', onReturn);
     window.addEventListener('focus', onReturn);
-    window.addEventListener('online', onReturn);
+    window.addEventListener('online', onOnline);
 
     return () => {
       document.removeEventListener('visibilitychange', onReturn);
       window.removeEventListener('focus', onReturn);
-      window.removeEventListener('online', onReturn);
+      window.removeEventListener('online', onOnline);
     };
   }, []);
 }

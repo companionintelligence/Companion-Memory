@@ -219,8 +219,6 @@ async function connect(): Promise<void> {
 
 function disconnect(): void {
   clearReconnect();
-  // Nobody is listening any more; whoever subscribes next reads fresh on mount.
-  missedChanges = false;
 
   const current = controller;
   controller = null;
@@ -244,6 +242,13 @@ export function setLiveChangesAuth(next: string | null): void {
   }
 
   if (!next) {
+    // The listeners stay mounted through a lapsed session (a JWT that expired
+    // while the laptop slept), so whatever changes before a token comes back
+    // goes unannounced like any other drop.
+    if (controller && subscriberCount() > 0) {
+      missedChanges = true;
+    }
+
     disconnect();
   }
 }
@@ -274,6 +279,8 @@ export function subscribeLiveChanges(topics: readonly LiveChangeTopic[], listene
     }
 
     if (subscriberCount() === 0) {
+      // Nobody is listening any more; whoever subscribes next reads fresh on mount.
+      missedChanges = false;
       disconnect();
     }
   };
@@ -309,15 +316,30 @@ function reconnectNow(): void {
   }
 }
 
+/**
+ * Back online. A stream that dropped is waiting out a backoff of up to 30 s.
+ * One that is still held went through the offline spell and may be dead
+ * without having noticed (not every browser fails an open fetch when the
+ * network goes), so it is replaced rather than trusted.
+ */
+function onOnline(): void {
+  if (controller && subscriberCount() > 0) {
+    const held = controller;
+    controller = null;
+    missedChanges = true;
+    held.abort();
+  }
+
+  reconnectNow();
+}
+
 if (typeof document !== 'undefined') {
-  // A backgrounded tab or a phone app brought back may hold a stream the
-  // network quietly dropped, and a browser back online has one waiting out a
-  // backoff of up to 30 s. Try now in both cases; the catch-up on connect
-  // covers whatever was missed while away.
+  // A backgrounded tab or a phone app brought back may have lost its stream
+  // while away. Try now; the catch-up on connect covers whatever was missed.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       reconnectNow();
     }
   });
-  window.addEventListener('online', reconnectNow);
+  window.addEventListener('online', onOnline);
 }

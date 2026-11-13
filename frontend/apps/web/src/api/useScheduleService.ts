@@ -183,8 +183,14 @@ export function useScheduleService(from: Date, to: Date): ScheduleResult {
   // moment ago, under a line saying what is shown may be incomplete. So while
   // the latest read has failed, or the retry after it is still on its way, keep
   // what the last read that worked returned.
-  const kept = error || !data ? previousData : undefined;
-  const forecast = data?.weekForecast ?? kept?.weekForecast ?? null;
+  //
+  // Not while paging to another window with nothing wrong: that read is on its
+  // way for the first time, and the page shows it loading rather than last
+  // window's forecast over an empty grid. And a read that answered is taken at
+  // its word for the forecast, where null means off or cold.
+  const paging = networkStatus === NetworkStatus.setVariables;
+  const kept = error || (!data && !paging) ? previousData : undefined;
+  const forecast = data ? (data.weekForecast ?? null) : (kept?.weekForecast ?? null);
   const fromMs = from.getTime();
   const toMs = to.getTime();
 

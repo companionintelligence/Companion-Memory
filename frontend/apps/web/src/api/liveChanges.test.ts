@@ -135,7 +135,7 @@ describe('liveChanges', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('announces every topic once when a dropped stream comes back, and not on the first connect', async () => {
+  it('announces every topic once when a dropped stream comes back but not on the first connect', async () => {
     const first = openStream();
     setLiveChangesAuth('tok');
     const tasks = vi.fn();
@@ -198,6 +198,41 @@ describe('liveChanges', () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(2);
     await second.opened;
+  });
+
+  it('replaces a stream still held when the browser comes back online and catches up', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+
+    // The offline spell never failed the open fetch.
+    const second = openStream();
+    window.dispatchEvent(new Event('online'));
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('catches up after a lapsed session while listeners stayed mounted', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok-1');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+
+    setLiveChangesAuth(null);
+    expect(isLiveChangesConnected()).toBe(false);
+
+    const second = openStream();
+    setLiveChangesAuth('tok-2');
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry a refused token, and connects when a new one is set', async () => {
