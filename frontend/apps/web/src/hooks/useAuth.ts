@@ -265,6 +265,27 @@ async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }
 /** How often the session check is repeated while Memory does not answer it. */
 const UNREACHABLE_RETRY_MS = 5000;
 
+/** How often the desktop window asks Memory whether its sign-in key still works. */
+const DEVICE_KEY_CHECK_MS = 60_000;
+
+/**
+ * Whether Memory says `key` no longer works. True only on its 401: a Memory that did not answer
+ * (the stack stopped, a timeout) says nothing about the key, and must not sign anyone out.
+ */
+async function deviceKeyRevoked(key: string): Promise<boolean> {
+  try {
+    await fetchJson('/api/keys/check', {
+      skipApiKey: true,
+      headers: { 'x-api-key': key },
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
+    });
+
+    return false;
+  } catch (error) {
+    return error instanceof FetchJsonError && error.status === 401;
+  }
+}
+
 /**
  * Whether a session call was cut off by its own deadline (`MEMORY_ANSWER_DEADLINE_MS`).
  * None of these calls is handed a caller signal, so an abort here can only be that
@@ -864,6 +885,56 @@ function useAuth(): ReturnValue {
     },
     [signOut],
   );
+
+  // Desktop only. The window's Companion sign-in holds its own key, and nothing ended that
+  // sign-in when the key was revoked somewhere else (a password change, Sign out everywhere,
+  // deleting it under Settings > API keys): every request got 401 and each page said this
+  // device could not reach Memory, for as long as the window stayed open. A browser session
+  // finds out at its next renewal. This asks about the key on a similar schedule, and when the
+  // window comes back into view, and signs the window out once Memory says the key is gone.
+  useEffect(() => {
+    if (!isTauriPlatform() || !nativeApiKey) {
+      return;
+    }
+
+    let stopped = false;
+    let asking = false;
+
+    const check = () => {
+      if (asking || stopped) {
+        return;
+      }
+
+      asking = true;
+      void deviceKeyRevoked(nativeApiKey)
+        .then((revoked) => {
+          // Only the key this check asked about: a sign-in since then holds another one.
+          if (revoked && !stopped && getApiKey() === nativeApiKey) {
+            void logout();
+          }
+        })
+        .finally(() => {
+          asking = false;
+        });
+    };
+
+    const checkWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        check();
+      }
+    };
+
+    const timer = setInterval(check, DEVICE_KEY_CHECK_MS);
+    document.addEventListener('visibilitychange', checkWhenVisible);
+    window.addEventListener('focus', check);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', checkWhenVisible);
+      window.removeEventListener('focus', check);
+    };
+  }, [nativeApiKey, logout]);
 
   const confirmSignOut = useCallback(async () => {
     setSignOutPrompt((prompt) => ({ ...prompt, open: false }));

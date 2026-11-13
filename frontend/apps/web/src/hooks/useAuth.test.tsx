@@ -6,6 +6,7 @@ import {
   getApiKey,
   needsNativeCloudConnect,
   setApiBaseUrl,
+  setApiKey,
 } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
@@ -1906,6 +1907,95 @@ describe('useAuth', () => {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       localStorage.removeItem('ci.apiKey');
     }
+  });
+
+  describe('desktop: a sign-in key revoked somewhere else', () => {
+    /** A desktop window signed in with Companion, answering /api/keys/check with `check`. */
+    async function signedInDesktop(check: () => Response) {
+      const { appState } = await beginNativeOidcSignIn();
+      const keychain = new Map<string, string>();
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+        invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+          switch (command) {
+            case 'take_pending_deep_link_command':
+              return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+            case 'plugin:ci-auth|secure_get':
+              return { value: keychain.get(args?.key ?? '') ?? null };
+            case 'plugin:ci-auth|secure_set':
+              keychain.set(args?.key ?? '', args?.value ?? '');
+
+              return null;
+            case 'plugin:ci-auth|secure_remove':
+              keychain.delete(args?.key ?? '');
+
+              return null;
+            default:
+              return null;
+          }
+        }),
+      };
+      const fetchMock = setFetch((url) => {
+        if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+          return jsonResponse({ accessToken: 'desktop-jwt' });
+        }
+
+        if (url.endsWith('/api/keys')) {
+          return jsonResponse({ id: 'key-d', key: 'desktop-key' });
+        }
+
+        if (url.endsWith('/api/keys/check')) {
+          return check();
+        }
+
+        return emptyResponse(true, 204);
+      });
+
+      const rendered = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(rendered.result.current[0].authenticated).toBe(true));
+
+      return { ...rendered, fetchMock, keychain };
+    }
+
+    afterEach(() => {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      setApiKey(null);
+    });
+
+    it('signs the window out when Memory says the key no longer works', async () => {
+      const { result, fetchMock, keychain } = await signedInDesktop(() =>
+        jsonResponse({ message: 'Unauthorized' }, false, 401),
+      );
+
+      // Coming back to the window asks at once, without waiting for the next scheduled check.
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() => expect(result.current[0].authenticated).toBe(false));
+      const check = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/check'));
+      expect(check?.[1]?.headers).toMatchObject({ 'x-api-key': 'desktop-key' });
+      expect(getApiKey()).toBeNull();
+      expect(keychain.has('memory:ci.apiKey')).toBe(false);
+    });
+
+    it('stays signed in when Memory does not answer the check', async () => {
+      const { result, fetchMock } = await signedInDesktop(() => {
+        throw new TypeError('Failed to fetch');
+      });
+
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/check'))).toBe(true),
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(result.current[0].authenticated).toBe(true);
+      expect(getApiKey()).toBe('desktop-key');
+    });
   });
 
   it('web logout revokes no key: a browser session holds none', async () => {
