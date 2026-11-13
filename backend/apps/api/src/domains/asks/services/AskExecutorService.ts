@@ -2,12 +2,14 @@ import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { PlaceService, queryNamesPlace } from '@ci/domains/memory';
 import {
   INDEXABLE_ENTITIES,
   type EntityIdentifier,
   type IndexableEntity,
   type PromptSearchResult,
   SearchService,
+  buildPromptQuery,
   hasNameSubjectFrame,
   promptMediaClass,
 } from '@ci/domains/search-next';
@@ -47,6 +49,13 @@ const NAME_SUBJECT_QUERY_TYPES: ReadonlySet<string> = new Set([
  * the difference visible; the cap itself is unchanged.
  */
 const DEFAULT_MAX_RESULTS = 50;
+
+/**
+ * Words of a photo ask that say how the photo relates to a place, not what it
+ * shows: "photos taken at", "near". The ask frame words ("do you have", "of",
+ * "at") are already gone from {@link buildPromptQuery}'s groups.
+ */
+const PLACE_REQUEST_WORDS: ReadonlySet<string> = new Set(['taken', 'near', 'around', 'by']);
 
 /** Coarse data-class → candidate entity-type hints (validated against the taxonomy). */
 const CLASS_TYPE_HINTS: Readonly<Record<string, readonly string[]>> = {
@@ -91,6 +100,7 @@ export class AskExecutorService {
   constructor(
     private readonly searchService: SearchService,
     private readonly logger: LoggerService,
+    private readonly places: PlaceService,
   ) {
     this.logger.setContext(AskExecutorService.name);
   }
@@ -142,13 +152,25 @@ export class AskExecutorService {
     const mediaEventPlaces =
       options.tier != null && photoAskMayMatchPlaces(options.tier, ask.query.dataClass);
 
-    const result = await this.searchService.searchPrompt(responderContext, {
+    const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
+    const searched = await this.searchService.searchPrompt(responderContext, {
       prompt: ask.query.prompt,
       subjectIsName,
-      maxResults: options.maxResults ?? DEFAULT_MAX_RESULTS,
+      maxResults,
       ...(includeTypes ? { includeTypes } : {}),
       ...(mediaEvents ? { mediaEvents, mediaEventPlaces } : {}),
     });
+    // The search above can match a photo by its place only through its event's
+    // `location_name`, which a geocoder writes. Without one (Memory Desktop) that
+    // is NULL on every photo, so "photos of Blue Bottle Coffee" answered "They
+    // have none." while chat found the photos by where they were taken. The
+    // same lookup chat uses answers instead, under the same tier rule, and only
+    // when the prompt names nothing but the place.
+    const atPlace =
+      mediaEvents && mediaEventPlaces
+        ? await this.photosAtNamedPlace(responderContext, ask, subjectIsName, maxResults)
+        : null;
+    const result = atPlace ?? searched;
 
     if (result.truncated) {
       // Owner-visible, on the owner's own box. The asker learns nothing from
@@ -161,6 +183,56 @@ export class AskExecutorService {
     }
 
     return result;
+  }
+
+  /**
+   * The photos taken at the place a photo ask names, as chat's
+   * `media.findPhotos` finds them ({@link PlaceService.photosAtNamedPlace}), or
+   * null to keep the text search's answer.
+   *
+   * Null unless every word the prompt asks about belongs to the name of a place
+   * it names. The lookup answers with every photo taken there, so "photos of my
+   * dog at Blue Bottle Coffee" must not get "yes" for a coffee shop with no dog
+   * in it. Null too when it finds nothing, or fails (logged).
+   */
+  private async photosAtNamedPlace(
+    context: UserServiceContext,
+    ask: Ask,
+    subjectIsName: boolean,
+    maxResults: number,
+  ): Promise<AskExecution | null> {
+    const groups = buildPromptQuery(ask.query.prompt, { subjectIsName }).filter(
+      (group) => !PLACE_REQUEST_WORDS.has(group.text.toLowerCase()),
+    );
+
+    if (groups.length === 0) {
+      return null;
+    }
+
+    try {
+      const found = await this.places.photosAtNamedPlace(context, ask.query.prompt, maxResults);
+      const placeOnly =
+        found.places.length > 0 &&
+        groups.every((group) => found.places.some((place) => queryNamesPlace(place.name, group.text)));
+
+      if (!placeOnly || found.total === 0) {
+        return null;
+      }
+
+      return {
+        items: found.fileIds.map((id) => ({ id, type: 'file' as const })),
+        totalMatches: found.total,
+        truncated: found.total > found.fileIds.length,
+        limit: maxResults,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Ask ${ask.id}: could not look for photos at a named place; answering from the text search ` +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      );
+
+      return null;
+    }
   }
 }
 
