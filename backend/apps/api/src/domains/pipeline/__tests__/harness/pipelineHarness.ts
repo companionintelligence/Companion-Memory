@@ -248,6 +248,10 @@ export class HarnessQueue extends EventService {
     return null;
   }
 
+  async hasLiveJob(): Promise<boolean> {
+    return false;
+  }
+
   async sendMany(
     queue: string,
     events: Array<{ name: string; data: Record<string, unknown> }>,

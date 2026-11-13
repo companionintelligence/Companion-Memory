@@ -29,7 +29,7 @@ import {
 import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
-import type { EventSendOptions, QueuedJob, QueueOptions } from '../types';
+import type { EventSendOptions, QueuedJob, QueuedJobState, QueueOptions } from '../types';
 import { YieldGateRegistry } from '../yieldGates';
 
 import { EventService } from './EventService';
@@ -65,6 +65,9 @@ const ENFORCING_QUEUE_POLICIES: ReadonlySet<NonNullable<QueueOptions['policy']>>
   'singleton',
   'stately',
 ]);
+
+// The states a job is still pending or running in, as `hasLiveJob` counts them.
+const LIVE_JOB_STATES: ReadonlySet<QueuedJobState> = new Set(['created', 'retry', 'active']);
 
 // Serializes queue PROVISIONING across processes. The web and worker halves
 // both create/update every queue at boot, and pg-boss's create_queue
@@ -1745,6 +1748,12 @@ export class PGBossEventService
       retryLimit: job.retryLimit,
       startedOn: job.startedOn ?? null,
     };
+  }
+
+  async hasLiveJob(queue: string, singletonKey: string): Promise<boolean> {
+    const jobs = await this.boss.findJobs(queue, { key: singletonKey });
+
+    return jobs.some((job) => LIVE_JOB_STATES.has(job.state));
   }
 
   private async executeJob(

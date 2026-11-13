@@ -201,6 +201,11 @@ export class LocalEventService extends EventService implements BeforeApplication
     return null;
   }
 
+  // Same reason: by the time a caller could ask, the job has already run.
+  async hasLiveJob(): Promise<boolean> {
+    return false;
+  }
+
   /**
    * Block until `startAfter` elapses, mirroring pg-boss's own value handling
    * (a Date/ISO string is an absolute time, a number is seconds from now).
