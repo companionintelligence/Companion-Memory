@@ -145,6 +145,13 @@ interface ControlOptions {
   /** `WindowStatus.open`. Defaults to open, so a test opts in to the night. */
   windowOpen?: boolean;
 
+  /**
+   * `WindowStatus.opensAt` and `nextOpensAt`. Defaults to a window long past,
+   * which no leg in these tests started before, so it changes no answer unless
+   * a test sets it.
+   */
+  windowBounds?: { opensAt: Date; nextOpensAt: Date };
+
   /** Make the window unreadable, the way an unmigrated `ci.pipeline_turns` is. */
   windowThrows?: boolean;
 
@@ -436,7 +443,8 @@ function makeControl(options: ControlOptions = {}) {
       return {
         open,
         state: open ? 'open' : 'closed',
-        nextOpensAt: new Date('2026-08-10T01:00:00.000Z'),
+        opensAt: options.windowBounds?.opensAt ?? new Date('2026-08-09T01:00:00.000Z'),
+        nextOpensAt: options.windowBounds?.nextOpensAt ?? new Date('2026-08-10T01:00:00.000Z'),
       };
     }),
   };
@@ -1309,6 +1317,42 @@ describe('PipelineControlService', () => {
 
       // Past its 1-day interval, inside its 3-day maxStaleness: due by the clock
       // and waiting on the window.
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
+    });
+
+    it('sweeps a nightly leg first swept yesterday afternoon in tonight\'s window, not the night after', async () => {
+      // A new account's nightly legs first run when its data arrives, during
+      // the day. Thirteen hours later the window is open but the 1-day interval
+      // is not up, and by the time it is the window has shut again.
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
+        windowOpen: true,
+        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+      });
+
+      await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]);
+    });
+
+    it('does not sweep a nightly leg twice in one window', async () => {
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 1 * hour) },
+        windowOpen: true,
+        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+      });
+
+      const report = await h.service.tick();
+
       expect(h.swept()).toEqual([]);
       expect(report.legsNotDue).toBe(1);
     });
