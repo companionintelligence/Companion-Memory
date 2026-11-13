@@ -41,9 +41,10 @@ const SECRET_PATH_SEGMENTS: readonly RegExp[] = [/^((?:\/api)?\/bluebubbles\/web
  * and state (`code_challenge`, `app_state`); the callback carries the Portal's
  * authorization code and the OAuth `state`. They are single-use and short-lived,
  * but the log outlives them, and logs get pasted into bug reports. The `/api`
- * prefix is optional for the reason given above.
+ * prefix is optional for the reason given above. Case-insensitive because
+ * Express routes are: `/Authenticate/OIDC/callback` reaches the same handler.
  */
-const SECRET_QUERY_PATHS: readonly RegExp[] = [/^(?:\/api)?\/authenticate\/oidc(?:\/|$)/];
+const SECRET_QUERY_PATHS: readonly RegExp[] = [/^(?:\/api)?\/authenticate\/oidc(?:\/|$)/i];
 
 const SECRET_QUERY_PARAMS: ReadonlySet<string> = new Set([
   'code',

@@ -60,6 +60,10 @@ describe('redactRequestPath', () => {
     expect(redactRequestPath('/api/authenticate/oidc/callback?c%6Fde=abc123&error=access_denied')).toBe(
       '/api/authenticate/oidc/callback?c%6Fde=REDACTED&error=access_denied',
     );
+    // Express matches routes case-insensitively, so this reaches the callback too.
+    expect(redactRequestPath('/Authenticate/OIDC/callback?code=abc123&state=def456')).toBe(
+      '/Authenticate/OIDC/callback?code=REDACTED&state=REDACTED',
+    );
   });
 
   it('leaves the query of other routes alone, including a `state` that is a filter', () => {

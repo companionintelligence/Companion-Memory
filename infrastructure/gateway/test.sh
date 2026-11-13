@@ -129,6 +129,18 @@ done
 # whole request line. /oauth/callback turns its own log off for the same reason.
 grep -q '^  access_log /var/log/nginx/access.log combined if=$loggable_request;$' "$nginx_conf" \
   || fail "the access log no longer skips the sign-in routes"
-grep -Fq '"~^/api/authenticate/oidc\b"   0;' "$nginx_conf" || fail "the sign-in routes are logged again"
+grep -q '^  map $uri $loggable_request {$' "$nginx_conf" || fail "the sign-in log filter no longer reads the routed path"
+grep -Fxq '    "~*^(?:/api)?/authenticate/oidc\b"   0;' "$nginx_conf" \
+  || fail "the sign-in routes are logged again"
+# A location's own access_log replaces the http-level one, `if=` and all, so
+# only `access_log off;` may appear in one.
+own_log=$(printf '%s\n' "$blocks" | grep -E 'access_log ' | grep -vE 'access_log off;' || true)
+[ -z "$own_log" ] || fail "a location writes its own access log, sign-in routes included: ${own_log%% |*}"
+
+# The error log too: an unreachable api makes nginx write the request line,
+# query and all, at level "error". The sign-in routes keep only "crit".
+printf '%s\n' "$blocks" | grep -F '    location /api/ {' | tr -s ' ' \
+  | grep -Fq ' location ~* ^/api/authenticate/oidc(?:/|$) { error_log /var/log/nginx/error.log crit; proxy_pass http://api; rewrite ^/api/(.*)$ /$1 break; }' \
+  || fail "the sign-in routes' request lines reach the error log"
 
 echo "gateway: ok"
