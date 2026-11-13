@@ -5,7 +5,7 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import parseDuration from 'parse-duration';
-import { MoreThan, Not, Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
@@ -335,8 +335,14 @@ export class AuthService {
     data: SessionMetadata,
   ): Promise<{ session: SessionEntity; graceMatch: boolean }> {
     const now = new Date();
-    const hashedIp = this.digest(data.ip);
-    const hashedUserAgent = this.digest(data.userAgent);
+    // A request with no User-Agent header (or no address) has nothing to digest.
+    // A session signed in that way stored NULL in the column (issueSessionToken
+    // writes the same `undefined`), so that is what to match: a session bound to a
+    // User-Agent still needs that one, and one bound to none needs none. Handing
+    // TypeORM the `undefined` itself made it refuse the query ("Undefined value
+    // encountered in property 'SessionEntity.user_agent'"), which answered 500.
+    const hashedIp = this.digest(data.ip) ?? IsNull();
+    const hashedUserAgent = this.digest(data.userAgent) ?? IsNull();
     const hashedToken = this.digest(token);
 
     const match = await this.sessionRepository.findOne({
