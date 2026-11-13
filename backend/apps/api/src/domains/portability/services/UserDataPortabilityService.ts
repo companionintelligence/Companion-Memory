@@ -1,3 +1,5 @@
+import type { Readable } from 'node:stream';
+
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
@@ -13,8 +15,10 @@ import { UserService } from '@ci/domains/user';
 import {
   FILE_CHUNK_BYTES,
   PORTABILITY_NDJSON_CONTENT_TYPE,
+  PORTABILITY_NDJSON_VERSION,
+  fixedSizeChunks,
   readPortabilityNdjsonStream,
-  serializePortabilityLine,
+  writePortabilityLine,
   type PortabilityStreamRecord,
 } from '../portabilityNdjson';
 import type {
@@ -243,36 +247,63 @@ export class UserDataPortabilityService {
 
     const manifest: PortabilityStreamRecord = {
       type: 'manifest',
-      version: ARCHIVE_VERSION,
+      version: PORTABILITY_NDJSON_VERSION,
       format: 'ndjson',
       exportedAt,
       userId: context.userId,
       profile: profile as Record<string, unknown> | null,
     };
 
-    res.write(`${serializePortabilityLine(manifest)}\n`);
+    let rows = 0;
+    let files = 0;
 
-    const tables = await this.discoverUserTables();
+    // Every line waits for the connection to take the one before it, so a
+    // file of any size passes through in FILE_CHUNK_BYTES pieces. The archive
+    // used to be queued as fast as it could be read: a 1.5 GB file sat in
+    // memory several times over and the transfer died partway, with nothing
+    // in what had arrived to say so.
+    try {
+      await writePortabilityLine(res, manifest);
 
-    for (const table of tables) {
-      for await (const row of this.iterateUserRows(context.userId, table)) {
-        const line: PortabilityStreamRecord = {
-          type: 'row',
-          table: qualifiedName(table),
-          row: this.serializeRow(row),
-        };
-        res.write(`${serializePortabilityLine(line)}\n`);
+      const tables = await this.discoverUserTables();
+
+      for (const table of tables) {
+        for await (const row of this.iterateUserRows(context.userId, table)) {
+          await writePortabilityLine(res, {
+            type: 'row',
+            table: qualifiedName(table),
+            row: this.serializeRow(row),
+          });
+          rows += 1;
+        }
       }
-    }
 
-    const fileRows = await this.selectUserRows(context.userId, {
-      schema: 'ci',
-      table: 'files',
-      userColumn: 'user_id',
-    });
+      const fileRows = await this.selectUserRows(context.userId, {
+        schema: 'ci',
+        table: 'files',
+        userColumn: 'user_id',
+      });
 
-    for (const row of fileRows) {
-      await this.writeFileChunks(context, res, row);
+      for (const row of fileRows) {
+        if (await this.writeFileChunks(context, res, row)) {
+          files += 1;
+        }
+      }
+
+      await writePortabilityLine(res, { type: 'end', rows, files });
+    } catch (error) {
+      // The 200 and part of the archive are already out. Ending the response
+      // normally would hand over a shorter archive that reads as whole, so it
+      // is cut instead: the download fails, and an import of what arrived has
+      // no end record.
+      this.logger.warn('Export stopped before the end of the archive', {
+        rows,
+        files,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.destroy();
+
+      return;
     }
 
     res.end();
@@ -296,10 +327,17 @@ export class UserDataPortabilityService {
 
     let rowsImported = 0;
     let filesRestored = 0;
+    let rowRecords = 0;
     let state: ImportState | null = null;
+    let archiveVersion: number | null = null;
+    let end: { rows: number; files: number } | null = null;
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
+        if (end) {
+          throw new BadRequestException('Archive has records after its end record');
+        }
+
         if (record.type === 'manifest') {
           if (state) {
             throw new BadRequestException('Archive manifest must be the first record');
@@ -308,6 +346,8 @@ export class UserDataPortabilityService {
           if (record.userId !== context.userId) {
             throw new BadRequestException('This archive belongs to a different account');
           }
+
+          archiveVersion = record.version;
 
           await this.setReplicationRole(queryRunner, 'replica');
           state = await this.beginImport(queryRunner, context.userId, record.profile, tables);
@@ -327,7 +367,15 @@ export class UserDataPortabilityService {
           rowsImported += await this.insertHeldRows(queryRunner, context.userId, links);
         }
 
+        if (record.type === 'end') {
+          end = { rows: record.rows, files: record.files };
+
+          return;
+        }
+
         if (record.type === 'row') {
+          rowRecords += 1;
+
           const table = tableByName.get(record.table);
 
           if (!table) {
@@ -396,6 +444,21 @@ export class UserDataPortabilityService {
 
       if (pendingFiles.size > 0) {
         throw new BadRequestException('Archive is missing one or more file chunks');
+      }
+
+      // Const copies, as above.
+      const ended = end as { rows: number; files: number } | null;
+      const version = archiveVersion as number | null;
+
+      // Version 1 archives were written without an end record and still import.
+      if (version !== 1 && !ended) {
+        throw new BadRequestException('Archive stops before its end record: the export was cut short');
+      }
+
+      if (ended && (ended.rows !== rowRecords || ended.files !== filesRestored)) {
+        throw new BadRequestException(
+          `Archive end record counts ${ended.rows} rows and ${ended.files} files, but the archive holds ${rowRecords} rows and ${filesRestored} files`,
+        );
       }
 
       rowsImported += await this.finishImport(queryRunner, context.userId, begun);
@@ -642,45 +705,78 @@ export class UserDataPortabilityService {
     }
   }
 
+  /**
+   * Stream one file's bytes as `file-chunk` records, read from the object
+   * store a chunk at a time. True when every chunk was written.
+   *
+   * A file that can't be opened is skipped with a warning, as before: its row
+   * is in the archive, its bytes are not. A failure after the first chunk is
+   * out can't be skipped (the archive would hold half a file), so it throws
+   * and the export is cut.
+   */
   private async writeFileChunks(
     context: UserServiceContext,
     res: Response,
     row: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const id = String(row.id ?? '');
     const bucket = String(row.bucket ?? '');
     const key = String(row.key ?? '');
 
     if (!id || !bucket || !key) {
-      return;
+      return false;
     }
 
-    try {
-      const content = await this.fileService.getFileContent(context, key);
-      const buffer = Buffer.from(content);
-      const total = Math.max(1, Math.ceil(buffer.length / FILE_CHUNK_BYTES));
+    let stream: Readable;
+    let total: number;
 
-      for (let index = 0; index < total; index += 1) {
-        const start = index * FILE_CHUNK_BYTES;
-        const chunk = buffer.subarray(start, start + FILE_CHUNK_BYTES);
-        const line: PortabilityStreamRecord = {
-          type: 'file-chunk',
-          id,
-          bucket,
-          key,
-          index,
-          total,
-          data: chunk.toString('base64'),
-        };
-        res.write(`${serializePortabilityLine(line)}\n`);
+    try {
+      const opened = await this.fileService.getFileStreamWithLength(context, key);
+
+      if (opened.contentLength == null) {
+        opened.stream.destroy();
+        throw new Error('The object store gave no length for this file');
       }
+
+      stream = opened.stream;
+      total = Math.max(1, Math.ceil(opened.contentLength / FILE_CHUNK_BYTES));
     } catch (error) {
       this.logger.warn('Skipped file blob during export', {
         fileId: id,
         key,
         error: error instanceof Error ? error.message : String(error),
       });
+
+      return false;
     }
+
+    const chunk = (index: number, data: Buffer): PortabilityStreamRecord => ({
+      type: 'file-chunk',
+      id,
+      bucket,
+      key,
+      index,
+      total,
+      data: data.toString('base64'),
+    });
+    let index = 0;
+
+    for await (const data of fixedSizeChunks(stream, FILE_CHUNK_BYTES)) {
+      await writePortabilityLine(res, chunk(index, data));
+      index += 1;
+    }
+
+    // An empty file is still one (empty) chunk, so the import restores it.
+    if (index === 0) {
+      await writePortabilityLine(res, chunk(0, Buffer.alloc(0)));
+      index = 1;
+    }
+
+    if (index !== total) {
+      throw new Error(`File ${id} came to ${index} chunks, ${total} expected from its length`);
+    }
+
+    return true;
   }
 
   private async exportProfile(context: UserServiceContext): Promise<UserProfileSnapshot | null> {
