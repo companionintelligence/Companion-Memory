@@ -7,9 +7,6 @@ import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTi
 
 import type { Thread } from './types';
 
-/** How many threads a compact list (the rail submenu) will ever show. */
-export const RECENT_THREAD_LIMIT = 10;
-
 /** Skip a refetch if the list we already have is younger than this. */
 const STALE_MS = 30_000;
 
@@ -124,6 +121,10 @@ interface Options {
    * actually expanded, and not again until the answer goes stale.
    */
   enabled: boolean;
+  /**
+   * Keep only the newest this many. Unset lists every thread: the rail's "All chats" is how a phone reaches an older
+   * chat from anywhere in the app, and a cap of 10 left the rest out of reach.
+   */
   limit?: number;
 }
 
@@ -134,13 +135,13 @@ interface RecentThreads {
 }
 
 /**
- * The newest threads, for picking one — not for managing them.
+ * The threads, newest first, for picking one — not for managing them.
  *
  * {@link useThreadListService} is the Chat page's full-fat version: it deletes,
  * polls while a generation runs, and owns the sidebar's state. This is the
- * read-only slice the navigation needs, capped, and idle until asked.
+ * read-only list the navigation needs, idle until asked.
  */
-export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Options): RecentThreads {
+export function useRecentThreads({ enabled, limit }: Options): RecentThreads {
   const { ready, headers } = useSessionAuth();
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
@@ -194,8 +195,8 @@ export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Optio
   }, [enabled, ready, headers]);
 
   // The API orders by `updatedAt` descending, so the head of the list is the
-  // most recent — no client-side sort, just a cap.
-  const recent = useMemo(() => threads.slice(0, limit), [threads, limit]);
+  // most recent — no client-side sort, at most a cap.
+  const recent = useMemo(() => (limit == null ? threads : threads.slice(0, limit)), [threads, limit]);
 
   return { threads: recent, loading, error };
 }

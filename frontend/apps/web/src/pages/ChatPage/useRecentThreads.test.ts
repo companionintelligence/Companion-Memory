@@ -4,13 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
-import {
-  RECENT_THREAD_LIMIT,
-  threadIdOf,
-  threadLabel,
-  useRecentThreads,
-  uuidV7Time,
-} from './useRecentThreads';
+import { threadIdOf, threadLabel, useRecentThreads, uuidV7Time } from './useRecentThreads';
 
 const h = vi.hoisted(() => ({
   auth: {
@@ -142,15 +136,17 @@ describe('useRecentThreads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('caps the list at the newest few, in the order the API returned them', async () => {
-    const many = Array.from({ length: RECENT_THREAD_LIMIT + 5 }, (_, i) => thread(`t${i}`, `Thread ${i}`));
+  // The rail's "All chats" opens this whole list. It used to stop at the newest 10, which left a phone no way to
+  // reach an older chat outside the Chat page's own sheet.
+  it('lists every thread, in the order the API returned them', async () => {
+    const many = Array.from({ length: 35 }, (_, i) => thread(`t${i}`, `Thread ${i}`));
     setFetch(() => ok(many));
 
     const { result } = renderHook(() => useRecentThreads({ enabled: true }));
 
-    await waitFor(() => expect(result.current.threads).toHaveLength(RECENT_THREAD_LIMIT));
+    await waitFor(() => expect(result.current.threads).toHaveLength(35));
     expect(result.current.threads[0].id).toBe('t0');
-    expect(result.current.threads.at(-1)?.id).toBe(`t${RECENT_THREAD_LIMIT - 1}`);
+    expect(result.current.threads.at(-1)?.id).toBe('t34');
   });
 
   it('honours an explicit limit', async () => {
