@@ -710,7 +710,20 @@ export class ChatTurnService {
       parseNumCtx(process.env[NUM_CTX_ENV_VAR]) == null
         ? ((await this.ollamaService.resolveChatContextTokens?.(payload.model)) ?? null)
         : null;
-    const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel, measuredContextTokens });
+    const budget = resolveContextBudget({
+      shrinkLevel: options.shrinkLevel,
+      measuredContextTokens,
+      // Every round that offers tools sends their definitions, about 5,400
+      // tokens for today's list. That is more than half of the 8k default
+      // window. Left out of this plan they took the room kept for the answer.
+      // Sized from the request, before `resolveModel` decides. A model without
+      // tools still gets the grown window here (a bigger `num_ctx` it does not
+      // need). A pinned demo model that turns tools on gets no reserve at all.
+      toolDefinitionBytes: payload.enableTools
+        ? (this.ollamaService.toolDefinitionBytes?.(requestContext) ?? 0)
+        : 0,
+      windowCanGrow: this.ollamaService.chatWindowCanGrow?.() ?? true,
+    });
 
     // Which messages re-send their attachments is settled over the whole thread, BEFORE admission,
     // because the text of an attachment (unlike an image) costs what it weighs and so has to be
@@ -803,6 +816,8 @@ export class ChatTurnService {
       model,
       budgetSource: budget.source,
       maxContextTokens: budget.maxContextTokens,
+      plannedContextTokens: budget.plannedContextTokens,
+      reservedToolTokens: budget.reservedToolTokens,
       promptBudgetBytes: budget.promptBudgetBytes,
       shrinkLevel: budget.shrinkLevel,
       admittedMessages: plan.admitted.length,
@@ -812,7 +827,10 @@ export class ChatTurnService {
       systemPromptOverReserve: systemPromptBytes > budget.reservedSystemTokens,
       inlineAttachmentMessages: plan.admitted.filter((index) => inlineAttachments[index]).length,
       attachmentTextBytes: plan.admitted.reduce((total, index) => total + attachmentTextBytes[index], 0),
-      estimatedPromptTokensUpperBound: systemPromptBytes + plan.admittedBytes,
+      // The tool reserve is an estimate rather than a bound. It counts only
+      // when the model is offered the tools at all.
+      estimatedPromptTokensUpperBound:
+        systemPromptBytes + plan.admittedBytes + (enableTools ? budget.reservedToolTokens : 0),
       overBudget: plan.overBudget,
     });
 
