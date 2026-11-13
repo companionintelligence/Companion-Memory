@@ -78,7 +78,10 @@ describe('closedPipeTolerant', () => {
       // A reader that is still running but has closed its end, the way `head`
       // has once it has its ten lines. Without a listener the EPIPE below is an
       // uncaught exception, which fails this run.
-      const reader = spawn('sh', ['-c', 'exec 0<&-; echo closed; sleep 5'], {
+      // `exec sleep` so that `kill()` below stops the sleep itself: dash forks
+      // a trailing command, and killing only the shell would leave the sleep
+      // holding the stdout pipe open for five seconds.
+      const reader = spawn('sh', ['-c', 'exec 0<&-; echo closed; exec sleep 5'], {
         stdio: ['pipe', 'pipe', 'ignore'],
       });
 
@@ -94,20 +97,25 @@ describe('closedPipeTolerant', () => {
         await closed;
 
         expect((stdin.errored as NodeJS.ErrnoException | null)?.code).toBe('EPIPE');
+
+        const written = vi.spyOn(stdin, 'write');
+
         expect(() => write('a line nobody will read\n')).not.toThrow();
+        expect(written).not.toHaveBeenCalled();
       } finally {
         reader.kill();
       }
     },
   );
 
-  it('stops calling write after EPIPE', () => {
+  // EOF is how libuv reports some broken pipes on Windows.
+  it.each(['EPIPE', 'EOF'])('stops calling write after %s', (code) => {
     const stream = new PassThrough();
     const written = vi.spyOn(stream, 'write');
     const write = closedPipeTolerant(stream);
 
     write('before\n');
-    stream.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    stream.emit('error', Object.assign(new Error(`write ${code}`), { code }));
     write('after\n');
 
     expect(written).toHaveBeenCalledTimes(1);

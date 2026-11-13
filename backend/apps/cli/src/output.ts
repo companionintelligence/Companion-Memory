@@ -26,13 +26,14 @@ export function processTerm(): Term {
 /**
  * A writer for `stream` that goes quiet once its reader has gone.
  *
- * `ci doctor | head` closes the pipe after ten lines, and the next write fails
- * with EPIPE. Node reports that as an `error` event on the stream, and with no
- * listener an `error` event is an uncaught exception: a stack trace on stderr
- * and exit 1 from a command that did nothing wrong. Nobody is left to read the
- * rest, so it is dropped and the command finishes as it would have with its
- * output going to /dev/null, exit status included. `ci doctor` still exits 1
- * when it found something, whether or not `head` stayed to read it.
+ * `ci doctor | head` closes the pipe after ten lines. The next write fails with
+ * EPIPE (or EOF, which is how libuv reports some broken pipes on Windows) and
+ * Node reports that as an `error` event on the stream. With no listener an
+ * `error` event is an uncaught exception: a stack trace on stderr and exit 1
+ * from a command that did nothing wrong. Nobody is left to read the rest, so it
+ * is dropped and the command finishes as it would have with its output going to
+ * /dev/null, exit status included. `ci doctor` still exits 1 when it found
+ * something, whether or not `head` stayed to read it.
  *
  * Any other write error is still thrown, as it was before.
  */
@@ -40,7 +41,7 @@ export function closedPipeTolerant(stream: NodeJS.WritableStream): (text: string
   let open = true;
 
   stream.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code !== 'EPIPE') {
+    if (error.code !== 'EPIPE' && error.code !== 'EOF') {
       throw error;
     }
 
