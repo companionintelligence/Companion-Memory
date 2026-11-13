@@ -41,9 +41,17 @@ class _Endpoint:
     rows: list[dict[str, str]] | None = None
     status_code = 200
     listings = 0
+    null_data = False
 
     def get(self, url: str, **_: Any) -> httpx.Response:
         self.listings += 1
+        if self.null_data:
+            # What Ollama answers with no models pulled.
+            return httpx.Response(
+                200,
+                json={"object": "list", "data": None},
+                request=httpx.Request("GET", url),
+            )
         if self.rows is None:
             raise httpx.ConnectError("[Errno 111] Connection refused")
         return httpx.Response(
@@ -384,6 +392,27 @@ def test_the_dossier_agent_moves_to_the_model_that_replaced_a_gone_one(
     assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
 
     assert summarizer._get_dossier_agent().model.model_name == "small-chat:latest"
+
+
+def test_a_configured_model_waits_while_ollama_has_no_models_at_all(
+    endpoint, client, monkeypatch
+):
+    """
+    Ollama with nothing pulled lists `"data": null`, not an empty list. Read as
+    a malformed answer, that kept the configured model and every run then got
+    a 404 for it.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+    endpoint.null_data = True
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
 
 
 def test_health_lists_the_models_once_while_the_model_holds(endpoint, client):

@@ -383,10 +383,16 @@ settings = Settings()
 
 
 def model_rows(listing: Any) -> list[dict]:
-    """The rows of a GET /models answer's JSON body. Raises when it is not a model list."""
+    """
+    The rows of a GET /models answer's JSON body. Raises when it is not a model list.
+
+    Ollama with no models answers `{"object":"list","data":null}`. That is an
+    empty list, not a malformed one: read as an error, it had the service trust
+    a configured model the server did not have.
+    """
     return [
         model
-        for model in listing.get("data", [])
+        for model in listing.get("data") or []
         if isinstance(model, dict) and model.get("id")
     ]
 
