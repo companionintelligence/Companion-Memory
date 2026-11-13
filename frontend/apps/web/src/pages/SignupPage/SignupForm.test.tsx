@@ -203,6 +203,35 @@ describe('SignupForm signup code requirement', () => {
   });
 });
 
+describe('SignupForm empty fields', () => {
+  it("says Required under each empty field, not zod's message for a missing value", async () => {
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findAllByText('Required')).toHaveLength(3);
+    expect(screen.queryByText(/expected string/i)).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('says Required under a field that was filled in and cleared again', async () => {
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test User' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'user@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findAllByText('Required')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
 describe('SignupForm email field', () => {
   it('configures the email field for an address on a touch keyboard', () => {
     h.error = null;

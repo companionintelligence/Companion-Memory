@@ -20,13 +20,15 @@ import { useAuth } from '../../hooks';
 
 // Validation rules (password length etc.) live in the backend signup schema —
 // the single source of truth. Server-reported issues are mapped onto the
-// matching fields below instead of being duplicated here.
+// matching fields below instead of being duplicated here. The form only says
+// that an empty field needs filling in, in words: zod 4's own message for a
+// missing value is "Invalid input: expected string, received undefined".
 const SignupFormSchema = s.object({
-  name: s.string(),
-  email: s.string().email({
+  name: s.string().min(1, { message: 'Required' }),
+  email: s.string().min(1, { message: 'Required' }).email({
     message: 'Invalid email.',
   }),
-  password: s.string(),
+  password: s.string().min(1, { message: 'Required' }),
   signup_code: s.string().optional(),
 });
 
@@ -71,6 +73,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
 
   const form = useForm<SignupFormData>({
     resolver: formDataResolver(SignupFormSchema),
+    defaultValues: { name: '', email: '', password: '' },
   });
 
   // Server issues are mapped only for submissions made by this mounted form:
