@@ -12,7 +12,7 @@ import { Link } from 'react-router-dom';
 import { useFeatures } from '@/common/feature';
 import { forecastStatusLabel } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
-import { CLASS_LABEL, normalizeClass } from '@/lib/activityPalette';
+import { classTitle } from '@/lib/activityPalette';
 import { starterPromptsFor } from '@/pages/ChatPage/starterPrompts';
 
 const WIDGET_TASKS = gql(
@@ -146,16 +146,6 @@ function OpenLink({ to, children }: { to: string; children: ReactNode }) {
   );
 }
 
-/**
- * The predicted activity class in the words the calendar legend uses ("Work",
- * "Errands", "Unsorted"), not HBPE's own label ("WORK", "UNKNOWN").
- */
-function predictionLabel(prediction: string): string {
-  const label = CLASS_LABEL[normalizeClass(prediction)];
-
-  return label.charAt(0).toUpperCase() + label.slice(1);
-}
-
 export interface WidgetDashboardViewProps {
   snapshot: CompanionWidgetSnapshot;
   prompts: string[];
@@ -238,9 +228,7 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
           {forecastAvailable ? (
             <>
               <p className="text-xl font-semibold leading-snug">
-                {snapshot.insight.prediction
-                  ? predictionLabel(snapshot.insight.prediction)
-                  : 'Forecast is updating'}
+                {snapshot.insight.prediction ?? 'Forecast is updating'}
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 {snapshot.insight.confidence === null
@@ -360,6 +348,8 @@ export default function WidgetDashboardPage() {
         tasksUpdatedAt: tasks.data?.tasks ? new Date().toISOString() : null,
         metricsUpdatedAt: metrics.data?.dailyMetrics ? new Date().toISOString() : null,
         jobsUpdatedAt,
+        // The calendar legend's words, as the phone's widgets get them too.
+        predictionLabel: classTitle,
       }),
     [forecast.data?.forecast, jobs, jobsUpdatedAt, metrics.data?.dailyMetrics, tasks.data?.tasks],
   );

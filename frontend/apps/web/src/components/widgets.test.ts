@@ -50,6 +50,34 @@ describe('native widget snapshot', () => {
     expect(JSON.stringify(snapshot)).not.toMatch(/script|note body|apiKey/i);
   });
 
+  it('words the prediction with predictionLabel and still finds its probability under the raw label', () => {
+    const forecast = {
+      generatedAt: '2026-11-11T11:00:00Z',
+      systemStatus: 'READY',
+      buckets: [
+        {
+          startTime: '2026-11-11T12:30:00Z',
+          predictedL0: 'UNKNOWN',
+          l0Probs: [
+            { label: 'WORK', probability: 0.9 },
+            { label: 'UNKNOWN', probability: 0.4 },
+          ],
+        },
+      ],
+    };
+    const now = new Date('2026-11-11T12:00:00.000Z');
+
+    const worded = buildWidgetSnapshot({
+      now,
+      forecast,
+      predictionLabel: (raw) => `<b>${raw.toLowerCase()}</b>`,
+    });
+
+    expect(worded.insight.prediction).toBe('unknown');
+    expect(worded.insight.confidence).toBe(0.4);
+    expect(buildWidgetSnapshot({ now, forecast }).insight.prediction).toBe('UNKNOWN');
+  });
+
   it('caps extreme server counts so native Int-backed widgets can still decode the snapshot', () => {
     const snapshot = buildWidgetSnapshot({
       now: new Date('2026-11-11T12:00:00.000Z'),

@@ -27,6 +27,8 @@ vi.mock('@ci/common', () => ({
   readWidgetActions: harness.readWidgetActions,
 }));
 
+import { classTitle } from '@/lib/activityPalette';
+
 import { WidgetSnapshotSync } from './WidgetSnapshotSync';
 
 function deferred<T>() {
@@ -73,5 +75,24 @@ describe('WidgetSnapshotSync', () => {
 
     expect(harness.clearWidgetSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.publishWidgetSnapshot).not.toHaveBeenCalled();
+  });
+
+  // The home-screen widgets print `insight.prediction` as it is; they showed
+  // the forecast's own "WORK" or "UNKNOWN".
+  it('publishes the prediction in the calendar legend words', async () => {
+    harness.client.query
+      .mockResolvedValueOnce({ data: { tasks: { edges: [] } } })
+      .mockResolvedValueOnce({ data: { forecast: { systemStatus: 'READY', buckets: [] } } })
+      .mockResolvedValueOnce({ data: { dailyMetrics: [] } });
+    harness.fetchJson.mockResolvedValue({
+      summary: { pending: 0, active: 0, failed: 0, deadLettered: 0, completed: 0 },
+    });
+
+    render(<WidgetSnapshotSync />);
+
+    await waitFor(() => expect(harness.publishWidgetSnapshot).toHaveBeenCalledTimes(1));
+    expect(harness.buildWidgetSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ predictionLabel: classTitle }),
+    );
   });
 });

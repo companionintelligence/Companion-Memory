@@ -2,6 +2,7 @@ import { buildWidgetSnapshot } from '@ci/common';
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { classTitle } from '@/lib/activityPalette';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { WidgetDashboardView } from './WidgetDashboardPage';
@@ -24,6 +25,8 @@ function renderPrediction(systemStatus: string, predictedL0: string, probability
         },
       ],
     },
+    // As WidgetDashboardPage and WidgetSnapshotSync build it.
+    predictionLabel: classTitle,
   });
 
   renderWithProviders(<WidgetDashboardView snapshot={snapshot} prompts={[]} paths={PATHS} />);
@@ -43,6 +46,13 @@ describe('WidgetDashboardView: the Prediction card', () => {
     expect(screen.queryByText('WORK')).not.toBeInTheDocument();
     // READY is the normal state; the card's own "Updated" time already says so.
     expect(screen.queryByText(/Forecast status|READY/)).not.toBeInTheDocument();
+  });
+
+  it('uses the legend word, not just a capitalised label', () => {
+    renderPrediction('READY', 'ERRAND', 0.7);
+
+    expect(screen.getByText('Errands')).toBeInTheDocument();
+    expect(screen.getByText('70% likely')).toBeInTheDocument();
   });
 
   it('calls an unclassified prediction unsorted, as the calendar does', () => {

@@ -80,6 +80,12 @@ export interface WidgetSnapshotInput {
   metricsUpdatedAt?: unknown;
   jobsUpdatedAt?: unknown;
   now?: Date;
+  /**
+   * Words for the predicted activity class, for every surface that prints the
+   * snapshot: the Widgets page and the phone's home-screen widgets. Without it
+   * the forecast's own label ("WORK", "UNKNOWN") is passed through as it is.
+   */
+  predictionLabel?: (predictedL0: string) => string;
 }
 
 function safeLabel(value: unknown, maxLength = 72): string | null {
@@ -166,9 +172,13 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
 
       return startTime !== null && new Date(startTime).getTime() >= now.getTime();
     }) ?? input.forecast?.buckets?.[0];
-  const prediction = safeLabel(forecastBucket?.predictedL0, 48);
+  const predictedClass = safeLabel(forecastBucket?.predictedL0, 48);
   const matchingProbability =
-    forecastBucket?.l0Probs?.find((entry) => entry.label === prediction)?.probability ?? null;
+    forecastBucket?.l0Probs?.find((entry) => entry.label === predictedClass)?.probability ?? null;
+  const prediction =
+    predictedClass && input.predictionLabel
+      ? (safeLabel(input.predictionLabel(predictedClass), 48) ?? predictedClass)
+      : predictedClass;
   const probabilityEntries = (forecastBucket?.l0Probs ?? [])
     .filter((entry) => typeof entry.probability === 'number' && Number.isFinite(entry.probability))
     .map((entry) => Math.max(0, Math.min(1, entry.probability as number)));

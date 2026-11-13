@@ -221,6 +221,16 @@ export function normalizeClass(raw: string | null | undefined): ActivityClass {
   return CLASS_SET.has(upper) ? (upper as ActivityClass) : 'UNKNOWN';
 }
 
+/**
+ * A class in the legend's words, capitalised for a headline: "Work",
+ * "Errands", "Unsorted". Not the forecast's own label ("WORK", "UNKNOWN").
+ */
+export function classTitle(raw: string | null | undefined): string {
+  const label = CLASS_LABEL[normalizeClass(raw)];
+
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 /** The source key an event is coloured by. */
 export function sourceOf(event: Pick<ScheduleEvent, 'sourceSystem'>): string {
   return event.sourceSystem?.trim() || LOCAL_SOURCE;
