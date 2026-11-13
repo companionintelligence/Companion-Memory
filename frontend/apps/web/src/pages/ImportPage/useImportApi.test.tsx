@@ -286,15 +286,28 @@ describe('useImportApi uploadFile', () => {
     await expect(promise).rejects.toThrow('Nothing was uploaded');
   });
 
-  it('reports byte progress as the upload streams', () => {
+  it('reports byte progress as the upload streams, in the file’s own bytes', () => {
     const api = useProbeApi();
     const onProgress = vi.fn();
 
-    void api.uploadFile(new File(['x'], 'a.zip'), onProgress);
+    void api.uploadFile(new File(['x'.repeat(2000)], 'a.zip'), onProgress);
 
-    FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 512, total: 2048 });
+    // The request body is the file plus ~200 bytes of multipart framing.
+    FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 1100, total: 2200 });
 
-    expect(onProgress).toHaveBeenCalledWith(512, 2048);
+    expect(onProgress).toHaveBeenLastCalledWith(1000, 2000);
+  });
+
+  it('never reports more than the file holds, however much framing went with it', () => {
+    const api = useProbeApi();
+    const onProgress = vi.fn();
+
+    // contacts.vcf: 435 bytes of file, 636 bytes on the wire.
+    void api.uploadFile(new File(['x'.repeat(435)], 'contacts.vcf'), onProgress);
+
+    FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 636, total: 636 });
+
+    expect(onProgress).toHaveBeenLastCalledWith(435, 435);
   });
 
   it('does not report progress when the event has no computable length', () => {
