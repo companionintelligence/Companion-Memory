@@ -164,6 +164,25 @@ describe('SyncStep', () => {
     });
   });
 
+  it('puts an error in the alert description, where it has the full width', async () => {
+    discardRun.mockRejectedValue(
+      new Error('Import run run-1: Staged media rows still name bytes that nothing has stored.'),
+    );
+
+    render(<SyncStep onBackToExport={vi.fn()} />);
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Discard' }))[0]);
+    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }));
+
+    const message = await screen.findByText(/Staged media rows still name bytes/);
+
+    // The alert's first grid column belongs to an icon and is 0 wide without
+    // one. Only the description is placed in the second, so text anywhere else
+    // was squeezed to a word per line.
+    expect(message).toHaveAttribute('data-slot', 'alert-description');
+    expect(screen.getByRole('alert')).toContainElement(message);
+  });
+
   it('says so when nothing is waiting', async () => {
     listUnpushed.mockResolvedValue([]);
 
