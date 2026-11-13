@@ -520,7 +520,9 @@ describe('ChatTurnService.execute on a turn stopped before it ran', () => {
     await service.execute(payload);
 
     expect(chatStream).not.toHaveBeenCalled();
-    expect(messageService.update).toHaveBeenCalledWith(expect.anything(), 'assistant-msg', { canceled: true });
+    expect(messageService.update).toHaveBeenCalledWith(expect.anything(), 'assistant-msg', {
+      canceled: true,
+    });
   });
 
   it('keeps a row an earlier run already streamed into', async () => {
@@ -529,7 +531,9 @@ describe('ChatTurnService.execute on a turn stopped before it ran', () => {
     await service.execute(payload);
 
     expect(chatStream).not.toHaveBeenCalled();
-    expect(messageService.update).not.toHaveBeenCalledWith(expect.anything(), 'assistant-msg', { canceled: true });
+    expect(messageService.update).not.toHaveBeenCalledWith(expect.anything(), 'assistant-msg', {
+      canceled: true,
+    });
   });
 });
 
@@ -541,14 +545,11 @@ describe('ChatTurnService.execute on a finished tool turn', () => {
       create: jest.fn(async () => ({})),
     };
     const chatStream = jest.fn(async () =>
-      streamFrom(
-        [{ message: { content: 'Nothing about coffee.' } }],
-        [
-          { role: 'assistant', content: '', tool_calls: [{ function: { name: 'knowledge', arguments: {} } }] },
-          { role: 'tool', content: '[]' },
-          { role: 'assistant', content: 'Nothing about coffee.' },
-        ] as Array<{ role: string; content: string }>,
-      ),
+      streamFrom([{ message: { content: 'Nothing about coffee.' } }], [
+        { role: 'assistant', content: '', tool_calls: [{ function: { name: 'knowledge', arguments: {} } }] },
+        { role: 'tool', content: '[]' },
+        { role: 'assistant', content: 'Nothing about coffee.' },
+      ] as Array<{ role: string; content: string }>),
     );
     const { service } = buildService(chatStream, messageService);
 
