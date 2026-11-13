@@ -2336,6 +2336,7 @@ type ObjectByIdentifierPayload {
   The namespace the value normalized into — not always the one asked for.
   """
   namespace: ObjectIdentifierNamespace
+  ownedItem: ItemType
   product: ProductModelType
   subjectType: ObjectIdentifierSubjectType
   value: String

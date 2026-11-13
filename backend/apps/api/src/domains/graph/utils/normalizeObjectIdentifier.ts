@@ -399,3 +399,52 @@ export function computeQualifier(
 export function isGloballyUniqueNamespace(namespace: ObjectIdentifierNamespace): boolean {
   return GLOBALLY_UNIQUE.has(namespace);
 }
+
+/** ISBN-13 (978 prefix) -> ISBN-10: the nine body digits and a mod-11 check digit, 'X' for 10. */
+function isbn13To10(isbn13: string): string {
+  const body = isbn13.slice(3, 12);
+  let sum = 0;
+  for (let i = 0; i < 9; i += 1) {
+    sum += Number(body[i]) * (10 - i);
+  }
+
+  const check = (11 - (sum % 11)) % 11;
+
+  return `${body}${check === 10 ? 'X' : String(check)}`;
+}
+
+/**
+ * The compact spellings a source may have written a normalized identifier as,
+ * the normalized value first. Every one normalizes back to it: a GTIN-14 also
+ * as the EAN-13, UPC-A or EAN-8 its leading zeros pad, and an ISBN-13 also as
+ * the GTIN-14 it pads to and, for a 978 book, as the ISBN-10 Amazon files as
+ * an ASIN.
+ *
+ * For matching a code kept as printed, such as a value in
+ * `ci.objects.identifier_codes`, against a normalized one without
+ * re-implementing the rules above in SQL. Compare after keeping only letters
+ * and digits and uppercasing: that is all these spellings leave out.
+ */
+export function compactSpellingsOf(namespace: ObjectIdentifierNamespace, valueNormalized: string): string[] {
+  const spellings = [valueNormalized];
+
+  if (namespace === 'gtin' && /^[0-9]{14}$/.test(valueNormalized)) {
+    for (const length of [13, 12, 8]) {
+      const pad = valueNormalized.slice(0, 14 - length);
+
+      if (/^0+$/.test(pad)) {
+        spellings.push(valueNormalized.slice(14 - length));
+      }
+    }
+  }
+
+  if (namespace === 'isbn' && /^[0-9]{13}$/.test(valueNormalized)) {
+    spellings.push(`0${valueNormalized}`);
+
+    if (valueNormalized.startsWith('978')) {
+      spellings.push(isbn13To10(valueNormalized));
+    }
+  }
+
+  return spellings;
+}
