@@ -510,14 +510,15 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
 
   describe('a person linking a sighting moves the thing\'s "last seen"', () => {
     const lastSeen = async (objectId: string): Promise<Date | null> => {
-      const [row] = (await dataSource.query(`SELECT last_seen_at FROM ci.objects WHERE object_id = $1::uuid`, [
-        objectId,
-      ])) as Array<{ last_seen_at: Date | null }>;
+      const [row] = (await dataSource.query(
+        `SELECT last_seen_at FROM ci.objects WHERE object_id = $1::uuid`,
+        [objectId],
+      )) as Array<{ last_seen_at: Date | null }>;
 
       return row?.last_seen_at ?? null;
     };
 
-    const sighting = async (label: string, observedAt: string): Promise<string> => {
+    const sighting = async (label: string, observedAt: string, placeEntityId?: string): Promise<string> => {
       const [created] = (
         await service.createMany(owner, [
           {
@@ -526,6 +527,7 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
             contentId: uuidv7(),
             detector: 'yolov8',
             bbox: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 },
+            ...(placeEntityId !== undefined && { placeEntityId }),
           },
         ])
       ).written;
@@ -556,6 +558,57 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
       await service.confirm(owner, sightingId, true);
 
       expect(await lastSeen(kettle)).toEqual(new Date('2026-05-03T08:00:00.000Z'));
+    });
+
+    it('takes the place the sighting was taken at along, for Recently seen', async () => {
+      const kitchen = uuidv7();
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id) VALUES ($1::uuid, 'Place', 'Kitchen', $2::uuid)`,
+        [kitchen, owner.userId],
+      );
+      const kettle = await insertThing('Tea kettle');
+      const sightingId = await sighting('tea kettle', '2026-05-05T07:30:00.000Z', kitchen);
+
+      await service.confirm(owner, sightingId, true, { resolvedObjectId: kettle });
+
+      const [row] = (await dataSource.query(
+        `SELECT last_seen_at, last_seen_place_entity_id FROM ci.objects WHERE object_id = $1::uuid`,
+        [kettle],
+      )) as Array<{ last_seen_at: Date | null; last_seen_place_entity_id: string | null }>;
+      expect(row).toEqual({
+        last_seen_at: new Date('2026-05-05T07:30:00.000Z'),
+        last_seen_place_entity_id: kitchen,
+      });
+    });
+
+    it("leaves another account's thing alone", async () => {
+      const someoneElse = { userId: uuidv7() };
+      await dataSource.query(
+        `INSERT INTO ci.users (id, name, email) VALUES ($1::uuid, 'Other spec fixture', $2)`,
+        [someoneElse.userId, `other.${someoneElse.userId}@example.invalid`],
+      );
+      const theirs = uuidv7();
+      try {
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id, linked_table, linked_id)
+           VALUES ($1::uuid, 'Item', 'Their lamp', $2::uuid, 'objects', $1::uuid)`,
+          [theirs, someoneElse.userId],
+        );
+        await dataSource.query(
+          `INSERT INTO ci.objects (object_id, user_id, entity_type) VALUES ($1::uuid, $2::uuid, 'Item')`,
+          [theirs, someoneElse.userId],
+        );
+        const sightingId = await sighting('lamp', '2026-05-06T09:00:00.000Z');
+
+        await expect(service.confirm(owner, sightingId, true, { resolvedObjectId: theirs })).rejects.toThrow(
+          /belongs to another account/,
+        );
+        expect(await lastSeen(theirs)).toBeNull();
+      } finally {
+        await dataSource.query('DELETE FROM ci.objects WHERE user_id = $1', [someoneElse.userId]);
+        await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [someoneElse.userId]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = $1', [someoneElse.userId]);
+      }
     });
 
     it('never walks it backwards for an older sighting, and a retraction leaves it alone', async () => {

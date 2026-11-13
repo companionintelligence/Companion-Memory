@@ -651,7 +651,9 @@ export class ObjectObservationService {
 
     const updated = await this.findById(context, id);
 
-    if (confirmed && updated?.resolvedObjectId != null) {
+    // What the row says now, not what was asked: an answer the guarded write
+    // above did not apply must not move a thing's "last seen".
+    if (updated?.confirmedByUser === true && updated.resolvedObjectId != null) {
       await touchObjectLastSeen(this.dataSource, updated.userId, updated.resolvedObjectId, updated);
     }
 
