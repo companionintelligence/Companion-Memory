@@ -168,6 +168,15 @@ export function persistedAssistantContent(thinking: string, text: string): strin
 }
 
 /**
+ * Whether a stored assistant row has nothing to show: no text and no thinking
+ * once the `<think>` wrap is taken off. Only such a row of a stopped turn is
+ * marked canceled; one with text stays visible.
+ */
+function isBlankAssistantContent(content: string | null | undefined): boolean {
+  return !(content ?? '').replace(/<\/?think>/g, '').trim();
+}
+
+/**
  * How many times one turn asks the backend before giving up on it, when the
  * backend sends NO response at all (`LlmFirstResponseTimeoutError`). A fresh
  * request re-enters the backend's queue at the back with nothing lost —
@@ -573,8 +582,18 @@ export class ChatTurnService {
     });
   }
 
+  /**
+   * A placeholder row is empty unless an earlier run of this job streamed into
+   * it before the API restarted. That text stays, the same as any stopped reply
+   * keeps what it showed (see {@link persistTurn}).
+   */
   private async finishCanceled(context: ServiceContext, payload: ChatGeneratePayload): Promise<void> {
-    await this.messageService.update(context, payload.assistantMessageId, { canceled: true });
+    const row = await this.messageService.findById(context, payload.assistantMessageId);
+
+    if (isBlankAssistantContent(row?.content)) {
+      await this.messageService.update(context, payload.assistantMessageId, { canceled: true });
+    }
+
     await this.setGenerationStatus(context, payload.threadId, 'idle');
     this.broker.complete(payload.threadId);
   }
@@ -586,10 +605,15 @@ export class ChatTurnService {
    * turn, so a persisted snapshot would accumulate one copy per turn.
    *
    * A stopped turn keeps what it streamed. `canceled` is stored in the same
-   * `is_deleted` column a deleted message uses, and every read leaves those
-   * rows out, so marking the cut-off reply canceled made the part the person
+   * `is_deleted` column a deleted message uses. Every read leaves those rows
+   * out, so marking the cut-off reply canceled made the part the person
    * watched arrive vanish on reload. Only a cut-off row with nothing in it is
-   * marked, as before.
+   * marked, as before. Thinking that is only whitespace counts as nothing.
+   *
+   * The last row of a stopped turn never ran its tool calls: the tool loop
+   * checks the signal before it runs them, so no result row follows. They are
+   * not stored. Kept, the row showed a lookup that never happened and replayed
+   * a call with no result into the next turn.
    */
   private async persistTurn(
     context: ServiceContext,
@@ -600,7 +624,11 @@ export class ChatTurnService {
     streamedText: string,
     streamedThink: string,
   ): Promise<void> {
-    const stoppedEmpty = (content: string | null | undefined) => aborted && !content?.trim();
+    const stoppedEmpty = (content: string | null | undefined) => aborted && isBlankAssistantContent(content);
+    const toolCallsOf = (message: OllamaMessage, last: boolean) =>
+      aborted && last
+        ? undefined
+        : (message.tool_calls as unknown[] as Record<string, unknown>[] | undefined);
 
     if (generated.length === 0) {
       const content = persistedAssistantContent(streamedThink, streamedText);
@@ -614,16 +642,21 @@ export class ChatTurnService {
     }
 
     const [first, ...rest] = generated;
-    const firstContent = first.content || streamedText;
+    // `streamedText` is every round's text. Only a lone row may take it: with
+    // rows after it, the text it would borrow is already theirs, and the reply
+    // showed twice on reload.
+    const firstContent = first.content || (rest.length === 0 ? streamedText : '');
 
     await this.messageService.update(context, payload.assistantMessageId, {
       content: firstContent,
       canceled: rest.length === 0 && stoppedEmpty(firstContent),
-      toolCalls: (first.tool_calls as unknown[] as Record<string, unknown>[]) ?? null,
+      toolCalls: toolCallsOf(first, rest.length === 0) ?? null,
     });
 
     for (let i = 0; i < rest.length; i++) {
       const message = rest[i];
+      const last = i === rest.length - 1;
+      const toolCalls = toolCallsOf(message, last);
 
       await this.messageService.create(
         { userId: payload.ownerId },
@@ -631,11 +664,9 @@ export class ChatTurnService {
           model,
           role: message.role,
           content: message.content,
-          canceled: i === rest.length - 1 && stoppedEmpty(message.content),
+          canceled: last && stoppedEmpty(message.content),
           threadId: payload.threadId,
-          ...(message.tool_calls && {
-            toolCalls: message.tool_calls as unknown[] as Record<string, unknown>[],
-          }),
+          ...(toolCalls && { toolCalls }),
           promptMessageId: payload.promptMessageId,
         },
       );
