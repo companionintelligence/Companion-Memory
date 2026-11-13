@@ -48,9 +48,10 @@ const SENT_BACK_TO_REVIEW = 'sentBackToReview';
  * `last_seen_at` / `last_seen_place_entity_id` exist so the things list can
  * sort and filter without a per-row subquery over observations. Guarded on
  * the timestamp so an out-of-order backfill of old photos cannot walk a
- * thing's "last seen" backwards. Both ways a sighting gets its thing write it:
- * the automatic resolution ladder (`ObjectResolutionService`) and a person's
- * answer ({@link ObjectObservationService.confirm}).
+ * thing's "last seen" backwards. The automatic resolution ladder
+ * (`ObjectResolutionService`) and a person's answer
+ * ({@link ObjectObservationService.confirm}) write it here. A thing minted from
+ * a capture photo starts with it instead (`ThingVisionListener`).
  */
 export async function touchObjectLastSeen(
   dataSource: DataSource,
