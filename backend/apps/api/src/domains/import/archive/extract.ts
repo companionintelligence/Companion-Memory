@@ -272,6 +272,22 @@ function declaredUncompressedBytes(archivePath: string): number | null {
 }
 
 /**
+ * True when the archive's entries add up to at least `threshold` bytes once
+ * unpacked, read from its central directory without inflating anything. False
+ * when the system `unzip` is missing (nothing could stream it anyway) or its
+ * listing can't be read.
+ */
+function unpacksPastThreshold(archivePath: string, threshold: number): boolean {
+  if (!systemUnzipAvailable()) {
+    return false;
+  }
+
+  const declared = declaredUncompressedBytes(archivePath);
+
+  return declared !== null && declared >= threshold;
+}
+
+/**
  * Streaming extraction via the system `unzip`. Handles ZIP64 and multi-GB
  * archives without buffering the payload in memory. The archive is validated
  * from its central directory first (zip-slip on every entry, declared total
@@ -370,8 +386,15 @@ export async function extractUploadedArchive(
   // and decompress each entry synchronously. Stream via `unzip` instead — the
   // same path unpack.ts takes above 1 GB. If the system `unzip` isn't available
   // we can't stream, so surface that.
+  //
+  // "Big" is what the archive unpacks to as well as its own size. adm-zip
+  // inflates each entry into one Buffer, which cannot pass 2 GiB, so a 2.9 MB
+  // zip holding a 3 GB file of zeros (a large JSON or CSV export compresses
+  // nearly as well) failed with Node's raw `The value of "length" is out of
+  // range` and extracted nothing. The central directory states each entry's
+  // size, so asking costs a listing, not a decompression.
   let result: ExtractResult;
-  if (archiveSize >= largeThreshold) {
+  if (archiveSize >= largeThreshold || unpacksPastThreshold(archivePath, largeThreshold)) {
     if (!systemUnzipAvailable()) {
       throw new Error(
         `archive is ${(archiveSize / 1e9).toFixed(1)}GB (exceeds in-memory unzip) ` +
