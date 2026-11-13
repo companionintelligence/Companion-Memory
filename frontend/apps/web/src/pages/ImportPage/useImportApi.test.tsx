@@ -308,6 +308,24 @@ describe('useImportApi uploadFile', () => {
     FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 636, total: 636 });
 
     expect(onProgress).toHaveBeenLastCalledWith(435, 435);
+
+    // Even a count past the body's own total stops at the file's size.
+    FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 700, total: 636 });
+
+    expect(onProgress).toHaveBeenLastCalledWith(435, 435);
+  });
+
+  it('does not claim the whole file before the last byte of the body is sent', () => {
+    const api = useProbeApi();
+    const onProgress = vi.fn();
+
+    // A 100-byte file carries more framing than file, so rounding to the nearest
+    // byte would read 100 of 100 with one byte still to go.
+    void api.uploadFile(new File(['x'.repeat(100)], 'note.txt'), onProgress);
+
+    FakeXHR.instances[0].upload.onprogress?.({ lengthComputable: true, loaded: 299, total: 300 });
+
+    expect(onProgress).toHaveBeenLastCalledWith(99, 100);
   });
 
   it('does not report progress when the event has no computable length', () => {
