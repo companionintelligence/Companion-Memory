@@ -2,6 +2,7 @@ import { type MouseEvent, type ReactNode, useMemo } from 'react';
 
 import { BrowserActivityIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { webAddress } from '@/lib/webAddress';
 
 import { EntityRow } from './EntityRow';
 
@@ -22,30 +23,28 @@ interface Props {
 export function BrowserActivityRow({ browserActivity, time, onClick }: Props) {
   const data = useFragment(BROWSER_ACTIVITY_FRAGMENT, browserActivity);
 
-  const domain = useMemo(() => {
-    try {
-      const urlObj = new URL(data.url);
-
-      return urlObj.hostname + urlObj.pathname;
-    } catch {
-      return data.url;
-    }
-  }, [data.url]);
+  const address = useMemo(() => webAddress(data.url), [data.url]);
 
   return (
     <EntityRow
       icon={<BrowserActivityIcon />}
       title={data.title || 'Untitled page'}
       subtitle={
-        <a
-          href={data.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 hover:text-blue-800 hover:underline"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {domain}
-        </a>
+        address ? (
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {address.hostname + address.pathname}
+          </a>
+        ) : // Not an address (see webAddress): plain text, and none at all when
+        // it only repeats the title above it.
+        data.url !== data.title ? (
+          data.url
+        ) : null
       }
       time={time}
       onClick={onClick}
