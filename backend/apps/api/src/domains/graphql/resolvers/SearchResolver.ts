@@ -1104,7 +1104,7 @@ export class SearchResolver {
     }
 
     // Already ranked by relevance; identifiers carry a score we discard (order preserves rank).
-    const direct = await this.searchService.search(context, options);
+    const direct = await this.withoutNoteMirrors(context, await this.searchService.search(context, options));
 
     // A photo's words are on its file and content rows, not on the event that
     // dates it. When events are in scope, reach them through their media too,
@@ -1120,6 +1120,31 @@ export class SearchResolver {
     );
 
     return mergeIdentifiers(direct, viaMedia);
+  }
+
+  /**
+   * Drop the `content` hits that are a note's Content mirror: the row
+   * `NoteContentFoldService` writes with the note's own id and its stored HTML
+   * as text. The search index holds the note and the mirror as two entries, so
+   * a folded note came back twice, once as raw markup. The note's own entry
+   * carries the same words, so nothing a search could find is lost.
+   */
+  private async withoutNoteMirrors(
+    context: UserServiceContext,
+    identifiers: EntityIdentifier<IndexableEntity>[],
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    const contentIds = identifiers.filter(({ type }) => type === 'content').map(({ id }) => id);
+
+    if (contentIds.length === 0) {
+      return identifiers;
+    }
+
+    const notes = await this.noteService.findByIds(context, contentIds);
+    const mirrors = new Set(notes.flatMap((note) => (note != null ? [note.id] : [])));
+
+    return mirrors.size === 0
+      ? identifiers
+      : identifiers.filter(({ type, id }) => !(type === 'content' && mirrors.has(id)));
   }
 
   private async searchByTags(
@@ -1353,11 +1378,13 @@ export class SearchResolver {
       wants('file-chunk') ? this.fileChunkService.getEntitiesForFileChunks(context, fileChunkOptions) : [],
       wants('note') ? this.noteService.getEntitiesForNotes(context, rowTimeOptions) : [],
       // Event-linked content is a facet of an event the same merge already
-      // returns — see ContentService.getEntitiesForContents.
+      // returns, and a note's Content mirror is a copy of the note — see
+      // ContentService.getEntitiesForContents.
       wants('content')
         ? this.contentService.getEntitiesForContents(context, {
             ...sourcedRowTimeOptions,
             excludeEventLinked: true,
+            excludeNoteMirrors: true,
           })
         : [],
       wants('person') ? this.personService.getEntitiesForPeople(context, rowTimeOptions) : [],
@@ -1477,6 +1504,7 @@ export class SearchResolver {
         ? this.contentService.countEntitiesForContents(context, {
             ...sourcedOptions,
             excludeEventLinked: true,
+            excludeNoteMirrors: true,
           })
         : 0,
       wants('person') ? this.personService.countEntitiesForPeople(context, dateOptions) : 0,

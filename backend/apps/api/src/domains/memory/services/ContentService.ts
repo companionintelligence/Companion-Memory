@@ -1130,6 +1130,11 @@ export class ContentService {
    * Applied only by the chronological browse. Query, tag and type-filtered
    * searches still return these rows — a user who searches for a photo, or
    * filters to Content, must still find it.
+   *
+   * `excludeNoteMirrors` drops the Content mirror `NoteContentFoldService`
+   * gives a note: same id as the note, and the note's stored HTML as its text.
+   * The feed already lists the note itself, so the mirror was a second copy of
+   * every folded note with its markup on show.
    */
   async getEntitiesForContents(
     context: ServiceContext,
@@ -1143,6 +1148,8 @@ export class ContentService {
       order?: 'ASC' | 'DESC';
       /** Drop rows that belong to an event (see the method docstring). */
       excludeEventLinked?: boolean;
+      /** Drop the Content mirrors of notes (see the method docstring). */
+      excludeNoteMirrors?: boolean;
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.excludeDeletedEventMedia(
@@ -1155,6 +1162,10 @@ export class ContentService {
 
     if (options.excludeEventLinked) {
       query = query.andWhere('content.event_id IS NULL');
+    }
+
+    if (options.excludeNoteMirrors) {
+      query = query.andWhere('NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = content.id)');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table
@@ -1207,7 +1218,13 @@ export class ContentService {
    */
   async countEntitiesForContents(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date; connectors?: string[]; excludeEventLinked?: boolean },
+    options: {
+      startTime?: Date;
+      endTime?: Date;
+      connectors?: string[];
+      excludeEventLinked?: boolean;
+      excludeNoteMirrors?: boolean;
+    },
   ): Promise<number> {
     let query = this.excludeDeletedEventMedia(
       this.contentRepository
@@ -1218,6 +1235,10 @@ export class ContentService {
 
     if (options.excludeEventLinked) {
       query = query.andWhere('content.event_id IS NULL');
+    }
+
+    if (options.excludeNoteMirrors) {
+      query = query.andWhere('NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = content.id)');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table

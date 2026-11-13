@@ -49,6 +49,8 @@ function makeResolver() {
   const noteService = {
     getEntitiesForNotes: jest.fn().mockResolvedValue([] as Identifier[]),
     countEntitiesForNotes: jest.fn().mockResolvedValue(0),
+    // Which content hits are a note's Content mirror; none, unless a test says so.
+    findByIds: jest.fn(async (_context: unknown, ids: string[]) => ids.map(() => null)),
   };
   const personService = {
     getEntitiesForPeople: jest.fn().mockResolvedValue([] as Identifier[]),
@@ -525,6 +527,38 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
     expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({
       excludeEventLinked: true,
     });
+  });
+
+  // A note folded into the graph (`fold-notes`) gets a Content row with the
+  // note's own id and its stored HTML as text, so the list showed every folded
+  // note twice, the second time as raw markup.
+  it("drops notes' Content mirrors from the browse fetch and from its total", async () => {
+    const { resolver, contentService } = makeResolver();
+
+    await resolver.search(ctx, {} as SearchInput);
+
+    expect(contentService.getEntitiesForContents.mock.calls[0][1]).toMatchObject({ excludeNoteMirrors: true });
+    expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({ excludeNoteMirrors: true });
+  });
+
+  it("drops a note's Content mirror from a query and keeps the note", async () => {
+    const { resolver, searchService, noteService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+    noteService.findByIds.mockImplementation(async (_context: unknown, ids: string[]) =>
+      ids.map((id) => (id === 'n1' ? ({ id: 'n1' } as never) : null)),
+    );
+
+    await resolver.search(ctx, { query: 'Lisbon' } as SearchInput);
+
+    expect(noteService.findByIds).toHaveBeenCalledWith(ctx, ['n1', 'c1']);
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
   });
 
   it('does not apply the event-linked exclusion to a tag search', async () => {
