@@ -266,7 +266,9 @@ export interface StageSchedule {
    * runs out before the next one opens is due now (`stageDueness`,
    * `due_before_next_window`). Otherwise a leg first swept in the afternoon
    * would miss that night's window by a few hours and wait a whole extra day.
-   * A metered stage keeps the plain interval, since it is what bounds spend.
+   * A metered stage only counts to the end of the open window: it starts at
+   * the opening of the window its interval runs out in and never gains one,
+   * since the interval is what bounds its spend.
    */
   minInterval: number;
 
