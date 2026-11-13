@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 import { AlertDialog, Collapsible, Popover, cn } from '@ci/shadcn';
 import { ChevronRight, LogOut, Palette } from '@ci/shadcn/icons';
@@ -119,6 +119,11 @@ function SubRow({ icon, label, onClick }: SubRowProps) {
 function ThemeSubmenu() {
   const { themeState, setTheme } = useTheme();
   const { expanded, setHoldOpen } = usePowerRail();
+
+  // The picker can go away while it is open without ever reporting a close:
+  // browser Back off /self folds the Self group it sits in. Let go of the
+  // rail with it, or nothing is left to release the hold.
+  useEffect(() => () => setHoldOpen(false), [setHoldOpen]);
 
   return (
     // A column, so the indented trigger stretches the way SubRow does.
