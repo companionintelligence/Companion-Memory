@@ -79,6 +79,13 @@ const TimelineRow = memo(function TimelineRow({
   );
 });
 
+/**
+ * This list is the map's side panel, laid straight over the satellite imagery,
+ * where bare text is hard to read. Its errors sit on the same card as the map's
+ * own "Couldn't load the map" (MapStatusOverlay).
+ */
+const PANEL_CARD_CLASS = 'rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur';
+
 interface TimelineViewProps {
   activeEntityId?: string | null;
   onEntityHover?: (entity: EntityItem | null) => void;
@@ -176,11 +183,8 @@ export function TimelineView({
   }
 
   if (error && timelineData.length === 0) {
-    // This list is the map's side panel, laid straight over the satellite
-    // imagery: bare, the error was hard to read. Same card as the map's own
-    // "Couldn't load the map" (MapStatusOverlay).
     return (
-      <div className="m-3 rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+      <div className={cn('m-3', PANEL_CARD_CLASS)}>
         <ErrorState onRetry={refetch} className="px-4 py-6" />
       </div>
     );
@@ -270,7 +274,13 @@ export function TimelineView({
         {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
 
         {pageFailed && (
-          <LoadMoreFailed noun="events" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+          <div className={cn('ml-8 mt-4', PANEL_CARD_CLASS)}>
+            <LoadMoreFailed
+              noun="events"
+              message={error.message}
+              onRetry={hasNextPage ? loadMore : refetch}
+            />
+          </div>
         )}
       </div>
     </div>

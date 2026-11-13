@@ -267,6 +267,20 @@ describe('TimelineView', () => {
     expect(loadMore).toHaveBeenCalledOnce();
   });
 
+  it('puts a later page error on the same card, since it sits over the map imagery too', () => {
+    mocks.useEntityService.mockReturnValue(
+      baseService({ data: [event('a', 'visited')], hasNextPage: true, error: new Error('timed out') }),
+    );
+
+    renderTimeline('/memory?view=map');
+
+    expect(screen.getByText("Couldn't load more events: timed out").parentElement?.parentElement).toHaveClass(
+      'bg-card/95',
+      'border',
+      'rounded-lg',
+    );
+  });
+
   it('loads the next page only when the sentinel intersects the viewport', () => {
     const loadMore = vi.fn();
     mocks.useEntityService.mockReturnValue(
