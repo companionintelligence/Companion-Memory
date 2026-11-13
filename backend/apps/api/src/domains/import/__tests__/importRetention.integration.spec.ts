@@ -1229,6 +1229,33 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       await rm(dir, { recursive: true, force: true });
     });
 
+    it('still refuses an upload run whose media stage failed, since retrying that stage stores the files', async () => {
+      const runId = await seedRun({ stages: ['unpack', 'parse', 'media'], classification: 'file' });
+
+      await finish(runId, 0, 'failed');
+      await dataSource.query(
+        `UPDATE ci_import.import_stages SET status = 'failed', error = 'object store unreachable'
+          WHERE run_id = $1::uuid AND kind = 'media'`,
+        [runId],
+      );
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'photos'), { recursive: true });
+      await writeFile(path.join(dir, 'photos', 'one.jpg'), 'not stored yet');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/Run the media stage/);
+      expect(await counts(runId)).toEqual(FULL);
+      expect(await runStatus(runId)).toBe('failed');
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
     /**
      * The half a discard cannot take back, and therefore has to declare.
      *

@@ -83,6 +83,13 @@ interface DiscardCandidate extends RetentionCandidate {
    * {@link ImportRetentionService.claimForDiscard}.
    */
   readonly uploadsOnly: boolean;
+  /**
+   * The run was started without a media stage (`ci import x.zip --stages
+   * unpack,parse`). Stages are fixed when a run starts and `retryStage` only
+   * moves a stage the run has, so nothing can ever store such a run's media.
+   * A run that has one, failed or cancelled, stores it by retrying that stage.
+   */
+  readonly noMediaStage: boolean;
 }
 
 /** A claimed discard, and whether it takes the run's scratch tree with it. */
@@ -492,10 +499,11 @@ export class ImportRetentionService {
    *    queries; a discard that stated it nowhere would be safe only for as long
    *    as a filesystem stat in another component happened to agree, and would
    *    become the one path that deletes the rows proving a photo exists only on
-   *    disk the moment that stopped being true. One exception: a run fed only
-   *    by uploads whose unstored media is in its own scratch tree (a parse-only
-   *    run) is discarded with that tree, so the rows and the bytes they name go
-   *    together.
+   *    disk the moment that stopped being true. One exception: a run started
+   *    without a media stage and fed only by uploads, whose unstored media is
+   *    in its own scratch tree (a parse-only run), is discarded with that tree,
+   *    so the rows and the bytes they name go together. Nothing else could
+   *    ever store those bytes.
    *
    * ### What it does NOT undo: media this run already stored
    *
@@ -678,7 +686,9 @@ export class ImportRetentionService {
                 ${unstoredMediaExistsSql('r.id', '$3')} AS "unstoredMedia",
                 EXISTS (SELECT 1 FROM ci_import.staged_sources s WHERE s.run_id = r.id)
                   AND NOT EXISTS (SELECT 1 FROM ci_import.staged_sources s
-                                   WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly"
+                                   WHERE s.run_id = r.id AND s.origin <> 'upload') AS "uploadsOnly",
+                NOT EXISTS (SELECT 1 FROM ci_import.import_stages ms
+                             WHERE ms.run_id = r.id AND ms.kind = 'media') AS "noMediaStage"
            FROM ci_import.import_runs r
           WHERE r.id = $1::uuid`,
         [runId, [...LIVE_STAGE_STATUSES], [...FILE_CLASSIFICATIONS]],
@@ -700,9 +710,11 @@ export class ImportRetentionService {
       // are this appliance's copy of what the person uploaded and is now
       // throwing away, so the discard takes the rows and the tree together and
       // nothing is left naming bytes that are gone, or holding bytes nothing
-      // names. A run fed by the inbox is still refused: its tree may hold the
-      // only copy of the person's files.
-      const takesUnstoredUploads = candidate.unstoredMedia && candidate.uploadsOnly && holdsTree;
+      // names. Still refused: a run fed by the inbox, whose tree may hold the
+      // only copy of the person's files, and a run that HAS a media stage
+      // (failed or cancelled), which stores those files by retrying it.
+      const takesUnstoredUploads =
+        candidate.unstoredMedia && candidate.noMediaStage && candidate.uploadsOnly && holdsTree;
 
       // The byte guards come before the "not pushable" answer, because that
       // answer promises the sweep will collect the run, and the sweep refuses
