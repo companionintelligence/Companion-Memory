@@ -740,9 +740,15 @@ export class ContentService {
       timeProp: 'createdAt',
       userId: context.userId,
       // Same rule as findById/findByIds: a deleted event's photo must not resurface
-      // in the paginated library (and must not inflate totalCount).
+      // in the paginated library (and must not inflate totalCount). A note's
+      // Content mirror is a copy of the note with its HTML as text, so the
+      // library leaves it out as the explorer's browse does.
       scope: (qb) =>
-        this.applyContentsFilter(this.excludeDeletedEventMedia(qb, 'content'), 'content', filter),
+        this.applyContentsFilter(
+          this.excludeNoteMirrors(this.excludeDeletedEventMedia(qb, 'content'), 'content'),
+          'content',
+          filter,
+        ),
     });
 
     return {
@@ -927,6 +933,19 @@ export class ContentService {
    * explorer. The LEFT JOIN keeps standalone content (`event_id IS NULL`)
    * visible, and restoring the event brings its media back with it.
    */
+  /**
+   * Hides the Content mirror `NoteContentFoldService` gives a note: same id as
+   * the note, the note's stored HTML as its text. Wherever the note itself is
+   * listed, or a list is of content the user brought in, the mirror is a second,
+   * raw copy of the note.
+   */
+  private excludeNoteMirrors<T extends ObjectLiteral>(
+    query: SelectQueryBuilder<T>,
+    alias: string,
+  ): SelectQueryBuilder<T> {
+    return query.andWhere(`NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = ${alias}.id)`);
+  }
+
   private excludeDeletedEventMedia<T extends ObjectLiteral>(
     query: SelectQueryBuilder<T>,
     alias: string,
@@ -1165,7 +1184,7 @@ export class ContentService {
     }
 
     if (options.excludeNoteMirrors) {
-      query = query.andWhere('NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = content.id)');
+      query = this.excludeNoteMirrors(query, 'content');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table
@@ -1238,7 +1257,7 @@ export class ContentService {
     }
 
     if (options.excludeNoteMirrors) {
-      query = query.andWhere('NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = content.id)');
+      query = this.excludeNoteMirrors(query, 'content');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table

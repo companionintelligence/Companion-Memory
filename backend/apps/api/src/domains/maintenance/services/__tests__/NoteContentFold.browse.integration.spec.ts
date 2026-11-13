@@ -57,7 +57,15 @@ describeWithDb(`a folded note's Content mirror in the browse (${availability.tar
     dataSource = new DataSource({
       type: 'postgres',
       ...dataSourceConnection(DATABASE_ENV),
-      entities: [BaseEntity, ContentEntity, ContentBaseEntity, EventEntity, EventBaseEntity, NoteEntity, UserEntity],
+      entities: [
+        BaseEntity,
+        ContentEntity,
+        ContentBaseEntity,
+        EventEntity,
+        EventBaseEntity,
+        NoteEntity,
+        UserEntity,
+      ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -104,10 +112,10 @@ describeWithDb(`a folded note's Content mirror in the browse (${availability.tar
        VALUES ($1, 'Content', 'Packing list', '{}'::jsonb, $2, 'content', $1)`,
       [textId, ownerId],
     );
-    await dataSource.query(`INSERT INTO ci.content (id, type, text, user_id) VALUES ($1, 'text', 'socks', $2)`, [
-      textId,
-      ownerId,
-    ]);
+    await dataSource.query(
+      `INSERT INTO ci.content (id, type, text, user_id) VALUES ($1, 'text', 'socks', $2)`,
+      [textId, ownerId],
+    );
 
     expect(await fold.fold(ownerId)).toEqual({ notesFolded: 1 });
 
@@ -120,5 +128,11 @@ describeWithDb(`a folded note's Content mirror in the browse (${availability.tar
     expect(browsed).toEqual([{ id: textId, type: 'content' }]);
     expect(await contents.countEntitiesForContents(owner, { excludeNoteMirrors: true })).toBe(1);
     expect(await contents.countEntitiesForContents(owner, {})).toBe(2);
+
+    // The content library leaves it out too, and its total agrees.
+    const library = await contents.findPage(owner, { first: 10 });
+
+    expect(library.entities.map(({ id }) => id)).toEqual([textId]);
+    expect(library.totalCount).toBe(1);
   });
 });

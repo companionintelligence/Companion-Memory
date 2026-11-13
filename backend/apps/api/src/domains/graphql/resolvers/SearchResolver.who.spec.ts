@@ -118,7 +118,10 @@ function makeResolver() {
     stub('getEntitiesForFileChunks') as never,
     stub('getEntitiesForItems') as never,
     // No note has a Content mirror here (see SearchResolver.withoutNoteMirrors).
-    { ...stub('getEntitiesForNotes'), findByIds: jest.fn(async (_context: unknown, ids: string[]) => ids.map(() => null)) } as never,
+    {
+      ...stub('getEntitiesForNotes'),
+      findByIds: jest.fn(async (_context: unknown, ids: string[]) => ids.map(() => null)),
+    } as never,
     stub('getEntitiesForPeople') as never,
     stub('getEntitiesForPlaces') as never,
     stub('getEntitiesForProducts') as never,

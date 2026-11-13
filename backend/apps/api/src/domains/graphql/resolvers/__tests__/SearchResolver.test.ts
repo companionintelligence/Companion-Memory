@@ -537,8 +537,12 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
 
     await resolver.search(ctx, {} as SearchInput);
 
-    expect(contentService.getEntitiesForContents.mock.calls[0][1]).toMatchObject({ excludeNoteMirrors: true });
-    expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({ excludeNoteMirrors: true });
+    expect(contentService.getEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
+    expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
   });
 
   it("drops a note's Content mirror from a query and keeps the note", async () => {
