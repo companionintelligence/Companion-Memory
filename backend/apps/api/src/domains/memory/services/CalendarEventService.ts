@@ -246,6 +246,22 @@ export const MAX_EXPANDED_OCCURRENCES = 1000;
 const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'planned_block'] as const;
 
 /**
+ * Calendar files (.ics) brought in through Import, which the allowlist above
+ * cannot name by type alone.
+ *
+ * The file importer (`datasources/calendar.ts`, importer `calendar`) writes
+ * every VEVENT as `event`, a type it shares with Facebook events (declined ones
+ * included) and Google reservations. Adding `event` to the allowlist would put
+ * those on the grid too, so the source has to say it is a calendar. Without
+ * this arm an imported calendar never showed at all, and on a box with no
+ * Google or Outlook connection that is every calendar the person has.
+ */
+const IMPORTED_CALENDAR_EVENT_SQL = `(event.event_type = 'event' AND event.source_system = 'calendar')`;
+
+/** The event-type half of every schedule read: the allowlist, NULL, or an imported calendar file. */
+const SCHEDULE_EVENT_TYPE_SQL = `(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes) OR ${IMPORTED_CALENDAR_EVENT_SQL})`;
+
+/**
  * "This event did not happen" — the one status vocabulary the calendar and the
  * planner share.
  *
@@ -1966,7 +1982,8 @@ export class CalendarEventService {
    * NULL arm is load-bearing, not a fallthrough: events the user creates through
    * EventResolver and events materialized by CandidateService when a schedule
    * suggestion is accepted both leave `event_type` unset, and dropping them
-   * would empty the calendar of exactly the entries the user put there.
+   * would empty the calendar of exactly the entries the user put there. Imported
+   * calendar files get their own arm too (IMPORTED_CALENDAR_EVENT_SQL).
    *
    * ═══ RECURRING SERIES ARE EXPANDED HERE, AND ONLY HERE ═══
    * `ci.events` holds one row per recurring SERIES, not one per occurrence —
@@ -2001,7 +2018,7 @@ export class CalendarEventService {
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .orderBy('event.start_time', 'ASC')
@@ -2064,7 +2081,7 @@ export class CalendarEventService {
       .andWhere(LIVE_EVENT_SQL)
       .andWhere('event.is_recurring = true')
       .andWhere('event.start_time < :to', { to })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .andWhere('event.user_id = :userId', { userId })

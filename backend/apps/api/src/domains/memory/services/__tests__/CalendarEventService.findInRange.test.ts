@@ -237,6 +237,21 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
     expect(clauseWith('event.event_type IS NULL')).toBeDefined();
   });
 
+  it('keeps calendar files from Import, which arrive as `event`, without allowlisting every `event`', async () => {
+    await setup();
+
+    await service.findInRange(ctx, from, to);
+
+    // The .ics importer writes `event`, and so do Facebook events and Google
+    // reservations; only the first is a calendar.
+    const typeClause = clauseWith('event.event_type IN (:...scheduleEventTypes)');
+    expect(typeClause).toContain(`(event.event_type = 'event' AND event.source_system = 'calendar')`);
+    expect(recurringClauseWith('event.event_type IN (:...scheduleEventTypes)')).toBe(typeClause);
+
+    const params = (qb.calls.andWhere ?? []).map(([, bind]) => bind) as { scheduleEventTypes?: string[] }[];
+    expect(params.find((bind) => bind?.scheduleEventTypes)?.scheduleEventTypes).not.toContain('event');
+  });
+
   it('scopes to the viewer', async () => {
     await setup();
 
