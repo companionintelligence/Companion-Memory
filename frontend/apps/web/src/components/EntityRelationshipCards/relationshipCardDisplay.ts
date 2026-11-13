@@ -134,8 +134,12 @@ const RELATIONSHIP_PHRASES: Record<string, DirectedPhrase> = {
   TAUGHT: { asSource: 'You taught', asTarget: 'Taught you' },
   LEARNED_FROM: { asSource: 'You learned from', asTarget: 'Learned from you' },
   CARES_FOR: { asSource: 'You care for', asTarget: 'Cares for you' },
-  CLIENT_OF: { asSource: 'Your client', asTarget: 'Their client' },
-  EMERGENCY_CONTACT_FOR: { asSource: 'Emergency contact', asTarget: 'Lists you as emergency contact' },
+  // `A CLIENT_OF B` is "A is B's client" and `A EMERGENCY_CONTACT_FOR B` is
+  // "A is B's emergency contact". Both used to be the wrong way round: on your
+  // own page, the person you are a client of read "Your client". "Them" is the
+  // page's person, so these read right on anyone's page.
+  CLIENT_OF: { asSource: 'Has them as a client', asTarget: 'Client' },
+  EMERGENCY_CONTACT_FOR: { asSource: 'Has them as emergency contact', asTarget: 'Emergency contact' },
   SUPPORTS: { asSource: 'You support', asTarget: 'Supports you' },
   EMPLOYS: { asSource: 'You employ', asTarget: 'Employs you' },
   LIVES_WITH: { asSource: 'Lives with you', asTarget: 'Lives with you' },
