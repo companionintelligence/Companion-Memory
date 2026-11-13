@@ -294,7 +294,7 @@ export class UserDataPortabilityService {
     } catch (error) {
       // The 200 and part of the archive are already out. Ending the response
       // normally would hand over a shorter archive that reads as whole, so it
-      // is cut instead: the download fails, and an import of what arrived has
+      // is cut instead. The download fails and an import of what arrived has
       // no end record.
       this.logger.warn('Export stopped before the end of the archive', {
         rows,
@@ -442,17 +442,20 @@ export class UserDataPortabilityService {
         throw new BadRequestException('Archive is missing a manifest record');
       }
 
-      if (pendingFiles.size > 0) {
-        throw new BadRequestException('Archive is missing one or more file chunks');
-      }
-
       // Const copies, as above.
       const ended = end as { rows: number; files: number } | null;
       const version = archiveVersion as number | null;
 
       // Version 1 archives were written without an end record and still import.
+      // Checked before the file chunks. Most of an archive's bytes are file
+      // chunks, so a cut download usually stops partway through a file. This
+      // message says why; "missing file chunks" would not.
       if (version !== 1 && !ended) {
         throw new BadRequestException('Archive stops before its end record: the export was cut short');
+      }
+
+      if (pendingFiles.size > 0) {
+        throw new BadRequestException('Archive is missing one or more file chunks');
       }
 
       if (ended && (ended.rows !== rowRecords || ended.files !== filesRestored)) {
@@ -709,10 +712,11 @@ export class UserDataPortabilityService {
    * Stream one file's bytes as `file-chunk` records, read from the object
    * store a chunk at a time. True when every chunk was written.
    *
-   * A file that can't be opened is skipped with a warning, as before: its row
-   * is in the archive, its bytes are not. A failure after the first chunk is
-   * out can't be skipped (the archive would hold half a file), so it throws
-   * and the export is cut.
+   * A file that can't be opened, or whose bytes can't be read before its first
+   * chunk goes out, is skipped with a warning, as before: its row is in the
+   * archive, its bytes are not. A failure once the first chunk is going out
+   * can't be skipped (the archive would hold half a file), so it throws and
+   * the export is cut.
    */
   private async writeFileChunks(
     context: UserServiceContext,
@@ -726,6 +730,16 @@ export class UserDataPortabilityService {
     if (!id || !bucket || !key) {
       return false;
     }
+
+    const skip = (error: unknown): false => {
+      this.logger.warn('Skipped file blob during export', {
+        fileId: id,
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return false;
+    };
 
     let stream: Readable;
     let total: number;
@@ -741,13 +755,7 @@ export class UserDataPortabilityService {
       stream = opened.stream;
       total = Math.max(1, Math.ceil(opened.contentLength / FILE_CHUNK_BYTES));
     } catch (error) {
-      this.logger.warn('Skipped file blob during export', {
-        fileId: id,
-        key,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      return false;
+      return skip(error);
     }
 
     const chunk = (index: number, data: Buffer): PortabilityStreamRecord => ({
@@ -760,10 +768,29 @@ export class UserDataPortabilityService {
       data: data.toString('base64'),
     });
     let index = 0;
+    let writing = false;
 
-    for await (const data of fixedSizeChunks(stream, FILE_CHUNK_BYTES)) {
-      await writePortabilityLine(res, chunk(index, data));
-      index += 1;
+    try {
+      for await (const data of fixedSizeChunks(stream, FILE_CHUNK_BYTES)) {
+        // Caught before the line goes out, so the archive never holds a chunk
+        // numbered past the file's total.
+        if (index >= total) {
+          throw new Error(`File ${id} runs past the ${total} chunks expected from its length`);
+        }
+
+        writing = true;
+        await writePortabilityLine(res, chunk(index, data));
+        index += 1;
+      }
+    } catch (error) {
+      // Up to its first line nothing of this file is in the archive. A read
+      // that fails there (the object store dropped the connection) skips the
+      // file the way a failed open does, instead of cutting the export.
+      if (writing) {
+        throw error;
+      }
+
+      return skip(error);
     }
 
     // An empty file is still one (empty) chunk, so the import restores it.

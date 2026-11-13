@@ -151,7 +151,7 @@ describe('UserDataPortabilityService', () => {
       };
     }
 
-    it('streams a file larger than one chunk, in order, and ends with an end record', async () => {
+    it('streams a file larger than one chunk in order and ends with an end record', async () => {
       const bytes = Buffer.alloc(2 * FILE_CHUNK_BYTES + 5);
       bytes.forEach((_, i) => (bytes[i] = i % 251));
       storedFile(bytes);
@@ -178,6 +178,10 @@ describe('UserDataPortabilityService', () => {
     it('stops reading and cuts the response when the download is closed partway through a file', async () => {
       const read = storedFile(Buffer.alloc(3 * FILE_CHUNK_BYTES));
       const written: string[] = [];
+      let tookThird!: () => void;
+      const third = new Promise<void>((resolve) => {
+        tookThird = resolve;
+      });
       const res = Object.assign(
         new Writable({
           highWaterMark: 1,
@@ -187,6 +191,8 @@ describe('UserDataPortabilityService', () => {
 
             if (written.length < 3) {
               callback();
+            } else {
+              tookThird();
             }
           },
         }),
@@ -195,6 +201,9 @@ describe('UserDataPortabilityService', () => {
 
       const exporting = service.writeExportStream({ userId: 'user-1' } as never, res as unknown as Response);
 
+      // Wait for the first chunk rather than a fixed time, then give the export
+      // a few turns to read ahead if it were going to.
+      await third;
       await new Promise((resolve) => setTimeout(resolve, 20));
       res.destroy();
       await exporting;
@@ -228,7 +237,7 @@ describe('UserDataPortabilityService', () => {
       expect(records().some((line) => line.type === 'end')).toBe(false);
     });
 
-    it('skips a file it cannot open, as before, and still ends the archive', async () => {
+    it('skips a file it cannot open as before and still ends the archive', async () => {
       (fileService.getFileStreamWithLength as jest.Mock).mockRejectedValue(new Error('NoSuchKey'));
       const { res, records } = readableResponse();
 
@@ -236,6 +245,93 @@ describe('UserDataPortabilityService', () => {
 
       expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
       expect(logger.warn).toHaveBeenCalledWith('Skipped file blob during export', expect.anything());
+    });
+
+    it('writes an empty file as one empty chunk, so the import restores it', async () => {
+      storedFile(Buffer.alloc(0));
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      const chunks = records().filter((line) => line.type === 'file-chunk');
+
+      expect(chunks).toEqual([expect.objectContaining({ id: 'f1', index: 0, total: 1, data: '' })]);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 1 });
+    });
+
+    it('skips a file whose length the object store does not give and closes its stream', async () => {
+      const stream = Readable.from([Buffer.from('bytes')]);
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream,
+        contentLength: undefined,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(stream.destroyed).toBe(true);
+      expect(records().some((line) => line.type === 'file-chunk')).toBe(false);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
+    });
+
+    it('cuts the response when a file ends short of the length the object store gave', async () => {
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from([Buffer.alloc(FILE_CHUNK_BYTES)]),
+        contentLength: 2 * FILE_CHUNK_BYTES + 1,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(res.destroyed).toBe(true);
+      expect(records().some((line) => line.type === 'end')).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Export stopped before the end of the archive',
+        expect.objectContaining({ error: 'File f1 came to 1 chunks, 3 expected from its length' }),
+      );
+    });
+
+    it('skips a file whose read fails before its first chunk is out and still ends the archive', async () => {
+      async function* resetEarly() {
+        yield Buffer.alloc(64 * 1024);
+        throw new Error('socket hang up');
+      }
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from(resetEarly()),
+        contentLength: 1024 * 1024,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(records().some((line) => line.type === 'file-chunk')).toBe(false);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
+      expect(res.writableEnded).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Skipped file blob during export',
+        expect.objectContaining({ fileId: 'f1', error: 'socket hang up' }),
+      );
+    });
+
+    it('cuts the response before writing a chunk past the total when a file runs long', async () => {
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from([Buffer.alloc(FILE_CHUNK_BYTES + 1)]),
+        contentLength: FILE_CHUNK_BYTES,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(res.destroyed).toBe(true);
+      expect(records().filter((line) => line.type === 'file-chunk')).toEqual([
+        expect.objectContaining({ index: 0, total: 1 }),
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Export stopped before the end of the archive',
+        expect.objectContaining({ error: 'File f1 runs past the 1 chunks expected from its length' }),
+      );
     });
   });
 
@@ -778,6 +874,18 @@ describe('UserDataPortabilityService', () => {
           'Archive stops before its end record',
         );
         expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      });
+
+      it('says a version 2 archive cut partway through a file stops before its end record', async () => {
+        await expect(importing([manifest({ version: 2 }), { ...chunk, total: 2 }])).rejects.toThrow(
+          'Archive stops before its end record',
+        );
+      });
+
+      it('still names missing file chunks in a version 1 archive', async () => {
+        await expect(importing([manifest(), { ...chunk, total: 2 }])).rejects.toThrow(
+          'Archive is missing one or more file chunks',
+        );
       });
 
       it('refuses an end record whose counts do not match the archive', async () => {

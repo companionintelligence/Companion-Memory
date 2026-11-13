@@ -41,6 +41,11 @@ describe('fixedSizeChunks', () => {
     expect(await collect(pieces(), 3)).toEqual([]);
   });
 
+  it('refuses a size that is not a positive whole number instead of looping forever', async () => {
+    await expect(collect(pieces('abc'), 0)).rejects.toThrow(RangeError);
+    await expect(collect(pieces('abc'), 1.5)).rejects.toThrow(RangeError);
+  });
+
   it('reads the source as it goes rather than all of it first', async () => {
     let read = 0;
 

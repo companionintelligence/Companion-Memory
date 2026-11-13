@@ -22,7 +22,9 @@ export const PORTABILITY_NDJSON_VERSION = 2 as const;
 
 export const portabilityManifestSchema = z.object({
   type: z.literal('manifest'),
-  version: z.union([z.literal(1), z.literal(PORTABILITY_NDJSON_VERSION)]),
+  // Every version an import reads, spelled out: tying the last one to
+  // PORTABILITY_NDJSON_VERSION would drop version 2 the day the constant moves on.
+  version: z.union([z.literal(1), z.literal(2)]),
   format: z.literal('ndjson'),
   exportedAt: z.string(),
   userId: z.string().uuid(),
@@ -70,8 +72,8 @@ export function serializePortabilityLine(record: PortabilityStreamRecord): strin
 }
 
 /**
- * Write one record as a line, and when the stream's buffer is full, wait until
- * it drains. Rejects once the stream is closed or destroyed (the download was
+ * Write one record as a line. When the stream's buffer is full, wait until it
+ * drains. Rejects once the stream is closed or destroyed (the download was
  * cancelled or the connection dropped), so a writer looping over records stops
  * instead of queueing the rest of the archive in memory.
  */
@@ -108,6 +110,12 @@ export async function* fixedSizeChunks(
   source: AsyncIterable<Uint8Array>,
   size: number,
 ): AsyncGenerator<Buffer> {
+  // A size of 0 never shrinks what is left of a piece, so the loop below would
+  // yield empty buffers forever.
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new RangeError(`Chunk size must be a positive whole number of bytes, got ${size}`);
+  }
+
   let pending: Buffer[] = [];
   let pendingBytes = 0;
 
