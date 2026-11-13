@@ -927,7 +927,7 @@ export type DuenessReason =
    * Swept more recently than `minInterval`, but not yet in the window that is
    * open now, and the interval runs out before the next one opens. Skipping
    * this window would hold the leg back a whole extra night, so this window is
-   * its turn.
+   * its turn. Never a metered stage: those keep their plain interval.
    */
   | 'due_before_next_window'
   /** Swept more recently than `minInterval`, and nothing of it is a due retry. */
@@ -1060,8 +1060,15 @@ export interface StageDueness {
  * the window. `windowBounds` closes both: while the window is open, a leg that
  * has not started in THIS window and whose interval runs out before the NEXT
  * window opens is due now (`due_before_next_window`). It still runs at most
- * once per window, since a start inside it is not before `opensAt`, and a
- * weekly leg still waits for the last window before its week is up.
+ * once per window, since a start inside it is not before `opensAt`.
+ *
+ * A METERED leg keeps its plain interval. Counting in windows starts a leg up
+ * to a window's gap sooner than `minInterval`: a daily leg swept at 00:58 by
+ * `maxStaleness` would be swept again when the window opens at 01:00, and a
+ * weekly one would come round after six days. For a local stage that is a
+ * night's work on this appliance; for a metered one it is a second `perRunCap`
+ * against somebody else's server, which is the spend `minInterval` exists to
+ * bound.
  */
 export function stageDueness(input: {
   stageId: string;
@@ -1127,6 +1134,7 @@ export function stageDueness(input: {
   if (staleness < schedule.minInterval) {
     if (
       schedule.window === 'enrichment' &&
+      schedule.cost !== 'metered' &&
       windowOpen &&
       windowBounds != null &&
       lastStartedAt.getTime() < windowBounds.opensAt.getTime() &&

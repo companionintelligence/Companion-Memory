@@ -152,6 +152,9 @@ interface ControlOptions {
    */
   windowBounds?: { opensAt: Date; nextOpensAt: Date };
 
+  /** `enrichment.window.enabled` is false: open, free-running, state `disabled`. */
+  windowDisabled?: boolean;
+
   /** Make the window unreadable, the way an unmigrated `ci.pipeline_turns` is. */
   windowThrows?: boolean;
 
@@ -428,21 +431,21 @@ function makeControl(options: ControlOptions = {}) {
     verbose: jest.fn(),
   };
 
-  // Only `status()` is ever called, and only for `.open` — the tick reads the
-  // window, it never takes a turn or charges the budget. The rest of
-  // `WindowStatus` is filled in because `tickConditions` logs `state` and
-  // `nextOpensAt` when the window is shut.
+  // Only `status()` is ever called, for `.open`, `state` and the window's
+  // bounds — the tick reads the window, it never takes a turn or charges the
+  // budget. `opensAt` and `nextOpensAt` become `stageDueness`'s `windowBounds`
+  // unless the window is disabled.
   const windowService = {
     status: jest.fn(async () => {
       if (options.windowThrows === true) {
         throw new Error('ci.pipeline_turns is not migrated on this database');
       }
 
-      const open = options.windowOpen ?? true;
+      const open = options.windowDisabled === true || (options.windowOpen ?? true);
 
       return {
         open,
-        state: open ? 'open' : 'closed',
+        state: options.windowDisabled === true ? 'disabled' : open ? 'open' : 'closed',
         opensAt: options.windowBounds?.opensAt ?? new Date('2026-08-09T01:00:00.000Z'),
         nextOpensAt: options.windowBounds?.nextOpensAt ?? new Date('2026-08-10T01:00:00.000Z'),
       };
@@ -1338,6 +1341,26 @@ describe('PipelineControlService', () => {
       await h.service.tick();
 
       expect(h.swept()).toEqual([STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]);
+    });
+
+    it('keeps a free-running appliance on the plain interval', async () => {
+      // A disabled window reports itself open with the default night's bounds.
+      // There is no nightly turn to line up with, so a leg swept 13 hours ago
+      // waits out its day as it always has.
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
+        windowDisabled: true,
+        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
     });
 
     it('does not sweep a nightly leg twice in one window', async () => {

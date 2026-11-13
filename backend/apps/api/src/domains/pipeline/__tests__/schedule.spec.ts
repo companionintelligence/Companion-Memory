@@ -667,23 +667,62 @@ describe('stageDueness', () => {
       expect(decision.reason).toBe('too_soon');
     });
 
-    it('still holds the weekly geocoder until the last window before its week is up', () => {
+    it('holds the weekly metered geocoders to their full week', () => {
+      // Its week is up at 14:00 today. Counted in windows, tonight would be its
+      // turn, eleven hours early; a metered stage waits for the week instead.
       const now = at(3);
-      const stageId = STAGE_IDS.ENRICH_GEOCODE;
-
-      // Its week is up at 14:00 tomorrow: tomorrow night's window comes first.
-      const sixDaysAgo = new Date(at(14).getTime() - 6 * DAYS);
-
-      expect(
-        stageDueness({ stageId, lastStartedAt: sixDaysAgo, windowOpen: OPEN, windowBounds: tonight, now }).reason,
-      ).toBe('too_soon');
-
-      // Its week is up at 14:00 today: tonight is the last window before then.
       const sevenDaysAgo = new Date(at(14).getTime() - 7 * DAYS);
 
-      expect(
-        stageDueness({ stageId, lastStartedAt: sevenDaysAgo, windowOpen: OPEN, windowBounds: tonight, now }).reason,
-      ).toBe('due_before_next_window');
+      for (const stageId of [
+        STAGE_IDS.ENRICH_GEOCODE,
+        STAGE_IDS.ENRICH_EVENT_REVERSE,
+        STAGE_IDS.ENRICH_POSITION_REVERSE,
+      ]) {
+        const decision = stageDueness({
+          stageId,
+          lastStartedAt: sevenDaysAgo,
+          windowOpen: OPEN,
+          windowBounds: tonight,
+          now,
+        });
+
+        expect(decision.due).toBe(false);
+        expect(decision.reason).toBe('too_soon');
+        expect(decision.eligibleAt).toEqual(at(14));
+      }
+    });
+
+    it('does not give the daily metered unfurl a second run in the window after an overdue one', () => {
+      // An overdue leg ignores the window, so it can start at 00:58. Counted in
+      // windows it would be due again at 01:00: a second `perRunCap` against
+      // somebody else's server two minutes after the first.
+      const now = at(1);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.ENRICH_UNFURL,
+        lastStartedAt: at(0, 58),
+        windowOpen: OPEN,
+        windowBounds: { opensAt: at(1), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) },
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
+    it('still runs a local leg in the window after it was swept overdue just before it opened', () => {
+      // The same 00:58 start on a local stage: tonight's window is its turn.
+      const now = at(1);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+        lastStartedAt: at(0, 58),
+        windowOpen: OPEN,
+        windowBounds: { opensAt: at(1), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) },
+        now,
+      });
+
+      expect(decision.reason).toBe('due_before_next_window');
     });
 
     it('leaves an unwindowed stage on its plain interval', () => {
