@@ -288,12 +288,22 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
     }
 }
 
+/// Where an unpacked release archive keeps the program. The macOS `.tgz` and
+/// the Windows `.zip` put it at the top, next to their libraries. The Linux
+/// `.tar.zst` puts it in `bin/`, with its libraries in `lib/ollama/`, and
+/// Ollama finds those relative to its own path, so it runs from `bin/` where
+/// it was unpacked rather than being moved.
+fn unpacked_binary(dest_dir: &Path) -> Option<PathBuf> {
+    [dest_dir.join(binary_name()), dest_dir.join("bin").join(binary_name())]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
 fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
     let asset = release_asset()
         .ok_or_else(|| format!("No prebuilt Ollama release for {}/{}", std::env::consts::OS, std::env::consts::ARCH))?;
 
-    let binary_path = dest_dir.join(binary_name());
-    if binary_path.is_file() {
+    if let Some(binary_path) = unpacked_binary(dest_dir) {
         // Fetched by a previous run of this app — no need to re-download.
         return Ok(binary_path);
     }
@@ -326,6 +336,10 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
     extract_archive(&archive_path, asset.name, dest_dir)?;
     let _ = std::fs::remove_file(&archive_path);
 
+    let Some(binary_path) = unpacked_binary(dest_dir) else {
+        return Err(format!("{} did not contain {}", asset.name, binary_name()));
+    };
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -336,9 +350,6 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    if !binary_path.is_file() {
-        return Err(format!("{} did not contain {}", asset.name, binary_name()));
-    }
     Ok(binary_path)
 }
 
@@ -709,6 +720,54 @@ mod tests {
         let err = extract_archive(&tgz_path, "ollama-linux-amd64.deb", &dest)
             .expect_err("an unhandled archive format must be an error");
         assert!(err.contains("Unrecognized archive format"), "{err}");
+    }
+
+    /// Ollama's Linux archive keeps the program in `bin/`, with its libraries
+    /// in `lib/ollama/`; the macOS and Windows archives keep it at the top.
+    /// Looking only at the top is how every Linux machine without Ollama
+    /// downloaded about 1 GB, unpacked it and then logged "did not contain
+    /// ollama", at every launch. Both layouts are built here as real archives,
+    /// the Linux one in its own .tar.zst format.
+    #[test]
+    fn the_program_is_found_where_each_release_archive_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = b"#!/bin/sh\necho ollama\n";
+        let library = b"not really a library";
+
+        let linux_archive = dir.path().join("ollama-linux-amd64.tar.zst");
+        {
+            let file = std::fs::File::create(&linux_archive).unwrap();
+            let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap().auto_finish();
+            let mut builder = tar::Builder::new(encoder);
+            let entries = [
+                (format!("bin/{}", binary_name()), &program[..]),
+                ("lib/ollama/libggml-base.so".to_string(), &library[..]),
+            ];
+            for (path, body) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                builder.append_data(&mut header, path, body).unwrap();
+            }
+            builder.into_inner().unwrap();
+        }
+
+        let linux = dir.path().join("linux");
+        std::fs::create_dir_all(&linux).unwrap();
+        extract_archive(&linux_archive, "ollama-linux-amd64.tar.zst", &linux).expect("a .tar.zst should unpack");
+        let found = unpacked_binary(&linux).expect("the Linux layout keeps the program in bin/");
+        assert_eq!(found, linux.join("bin").join(binary_name()));
+        assert_eq!(std::fs::read(&found).unwrap(), program);
+
+        let top_level = dir.path().join("top-level");
+        std::fs::create_dir_all(&top_level).unwrap();
+        std::fs::write(top_level.join(binary_name()), program).unwrap();
+        assert_eq!(unpacked_binary(&top_level), Some(top_level.join(binary_name())));
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(empty.join("bin")).unwrap();
+        assert_eq!(unpacked_binary(&empty), None, "a directory named bin is not the program");
     }
 
     /// Exercises real process spawning against whatever `ollama` binary is

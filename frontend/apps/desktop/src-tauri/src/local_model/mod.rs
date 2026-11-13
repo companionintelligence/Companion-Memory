@@ -65,9 +65,36 @@ pub struct LlmEnvOverride {
 /// once this is Done instead of re-resolving (which would mean
 /// re-probing/possibly re-downloading, and — see resolve_once's doc comment —
 /// re-appending the same `.env` override lines).
+///
+/// A failure is kept too, for the rest of this launch. Two callers reach
+/// resolve_once moments apart at every start (main.rs's startup task and the
+/// splash's start_stack_command), so forgetting a failure meant the second one
+/// started the whole resolution over straight away: on Linux without Ollama,
+/// a second download of about 1 GB that failed the same way. The next launch
+/// tries again.
 enum ResolutionState {
     NotStarted,
     Done,
+    Failed(String),
+}
+
+impl ResolutionState {
+    /// Runs `resolve` the first time only. Every later call gets the first
+    /// call's outcome back, a failure included, without running anything.
+    fn settle(&mut self, resolve: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        match self {
+            ResolutionState::Done => return Ok(()),
+            ResolutionState::Failed(reason) => return Err(reason.clone()),
+            ResolutionState::NotStarted => {}
+        }
+
+        let outcome = resolve();
+        *self = match &outcome {
+            Ok(()) => ResolutionState::Done,
+            Err(reason) => ResolutionState::Failed(reason.clone()),
+        };
+        outcome
+    }
 }
 
 /// Holds whatever child processes this module itself spawned, so main.rs can
@@ -181,20 +208,17 @@ impl LocalModelHandles {
     /// other stack_manager entry point.
     pub fn resolve_once(&self, paths: &crate::stack_manager::StackPaths, apple_bridge_binary: &Path) -> Result<(), String> {
         let mut resolution = self.resolution.lock().unwrap_or_else(|p| p.into_inner());
-        if matches!(&*resolution, ResolutionState::Done) {
-            return Ok(());
-        }
+        resolution.settle(|| {
+            let (status, env) = resolve_and_start(&paths.data_dir, &paths.logs_dir, apple_bridge_binary, self)?;
+            log::info!("Local model resolved: {:?} — {}", status.chat_backend, status.detail);
+            *self.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(status);
 
-        let (status, env) = resolve_and_start(&paths.data_dir, &paths.logs_dir, apple_bridge_binary, self)?;
-        log::info!("Local model resolved: {:?} — {}", status.chat_backend, status.detail);
-        *self.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(status);
+            if let Err(e) = crate::stack_manager::apply_llm_env_override(paths, &env) {
+                log::error!("Failed to apply local-model env override: {e}");
+            }
 
-        if let Err(e) = crate::stack_manager::apply_llm_env_override(paths, &env) {
-            log::error!("Failed to apply local-model env override: {e}");
-        }
-
-        *resolution = ResolutionState::Done;
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -327,5 +351,44 @@ mod tests {
 
         assert_eq!(backend, ChatBackend::HostOllama);
         assert_eq!(probes.get(), 0, "the Apple bridge should not have been probed at all");
+    }
+
+    /// The splash's start call arrives moments after main.rs's own and waits
+    /// on the same gate. When the first resolution failed, the second used to
+    /// run it all again: on Linux without Ollama, that was a second 1 GB
+    /// download failing the same way, at every launch.
+    #[test]
+    fn a_failed_resolution_is_not_started_over_by_the_next_caller() {
+        let attempts = std::cell::Cell::new(0);
+        let mut state = ResolutionState::NotStarted;
+
+        let first = state.settle(|| {
+            attempts.set(attempts.get() + 1);
+            Err("ollama-linux-amd64.tar.zst did not contain ollama".to_string())
+        });
+        let second = state.settle(|| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        });
+
+        assert_eq!(first, Err("ollama-linux-amd64.tar.zst did not contain ollama".to_string()));
+        assert_eq!(second, first, "the second caller should hear the first caller's failure");
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn a_successful_resolution_is_not_run_twice() {
+        let attempts = std::cell::Cell::new(0);
+        let mut state = ResolutionState::NotStarted;
+
+        for _ in 0..2 {
+            let outcome = state.settle(|| {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            });
+            assert_eq!(outcome, Ok(()));
+        }
+
+        assert_eq!(attempts.get(), 1);
     }
 }
