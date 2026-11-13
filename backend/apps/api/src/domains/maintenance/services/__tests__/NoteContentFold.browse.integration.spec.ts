@@ -24,7 +24,8 @@ import { NoteContentFoldService } from '../NoteContentFoldService';
  * `fold-notes` gives every note a Content row with the note's own id and its
  * stored HTML as text. The Memory list already shows the note, so the browse
  * leaves that mirror out (`excludeNoteMirrors`), and counts the same rows it
- * fetches. Real SQL: the exclusion is a `NOT EXISTS` over `ci.notes`.
+ * fetches. Real SQL: the exclusion reads the mirror's own base row, which the
+ * fold links to `notes`, so it holds after the note is deleted too.
  */
 const DATABASE_ENV = { urlEnvVar: 'MEMORY_TEST_DATABASE_URL' };
 const availability = databaseAvailability(DATABASE_ENV);
@@ -134,5 +135,21 @@ describeWithDb(`a folded note's Content mirror in the browse (${availability.tar
 
     expect(library.entities.map(({ id }) => id)).toEqual([textId]);
     expect(library.totalCount).toBe(1);
+
+    // Its type picker offers nothing only the mirror carries.
+    expect((await contents.getFacets(owner)).types).toEqual(['text']);
+
+    // Search hits are checked the same way.
+    expect(await contents.noteMirrorIds(owner, [noteId, textId])).toEqual(new Set([noteId]));
+
+    // Deleting the note leaves its mirror behind; the list must not bring the
+    // copy back now that nothing else shows it.
+    await dataSource.query('DELETE FROM ci.notes WHERE id = $1', [noteId]);
+
+    expect(await contents.getEntitiesForContents(owner, { excludeNoteMirrors: true })).toEqual([
+      { id: textId, type: 'content' },
+    ]);
+    expect(await contents.countEntitiesForContents(owner, { excludeNoteMirrors: true })).toBe(1);
+    expect((await contents.findPage(owner, { first: 10 })).entities.map(({ id }) => id)).toEqual([textId]);
   });
 });

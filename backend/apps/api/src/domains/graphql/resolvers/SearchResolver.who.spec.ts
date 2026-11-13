@@ -69,6 +69,8 @@ function makeResolver() {
       return [{ id: CONTENT.id, type: 'content' as IndexableEntity }];
     }),
     countEntitiesForContents: jest.fn(async () => 1),
+    // No content row here is a note's Content mirror (see SearchResolver.foldNoteMirrors).
+    noteMirrorIds: jest.fn(async () => new Set<string>()),
   };
 
   const entityResolutionService = {
@@ -117,11 +119,7 @@ function makeResolver() {
     stub('getEntitiesForFiles') as never,
     stub('getEntitiesForFileChunks') as never,
     stub('getEntitiesForItems') as never,
-    // No note has a Content mirror here (see SearchResolver.withoutNoteMirrors).
-    {
-      ...stub('getEntitiesForNotes'),
-      findByIds: jest.fn(async (_context: unknown, ids: string[]) => ids.map(() => null)),
-    } as never,
+    stub('getEntitiesForNotes') as never,
     stub('getEntitiesForPeople') as never,
     stub('getEntitiesForPlaces') as never,
     stub('getEntitiesForProducts') as never,

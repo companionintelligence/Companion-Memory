@@ -50,6 +50,7 @@ import {
   contentTypeOptions,
   distinctColumnSql,
   effectiveSourceSystemPredicate,
+  noteMirrorSql,
 } from './contentFacetsSql';
 import { type PurgedContentAggregates, purgeContentAggregates, purgeFilesWrappedBy } from './contentPurge';
 import { CtiAggregate, detailChanged } from './CtiAggregate';
@@ -924,6 +925,40 @@ export class ContentService {
   }
 
   /**
+   * Hides the Content mirror `NoteContentFoldService` gives a note: same id as
+   * the note, the note's stored HTML as its text. Wherever the note itself is
+   * listed, or a list is of content the user brought in, the mirror is a second,
+   * raw copy of the note. Keyed on the mirror's own base row
+   * ({@link noteMirrorSql}), not on the note, so deleting the note does not
+   * bring its copy back.
+   */
+  private excludeNoteMirrors<T extends ObjectLiteral>(
+    query: SelectQueryBuilder<T>,
+    alias: string,
+  ): SelectQueryBuilder<T> {
+    return query.andWhere(`NOT ${noteMirrorSql(alias)}`);
+  }
+
+  /**
+   * Which of these content ids are a note's Content mirror (see
+   * {@link excludeNoteMirrors}). For the search paths, which pick their
+   * candidates from the index before any SQL scope applies.
+   */
+  async noteMirrorIds(context: UserServiceContext, ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ id: string }> = await this.contentRepository.manager.query(
+      `SELECT e.entity_id AS id FROM ci.entities e
+        WHERE e.entity_id = ANY($1::uuid[]) AND e.owner_user_id = $2 AND e.linked_table = 'notes'`,
+      [ids, context.userId],
+    );
+
+    return new Set(rows.map((row) => row.id));
+  }
+
+  /**
    * Hides content that only exists as the media plumbing of a tombstoned event.
    *
    * A photo/video event carries its binary through a `ci.content` row
@@ -933,19 +968,6 @@ export class ContentService {
    * explorer. The LEFT JOIN keeps standalone content (`event_id IS NULL`)
    * visible, and restoring the event brings its media back with it.
    */
-  /**
-   * Hides the Content mirror `NoteContentFoldService` gives a note: same id as
-   * the note, the note's stored HTML as its text. Wherever the note itself is
-   * listed, or a list is of content the user brought in, the mirror is a second,
-   * raw copy of the note.
-   */
-  private excludeNoteMirrors<T extends ObjectLiteral>(
-    query: SelectQueryBuilder<T>,
-    alias: string,
-  ): SelectQueryBuilder<T> {
-    return query.andWhere(`NOT EXISTS (SELECT 1 FROM ci.notes note WHERE note.id = ${alias}.id)`);
-  }
-
   private excludeDeletedEventMedia<T extends ObjectLiteral>(
     query: SelectQueryBuilder<T>,
     alias: string,
