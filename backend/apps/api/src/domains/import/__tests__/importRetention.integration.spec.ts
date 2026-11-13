@@ -1375,4 +1375,92 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       }
     });
   });
+
+  // ── the cascade's cost ────────────────────────────────────────────────────
+
+  describe('the cascade from each deleted staged item', () => {
+    /**
+     * Staged rows to plan against. The planner picks by cost, so a near-empty
+     * table proves nothing: a sequential scan wins there with or without an
+     * index. This is enough pages for a scan of every edge to be the wrong
+     * answer, and seeds in about a second.
+     */
+    const SEEDED_ITEMS = 20_000;
+
+    /**
+     * `EXPLAIN` the statement Postgres's foreign-key trigger runs on
+     * `staged_relationships` for one deleted staged item, against a run of
+     * {@link SEEDED_ITEMS} items that each carry an item-to-entity edge and an
+     * item-to-item edge (the shape of mail and its attachments).
+     *
+     * The seed, the ANALYZE and the plan all happen in one transaction that is
+     * rolled back, so sibling suites sharing the database never see the rows or
+     * the statistics. `GENERIC_PLAN` because the trigger runs a prepared
+     * statement with `$1` bound per deleted item.
+     */
+    async function cascadePlan(column: 'item_id' | 'related_item_id'): Promise<string> {
+      const { run } = await harness.startRunForDrop(await harness.stageDrop('mail.zip'), [
+        'unpack',
+        'parse',
+        'push',
+      ]);
+      const runner = dataSource.createQueryRunner();
+
+      await runner.connect();
+      await runner.startTransaction();
+
+      try {
+        await runner.query(
+          `INSERT INTO ci_import.staged_items (run_id, user_id, data_source, content_hash)
+           SELECT $1::uuid, $2::uuid, 'gmail', 'planner-' || g FROM generate_series(1, $3::int) g`,
+          [run.id, userId, SEEDED_ITEMS],
+        );
+
+        const [entity] = await runner.query<Array<{ id: string }>>(
+          `INSERT INTO ci_import.staged_entities (run_id, user_id, type, name)
+           VALUES ($1::uuid, $2::uuid, 'Person', 'Ada') RETURNING id`,
+          [run.id, userId],
+        );
+
+        await runner.query(
+          `INSERT INTO ci_import.staged_relationships (run_id, item_id, entity_id, relation)
+           SELECT $1::uuid, id, $2::uuid, 'from' FROM ci_import.staged_items WHERE run_id = $1::uuid`,
+          [run.id, entity.id],
+        );
+        await runner.query(
+          `INSERT INTO ci_import.staged_relationships (run_id, item_id, related_item_id, relation)
+           SELECT $1::uuid, id, next_id, 'attachment'
+             FROM (SELECT id, lead(id) OVER (ORDER BY id) AS next_id
+                     FROM ci_import.staged_items WHERE run_id = $1::uuid) pairs
+            WHERE next_id IS NOT NULL`,
+          [run.id],
+        );
+        await runner.query(`ANALYZE ci_import.staged_relationships`);
+
+        const plan = await runner.query<Array<{ 'QUERY PLAN': string }>>(
+          `EXPLAIN (GENERIC_PLAN)
+           DELETE FROM ONLY ci_import.staged_relationships WHERE $1::uuid OPERATOR(pg_catalog.=) ${column}`,
+        );
+
+        return plan.map((line) => line['QUERY PLAN']).join('\n');
+      } finally {
+        await runner.rollbackTransaction();
+        await runner.release();
+      }
+    }
+
+    it('finds the item-to-entity and item-to-item edges by item_id through an index', async () => {
+      const plan = await cascadePlan('item_id');
+
+      expect(plan).toContain('staged_relationships_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
+    });
+
+    it('finds the edges pointing at the item by related_item_id through an index', async () => {
+      const plan = await cascadePlan('related_item_id');
+
+      expect(plan).toContain('staged_relationships_related_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
+    });
+  });
 });
