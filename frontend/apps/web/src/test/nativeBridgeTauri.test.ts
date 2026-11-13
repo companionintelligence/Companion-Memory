@@ -62,6 +62,28 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     unsubscribe();
   });
 
+  it('hands a link that started the app to every listener, not only the one that asked first', async () => {
+    // The widget router and the sign-in callback both listen. When the widget router asked
+    // first, the sign-in link went to it and the sign-in never finished.
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce('companion://oidc/callback?code=cold-start')
+      .mockResolvedValue(null);
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const widgetRouter = vi.fn();
+    const signIn = vi.fn();
+    const unsubscribeWidget = await addAppUrlOpenListener(widgetRouter);
+    const unsubscribeSignIn = await addAppUrlOpenListener(signIn);
+
+    expect(widgetRouter).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
+    expect(signIn).toHaveBeenCalledWith('companion://oidc/callback?code=cold-start');
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    unsubscribeWidget();
+    unsubscribeSignIn();
+  });
+
   it('does not call the handler when nothing was pending', async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };

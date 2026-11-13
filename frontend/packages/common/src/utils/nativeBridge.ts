@@ -1157,6 +1157,40 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
 }
 
 /**
+ * What `take_pending_deep_link_command` handed this page, per Tauri bridge object.
+ *
+ * The shell keeps one pending link and gives it to the first caller, and a page has more than one
+ * listener: useAuth's sign-in callback and WidgetDeepLinkRouter. When the widget router asked
+ * first, a sign-in link that started the app went to a listener that ignores it, and the window
+ * stayed on the sign-in screen. So the link is taken once and every listener gets it, each
+ * ignoring what is not for it. Keyed by the bridge object, so a page (and a test that installs
+ * its own bridge) takes once.
+ */
+const pendingDeepLinkTakes = new WeakMap<object, Promise<string | null>>();
+
+function takePendingDeepLinkOnce(): Promise<string | null> {
+  const bridge = (window as unknown as { __TAURI_INTERNALS__: object }).__TAURI_INTERNALS__;
+  let taken = pendingDeepLinkTakes.get(bridge);
+
+  if (!taken) {
+    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
+    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
+    // REJECTION here is therefore always a real failure (an ACL/permission denial is
+    // the one seen in practice: the capability granting this command IPC reachability
+    // must list the origin the webview navigated to). Keep the same `null` fallback so
+    // callers are unaffected, but log the failure instead of silently discarding it.
+    taken = tauriInvoke<string | null>('take_pending_deep_link_command').catch((err: unknown) => {
+      console.error('take_pending_deep_link_command failed', err);
+
+      return null;
+    });
+    pendingDeepLinkTakes.set(bridge, taken);
+  }
+
+  return taken;
+}
+
+/**
  * Subscribe to deep links opened into the app (custom URL scheme / universal links).
  * `handler` receives the full URL string. Used to complete native "Sign in with CI
  * Portal": the system browser redirects to `companion://oidc/callback?...` and that
@@ -1169,9 +1203,10 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
  *   (`getLaunchUrl`, see useAuth.ts), not this function.
  * - Tauri (desktop): the Rust side (`main.rs`) already unifies cold-start AND
  *   warm-start delivery into one place, so there is no separate getLaunchUrl-shaped
- *   call needed here — this function alone covers both. It (a) drains
- *   `take_pending_deep_link_command` once, for a URL that arrived before this
- *   listener was up (true cold start, or a warm-start delivery that raced mounting),
+ *   call needed here — this function alone covers both. It (a) gets the URL that
+ *   arrived before any listener was up (true cold start, or a warm-start delivery that
+ *   raced page load), which `take_pending_deep_link_command` hands over once per page
+ *   and every listener receives (see takePendingDeepLinkOnce),
  *   then (b) subscribes to the live `companion-deep-link` DOM event `main.rs`
  *   dispatches for anything after. A plain `window.addEventListener` — no
  *   `@tauri-apps/api` import needed, matching this file's Capacitor-free-import
@@ -1194,19 +1229,7 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   }
 
   if (isTauriPlatform()) {
-    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
-    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
-    // REJECTION here is therefore always a real failure (an ACL/permission denial is
-    // the one seen in practice: the capability granting this command IPC reachability
-    // must list the origin the webview navigated to). Keep the same `null` fallback so
-    // callers are unaffected, but log the failure instead of silently discarding it.
-    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(
-      (err: unknown) => {
-        console.error('take_pending_deep_link_command failed', err);
-
-        return null;
-      },
-    );
+    const pending = await takePendingDeepLinkOnce();
 
     if (pending) {
       handler(pending);
