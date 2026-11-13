@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
+import { chipFill } from '@/lib/activityPalette';
 import { EVENT_DRAG_TYPE } from '@/lib/scheduleDrag';
 
 import { addDays, startOfLocalDay } from './nowNext';
@@ -768,7 +769,9 @@ describe('VerticalCalendar — moving an event without a drag', () => {
     const chip = screen.getByRole('listitem', { name: '3 overlapping activities' });
     const count = within(chip).getByText('3');
 
-    expect(chip.getAttribute('style')).toContain('color-mix(in oklab');
+    // The border is a color-mix too, so check the fill itself: the chip's own
+    // hue (its accent bar) mixed down with chipFill, as on every other chip.
+    expect(chip.style.backgroundColor).toBe(chipFill(chip.style.borderLeftColor));
     expect(count.className).not.toMatch(/mix-blend|text-background/);
   });
 

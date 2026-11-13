@@ -267,9 +267,8 @@ function ClusterBlock({
           left: `calc(${(lane / laneCount) * 100}% + 2px)`,
           width: `calc(${(1 / laneCount) * 100}% - 4px)`,
           // The same tint every other chip uses, so the count can be plain
-          // foreground text. On the solid hue it was drawn with
-          // `text-background mix-blend-difference`, which on the light theme's
-          // slate came out at 1.3:1, and the count is all this chip shows.
+          // foreground text. The count is all this chip shows. Drawn over the
+          // solid hue it fell to 1.3:1 on the light theme's slate.
           backgroundColor: chipFill(color),
           borderColor: chipBorder(color),
           borderLeftWidth: '3px',
