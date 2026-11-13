@@ -1,3 +1,4 @@
+import { ThreadRemovedEvent } from '../../events';
 import { ThreadService } from '../ThreadService';
 
 function build(affected: number) {
@@ -12,7 +13,7 @@ function build(affected: number) {
     eventEmitter as never,
   );
 
-  return { service, repository, eventEmitter };
+  return { service, repository, eventService, eventEmitter };
 }
 
 /**
@@ -22,7 +23,7 @@ function build(affected: number) {
  */
 describe('ThreadService.softRemove', () => {
   it('archives the thread and sets its generation status back to idle in one write', async () => {
-    const { service, repository, eventEmitter } = build(1);
+    const { service, repository, eventService, eventEmitter } = build(1);
 
     await expect(service.softRemove({ userId: 'user-1' } as never, 'thread-1')).resolves.toBe(true);
 
@@ -31,13 +32,15 @@ describe('ThreadService.softRemove', () => {
       { id: 'thread-1', user: { id: 'user-1' } },
       { isArchived: true, generationStatus: 'idle' },
     );
-    expect(eventEmitter.emit).toHaveBeenCalledWith(expect.anything(), { threadId: 'thread-1' });
+    expect(eventEmitter.emit).toHaveBeenCalledWith(ThreadRemovedEvent, { threadId: 'thread-1' });
+    expect(eventService.send).toHaveBeenCalledWith(ThreadRemovedEvent, { threadId: 'thread-1' });
   });
 
   it('reports a thread it could not find', async () => {
-    const { service, eventEmitter } = build(0);
+    const { service, eventService, eventEmitter } = build(0);
 
     await expect(service.softRemove({ userId: 'user-1' } as never, 'thread-1')).resolves.toBe(false);
     expect(eventEmitter.emit).not.toHaveBeenCalled();
+    expect(eventService.send).not.toHaveBeenCalled();
   });
 });

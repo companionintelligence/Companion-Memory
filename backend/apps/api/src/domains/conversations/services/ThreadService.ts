@@ -280,9 +280,9 @@ export class ThreadService {
     // `generation_status` goes back to idle in the same write. The turn this
     // stops would set it itself, but through `update`, which no longer matches
     // an archived thread, so a chat deleted mid-reply kept `running`. The model
-    // queues (`countPendingGenerations`, and HBPE's labeler reading the same
-    // column) took that for someone waiting on the model and held all
-    // background AI work for every account until the row aged out.
+    // queues that yield to chat (`countPendingGenerations` and HBPE's labeler,
+    // which reads the same column) took that for someone waiting on the model
+    // and held background model work for every account until the row aged out.
     const result = await this.threadRepository.update(
       {
         id,
