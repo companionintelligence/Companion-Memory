@@ -169,6 +169,19 @@ describe('SignupForm signup code requirement', () => {
     expect(screen.queryByLabelText('Signup code')).not.toBeInTheDocument();
   });
 
+  it('keeps the signup code input controlled from the first render', () => {
+    h.codesRequired = true;
+    h.error = null;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<SignupForm />);
+
+    fireEvent.change(screen.getByLabelText('Signup code'), { target: { value: 'abc' } });
+
+    expect(consoleError.mock.calls.map((call) => String(call[0]))).not.toContainEqual(
+      expect.stringMatching(/uncontrolled input to be controlled/),
+    );
+  });
+
   it('maps a signup_code issue onto its own field once the field exists, instead of the alert', async () => {
     h.codesRequired = true;
     h.error = new FetchJsonError(400, 'Bad Request', 'Validation failed', [
@@ -228,6 +241,9 @@ describe('SignupForm empty fields', () => {
     fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
 
     expect(await screen.findAllByText('Required')).toHaveLength(1);
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText('Password')).toHaveAttribute('aria-invalid', 'false');
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });

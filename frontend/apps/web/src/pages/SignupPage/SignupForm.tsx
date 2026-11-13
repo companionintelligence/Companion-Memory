@@ -224,7 +224,10 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
               <Form.Item>
                 <Form.Label>Signup code</Form.Label>
                 <Form.Control>
-                  <Input {...field} />
+                  {/* No default value: an untouched code must reach the server as
+                      absent, not as an empty string. The '' only keeps the input
+                      controlled from the first render. */}
+                  <Input {...field} value={field.value ?? ''} />
                 </Form.Control>
                 <Form.Message />
               </Form.Item>
