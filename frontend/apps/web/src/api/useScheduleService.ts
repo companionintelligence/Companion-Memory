@@ -159,8 +159,9 @@ interface QueryData {
  * `events` is committed fact; `rhythm` is the HBPE occurrence climate. They are
  * fetched together but never merged — the whole point of the page is that the
  * user can tell them apart. The rhythm layer is nullable by design: the forecast
- * resolver returns null when the `hbpe` flag is off or the engine is cold, and
- * the page still has something true to show without it.
+ * resolver returns null when the `hbpe` flag is off or the call failed (a cold
+ * engine answers with seven empty days instead), and the page still has
+ * something true to show without it.
  */
 export function useScheduleService(from: Date, to: Date): ScheduleResult {
   const { data, previousData, loading, error, refetch, networkStatus } = useQuery<QueryData>(GET_SCHEDULE, {
