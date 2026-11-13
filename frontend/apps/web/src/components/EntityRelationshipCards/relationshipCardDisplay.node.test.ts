@@ -40,6 +40,15 @@ describe('formatRelationshipPhrase', () => {
     ).toBe('You emailed');
   });
 
+  it('names the neighbor as the parent or child of the page it is on, not "your parent"', () => {
+    // You PARENT_OF your child: on the child's page your card is their parent.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: false })).toBe('Parent');
+    // Your parent PARENT_OF you: on your parent's page your card is their child.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true })).toBe('Child');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: true })).toBe('Parent');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: false })).toBe('Child');
+  });
+
   it('hides leftover associated-with edges that have no original type', () => {
     expect(formatRelationshipPhrase('ASSOCIATED_WITH', { focusIsSource: true })).toBeNull();
   });

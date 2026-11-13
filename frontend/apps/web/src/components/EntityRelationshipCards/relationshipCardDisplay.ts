@@ -141,8 +141,12 @@ const RELATIONSHIP_PHRASES: Record<string, DirectedPhrase> = {
   LIVES_WITH: { asSource: 'Lives with you', asTarget: 'Lives with you' },
   MET_WITH: { asSource: 'You met', asTarget: 'Met you' },
   SPOUSE: { asSource: 'Spouse', asTarget: 'Spouse' },
-  PARENT_OF: { asSource: 'Their parent', asTarget: 'Your parent' },
-  CHILD_OF: { asSource: 'Their child', asTarget: 'Your child' },
+  // The card names the NEIGHBOR's role toward the page it is on, with no
+  // "you" or "your": everywhere else "you" is the account owner, so on your
+  // child's page your own card read "Your parent · This is you!". When the
+  // page is the parent (the edge's source), the neighbor is its child.
+  PARENT_OF: { asSource: 'Child', asTarget: 'Parent' },
+  CHILD_OF: { asSource: 'Parent', asTarget: 'Child' },
   SIBLING_OF: { asSource: 'Sibling', asTarget: 'Sibling' },
   LIVES_IN: { asSource: 'Lives here', asTarget: 'Home' },
   STUDIES_AT: { asSource: 'Studies here', asTarget: 'School' },
