@@ -56,8 +56,10 @@
 # sets either, so on Desktop the OAuth Setup dialog asked people to register
 # "undefined/oauth/callback" and the redirect_uri sent to the provider was the
 # same, which every provider refuses. The gateway serves /oauth/callback, so
-# it is APP_BASE_URL plus that path. `:+` leaves it empty, and the api on its
-# own fallback, if APP_BASE_URL is ever unset.
+# it is APP_BASE_URL plus that path. OPENID_CALLBACK_URL does the same for the
+# OpenID services (Steam), which otherwise return to
+# https://ci-server.localhost/openid/callback. `:+` leaves both empty (and the
+# api on its own fallbacks) if APP_BASE_URL is ever unset.
 services:
   api:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
@@ -65,6 +67,7 @@ services:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://hub.ci.computer}
       APP_BASE_URL: ${APP_BASE_URL:-}
       OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
+      OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
   worker:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
   migrate-database:

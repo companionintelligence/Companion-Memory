@@ -126,6 +126,7 @@ test('rendered as the desktop app runs it, the api sends OAuth services back to 
   );
 
   assert.equal(config.services.api.environment?.OAUTH_CALLBACK_URL, 'http://127.0.0.1:8642/oauth/callback');
+  assert.equal(config.services.api.environment?.OPENID_CALLBACK_URL, 'http://127.0.0.1:8642/openid/callback');
 });
 
 /** Every `ports:` entry of the data services, in every compose file in the repo root. */
