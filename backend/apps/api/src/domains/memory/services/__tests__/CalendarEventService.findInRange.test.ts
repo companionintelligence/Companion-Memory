@@ -320,6 +320,19 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
       expect(recurringClauseWith('event.start_time < :to')).toBeDefined();
     });
 
+    it('loads only rows that hold a rule, so rule-less ones cannot use up the cap', async () => {
+      await setup();
+
+      await service.findInRange(ctx, from, to);
+
+      // An imported .ics series and an Outlook instance are both is_recurring
+      // with no rule; neither can expand.
+      const ruleClause = recurringClauseWith("'recurrenceRule'");
+      expect(ruleClause).toContain("(event.metadata -> 'recurrenceRule') IS NOT NULL");
+      expect(ruleClause).toContain("(event.recurrence_pattern -> 'rrule') IS NOT NULL");
+      expect(clauseWith("'recurrenceRule'")).toBeUndefined();
+    });
+
     it('repeats the window query liveness and event-type predicates', async () => {
       await setup();
 

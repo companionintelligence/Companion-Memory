@@ -10,12 +10,13 @@ import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/supp
 import { BaseEntity } from '../../entities/BaseEntity';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
-import { calendarEventIdentity, platformIdentity } from '../../identity';
+import { calendarEventIdentity, platformIdentity, type SourceIdentity } from '../../identity';
 import { clearExpansionZoneCache } from '../../recurrence/queries';
 import type { CreateEventDto } from '../../types';
 import { CalendarEventService } from '../CalendarEventService';
-import { EVENT_STATUS_REOPENER } from '../eventStatusReopener';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
+import { stubPipelineReopeners } from './harness/pipelineReopeners';
 
 /**
  * Which `ci.events` rows the calendar draws, by type and source, on real rows.
@@ -58,7 +59,7 @@ describeWithDb(`CalendarEventService.findInRange — imported calendar files (${
   function imported(
     title: string,
     eventType: string | undefined,
-    identity: { system: string; id: string },
+    identity: SourceIdentity,
     over: Partial<CreateEventDto> = {},
   ): CreateEventDto {
     return {
@@ -73,7 +74,7 @@ describeWithDb(`CalendarEventService.findInRange — imported calendar files (${
     };
   }
 
-  function icsIdentity(): { system: string; id: string } {
+  function icsIdentity(): SourceIdentity {
     const identity = calendarEventIdentity(`ics-${uuidv7()}@example.test`);
 
     if (!identity) {
@@ -113,12 +114,7 @@ describeWithDb(`CalendarEventService.findInRange — imported calendar files (${
       dataSource,
       new GraphDeltaWriter(dataSource, noopLogger),
       { notifyEvents: jest.fn(async () => undefined) } as never,
-      {
-        get: (token: string) =>
-          token === EVENT_STATUS_REOPENER
-            ? { reopenStatusDecisions: jest.fn(async () => 0) }
-            : { reopenTimeDecisions: jest.fn(async () => 0) },
-      } as never,
+      stubPipelineReopeners().moduleRef as never,
     );
   });
 
@@ -170,5 +166,28 @@ describeWithDb(`CalendarEventService.findInRange — imported calendar files (${
     ]);
 
     expect(await titlesInJanuary()).toEqual(['Team Meeting']);
+  });
+
+  it('expands an imported series that holds a rule, as a Google sync leaves a row it converged onto', async () => {
+    // Wednesday 4 December 2024. The master is outside January, so every row
+    // below comes from the recurring-masters leg.
+    await service.createDetailed(ctx, [
+      imported('Weekly sync', 'event', icsIdentity(), {
+        start_time: new Date('2024-12-04T10:00:00Z'),
+        end_time: new Date('2024-12-04T11:00:00Z'),
+        is_recurring: true,
+        metadata: { recurrenceRule: ['RRULE:FREQ=WEEKLY;BYDAY=WE'], recurrenceTimeZone: 'UTC' },
+      }),
+    ]);
+
+    const events = await service.findInRange(ctx, FROM, TO);
+
+    expect(events.map((event) => `${event.title} ${event.startTime.toISOString()}`)).toEqual([
+      'Weekly sync 2025-01-01T10:00:00.000Z',
+      'Weekly sync 2025-01-08T10:00:00.000Z',
+      'Weekly sync 2025-01-15T10:00:00.000Z',
+      'Weekly sync 2025-01-22T10:00:00.000Z',
+      'Weekly sync 2025-01-29T10:00:00.000Z',
+    ]);
   });
 });
