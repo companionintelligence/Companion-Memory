@@ -157,7 +157,7 @@ impl LocalModelHandles {
     }
 
     /// Whether the stack gets its model through something this app runs: its
-    /// own Ollama, the relay in front of an Ollama, or the Apple bridge. All of
+    /// own Ollama, the relay in front of an Ollama or the Apple bridge. All of
     /// them stop with the app, so the containers lose their model when it
     /// quits.
     pub fn serves_the_stack(&self) -> bool {
@@ -347,7 +347,7 @@ mod tests {
     /// Tray > Quit stops the stack only when quitting would leave it without a
     /// model, and that decision is this answer. It has to follow what is
     /// actually registered: nothing for a user's own Ollama the containers
-    /// reach directly, and yes for a relay or an Ollama this app started.
+    /// reach directly, yes for a relay or an Ollama this app started.
     #[test]
     fn the_stack_depends_on_the_app_only_while_the_app_runs_something_for_it() {
         let handles = LocalModelHandles::default();
