@@ -656,68 +656,151 @@ describe('the system-line filter must not eat human messages', () => {
 
     expect(pipeline).toHaveLength(1);
   });
+});
 
-  describe('a _chat.txt dropped straight into the inbox service folder', () => {
-    const LRM = '\u200e';
-    const NOTICE_EXPORT = [
-      `[1/3/21, 9:00:00 AM] Alice: ${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`,
-      '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
-      '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
-    ].join('\n');
+describe('a _chat.txt in a folder the system named', () => {
+  const LRM = '\u200e';
+  const noticeFrom = (chat: string): string =>
+    `[1/3/21, 9:00:00 AM] ${chat}: ${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`;
+  const NOTICE_EXPORT = [
+    noticeFrom('Alice'),
+    '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+    '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+  ].join('\n');
 
-    const importFrom = async (folders: string[], transcript: string): Promise<EmittedGraph[]> => {
-      const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-inbox-')), ...folders);
-      fs.mkdirSync(root, { recursive: true });
-      fs.writeFileSync(path.join(root, '_chat.txt'), transcript);
+  const tempRoots: string[] = [];
 
-      const pipeline: EmittedGraph[] = [];
-      await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
-        pipeline,
-        timeframe: {},
-        log: () => {},
-      } as unknown as ImportParams);
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      return pipeline;
-    };
+  const importFrom = async (folders: string[], transcript: string): Promise<EmittedGraph[]> => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-inbox-'));
+    tempRoots.push(tempRoot);
+    const root = path.join(tempRoot, ...folders);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, '_chat.txt'), transcript);
 
-    it('takes the chat name from the encryption notice, matching an upload of the same export', async () => {
-      // The folder is the inbox's own `whatsapp/`, which says nothing about the
-      // chat. Named after it, every message got a second identity and the
-      // export was saved twice.
-      const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
-      const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+    const pipeline: EmittedGraph[] = [];
+    await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
 
-      expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
-      expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
-    });
+    return pipeline;
+  };
 
-    it('names a transcript without the notice after its people, never after the service', async () => {
-      const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
-      const pipeline = await importFrom(['whatsapp'], fixture);
+  it('takes the chat name from the encryption notice, matching an upload of the same export', async () => {
+    // The folder is the inbox's own `whatsapp/`, which says nothing about the
+    // chat. Named after it, every message got a second identity and the
+    // export was saved twice.
+    const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
 
-      expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
-        new Set(['Alice, Bob']),
-      );
-    });
+    expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
 
-    it('names a bare _chat.txt in a run folder from its transcript, not the run id', async () => {
-      // An uploaded `_chat.txt` lands at the top of the run's scratch folder,
-      // `<scratch>/<user>/<run id>/`. Named after the run id, the same chat
-      // uploaded twice was two chats.
-      const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
-      const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
+  it('names a transcript without the notice after its people, never after the service', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp'], fixture);
 
-      expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
-      expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
-    });
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['Alice, Bob']),
+    );
+  });
 
-    it('keeps the export folder name when the folder sits inside the service folder', async () => {
-      const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
-      const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);
+  it('names a bare _chat.txt in a run folder from its transcript, not the run id', async () => {
+    // An uploaded `_chat.txt` lands at the top of the run's scratch folder,
+    // `<scratch>/<user>/<run id>/`. Named after the run id, the same chat
+    // uploaded twice was two chats.
+    const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
+    const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
 
-      expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
-        new Set(['whatsapp-export']),
-      );
-    });
+    expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
+  });
+
+  it('keeps the export folder name when the folder sits inside the service folder', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['whatsapp-export']),
+    );
+  });
+
+  it("names loose files the wizard packed from the transcript, not the pack's file count", async () => {
+    // `_chat.txt` and two photos picked with "Choose files" upload as
+    // `WhatsApp (3 files).zip` and unpack into `WhatsApp__3_files_/`.
+    const packed = await importFrom(['WhatsApp__3_files_'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+    expect(packed.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
+
+  it('spells a notice sender with filename-unsafe characters the way its zip is spelled', async () => {
+    const chat = 'LITA | Companion Tech Team';
+    const transcript = [noticeFrom(chat), '[1/3/21, 9:01:00 AM] Alice: hi'].join('\n');
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_LITA___Companion_Tech_Team'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - LITA _ Companion Tech Team'], transcript);
+
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('drops the bidi marks WhatsApp wraps around a phone number', async () => {
+    const transcript = [noticeFrom('\u202a+1 (555) 010-9999\u202c'), '[1/3/21, 9:01:00 AM] Alice: hi'].join(
+      '\n',
+    );
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - +1 (555) 010-9999'], transcript);
+
+    expect(dropped[0].item.metadata.Conversation).toBe('1 (555) 010-9999');
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('names a chat whose uploaded folder kept only the prefix from its transcript, not "Chat"', async () => {
+    // An upload turns every non-ASCII character into `_`, so two chats named in
+    // another script both arrive as `WhatsApp_Chat_-___`.
+    const first = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('王伟'), '[1/3/21, 9:01:00 AM] 王伟: hi'].join('\n'),
+    );
+    const second = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('李娜'), '[1/3/21, 9:01:00 AM] 李娜: hi'].join('\n'),
+    );
+
+    expect(first[0].item.metadata.Conversation).toBe('王伟');
+    expect(second[0].item.metadata.Conversation).toBe('李娜');
+  });
+
+  it('closes the transcript it stops reading at the notice', async () => {
+    const created: fs.ReadStream[] = [];
+    const original = fs.createReadStream;
+    const spy = jest.spyOn(fs, 'createReadStream').mockImplementation(((
+      ...args: Parameters<typeof original>
+    ) => {
+      const stream = original(...args);
+      created.push(stream);
+
+      return stream;
+    }) as typeof fs.createReadStream);
+
+    try {
+      await importFrom(['whatsapp'], NOTICE_EXPORT);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(created).toHaveLength(2);
+    expect(created.every((stream) => stream.destroyed)).toBe(true);
   });
 });

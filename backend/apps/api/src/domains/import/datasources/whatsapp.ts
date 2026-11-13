@@ -55,57 +55,92 @@ const IOS_RE =
  * namespace for every message id. Whichever half of the path actually names the
  * chat has to win, and that is the more specific half.
  *
- * Null when the folder is one of the inbox's service folders. A `_chat.txt`
- * dropped straight into `<inbox>/whatsapp/` was named "whatsapp": every message
- * of the same export uploaded earlier through the wizard was saved a second
- * time under that name, and two different chats dropped that way shared one
- * thread. Null too when the folder is an import run's own scratch folder,
- * which is where a bare `_chat.txt` lands when it is uploaded or dropped at
- * the inbox's top level: named after the run's id, it was a new chat every
- * time it was imported. The caller names such a chat from its transcript
- * instead ({@link conversationNameFromTranscript}).
+ * Null when the folder was named by the system rather than by an export (see
+ * {@link namedBySystem}). A `_chat.txt` dropped straight into
+ * `<inbox>/whatsapp/` was named "whatsapp": every message of the same export
+ * uploaded earlier through the wizard was saved a second time under that name
+ * and two different chats dropped that way shared one thread. Null too when
+ * the folder name is nothing but the exporter's prefix: an upload replaces
+ * every non-ASCII character with `_`, so a chat named in another script
+ * arrived as `WhatsApp_Chat_-___` and every such chat was called "Chat". The
+ * caller names these chats from their transcript instead
+ * ({@link conversationNameFromTranscript}).
  */
 function conversationNameFrom(chatPath: string): string | null {
-  const normalise = (value: string): string =>
-    value
-      // Underscores stand in for characters the exporter or the upload path
-      // could not keep — including the `|` in this corpus's own chat name.
-      .replace(/[_+]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
   const stripPrefix = (value: string): string =>
     value.replace(/^WhatsApp Chat(\s+(?:with|-))?\s*/i, '').trim();
 
   // `_chat.txt` — the generic transcript name — normalises to '' and falls
   // through to the directory, which is where that layout keeps the chat name.
-  const fromFile = stripPrefix(normalise(path.basename(chatPath, '.txt').replace(/_chat/i, '')));
+  const fromFile = stripPrefix(normaliseName(path.basename(chatPath, '.txt').replace(/_chat/i, '')));
   if (fromFile) {
     return fromFile;
   }
 
   const directory = path.basename(path.dirname(chatPath));
 
-  if (SERVICE_FOLDERS.has(directory.toLowerCase()) || RUN_FOLDER_RE.test(directory)) {
+  if (namedBySystem(directory)) {
     return null;
   }
 
-  const fromDirectory = stripPrefix(normalise(directory));
+  return stripPrefix(normaliseName(directory)) || null;
+}
 
-  return fromDirectory || 'Chat';
+function normaliseName(value: string): string {
+  // Underscores stand in for characters the exporter or the upload path
+  // could not keep, such as the `|` in this corpus's own chat name.
+  return value.replace(/[_+]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** The inbox's service folders (`whatsapp`, `google-takeout`, …): folders the inbox made, not names an export chose. */
-const SERVICE_FOLDERS = new Set(serviceInboxFolders().map((folder) => folder.toLowerCase()));
+const INBOX_SERVICE_FOLDERS = new Set(serviceInboxFolders().map((folder) => folder.toLowerCase()));
 
 /** An import run's scratch folder, named after the run's id. No export names a chat like this. */
 const RUN_FOLDER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
+/**
+ * The zip the import wizard packs loose files into, `<card title> (<n> files).zip`,
+ * as it reads once the upload has sanitised and unpacked it (`WhatsApp__3_files_`
+ * normalises to `WhatsApp 3 files`). Picking `_chat.txt` and its photos with
+ * "Choose files" lands them in one of these. The count changes with every
+ * upload of the same chat.
+ */
+const LOOSE_FILES_FOLDER_RE = /^(?!WhatsApp Chat\b).+ \(?\d+ files\)?$/i;
 
 /**
- * A chat's name from its own transcript, for a `_chat.txt` whose folder names
- * a service rather than the chat.
+ * A folder the inbox, an import run or the wizard named, which says nothing
+ * about the chat inside it: the inbox's own `whatsapp/`, the run's scratch
+ * folder a bare `_chat.txt` is moved into, or the wizard's loose-files zip.
+ */
+function namedBySystem(directory: string): boolean {
+  return (
+    INBOX_SERVICE_FOLDERS.has(directory.toLowerCase()) ||
+    RUN_FOLDER_RE.test(directory) ||
+    LOOSE_FILES_FOLDER_RE.test(normaliseName(directory))
+  );
+}
+
+const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
+
+/** Bidi and direction marks anywhere in a name. WhatsApp wraps a phone number in U+202A and U+202C. */
+const INVISIBLE_MARKS_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** Characters a filename cannot hold. The exporter writes `_` for them (`LITA | …` became `LITA _ …`). */
+const FILENAME_UNSAFE_RE = /[\\/:*?"<>|]/g;
+
+/**
+ * The notice's sender spelled the way the folder route spells the same chat.
+ * Without this the transcript called the corpus's own chat
+ * "LITA | Companion Tech Team" while its zip, uploaded or dropped in the inbox,
+ * was "LITA Companion Tech Team", so the two never deduped.
+ */
+function chatNameFromSender(sender: string): string {
+  return normaliseName(sender.replace(INVISIBLE_MARKS_RE, '').replace(FILENAME_UNSAFE_RE, '_'));
+}
+
+/**
+ * A chat's name from its own transcript, for a `_chat.txt` whose folder does
+ * not name the chat.
  *
  * iOS starts every export with WhatsApp's encryption notice, sent "by" the chat
  * itself: `[1/3/21, 9:00:00 AM] Alice: Messages and calls are end-to-end
@@ -116,10 +151,8 @@ const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
  * chats in two threads.
  */
 async function conversationNameFromTranscript(chatPath: string): Promise<string> {
-  const rl = readline.createInterface({
-    input: fs.createReadStream(chatPath, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+  const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
   const senders = new Set<string>();
 
   try {
@@ -131,13 +164,21 @@ async function conversationNameFromTranscript(chatPath: string): Promise<string>
       }
 
       if (senders.size === 0 && ENCRYPTION_NOTICE_RE.test(stripLeadingInvisible(parsed.text))) {
-        return parsed.sender;
+        const name = chatNameFromSender(parsed.sender);
+
+        if (name) {
+          return name;
+        }
       }
 
       senders.add(parsed.sender);
     }
   } finally {
     rl.close();
+    // Closing readline does not close its input. Returning at the notice left
+    // the stream paused on its first chunk with the file still open, one
+    // descriptor per chat for the life of the process.
+    input.destroy();
   }
 
   return [...senders].sort().join(', ') || 'Chat';
