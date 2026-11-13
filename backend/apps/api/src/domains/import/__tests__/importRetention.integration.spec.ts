@@ -1178,6 +1178,57 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await counts(runId)).toEqual(GONE);
     });
 
+    it('takes a parse-only run of uploaded files together with the tree its files are in', async () => {
+      // `ci import notes.zip --stages unpack,parse`: plain files staged as
+      // media rows whose bytes sit in the run's scratch tree. Stages are fixed
+      // when a run starts, so nothing can ever run media on it, and refusing
+      // here left it on the Sync card until every row was pushed.
+      const runId = await seedRun({ stages: PARSED_STAGES, classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      expect(await harness.service.hasUnstoredMedia(runId)).toBe(true);
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        runId,
+        scratchTreeReclaimed: true,
+      });
+      expect(await counts(runId)).toEqual(GONE);
+      expect(await scratch.exists(userId, runId)).toBe(false);
+    });
+
+    it('still refuses that run when an inbox unit fed it, since its tree may be the only copy', async () => {
+      const runId = await seedRun({ stages: PARSED_STAGES, classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources
+            SET origin = 'inbox', drop_id = NULL, expires_at = NULL, source_path = $2, status = 'moved'
+          WHERE run_id = $1::uuid`,
+        [runId, path.join(userInboxDir(userId), 'notes')],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/Run the media stage/);
+      expect(await counts(runId)).toEqual(PARSED_FULL);
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
     /**
      * The half a discard cannot take back, and therefore has to declare.
      *

@@ -492,7 +492,10 @@ export class ImportRetentionService {
    *    queries; a discard that stated it nowhere would be safe only for as long
    *    as a filesystem stat in another component happened to agree, and would
    *    become the one path that deletes the rows proving a photo exists only on
-   *    disk the moment that stopped being true.
+   *    disk the moment that stopped being true. One exception: a run fed only
+   *    by uploads whose unstored media is in its own scratch tree (a parse-only
+   *    run) is discarded with that tree, so the rows and the bytes they name go
+   *    together.
    *
    * ### What it does NOT undo: media this run already stored
    *
@@ -687,17 +690,29 @@ export class ImportRetentionService {
         );
       }
 
+      const holdsTree = await this.scratch.exists(candidate.userId, candidate.id);
+
+      // A parse-only run of uploads (`ci import x.zip --stages unpack,parse`)
+      // stages its plain files as media rows whose bytes are in its own scratch
+      // tree, and nothing can run the media stage on it afterwards: stages are
+      // fixed when a run starts. Refusing left it on the Sync card until
+      // someone pushed every row. When every source was an upload, those bytes
+      // are this appliance's copy of what the person uploaded and is now
+      // throwing away, so the discard takes the rows and the tree together and
+      // nothing is left naming bytes that are gone, or holding bytes nothing
+      // names. A run fed by the inbox is still refused: its tree may hold the
+      // only copy of the person's files.
+      const takesUnstoredUploads = candidate.unstoredMedia && candidate.uploadsOnly && holdsTree;
+
       // The byte guards come before the "not pushable" answer, because that
       // answer promises the sweep will collect the run, and the sweep refuses
       // a run for exactly these two reasons. A run that failed in a worker
       // still owns its scratch tree (the failure path never reclaims it, and
       // `UnpackStage` moves the upload into it), so it is told about the tree
       // rather than promised a collection that never comes.
-      if (candidate.unstoredMedia) {
+      if (candidate.unstoredMedia && !takesUnstoredUploads) {
         throw new ConflictException(`Import run ${runId}: ${UNSTORED_MEDIA_REASON}`);
       }
-
-      const holdsTree = await this.scratch.exists(candidate.userId, candidate.id);
 
       // The trees a discard takes, both from a run with no parse to push (a
       // failed unpack, typically), which the sweep never collects while the
@@ -727,7 +742,9 @@ export class ImportRetentionService {
         );
       }
 
-      const reclaimScratch = holdsTree && !candidate.pushable && (candidate.uploadsOnly || inbox != null);
+      const reclaimScratch =
+        takesUnstoredUploads ||
+        (holdsTree && !candidate.pushable && (candidate.uploadsOnly || inbox != null));
 
       if (holdsTree && !reclaimScratch) {
         throw new ConflictException(
