@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { LLM_API_KEY_PLACEHOLDER } from '@ci/configuration';
 
 import {
   containerSharedConfigPath,
@@ -52,7 +52,10 @@ export interface LlmEndpointView {
   locked: boolean;
   /** The normalized endpoint the API container will contact (never carries credentials). */
   endpoint: string;
-  /** Whether a credential is available, without exposing its value. */
+  /**
+   * Whether someone set a credential, without exposing its value. False for the built-in
+   * placeholder ({@link LLM_API_KEY_PLACEHOLDER}), which is still sent as the bearer.
+   */
   apiKeyConfigured: boolean;
 }
 
@@ -78,15 +81,6 @@ interface ResolvedLlmEndpoint {
 }
 
 const DEFAULT_OLLAMA_PORT = 11434;
-
-/**
- * The key `configuration.ts` falls back to when LLM_API_KEY is empty, and the
- * one `.env.default` and the local compose files set. It stands in where a
- * client wants some key, and it is still sent, but nobody set it: counted as a
- * credential, it made every appliance report a key it did not have, in
- * Settings > Model and in `ci memory status`.
- */
-const PLACEHOLDER_API_KEY = 'ollama';
 const DEFAULT_OPENAI_PORT = 8000;
 
 function inferHostGateway(): string {
@@ -297,7 +291,12 @@ export class LlmEndpointService implements OnModuleInit {
       hostGateway: this.resolved.hostGateway,
       locked: this.resolved.locked,
       endpoint: safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost),
-      apiKeyConfigured: this.resolved.apiKey.length > 0 && this.resolved.apiKey !== PLACEHOLDER_API_KEY,
+      // A key saved here always counts, even the placeholder's own word (Ollama's docs say to
+      // type it, and Settings saved it back for a while): it overrides LLM_API_KEY, so Settings
+      // must keep offering to remove it.
+      apiKeyConfigured:
+        this.persistedApiKey != null ||
+        (this.resolved.apiKey.length > 0 && this.resolved.apiKey !== LLM_API_KEY_PLACEHOLDER),
     };
   }
 

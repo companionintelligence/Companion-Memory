@@ -63,6 +63,14 @@ export const DEFAULT_CHAT_MODEL = 'gemma4:e4b';
  */
 export const DEFAULT_UTILITY_MODEL = DEFAULT_CHAT_MODEL;
 
+/**
+ * What `llm.apiKey` holds when LLM_API_KEY is empty or unset. `.env.default` and the local and
+ * staging compose files set the same word. It still goes out as the bearer, since some
+ * OpenAI-compatible servers want a token of any value. Nobody chose it though, so
+ * `LlmEndpointService.getView` does not count it as a configured credential.
+ */
+export const LLM_API_KEY_PLACEHOLDER = 'ollama';
+
 const booleanStringSchema = z.preprocess((val) => {
   if (val === 'true') {
     return true;
@@ -372,7 +380,7 @@ export const ConfigSchema = z.object({
   llm: z
     .object({
       apiBase: z.string().optional(),
-      apiKey: z.string().default('ollama'),
+      apiKey: z.string().default(LLM_API_KEY_PLACEHOLDER),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
@@ -1675,7 +1683,7 @@ if (!parsed.llm.apiBase) {
 }
 
 if (!parsed.llm.apiKey) {
-  parsed.llm.apiKey = 'ollama';
+  parsed.llm.apiKey = LLM_API_KEY_PLACEHOLDER;
 }
 
 if (!parsed.llm.chatModel) {
