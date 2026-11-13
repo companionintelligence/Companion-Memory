@@ -244,7 +244,8 @@ type BaseSearchOptions = {
    * `keyword` mode only: also match the query's last word as the START of a
    * word, so "Jor" finds Jordan. For menus that search as you type, such as a
    * note's `[[` link menu; `websearch_to_tsquery` alone matches whole
-   * (stemmed) words, so a half-typed name found nothing.
+   * (stemmed) words, so a half-typed name found nothing. `auto` resolves to
+   * keyword when it is set; the other modes ignore it.
    */
   prefix?: boolean;
   /**
@@ -509,17 +510,24 @@ const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, 
 const MIN_PREFIX_LENGTH = 2;
 
 /**
- * The last run of letters and digits in a query, lower-cased, for a
+ * The last run of letters, combining marks and digits in a query, for a
  * `to_tsquery('simple', ... || ':*')` prefix match; `null` when it is shorter
  * than {@link MIN_PREFIX_LENGTH}. The last RUN, not the last word with its
  * punctuation squeezed out: Postgres indexes "O'Brien" as `o` and `brien` and
  * "Jean-Pierre" with a `pierr` part, so "O'Br" has to look for `br` and
- * "Jean-Pi" for `pi`. Only letters and digits survive, so the bound value can
- * never carry tsquery syntax of its own.
+ * "Jean-Pi" for `pi`. Only letters, marks and digits survive, so the bound
+ * value can never carry tsquery syntax of its own.
+ *
+ * Marks belong to the run because Postgres keeps them inside a word: "राहुल"
+ * is one lexeme, and its vowel signs are marks, so without them "राहु" left
+ * a single letter. The case is left alone: the 'simple' dictionary lowers the
+ * term with the database's own rules, the ones the index was built with.
+ * JavaScript's rules differ ("İ" becomes "i" plus a combining dot), so "İst"
+ * lowered here never found İstanbul.
  */
 export function prefixTermOf(query: string): string | null {
-  const runs = query.match(/[\p{L}\p{N}]+/gu) ?? [];
-  const last = (runs[runs.length - 1] ?? '').toLowerCase();
+  const runs = query.match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+  const last = runs[runs.length - 1] ?? '';
 
   return last.length >= MIN_PREFIX_LENGTH ? last : null;
 }
@@ -589,7 +597,16 @@ export class SearchService {
     // and can record. Logged as 'auto' it would be unreadable: auto is the
     // default, so it is most calls, and the three strategies it picks between
     // have completely different recall behaviour.
-    const modeTaken: SearchModeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    //
+    // `prefix` is a keyword feature, so it steers 'auto' to keyword: left to
+    // the word count, a four-word query went to boosted and dropped the prefix
+    // without a word.
+    const modeTaken: SearchModeTaken =
+      mode !== 'auto'
+        ? mode
+        : resolvedOptions.prefix === true
+          ? 'keyword'
+          : resolveAutoMode(resolvedOptions.query);
     const startedAt = Date.now();
 
     let outcome: StrategyResult;
@@ -1479,7 +1496,8 @@ export class SearchService {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
     const typeFilter = this.buildTypeFilter(options, 3);
-    const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0));
+    const timeParamOffset = 3 + (typeFilter.param ? 1 : 0);
+    const timeFilter = buildTimeFilter(options, timeParamOffset);
     const { weights } = await this.rankingLiterals();
 
     // The whole-word query OR'd with the last word as a prefix. 'simple', not
@@ -1487,7 +1505,7 @@ export class SearchService {
     // has not finished. The whole words still go through 'english', so a
     // finished "Jordans" matches as it did before.
     const prefixTerm = options.prefix === true ? prefixTermOf(query) : null;
-    const prefixParam = 3 + (typeFilter.param ? 1 : 0) + timeFilter.params.length;
+    const prefixParam = timeParamOffset + timeFilter.params.length;
     const tsquery =
       prefixTerm == null
         ? KEYWORD_TSQUERY_SQL

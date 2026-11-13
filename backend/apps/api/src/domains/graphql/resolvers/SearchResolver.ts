@@ -558,6 +558,7 @@ export class SearchResolver {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         semantic: input.semantic === true,
+        prefix: input.prefix === true,
         maxResults: Math.max(pinLimit, QUERY_CANDIDATE_LIMIT),
       });
 

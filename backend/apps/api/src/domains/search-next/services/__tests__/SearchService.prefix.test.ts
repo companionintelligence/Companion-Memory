@@ -18,32 +18,43 @@ const CONTEXT = { userId: 'user-1' } as unknown as UserServiceContext;
 
 function makeService() {
   const query = jest.fn().mockResolvedValue([]);
+  const generateEmbeddingString = jest.fn();
   const service = new SearchService(
     { query } as unknown as DataSource,
-    { generateEmbeddingString: jest.fn() } as unknown as EmbeddingGenerationService,
+    { generateEmbeddingString } as unknown as EmbeddingGenerationService,
     { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as unknown as RetrievalPolicyService,
     { send: jest.fn().mockResolvedValue([]) } as unknown as EventService,
   );
 
-  return { service, query };
+  return { service, query, generateEmbeddingString };
 }
 
 describe('prefixTermOf', () => {
-  it('takes the last word, lower-cased', () => {
-    expect(prefixTermOf('Jor')).toBe('jor');
-    expect(prefixTermOf('  coffee with Jor  ')).toBe('jor');
+  it('takes the last word as typed, for Postgres to lower-case', () => {
+    expect(prefixTermOf('Jor')).toBe('Jor');
+    expect(prefixTermOf('  coffee with Jor  ')).toBe('Jor');
+    // JavaScript lowers "İ" to "i" plus a combining dot; Postgres, which built
+    // the index, lowers it to "i".
+    expect(prefixTermOf('İst')).toBe('İst');
   });
 
-  it('keeps letters and digits only, so no tsquery syntax reaches the query', () => {
+  it('keeps letters, marks and digits only, so no tsquery syntax reaches the query', () => {
     expect(prefixTermOf('jor:* | !xy')).toBe('xy');
-    expect(prefixTermOf('Zoë')).toBe('zoë');
-    expect(prefixTermOf('3M')).toBe('3m');
+    expect(prefixTermOf('Zoë')).toBe('Zoë');
+    expect(prefixTermOf('3M')).toBe('3M');
+  });
+
+  it('keeps combining marks inside the word, as Postgres does', () => {
+    // Devanagari vowel signs are marks; "राहुल" is indexed as one lexeme.
+    expect(prefixTermOf('राहु')).toBe('राहु');
+    // "Zoë" typed as "e" plus a combining diaeresis.
+    expect(prefixTermOf('Zoe\u0308')).toBe('Zoe\u0308');
   });
 
   it('takes the part after an apostrophe or hyphen, as Postgres splits the word', () => {
     // "O'Brien" is indexed as `o` and `brien`, "Jean-Pierre" with a `pierr` part.
-    expect(prefixTermOf("O'Br")).toBe('br');
-    expect(prefixTermOf('Jean-Pi')).toBe('pi');
+    expect(prefixTermOf("O'Br")).toBe('Br');
+    expect(prefixTermOf('Jean-Pi')).toBe('Pi');
   });
 
   it('is null when nothing usable is left', () => {
@@ -55,7 +66,7 @@ describe('prefixTermOf', () => {
   it('is null for a single letter, which would match nearly every row', () => {
     expect(prefixTermOf('J')).toBeNull();
     expect(prefixTermOf('Jordan H')).toBeNull();
-    expect(prefixTermOf('Jo')).toBe('jo');
+    expect(prefixTermOf('Jo')).toBe('Jo');
   });
 });
 
@@ -71,7 +82,7 @@ describe('SearchService keyword search with prefix', () => {
     expect(sql).toContain(`|| to_tsquery('simple', $4 || ':*')`);
     expect(params).toHaveLength(4);
     expect(params.slice(0, 2)).toEqual(['user-1', 'Jor']);
-    expect(params[3]).toBe('jor');
+    expect(params[3]).toBe('Jor');
   });
 
   it('numbers the prefix after the type and time filters', async () => {
@@ -89,7 +100,20 @@ describe('SearchService keyword search with prefix', () => {
 
     expect(sql).toContain(`to_tsquery('simple', $5 || ':*')`);
     expect(params).toHaveLength(5);
-    expect(params[4]).toBe('jor');
+    expect(params[4]).toBe('Jor');
+  });
+
+  it('runs keyword search for an auto-mode query of any length', async () => {
+    const { service, query, generateEmbeddingString } = makeService();
+
+    // Five words: left to the word count, auto would pick boosted and drop the prefix.
+    await service.search(CONTEXT, { query: 'coffee with Jordan at Ha', prefix: true });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(generateEmbeddingString).not.toHaveBeenCalled();
+    expect(sql).toContain(`to_tsquery('simple', $4 || ':*')`);
+    expect(params[3]).toBe('Ha');
   });
 
   it('leaves the query as it was without the flag', async () => {
@@ -101,6 +125,5 @@ describe('SearchService keyword search with prefix', () => {
 
     expect(sql).not.toContain(':*');
     expect(params).toHaveLength(3);
-    expect(params).not.toContain('jor');
   });
 });

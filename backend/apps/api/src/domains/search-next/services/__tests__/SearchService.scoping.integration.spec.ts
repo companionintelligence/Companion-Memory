@@ -199,6 +199,19 @@ describeWithDatabase(`SearchService scoping against a live Postgres (${availabil
 
       expect(results.map(({ id }) => id)).toEqual([obrien]);
     });
+
+    it('prefix: reads the half-typed word the way Postgres read the indexed one', async () => {
+      // Postgres lowers "İ" to "i"; JavaScript to "i" plus a combining dot.
+      const istanbul = await seedVector(userA, 'place', 'İstanbul');
+      // The vowel signs are combining marks, and Postgres keeps them inside the word.
+      const rahul = await seedVector(userA, 'person', 'राहुल शर्मा');
+
+      const turkish = await service.search(contextA, { query: 'İst', mode: 'keyword', prefix: true });
+      const hindi = await service.search(contextA, { query: 'राहु', mode: 'keyword', prefix: true });
+
+      expect(turkish.map(({ id }) => id)).toEqual([istanbul]);
+      expect(hindi.map(({ id }) => id)).toEqual([rahul]);
+    });
   });
 
   describe('semanticSearch (mode: semantic)', () => {
