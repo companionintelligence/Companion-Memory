@@ -68,6 +68,7 @@ function build(overrides: Partial<Record<string, unknown>> = {}) {
     findAll: jest.fn(),
     findById: jest.fn(),
     update: jest.fn(),
+    findOwnedUnitOfModel: jest.fn(async () => null),
     ...(overrides.itemService as object),
   };
 
@@ -358,6 +359,33 @@ describe('ItemResolver.objectByIdentifier', () => {
     expect(payload.item ?? null).toBeNull();
     expect(objectIdentifierService.resolve).toHaveBeenCalled();
     expect(productModelService.findById).toHaveBeenCalledWith({ userId: 'user-1' }, PRODUCT_A);
+  });
+
+  it('answers a model code with the unit you own of that model, as an Amazon import leaves it', async () => {
+    const owned = makeItem({ name: 'Castrol GTX motor oil', identifierCodes: { asin: 'B09M95S7ZN' } });
+    const { resolver, itemService } = build({
+      objectIdentifierService: {
+        resolve: jest.fn(async () => ({
+          subjectType: 'product_model',
+          subjectId: PRODUCT_A,
+          namespace: 'asin',
+          valueNormalized: 'B09M95S7ZN',
+          qualifier: '',
+          confidence: 1,
+        })),
+      },
+      productModelService: { findById: jest.fn(async () => ({ id: PRODUCT_A, title: 'Castrol GTX' })) },
+      itemService: { findOwnedUnitOfModel: jest.fn(async () => owned) },
+    });
+
+    const payload = await resolver.objectByIdentifier(context, 'asin', 'B09M95S7ZN');
+
+    expect(payload.subjectType).toBe('product_model');
+    expect(payload.item?.id).toBe(GlobalUID.encode('item', ITEM_A));
+    expect(itemService.findOwnedUnitOfModel).toHaveBeenCalledWith({ userId: 'user-1' }, PRODUCT_A, {
+      namespace: 'asin',
+      value: 'B09M95S7ZN',
+    });
   });
 
   it('reports an unreadable code as unmatched rather than raising', async () => {

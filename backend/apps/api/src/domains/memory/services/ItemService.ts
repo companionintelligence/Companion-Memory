@@ -765,6 +765,34 @@ export class ItemService {
   }
 
   /**
+   * The unit you own of a product model, or `null` when you own none.
+   *
+   * Found by the unit's product link, or by the model's code in the unit's own
+   * `identifier_codes` (keyed by namespace, value normalized), which is where an
+   * import such as Amazon's leaves it: the ASIN is claimed by the catalog
+   * model, and the unit's `product_id` stays empty. Of several units, one you
+   * still have (`active`) comes first, then the most recently acquired.
+   */
+  async findOwnedUnitOfModel(
+    context: UserServiceContext,
+    productId: string,
+    code: { namespace: string; value: string },
+  ): Promise<Item | null> {
+    const rows: Array<{ object_id: string }> = await this.itemRepository.query(
+      `SELECT object_id
+         FROM ci.objects
+        WHERE user_id = $1::uuid
+          AND merged_into_object_id IS NULL
+          AND (product_id = $2::uuid OR identifier_codes ->> $3 = $4)
+        ORDER BY (lifecycle_state = 'active') DESC, acquired_at DESC NULLS LAST, object_id DESC
+        LIMIT 1`,
+      [context.userId, productId, code.namespace, code.value],
+    );
+
+    return rows.length === 0 ? null : this.findById(context, rows[0].object_id);
+  }
+
+  /**
    * The Items associated with each of `fileIds`, keyed by file id. A file with
    * no items is absent from the map rather than a positional hole a caller
    * could zip its neighbours onto.
