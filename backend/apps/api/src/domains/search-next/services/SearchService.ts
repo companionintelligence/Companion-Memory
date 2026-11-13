@@ -241,6 +241,13 @@ type BaseSearchOptions = {
   /** See {@link SemanticSearchScope.mediaContentOnly}. */
   mediaContentOnly?: boolean;
   /**
+   * `keyword` mode only: also match the query's last word as the START of a
+   * word, so "Jor" finds Jordan. For menus that search as you type, such as a
+   * note's `[[` link menu; `websearch_to_tsquery` alone matches whole
+   * (stemmed) words, so a half-typed name found nothing.
+   */
+  prefix?: boolean;
+  /**
    * Hybrid fusion strategy:
    * - `'weighted'` (default): 50/50 normalized score average.
    * - `'rrf'`: Reciprocal Rank Fusion ($\sum_i \frac{1}{k + \text{rank}_i}$, $k=60$),
@@ -492,6 +499,19 @@ const DEFAULT_MAX_RESULTS = 25;
  * bound as `$2`.
  */
 const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery`;
+
+/**
+ * The last word of a query, reduced to letters and digits and lower-cased, for
+ * a `to_tsquery('simple', ... || ':*')` prefix match; `null` when nothing is
+ * left. Only letters and digits survive, so the bound value can never carry
+ * tsquery syntax of its own.
+ */
+export function prefixTermOf(query: string): string | null {
+  const words = query.trim().split(/\s+/);
+  const last = (words[words.length - 1] ?? '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+
+  return last.length > 0 ? last : null;
+}
 
 @Injectable()
 export class SearchService {
@@ -1451,13 +1471,24 @@ export class SearchService {
     const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0));
     const { weights } = await this.rankingLiterals();
 
+    // The whole-word query OR'd with the last word as a prefix. 'simple', not
+    // 'english': stemming a half-typed word would guess at a word the person
+    // has not finished. The whole words still go through 'english', so a
+    // finished "Jordans" matches as it did before.
+    const prefixTerm = options.prefix === true ? prefixTermOf(query) : null;
+    const prefixParam = 3 + (typeFilter.param ? 1 : 0) + timeFilter.params.length;
+    const tsquery =
+      prefixTerm == null
+        ? KEYWORD_TSQUERY_SQL
+        : `(${KEYWORD_TSQUERY_SQL}) || to_tsquery('simple', $${prefixParam} || ':*')`;
+
     // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
     // the size of the whole match set on every returned row — and it is free
     // here, because ORDER BY score already ranks every matching row before the
     // LIMIT takes the top of it.
     const sql = `
       WITH q AS (
-        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
+        SELECT ${tsquery} AS tq
       )
       SELECT
         entity_id,
@@ -1483,6 +1514,10 @@ export class SearchService {
     }
 
     params.push(...timeFilter.params);
+
+    if (prefixTerm != null) {
+      params.push(prefixTerm);
+    }
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 

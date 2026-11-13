@@ -172,6 +172,25 @@ describeWithDatabase(`SearchService scoping against a live Postgres (${availabil
       expect(results).toHaveLength(1);
       expect(results[0].type).toBe('person');
     });
+
+    it('prefix: a half-typed name finds the whole one, and only for this user', async () => {
+      const jordanLee = await seedVector(userA, 'person', 'Jordan Lee');
+      const jordanHale = await seedVector(userA, 'person', 'Jordan Hale');
+      await seedVector(userA, 'person', 'Casey Brooks');
+      await seedVector(userB, 'person', 'Jordan Kim');
+
+      // Whole words only without the flag: "Jor" is not a word anybody wrote.
+      expect(await service.search(contextA, { query: 'Jor', mode: 'keyword' })).toEqual([]);
+
+      const results = await service.search(contextA, { query: 'Jor', mode: 'keyword', prefix: true });
+
+      expect(results.map(({ id }) => id).sort()).toEqual([jordanLee, jordanHale].sort());
+
+      // The earlier words still match whole, and rank the row with both first.
+      const both = await service.search(contextA, { query: 'Jordan Ha', mode: 'keyword', prefix: true });
+
+      expect(both[0]?.id).toBe(jordanHale);
+    });
   });
 
   describe('semanticSearch (mode: semantic)', () => {

@@ -3533,6 +3533,7 @@ input SearchInput {
   includeTypes: [String!]
   people: [String!]
   places: [String!]
+  prefix: Boolean
   query: String
   semantic: Boolean
   shareToken: String
