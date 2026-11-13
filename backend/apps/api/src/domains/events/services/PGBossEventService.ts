@@ -1584,7 +1584,7 @@ export class PGBossEventService
           message: reason instanceof Error ? reason.message : String(reason),
           stack: reason instanceof Error ? reason.stack : undefined,
           failedAt: new Date().toISOString(),
-          // See failJob: the dead-letter copy keeps `output` but not the queue.
+          // See failJob for why the failure names its queue.
           queue: queueName,
         }),
         'fail',
@@ -1703,10 +1703,12 @@ export class PGBossEventService
    * the plan only touches `state < 'completed'`.
    *
    * The output always names the queue. When the job is out of retries, pg-boss
-   * copies only its `data` and `output` onto the `dead-letter` queue, so without
-   * this a dead letter cannot say where it died. `DeadLetterReaperListener`
-   * reads `output.queue` back, and replay sends the letter to that queue alone
-   * rather than to every queue that listens for the event.
+   * copies it onto the `dead-letter` queue. pg-boss 10 kept only `data` and
+   * `output` on that copy, so without this a dead letter could not say where it
+   * died. pg-boss 12 keeps the output in `source_output` and the queue in
+   * `source_name`. `DeadLetterReaperListener` reads this field first and
+   * `source_name` after it. Replay sends the letter to that queue alone rather
+   * than to every queue that listens for the event.
    */
   async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<boolean> {
     const result = (await this.boss.fail(queue, jobId, { ...output, queue })) as unknown as
