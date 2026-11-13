@@ -700,6 +700,17 @@ describe('the system-line filter must not eat human messages', () => {
       );
     });
 
+    it('names a bare _chat.txt in a run folder from its transcript, not the run id', async () => {
+      // An uploaded `_chat.txt` lands at the top of the run's scratch folder,
+      // `<scratch>/<user>/<run id>/`. Named after the run id, the same chat
+      // uploaded twice was two chats.
+      const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
+      const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
+
+      expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+      expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
+    });
+
     it('keeps the export folder name when the folder sits inside the service folder', async () => {
       const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
       const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);

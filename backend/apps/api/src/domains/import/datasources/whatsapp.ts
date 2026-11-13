@@ -59,8 +59,11 @@ const IOS_RE =
  * dropped straight into `<inbox>/whatsapp/` was named "whatsapp": every message
  * of the same export uploaded earlier through the wizard was saved a second
  * time under that name, and two different chats dropped that way shared one
- * thread. The caller names such a chat from its transcript instead
- * ({@link conversationNameFromTranscript}).
+ * thread. Null too when the folder is an import run's own scratch folder,
+ * which is where a bare `_chat.txt` lands when it is uploaded or dropped at
+ * the inbox's top level: named after the run's id, it was a new chat every
+ * time it was imported. The caller names such a chat from its transcript
+ * instead ({@link conversationNameFromTranscript}).
  */
 function conversationNameFrom(chatPath: string): string | null {
   const normalise = (value: string): string =>
@@ -83,7 +86,7 @@ function conversationNameFrom(chatPath: string): string | null {
 
   const directory = path.basename(path.dirname(chatPath));
 
-  if (SERVICE_FOLDERS.has(directory.toLowerCase())) {
+  if (SERVICE_FOLDERS.has(directory.toLowerCase()) || RUN_FOLDER_RE.test(directory)) {
     return null;
   }
 
@@ -94,6 +97,9 @@ function conversationNameFrom(chatPath: string): string | null {
 
 /** The inbox's service folders (`whatsapp`, `google-takeout`, …): folders the inbox made, not names an export chose. */
 const SERVICE_FOLDERS = new Set(serviceInboxFolders().map((folder) => folder.toLowerCase()));
+
+/** An import run's scratch folder, named after the run's id. No export names a chat like this. */
+const RUN_FOLDER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
 
