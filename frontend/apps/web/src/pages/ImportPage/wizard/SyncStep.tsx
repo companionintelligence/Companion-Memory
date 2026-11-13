@@ -126,9 +126,8 @@ export function SyncStep({ onBackToExport, showNav = true, onNavState }: SyncSte
 
       {error != null && (
         <Alert variant="destructive">
-          {/* The description, not a bare span: the alert is a grid whose first
-              column is the (absent) icon's and is 0 wide, and only the
-              description sits in the second, so a span wrapped one word per line. */}
+          {/* Text goes through Description. Anything else lands in the alert
+              grid's first column, which belongs to the icon and is 0 wide without one. */}
           <Alert.Description>{error}</Alert.Description>
         </Alert>
       )}

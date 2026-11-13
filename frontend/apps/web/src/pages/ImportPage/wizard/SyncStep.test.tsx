@@ -179,7 +179,7 @@ describe('SyncStep', () => {
     // The alert's first grid column belongs to an icon and is 0 wide without
     // one. Only the description is placed in the second, so text anywhere else
     // was squeezed to a word per line.
-    expect(message).toHaveAttribute('data-slot', 'alert-description');
+    expect(message.closest('[data-slot="alert-description"]')).not.toBeNull();
     expect(screen.getByRole('alert')).toContainElement(message);
   });
 
