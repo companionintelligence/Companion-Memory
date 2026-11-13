@@ -194,6 +194,44 @@ describe('Chat', () => {
     warn.mockRestore();
   });
 
+  it('shows the last character of a finished reply', async () => {
+    // `streaming-markdown` holds back a closing `!`, `.` or `*` in case it starts markdown and writes it only when the
+    // parser is ended. A reply with no trailing newline lost it on screen until a reload.
+    const encoder = new FrameEncoder();
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encodeFrame(Channel.TEXT, 'Hi '));
+        controller.enqueue(encoder.encodeFrame(Channel.TEXT, 'Blake!'));
+        controller.close();
+      },
+    });
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Hi Blake!'));
+  });
+
+  it('shows the last character of a reply block that a tool call ends', async () => {
+    const encoder = new FrameEncoder();
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encodeFrame(Channel.TEXT, 'Let me look that up.'));
+        controller.enqueue(
+          encoder.encodeFrame(Channel.TOOL, JSON.stringify([{ function: { name: 'memory.search' } }])),
+        );
+        controller.close();
+      },
+    });
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Let me look that up.'));
+  });
+
   /**
    * A turn whose stream dies — the on-device model failing right after a tool call was the case that motivated this.
    * The notice always says the reply is incomplete; it adds the reason only when the failure carries one.

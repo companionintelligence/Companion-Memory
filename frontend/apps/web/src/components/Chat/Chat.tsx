@@ -161,6 +161,18 @@ export function Chat({
     // of a block. These refs will not be set until the next React render cycle and
     // we want to pause the text stream until they fixate on the newly created stream
     // receiver elements.
+    //
+    // End both parsers first. `streaming-markdown` holds back the last few characters in case they start markdown (a
+    // closing `!`, `.`, `*` or the end of a link) and writes them only on `parser_end`, so a block dropped without it
+    // stayed a character short until a reload.
+    if (textParserRef.current) {
+      smd.parser_end(textParserRef.current);
+    }
+
+    if (thinkParserRef.current) {
+      smd.parser_end(thinkParserRef.current);
+    }
+
     textStreamingRef.current = null;
     textParserRef.current = null;
     thinkStreamingRef.current = null;
