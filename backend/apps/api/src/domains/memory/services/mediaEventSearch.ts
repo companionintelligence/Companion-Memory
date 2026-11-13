@@ -27,7 +27,8 @@ export interface MediaEventSearchDeps {
         query: string;
         maxResults?: number;
         includeTypes: IndexableEntity[];
-        mode?: 'semantic';
+        mode?: 'semantic' | 'keyword';
+        prefix?: boolean;
       },
     ): Promise<EntityIdentifier<IndexableEntity>[]>;
   };
@@ -61,17 +62,23 @@ export function searchReachesEvents(
   return true;
 }
 
-/** Event identifiers for every event whose content or file matches `query`. */
+/**
+ * Event identifiers for every event whose content or file matches `query`.
+ * `prefix` is the search-as-you-type keyword match the direct search ran with
+ * (`SearchOptions.prefix`), so both halves read a half-typed word the same way.
+ */
 export async function eventsForMatchingMedia(
   deps: MediaEventSearchDeps,
   context: UserServiceContext,
-  options: { query: string; maxResults?: number; semantic?: boolean },
+  options: { query: string; maxResults?: number; semantic?: boolean; prefix?: boolean },
 ): Promise<EntityIdentifier<IndexableEntity>[]> {
   const hits = await deps.searchService.search(context, {
     query: options.query,
     maxResults: options.maxResults,
     includeTypes: MEDIA_HIT_TYPES,
-    ...(options.semantic && { mode: 'semantic' as const }),
+    ...(options.semantic
+      ? { mode: 'semantic' as const }
+      : options.prefix && { mode: 'keyword' as const, prefix: true }),
   });
 
   const contentIds = hits.filter((hit) => hit.type === 'content').map((hit) => hit.id);
