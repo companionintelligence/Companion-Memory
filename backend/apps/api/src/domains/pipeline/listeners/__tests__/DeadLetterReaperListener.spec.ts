@@ -643,10 +643,14 @@ describe('DeadLetterReaperListener', () => {
     }
 
     /**
-     * One exhausted job on the dead-letter queue, as pg-boss re-inserts it:
-     * original payload in `data`, the failure in `output`.
+     * One exhausted job on the dead-letter queue, as pg-boss 10 re-inserted it:
+     * original payload in `data`, the failure in `output`. pg-boss 12 leaves
+     * `output` empty and puts the failure in `source_output` and the queue it
+     * failed on in `source_name`; pass those for that shape.
      */
-    async function seedDeadLetter(fields: { data?: unknown; output?: unknown } = {}): Promise<string> {
+    async function seedDeadLetter(
+      fields: { data?: unknown; output?: unknown; sourceOutput?: unknown; sourceName?: string } = {},
+    ): Promise<string> {
       const id = randomUUID();
       // Year 2000 + a monotonic counter: older than every genuine dead letter,
       // so `ORDER BY created_on LIMIT` is deterministic no matter what the live
@@ -654,9 +658,18 @@ describe('DeadLetterReaperListener', () => {
       const createdOn = new Date(Date.UTC(2000, 0, 1) + clock++ * 1_000).toISOString();
 
       await runner.query(
-        `INSERT INTO pgboss.job (id, name, data, output, created_on, keep_until)
-         VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb, $5::timestamptz, $5::timestamptz + interval '30 days')`,
-        [id, DEAD_LETTER_QUEUE, toJsonb(fields.data), toJsonb(fields.output), createdOn],
+        `INSERT INTO pgboss.job (id, name, data, output, source_output, source_name, created_on, keep_until)
+         VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::timestamptz,
+                 $7::timestamptz + interval '30 days')`,
+        [
+          id,
+          DEAD_LETTER_QUEUE,
+          toJsonb(fields.data),
+          toJsonb(fields.output),
+          toJsonb(fields.sourceOutput),
+          fields.sourceName ?? null,
+          createdOn,
+        ],
       );
 
       return id;
@@ -741,6 +754,47 @@ describe('DeadLetterReaperListener', () => {
       const [letter] = await lettersFor([id]);
       expect(letter.queue).toBe('file-preview-generation');
       expect(letter.error).toBe('vips not found on PATH');
+    });
+
+    /**
+     * The shape every dead letter has had since pg-boss 12: the copy is a new
+     * job that has not run, so its `output` is NULL, and the failed job's output
+     * and queue ride along as `source_output` and `source_name`. Reading
+     * `output` alone filed every one of these as `dead-letter` with the "no
+     * recorded output" placeholder.
+     */
+    it('reads the failure and its queue from where pg-boss 12 keeps them', async () => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded', fileId: randomUUID() },
+        sourceName: 'document-parsing',
+        sourceOutput: {
+          message: 'fetch failed',
+          stack: 'TypeError: fetch failed\n    at MarkItDownExtractor.parse (MarkItDownExtractor.ts:69:22)',
+          queue: 'document-parsing',
+        },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('document-parsing');
+      expect(letter.error).toBe(
+        'fetch failed\nTypeError: fetch failed\n    at MarkItDownExtractor.parse (MarkItDownExtractor.ts:69:22)',
+      );
+    });
+
+    it("takes the queue from `source_name` when the failure names none, as pg-boss's own expiry does not", async () => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded' },
+        sourceName: 'file-preview-generation',
+        sourceOutput: { value: { message: 'job failed by timeout in active state' } },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('file-preview-generation');
+      expect(letter.error).toContain('job failed by timeout in active state');
     });
 
     it.each([

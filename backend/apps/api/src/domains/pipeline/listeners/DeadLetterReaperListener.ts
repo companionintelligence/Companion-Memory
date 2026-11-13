@@ -183,20 +183,28 @@ export class DeadLetterReaperListener {
     // this table's primary key, so the steady-state cost of a reap that finds
     // nothing is an index probe per candidate.
     //
+    // `failure` is the failed job's output. Since pg-boss 12 the dead-letter copy
+    // is a new job that has not run, so its own `output` is NULL and the failed
+    // job's output is in `source_output`, next to the queue it failed on in
+    // `source_name`. Reading `output` alone recorded every letter as
+    // `dead-letter` with the "no recorded output" placeholder. A copy made by
+    // pg-boss 10 has no `source_*` and its `output` holds the failure, so that
+    // is the fallback.
+    //
     // Column-by-column notes, each guarding a way this can meet data it did not
     // expect:
-    //  - `queue` is the queue the job FAILED on, read from `output.queue`, which
-    //    `PGBossEventService` writes on both of its failure paths. pg-boss's
-    //    dead-letter copy keeps `data` and `output` and drops the source queue,
-    //    so this is the only place it survives. Replay sends the letter to this
+    //  - `queue` is the queue the job FAILED on, read from the failure's `queue`,
+    //    which `PGBossEventService` writes on both of its failure paths, then
+    //    from `source_name`. Replay sends the letter to this
     //    queue alone, unless it no longer listens for the event or the letter
     //    has a better route (see `replayQueueFor` in PipelineRunService).
     //    Before, every reaped letter said `dead-letter` and replay
     //    fanned it out to every queue listening for the event: a `file.uploaded`
     //    that failed only its preview re-ran all six of its listeners. A blank,
-    //    non-string or `dead-letter` value falls back to `j.name`, as does an
-    //    output with no queue (pg-boss's own expiry writes one, and so did every
-    //    failure before this field existed). Those still replay by listener
+    //    non-string or `dead-letter` value falls back to `source_name`, as does
+    //    an output with no queue (pg-boss's own expiry writes one, and so did
+    //    every failure before this field existed). A copy with neither (made by
+    //    pg-boss 10) falls back to `j.name` and still replays by listener
     //    registration.
     //  - `payload` is `j.data` VERBATIM. Never wrapped, never enriched — a dead
     //    letter that cannot be replayed byte-for-byte is just a log line.
@@ -217,9 +225,11 @@ export class DeadLetterReaperListener {
               (id, queue, event_name, stage, entity_type, entity_id, user_id, payload, error, failed_at)
        SELECT j.id,
               CASE
-                WHEN jsonb_typeof(j.output->'queue') = 'string'
-                 AND j.output->>'queue' NOT IN ('', $1)
-                THEN j.output->>'queue'
+                WHEN jsonb_typeof(f.failure->'queue') = 'string'
+                 AND f.failure->>'queue' NOT IN ('', $1)
+                THEN f.failure->>'queue'
+                WHEN j.source_name NOT IN ('', $1)
+                THEN j.source_name
                 ELSE j.name
               END,
               COALESCE(NULLIF(j.data->>'name', ''), 'unknown'),
@@ -256,12 +266,13 @@ export class DeadLetterReaperListener {
               ),
               COALESCE(j.data, '{}'::jsonb),
               COALESCE(
-                NULLIF(j.output->>'message', '') || COALESCE(E'\\n' || (j.output->>'stack'), ''),
-                j.output::text,
+                NULLIF(f.failure->>'message', '') || COALESCE(E'\\n' || (f.failure->>'stack'), ''),
+                f.failure::text,
                 'pg-boss job exhausted its retries with no recorded output'
               ),
               j.created_on
          FROM pgboss.job j
+        CROSS JOIN LATERAL (SELECT COALESCE(j.source_output, j.output) AS failure) f
         WHERE j.name = $1
           AND NOT EXISTS (SELECT 1 FROM ci.pipeline_dead_letters d WHERE d.id = j.id)
         ORDER BY j.created_on
