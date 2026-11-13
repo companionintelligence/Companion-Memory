@@ -646,6 +646,49 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
     expect(query).not.toHaveBeenCalled();
     expect(update.mock.calls[0][1]).toEqual(expect.objectContaining({ resolvedProductId: NAMED_PRODUCT }));
   });
+
+  it('moves the thing\'s "last seen" when the row comes back confirmed and linked', async () => {
+    const { service, findOne, query } = makeService();
+    const observedAt = new Date('2026-05-02T10:00:00.000Z');
+
+    findOne
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-7',
+      })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: true,
+        resolvedObjectId: 'item-7',
+        observedAt,
+        placeEntityId: null,
+      });
+
+    await service.confirm(ctx(), 'obs-1');
+
+    const touch = query.mock.calls.find(([sql]) => String(sql).includes('SET last_seen_at'));
+    expect(touch?.[1]).toEqual([USER, 'item-7', observedAt, null]);
+  });
+
+  it('leaves "last seen" alone for a retraction that keeps the link', async () => {
+    const { service, findOne, query } = makeService();
+
+    findOne
+      .mockResolvedValueOnce({ id: 'obs-1', userId: USER, confirmedByUser: true, resolvedObjectId: 'item-1' })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-1',
+      });
+
+    await service.confirm(ctx(), 'obs-1', false);
+
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('SET last_seen_at'))).toBe(false);
+  });
 });
 
 describe('ObjectObservationService.sendBackToReview — "not this thing"', () => {
