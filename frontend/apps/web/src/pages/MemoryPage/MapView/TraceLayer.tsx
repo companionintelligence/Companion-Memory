@@ -12,6 +12,7 @@ import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { boundsToBbox, clampBboxSpan } from '../bbox';
 import { useEntityService } from '../useEntityService';
 
+import { fitPadding } from './pinSet';
 import { describeTrace, traceRadius, traceSegments, type TracePoint } from './trace';
 
 /**
@@ -272,7 +273,16 @@ export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: s
  * here, and because the event pins must keep working exactly as they did when
  * it is switched off.
  */
-export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; fitToTrace: boolean }) {
+export function PositionTraceLayer({
+  enabled,
+  fitToTrace,
+  panelInset = 0,
+}: {
+  enabled: boolean;
+  fitToTrace: boolean;
+  /** How much of the map's left edge a panel covers; the trace is framed right of it. */
+  panelInset?: number;
+}) {
   const { points, loading, error, totalFixes, bucketSeconds, hasMore } = usePositionTrack({ enabled });
   const map = useLeafletMap();
   const fitted = useRef(false);
@@ -289,9 +299,9 @@ export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; 
     fitted.current = true;
     map.fitBounds(
       L.latLngBounds(points.map((point) => [point.latitude, point.longitude] as [number, number])),
-      { padding: [60, 60], maxZoom: 13 },
+      { ...fitPadding(panelInset), maxZoom: 13 },
     );
-  }, [enabled, fitToTrace, points, map]);
+  }, [enabled, fitToTrace, points, map, panelInset]);
 
   if (!enabled) {
     return null;
