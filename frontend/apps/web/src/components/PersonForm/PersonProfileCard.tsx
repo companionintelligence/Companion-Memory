@@ -153,14 +153,18 @@ export function PersonProfileCard({ person, onEdit }: Props) {
   }
 
   if (person.website) {
+    // A contact card keeps its URL as typed, often a bare `www.example.com`.
+    // As an `href` that opened one of Memory's own pages, so only a web
+    // address is a link (see webAddress). The link goes to the parsed form
+    // because a browser reads `https:www.example.com` in an `href` as a path
+    // on Memory's own https origin.
+    const website = webAddress(person.website);
+
     rows.push(
-      // A contact card keeps its URL as typed, often a bare `www.example.com`.
-      // As an `href` that opened one of Memory's own pages, so only a web
-      // address is a link (see webAddress).
       <Row key="website" label="Website">
-        {webAddress(person.website) ? (
+        {website ? (
           <a
-            href={person.website}
+            href={website.href}
             target="_blank"
             rel="noreferrer noopener"
             className="truncate hover:underline"

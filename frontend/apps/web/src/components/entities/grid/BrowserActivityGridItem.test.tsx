@@ -27,6 +27,17 @@ describe('BrowserActivityGridItem', () => {
     expect(link).toHaveAttribute('href', 'https://vitest.dev/guide/');
   });
 
+  it('links the parsed address, not the string as stored', () => {
+    renderWithProviders(
+      <BrowserActivityGridItem browserActivity={makeActivity({ url: 'http:vitest.dev/guide/' })} />,
+    );
+
+    expect(screen.getByRole('link', { name: 'vitest.dev' })).toHaveAttribute(
+      'href',
+      'http://vitest.dev/guide/',
+    );
+  });
+
   it('shows a stored string that is not a web address as text, not as a link', () => {
     renderWithProviders(<BrowserActivityGridItem browserActivity={makeActivity({ url: 'not a url' })} />);
 

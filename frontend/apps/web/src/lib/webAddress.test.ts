@@ -8,6 +8,10 @@ describe('webAddress', () => {
     expect(webAddress('http://example.com/a')?.pathname).toBe('/a');
   });
 
+  it('normalizes an address written without slashes', () => {
+    expect(webAddress('https:www.example.com')?.href).toBe('https://www.example.com/');
+  });
+
   it('is null for text that an import stored in place of an address', () => {
     expect(webAddress('Explored on Google Maps')).toBeNull();
     expect(webAddress('Dismissed shelf Expiration date: Dec 8, 2026')).toBeNull();

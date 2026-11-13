@@ -36,7 +36,7 @@ export function BrowserActivityGridItem({ browserActivity, onClick }: Props) {
         <div className="line-clamp-3 w-full min-w-0 break-words leading-tight">{data.title}</div>
         {address ? (
           <a
-            href={data.url}
+            href={address.href}
             target="_blank"
             rel="noopener noreferrer"
             className="block w-full min-w-0 truncate text-blue-600 hover:text-blue-800 hover:underline"

@@ -42,6 +42,17 @@ describe('BrowserActivityRow', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
+  it('links the parsed address, not the string as stored', () => {
+    renderWithProviders(
+      <BrowserActivityRow browserActivity={makeActivity({ url: 'http:vitest.dev/guide/' })} />,
+    );
+
+    expect(screen.getByRole('link', { name: 'vitest.dev/guide/' })).toHaveAttribute(
+      'href',
+      'http://vitest.dev/guide/',
+    );
+  });
+
   it('shows other stored text plainly', () => {
     renderWithProviders(
       <BrowserActivityRow browserActivity={makeActivity({ title: 'Lanier', url: 'around Lanier' })} />,

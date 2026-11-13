@@ -130,12 +130,23 @@ describe('PersonProfileCard', () => {
 
     expect(screen.getByRole('link', { name: 'https://dana.example.com' })).toHaveAttribute(
       'href',
-      'https://dana.example.com',
+      'https://dana.example.com/',
     );
 
     rerender(<PersonProfileCard person={{ name: 'Dana', website: 'www.example.com' }} />);
     expect(screen.getByText('www.example.com')).toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('links the parsed address, not the string as typed', () => {
+    // `http:www.example.com` parses as http://www.example.com/, but as a raw
+    // href on an http page the browser reads it as a path on this origin.
+    render(<PersonProfileCard person={{ name: 'Dana', website: 'http:www.example.com' }} />);
+
+    expect(screen.getByRole('link', { name: 'http:www.example.com' })).toHaveAttribute(
+      'href',
+      'http://www.example.com/',
+    );
   });
 
   it('drops addresses with no lines rather than rendering an empty row', () => {

@@ -25,27 +25,29 @@ export function BrowserActivityRow({ browserActivity, time, onClick }: Props) {
 
   const address = useMemo(() => webAddress(data.url), [data.url]);
 
+  // Text that is not an address (see webAddress) shows plainly. It is left out
+  // when it only repeats the title above it.
+  let subtitle: ReactNode = data.url !== data.title ? data.url : null;
+
+  if (address) {
+    subtitle = (
+      <a
+        href={address.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 hover:text-blue-800 hover:underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {address.hostname + address.pathname}
+      </a>
+    );
+  }
+
   return (
     <EntityRow
       icon={<BrowserActivityIcon />}
       title={data.title || 'Untitled page'}
-      subtitle={
-        address ? (
-          <a
-            href={data.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:text-blue-800 hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {address.hostname + address.pathname}
-          </a>
-        ) : // Not an address (see webAddress): plain text, and none at all when
-        // it only repeats the title above it.
-        data.url !== data.title ? (
-          data.url
-        ) : null
-      }
+      subtitle={subtitle}
       time={time}
       onClick={onClick}
     />
