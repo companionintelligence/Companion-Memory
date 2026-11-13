@@ -1,4 +1,8 @@
-import { bytes, csv, duration, stamp, table } from '../output';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
+
+import { bytes, closedPipeTolerant, csv, duration, stamp, table } from '../output';
 
 describe('table', () => {
   it('pads columns to their widest cell and rules the header', () => {
@@ -64,5 +68,59 @@ describe('csv', () => {
   it('distinguishes "not given" from "given as empty"', () => {
     expect(csv(undefined)).toBeUndefined();
     expect(csv(' , ')).toBeUndefined();
+  });
+});
+
+describe('closedPipeTolerant', () => {
+  it.skipIf(process.platform === 'win32')(
+    'drops what is left once the reader has closed the pipe, instead of crashing',
+    async () => {
+      // A reader that is still running but has closed its end, the way `head`
+      // has once it has its ten lines. Without a listener the EPIPE below is an
+      // uncaught exception, which fails this run.
+      const reader = spawn('sh', ['-c', 'exec 0<&-; echo closed; sleep 5'], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+
+      try {
+        await once(reader.stdout!, 'data');
+
+        const stdin = reader.stdin!;
+        // Not `once()`: that rejects on the very `error` event under test.
+        const closed = new Promise((resolve) => stdin.once('close', resolve));
+        const write = closedPipeTolerant(stdin);
+
+        write('first line\n');
+        await closed;
+
+        expect((stdin.errored as NodeJS.ErrnoException | null)?.code).toBe('EPIPE');
+        expect(() => write('a line nobody will read\n')).not.toThrow();
+      } finally {
+        reader.kill();
+      }
+    },
+  );
+
+  it('stops calling write after EPIPE', () => {
+    const stream = new PassThrough();
+    const written = vi.spyOn(stream, 'write');
+    const write = closedPipeTolerant(stream);
+
+    write('before\n');
+    stream.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    write('after\n');
+
+    expect(written).toHaveBeenCalledTimes(1);
+    expect(written).toHaveBeenCalledWith('before\n');
+  });
+
+  it('still throws any other write error', () => {
+    const stream = new PassThrough();
+
+    closedPipeTolerant(stream);
+
+    expect(() => stream.emit('error', Object.assign(new Error('write EIO'), { code: 'EIO' }))).toThrow(
+      'write EIO',
+    );
   });
 });
