@@ -42,7 +42,7 @@ import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 import { booleanish } from './booleanish';
-import { compactSearchHit, type CompactSearchHit, stringCapFor } from './compactSearchHit';
+import { boundSearchPage, type CompactSearchHit } from './compactSearchHit';
 
 /**
  * `query` is optional ONLY for a count: "how many photos do I have" has no
@@ -138,7 +138,7 @@ export type SearchResult =
 export type SearchResultItem = CompactSearchHit<IndexableEntity>;
 
 /**
- * A hit before {@link compactSearchHit} trims it. `takenAt`: when a photo or video was taken (its
+ * A hit before {@link boundSearchPage} trims it. `takenAt`: when a photo or video was taken (its
  * media event's start, ISO 8601), on a content hit or a file hit through its content row. Absent
  * for anything else and for an undated photo. The only date on a photo hit that means anything:
  * `createdAt` is when it was imported.
@@ -517,12 +517,19 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
     });
 
-    const items = await this.resolveEntities(serviceContext, page.items);
+    const { items, omitted } = await this.resolveEntities(serviceContext, page.items);
+    // Hits left out for size make the page a cut of the match set even when the search was not.
+    const truncated = page.truncated || omitted > 0;
+    const sizeNote =
+      omitted > 0
+        ? ` ${omitted} more on this page were left out to keep the result small: narrow the query, ` +
+          'or use since/until, to see them.'
+        : '';
 
     return {
-      summary: describePage(page, items.length, input.sort === 'recent'),
+      summary: describePage({ ...page, truncated }, items.length, input.sort === 'recent') + sizeNote,
       totalMatches: page.totalMatches,
-      truncated: page.truncated,
+      truncated,
       limit: page.limit,
       mode: page.modeTaken,
       items,
@@ -601,16 +608,22 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
    * media.findPhotos' photos taken at a named place.
    */
   async resolveFileHits(context: ToolExecutionContext, fileIds: string[]): Promise<SearchResultItem[]> {
-    return this.resolveEntities(
+    const { items } = await this.resolveEntities(
       toServiceContext(context),
       fileIds.map((id) => ({ type: 'file' as const, id })),
     );
+
+    return items;
   }
 
+  /**
+   * The hits, hydrated and trimmed to one page's budget (see boundSearchPage). `omitted` counts
+   * the hits that resolved but were left out to keep the page inside it.
+   */
   private async resolveEntities(
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity>[],
-  ): Promise<SearchResultItem[]> {
+  ): Promise<{ items: SearchResultItem[]; omitted: number }> {
     const groupedByType: Map<IndexableEntity, string[]> = results.reduce((acc, result) => {
       if (!acc.has(result.type)) {
         acc.set(result.type, []);
@@ -745,8 +758,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
 
     // Every caller of a search intent (MCP, REST, the in-app chat, the phone) reads this, and
     // only the in-app chat and the phone bound it on the way in. See compactSearchHit.
-    const stringCap = stringCapFor(hydrated.length);
-    const orderedResults: SearchResultItem[] = hydrated.map((hit) => compactSearchHit(hit, stringCap));
+    const { items: orderedResults, omitted } = boundSearchPage(hydrated);
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
     // the caller cannot tell "nothing matched" from "everything matched was
@@ -766,7 +778,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       });
     }
 
-    return orderedResults;
+    return { items: orderedResults, omitted };
   }
 }
 

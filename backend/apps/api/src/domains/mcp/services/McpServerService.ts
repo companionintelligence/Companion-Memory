@@ -105,7 +105,10 @@ export class McpServerService {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify(result, null, 2),
+                // Compact, not indented: a model reads both the same, and indentation was about a
+                // quarter of every search result's characters, all of it spent from the caller's
+                // context window (measured 2026-11-13, OpenClaw at 64k).
+                text: JSON.stringify(result),
               },
             ],
           };

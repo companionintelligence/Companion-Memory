@@ -184,6 +184,51 @@ export function compactSearchHit<T extends { id: string; type: string; link?: st
   };
 }
 
+/**
+ * The most a page of hits may take, in characters of compact JSON. Measured 2026-11-13: with only
+ * the per-hit trim, a 25-hit page was still 17k characters, and an OpenClaw chat at a 64k window
+ * (a 45.5k-token budget, ~26k of it the fixed prompt) overflowed on its second question.
+ */
+export const PAGE_CHARACTER_BUDGET = 8_000;
+
+/** Strings are shortened this far, and no further, before hits are left out instead. */
+const SMALLEST_SHRUNK_CAP = 120;
+
+/**
+ * A page of hits, trimmed to fit {@link PAGE_CHARACTER_BUDGET}: strings shorten step by step
+ * (a hit's identity and dates never do), and if the shortest still overflows, trailing hits are
+ * left out. `omitted` counts those, so the caller can say the page was cut. The first hit is
+ * always kept.
+ */
+export function boundSearchPage<T extends { id: string; type: string; link?: string; takenAt?: string }>(
+  hits: readonly T[],
+  budget: number = PAGE_CHARACTER_BUDGET,
+): { items: CompactSearchHit<T['type']>[]; omitted: number } {
+  let cap = stringCapFor(hits.length);
+  let items = hits.map((hit) => compactSearchHit(hit, cap));
+
+  while (JSON.stringify(items).length > budget && cap > SMALLEST_SHRUNK_CAP) {
+    cap = Math.max(SMALLEST_SHRUNK_CAP, Math.floor(cap * 0.6));
+    items = hits.map((hit) => compactSearchHit(hit, cap));
+  }
+
+  const kept: CompactSearchHit<T['type']>[] = [];
+  let spent = 2;
+
+  for (const item of items) {
+    const cost = JSON.stringify(item).length + (kept.length > 0 ? 1 : 0);
+
+    if (kept.length > 0 && spent + cost > budget) {
+      break;
+    }
+
+    kept.push(item);
+    spent += cost;
+  }
+
+  return { items: kept, omitted: items.length - kept.length };
+}
+
 /** A trimmed hit: its identity, then whichever of its entity's fields had something to say. */
 export type CompactSearchHit<TType extends string = string> = {
   id: string;

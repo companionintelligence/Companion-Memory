@@ -1,4 +1,4 @@
-import { compactSearchHit, stringCapFor } from '../compactSearchHit';
+import { boundSearchPage, compactSearchHit, PAGE_CHARACTER_BUDGET, stringCapFor } from '../compactSearchHit';
 
 /**
  * The shape of a real `knowledge_search` email hit, as OpenClaw received it over MCP on
@@ -120,5 +120,48 @@ describe('compactSearchHit', () => {
     expect(stringCapFor(10)).toBe(600);
     expect(stringCapFor(100)).toBe(300);
     expect(stringCapFor(0)).toBe(4_000);
+  });
+});
+
+describe('boundSearchPage', () => {
+  const note = (i: number) => ({
+    id: `n${i}`,
+    type: 'note',
+    link: `/notes/n${i}`,
+    text: `${i} `.repeat(400),
+  });
+
+  it('leaves a page that fits alone', () => {
+    const { items, omitted } = boundSearchPage([emailHit]);
+
+    expect(omitted).toBe(0);
+    expect(items[0]).toEqual(compactSearchHit(emailHit, stringCapFor(1)));
+  });
+
+  it('shortens strings until a full page fits, keeping every hit', () => {
+    const hits = Array.from({ length: 25 }, (_, i) => note(i));
+    const { items, omitted } = boundSearchPage(hits);
+
+    expect(omitted).toBe(0);
+    expect(items).toHaveLength(25);
+    expect(JSON.stringify(items).length).toBeLessThanOrEqual(PAGE_CHARACTER_BUDGET);
+    expect(items.every((item) => item.link === `/notes/${item.id}`)).toBe(true);
+  });
+
+  it('leaves trailing hits out when even the shortest strings do not fit, and counts them', () => {
+    const hits = Array.from({ length: 80 }, (_, i) => note(i));
+    const { items, omitted } = boundSearchPage(hits);
+
+    expect(items.length + omitted).toBe(80);
+    expect(omitted).toBeGreaterThan(0);
+    expect(items.map((item) => item.id)).toEqual(hits.slice(0, items.length).map((hit) => hit.id));
+    expect(JSON.stringify(items).length).toBeLessThanOrEqual(PAGE_CHARACTER_BUDGET);
+  });
+
+  it('always keeps the first hit', () => {
+    const { items, omitted } = boundSearchPage([note(1), note(2)], 50);
+
+    expect(items.map((item) => item.id)).toEqual(['n1']);
+    expect(omitted).toBe(1);
   });
 });
