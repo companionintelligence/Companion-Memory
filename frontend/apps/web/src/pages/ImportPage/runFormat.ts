@@ -167,22 +167,32 @@ export function serviceLabels(names: readonly string[], sources: ServiceTitles):
  * fitbit (56/57)" and a completed Save reading "pushing", in-progress words under
  * a green check. A completed stage has no sub-label; the check says it.
  *
- * A failed or cancelled stage keeps its phase on purpose: where it stopped is the
- * first thing anyone asks about one that did not finish. It says that it
- * stopped, though. The bare phase is in the present tense, so a failed Unpack
- * read "Unpack extracting" beside its red error and Try again, as if it were
- * still at work.
+ * A failed stage keeps its phase on purpose: where it stopped is the first thing
+ * anyone asks about one that did not finish. It says that it stopped, though.
+ * The bare phase is in the present tense, so a failed Unpack read "Unpack
+ * extracting" beside its red error and Try again, as if it were still at work.
+ *
+ * A queued or cancelled stage says nothing. The runner only writes `phase` while
+ * it holds the stage, so a queued one that has a phase got it on an earlier
+ * attempt: Try again and the orphan requeue both put a stage back to `queued`
+ * without clearing it, and the stage sat reading "extracting" while it waited.
+ * Cancelling a run only cancels its queued stages (`ImportRunService.cancel`),
+ * so a cancelled stage's phase is from an earlier attempt too.
  */
 export function stagePhase(stage: { readonly status: string; readonly phase: string | null }): string | null {
-  if (stage.status === 'completed' || !stage.phase) {
+  if (!stage.phase) {
     return null;
   }
 
-  if (stage.status === 'failed' || stage.status === 'cancelled') {
-    return `${stage.status} while ${stage.phase}`;
+  if (stage.status === 'running') {
+    return stage.phase;
   }
 
-  return stage.phase;
+  if (stage.status === 'failed') {
+    return `failed while ${stage.phase}`;
+  }
+
+  return null;
 }
 
 /**

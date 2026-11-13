@@ -201,16 +201,21 @@ describe('stagePhase', () => {
     expect(stagePhase({ status: 'running', phase: 'parsing gmail (1/2)' })).toBe('parsing gmail (1/2)');
   });
 
-  it('keeps where a stage stopped, which is the first thing asked about one that did not finish', () => {
+  it('keeps where a stage stopped, worded as stopped rather than as still working', () => {
+    // A failed Unpack used to say "Unpack extracting" beside its own red error.
+    expect(stagePhase({ status: 'failed', phase: 'extracting' })).toBe('failed while extracting');
     expect(stagePhase({ status: 'failed', phase: 'parsing gmail (1/2)' })).toBe(
       'failed while parsing gmail (1/2)',
     );
-    expect(stagePhase({ status: 'cancelled', phase: 'uploading' })).toBe('cancelled while uploading');
   });
 
-  it('does not read as still working once the stage has stopped', () => {
-    // A failed Unpack used to say "Unpack extracting" beside its own red error.
-    expect(stagePhase({ status: 'failed', phase: 'extracting' })).toBe('failed while extracting');
+  it('says nothing for a stage waiting to run again, or cancelled while it waited', () => {
+    // Try again and the orphan requeue leave the last attempt's phase on a
+    // stage they put back in the queue. Cancelling a run only cancels queued
+    // stages, so a cancelled stage's phase is from an earlier attempt as well.
+    expect(stagePhase({ status: 'queued', phase: 'extracting' })).toBeNull();
+    expect(stagePhase({ status: 'cancelled', phase: 'uploading' })).toBeNull();
+    expect(stagePhase({ status: 'skipped', phase: 'pushing' })).toBeNull();
   });
 
   it('has nothing to say when the runner set nothing', () => {
