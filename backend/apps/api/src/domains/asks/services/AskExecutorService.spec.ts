@@ -343,6 +343,7 @@ describe('AskExecutorService photos at a named place', () => {
       { userId: 'responder-1' },
       'Do you have photos of Blue Bottle Coffee?',
       50,
+      { kind: 'photos' },
     );
     expect(result).toEqual({
       items: [
@@ -421,5 +422,35 @@ describe('AskExecutorService photos at a named place', () => {
 
     expect(result).toEqual(noTextMatch);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection reset'));
+  });
+
+  it('keeps the text search when it already found more, as on a box with a geocoder', async () => {
+    // A photo whose caption names the coffee shop matches the text search wherever it was taken.
+    const textMatch = { items: [{ id: 'e1', type: 'event' }], totalMatches: 12, truncated: false, limit: 50 };
+    const { service } = makeService(textMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Blue Bottle Coffee?'), {
+      tier: 'household',
+    });
+
+    expect(result).toEqual(textMatch);
+  });
+
+  it('counts videos at the place too for a media ask', async () => {
+    const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    await service.executeWithMeta(
+      fakeAsk({
+        query: { queryType: 'content', dataClass: 'media', prompt: 'Any media from Blue Bottle Coffee?' },
+      }),
+      { tier: 'household' },
+    );
+
+    expect(places.photosAtNamedPlace).toHaveBeenCalledWith(
+      { userId: 'responder-1' },
+      'Any media from Blue Bottle Coffee?',
+      50,
+      { kind: 'media' },
+    );
   });
 });

@@ -165,12 +165,15 @@ export class AskExecutorService {
     // is NULL on every photo, so "photos of Blue Bottle Coffee" answered "They
     // have none." while chat found the photos by where they were taken. The
     // same lookup chat uses answers instead, under the same tier rule, and only
-    // when the prompt names nothing but the place.
+    // when the prompt names nothing but the place. The two sets overlap (one
+    // counts a photo's event, the other its file), so they are not added up:
+    // the place answers only when it found more, and never lowers the count a
+    // geocoded box already gave.
     const atPlace =
       mediaEvents && mediaEventPlaces
-        ? await this.photosAtNamedPlace(responderContext, ask, subjectIsName, maxResults)
+        ? await this.photosAtNamedPlace(responderContext, ask, subjectIsName, mediaEvents, maxResults)
         : null;
-    const result = atPlace ?? searched;
+    const result = atPlace != null && atPlace.totalMatches > searched.totalMatches ? atPlace : searched;
 
     if (result.truncated) {
       // Owner-visible, on the owner's own box. The asker learns nothing from
@@ -193,12 +196,14 @@ export class AskExecutorService {
    * Null unless every word the prompt asks about belongs to the name of a place
    * it names. The lookup answers with every photo taken there, so "photos of my
    * dog at Blue Bottle Coffee" must not get "yes" for a coffee shop with no dog
-   * in it. Null too when it finds nothing, or fails (logged).
+   * in it. Null too when it finds nothing, or fails (logged). A photos ask
+   * counts only the images taken there, a media ask the videos too.
    */
   private async photosAtNamedPlace(
     context: UserServiceContext,
     ask: Ask,
     subjectIsName: boolean,
+    kind: 'photos' | 'media',
     maxResults: number,
   ): Promise<AskExecution | null> {
     const groups = buildPromptQuery(ask.query.prompt, { subjectIsName }).filter(
@@ -210,7 +215,7 @@ export class AskExecutorService {
     }
 
     try {
-      const found = await this.places.photosAtNamedPlace(context, ask.query.prompt, maxResults);
+      const found = await this.places.photosAtNamedPlace(context, ask.query.prompt, maxResults, { kind });
       const placeOnly =
         found.places.length > 0 &&
         groups.every((group) => found.places.some((place) => queryNamesPlace(place.name, group.text)));

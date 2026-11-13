@@ -860,11 +860,14 @@ export class PlaceService {
    * A place is named by its own name or by the label or an alias the user gave
    * it on the Places page. When one named place's name is part of another's,
    * only the longer one counts ({@link mostSpecificPlaces}).
+   *
+   * `kind: 'photos'` leaves videos out, as a photo ask's text search does.
    */
   async photosAtNamedPlace(
     context: UserServiceContext,
     query: string,
     limit: number,
+    { kind = 'media' }: { kind?: 'photos' | 'media' } = {},
   ): Promise<PhotosAtNamedPlace> {
     const trimmed = query.trim();
     const none: PhotosAtNamedPlace = { places: [], fileIds: [], total: 0 };
@@ -991,11 +994,11 @@ export class PlaceService {
         WHERE f.user_id = $1
           AND f.deleted_at IS NULL
           AND f.variant = 'ORIGINAL'
-          AND (f.content_type LIKE 'image/%' OR f.content_type LIKE 'video/%')
+          AND (f.content_type LIKE 'image/%' OR ($5::boolean AND f.content_type LIKE 'video/%'))
         GROUP BY f.id
         ORDER BY MAX(l.start_time) DESC, f.id
         LIMIT GREATEST($4::int, 1)`,
-      [context.userId, places.map((place) => place.id), PHOTO_AT_PLACE_METERS, limit],
+      [context.userId, places.map((place) => place.id), PHOTO_AT_PLACE_METERS, limit, kind === 'media'],
     );
 
     return {
