@@ -38,9 +38,15 @@ export function useChatAboutActions(context: AgentChatContext) {
     [harnesses],
   );
   const chatableHarnesses = useMemo(() => installedHarnesses.filter(isChatableHarness), [installedHarnesses]);
-  // Always take OpenClaw from the full list — the API returns it even when
-  // not installed, so Dispatch can toast a real reason instead of vanishing.
-  const openclaw = useMemo(() => harnesses.find((harness) => harness.id === 'openclaw') ?? null, [harnesses]);
+  // Take OpenClaw from the full list — the API returns it even when not
+  // installed, so on a Hub the menu can offer Connect and Dispatch can toast a
+  // real reason instead of vanishing. With no Hub to install it from (no
+  // `connectUrl`, as on Memory Desktop) neither row can ever work, so leave it out.
+  const openclaw = useMemo(() => {
+    const found = harnesses.find((harness) => harness.id === 'openclaw');
+
+    return found && (found.installed || found.connectedToMemory || found.connectUrl) ? found : null;
+  }, [harnesses]);
 
   const chatHere = useCallback(() => {
     openInAppChat(navigate, context);
