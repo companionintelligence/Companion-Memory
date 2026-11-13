@@ -3528,7 +3528,7 @@ export type Query = {
   /** Distinct event types ("how things happened") present for the user. */
   eventTypes: Array<Scalars['String']['output']>;
   events: EventConnection;
-  /** Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions). */
+  /** Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions) and `event` rows from an imported calendar file (source_system calendar). */
   eventsInRange: Array<EventType>;
   /** Get actions for the feed, prioritizing unseen actions */
   feedActions: Array<ActionType>;
