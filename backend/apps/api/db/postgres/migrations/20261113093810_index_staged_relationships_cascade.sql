@@ -16,9 +16,11 @@
 --
 --  - `item_id = $1` implies neither predicate, so neither index can serve it
 --    and every deleted item is a sequential scan of the table.
---  - `related_item_id = $1` is not the leading column of either. With few
---    item-to-item edges the planner gets away with the small partial index;
---    with many (mail and its attachments) it is a sequential scan too.
+--  - `related_item_id = $1` is not the leading column of either. Postgres 18
+--    answers it with a skip scan of staged_relationships_item_related_uniq,
+--    one descent per distinct item_id, so once a run has many item-to-item
+--    edges (mail and its attachments) every deleted item walks that whole
+--    index.
 --
 --   EXPLAIN DELETE FROM ci_import.staged_relationships WHERE item_id = '<uuid>';
 --   -- before: Seq Scan on staged_relationships, Filter: (item_id = ...)
@@ -38,16 +40,40 @@
 --
 -- dbmate runs each migration inside a transaction, which `CREATE INDEX
 -- CONCURRENTLY` cannot run in; 20260819000439_add_position_id_index documents
--- the same trade-off. `staged_relationships` only holds parses that have not
--- been pushed or retired yet, so the build is short and the appliance takes it
--- at migrate time. An operator holding an unusually large staged parse can
--- build both out of band first, after which this is a no-op through IF NOT
--- EXISTS:
+-- the same trade-off. `staged_relationships` keeps a finished run's edges until
+-- the retention sweep takes them (`stagingDays`, 7 by default), and keeps a
+-- parse that was never pushed until its owner discards it. On most appliances
+-- that is small, the build is short and it happens at migrate time. An operator
+-- holding a large staged parse (ImportRetentionService measured one run at
+-- 780,946 items) can build both out of band first, after which this is a no-op
+-- through IF NOT EXISTS:
 --
 --   CREATE INDEX CONCURRENTLY IF NOT EXISTS staged_relationships_item_idx
 --     ON ci_import.staged_relationships (item_id);
 --   CREATE INDEX CONCURRENTLY IF NOT EXISTS staged_relationships_related_item_idx
 --     ON ci_import.staged_relationships (related_item_id) WHERE related_item_id IS NOT NULL;
+--
+-- A CONCURRENTLY build that fails or is cancelled leaves an INVALID index under
+-- the same name. IF NOT EXISTS would take that as done, record this migration
+-- as applied and leave the cascade scanning, so an invalid leftover is dropped
+-- first and rebuilt here.
+DO $$
+DECLARE
+    leftover regclass;
+BEGIN
+    FOR leftover IN
+        SELECT i.indexrelid::regclass
+          FROM pg_catalog.pg_index i
+         WHERE NOT i.indisvalid
+           AND i.indexrelid IN (
+                 to_regclass('ci_import.staged_relationships_item_idx'),
+                 to_regclass('ci_import.staged_relationships_related_item_idx'))
+    LOOP
+        EXECUTE format('DROP INDEX %s', leftover);
+    END LOOP;
+END
+$$;
+
 CREATE INDEX IF NOT EXISTS staged_relationships_item_idx
     ON ci_import.staged_relationships (item_id);
 
