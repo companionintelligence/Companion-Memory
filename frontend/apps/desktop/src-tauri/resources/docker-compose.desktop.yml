@@ -82,6 +82,17 @@ services:
     image: ghcr.io/companionintelligence/companion/object-store:${CI_SERVER_IMAGE_TAG}
   summary-service:
     image: ghcr.io/companionintelligence/companion/summary-service:${CI_SERVER_IMAGE_TAG}
+    # The model this app runs (or the user's own Ollama) answers on the host's
+    # port 11434, which the api reaches through its OLLAMA_HOST default.
+    # docker-compose.production.yml hands the summary service an empty
+    # LLM_API_BASE unless something sets one. This app only writes one on the
+    # Apple on-device branch. Summary images up to 2026.11.11 took that
+    # empty value as their endpoint, so every summary failed with "Connection
+    # error.". Newer ones read it as unset, but CI_SERVER_IMAGE_TAG can pin an
+    # older release, so the default stays here too. Keep it equal to
+    # DEFAULT_LLM_API_BASE in backend/apps/summary/src/ci/summary/config.py.
+    environment:
+      LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
   setup-database:
     image: ghcr.io/companionintelligence/companion/setup-database:${CI_SERVER_IMAGE_TAG}
   generate-secrets:

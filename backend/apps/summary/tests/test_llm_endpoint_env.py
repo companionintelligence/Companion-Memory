@@ -395,3 +395,40 @@ def test_embedding_model_takes_only_hubs_names_for_the_indexed_model(
 
     monkeypatch.setenv("EMBEDDING_MODEL", "mxbai-embed-large")
     assert resolve_embedding_model() == "mxbai-embed-large"
+
+
+def test_an_empty_llm_api_base_means_the_default_endpoint(monkeypatch):
+    """
+    docker-compose.production.yml passes `LLM_API_BASE: ${LLM_API_BASE:-}`, so
+    where nothing sets the variable (Memory Desktop) the service gets an empty
+    string. That used to win over the default and every summary failed with
+    "Connection error.".
+    """
+    from ci.summary.config import DEFAULT_LLM_API_BASE, Settings
+
+    monkeypatch.setenv("CI_LLM_HOST_REWRITE", "off")
+
+    for blank in ("", "   "):
+        monkeypatch.setenv("LLM_API_BASE", blank)
+        assert Settings().llm_api_base == DEFAULT_LLM_API_BASE
+
+    monkeypatch.setenv("LLM_API_BASE", "http://ci-hub:5002/api/inference/pool/v1")
+    assert Settings().llm_api_base == "http://ci-hub:5002/api/inference/pool/v1"
+
+
+def test_a_blank_llm_api_base_still_sends_the_chat_key_to_the_chat_origin(monkeypatch):
+    """Chat falls back to the default endpoint, so the embedding key must as well."""
+    import ci.summary.config as config
+
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_API_BASE", "")
+    monkeypatch.setenv("LLM_API_KEY", "proxy-key")
+    monkeypatch.setattr(
+        config.settings, "llm_api_base", "http://host.docker.internal:11434/v1"
+    )
+
+    assert (
+        config.resolve_embedding_api_key("http://host.docker.internal:11434/v1")
+        == "proxy-key"
+    )
+    assert config.resolve_embedding_api_key("http://elsewhere:8000/v1") == "ollama"
