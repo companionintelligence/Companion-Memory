@@ -156,6 +156,21 @@ impl LocalModelHandles {
         }
     }
 
+    /// Whether the stack gets its model through something this app runs: its
+    /// own Ollama, the relay in front of an Ollama, or the Apple bridge. All of
+    /// them stop with the app, so the containers lose their model when it
+    /// quits.
+    pub fn serves_the_stack(&self) -> bool {
+        let child = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        let relay = self.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        #[cfg(target_os = "macos")]
+        let apple = self.apple_bridge.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        #[cfg(not(target_os = "macos"))]
+        let apple = false;
+
+        child || relay || apple
+    }
+
     pub fn status(&self) -> Option<LocalModelResolution> {
         self.status.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
@@ -327,5 +342,30 @@ mod tests {
 
         assert_eq!(backend, ChatBackend::HostOllama);
         assert_eq!(probes.get(), 0, "the Apple bridge should not have been probed at all");
+    }
+
+    /// Tray > Quit stops the stack only when quitting would leave it without a
+    /// model, and that decision is this answer. It has to follow what is
+    /// actually registered: nothing for a user's own Ollama the containers
+    /// reach directly, and yes for a relay or an Ollama this app started.
+    #[test]
+    fn the_stack_depends_on_the_app_only_while_the_app_runs_something_for_it() {
+        let handles = LocalModelHandles::default();
+        assert!(!handles.serves_the_stack(), "nothing registered, nothing for Quit to take away");
+
+        let relay = bridge_relay::spawn(std::net::Ipv4Addr::LOCALHOST, 0).expect("bind a relay on an ephemeral port");
+        *handles.ollama_relay_slot().lock().unwrap() = Some(relay);
+        assert!(handles.serves_the_stack(), "a relay in front of an Ollama");
+        handles.shutdown();
+        assert!(!handles.serves_the_stack(), "shutdown removes the relay");
+
+        #[cfg(unix)]
+        {
+            let child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn a stand-in child");
+            *handles.ollama_child_slot().lock().unwrap() = Some(child);
+            assert!(handles.serves_the_stack(), "an Ollama this app started");
+            handles.shutdown();
+            assert!(!handles.serves_the_stack(), "shutdown kills and forgets the child");
+        }
     }
 }

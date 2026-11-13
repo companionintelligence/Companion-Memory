@@ -79,8 +79,34 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             // the same treatment: kill them before quitting, or an orphaned
             // Ollama sidecar / Apple bridge process lingers with nothing left
             // to talk to it.
-            app.state::<local_model::LocalModelHandles>().shutdown();
-            app.exit(0);
+            //
+            // Which means that when this app is what serves the stack its
+            // model, quitting takes the model away from containers that keep
+            // running: Memory went on answering in a browser and to agents
+            // while chat, search and summaries all failed, and nothing said
+            // the app had been closed. So in that case Quit stops the stack
+            // first. It starts again with the app.
+            let handles = app.state::<local_model::LocalModelHandles>();
+            if !handles.serves_the_stack() {
+                handles.shutdown();
+                app.exit(0);
+                return;
+            }
+
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let paths = app.state::<StackPathsState>().0.clone();
+            let app = app.clone();
+            // `docker compose down` takes seconds; off the event loop.
+            std::thread::spawn(move || {
+                log::info!("Quit: stopping the stack, which loses its model when this app exits");
+                if let Err(e) = stack_manager::stop_stack(&paths) {
+                    log::error!("Quit: could not stop the stack: {e}");
+                }
+                app.state::<local_model::LocalModelHandles>().shutdown();
+                app.exit(0);
+            });
         }
         _ => {}
     }
