@@ -1577,7 +1577,7 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
 
   return (
     <Map center={[37.7749, -122.4194]} autoCenterMarkers={false} attributionControl={false}>
-      <Map.Controls position="top-right" />
+      <Map.Controls position="top-right" panelInset={TIMELINE_PANEL_PX} />
       <Map.Panel position="left" className="w-[300px] relative">
         <TimelineView
           activeEntityId={timelineActiveId}

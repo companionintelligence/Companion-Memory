@@ -13,7 +13,8 @@ type ReturnType = [
     toggleRoutes: () => void;
     zoomIn: () => void;
     zoomOut: () => void;
-    centerVisibleMarkers: () => void;
+    /** `panelInset`: px of the map's left edge a panel covers; the pins are framed right of it. */
+    centerVisibleMarkers: (panelInset?: number) => void;
   },
 ];
 
@@ -41,26 +42,30 @@ function useMap({ autoCenterMarkers = true }: MapOptions = {}): ReturnType {
     setDisplayRoutes((prev) => !prev);
   }, []);
 
-  const centerVisibleMarkers = useCallback(() => {
-    const mapBounds = map.getBounds();
-    const visibleMarkers = markers.filter((marker) => mapBounds.contains(marker.getLatLng()));
+  const centerVisibleMarkers = useCallback(
+    (panelInset = 0) => {
+      const mapBounds = map.getBounds();
+      const visibleMarkers = markers.filter((marker) => mapBounds.contains(marker.getLatLng()));
 
-    if (visibleMarkers.length === 0) {
-      return;
-    }
+      if (visibleMarkers.length === 0) {
+        return;
+      }
 
-    if (visibleMarkers.length === 1) {
-      map.panTo(visibleMarkers[0].getLatLng());
+      if (visibleMarkers.length === 1) {
+        map.panTo(visibleMarkers[0].getLatLng());
 
-      return;
-    }
+        return;
+      }
 
-    const bounds = L.latLngBounds(visibleMarkers.map((marker) => marker.getLatLng()));
+      const bounds = L.latLngBounds(visibleMarkers.map((marker) => marker.getLatLng()));
 
-    map.fitBounds(bounds, {
-      padding: [50, 50],
-    });
-  }, [map, markers]);
+      map.fitBounds(bounds, {
+        paddingTopLeft: [50 + panelInset, 50],
+        paddingBottomRight: [50, 50],
+      });
+    },
+    [map, markers],
+  );
 
   useEffect(() => {
     if (!map) {
