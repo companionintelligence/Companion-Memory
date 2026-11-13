@@ -52,11 +52,16 @@ const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 // The paired Memory origin, mirrored into the keystore for native consumers.
 const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
 
-/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
-async function removeStoredDeviceKey(): Promise<void> {
+/** Forget this device's stored key, its id and its capability. Never rejects: secureStorageRemove swallows a refused delete. */
+async function removeStoredKeyEntries(): Promise<void> {
   await secureStorageRemove(API_KEY_STORAGE);
   await secureStorageRemove(API_KEY_ID_STORAGE);
   await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+}
+
+/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
+async function removeStoredDeviceKey(): Promise<void> {
+  await removeStoredKeyEntries();
   forgetUser();
   forgetFeatures();
 }
@@ -384,16 +389,14 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     await secureStorageSet(API_KEY_ID_STORAGE, created.id);
     await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
   } catch (error) {
-    // The key is live on the server, but this device could not keep it: nothing would ever use
-    // it, and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
+    // The key is live on the server, but this device could not keep it. Nothing would ever use
+    // it and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
     // Service) left one such full-access key behind on every try. Give it back first.
     await revokeDeviceKey(created.key, `${base}/api/keys/current`);
 
     // A write that got partway kept the key just revoked; nothing may read that back.
     if ((await storedDeviceKey()) === created.key) {
-      await secureStorageRemove(API_KEY_STORAGE).catch(() => undefined);
-      await secureStorageRemove(API_KEY_ID_STORAGE).catch(() => undefined);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE).catch(() => undefined);
+      await removeStoredKeyEntries();
     }
 
     throw new DeviceKeyNotSavedError(error);
