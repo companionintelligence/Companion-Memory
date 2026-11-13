@@ -68,6 +68,13 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
       onKeyDown={
         onPlace
           ? (event) => {
+              // Only a key pressed on the card itself. Enter or Space on the
+              // Dismiss button inside bubbles up here, and handling it placed
+              // the task while preventDefault() cancelled the button's click.
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 onPlace(task.id);

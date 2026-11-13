@@ -251,6 +251,36 @@ describe('TaskSlateDrawer — Plan backlog', () => {
     expect(screen.queryByLabelText('Dismiss Call Mum')).not.toBeInTheDocument();
   });
 
+  it('leaves Enter and Space on Dismiss to the button instead of placing the task', async () => {
+    // The card is a role="button" <li> that places on Enter and Space. The
+    // Dismiss button's key presses bubbled up to it: the task was placed, and
+    // the card's preventDefault() cancelled the button's own click.
+    const onPlace = vi.fn();
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onPlace={onPlace}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    const dismiss = await screen.findByLabelText('Dismiss Try this');
+
+    // `false` would mean a handler called preventDefault().
+    expect(fireEvent.keyDown(dismiss, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(dismiss, { key: ' ' })).toBe(true);
+    expect(onPlace).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /Add Try this at this time/ }), { key: 'Enter' });
+    expect(onPlace).toHaveBeenCalledWith('p1');
+  });
+
   /**
    * ═══ WHAT THIS TEST USED TO CHECK ═══
    * That the slate borrowed the Plan board's subtree-aware `section.count`, so
