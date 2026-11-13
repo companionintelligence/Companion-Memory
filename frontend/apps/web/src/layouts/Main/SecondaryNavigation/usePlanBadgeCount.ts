@@ -44,10 +44,15 @@ interface PlanBadgeCountQueryResult {
  * Reuses `openCount` — the same function the Kanban board's own section
  * counts are built from — rather than a second, drifting definition of
  * "open".
+ *
+ * `enabled` is false when the Tasks row is hidden (`planning.page` off): the
+ * count would be shown nowhere, so it neither asks the API nor holds the live
+ * stream open on every page for it.
  */
-export function usePlanBadgeCount(): number {
+export function usePlanBadgeCount(enabled = true): number {
   const { data, refetch } = useQuery<PlanBadgeCountQueryResult, { first: number }>(GET_PLAN_BADGE_COUNT, {
     variables: { first: PLAN_BADGE_TASK_LIMIT },
+    skip: !enabled,
     fetchPolicy: 'no-cache',
     notifyOnNetworkStatusChange: true,
   });
@@ -57,13 +62,15 @@ export function usePlanBadgeCount(): number {
   // a task from another device or a scan. Re-read on the same signals as the
   // Plan board: the server's task change stream, and coming back to the tab.
   const reload = useCallback(() => {
-    void refetch();
-  }, [refetch]);
+    if (enabled) {
+      void refetch();
+    }
+  }, [enabled, refetch]);
 
-  useLiveChanges(['tasks'], reload);
+  useLiveChanges(enabled ? ['tasks'] : [], reload);
   useRefetchOnReturn(reload);
 
-  if (!data) {
+  if (!enabled || !data) {
     return 0;
   }
 

@@ -72,4 +72,20 @@ describe('usePlanBadgeCount', () => {
     vi.mocked(useRefetchOnReturn).mock.calls.at(-1)?.[0]();
     expect(refetch).toHaveBeenCalledTimes(2);
   });
+
+  // With the Tasks row hidden the count is shown nowhere: no query, and no
+  // live stream held open on every page for it.
+  it('neither asks nor listens while the Tasks row is hidden', () => {
+    const refetch = vi.fn();
+    mockedUseQuery.mockReturnValue({ data: { tasks: { edges: [node('t1', 'open')] } }, refetch } as never);
+
+    const { result } = renderHook(() => usePlanBadgeCount(false));
+
+    expect(result.current).toBe(0);
+    expect(mockedUseQuery.mock.calls.at(-1)?.[1]).toMatchObject({ skip: true });
+    expect(vi.mocked(useLiveChanges)).toHaveBeenLastCalledWith([], expect.any(Function));
+
+    vi.mocked(useRefetchOnReturn).mock.calls.at(-1)?.[0]();
+    expect(refetch).not.toHaveBeenCalled();
+  });
 });

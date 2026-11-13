@@ -2,6 +2,10 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
+import {
+  GET_PLAN_BADGE_COUNT,
+  usePlanBadgeCount,
+} from '@/layouts/Main/SecondaryNavigation/usePlanBadgeCount';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { UPDATE_TASK } from './EditTaskModal';
@@ -110,6 +114,41 @@ const DECLINE_PENDING = gql(`
     }
   }
 `);
+
+const CREATE_TASK = gql(`
+  mutation CreateTask($input: CreateTaskInput!) {
+    createTask(input: $input) {
+      success
+      task {
+        id
+        ...TaskRowFragment
+      }
+    }
+  }
+`);
+
+function badgeMock(statuses: string[]) {
+  return {
+    request: { query: GET_PLAN_BADGE_COUNT, variables: { first: 200 } },
+    result: {
+      data: {
+        tasks: {
+          __typename: 'TaskConnection',
+          edges: statuses.map((status, index) => ({
+            __typename: 'TaskEdge',
+            node: { __typename: 'TaskType', id: `badge-${index}`, status },
+          })),
+        },
+        taskPendingChanges: [],
+      },
+    },
+  };
+}
+
+/** The rail's Tasks count, mounted beside the page the way the layout does. */
+function BadgeProbe() {
+  return <output data-testid="plan-badge">{usePlanBadgeCount()}</output>;
+}
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -404,6 +443,37 @@ describe('PlanPage', () => {
     fireEvent.change(screen.getByLabelText(/new task title/i), { target: { value: '   ' } });
 
     expect(screen.getByRole('button', { name: /add/i })).toBeDisabled();
+  });
+
+  // The form used to refetch only the board, so the rail badge kept its old
+  // number. The live stream covers it on the desktop, but the phone has no
+  // token to open that stream: the page has to re-read the badge itself.
+  it('re-reads the rail badge after adding a task', async () => {
+    renderWithProviders(
+      <>
+        <PlanPage />
+        <BadgeProbe />
+      </>,
+      {
+        mocks: [
+          tasksMock([]),
+          badgeMock([]),
+          {
+            request: { query: CREATE_TASK, variables: { input: { title: 'Badge probe' } } },
+            result: { data: { createTask: { __typename: 'CreateTaskPayload', success: true, task: null } } },
+          },
+          badgeMock(['open']),
+        ],
+      },
+    );
+
+    await screen.findByLabelText(/new task title/i);
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('0'));
+
+    fireEvent.change(screen.getByLabelText(/new task title/i), { target: { value: 'Badge probe' } });
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('1'));
   });
 
   it('shows a Schedule button on open work', async () => {
