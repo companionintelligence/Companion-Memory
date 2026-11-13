@@ -432,6 +432,11 @@ export function GlobalSearchBox() {
     tags,
   ]);
 
+  // The rows above always lead with Clear and Search-for once there is a query,
+  // so SearchBox is told outright when the search came back empty.
+  const noMatches =
+    Boolean(query?.trim()) && !loading && !error && tags.length === 0 && suggestions.length === 0;
+
   // Live, debounced. Drives the suggestion query everywhere, and on a live-search
   // page also writes `?search` so the page filters as you type (replace: keep
   // history clean).
@@ -645,6 +650,7 @@ export function GlobalSearchBox() {
           loading={loading}
           error={error}
           results={results}
+          noMatches={noMatches}
           showClear={activeFilterCount > 0 || Boolean(onLiveSearchPage ? urlSearch : query?.trim())}
           panelFooter={
             explorerFiltersApply && !onMemoryExplorer ? (

@@ -228,6 +228,13 @@ interface Props {
    * which in a phone header is only part of the width. Desktop is unaffected.
    */
   fullWidthOnPhone?: boolean;
+  /**
+   * The search answered and nothing matched, but `results` still holds the
+   * caller's own action rows (the header's "Clear search query" and "Search
+   * Memory for …"). Says "No results found." under them: with any rows at all
+   * the empty state below the list is never reached.
+   */
+  noMatches?: boolean;
 }
 
 function SearchBox(
@@ -262,6 +269,7 @@ function SearchBox(
     onSave,
     engageRef,
     fullWidthOnPhone = false,
+    noMatches = false,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
 ) {
@@ -761,6 +769,7 @@ function SearchBox(
                   </div>
                 </Fragment>
               ))}
+              {noMatches && <p className="px-4 pt-2 pb-1 text-sm text-muted-foreground">No results found.</p>}
             </div>
             <ScrollBar />
           </ScrollArea>

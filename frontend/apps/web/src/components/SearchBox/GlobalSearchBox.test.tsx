@@ -421,6 +421,30 @@ describe('GlobalSearchBox suggestions', () => {
     expect(params().has('search')).toBe(false);
   });
 
+  it('says "No results found." under the Clear and Search-for rows when nothing matched', async () => {
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    expect(await screen.findByText('No results found.')).toBeInTheDocument();
+    expect(screen.getByText('Clear search query')).toBeInTheDocument();
+    expect(screen.getByText('Search all of Memory for')).toBeInTheDocument();
+  });
+
+  it('does not say "No results found." once something matched', async () => {
+    h.search = { data: [], tags: [{ id: 't1', label: 'vacation' }], loading: false, error: undefined };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'vac' } });
+
+    await screen.findByText('#vacation');
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+  });
+
   it('selecting a person suggestion decodes its GlobalUID and opens the detail route', async () => {
     h.search = {
       data: [

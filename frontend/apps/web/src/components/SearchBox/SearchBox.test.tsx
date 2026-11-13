@@ -225,6 +225,38 @@ describe('SearchBox', () => {
     expect(onResultSelect).toHaveBeenCalledWith(results[0]);
   });
 
+  it('says "No results found." under the rows with noMatches, outside the rows and the arrow-key order', () => {
+    const onResultSelect = vi.fn();
+
+    renderWithProviders(
+      <SearchBox displayResults results={RESULTS} noMatches onResultSelect={onResultSelect} />,
+    );
+
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    const notice = screen.getByText('No results found.');
+
+    expect(
+      screen.getByText('Result Two').compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(notice);
+    expect(onResultSelect).not.toHaveBeenCalled();
+  });
+
+  it('leaves the rows alone without noMatches', () => {
+    renderWithProviders(<SearchBox displayResults results={RESULTS} />);
+
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'r' } });
+
+    expect(screen.getByText('Result One')).toBeInTheDocument();
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+  });
+
   describe('fullWidthOnPhone', () => {
     function renderOpen(props: Partial<React.ComponentProps<typeof SearchBox>> = {}) {
       renderWithProviders(<SearchBox displayResults results={RESULTS} fullWidthOnPhone {...props} />);
