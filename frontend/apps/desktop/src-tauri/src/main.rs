@@ -104,6 +104,37 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
+/// The main window's minimum size from tauri.conf.json, if it sets one.
+#[cfg(any(target_os = "linux", test))]
+fn configured_minimum(config: &tauri::Config) -> Option<(f64, f64)> {
+    let window = config.app.windows.iter().find(|window| window.label == "main")?;
+
+    Some((window.min_width?, window.min_height?))
+}
+
+/// Keep the window's content at least its configured minimum on Linux.
+///
+/// tao passes the minimum to GTK as geometry hints for the whole window, and with GTK's own
+/// decorations (GNOME on Wayland) the whole window includes its drop shadow. GTK takes the
+/// shadow off again before it tells the compositor, so the window could be dragged down to a
+/// 908 x 588 frame although tauri.conf.json says 960 x 640; a plain GTK window given the same
+/// hints stops at the same size. A size request on the box that holds the webview is measured
+/// without the shadow, so the content keeps the minimum the config names, as it does on macOS
+/// and Windows.
+#[cfg(target_os = "linux")]
+fn hold_minimum_content_size(window: &tauri::WebviewWindow, minimum: Option<(f64, f64)>) {
+    use gtk::prelude::WidgetExt;
+
+    let Some((width, height)) = minimum else {
+        return;
+    };
+
+    match window.default_vbox() {
+        Ok(content) => content.set_size_request(width.round() as i32, height.round() as i32),
+        Err(e) => log::warn!("could not hold the window's minimum size: {e}"),
+    }
+}
+
 /// The only part of a URL that may reach the log file.
 ///
 /// Both the incoming OIDC callback deep link and the outgoing sign-in URL this
@@ -391,6 +422,11 @@ fn main() {
                     Ok(Ok(())) => {}
                 }
             });
+
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                hold_minimum_content_size(&window, configured_minimum(app.config()));
+            }
 
             // Hide to tray on close instead of quitting — the stack keeps running.
             let paths_for_events = paths_for_log.clone();
@@ -775,6 +811,16 @@ mod tests {
 
         let verbose = ShellLogger { level: log::LevelFilter::Trace };
         assert!(verbose.enabled(&metadata(log::Level::Trace)));
+    }
+
+    /// The Linux size request is built from these numbers, so a config that stopped naming a
+    /// minimum would quietly leave GNOME shrinking the window below it again.
+    #[test]
+    fn the_main_window_minimum_is_read_from_the_config() {
+        let config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+
+        assert_eq!(configured_minimum(&config), Some((960.0, 640.0)));
     }
 
     /// On Linux the browser returns sign-in as `companion://oidc/callback?code=...`
