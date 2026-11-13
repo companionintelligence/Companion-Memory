@@ -336,7 +336,7 @@ export {
 } from './services/eventLocationReopener';
 // The pipeline's `metadata.location_source` / `promote.stage` vocabulary as the location refresh reads it;
 // pipeline/__tests__/sourceLocationVocabulary.spec.ts holds the stages to it.
-export { SOURCE_LOCATION_VOCABULARY } from './services/sourceLocationMerge';
+export { SOURCE_LOCATION_VOCABULARY, coordinatesOf } from './services/sourceLocationMerge';
 export { changedFieldsBetween } from './services/GraphDeltaWriter';
 export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
