@@ -1,5 +1,7 @@
 import { TIER_PROFILES } from '@ci/domains/model-routing';
 
+import { CHAT_CONTEXT_LADDER } from './residency/footprint';
+
 /**
  * The chat path's context budget, and the admission order that fits a thread
  * into it.
@@ -64,6 +66,27 @@ const MAX_SYSTEM_RESERVE_TOKENS = 8_192;
 /** A thread never gets less than this, however small the configured window. */
 const MIN_PROMPT_BUDGET_BYTES = 2_048;
 
+/**
+ * Bytes of tool-definition JSON per token, for the tool list a turn offers.
+ *
+ * The one place this module divides by a ratio, and only for text this
+ * appliance writes itself: the tools' names, descriptions and JSON schemas,
+ * ASCII and punctuation-dense. Counted at a byte per token (the bound used for
+ * everything else), the 35 tools offered today (31,386 bytes) would claim a
+ * 32k window on their own. Measured with gemma4:e4b they cost about 5,400
+ * tokens, 5.8 bytes each; 4 keeps a wide margin under that.
+ */
+export const TOOL_DEFINITION_BYTES_PER_TOKEN = 4;
+
+/**
+ * The least window a turn with tools keeps for everything else (system prompt,
+ * history, answer) once the tool definitions are in: the default window a turn
+ * without tools gets. Planned without the tools, the 8k default left gemma4:e4b
+ * a few hundred tokens to answer in, and most such turns stopped on "length"
+ * with nothing written.
+ */
+const MIN_WINDOW_BESIDE_TOOLS = TIER_PROFILES.on_device.maxContextTokens;
+
 /** How many times a context-overflow failure may halve the history budget. */
 export const MAX_CONTEXT_SHRINK_LEVEL = 2;
 
@@ -74,10 +97,17 @@ export interface ContextBudget {
   maxContextTokens: number;
   reservedOutputTokens: number;
   reservedSystemTokens: number;
+  /** The window held for the tool definitions the turn offers; 0 without tools. */
+  reservedToolTokens: number;
+  /**
+   * The window `source` chose, before it grew to make room for the tools.
+   * Equal to `maxContextTokens` unless it grew.
+   */
+  plannedContextTokens: number;
   /**
    * Hard upper bound on the BYTES of admitted conversation messages. Because
    * `tokens <= bytes`, staying under this keeps the prompt under
-   * `maxContextTokens - reservedOutputTokens - reservedSystemTokens`.
+   * `maxContextTokens - reservedToolTokens - reservedOutputTokens - reservedSystemTokens`.
    */
   promptBudgetBytes: number;
   source: ContextBudgetSource;
@@ -122,6 +152,15 @@ export function resolveContextBudget(
      * that is not a positive integer is treated as absent.
      */
     measuredContextTokens?: number | null;
+    /**
+     * Bytes of the tool definitions this turn offers the model (the JSON sent
+     * as `tools`), or 0 for a turn without tools. They ride in every round that
+     * offers tools, so they are held out of the window before anything else is
+     * planned. When that would leave less than the default window, a window
+     * nobody configured grows to the smallest {@link CHAT_CONTEXT_LADDER} rung
+     * that leaves it. A `CI_LLM_NUM_CTX` window is a decision and never grows.
+     */
+    toolDefinitionBytes?: number;
   } = {},
 ): ContextBudget {
   const env = options.env ?? process.env;
@@ -133,22 +172,29 @@ export function resolveContextBudget(
     options.measuredContextTokens > 0
       ? options.measuredContextTokens
       : null;
-  const maxContextTokens = fromHub ?? measured ?? TIER_PROFILES.on_device.maxContextTokens;
+  const plannedContextTokens = fromHub ?? measured ?? TIER_PROFILES.on_device.maxContextTokens;
   const source: ContextBudgetSource =
     fromHub != null ? NUM_CTX_ENV_VAR : measured != null ? 'residency-planner' : 'tier-profile';
+  const toolBytes = Math.max(0, Math.floor(options.toolDefinitionBytes ?? 0));
+  const reservedToolTokens = Math.ceil(toolBytes / TOOL_DEFINITION_BYTES_PER_TOKEN);
+  const maxContextTokens =
+    fromHub == null ? windowBesideTools(plannedContextTokens, reservedToolTokens) : plannedContextTokens;
+  // The rest of the plan is made on what the tools leave, exactly as a turn
+  // without tools plans its whole window.
+  const conversationTokens = maxContextTokens - reservedToolTokens;
 
   const reservedOutputTokens = clamp(
-    Math.round(maxContextTokens * OUTPUT_RESERVE_FRACTION),
+    Math.round(conversationTokens * OUTPUT_RESERVE_FRACTION),
     MIN_OUTPUT_RESERVE_TOKENS,
     MAX_OUTPUT_RESERVE_TOKENS,
   );
   const reservedSystemTokens = clamp(
-    Math.round(maxContextTokens * SYSTEM_RESERVE_FRACTION),
+    Math.round(conversationTokens * SYSTEM_RESERVE_FRACTION),
     MIN_SYSTEM_RESERVE_TOKENS,
     MAX_SYSTEM_RESERVE_TOKENS,
   );
 
-  const availableTokens = maxContextTokens - reservedOutputTokens - reservedSystemTokens;
+  const availableTokens = conversationTokens - reservedOutputTokens - reservedSystemTokens;
   // tokens <= bytes, so one token of headroom buys exactly one byte of prompt.
   // The floor is applied BEFORE the shrink, not after: a shrink only happens
   // because the backend already rejected the previous prompt, and a floor that
@@ -161,10 +207,32 @@ export function resolveContextBudget(
     maxContextTokens,
     reservedOutputTokens,
     reservedSystemTokens,
+    reservedToolTokens,
+    plannedContextTokens,
     promptBudgetBytes,
     source,
     shrinkLevel,
   };
+}
+
+/**
+ * `planned`, or when the tools would leave less than
+ * {@link MIN_WINDOW_BESIDE_TOOLS} of it, the smallest ladder rung that leaves
+ * that much (the top rung when none does). Never smaller than `planned`.
+ *
+ * A grown window is stable from turn to turn: the planner reports the window
+ * the model is resident at, and that rung already leaves enough, so it is used
+ * as it is the next time.
+ */
+function windowBesideTools(planned: number, toolTokens: number): number {
+  if (toolTokens === 0 || planned - toolTokens >= MIN_WINDOW_BESIDE_TOOLS) {
+    return planned;
+  }
+
+  const rungs = [...CHAT_CONTEXT_LADDER].sort((a, b) => a - b);
+  const rung = rungs.find((ctx) => ctx - toolTokens >= MIN_WINDOW_BESIDE_TOOLS) ?? rungs[rungs.length - 1];
+
+  return Math.max(planned, rung);
 }
 
 /**

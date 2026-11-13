@@ -668,7 +668,18 @@ export class ChatTurnService {
       parseNumCtx(process.env[NUM_CTX_ENV_VAR]) == null
         ? ((await this.ollamaService.resolveChatContextTokens?.(payload.model)) ?? null)
         : null;
-    const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel, measuredContextTokens });
+    const budget = resolveContextBudget({
+      shrinkLevel: options.shrinkLevel,
+      measuredContextTokens,
+      // Every round that offers tools sends their definitions, about 5,400
+      // tokens for today's list: more than half of the 8k default window, and
+      // left out of this plan they took the room kept for the answer. Sized
+      // from the request, before `resolveModel` can turn tools off for a
+      // model without them; such a turn only plans room it does not use.
+      toolDefinitionBytes: payload.enableTools
+        ? (this.ollamaService.toolDefinitionBytes?.(requestContext) ?? 0)
+        : 0,
+    });
 
     // Which messages re-send their attachments is settled over the whole thread, BEFORE admission,
     // because the text of an attachment (unlike an image) costs what it weighs and so has to be
@@ -761,6 +772,8 @@ export class ChatTurnService {
       model,
       budgetSource: budget.source,
       maxContextTokens: budget.maxContextTokens,
+      plannedContextTokens: budget.plannedContextTokens,
+      reservedToolTokens: budget.reservedToolTokens,
       promptBudgetBytes: budget.promptBudgetBytes,
       shrinkLevel: budget.shrinkLevel,
       admittedMessages: plan.admitted.length,
@@ -770,7 +783,7 @@ export class ChatTurnService {
       systemPromptOverReserve: systemPromptBytes > budget.reservedSystemTokens,
       inlineAttachmentMessages: plan.admitted.filter((index) => inlineAttachments[index]).length,
       attachmentTextBytes: plan.admitted.reduce((total, index) => total + attachmentTextBytes[index], 0),
-      estimatedPromptTokensUpperBound: systemPromptBytes + plan.admittedBytes,
+      estimatedPromptTokensUpperBound: systemPromptBytes + plan.admittedBytes + budget.reservedToolTokens,
       overBudget: plan.overBudget,
     });
 

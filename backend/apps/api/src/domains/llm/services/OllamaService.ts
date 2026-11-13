@@ -2014,6 +2014,17 @@ export class OllamaService implements OnModuleInit {
    * tool it likes regardless of what it was shown, which is why the registry re-checks — but a
    * model handed a catalog whose entries fail is a model that retries them.
    */
+  /**
+   * Bytes of the tool definitions {@link chatStream} would offer this caller,
+   * as the JSON it sends them in, or 0 when it would offer none. The chat
+   * path holds them out of the context window before it plans the rest.
+   */
+  toolDefinitionBytes(context: ChatRequestContext): number {
+    const tools = this.toolsWithinCapability(context).map(this.convertToOllamaTool);
+
+    return tools.length > 0 ? Buffer.byteLength(JSON.stringify(tools), 'utf8') : 0;
+  }
+
   private toolsWithinCapability(context: ChatRequestContext): ToolSchema[] {
     const capability = resolveInvocationCapability(context);
 
