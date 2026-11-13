@@ -509,8 +509,21 @@ def resolve_output_mode() -> str:
     return _resolved_output_mode
 
 
+def is_still_served(model: str) -> bool:
+    """
+    Whether the endpoint lists `model` now. An answer that is not a model list
+    is no sign it has gone, the same as resolve_llm_model treats it.
+    """
+    try:
+        rows = _served_models()
+    except Exception:
+        return True
+
+    return _is_served(model, [str(row["id"]) for row in rows])
+
+
 class NoChatModelError(RuntimeError):
-    """Nothing is configured and the endpoint offers no chat model, so far."""
+    """There is no chat model to run on yet: none configured or served, or no endpoint answering."""
 
 
 @lru_cache(maxsize=1)
@@ -524,9 +537,11 @@ def resolve_llm_model() -> str:
     so the service always names a model that actually exists — never a
     hardcoded default.
 
-    Raises NoChatModelError when nothing is configured on a Hub with no AI engine
-    or with no chat model pulled yet. Call this when work needs a model, never at
-    import. lru_cache does not store a raise, so the next caller asks the endpoint
+    Raises NoChatModelError while there is no chat model to run on: nothing is
+    configured on a Hub with no AI engine or with no chat model pulled yet, the
+    endpoint does not answer at all, or it serves neither the configured model
+    nor any other chat model. Call this when work needs a model, never at import.
+    lru_cache does not store a raise, so the next caller asks the endpoint
     again, which is how the service finds a model that appears after it started.
     """
     configured = settings.llm_model
@@ -534,9 +549,10 @@ def resolve_llm_model() -> str:
     try:
         rows = _served_models()
     except Exception as exc:
-        if configured:
-            # Endpoint not reachable yet: trust the configured model rather
-            # than failing startup — it is validated per-request anyway.
+        if configured and not isinstance(exc, httpx.TransportError):
+            # A server answered, with an error: a /models route it does not
+            # have, or one it guards. That says nothing against the configured
+            # model, which is validated per request anyway.
             logger.warning(
                 "Could not list models at %s (%s); using configured model %r unvalidated.",
                 settings.llm_api_base,
@@ -544,6 +560,14 @@ def resolve_llm_model() -> str:
                 configured,
             )
             return configured
+        if configured:
+            # Nothing answered. The configured model used to be trusted here
+            # too, so /health named it and every summary job ran against an
+            # endpoint that was not there, failed and spent its retries.
+            raise NoChatModelError(
+                f"{settings.llm_api_base} did not answer ({exc}), so the configured model "
+                f"{configured!r} cannot be used yet."
+            ) from exc
         raise NoChatModelError(
             f"No LLM model configured and model discovery at {settings.llm_api_base} failed ({exc}). "
             "Set LLM_DEFAULT_CHAT_MODEL (normally injected by CI Hub) or make the endpoint reachable."
@@ -563,12 +587,12 @@ def resolve_llm_model() -> str:
                 fallback,
             )
             return fallback
-        logger.warning(
-            "Configured model %r is not served by %s and no alternative chat model is available; keeping it.",
-            configured,
-            settings.llm_api_base,
+        # It used to be kept anyway, and every request then failed with
+        # "model not found" until the queue's retries ran out.
+        raise NoChatModelError(
+            f"Configured model {configured!r} is not served by {settings.llm_api_base} "
+            "and no other chat model is."
         )
-        return configured
 
     discovered = _pick_chat_model(rows)
     if not discovered:

@@ -38,7 +38,12 @@ from ci.sidecar.llm_host import (
     running_in_container,
 )
 
-from .config import NoChatModelError, resolve_llm_model, settings
+from .config import (
+    NoChatModelError,
+    is_still_served,
+    resolve_llm_model,
+    settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,16 +146,49 @@ def probe_endpoint(
 
 
 def available_chat_model(status: EndpointStatus) -> str | None:
-    """The model work would run on right now, or None while there isn't one."""
-    if not status.reachable and not settings.llm_model:
-        # resolve_llm_model would only repeat the request that just failed, and
+    """
+    The model work would run on right now, or None while there isn't one.
+
+    resolve_llm_model remembers its answer, and this used to repeat it: with
+    the endpoint down, and after the endpoint stopped serving the model. So the
+    API's gate stayed open and every summary job failed against a model that
+    wasn't there, then retried until its retries ran out. Now the answer is
+    checked against the endpoint first and forgotten when it no longer holds,
+    so this says None and a run that starts anyway asks again.
+    """
+    if not status.reachable:
+        # Asking again would only repeat the request that just failed, and
         # against an address that drops packets that takes ten more seconds.
+        _forget_the_model("its endpoint does not answer")
         return None
+
+    if resolve_llm_model.cache_info().currsize and not is_still_served(
+        resolve_llm_model()
+    ):
+        _forget_the_model("its endpoint no longer serves it")
 
     try:
         return resolve_llm_model()
     except NoChatModelError:
         return None
+
+
+def _forget_the_model(reason: str) -> None:
+    if not resolve_llm_model.cache_info().currsize:
+        return
+
+    # Imported here because it builds the agents, which nothing else in this
+    # module needs.
+    from .llm_config import get_llm_config
+
+    logger.warning(
+        "Chat model %r is not available now: %s. Summaries, insights and actions "
+        "wait until there is one.",
+        resolve_llm_model(),
+        reason,
+    )
+    resolve_llm_model.cache_clear()
+    get_llm_config.cache_clear()
 
 
 def llm_report() -> dict[str, object]:
@@ -172,7 +210,9 @@ def check_endpoint_at_startup() -> EndpointStatus:
             url=settings.llm_api_base, reachable=False, detail=str(exc)
         )
 
-    if available_chat_model(status) is None:
+    model = available_chat_model(status)
+
+    if model is None and (status.reachable or not settings.llm_model):
         # WARNING, not ERROR: this is a Hub nobody has added an AI engine to yet,
         # and nothing has failed. Memory runs without it and the work waits.
         logger.warning(

@@ -245,16 +245,87 @@ def test_health_waits_again_when_the_engine_behind_a_discovered_model_stops(
     assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
 
 
-def test_health_reports_a_configured_model_with_the_endpoint_down(
+def test_a_configured_model_waits_while_the_endpoint_is_down(
     endpoint, client, monkeypatch
 ):
-    """Configured means trusted until a request says otherwise, as it always has."""
+    """
+    A configured model used to be named here whatever the endpoint said, so the
+    API's gate stayed open and every summary job timed out against an endpoint
+    that was not there, spending its retries.
+    """
     monkeypatch.setattr(config.settings, "llm_model", "configured:model")
 
     body = client.get("/health").json()
 
     assert body["status"] == "degraded"
     assert body["llm"]["reachable"] is False
+    assert body["llm"]["model"] is None
+    assert "waiting" in body["llm"]["detail"]
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+
+def test_a_configured_model_that_goes_away_is_waited_for_and_found_again(
+    endpoint, client, monkeypatch
+):
+    """
+    The failure seen on Memory Desktop: the model was served, remembered, then
+    removed while the server kept answering. /health went on naming it and the
+    hourly job failed with "model not found" and retried.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    with_model = [{"id": "nomic-embed-text"}, {"id": "gemma4:e4b"}]
+    endpoint.rows = with_model
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+    endpoint.rows = EMBEDDER_ONLY
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    assert "waiting" in body["llm"]["detail"]
+    with pytest.raises(config.NoChatModelError):
+        llm_config.get_llm_config()
+
+    endpoint.rows = with_model
+
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+
+def test_a_remembered_model_is_waited_for_while_its_endpoint_is_down(
+    endpoint, client, monkeypatch
+):
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert config.resolve_llm_model() == "gemma4:e4b"
+
+    endpoint.rows = None
+    assert client.get("/health").json()["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+
+def test_a_server_that_refuses_the_model_list_does_not_stop_a_configured_model(
+    endpoint, client, monkeypatch
+):
+    """
+    A 401 or 404 on /models is a server answering: the probe counts it reachable,
+    and nothing in it says the configured model is gone.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "configured:model")
+
+    def guarded(url: str, **_: Any) -> httpx.Response:
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", guarded)
+
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
     assert body["llm"]["model"] == "configured:model"
 
 
