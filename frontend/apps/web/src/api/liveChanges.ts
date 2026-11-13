@@ -26,7 +26,12 @@ import { streamingFetch } from '@ci/common';
  * return to a visible tab, and a 401/403 waits for a NEW token rather than
  * retrying with the one that was refused. The token rotates every few
  * minutes; an open stream is not reconnected for that, the new token is just
- * what the next connect uses.
+ * what the next connect uses. The browser coming back online also reconnects
+ * at once.
+ *
+ * Nothing that changed while the stream was down was announced, so the first
+ * stream that opens after a drop announces every topic with listeners once.
+ * They re-read and are current again without waiting for their next poll.
  */
 export type LiveChangeTopic = 'tasks' | 'calendar';
 
@@ -46,6 +51,8 @@ let controller: AbortController | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = RECONNECT_FLOOR_MS;
 let refusedToken: string | null = null;
+/** A stream subscribers wanted was down, so changes may have gone unannounced. */
+let missedChanges = false;
 
 function subscriberCount(): number {
   let count = 0;
@@ -148,6 +155,7 @@ async function connect(): Promise<void> {
       // Wait for the next one, or a minute, whichever is first.
       refusedToken = usedToken;
       controller = null;
+      missedChanges = true;
       scheduleReconnect(UNAUTHORIZED_WAIT_MS);
 
       return;
@@ -155,12 +163,21 @@ async function connect(): Promise<void> {
 
     if (!response.ok || !response.body) {
       controller = null;
+      missedChanges = true;
       scheduleReconnect();
 
       return;
     }
 
     reconnectDelay = RECONNECT_FLOOR_MS;
+
+    if (missedChanges) {
+      missedChanges = false;
+
+      for (const topic of subscribers.keys()) {
+        emit(topic);
+      }
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -195,12 +212,15 @@ async function connect(): Promise<void> {
   controller = null;
 
   if (!own.signal.aborted) {
+    missedChanges = true;
     scheduleReconnect();
   }
 }
 
 function disconnect(): void {
   clearReconnect();
+  // Nobody is listening any more; whoever subscribes next reads fresh on mount.
+  missedChanges = false;
 
   const current = controller;
   controller = null;
@@ -277,17 +297,27 @@ export function resetLiveChangesForTests(): void {
   token = null;
   refusedToken = null;
   reconnectDelay = RECONNECT_FLOOR_MS;
+  missedChanges = false;
+}
+
+/** Skip whatever backoff is pending and try now. */
+function reconnectNow(): void {
+  if (!controller && subscriberCount() > 0) {
+    clearReconnect();
+    reconnectDelay = RECONNECT_FLOOR_MS;
+    void connect();
+  }
 }
 
 if (typeof document !== 'undefined') {
   // A backgrounded tab or a phone app brought back may hold a stream the
-  // network quietly dropped. Skip whatever backoff is pending and try now;
-  // `useRefetchOnReturn` covers whatever was missed while away.
+  // network quietly dropped, and a browser back online has one waiting out a
+  // backoff of up to 30 s. Try now in both cases; the catch-up on connect
+  // covers whatever was missed while away.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && !controller && subscriberCount() > 0) {
-      clearReconnect();
-      reconnectDelay = RECONNECT_FLOOR_MS;
-      void connect();
+    if (document.visibilityState === 'visible') {
+      reconnectNow();
     }
   });
+  window.addEventListener('online', reconnectNow);
 }
