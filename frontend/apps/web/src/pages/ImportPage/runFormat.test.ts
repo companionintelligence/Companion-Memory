@@ -202,8 +202,15 @@ describe('stagePhase', () => {
   });
 
   it('keeps where a stage stopped, which is the first thing asked about one that did not finish', () => {
-    expect(stagePhase({ status: 'failed', phase: 'parsing gmail (1/2)' })).toBe('parsing gmail (1/2)');
-    expect(stagePhase({ status: 'cancelled', phase: 'uploading' })).toBe('uploading');
+    expect(stagePhase({ status: 'failed', phase: 'parsing gmail (1/2)' })).toBe(
+      'failed while parsing gmail (1/2)',
+    );
+    expect(stagePhase({ status: 'cancelled', phase: 'uploading' })).toBe('cancelled while uploading');
+  });
+
+  it('does not read as still working once the stage has stopped', () => {
+    // A failed Unpack used to say "Unpack extracting" beside its own red error.
+    expect(stagePhase({ status: 'failed', phase: 'extracting' })).toBe('failed while extracting');
   });
 
   it('has nothing to say when the runner set nothing', () => {
