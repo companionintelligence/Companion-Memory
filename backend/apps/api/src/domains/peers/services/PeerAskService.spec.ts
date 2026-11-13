@@ -348,7 +348,13 @@ describe('PeerAskService.handle', () => {
       mocks.peerLinkService as never,
       mocks.askService as never,
       mocks.grantService as never,
-      new AskExecutorService(searchService as never, logger as never),
+      new AskExecutorService(
+        searchService as never,
+        logger as never,
+        {
+          photosAtNamedPlace: jest.fn().mockResolvedValue({ places: [], fileIds: [], total: 0 }),
+        } as never,
+      ),
       mocks.answerService as never,
       mocks.auditService as never,
       mocks.eventRepository as never,
