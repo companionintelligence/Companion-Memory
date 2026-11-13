@@ -351,6 +351,13 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const hasRhythmSignal =
     rhythm.some((day) => daypartWeights(day).some((weight) => weight >= RHYTHM_NOISE_FLOOR)) ||
     hasOccupancySignal;
+  // What the footer dates the rhythm layer by: the week forecast, or the
+  // occupancy histogram when only that one answered with something to draw.
+  const rhythmGeneratedAt = generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null);
+  // With HBPE on, no date means the forecast call failed (see rhythmFooter), and
+  // the footer that says so lives on the schedule surface. A read that failed
+  // as a whole is the hard error instead.
+  const forecastUnreachable = hbpeEnabled && !rhythmGeneratedAt && !error;
 
   // Placing a backlog task mints a planned block, so the committed lane has to re-read.
   const {
@@ -539,10 +546,23 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // the surface is gated on whether anything resolved rather than on `error`.
   // A month or a year is a surface in its own right: an empty one is still a
   // calendar to move around in, not the "connect something" welcome.
+  //
+  // Nor is a week the forecast could not be fetched for: the welcome told
+  // someone whose calendar was already imported to connect one, and stood in
+  // for the surface whose footer says the forecast is unreachable.
   const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
   const overview = view === 'month' || view === 'year';
-  const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && atToday && !overview;
-  const showScheduleSurface = !atToday || overview || hasAnything || planError || fetching;
+  const isTrulyEmpty =
+    !loading &&
+    !fetching &&
+    !hasAnything &&
+    !error &&
+    !planError &&
+    !forecastUnreachable &&
+    atToday &&
+    !overview;
+  const showScheduleSurface =
+    !atToday || overview || hasAnything || planError || fetching || forecastUnreachable;
 
   // Embedded, the host (Calendar) supplies the frame and is otherwise empty —
   // this is the whole page now, not one block in a taller scrolling column —
@@ -724,7 +744,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         liftSelectedHour={isMobile && view === 'day' && slot !== null}
         onMoveEvent={handleMove}
         footer={rhythmFooter(
-          generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null),
+          rhythmGeneratedAt,
           rhythmCoversWindow || hasOccupancySignal,
           hbpeEnabled,
           pipelineRunning,

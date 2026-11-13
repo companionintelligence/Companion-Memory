@@ -555,11 +555,29 @@ describe('SchedulePage — failed queries', () => {
   });
 
   it('still shows the empty state when everything resolved and there is nothing', () => {
+    // With the flag on, a null forecast is a failed call (next case); with it
+    // off there is no rhythm layer to wait for, so this is a truly empty week.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
 
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByText(/Connect a calendar/)).toBeInTheDocument();
+  });
+
+  it('shows the week and says the forecast is unreachable, not "connect a calendar", when HBPE is down', () => {
+    // The forecast resolver swallows an HBPE failure and answers null. An empty
+    // week then got the first-run welcome, telling someone whose calendar was
+    // already imported to connect one, and the footer naming the real problem
+    // never rendered.
+    h.hbpeEnabled = true;
+    setSchedule({ events: [], rhythm: [], generatedAt: null });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't reach the rhythm forecast/)).toBeInTheDocument();
   });
 
   it('keeps the week visible when the calendar is empty but Plan has backlog', () => {
