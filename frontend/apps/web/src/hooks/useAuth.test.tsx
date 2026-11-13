@@ -1950,11 +1950,23 @@ describe('useAuth', () => {
         return emptyResponse(true, 204);
       });
 
-      const rendered = renderHook(() => useAuth(), { wrapper });
-      await waitFor(() => expect(rendered.result.current[0].authenticated).toBe(true));
+      let navigate: ((to: string) => void) | undefined;
+      const rendered = renderHook(
+        () => {
+          navigate = useNavigate();
 
-      return { ...rendered, fetchMock, keychain };
+          return useAuth();
+        },
+        { wrapper },
+      );
+      await waitFor(() => expect(rendered.result.current[0].authenticated).toBe(true));
+      expect(keychain.get('memory:ci.apiKey')).toBe('desktop-key');
+
+      return { ...rendered, fetchMock, keychain, navigateTo: (to: string) => navigate?.(to) };
     }
+
+    const keyChecks = (fetchMock: ReturnType<typeof setFetch>) =>
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/keys/check')).length;
 
     afterEach(() => {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -1975,7 +1987,31 @@ describe('useAuth', () => {
       const check = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/check'));
       expect(check?.[1]?.headers).toMatchObject({ 'x-api-key': 'desktop-key' });
       expect(getApiKey()).toBeNull();
-      expect(keychain.has('memory:ci.apiKey')).toBe(false);
+      // The keychain copy goes at the end of the sign-out, after `authenticated` has already turned false.
+      await waitFor(() => expect(keychain.has('memory:ci.apiKey')).toBe(false));
+    });
+
+    it('asks every minute while the person moves between pages', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      try {
+        const { result, fetchMock, navigateTo } = await signedInDesktop(() =>
+          jsonResponse({ message: 'Unauthorized' }, false, 401),
+        );
+
+        // A new page every 40 seconds with no focus change: the minute must not start over on each one.
+        for (const page of ['/planning', '/memory', '/chat']) {
+          act(() => navigateTo(page));
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(40_000);
+          });
+        }
+
+        expect(keyChecks(fetchMock)).toBeGreaterThan(0);
+        await waitFor(() => expect(result.current[0].authenticated).toBe(false));
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('stays signed in when Memory does not answer the check', async () => {
@@ -1987,9 +2023,7 @@ describe('useAuth', () => {
         window.dispatchEvent(new Event('focus'));
       });
 
-      await waitFor(() =>
-        expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/check'))).toBe(true),
-      );
+      await waitFor(() => expect(keyChecks(fetchMock)).toBeGreaterThan(0));
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
