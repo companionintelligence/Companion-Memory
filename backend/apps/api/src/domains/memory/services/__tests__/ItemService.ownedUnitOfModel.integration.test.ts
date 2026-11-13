@@ -116,7 +116,10 @@ describeWithDb(`ItemService.findOwnedUnitOfModel against Postgres (${availabilit
     const mug = await insertProduct('Blue mug');
     const unit = await items.create(owner, { name: 'Blue mug', productId: mug });
 
-    const found = await items.findOwnedUnitOfModel(owner, mug, { namespace: 'gtin', value: '00012345678905' });
+    const found = await items.findOwnedUnitOfModel(owner, mug, {
+      namespace: 'gtin',
+      value: '00012345678905',
+    });
 
     expect(found?.id).toBe(unit.id);
   });
@@ -143,6 +146,28 @@ describeWithDb(`ItemService.findOwnedUnitOfModel against Postgres (${availabilit
     const found = await items.findOwnedUnitOfModel(owner, oil, { namespace: 'asin', value: ASIN });
 
     expect(found?.id).toBe(newest.id);
+  });
+
+  it('skips a unit that was merged into another', async () => {
+    const oil = await insertProduct('Motor oil');
+    const survivor = await items.create(owner, {
+      name: 'Motor oil',
+      identifierCodes: { asin: ASIN },
+      acquiredAt: new Date('2025-01-01T00:00:00.000Z'),
+    });
+    const merged = await items.create(owner, {
+      name: 'Motor oil (duplicate)',
+      identifierCodes: { asin: ASIN },
+      acquiredAt: new Date('2026-05-17T00:00:00.000Z'),
+    });
+    await dataSource.query('UPDATE ci.objects SET merged_into_object_id = $1 WHERE object_id = $2', [
+      survivor.id,
+      merged.id,
+    ]);
+
+    const found = await items.findOwnedUnitOfModel(owner, oil, { namespace: 'asin', value: ASIN });
+
+    expect(found?.id).toBe(survivor.id);
   });
 
   it("is null when you own none, and never returns another account's unit", async () => {

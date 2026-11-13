@@ -783,7 +783,7 @@ export class ItemService {
          FROM ci.objects
         WHERE user_id = $1::uuid
           AND merged_into_object_id IS NULL
-          AND (product_id = $2::uuid OR identifier_codes ->> $3 = $4)
+          AND (product_id = $2::uuid OR identifier_codes ->> $3::text = $4::text)
         ORDER BY (lifecycle_state = 'active') DESC, acquired_at DESC NULLS LAST, object_id DESC
         LIMIT 1`,
       [context.userId, productId, code.namespace, code.value],

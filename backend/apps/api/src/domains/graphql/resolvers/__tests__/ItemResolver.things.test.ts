@@ -381,7 +381,9 @@ describe('ItemResolver.objectByIdentifier', () => {
     const payload = await resolver.objectByIdentifier(context, 'asin', 'B09M95S7ZN');
 
     expect(payload.subjectType).toBe('product_model');
-    expect(payload.item?.id).toBe(GlobalUID.encode('item', ITEM_A));
+    expect(payload.ownedItem?.id).toBe(GlobalUID.encode('item', ITEM_A));
+    // Not the claim holder: the identifier list's merge offer reads `item`.
+    expect(payload.item).toBeNull();
     expect(itemService.findOwnedUnitOfModel).toHaveBeenCalledWith({ userId: 'user-1' }, PRODUCT_A, {
       namespace: 'asin',
       value: 'B09M95S7ZN',
