@@ -262,8 +262,8 @@ export interface StageSchedule {
    * pass ran an hour ago.
    *
    * For a local stage confined to the enrichment window it is counted in
-   * windows: a leg that has not started in the open window, and whose interval
-   * runs out before the next one opens, is due now (`stageDueness`,
+   * windows: a leg that has not started in the open window and whose interval
+   * runs out before the next one opens is due now (`stageDueness`,
    * `due_before_next_window`). Otherwise a leg first swept in the afternoon
    * would miss that night's window by a few hours and wait a whole extra day.
    * A metered stage keeps the plain interval, since it is what bounds spend.

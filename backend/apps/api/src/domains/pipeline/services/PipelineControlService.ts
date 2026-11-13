@@ -21,6 +21,7 @@ import {
   meteredStageIds,
   stageDueness,
   type StageDueness,
+  type WindowBounds,
 } from '../schedule';
 import type { Stage } from '../types';
 
@@ -700,11 +701,12 @@ interface TickConditions {
   windowOpen: boolean;
 
   /**
-   * `WindowStatus.opensAt` and `nextOpensAt`, for `stageDueness`'s
+   * `WindowStatus.opensAt`, `closesAt` and `nextOpensAt`, for `stageDueness`'s
    * `windowBounds`. `null` when the window is disabled (free-running, so there
-   * is no nightly turn to line up with) or could not be read.
+   * is no nightly turn to line up with) or `status()` threw. A window that is
+   * shut still carries its bounds; `windowOpen` is what keeps them inert.
    */
-  windowBounds: { opensAt: Date; nextOpensAt: Date } | null;
+  windowBounds: WindowBounds | null;
 
   /** The instant this tick judges every leg against. */
   now: Date;
@@ -1481,7 +1483,9 @@ export class PipelineControlService {
       return {
         windowOpen: window.open,
         windowBounds:
-          window.state === 'disabled' ? null : { opensAt: window.opensAt, nextOpensAt: window.nextOpensAt },
+          window.state === 'disabled'
+            ? null
+            : { opensAt: window.opensAt, closesAt: window.closesAt, nextOpensAt: window.nextOpensAt },
         now,
       };
     } catch (err: unknown) {

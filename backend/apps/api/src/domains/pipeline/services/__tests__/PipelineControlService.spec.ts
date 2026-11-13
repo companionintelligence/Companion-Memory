@@ -9,7 +9,7 @@ import { LoggerService } from '@ci/common/logging';
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
 import { SHARD_LEASE_SECONDS, STAGE_IDS, STAGE_ID_LIST, type StageId } from '../../constants';
 import { PIPELINE_TICK, PipelineTickCron } from '../../listeners/PipelineTickCron';
-import { automaticStageIds, stageDueness, stageSchedule } from '../../schedule';
+import { automaticStageIds, stageDueness, stageSchedule, type WindowBounds } from '../../schedule';
 import type { Stage } from '../../types';
 import { BackpressureService } from '../BackpressureService';
 import { EnrichmentWindowService } from '../EnrichmentWindowService';
@@ -150,7 +150,7 @@ interface ControlOptions {
    * which no leg in these tests started before, so it changes no answer unless
    * a test sets it.
    */
-  windowBounds?: { opensAt: Date; nextOpensAt: Date };
+  windowBounds?: WindowBounds;
 
   /** `enrichment.window.enabled` is false: open, free-running, state `disabled`. */
   windowDisabled?: boolean;
@@ -432,7 +432,7 @@ function makeControl(options: ControlOptions = {}) {
   };
 
   // Only `status()` is ever called, for `.open`, `state` and the window's
-  // bounds — the tick reads the window, it never takes a turn or charges the
+  // bounds. The tick reads the window; it never takes a turn or charges the
   // budget. `opensAt` and `nextOpensAt` become `stageDueness`'s `windowBounds`
   // unless the window is disabled.
   const windowService = {
@@ -447,6 +447,7 @@ function makeControl(options: ControlOptions = {}) {
         open,
         state: options.windowDisabled === true ? 'disabled' : open ? 'open' : 'closed',
         opensAt: options.windowBounds?.opensAt ?? new Date('2026-08-09T01:00:00.000Z'),
+        closesAt: options.windowBounds?.closesAt ?? new Date('2026-08-09T06:00:00.000Z'),
         nextOpensAt: options.windowBounds?.nextOpensAt ?? new Date('2026-08-10T01:00:00.000Z'),
       };
     }),
@@ -989,6 +990,39 @@ describe('PipelineControlService', () => {
       expect(h.swept()).toEqual([STAGE_IDS.ENRICH_ESTIMATE_LOCATION]);
     });
 
+    it('sweeps a weekly producer before its nightly consumer on the night its week runs out', async () => {
+      // Geocode started a minute into last week's window and the estimator a
+      // minute into last night's. Both take tonight's window from the opening,
+      // so the producer is due on the same tick and the consumer waits for it
+      // instead of sweeping first and missing this week's coordinates.
+      const minute = 60 * 1000;
+      const day = 24 * 60 * minute;
+      const now = Date.now();
+      const h = makeControl({
+        users: [
+          runningRun({
+            detail: { stages: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION] },
+          }),
+        ],
+        stale: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION],
+        lastStartedAt: {
+          [STAGE_IDS.ENRICH_GEOCODE]: new Date(now - 7 * day + minute),
+          [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: new Date(now - day + minute),
+        },
+        windowOpen: true,
+        windowBounds: {
+          opensAt: new Date(now - minute),
+          closesAt: new Date(now + 5 * 60 * minute),
+          nextOpensAt: new Date(now + day - minute),
+        },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_GEOCODE]);
+      expect(report.legsBlocked).toBe(1);
+    });
+
     it('does not let a producer that is not DUE block anything', async () => {
       // THE BUG the dueness filter fixes, and it is a real one rather than a
       // hypothetical: `enrich.estimate_location` and `promote.place` are NIGHTLY
@@ -1324,10 +1358,10 @@ describe('PipelineControlService', () => {
       expect(report.legsNotDue).toBe(1);
     });
 
-    it('sweeps a nightly leg first swept yesterday afternoon in tonight\'s window, not the night after', async () => {
+    it("sweeps a nightly leg first swept yesterday afternoon in tonight's window, not the night after", async () => {
       // A new account's nightly legs first run when its data arrives, during
       // the day. Thirteen hours later the window is open but the 1-day interval
-      // is not up, and by the time it is the window has shut again.
+      // is not up. By the time it is, the window has shut again.
       const hour = 60 * 60 * 1000;
       const now = Date.now();
       const h = makeControl({
@@ -1335,7 +1369,11 @@ describe('PipelineControlService', () => {
         stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
         lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
         windowOpen: true,
-        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
       });
 
       await h.service.tick();
@@ -1354,7 +1392,11 @@ describe('PipelineControlService', () => {
         stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
         lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
         windowDisabled: true,
-        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
       });
 
       const report = await h.service.tick();
@@ -1371,7 +1413,11 @@ describe('PipelineControlService', () => {
         stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
         lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 1 * hour) },
         windowOpen: true,
-        windowBounds: { opensAt: new Date(now - 2 * hour), nextOpensAt: new Date(now + 22 * hour) },
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
       });
 
       const report = await h.service.tick();

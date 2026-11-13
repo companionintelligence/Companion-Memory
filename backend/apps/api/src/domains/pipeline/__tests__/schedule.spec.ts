@@ -573,7 +573,7 @@ describe('stageDueness', () => {
     // The default window: 01:00 to 06:00. `at(3)` is 03:00 tonight, so the
     // window that is open opened at 01:00 and the next one opens at 01:00
     // tomorrow.
-    const tonight = { opensAt: at(1), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) };
+    const tonight = { opensAt: at(1), closesAt: at(6), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) };
 
     // The nightly people work: a new account's first pass of these runs when
     // its data arrives, during the day, because a never-run leg ignores the
@@ -621,7 +621,7 @@ describe('stageDueness', () => {
     });
 
     it('runs a leg that started at 01:05 last night as soon as the window opens tonight', () => {
-      // Without this the leg waits until 01:05, then 01:10 the night after, and
+      // Without this the leg waits until 01:05, then 01:10 the night after. It
       // creeps later each night until it falls off the end of the window.
       const now = at(1);
 
@@ -667,9 +667,9 @@ describe('stageDueness', () => {
       expect(decision.reason).toBe('too_soon');
     });
 
-    it('holds the weekly metered geocoders to their full week', () => {
-      // Its week is up at 14:00 today. Counted in windows, tonight would be its
-      // turn, eleven hours early; a metered stage waits for the week instead.
+    it("holds a weekly metered geocoder whose week is up after tonight's window shuts", () => {
+      // Its week is up at 14:00 today. Counted to the next window, tonight would
+      // be its turn, eleven hours early; a metered stage waits for the week.
       const now = at(3);
       const sevenDaysAgo = new Date(at(14).getTime() - 7 * DAYS);
 
@@ -692,6 +692,47 @@ describe('stageDueness', () => {
       }
     });
 
+    it('starts a weekly metered geocoder at the opening of the window its week runs out in', () => {
+      // It started at 01:05 a week ago, so its week is up at 01:05 tonight,
+      // inside this window: the same window it runs in either way, from the
+      // opening, so the nightly consumers it feeds wait for it.
+      const now = at(1);
+
+      for (const stageId of [
+        STAGE_IDS.ENRICH_GEOCODE,
+        STAGE_IDS.ENRICH_EVENT_REVERSE,
+        STAGE_IDS.ENRICH_POSITION_REVERSE,
+      ]) {
+        const decision = stageDueness({
+          stageId,
+          lastStartedAt: new Date(at(1, 5).getTime() - 7 * DAYS),
+          windowOpen: OPEN,
+          windowBounds: tonight,
+          now,
+        });
+
+        expect(decision.due).toBe(true);
+        expect(decision.reason).toBe('due_before_next_window');
+      }
+    });
+
+    it('does not run the daily metered unfurl twice in a day after a daytime first pass', () => {
+      // Its first pass ran at 14:00 yesterday, so its day is up at 14:00 today,
+      // after tonight's window shuts. It keeps its day, as on a plain interval.
+      const now = at(3);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.ENRICH_UNFURL,
+        lastStartedAt: ago(now, 13 * HOURS),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
     it('does not give the daily metered unfurl a second run in the window after an overdue one', () => {
       // An overdue leg ignores the window, so it can start at 00:58. Counted in
       // windows it would be due again at 01:00: a second `perRunCap` against
@@ -702,7 +743,7 @@ describe('stageDueness', () => {
         stageId: STAGE_IDS.ENRICH_UNFURL,
         lastStartedAt: at(0, 58),
         windowOpen: OPEN,
-        windowBounds: { opensAt: at(1), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) },
+        windowBounds: tonight,
         now,
       });
 
@@ -718,7 +759,7 @@ describe('stageDueness', () => {
         stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
         lastStartedAt: at(0, 58),
         windowOpen: OPEN,
-        windowBounds: { opensAt: at(1), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) },
+        windowBounds: tonight,
         now,
       });
 
