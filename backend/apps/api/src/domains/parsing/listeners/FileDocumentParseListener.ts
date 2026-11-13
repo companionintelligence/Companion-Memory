@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OnEvent, EventService } from '@ci/domains/events';
+import { OnEvent, EventService, type QueueOptions } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 import { FileUploadedEvent, type FileUploadedPayload } from '@ci/domains/files/events';
 
@@ -15,6 +15,26 @@ import { DocumentChunkService } from '../services/DocumentChunkService';
 import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../services/DocumentExtractor';
 import { DocumentParserService } from '../services/DocumentParserService';
 import { ParseStatus } from '../types';
+
+/**
+ * The document-parsing queue's retries: long enough to outlast a parser restart.
+ *
+ * Every queue's default is 3 retries 10 s apart with backoff, so a job used its
+ * last retry about two minutes after the first failure. A document uploaded
+ * while the summary service (the parser) was stopped for an update or caught in
+ * a crash loop failed for good 15 s before the service came back. Nothing
+ * parses it again on its own. pg-boss waits between `retryDelay * 2^(n-1)` and
+ * `retryDelay * 2^n` seconds before retry `n`, so these five retries 30 s apart
+ * span about 15 to 30 minutes. That holds only while the queue keeps the
+ * `retryBackoff: true` every queue gets from PGBossEventService's
+ * QUEUE_RETRY_POLICY; without it they span two and a half minutes.
+ *
+ * A file the parser refuses outright (UnparseableDocumentError) is not retried
+ * at all. Every other failure is, including ones that waiting won't clear (an
+ * object missing from storage, a sidecar token mismatch). Those now take half
+ * an hour to reach the dead-letter queue instead of two minutes.
+ */
+export const DOCUMENT_PARSING_RETRY = { retryLimit: 5, retryDelay: 30 } as const satisfies QueueOptions;
 
 @Injectable()
 export class FileDocumentParseListener {
@@ -31,7 +51,7 @@ export class FileDocumentParseListener {
     this.logger.setContext(FileDocumentParseListener.name);
   }
 
-  @OnEvent(FileUploadedEvent, { queue: 'document-parsing' })
+  @OnEvent(FileUploadedEvent, { queue: 'document-parsing', queueOptions: DOCUMENT_PARSING_RETRY })
   async parseDocument(payload: FileUploadedPayload) {
     const context = toServiceContext({ userId: payload.userId });
 
@@ -141,7 +161,8 @@ export class FileDocumentParseListener {
 
       // The parser refused this file (too large, an archive bomb, out of time
       // or memory). Retrying would send the same bytes back for the same
-      // answer, up to three more times; the failure is recorded on the file.
+      // answer on every retry in DOCUMENT_PARSING_RETRY, half an hour of them;
+      // the failure is recorded on the file.
       if (err instanceof UnparseableDocumentError) {
         return;
       }
