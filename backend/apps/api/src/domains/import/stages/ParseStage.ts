@@ -283,7 +283,21 @@ export class ParseStage implements ImportStageRunner {
     );
     const zone = row?.timezone?.trim();
 
-    return zone && isValidTimezone(zone) ? zone : undefined;
+    if (!zone) {
+      return undefined;
+    }
+
+    if (!isValidTimezone(zone)) {
+      // Worth one line, since zone-less export times then land in the server's zone.
+      this.logger.warn('Unrecognised profile time zone; zone-less times stay in the server zone', {
+        userId,
+        timezone: zone.slice(0, 64),
+      });
+
+      return undefined;
+    }
+
+    return zone;
   }
 
   /** Run one importer, staging everything it emits. */

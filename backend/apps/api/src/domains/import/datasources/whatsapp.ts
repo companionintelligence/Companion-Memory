@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
-import { serverTimezone, wallClockToUTC, type WallClock } from '@ci/common/time/zoned';
+import { wallClockToUTC, type WallClock } from '@ci/common/time/zoned';
 
 import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -102,21 +102,35 @@ function stripLeadingInvisible(line: string): string {
 interface ParsedLine {
   ts: Date | undefined;
   /**
-   * The same wall clock read in the SERVER's zone, which is what `new Date(…)`
-   * made of it before {@link ParsedLine.ts} moved to the account's zone. Only
-   * the message id uses it. The id carries a time, so an id built from `ts`
-   * would change for every message of a chat imported before, and importing
-   * a newer export of that chat (WhatsApp exports are cumulative) would save
-   * every old message a second time. Read the old way, the id stays what it
-   * was on this server, and changing the profile's zone later can't fork it.
+   * What `new Date(…)` made of the header on this server, which is what
+   * {@link ParsedLine.ts} was before it moved to the account's zone. Only the
+   * message id uses it. The id carries a time, so an id built from `ts` would
+   * change for every message of a chat imported before. Importing a newer
+   * export of that chat (WhatsApp exports are cumulative) would then save every
+   * old message a second time. Changing the profile's zone later can't fork it
+   * either.
+   *
+   * It runs the old expression itself rather than re-reading the wall clock in
+   * `serverTimezone()`. The two disagree: a `TZ` that ICU can't name (such as
+   * `:/etc/localtime`) reports no zone, which `serverTimezone()` turns into UTC
+   * while `Date` still reads the host's clock. The repeated fall-back hour east
+   * of UTC also resolves the other way, so those ids would fork too.
    */
   idTime: Date | undefined;
   sender: string;
   text: string;
 }
 
+/** `d`, or undefined when it is an Invalid Date. */
+function dated(d: Date): Date | undefined {
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
 /**
- * Out-of-range fields leave the line undated, as `new Date` did.
+ * Out-of-range fields leave the line undated, with two edges. A day past a
+ * short month's end (2/30) rolls into the next month, as `new Date` did.
+ * `24:00`, which `new Date` read as the next day's midnight, is undated here.
+ * Neither appears in a real export.
  */
 function validWallClock(w: WallClock): WallClock | undefined {
   if (
@@ -168,29 +182,25 @@ function androidWallClock(date: string, time: string): WallClock | undefined {
 }
 
 /**
- * The zones a chat's wall-clock times are read in: the account's for the
- * instant a message is stored at, the server's for its id (see
- * {@link ParsedLine.idTime}).
+ * One header line, with its time read in `accountZone`.
  *
  * Neither platform writes a zone or an offset: the times are what the phone's
  * clock read. They used to go through `new Date(…)`, which reads them in the
- * SERVER's zone, so the same chat landed at different instants on different
- * machines, and in a UTC container a Pacific account's midnight New Year
- * messages sat at 4 PM on Dec 31. The importer is told the account's zone
- * (`ImportParams.timeZone`) and stores them there.
+ * SERVER's zone. The same chat landed at different instants on different
+ * machines. In a UTC container a Pacific account's midnight New Year messages
+ * sat at 4 PM on Dec 31. The importer is told the account's zone
+ * (`ImportParams.timeZone`) and stores them there. Without one, the stored
+ * time stays the server's reading, the same instant the id carries.
  */
-interface ChatZones {
-  account: string;
-  server: string;
-}
-
-function parseWALine(line: string, zones: ChatZones): ParsedLine | null {
+function parseWALine(line: string, accountZone: string | undefined): ParsedLine | null {
   const cleaned = stripLeadingInvisible(line);
   let wall: WallClock | undefined;
+  let idTime: Date | undefined;
   let m = IOS_RE.exec(cleaned);
 
   if (m) {
     wall = iosWallClock(m[1], m[2]);
+    idTime = dated(new Date(`${m[1]} ${m[2]}`));
   } else {
     m = ANDROID_RE.exec(cleaned);
 
@@ -198,12 +208,16 @@ function parseWALine(line: string, zones: ChatZones): ParsedLine | null {
       return null;
     }
 
+    // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
+    const [day, month, year] = m[1].split('/');
+
     wall = androidWallClock(m[1], m[2]);
+    idTime = dated(new Date(`${year}-${month}-${day}T${m[2]}:00`));
   }
 
   return {
-    ts: wall && wallClockToUTC(wall, zones.account),
-    idTime: wall && wallClockToUTC(wall, zones.server),
+    ts: accountZone == null ? idTime : wall && wallClockToUTC(wall, accountZone),
+    idTime,
     sender: m[3].trim(),
     text: m[4],
   };
@@ -368,8 +382,6 @@ export class WhatsAppFileImporter implements FileImporter {
 
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
     const conversationName = conversationNameFrom(chatPath);
-    const server = serverTimezone();
-    const zones: ChatZones = { account: params.timeZone ?? server, server };
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
@@ -497,7 +509,7 @@ export class WhatsAppFileImporter implements FileImporter {
     };
 
     for await (const line of rl) {
-      const parsed = parseWALine(line, zones);
+      const parsed = parseWALine(line, params.timeZone);
       if (parsed) {
         if (current) {
           flush(current);

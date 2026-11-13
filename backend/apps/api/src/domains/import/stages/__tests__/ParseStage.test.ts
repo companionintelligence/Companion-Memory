@@ -433,7 +433,7 @@ describe('the time zone handed to importers', () => {
 
     dataSourcesRecognize.mockResolvedValue([importerSeeing(seen)]);
 
-    const { stage, dataSource } = buildStage();
+    const { stage, dataSource, logger } = buildStage();
 
     dataSource.query.mockImplementation(async (sql: string) =>
       sql.includes('FROM ci.users') ? ([{ timezone: 'Not/AZone' }] as never[]) : [],
@@ -442,5 +442,9 @@ describe('the time zone handed to importers', () => {
     await stage.run(contextFor());
 
     expect(seen[0].timeZone).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('time zone'),
+      expect.objectContaining({ timezone: 'Not/AZone' }),
+    );
   });
 });
