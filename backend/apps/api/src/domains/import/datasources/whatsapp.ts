@@ -101,23 +101,24 @@ function stripLeadingInvisible(line: string): string {
 
 interface ParsedLine {
   ts: Date | undefined;
+  /**
+   * The same wall clock read in the SERVER's zone, which is what `new Date(…)`
+   * made of it before {@link ParsedLine.ts} moved to the account's zone. Only
+   * the message id uses it. The id carries a time, so an id built from `ts`
+   * would change for every message of a chat imported before, and importing
+   * a newer export of that chat (WhatsApp exports are cumulative) would save
+   * every old message a second time. Read the old way, the id stays what it
+   * was on this server, and changing the profile's zone later can't fork it.
+   */
+  idTime: Date | undefined;
   sender: string;
   text: string;
 }
 
 /**
- * An export's wall-clock time as an instant, read in `timeZone`.
- *
- * Neither platform writes a zone or an offset: the times are what the phone's
- * clock read. They used to go through `new Date(…)`, which reads them in the
- * SERVER's zone, so the same chat landed at different instants on different
- * machines, and in a UTC container a Pacific account's midnight New Year
- * messages sat at 4 PM on Dec 31. The importer is told the account's zone
- * (`ImportParams.timeZone`) and reads them there.
- *
  * Out-of-range fields leave the line undated, as `new Date` did.
  */
-function wallTime(w: WallClock, timeZone: string): Date | undefined {
+function validWallClock(w: WallClock): WallClock | undefined {
   if (
     w.month < 1 ||
     w.month > 12 ||
@@ -130,13 +131,13 @@ function wallTime(w: WallClock, timeZone: string): Date | undefined {
     return undefined;
   }
 
-  return wallClockToUTC(w, timeZone);
+  return w;
 }
 
 const IOS_TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s?([AP]M)?$/;
 
 /** iOS `M/D/YY` (or `M/D/YYYY`) and `H:MM[:SS][ AM|PM]`. */
-function iosTime(date: string, time: string, timeZone: string): Date | undefined {
+function iosWallClock(date: string, time: string): WallClock | undefined {
   const [month, day, rawYear] = date.split('/').map(Number);
   const t = IOS_TIME_RE.exec(time.trim());
 
@@ -155,30 +156,57 @@ function iosTime(date: string, time: string, timeZone: string): Date | undefined
   // Two-digit years as `new Date` read them: 00-49 are 20xx, 50-99 are 19xx.
   const year = rawYear < 100 ? rawYear + (rawYear < 50 ? 2000 : 1900) : rawYear;
 
-  return wallTime({ year, month, day, hour, minute: Number(t[2]), second: Number(t[3] ?? 0) }, timeZone);
+  return validWallClock({ year, month, day, hour, minute: Number(t[2]), second: Number(t[3] ?? 0) });
 }
 
-function parseWALine(line: string, timeZone: string): ParsedLine | null {
+/** Android `DD/MM/YYYY` and `HH:MM`. */
+function androidWallClock(date: string, time: string): WallClock | undefined {
+  const [day, month, year] = date.split('/').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+
+  return validWallClock({ year, month, day, hour, minute, second: 0 });
+}
+
+/**
+ * The zones a chat's wall-clock times are read in: the account's for the
+ * instant a message is stored at, the server's for its id (see
+ * {@link ParsedLine.idTime}).
+ *
+ * Neither platform writes a zone or an offset: the times are what the phone's
+ * clock read. They used to go through `new Date(…)`, which reads them in the
+ * SERVER's zone, so the same chat landed at different instants on different
+ * machines, and in a UTC container a Pacific account's midnight New Year
+ * messages sat at 4 PM on Dec 31. The importer is told the account's zone
+ * (`ImportParams.timeZone`) and stores them there.
+ */
+interface ChatZones {
+  account: string;
+  server: string;
+}
+
+function parseWALine(line: string, zones: ChatZones): ParsedLine | null {
   const cleaned = stripLeadingInvisible(line);
+  let wall: WallClock | undefined;
   let m = IOS_RE.exec(cleaned);
+
   if (m) {
-    return { ts: iosTime(m[1], m[2], timeZone), sender: m[3].trim(), text: m[4] };
+    wall = iosWallClock(m[1], m[2]);
+  } else {
+    m = ANDROID_RE.exec(cleaned);
+
+    if (m == null) {
+      return null;
+    }
+
+    wall = androidWallClock(m[1], m[2]);
   }
 
-  m = ANDROID_RE.exec(cleaned);
-  if (m) {
-    // DD/MM/YYYY, HH:MM
-    const [day, month, year] = m[1].split('/').map(Number);
-    const [hour, minute] = m[2].split(':').map(Number);
-
-    return {
-      ts: wallTime({ year, month, day, hour, minute, second: 0 }, timeZone),
-      sender: m[3].trim(),
-      text: m[4],
-    };
-  }
-
-  return null;
+  return {
+    ts: wall && wallClockToUTC(wall, zones.account),
+    idTime: wall && wallClockToUTC(wall, zones.server),
+    sender: m[3].trim(),
+    text: m[4],
+  };
 }
 
 const SYSTEM_VERB_RE =
@@ -340,7 +368,8 @@ export class WhatsAppFileImporter implements FileImporter {
 
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
     const conversationName = conversationNameFrom(chatPath);
-    const timeZone = params.timeZone ?? serverTimezone();
+    const server = serverTimezone();
+    const zones: ChatZones = { account: params.timeZone ?? server, server };
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
@@ -442,7 +471,7 @@ export class WhatsAppFileImporter implements FileImporter {
 
       params.pipeline.push({
         item: {
-          id: `whatsapp:${conversationName}:${p.ts ? p.ts.toISOString() : 'noTs'}:${seq++}`,
+          id: `whatsapp:${conversationName}:${p.idTime ? p.idTime.toISOString() : 'noTs'}:${seq++}`,
           classification: loc ? 'location' : 'message',
           timestamp: p.ts,
           ...(loc && { location: loc }),
@@ -468,7 +497,7 @@ export class WhatsAppFileImporter implements FileImporter {
     };
 
     for await (const line of rl) {
-      const parsed = parseWALine(line, timeZone);
+      const parsed = parseWALine(line, zones);
       if (parsed) {
         if (current) {
           flush(current);

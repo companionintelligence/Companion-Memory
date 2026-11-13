@@ -719,5 +719,45 @@ describe('the system-line filter must not eat human messages', () => {
     it('leaves a header with an impossible time undated rather than inventing one', async () => {
       expect(await chatIn(['[13/1/21, 1:00:00 AM] Alice: month 13'], 'UTC')).toEqual(['undated']);
     });
+
+    it('keeps the message ids it made before, whatever zone the account is in', async () => {
+      // The id carries a time. Built from the account-zone instant, a chat
+      // imported before this change would get new ids, and importing a newer
+      // export of it would save every old message again. It stays the server's
+      // reading, which is what `new Date` gave the old code in this process.
+      const lines = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '01/07/2021, 09:05 - Bob: Android'];
+      const imported = async (timeZone?: string): Promise<EmittedGraph[]> => {
+        const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-id-')), 'chat');
+        fs.mkdirSync(root);
+        fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+        const pipeline: EmittedGraph[] = [];
+        await new WhatsAppFileImporter().fileImport({}, { filename: 'chat', fullPath: root }, {
+          pipeline,
+          timeframe: {},
+          timeZone,
+          log: () => {},
+        } as unknown as ImportParams);
+
+        return pipeline;
+      };
+
+      const legacy = [
+        `whatsapp:chat:${new Date('1/1/21 12:00:00 AM').toISOString()}:0`,
+        `whatsapp:chat:${new Date('2021-07-01T09:05:00').toISOString()}:1`,
+      ];
+
+      // Two zones at least one of which is not this process's, so the stored
+      // instants move while the ids must not.
+      for (const timeZone of ['America/Los_Angeles', 'Pacific/Kiritimati', undefined]) {
+        const items = await imported(timeZone);
+
+        expect(items.map((entry) => entry.item.id)).toEqual(legacy);
+      }
+
+      expect((await imported('Pacific/Kiritimati'))[0].item.timestamp?.toISOString()).toBe(
+        '2020-12-31T10:00:00.000Z',
+      );
+    });
   });
 });
