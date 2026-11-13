@@ -66,27 +66,41 @@ const DUPLICATE_REASON_LABELS: Record<DuplicateGroup['reason'], string> = {
   NAME_PROXIMITY: 'Same name, within 150 m',
 };
 
-type PlaceProperties = {
-  address?: string | null;
-  lat?: number | null;
-  lng?: number | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  source?: string | null;
-};
+/** `properties` is free-form JSON any client can write, so a key is only text if it is a string. */
+function textProperty(properties: Record<string, unknown>, key: string): string | null {
+  const value = properties[key];
+
+  return typeof value === 'string' ? value : null;
+}
 
 /** The one-line summary under a place's name: address, else coordinates, plus where it came from. */
 function describePlace(place: DuplicatePlace): string {
-  const properties = (place.properties ?? {}) as PlaceProperties;
-  // The typed coordinates first: a place made by hand keeps its point only
-  // there, with nothing in `properties`, and would otherwise read as a dash.
-  const lat = place.latitude ?? properties.latitude ?? properties.lat;
-  const lng = place.longitude ?? properties.longitude ?? properties.lng;
+  const properties = (place.properties ?? {}) as Record<string, unknown>;
+  // Only the typed coordinates. The server fills them from location_point,
+  // else from the numeric `lat`/`lng` or `geolocation` in properties
+  // (PlaceEntity.loadPropertiesFromJsonb), so a place made by hand, which
+  // keeps nothing in properties, still has them.
+  const { latitude, longitude } = place;
   const where =
-    properties.address?.trim() ||
-    (lat != null && lng != null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : null);
+    textProperty(properties, 'address')?.trim() ||
+    (latitude != null && longitude != null ? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}` : null);
 
-  return [where, place.placeKind, properties.source?.replace(/_/g, ' ')].filter(Boolean).join(' · ') || '—';
+  return (
+    [where, place.placeKind, textProperty(properties, 'source')?.replace(/_/g, ' ')]
+      .filter(Boolean)
+      .join(' · ') || '—'
+  );
+}
+
+/**
+ * A group is its members: two "Same name" clusters in different towns share
+ * `value` (the name), and the server already drops a repeated member set.
+ */
+function groupKey(group: DuplicateGroup): string {
+  return group.places
+    .map((place) => place.id)
+    .sort()
+    .join(',');
 }
 
 /**
@@ -253,7 +267,7 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
   const { isMobile } = useDeviceLayout();
   const [pages, setPages] = useState(1);
   const [expandedMobile, setExpandedMobile] = useState(false);
-  const { data, error, refetch, fetchMore } = useQuery(GET_PLACE_DUPLICATES, {
+  const { data, error, loading, refetch, fetchMore } = useQuery(GET_PLACE_DUPLICATES, {
     variables: { limit: PLACE_DUPLICATE_PAGE_SIZE, offset: 0 },
     notifyOnNetworkStatusChange: true,
   });
@@ -272,18 +286,14 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
           return prev;
         }
 
-        const seen = new Set(
-          (prev.placeDuplicates?.groups ?? []).map((group) => `${group.reason}:${group.value}`),
-        );
+        const seen = new Set((prev.placeDuplicates?.groups ?? []).map(groupKey));
 
         return {
           placeDuplicates: {
             ...fetchMoreResult.placeDuplicates,
             groups: [
               ...(prev.placeDuplicates?.groups ?? []),
-              ...fetchMoreResult.placeDuplicates.groups.filter(
-                (group) => !seen.has(`${group.reason}:${group.value}`),
-              ),
+              ...fetchMoreResult.placeDuplicates.groups.filter((group) => !seen.has(groupKey(group))),
             ],
           },
         };
@@ -324,11 +334,7 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
       </Card.Header>
       <Card.Content className="flex max-h-[40em] flex-col gap-2 overflow-y-auto p-3 pt-0 sm:gap-3 sm:p-6 sm:pt-0">
         {visibleGroups.map((group) => (
-          <PlaceDuplicateGroupRow
-            key={`${group.reason}:${group.value}`}
-            group={group}
-            onMerged={handleMerged}
-          />
+          <PlaceDuplicateGroupRow key={groupKey(group)} group={group} onMerged={handleMerged} />
         ))}
 
         {isMobile && !expandedMobile && groups.length > 1 && (
@@ -339,7 +345,9 @@ export function PlaceDuplicatesCard({ onMerged }: { onMerged: () => Promise<unkn
 
         {duplicates?.hasMore && (!isMobile || expandedMobile) && (
           <div className="flex justify-center">
-            <Button variant="outline" size="sm" onClick={loadMore}>
+            {/* One page at a time: two pages in flight can land out of order,
+                and the later one's hasMore wins. */}
+            <Button variant="outline" size="sm" disabled={loading} onClick={loadMore}>
               Load more duplicate groups
             </Button>
           </div>

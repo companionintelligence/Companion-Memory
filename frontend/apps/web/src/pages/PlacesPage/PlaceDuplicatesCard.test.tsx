@@ -13,6 +13,8 @@ import {
 
 const PLACE_A = btoa('place:01a01c70-a291-720e-bd3e-516757a8c58d');
 const PLACE_B = btoa('place:01a01c70-a363-726d-862f-57f87330ac60');
+const PLACE_C = btoa('place:01a01c70-a4f2-7b3a-9c1e-2d6f0b8e4a11');
+const PLACE_D = btoa('place:01a01c70-a5c8-7e44-8a07-6b1d3f9c2e52');
 
 function place(id: string, lng: number) {
   return {
@@ -22,8 +24,9 @@ function place(id: string, lng: number) {
     description: null,
     placeKind: 'address',
     properties: { address: null, lat: 33.695, lng, source: 'reverse_geocode' },
-    latitude: null,
-    longitude: null,
+    // The server folds numeric properties.lat/lng into the typed pair.
+    latitude: 33.695,
+    longitude: lng,
   };
 }
 
@@ -115,7 +118,47 @@ describe('PlaceDuplicatesCard', () => {
 
     expect(await screen.findByText('37.77490, -122.41940')).toBeInTheDocument();
     expect(screen.getByText('37.77600, -122.41940')).toBeInTheDocument();
-    expect(screen.queryByText('—')).not.toBeInTheDocument();
+    expect(screen.queryAllByText('—')).toHaveLength(0);
+  });
+
+  it('keeps two same-name groups apart when the second arrives with Load more', async () => {
+    const firstPage = duplicatesMock([GROUP]);
+    firstPage.result.data.placeDuplicates.hasMore = true;
+    const otherTown = {
+      ...GROUP,
+      places: [
+        { ...place(PLACE_C, -118.2437), name: 'Other town A' },
+        { ...place(PLACE_D, -118.2438), name: 'Other town B' },
+      ],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [
+        firstPage,
+        {
+          request: {
+            query: GET_PLACE_DUPLICATES,
+            variables: { limit: PLACE_DUPLICATE_PAGE_SIZE, offset: PLACE_DUPLICATE_PAGE_SIZE },
+          },
+          result: {
+            data: {
+              placeDuplicates: {
+                __typename: 'PlaceDuplicatesPayload' as const,
+                totalCount: 2,
+                hasMore: false,
+                groups: [otherTown],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more duplicate groups' }));
+
+    expect(await screen.findByText('Other town A')).toBeInTheDocument();
+    // Both share the value the old key was built from; both must stay listed.
+    expect(screen.getAllByText(/Same name, within 150 m/)).toHaveLength(2);
   });
 
   it('shows one clearly actionable group at a time on mobile', async () => {
@@ -124,8 +167,8 @@ describe('PlaceDuplicatesCard', () => {
       ...GROUP,
       value: 'Second duplicate group',
       places: [
-        { ...place(PLACE_A, -117.75), name: 'Second A' },
-        { ...place(PLACE_B, -117.751), name: 'Second B' },
+        { ...place(PLACE_C, -117.75), name: 'Second A' },
+        { ...place(PLACE_D, -117.751), name: 'Second B' },
       ],
     };
 
