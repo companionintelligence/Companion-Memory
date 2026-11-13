@@ -508,6 +508,69 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     );
   });
 
+  describe('a person linking a sighting moves the thing\'s "last seen"', () => {
+    const lastSeen = async (objectId: string): Promise<Date | null> => {
+      const [row] = (await dataSource.query(`SELECT last_seen_at FROM ci.objects WHERE object_id = $1::uuid`, [
+        objectId,
+      ])) as Array<{ last_seen_at: Date | null }>;
+
+      return row?.last_seen_at ?? null;
+    };
+
+    const sighting = async (label: string, observedAt: string): Promise<string> => {
+      const [created] = (
+        await service.createMany(owner, [
+          {
+            observedAt: new Date(observedAt),
+            label,
+            contentId: uuidv7(),
+            detector: 'yolov8',
+            bbox: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 },
+          },
+        ])
+      ).written;
+
+      return created.id;
+    };
+
+    it('"This is…" in review sets it to when the sighting was taken', async () => {
+      const lamp = await insertThing('Desk lamp');
+      const sightingId = await sighting('desk lamp', '2026-05-02T10:00:00.000Z');
+
+      expect(await lastSeen(lamp)).toBeNull();
+
+      await service.confirm(owner, sightingId, true, { resolvedObjectId: lamp });
+
+      expect(await lastSeen(lamp)).toEqual(new Date('2026-05-02T10:00:00.000Z'));
+    });
+
+    it('"Yes" on a sighting already linked to the thing sets it too', async () => {
+      const kettle = await insertThing('Tea kettle');
+      const sightingId = await sighting('tea kettle', '2026-05-03T08:00:00.000Z');
+
+      await service.resolve(owner, sightingId, {
+        resolvedObjectId: kettle,
+        resolutionMethod: 'embedding',
+        resolutionConfidence: 0.6,
+      });
+      await service.confirm(owner, sightingId, true);
+
+      expect(await lastSeen(kettle)).toEqual(new Date('2026-05-03T08:00:00.000Z'));
+    });
+
+    it('never walks it backwards for an older sighting, and a retraction leaves it alone', async () => {
+      const mug = await insertThing('Blue mug');
+      const newer = await sighting('mug', '2026-05-04T09:00:00.000Z');
+      const older = await sighting('cup', '2026-04-01T09:00:00.000Z');
+
+      await service.confirm(owner, newer, true, { resolvedObjectId: mug });
+      await service.confirm(owner, older, true, { resolvedObjectId: mug });
+      await service.confirm(owner, newer, false);
+
+      expect(await lastSeen(mug)).toEqual(new Date('2026-05-04T09:00:00.000Z'));
+    });
+  });
+
   it('"No" on a sighting linked only to a product clears that link and sends it back', async () => {
     const mugModel = await insertProduct('Stoneware mug');
     const [created] = (
