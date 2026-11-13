@@ -4,9 +4,9 @@ import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { isUuidInput } from '@ci/common/persistence';
+import { isUuidInput, quotedId } from '@ci/common/persistence';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
+import { CalendarEventService, adoptIngestIdentity, coordinatesOf } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
@@ -49,9 +49,10 @@ const MAX_RANGE_DAYS = 92;
  * back. It went to the database as is and failed the uuid cast in
  * `refuseForeignLinks`, which `formatError` reports as "Internal server error".
  * A global id of the right type is unwrapped, a bare uuid passes as it always
- * has, an empty id is left to the writer (no link in the single-id fields, a
- * 400 from `refuseForeignLinks` in the list), and anything else is the
- * caller's mistake, answered with a 400 that names the field.
+ * has, an empty id is left to the writer, and anything else is the caller's
+ * mistake, answered with a 400 that names the field. An empty single id is no
+ * link in createEvent and leaves the link as it is in updateEvent; an empty
+ * entry in the list is a 400 from `refuseForeignLinks`.
  */
 function linkedEntityId<T extends string | undefined>(field: string, value: T, type: 'person' | 'place'): T {
   if (!value || isUuidInput(value)) {
@@ -70,9 +71,7 @@ function linkedEntityId<T extends string | undefined>(field: string, value: T, t
     return decoded.id as T;
   }
 
-  const shown = value.length > 64 ? `${value.slice(0, 64)}...` : value;
-
-  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got "${shown}"`);
+  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got ${quotedId(value)}`);
 }
 
 function linkedPersonIds(field: string, values: string[] | undefined): string[] | undefined {
@@ -87,28 +86,17 @@ function linkedPersonIds(field: string, values: string[] | undefined): string[] 
  * and answered "Internal server error", and a latitude past 90 was stored
  * wrapped round to another place without a word.
  */
-function assertGeoJsonPoint(value: unknown): void {
-  if (value == null) {
-    return;
-  }
-
-  const point = value as { type?: unknown; coordinates?: unknown };
-  const coordinates = Array.isArray(point.coordinates) ? (point.coordinates as unknown[]) : null;
-  const [longitude, latitude] = coordinates ?? [];
-
-  if (
-    point.type === 'Point' &&
-    coordinates?.length === 2 &&
-    typeof longitude === 'number' &&
-    typeof latitude === 'number' &&
-    Math.abs(longitude) <= 180 &&
-    Math.abs(latitude) <= 90
-  ) {
+function assertGeoJsonPoint(
+  field: string,
+  value: { type?: string; coordinates?: unknown } | null | undefined,
+): void {
+  // coordinatesOf passes a third coordinate as an altitude, and the 2D column refuses one.
+  if (value == null || (coordinatesOf(value) !== null && (value.coordinates as unknown[]).length === 2)) {
     return;
   }
 
   throw new BadRequestException(
-    '`locationCoordinates` must be a GeoJSON Point, { "type": "Point", "coordinates": [longitude, latitude] }, ' +
+    `\`${field}\` must be a GeoJSON Point, { "type": "Point", "coordinates": [longitude, latitude] }, ` +
       'with longitude from -180 to 180 and latitude from -90 to 90',
   );
 }
@@ -156,8 +144,11 @@ export class EventResolver {
     }
   }
 
-  /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
-  private toDto(input: CreateEventInput) {
+  /**
+   * Map a CreateEventInput (GraphQL) to the service's CreateEventDto. `at` prefixes the field a
+   * refusal names, so a batch says which of its events it was (`input[3].`).
+   */
+  private toDto(input: CreateEventInput, at = '') {
     return {
       title: input.title,
       description: input.description,
@@ -168,9 +159,9 @@ export class EventResolver {
       duration_minutes: input.durationMinutes,
       location_name: input.locationName,
       location_coordinates: input.locationCoordinates,
-      location_entity_id: linkedEntityId('locationEntityId', input.locationEntityId, 'place'),
-      participant_entity_ids: linkedPersonIds('participantEntityIds', input.participantEntityIds),
-      organizer_entity_id: linkedEntityId('organizerEntityId', input.organizerEntityId, 'person'),
+      location_entity_id: linkedEntityId(`${at}locationEntityId`, input.locationEntityId, 'place'),
+      participant_entity_ids: linkedPersonIds(`${at}participantEntityIds`, input.participantEntityIds),
+      organizer_entity_id: linkedEntityId(`${at}organizerEntityId`, input.organizerEntityId, 'person'),
       source_type: input.sourceType,
       // External identities are adopted, not minted: the caller owns its
       // namespace; the registry canonicalizes the system spelling
@@ -194,7 +185,7 @@ export class EventResolver {
     @Args('input') input: CreateEventInput,
   ): Promise<EventType> {
     this.assertTimeOrder(input.startTime, input.endTime);
-    assertGeoJsonPoint(input.locationCoordinates);
+    assertGeoJsonPoint('locationCoordinates', input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 
@@ -216,16 +207,16 @@ export class EventResolver {
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
     input: CreateEventInput[],
   ): Promise<EventType[]> {
-    input.forEach((i) => {
+    input.forEach((i, index) => {
       this.assertTimeOrder(i.startTime, i.endTime);
-      assertGeoJsonPoint(i.locationCoordinates);
+      assertGeoJsonPoint(`input[${index}].locationCoordinates`, i.locationCoordinates);
     });
 
     const serviceContext = toServiceContext(context);
 
     const entities = await this.eventService.create(
       serviceContext,
-      input.map((i) => this.toDto(i)),
+      input.map((i, index) => this.toDto(i, `input[${index}].`)),
     );
 
     return entities.map((e) => EventType.toType(e));
@@ -238,7 +229,7 @@ export class EventResolver {
     @Args('input') input: UpdateEventInput,
   ): Promise<EventType | null> {
     this.assertTimeOrder(input.startTime, input.endTime);
-    assertGeoJsonPoint(input.locationCoordinates);
+    assertGeoJsonPoint('locationCoordinates', input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 

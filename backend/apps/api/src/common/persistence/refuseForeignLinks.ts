@@ -36,8 +36,8 @@ export function isUuidInput(value: string): boolean {
   return UUID_INPUT.test(value);
 }
 
-/** The id as the refusal quotes it: the caller's own input, cut short so a long one cannot fill the answer. */
-function quoted(id: string): string {
+/** An id as a refusal quotes it: the caller's own input, cut short so a long one cannot fill the answer. */
+export function quotedId(id: string): string {
   return JSON.stringify(id.length > 64 ? `${id.slice(0, 64)}...` : id);
 }
 
@@ -81,7 +81,7 @@ export async function refuseForeignLinks(
 
     if (malformed !== undefined) {
       throw new BadRequestException(
-        `${link.field} ${quoted(malformed)} is not a uuid, so the ${what} was refused.`,
+        `${link.field} ${quotedId(malformed)} is not a uuid, so the ${what} was refused.`,
       );
     }
   }

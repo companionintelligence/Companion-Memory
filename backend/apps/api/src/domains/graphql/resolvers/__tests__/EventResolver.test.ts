@@ -332,6 +332,19 @@ describe('EventResolver links and coordinates', () => {
     expect(eventService.create).not.toHaveBeenCalled();
   });
 
+  it('names the event in a batch whose link or point was refused', async () => {
+    const { resolver, eventService } = makeResolver();
+    const fine = { title: 'Lunch', startTime: START };
+
+    await expect(
+      resolver.createEvents(viewerCtx, [fine, { ...fine, organizerEntityId: 'not-an-id' }]),
+    ).rejects.toThrow('`input[1].organizerEntityId` takes a person id or its uuid; got "not-an-id"');
+    await expect(
+      resolver.createEvents(viewerCtx, [fine, fine, { ...fine, locationCoordinates: { lat: 1 } as never }]),
+    ).rejects.toThrow('`input[2].locationCoordinates` must be a GeoJSON Point');
+    expect(eventService.create).not.toHaveBeenCalled();
+  });
+
   it('passes a bare uuid through in any spelling Postgres reads, as before', async () => {
     const { resolver, eventService } = makeResolver();
     eventService.create.mockResolvedValue([makeEvent()]);
