@@ -12,6 +12,7 @@ import { Link } from 'react-router-dom';
 import { useFeatures } from '@/common/feature';
 import { PageContent } from '@/components/layout';
 import { starterPromptsFor } from '@/pages/ChatPage/starterPrompts';
+import { useJobsAuth } from '@/pages/JobsPage/useJobsAuth';
 
 const WIDGET_TASKS = gql(
   'query WidgetBoardTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
@@ -313,12 +314,21 @@ export default function WidgetDashboardPage() {
   });
   const [jobs, setJobs] = useState<JobsData | null>(null);
   const [jobsUpdatedAt, setJobsUpdatedAt] = useState<string | null>(null);
+  // `/api/jobs/dashboard` is REST, so nothing adds the session's token the way
+  // Apollo does for the other three cards. Without it a browser session got 401
+  // on every load and the card never left "Waiting for sync". The Jobs page
+  // sends the same request through the same hook.
+  const { ready: jobsAuthReady, headers: jobsHeaders } = useJobsAuth();
 
   useEffect(() => {
+    if (!jobsAuthReady) {
+      return;
+    }
+
     let active = true;
     const refresh = async () => {
       try {
-        const result = await fetchJson<JobsData>('/api/jobs/dashboard');
+        const result = await fetchJson<JobsData>('/api/jobs/dashboard', { headers: jobsHeaders });
         if (active && result?.summary) {
           setJobs(result);
           setJobsUpdatedAt(new Date().toISOString());
@@ -335,7 +345,7 @@ export default function WidgetDashboardPage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [jobsAuthReady, jobsHeaders]);
 
   const snapshot = useMemo(
     () =>
