@@ -290,54 +290,61 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
 
 /// Where an unpacked release archive keeps the program. The macOS `.tgz` and
 /// the Windows `.zip` put it at the top, next to their libraries. The Linux
-/// `.tar.zst` puts it in `bin/`, with its libraries in `lib/ollama/`, and
-/// Ollama finds those relative to its own path, so it runs from `bin/` where
-/// it was unpacked rather than being moved.
+/// `.tar.zst` puts it in `bin/` with its libraries in `lib/ollama/`. Ollama
+/// finds those relative to its own path, so it runs from `bin/` where it was
+/// unpacked rather than being moved.
 fn unpacked_binary(dest_dir: &Path) -> Option<PathBuf> {
     [dest_dir.join(binary_name()), dest_dir.join("bin").join(binary_name())]
         .into_iter()
         .find(|candidate| candidate.is_file())
 }
 
-fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
-    let asset = release_asset()
-        .ok_or_else(|| format!("No prebuilt Ollama release for {}/{}", std::env::consts::OS, std::env::consts::ARCH))?;
+/// Written into the runtime folder once an archive has been unpacked in full.
+/// The Linux archive lists `bin/ollama` first and about 2 GB of libraries
+/// after it, so an unpack cut short (the app quit during the first start, a
+/// full disk) leaves a program that starts but has nothing to run a model
+/// with. Finding the program alone would take that for a finished download at
+/// every later launch, so only this marker does. Named after the release, so
+/// a newer OLLAMA_VERSION is downloaded rather than the old one reused.
+fn unpacked_marker(dest_dir: &Path, asset_name: &str) -> PathBuf {
+    dest_dir.join(format!(".{asset_name}-{OLLAMA_VERSION}.unpacked"))
+}
 
-    if let Some(binary_path) = unpacked_binary(dest_dir) {
-        // Fetched by a previous run of this app — no need to re-download.
-        return Ok(binary_path);
+/// The program from an earlier unpack of this release that finished.
+fn previously_unpacked(dest_dir: &Path, asset_name: &str) -> Option<PathBuf> {
+    if !unpacked_marker(dest_dir, asset_name).is_file() {
+        return None;
     }
+    unpacked_binary(dest_dir)
+}
 
-    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create {}: {e}", dest_dir.display()))?;
-
-    let url = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_VERSION}/{}", asset.name);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-    let mut response = client.get(&url).send().map_err(|e| format!("Failed to download {url}: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("Failed to download {url}: HTTP {}", response.status()));
+/// Removes the folders an earlier unpack put in `dest_dir`. One cut short may
+/// hold entries the tar crate will not write over (it refuses a hard link
+/// whose name exists). One from an older OLLAMA_VERSION would leave that
+/// release's GPU backends in `lib/ollama/` for the new program to load beside
+/// its own. `models/`, the archive and the markers stay where they are.
+fn clear_earlier_unpack(dest_dir: &Path) {
+    for folder in ["bin", "lib"] {
+        let path = dest_dir.join(folder);
+        if path.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::warn!("Could not remove {} before unpacking: {e}", path.display());
+            }
+        }
     }
+}
 
-    let archive_path = dest_dir.join(asset.name);
-    {
-        let mut file = std::fs::File::create(&archive_path)
-            .map_err(|e| format!("Failed to create {}: {e}", archive_path.display()))?;
-        std::io::copy(&mut response, &mut file)
-            .map_err(|e| format!("Failed to write {}: {e}", archive_path.display()))?;
-    }
-
-    if let Err(e) = verify_checksum(&archive_path, asset.sha256) {
-        let _ = std::fs::remove_file(&archive_path);
-        return Err(e);
-    }
-
-    extract_archive(&archive_path, asset.name, dest_dir)?;
-    let _ = std::fs::remove_file(&archive_path);
+/// Unpacks a verified archive into `dest_dir` once what an earlier unpack left
+/// there is cleared. Returns the program in it. The marker is written
+/// once the program has been found. The archive goes last, so an unpack cut
+/// short leaves it for the next launch to unpack again without a download.
+fn unpack(archive_path: &Path, asset_name: &str, dest_dir: &Path) -> Result<PathBuf, String> {
+    clear_earlier_unpack(dest_dir);
+    extract_archive(archive_path, asset_name, dest_dir)?;
 
     let Some(binary_path) = unpacked_binary(dest_dir) else {
-        return Err(format!("{} did not contain {}", asset.name, binary_name()));
+        let _ = std::fs::remove_file(archive_path);
+        return Err(format!("{asset_name} did not contain {}", binary_name()));
     };
 
     #[cfg(unix)]
@@ -350,7 +357,61 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         }
     }
 
+    let marker = unpacked_marker(dest_dir, asset_name);
+    if let Err(e) = std::fs::write(&marker, b"") {
+        // Costs a second download at the next launch, nothing more.
+        log::warn!("Could not write {}: {e}", marker.display());
+    }
+    let _ = std::fs::remove_file(archive_path);
+
     Ok(binary_path)
+}
+
+fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
+    let asset = release_asset()
+        .ok_or_else(|| format!("No prebuilt Ollama release for {}/{}", std::env::consts::OS, std::env::consts::ARCH))?;
+
+    if let Some(binary_path) = previously_unpacked(dest_dir, asset.name) {
+        // Fetched by a previous run of this app — no need to re-download.
+        return Ok(binary_path);
+    }
+
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create {}: {e}", dest_dir.display()))?;
+
+    // The app quitting during an unpack leaves the verified archive behind.
+    // Unpacking that again beats fetching another 1 GB. A download cut short
+    // fails the checksum and is fetched again.
+    let archive_path = dest_dir.join(asset.name);
+    if archive_path.is_file() {
+        if verify_checksum(&archive_path, asset.sha256).is_ok() {
+            return unpack(&archive_path, asset.name, dest_dir);
+        }
+        let _ = std::fs::remove_file(&archive_path);
+    }
+
+    let url = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_VERSION}/{}", asset.name);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let mut response = client.get(&url).send().map_err(|e| format!("Failed to download {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Failed to download {url}: HTTP {}", response.status()));
+    }
+
+    {
+        let mut file = std::fs::File::create(&archive_path)
+            .map_err(|e| format!("Failed to create {}: {e}", archive_path.display()))?;
+        std::io::copy(&mut response, &mut file)
+            .map_err(|e| format!("Failed to write {}: {e}", archive_path.display()))?;
+    }
+
+    if let Err(e) = verify_checksum(&archive_path, asset.sha256) {
+        let _ = std::fs::remove_file(&archive_path);
+        return Err(e);
+    }
+
+    unpack(&archive_path, asset.name, dest_dir)
 }
 
 /// Lowercase hex of a digest. sha2 0.11 returns a `hybrid_array::Array`, which has no `LowerHex`
@@ -722,36 +783,39 @@ mod tests {
         assert!(err.contains("Unrecognized archive format"), "{err}");
     }
 
-    /// Ollama's Linux archive keeps the program in `bin/`, with its libraries
+    /// A `.tar.zst` in the Linux release's layout and order: the program in
+    /// `bin/` first, then its libraries in `lib/ollama/`.
+    fn write_linux_layout_archive(path: &Path, program: &[u8]) {
+        let file = std::fs::File::create(path).unwrap();
+        let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap().auto_finish();
+        let mut builder = tar::Builder::new(encoder);
+        let entries = [
+            (format!("bin/{}", binary_name()), program),
+            ("lib/ollama/libggml-base.so".to_string(), &b"not really a library"[..]),
+        ];
+        for (path, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body).unwrap();
+        }
+        builder.into_inner().unwrap();
+    }
+
+    /// Ollama's Linux archive keeps the program in `bin/` with its libraries
     /// in `lib/ollama/`; the macOS and Windows archives keep it at the top.
     /// Looking only at the top is how every Linux machine without Ollama
     /// downloaded about 1 GB, unpacked it and then logged "did not contain
-    /// ollama", at every launch. Both layouts are built here as real archives,
-    /// the Linux one in its own .tar.zst format.
+    /// ollama", at every launch. The Linux layout is built here as a real
+    /// .tar.zst; the top-level one only needs the file in place.
     #[test]
     fn the_program_is_found_where_each_release_archive_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
         let program = b"#!/bin/sh\necho ollama\n";
-        let library = b"not really a library";
 
         let linux_archive = dir.path().join("ollama-linux-amd64.tar.zst");
-        {
-            let file = std::fs::File::create(&linux_archive).unwrap();
-            let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap().auto_finish();
-            let mut builder = tar::Builder::new(encoder);
-            let entries = [
-                (format!("bin/{}", binary_name()), &program[..]),
-                ("lib/ollama/libggml-base.so".to_string(), &library[..]),
-            ];
-            for (path, body) in entries {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(body.len() as u64);
-                header.set_mode(0o755);
-                header.set_cksum();
-                builder.append_data(&mut header, path, body).unwrap();
-            }
-            builder.into_inner().unwrap();
-        }
+        write_linux_layout_archive(&linux_archive, program);
 
         let linux = dir.path().join("linux");
         std::fs::create_dir_all(&linux).unwrap();
@@ -768,6 +832,55 @@ mod tests {
         let empty = dir.path().join("empty");
         std::fs::create_dir_all(empty.join("bin")).unwrap();
         assert_eq!(unpacked_binary(&empty), None, "a directory named bin is not the program");
+    }
+
+    /// The Linux archive lists `bin/ollama` before its libraries, so an unpack
+    /// cut short leaves the program without them. Only a finished unpack may
+    /// be reused at the next launch. One cut short is unpacked again from
+    /// scratch and only then marked finished.
+    #[test]
+    fn only_a_finished_unpack_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        // What an unpack cut short after its first entry leaves behind.
+        let runtime = dir.path().join("ollama-runtime");
+        std::fs::create_dir_all(runtime.join("bin")).unwrap();
+        std::fs::write(runtime.join("bin").join(binary_name()), b"#!/bin/sh\n").unwrap();
+        assert_eq!(previously_unpacked(&runtime, asset), None, "a cut-short unpack is not a finished one");
+
+        let found = unpack(&archive, asset, &runtime).expect("the archive should unpack over the partial one");
+        assert_eq!(found, runtime.join("bin").join(binary_name()));
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file(), "the libraries are there now");
+        assert!(!archive.exists(), "the archive is removed once unpacked");
+        assert_eq!(previously_unpacked(&runtime, asset), Some(found));
+    }
+
+    /// A newer OLLAMA_VERSION is unpacked where the older one was. Its GPU
+    /// backends in `lib/ollama/` must not sit beside the new ones, where the
+    /// new program would load them, while the pulled models stay put.
+    #[test]
+    fn an_unpack_clears_the_earlier_releases_libraries_but_keeps_the_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        let runtime = dir.path().join("ollama-runtime");
+        let old_backend = runtime.join("lib/ollama/cuda_v11/libggml-cuda.so");
+        std::fs::create_dir_all(old_backend.parent().unwrap()).unwrap();
+        std::fs::write(&old_backend, b"an older release's backend").unwrap();
+        let model = runtime.join("models/blobs/sha256-abc");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::write(&model, b"weights").unwrap();
+
+        unpack(&archive, asset, &runtime).expect("the archive should unpack");
+
+        assert!(!old_backend.exists(), "the older release's backend should be gone");
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file());
+        assert_eq!(std::fs::read(&model).unwrap(), b"weights", "the models are not the unpack's to clear");
     }
 
     /// Exercises real process spawning against whatever `ollama` binary is
