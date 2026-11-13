@@ -12,6 +12,11 @@ import {
   keysetSeek,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import {
+  compactSpellingsOf,
+  isGloballyUniqueNamespace,
+  type ObjectIdentifierNamespace,
+} from '@ci/domains/graph/utils/normalizeObjectIdentifier';
 import { ItemCreatedEvent, ItemUpdatedEvent, ItemRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -37,6 +42,14 @@ const DEFAULT_ITEM_PAGE_SIZE = 50;
 
 /** Hard ceiling on a page, so `limit: 100000` still costs one page. */
 const MAX_ITEM_PAGE_SIZE = 200;
+
+/**
+ * The `identifier_codes` keys a model code may sit under. One family, because
+ * the spellings tell them apart: a GTIN is also filed as `upc` or `ean`, and a
+ * book's ISBN as its barcode (`gtin`, `ean`) or, by Amazon, as an all-digit
+ * `asin`. The aliases are `ReceiptService.CODE_KEY_NAMESPACES`' own.
+ */
+const MODEL_CODE_BAG_KEYS: readonly string[] = ['gtin', 'upc', 'ean', 'isbn', 'asin'];
 
 /**
  * Spanning-aggregate service for the object CTI split: an item is ONE
@@ -768,25 +781,47 @@ export class ItemService {
    * The unit you own of a product model, or `null` when you own none.
    *
    * Found by the unit's product link, or by the model's code in the unit's own
-   * `identifier_codes` (keyed by namespace, value normalized), which is where an
-   * import such as Amazon's leaves it: the ASIN is claimed by the catalog
-   * model, and the unit's `product_id` stays empty. Of several units, one you
-   * still have (`active`) comes first, then the most recently acquired.
+   * `identifier_codes`, which is where an import such as Amazon's leaves it:
+   * the ASIN is claimed by the catalog model, and the unit's `product_id` stays
+   * empty. The bag keeps codes as their source wrote them, so a GTIN is looked
+   * for under its aliases and in every spelling that normalizes to it
+   * ({@link compactSpellingsOf}): `upc: '012345678905'`, or a book's ISBN-10
+   * under `asin`. A SKU or MPN is unique only within its brand, which the bag
+   * does not record, so for those only the product link counts.
+   *
+   * Of several units, one you still have (active, stored or lent out) comes
+   * first, then the most recently acquired.
    */
   async findOwnedUnitOfModel(
     context: UserServiceContext,
     productId: string,
-    code: { namespace: string; value: string },
+    code: { namespace: ObjectIdentifierNamespace; value: string },
   ): Promise<Item | null> {
+    const bagKeys = !isGloballyUniqueNamespace(code.namespace)
+      ? []
+      : MODEL_CODE_BAG_KEYS.includes(code.namespace)
+        ? MODEL_CODE_BAG_KEYS
+        : [code.namespace];
+
     const rows: Array<{ object_id: string }> = await this.itemRepository.query(
-      `SELECT object_id
-         FROM ci.objects
-        WHERE user_id = $1::uuid
-          AND merged_into_object_id IS NULL
-          AND (product_id = $2::uuid OR identifier_codes ->> $3::text = $4::text)
-        ORDER BY (lifecycle_state = 'active') DESC, acquired_at DESC NULLS LAST, object_id DESC
+      `SELECT o.object_id
+         FROM ci.objects o
+        WHERE o.user_id = $1::uuid
+          AND o.merged_into_object_id IS NULL
+          AND (
+                o.product_id = $2::uuid
+             OR EXISTS (
+                  SELECT 1
+                    FROM unnest($3::text[]) AS bag(key)
+                   WHERE upper(regexp_replace(o.identifier_codes ->> bag.key, '[^0-9A-Za-z]', '', 'g'))
+                         = ANY($4::text[])
+                )
+              )
+        ORDER BY (o.lifecycle_state IN ('active', 'stored', 'lent_out')) DESC,
+                 o.acquired_at DESC NULLS LAST,
+                 o.object_id DESC
         LIMIT 1`,
-      [context.userId, productId, code.namespace, code.value],
+      [context.userId, productId, bagKeys, compactSpellingsOf(code.namespace, code.value)],
     );
 
     return rows.length === 0 ? null : this.findById(context, rows[0].object_id);

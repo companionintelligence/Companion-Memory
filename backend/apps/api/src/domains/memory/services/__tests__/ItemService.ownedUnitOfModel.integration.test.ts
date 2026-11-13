@@ -170,6 +170,61 @@ describeWithDb(`ItemService.findOwnedUnitOfModel against Postgres (${availabilit
     expect(found?.id).toBe(survivor.id);
   });
 
+  it('finds a barcode kept as printed, under an alias key', async () => {
+    const drill = await insertProduct('Cordless drill');
+    const unit = await items.create(owner, { name: 'Drill', identifierCodes: { upc: '0-12345-67890-5' } });
+
+    const found = await items.findOwnedUnitOfModel(owner, drill, {
+      namespace: 'gtin',
+      value: '00012345678905',
+    });
+
+    expect(found?.id).toBe(unit.id);
+  });
+
+  it('finds a book Amazon filed by its ISBN-10 as an ASIN', async () => {
+    const book = await insertProduct('A book');
+    const unit = await items.create(owner, { name: 'A book', identifierCodes: { asin: '0306406152' } });
+
+    const found = await items.findOwnedUnitOfModel(owner, book, {
+      namespace: 'isbn',
+      value: '9780306406157',
+    });
+
+    expect(found?.id).toBe(unit.id);
+  });
+
+  it("does not match a SKU in the bag, which is unique only within one brand's catalog", async () => {
+    const part = await insertProduct('Part');
+    await items.create(owner, {
+      name: 'Other brand part',
+      brand: 'Other',
+      identifierCodes: { sku: 'ABC-123' },
+    });
+
+    expect(await items.findOwnedUnitOfModel(owner, part, { namespace: 'sku', value: 'ABC-123' })).toBeNull();
+  });
+
+  it('prefers a stored unit, which you still have, over a newer one you returned', async () => {
+    const oil = await insertProduct('Motor oil');
+    const stored = await items.create(owner, {
+      name: 'Motor oil (garage)',
+      identifierCodes: { asin: ASIN },
+      lifecycleState: 'stored',
+      acquiredAt: new Date('2025-01-01T00:00:00.000Z'),
+    });
+    await items.create(owner, {
+      name: 'Motor oil (returned)',
+      identifierCodes: { asin: ASIN },
+      lifecycleState: 'returned',
+      acquiredAt: new Date('2026-05-17T00:00:00.000Z'),
+    });
+
+    const found = await items.findOwnedUnitOfModel(owner, oil, { namespace: 'asin', value: ASIN });
+
+    expect(found?.id).toBe(stored.id);
+  });
+
   it("is null when you own none, and never returns another account's unit", async () => {
     const oil = await insertProduct('Motor oil');
     await items.create(stranger, { name: 'Their motor oil', identifierCodes: { asin: ASIN } });

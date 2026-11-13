@@ -63,7 +63,9 @@ export class ObjectByIdentifierPayload {
   /**
    * For a model code, a unit of that model you own: linked to the model, or
    * carrying the code in its own `identifier_codes`, which is where an Amazon
-   * import leaves an ASIN. Null when you own none, and for an instance code.
+   * import leaves an ASIN. One you still have comes first; a unit you returned
+   * or used up is answered only when it is the only one. Null when you have no
+   * unit of the model, and for an instance code.
    *
    * Not the claim holder, which is why it is not `item`: a caller asking who
    * holds a code (to offer a merge) must not be handed a unit that merely
