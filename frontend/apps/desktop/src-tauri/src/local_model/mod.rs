@@ -75,8 +75,9 @@ enum ResolutionState {
 /// but don't own (the user's own pre-existing Ollama), only, on Linux, the
 /// relay this app may put in front of it.
 ///
-/// Both `ollama_child` and `ollama_relay` are populated by
-/// `ollama_sidecar::ensure_available` itself, directly, as soon as each
+/// Both `ollama_child` and `ollama_relay` are populated from inside
+/// `ollama_sidecar` (`ensure_available`, plus `reach_host_ollama` for a relay
+/// in front of the user's own Ollama), directly, as soon as each
 /// resource exists — not by its caller after the whole (potentially
 /// multi-minute, model-download-and-pull) call returns. A quit signal
 /// arriving mid-resolution must still be able to find and kill whatever has
@@ -240,7 +241,7 @@ fn resolve_and_start(
         // `handles` itself, so quitting the app removes it.
         #[cfg(target_os = "linux")]
         log::info!(
-            "An Ollama instance is already answering on port {} — reusing it; checking that the \
+            "An Ollama instance is already answering on port {}. Reusing it after checking that the \
              appliance's containers can reach it.",
             ollama_sidecar::OLLAMA_PORT
         );

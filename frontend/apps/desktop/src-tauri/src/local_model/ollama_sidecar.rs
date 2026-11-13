@@ -7,7 +7,8 @@
 //! one value it exports into `.env` is DEFAULT_CHAT_MODEL, which
 //! stack_manager::write_env_file reads; see that constant's comment):
 //!
-//!   1. Already running (the user's own Ollama) → nothing to do.
+//!   1. Already running (the user's own Ollama) → nothing to start. On Linux
+//!      it may still get a bridge relay in front of it; see reach_host_ollama.
 //!   2. `ollama` is installed but not running → launch it with its own
 //!      default `OLLAMA_MODELS`, so any models the user already pulled are
 //!      reused rather than duplicated.
@@ -135,8 +136,12 @@ pub fn is_running(port: u16) -> bool {
 /// gateway, to tell whether a server answering on loopback is also reachable
 /// from the containers.
 fn is_running_on(host: std::net::Ipv4Addr, port: u16) -> bool {
+    // No proxy: both addresses are this host's own. reqwest otherwise follows
+    // HTTP_PROXY. A NO_PROXY that lists loopback rarely lists the bridge
+    // gateway, so the proxy would answer for an address only this host has.
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
+        .no_proxy()
         .build()
     {
         Ok(client) => client,
@@ -176,9 +181,12 @@ pub fn ensure_available(
     handles: &crate::local_model::LocalModelHandles,
 ) -> Result<RunningInstance, String> {
     if is_running(OLLAMA_PORT) {
-        // Somebody else's Ollama, bound however they chose. Nothing to start;
-        // making it reachable from the containers is reach_host_ollama's job,
-        // which resolve_and_start calls on that path.
+        // Somebody else's Ollama, which began answering after
+        // resolve_and_start's own probe missed it (a service still starting,
+        // or one too busy to answer within the timeout). Nothing to start, but
+        // the containers need to reach it just as on the path where
+        // resolve_and_start found it first.
+        reach_host_ollama(handles);
         return Ok(RunningInstance { port: OLLAMA_PORT });
     }
 
@@ -232,15 +240,15 @@ pub fn ensure_available(
 
 /// Linux: makes the user's own Ollama reachable from the appliance's
 /// containers when it answers on loopback only. That is how Ollama's own Linux
-/// service binds unless OLLAMA_HOST is changed, and the containers arrive at
-/// the docker bridge gateway, where nothing then listens: the app reported the
+/// service binds unless OLLAMA_HOST is changed. The containers arrive at the
+/// docker bridge gateway, where nothing then listens: the app reported the
 /// model resolved while chat said "Chat can't reach a model".
 ///
 /// It is the relay this app already puts in front of its own sidecar, with the
 /// same limits: bound to the bridge gateway address only, serving only the
-/// appliance's own compose networks, and gone when the app quits. The user's
+/// appliance's own compose networks and gone when the app quits. The user's
 /// Ollama itself is not touched. One that already answers on the gateway
-/// address (bound to 0.0.0.0, say) is left alone, and gets no relay.
+/// address (bound to 0.0.0.0, say) is left alone and gets no relay.
 pub fn reach_host_ollama(handles: &crate::local_model::LocalModelHandles) {
     #[cfg(not(target_os = "linux"))]
     {
@@ -249,17 +257,27 @@ pub fn reach_host_ollama(handles: &crate::local_model::LocalModelHandles) {
 
     #[cfg(target_os = "linux")]
     {
-        if let Ok(gateway) = crate::local_model::bridge_relay::discover_host_gateway() {
-            if is_running_on(gateway, OLLAMA_PORT) {
-                log::info!(
-                    "Your Ollama already answers on the docker bridge gateway ({gateway}:{OLLAMA_PORT}), \
-                     so the containers reach it directly; no relay started."
+        let gateway = match crate::local_model::bridge_relay::discover_host_gateway() {
+            Ok(gateway) => gateway,
+            Err(e) => {
+                log::warn!(
+                    "Your Ollama answers on 127.0.0.1:{OLLAMA_PORT}, but no docker bridge gateway could \
+                     be discovered ({e}), so no relay was started. If the appliance reports model errors, \
+                     check `docker network inspect bridge`."
                 );
                 return;
             }
+        };
+
+        if is_running_on(gateway, OLLAMA_PORT) {
+            log::info!(
+                "Your Ollama already answers on the docker bridge gateway ({gateway}:{OLLAMA_PORT}), \
+                 so the containers reach it directly; no relay started."
+            );
+            return;
         }
 
-        register_relay(handles, start_bridge_relay(OLLAMA_PORT));
+        register_relay(handles, relay_on_gateway(gateway, OLLAMA_PORT));
     }
 }
 
@@ -270,11 +288,13 @@ fn register_relay(
     let Some(relay) = relay else {
         return;
     };
-    let mut guard = handles.ollama_relay_slot().lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(previous) = guard.take() {
+    // Swapped in under the lock and shut down after it is released, for the
+    // reason LocalModelHandles::shutdown gives: shutdown() blocks on a connect
+    // and a thread join.
+    let previous = handles.ollama_relay_slot().lock().unwrap_or_else(|p| p.into_inner()).replace(relay);
+    if let Some(previous) = previous {
         previous.shutdown();
     }
-    *guard = Some(relay);
 }
 
 /// Linux: publish the loopback sidecar on the one address containers arrive
@@ -316,19 +336,30 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
             }
         };
 
-        match bridge_relay::spawn(gateway, port) {
-            Ok(handle) => {
-                log::info!("Local model server reachable by containers at {} (relayed to 127.0.0.1:{port})", handle.bind_addr);
-                Some(handle)
-            }
-            Err(e) => {
-                log::error!(
-                    "Local model server is bound to 127.0.0.1:{port} but the bridge-gateway relay \
-                     on {gateway}:{port} could not start ({e}). The appliance's containers will \
-                     not be able to reach it."
-                );
-                None
-            }
+        relay_on_gateway(gateway, port)
+    }
+}
+
+/// The half of [`start_bridge_relay`] after the gateway is known. Shared with
+/// reach_host_ollama, which has already asked Docker for the gateway and would
+/// otherwise run `docker network inspect bridge` a second time.
+#[cfg(target_os = "linux")]
+fn relay_on_gateway(
+    gateway: std::net::Ipv4Addr,
+    port: u16,
+) -> Option<crate::local_model::bridge_relay::RelayHandle> {
+    match crate::local_model::bridge_relay::spawn(gateway, port) {
+        Ok(handle) => {
+            log::info!("Local model server reachable by containers at {} (relayed to 127.0.0.1:{port})", handle.bind_addr);
+            Some(handle)
+        }
+        Err(e) => {
+            log::error!(
+                "Local model server is bound to 127.0.0.1:{port} but the bridge-gateway relay \
+                 on {gateway}:{port} could not start ({e}). The appliance's containers will \
+                 not be able to reach it."
+            );
+            None
         }
     }
 }
@@ -656,12 +687,12 @@ mod tests {
         assert!(!is_running(nobody));
     }
 
-    /// reach_host_ollama relays the user's own Ollama only when the containers
-    /// cannot already reach it, and finds that out by asking at the docker
-    /// bridge gateway address. Modelled here on loopback, which Linux spans
-    /// across 127.0.0.0/8: a server bound to 127.0.0.1 alone (Ollama's own
-    /// Linux service, as the gateway sees it) does not answer at 127.0.0.2, and
-    /// one bound to every address does.
+    /// The probe reach_host_ollama decides with: it relays the user's own
+    /// Ollama only when the containers cannot already reach it, which it finds
+    /// out by asking at the docker bridge gateway address. Modelled here on
+    /// loopback, which Linux spans across 127.0.0.0/8. A server bound to
+    /// 127.0.0.1 alone (Ollama's own Linux service, as the gateway sees it)
+    /// does not answer at 127.0.0.2. One bound to every address does.
     #[cfg(target_os = "linux")]
     #[test]
     fn only_a_server_bound_beyond_loopback_answers_at_another_address() {
