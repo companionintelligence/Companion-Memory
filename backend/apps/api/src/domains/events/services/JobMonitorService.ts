@@ -14,11 +14,50 @@ import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import { PgBossQueueEntity } from '../entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from '../entities/PgBossScheduleEntity';
 
-/** Why a job failed, lifted out of `pgboss.job.output`. */
+/** Why a job failed, lifted out of `pgboss.job.output` (or `source_output` on a dead-letter copy). */
 export interface JobFailureDto {
   readonly message: string;
   readonly stack?: string;
   readonly failedAt?: string;
+}
+
+/**
+ * Why a job failed, as the Jobs table and the dashboard show it.
+ *
+ * A dead-letter copy's own output is empty until something runs it. Since
+ * pg-boss 12 the failure it was copied for is in `source_output`, so that is
+ * read when the row's own output names no failure.
+ */
+export function jobFailure(job: Pick<PgBossJobEntity, 'output' | 'sourceOutput'>): JobFailureDto | null {
+  return failureIn(job.output) ?? failureIn(job.sourceOutput);
+}
+
+/**
+ * Lift a failure out of one jsonb output.
+ *
+ * `output` is an untyped jsonb column: the worker writes
+ * `{ message, stack, failedAt }` on failure, but deferred completions write
+ * deliberate SUCCESS payloads there too. Those can carry user data. Only the
+ * three known failure fields are copied out and only when a message is
+ * present. A success payload therefore projects to `null` rather than
+ * leaking through this path.
+ */
+function failureIn(output: Record<string, unknown> | null | undefined): JobFailureDto | null {
+  if (!output || typeof output !== 'object') {
+    return null;
+  }
+
+  const message = typeof output['message'] === 'string' ? output['message'].trim() : '';
+
+  if (!message) {
+    return null;
+  }
+
+  return {
+    message,
+    stack: typeof output['stack'] === 'string' ? output['stack'] : undefined,
+    failedAt: typeof output['failedAt'] === 'string' ? output['failedAt'] : undefined,
+  };
 }
 
 /**
@@ -703,7 +742,7 @@ export class JobMonitorService {
       deadLetter: job.deadLetter,
       policy: job.policy,
       ...this.projectPayload(job.data),
-      failure: this.toFailure(job.output),
+      failure: jobFailure(job),
     };
   }
 
@@ -722,34 +761,6 @@ export class JobMonitorService {
       event: typeof data['name'] === 'string' ? data['name'] : null,
       workType: typeof data['workType'] === 'string' ? data['workType'] : null,
       payloadBytes: this.byteLength(data),
-    };
-  }
-
-  /**
-   * Lift a failure out of `output`.
-   *
-   * `output` is an untyped jsonb column: the worker writes
-   * `{ message, stack, failedAt }` on failure, but deferred completions write
-   * deliberate SUCCESS payloads there too, and those can carry user data. Only
-   * the three known failure fields are copied out, and only when a message is
-   * actually present — so a success payload projects to `null` rather than
-   * leaking through this path.
-   */
-  private toFailure(output: Record<string, unknown> | null | undefined): JobFailureDto | null {
-    if (!output || typeof output !== 'object') {
-      return null;
-    }
-
-    const message = typeof output['message'] === 'string' ? output['message'].trim() : '';
-
-    if (!message) {
-      return null;
-    }
-
-    return {
-      message,
-      stack: typeof output['stack'] === 'string' ? output['stack'] : undefined,
-      failedAt: typeof output['failedAt'] === 'string' ? output['failedAt'] : undefined,
     };
   }
 
