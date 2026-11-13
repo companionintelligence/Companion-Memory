@@ -656,4 +656,57 @@ describe('the system-line filter must not eat human messages', () => {
 
     expect(pipeline).toHaveLength(1);
   });
+
+  describe('a _chat.txt dropped straight into the inbox service folder', () => {
+    const LRM = '\u200e';
+    const NOTICE_EXPORT = [
+      `[1/3/21, 9:00:00 AM] Alice: ${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`,
+      '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+      '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+    ].join('\n');
+
+    const importFrom = async (folders: string[], transcript: string): Promise<EmittedGraph[]> => {
+      const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-inbox-')), ...folders);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, '_chat.txt'), transcript);
+
+      const pipeline: EmittedGraph[] = [];
+      await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return pipeline;
+    };
+
+    it('takes the chat name from the encryption notice, matching an upload of the same export', async () => {
+      // The folder is the inbox's own `whatsapp/`, which says nothing about the
+      // chat. Named after it, every message got a second identity and the
+      // export was saved twice.
+      const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
+      const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+      expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+      expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+    });
+
+    it('names a transcript without the notice after its people, never after the service', async () => {
+      const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+      const pipeline = await importFrom(['whatsapp'], fixture);
+
+      expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+        new Set(['Alice, Bob']),
+      );
+    });
+
+    it('keeps the export folder name when the folder sits inside the service folder', async () => {
+      const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+      const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);
+
+      expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+        new Set(['whatsapp-export']),
+      );
+    });
+  });
 });

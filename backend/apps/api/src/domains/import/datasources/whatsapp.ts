@@ -4,6 +4,8 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { serviceInboxFolders } from '../sources/inboxFolders';
+
 import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -52,8 +54,15 @@ const IOS_RE =
  * name — a single thread id for every chat in the export, and one identity
  * namespace for every message id. Whichever half of the path actually names the
  * chat has to win, and that is the more specific half.
+ *
+ * Null when the folder is one of the inbox's service folders. A `_chat.txt`
+ * dropped straight into `<inbox>/whatsapp/` was named "whatsapp": every message
+ * of the same export uploaded earlier through the wizard was saved a second
+ * time under that name, and two different chats dropped that way shared one
+ * thread. The caller names such a chat from its transcript instead
+ * ({@link conversationNameFromTranscript}).
  */
-function conversationNameFrom(chatPath: string): string {
+function conversationNameFrom(chatPath: string): string | null {
   const normalise = (value: string): string =>
     value
       // Underscores stand in for characters the exporter or the upload path
@@ -72,9 +81,60 @@ function conversationNameFrom(chatPath: string): string {
     return fromFile;
   }
 
-  const fromDirectory = stripPrefix(normalise(path.basename(path.dirname(chatPath))));
+  const directory = path.basename(path.dirname(chatPath));
+
+  if (SERVICE_FOLDERS.has(directory.toLowerCase())) {
+    return null;
+  }
+
+  const fromDirectory = stripPrefix(normalise(directory));
 
   return fromDirectory || 'Chat';
+}
+
+/** The inbox's service folders (`whatsapp`, `google-takeout`, …): folders the inbox made, not names an export chose. */
+const SERVICE_FOLDERS = new Set(serviceInboxFolders().map((folder) => folder.toLowerCase()));
+
+const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
+
+/**
+ * A chat's name from its own transcript, for a `_chat.txt` whose folder names
+ * a service rather than the chat.
+ *
+ * iOS starts every export with WhatsApp's encryption notice, sent "by" the chat
+ * itself: `[1/3/21, 9:00:00 AM] Alice: Messages and calls are end-to-end
+ * encrypted. …`. That sender is the name the export's zip carries too
+ * (`WhatsApp Chat - Alice.zip`), so the chat gets the same identity as an
+ * upload of that zip and dedupes against it. A transcript without the notice
+ * is named after the people in it, sorted, which at least keeps two different
+ * chats in two threads.
+ */
+async function conversationNameFromTranscript(chatPath: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: fs.createReadStream(chatPath, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  const senders = new Set<string>();
+
+  try {
+    for await (const line of rl) {
+      const parsed = parseWALine(line);
+
+      if (parsed == null) {
+        continue;
+      }
+
+      if (senders.size === 0 && ENCRYPTION_NOTICE_RE.test(stripLeadingInvisible(parsed.text))) {
+        return parsed.sender;
+      }
+
+      senders.add(parsed.sender);
+    }
+  } finally {
+    rl.close();
+  }
+
+  return [...senders].sort().join(', ') || 'Chat';
 }
 
 // Android: DD/MM/YYYY, HH:MM - Sender: message
@@ -283,7 +343,8 @@ export class WhatsAppFileImporter implements FileImporter {
   }
 
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
-    const conversationName = conversationNameFrom(chatPath);
+    const conversationName =
+      conversationNameFrom(chatPath) ?? (await conversationNameFromTranscript(chatPath));
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
