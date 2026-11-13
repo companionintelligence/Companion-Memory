@@ -172,7 +172,11 @@ function ThemeSubmenu() {
             </div>
           </div>
 
-          <Popover onOpenChange={setHoldOpen}>
+          {/* Holds an already-wide rail open while the picker is up; never widens a
+              collapsed one. Widening swaps the rail's collapsed tree for the
+              expanded one, which remounts this popover closed: the picker never
+              opened, and with no close to report the hold, the rail stayed wide. */}
+          <Popover onOpenChange={(open) => setHoldOpen(open && expanded)}>
             <Popover.Trigger
               className={cn(
                 'flex cursor-pointer items-center gap-1.5 rounded-md text-left text-xs text-muted-foreground transition',

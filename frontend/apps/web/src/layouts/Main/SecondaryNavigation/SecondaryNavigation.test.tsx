@@ -302,6 +302,41 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
   });
 
+  // Widening the rail swaps its collapsed tree for the expanded one, which
+  // remounted the picker closed and left the rail stuck wide.
+  it('opens Colours from the collapsed rail beside it, without widening the rail', () => {
+    renderRail('/feed', { expanded: false });
+
+    fireEvent.click(screen.getByRole('link', { name: /Test User/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Colours' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  it('still holds a pinned rail open while Colours is up, even if it is unpinned underneath', () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    renderToggleAndRail('/feed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Colours' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
   // Support and Docs were two permanent rows for one question.
   it('puts Support and Docs under one Help entry', () => {
     renderRail('/feed', { expanded: true });
