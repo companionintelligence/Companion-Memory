@@ -588,12 +588,12 @@ fn is_openable_external_url(url: &str) -> bool {
 ///
 /// An `xdg-open` that cannot run the browser exits non-zero within a moment.
 /// One that started the browser in the foreground (a BROWSER program that only
-/// returns when the browser closes) is still running after this, and that is
-/// a browser that opened.
+/// returns when the browser closes) is still running after this. That is a
+/// browser that opened.
 #[cfg(target_os = "linux")]
 const BROWSER_LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Open `url` in the default browser, and fail when the launcher says it could not.
+/// Open `url` in the default browser. Fail when the launcher says it could not.
 ///
 /// On Linux tauri_plugin_opener starts `xdg-open` detached and returns Ok as soon
 /// as the process exists. So a launcher that then failed to run the browser (a
@@ -602,13 +602,14 @@ const BROWSER_LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs
 /// its own error, desktop.log said "opened" and the window said nothing, because
 /// its "Could not open your browser" message only shows when this command fails.
 /// The same launchers are tried in the same order (open::commands, which the
-/// plugin uses), and the first one that starts gets BROWSER_LAUNCH_GRACE to fail.
+/// plugin uses). The first one that starts gets BROWSER_LAUNCH_GRACE to fail.
+/// When none starts, the error names every launcher tried and why it failed.
 #[cfg(target_os = "linux")]
 fn open_in_browser(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
     use std::os::unix::process::CommandExt as _;
     use std::process::Stdio;
 
-    let mut not_started = None;
+    let mut not_started = Vec::new();
     for mut command in open::commands(url) {
         let launcher = command.get_program().to_string_lossy().into_owned();
         // Detached from the app's process group and its output, as the plugin's
@@ -617,15 +618,19 @@ fn open_in_browser(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
 
         match command.spawn() {
             Ok(child) => return launcher_outcome(child, &launcher, BROWSER_LAUNCH_GRACE),
-            Err(e) => not_started = Some(format!("{launcher}: {e}")),
+            Err(e) => not_started.push(format!("{launcher}: {e}")),
         }
     }
 
-    Err(not_started.unwrap_or_else(|| "no browser launcher could be started".to_string()))
+    if not_started.is_empty() {
+        return Err("no browser launcher could be started".to_string());
+    }
+
+    Err(not_started.join("; "))
 }
 
-/// macOS and Windows already report a launch that failed (the plugin waits for
-/// `open` there, and ShellExecute answers directly).
+/// macOS and Windows already report a launch that failed: the plugin waits for
+/// `open` there and ShellExecute answers directly.
 #[cfg(not(target_os = "linux"))]
 fn open_in_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
     app.opener().open_url(url, None::<String>).map_err(|e| e.to_string())
@@ -664,7 +669,7 @@ fn launcher_outcome(
 /// Restricted to http(s) so a compromised webview can't use this as a generic
 /// local-file/other-scheme open primitive.
 ///
-/// Async because open_in_browser can wait out BROWSER_LAUNCH_GRACE, and a
+/// Async because open_in_browser can wait out BROWSER_LAUNCH_GRACE. A
 /// synchronous command runs on the main thread, which would freeze the window.
 #[tauri::command]
 async fn open_external_url_command(
@@ -686,8 +691,7 @@ async fn open_external_url_command(
         return Err("open_external_url_command only accepts http(s) URLs".to_string());
     }
 
-    let opening = url.clone();
-    let result = tokio::task::spawn_blocking(move || open_in_browser(&app, &opening))
+    let result = tokio::task::spawn_blocking(move || open_in_browser(&app, &url))
         .await
         .map_err(|e| format!("Task join error: {e}"))
         .and_then(|opened| opened);
@@ -782,8 +786,8 @@ mod tests {
     }
 
     /// The launcher's exit is what tells the window whether a browser opened:
-    /// an early non-zero exit is the failure the sign-in button must show, and
-    /// a launcher still running after the grace period is a browser that
+    /// an early non-zero exit is the failure the sign-in button must show. A
+    /// launcher still running after the grace period is a browser that
     /// started in the foreground, not a failure.
     #[cfg(target_os = "linux")]
     #[test]
