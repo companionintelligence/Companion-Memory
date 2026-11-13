@@ -1375,4 +1375,63 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       }
     });
   });
+
+  // ── the cascade's cost ────────────────────────────────────────────────────
+
+  describe('the cascade from each deleted staged item', () => {
+    /**
+     * `EXPLAIN` the statement Postgres's foreign-key trigger runs on
+     * `staged_relationships` for every staged item a discard deletes.
+     * `GENERIC_PLAN` because the trigger runs a prepared statement with `$1`
+     * bound per item.
+     *
+     * Sequential scans are switched off for the one transaction, so the plan
+     * answers "which index can serve this lookup", whatever the table holds. A
+     * cost-based answer would need the table seeded and analyzed, and ANALYZE
+     * writes `reltuples` in place even inside a rolled-back transaction, which
+     * leaks into every suite sharing this database (see
+     * RecallProbeService.integration.spec.ts). With no usable index the plan is
+     * still a (disabled) sequential scan, which is what the cascade did before.
+     */
+    async function cascadePlan(column: 'item_id' | 'related_item_id'): Promise<string> {
+      const runner = dataSource.createQueryRunner();
+
+      try {
+        await runner.connect();
+        await runner.startTransaction();
+        await runner.query(`SET LOCAL enable_seqscan = off`);
+
+        const plan = (await runner.query(
+          `EXPLAIN (GENERIC_PLAN)
+           DELETE FROM ONLY ci_import.staged_relationships WHERE $1::uuid OPERATOR(pg_catalog.=) ${column}`,
+        )) as Array<{ 'QUERY PLAN': string }>;
+
+        return plan.map((line) => line['QUERY PLAN']).join('\n');
+      } finally {
+        try {
+          if (runner.isTransactionActive) {
+            await runner.rollbackTransaction();
+          }
+        } finally {
+          await runner.release();
+        }
+      }
+    }
+
+    it('finds the edges an item starts by item_id through an index, not a scan of every edge', async () => {
+      const plan = await cascadePlan('item_id');
+
+      expect(plan).toContain('staged_relationships_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
+    });
+
+    it('finds the edges pointing at an item by related_item_id through its own index', async () => {
+      // Not the unique (item_id, related_item_id, relation) index: related_item_id
+      // is its second column, so serving this lookup walks the whole index.
+      const plan = await cascadePlan('related_item_id');
+
+      expect(plan).toContain('staged_relationships_related_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
+    });
+  });
 });
