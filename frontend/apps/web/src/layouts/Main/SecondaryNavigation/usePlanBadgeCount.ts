@@ -1,6 +1,10 @@
+import { useCallback } from 'react';
+
 import { gql } from '@apollo/client';
 import { useQuery } from '@apollo/client/react';
 
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
 import { openCount, type SectionedTask } from '@/pages/PlanPage/taskSections';
 
 // Matches usePlanTasks' own cap (first: 200) — the badge should not claim
@@ -42,11 +46,22 @@ interface PlanBadgeCountQueryResult {
  * "open".
  */
 export function usePlanBadgeCount(): number {
-  const { data } = useQuery<PlanBadgeCountQueryResult, { first: number }>(GET_PLAN_BADGE_COUNT, {
+  const { data, refetch } = useQuery<PlanBadgeCountQueryResult, { first: number }>(GET_PLAN_BADGE_COUNT, {
     variables: { first: PLAN_BADGE_TASK_LIMIT },
     fetchPolicy: 'no-cache',
     notifyOnNetworkStatusChange: true,
   });
+
+  // `no-cache` means no other query's answer reaches this one, so it moved only
+  // when a page remembered to refetch it by name. Adding a task did not, nor did
+  // a task from another device or a scan. Re-read on the same signals as the
+  // Plan board: the server's task change stream, and coming back to the tab.
+  const reload = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
+  useLiveChanges(['tasks'], reload);
+  useRefetchOnReturn(reload);
 
   if (!data) {
     return 0;
