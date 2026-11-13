@@ -212,7 +212,11 @@ describe('useScheduleService — failure', () => {
   function eventAt(id: string, day: Date, hours: number) {
     const start = new Date(day.getTime() + hours * 3_600_000);
 
-    return { id, startTime: start.toISOString(), endTime: new Date(start.getTime() + 3_600_000).toISOString() };
+    return {
+      id,
+      startTime: start.toISOString(),
+      endTime: new Date(start.getTime() + 3_600_000).toISOString(),
+    };
   }
 
   it('keeps the week on screen when a refresh fails outright', () => {
