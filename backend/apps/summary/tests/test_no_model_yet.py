@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ci.summary import activities, config, llm_config, llm_health
+from ci.summary import summarizer as summarizer_module
 from ci.summary.runner import FunctionRunner, RunRequest
 from ci.summary.summarizer import Summarizer
 
@@ -38,12 +39,15 @@ class _Endpoint:
     """What GET /models answers. `None` refuses the connection."""
 
     rows: list[dict[str, str]] | None = None
+    status_code = 200
+    listings = 0
 
     def get(self, url: str, **_: Any) -> httpx.Response:
+        self.listings += 1
         if self.rows is None:
             raise httpx.ConnectError("[Errno 111] Connection refused")
         return httpx.Response(
-            200,
+            self.status_code,
             json={"data": self.rows},
             request=httpx.Request("GET", url),
         )
@@ -52,6 +56,7 @@ class _Endpoint:
 def _forget_the_model() -> None:
     config.resolve_llm_model.cache_clear()
     llm_config.get_llm_config.cache_clear()
+    summarizer_module.summarizer.dossier_agent = None
 
 
 @pytest.fixture
@@ -327,6 +332,69 @@ def test_a_server_that_refuses_the_model_list_does_not_stop_a_configured_model(
 
     assert body["llm"]["reachable"] is True
     assert body["llm"]["model"] == "configured:model"
+
+
+def test_a_configured_model_waits_while_the_hub_pool_has_no_engine_behind_it(
+    endpoint, client, monkeypatch
+):
+    """
+    CI-Hub's pool answers 502 on /models when the engine behind it is down, and
+    502 again on every chat request. That is no model to run on, not a server
+    guarding its list.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+    endpoint.status_code = 502
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+    endpoint.status_code = 200
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+
+def test_the_configured_model_takes_over_from_its_stand_in_when_it_is_back(
+    endpoint, client, monkeypatch
+):
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    endpoint.rows = [*A_CHAT_MODEL, {"id": "gemma4:e4b"}]
+
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+
+def test_the_dossier_agent_moves_to_the_model_that_replaced_a_gone_one(
+    endpoint, client, monkeypatch
+):
+    """It is built once per process, so it kept asking for the model that went."""
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    summarizer = summarizer_module.summarizer
+    assert summarizer._get_dossier_agent().model.model_name == "gemma4:e4b"
+
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    assert summarizer._get_dossier_agent().model.model_name == "small-chat:latest"
+
+
+def test_health_lists_the_models_once_while_the_model_holds(endpoint, client):
+    """The probe's listing is the one the remembered model is checked against."""
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    endpoint.listings = 0
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    assert endpoint.listings == 1
 
 
 # ── A run that gets here anyway ─────────────────────────────────────────────

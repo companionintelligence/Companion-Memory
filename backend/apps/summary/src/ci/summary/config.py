@@ -5,7 +5,9 @@ Configuration management for CI-Summary Service.
 import logging
 import os
 import re
+from collections.abc import Sequence
 from functools import lru_cache
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -380,6 +382,15 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def model_rows(listing: Any) -> list[dict]:
+    """The rows of a GET /models answer's JSON body. Raises when it is not a model list."""
+    return [
+        model
+        for model in listing.get("data", [])
+        if isinstance(model, dict) and model.get("id")
+    ]
+
+
 def _served_models() -> list[dict]:
     """Rows of the OpenAI-compatible endpoint's GET /models listing."""
     url = f"{settings.llm_api_base.rstrip('/')}/models"
@@ -387,11 +398,7 @@ def _served_models() -> list[dict]:
         url, headers={"Authorization": f"Bearer {settings.llm_api_key}"}, timeout=10.0
     )
     response.raise_for_status()
-    return [
-        model
-        for model in response.json().get("data", [])
-        if isinstance(model, dict) and model.get("id")
-    ]
+    return model_rows(response.json())
 
 
 def _is_served(model: str, served: list[str]) -> bool:
@@ -509,17 +516,49 @@ def resolve_output_mode() -> str:
     return _resolved_output_mode
 
 
-def is_still_served(model: str) -> bool:
+def forget_output_mode() -> None:
+    """Decide the output mode again on next use: the model may now be on another backend."""
+    global _resolved_output_mode
+    _resolved_output_mode = None
+
+
+def _nothing_to_run_on(exc: Exception) -> bool:
     """
-    Whether the endpoint lists `model` now. An answer that is not a model list
-    is no sign it has gone, the same as resolve_llm_model treats it.
+    Whether a failed /models listing means no model can be used now. Nothing
+    answered, or a server answered 5xx: CI-Hub's pool says 502 when the engine
+    behind it is down, and says it again on every chat request. A 401, 403 or
+    404 is a server that guards or lacks the route, and says nothing against
+    the model.
     """
-    try:
-        rows = _served_models()
-    except Exception:
+    if isinstance(exc, httpx.TransportError):
         return True
 
-    return _is_served(model, [str(row["id"]) for row in rows])
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+
+
+def why_not_still(model: str, served: Sequence[str] | None = None) -> str | None:
+    """
+    Why resolve_llm_model would no longer answer `model`, which it remembers,
+    or None while it still would. `served` is a listing the caller has just
+    read; without one the endpoint is asked. A listing that fails the way
+    resolve_llm_model trusts a configured model through is no sign it has gone.
+    """
+    if served is None:
+        try:
+            served = [str(row["id"]) for row in _served_models()]
+        except Exception as exc:
+            if _nothing_to_run_on(exc):
+                return f"its endpoint cannot list its models ({exc})"
+            return None
+
+    configured = settings.llm_model
+    if configured and model != configured and _is_served(configured, served):
+        return f"it stood in for {configured!r}, which is served again"
+
+    if not _is_served(model, list(served)):
+        return "its endpoint no longer serves it"
+
+    return None
 
 
 class NoChatModelError(RuntimeError):
@@ -539,8 +578,9 @@ def resolve_llm_model() -> str:
 
     Raises NoChatModelError while there is no chat model to run on: nothing is
     configured on a Hub with no AI engine or with no chat model pulled yet, the
-    endpoint does not answer at all, or it serves neither the configured model
-    nor any other chat model. Call this when work needs a model, never at import.
+    endpoint does not answer at all or answers 5xx, or it serves neither the
+    configured model nor any other chat model. Call this when work needs a
+    model, never at import.
     lru_cache does not store a raise, so the next caller asks the endpoint
     again, which is how the service finds a model that appears after it started.
     """
@@ -549,10 +589,10 @@ def resolve_llm_model() -> str:
     try:
         rows = _served_models()
     except Exception as exc:
-        if configured and not isinstance(exc, httpx.TransportError):
-            # A server answered, with an error: a /models route it does not
-            # have, or one it guards. That says nothing against the configured
-            # model, which is validated per request anyway.
+        if configured and not _nothing_to_run_on(exc):
+            # A server answered, with a 4xx: a /models route it does not have,
+            # or one it guards. That says nothing against the configured model,
+            # which is validated per request anyway.
             logger.warning(
                 "Could not list models at %s (%s); using configured model %r unvalidated.",
                 settings.llm_api_base,
@@ -561,12 +601,12 @@ def resolve_llm_model() -> str:
             )
             return configured
         if configured:
-            # Nothing answered. The configured model used to be trusted here
-            # too, so /health named it and every summary job ran against an
-            # endpoint that was not there, failed and spent its retries.
+            # Nothing answered, or a 5xx did. The configured model used to be
+            # trusted here too, so /health named it and every summary job ran
+            # against an endpoint that was not there, failed and spent its retries.
             raise NoChatModelError(
-                f"{settings.llm_api_base} did not answer ({exc}), so the configured model "
-                f"{configured!r} cannot be used yet."
+                f"{settings.llm_api_base} cannot list its models ({exc}), so the configured "
+                f"model {configured!r} cannot be used yet."
             ) from exc
         raise NoChatModelError(
             f"No LLM model configured and model discovery at {settings.llm_api_base} failed ({exc}). "
