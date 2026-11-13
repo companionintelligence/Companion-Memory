@@ -32,7 +32,7 @@
 #
 # api also gets OIDC_ISSUER_URL/APP_BASE_URL, which no other compose file sets
 # (map-valued `environment:` merges by key across -f files, unlike the
-# list-valued keys above, so this only *adds* two keys to production.yml's
+# list-valued keys above, so this only *adds* its keys to production.yml's
 # own environment block, it doesn't replace it). Both are needed for
 # "Sign in with CI-Portal" (OidcController.initiate/callback) to work at all
 # here:
@@ -49,12 +49,25 @@
 # .env (CI_PORTAL_URL is the operator-overridable input; APP_BASE_URL is
 # always http://127.0.0.1:<GATEWAY_PORT>, since that's the one address this
 # app is guaranteed to actually be reachable at).
+#
+# OAUTH_CALLBACK_URL is where a service (Google and the others) sends the
+# person back after they connect it with their own OAuth app. The api builds
+# it from OAUTH_CALLBACK_URL, else from APP_PUBLIC_URL. No compose file sets
+# either, so on Desktop the OAuth Setup dialog asked people to register
+# "undefined/oauth/callback" and the redirect_uri sent to the provider was the
+# same, which every provider refuses. The gateway serves /oauth/callback, so
+# it is APP_BASE_URL plus that path. OPENID_CALLBACK_URL does the same for the
+# OpenID services (Steam), which otherwise return to
+# https://ci-server.localhost/openid/callback. `:+` leaves both empty (and the
+# api on its own fallbacks) if APP_BASE_URL is ever unset.
 services:
   api:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
     environment:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://hub.ci.computer}
       APP_BASE_URL: ${APP_BASE_URL:-}
+      OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
+      OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
   worker:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
   migrate-database:

@@ -31,6 +31,9 @@
     "oauth": {
       "callbackUrl": "OAUTH_CALLBACK_URL"
     },
+    "openid": {
+      "callbackUrl": "OPENID_CALLBACK_URL"
+    },
     "oidc": {
       "issuerUrl": "OIDC_ISSUER_URL",
       "publicBaseUrl": "APP_BASE_URL",
