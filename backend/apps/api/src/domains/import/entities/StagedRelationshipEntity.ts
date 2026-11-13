@@ -18,6 +18,11 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm'
  */
 @Entity({ schema: 'ci_import', name: 'staged_relationships' })
 @Index('staged_relationships_entity_idx', ['entityId'])
+// The two columns that cascade from staged_items (migration
+// 20261113093810_index_staged_relationships_cascade): without them every
+// deleted staged item scanned this whole table.
+@Index('staged_relationships_item_idx', ['itemId'])
+@Index('staged_relationships_related_item_idx', ['relatedItemId'])
 export class StagedRelationshipEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
