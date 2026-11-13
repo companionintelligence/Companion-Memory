@@ -354,9 +354,9 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // What the footer dates the rhythm layer by: the week forecast, or the
   // occupancy histogram when only that one answered with something to draw.
   const rhythmGeneratedAt = generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null);
-  // With HBPE on, no date means the forecast call failed (see rhythmFooter), and
-  // the footer that says so lives on the schedule surface. A read that failed
-  // as a whole is the hard error instead.
+  // With HBPE on, no date means the forecast call failed (see rhythmFooter). The
+  // footer that says so lives on the schedule surface. A read that reported an
+  // error takes the error path instead, since `error` can't say which field failed.
   const forecastUnreachable = hbpeEnabled && !rhythmGeneratedAt && !error;
 
   // Placing a backlog task mints a planned block, so the committed lane has to re-read.
@@ -547,22 +547,19 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // A month or a year is a surface in its own right: an empty one is still a
   // calendar to move around in, not the "connect something" welcome.
   //
-  // Nor is a week the forecast could not be fetched for: the welcome told
-  // someone whose calendar was already imported to connect one, and stood in
-  // for the surface whose footer says the forecast is unreachable.
-  const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
+  // Nor is a week the forecast could not be fetched for. The welcome told
+  // someone whose calendar was already imported to connect one. It also stood
+  // in for the surface whose footer says the forecast is unreachable.
+  //
+  // In-window occupancy counts as something. The grid draws it even when the
+  // week forecast failed, so the welcome would hide it.
+  const hasAnything = events.length > 0 || rhythm.length > 0 || hasOccupancySignal || backlogCount > 0;
   const overview = view === 'month' || view === 'year';
-  const isTrulyEmpty =
-    !loading &&
-    !fetching &&
-    !hasAnything &&
-    !error &&
-    !planError &&
-    !forecastUnreachable &&
-    atToday &&
-    !overview;
   const showScheduleSurface =
     !atToday || overview || hasAnything || planError || fetching || forecastUnreachable;
+  // Everything that keeps the surface up also keeps the welcome down, so the
+  // two cannot drift apart when a new reason is added.
+  const isTrulyEmpty = !showScheduleSurface && !loading && !error;
 
   // Embedded, the host (Calendar) supplies the frame and is otherwise empty —
   // this is the whole page now, not one block in a taller scrolling column —

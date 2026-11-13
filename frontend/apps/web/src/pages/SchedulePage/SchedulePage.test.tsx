@@ -541,6 +541,8 @@ describe('SchedulePage — failed queries', () => {
   });
 
   it('shows the slate as failed rather than empty when the plan list errors', () => {
+    // Flag off, so an unreachable forecast can't be what keeps the week up.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
     setPlan({ error: true });
 
@@ -567,9 +569,9 @@ describe('SchedulePage — failed queries', () => {
 
   it('shows the week and says the forecast is unreachable, not "connect a calendar", when HBPE is down', () => {
     // The forecast resolver swallows an HBPE failure and answers null. An empty
-    // week then got the first-run welcome, telling someone whose calendar was
-    // already imported to connect one, and the footer naming the real problem
-    // never rendered.
+    // week then got the first-run welcome, which told someone whose calendar was
+    // already imported to connect one. The footer naming the real problem never
+    // rendered.
     h.hbpeEnabled = true;
     setSchedule({ events: [], rhythm: [], generatedAt: null });
 
@@ -580,7 +582,44 @@ describe('SchedulePage — failed queries', () => {
     expect(screen.getByText(/Couldn't reach the rhythm forecast/)).toBeInTheDocument();
   });
 
+  it('keeps the week up when the week forecast failed but in-window occupancy answered', () => {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+    h.forecast = [
+      {
+        data: {
+          systemStatus: 'READY',
+          generatedAt: '2026-09-06T03:00:00.000Z',
+          buckets: [
+            {
+              bucketIndex: 36,
+              startTime: at.toISOString(),
+              l0Probs: [{ label: 'WORK', probability: 0.8 }],
+              l1Probs: [],
+              l2Probs: null,
+              q10: 0.5,
+              q50: 0.8,
+              q90: 0.9,
+            },
+          ],
+        },
+        loading: false,
+        stalled: false,
+      },
+      { refetch: vi.fn() },
+    ];
+    setSchedule({ events: [], rhythm: [], generatedAt: null });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByText(/Pattern rhythm \(HBPE\) from your history, updated/)).toBeInTheDocument();
+  });
+
   it('keeps the week visible when the calendar is empty but Plan has backlog', () => {
+    // Flag off, so an unreachable forecast can't be what keeps the week up.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
     setPlan({
       backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
