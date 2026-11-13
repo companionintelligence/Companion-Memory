@@ -412,7 +412,7 @@ describe('AskExecutorService photos at a named place', () => {
     expect(result).toEqual(textMatch);
   });
 
-  it('falls back to the text search, and says so, when the place lookup fails', async () => {
+  it('falls back to the text search and says so when the place lookup fails', async () => {
     const { service, places, logger } = makeService(noTextMatch, BLUE_BOTTLE);
     places.photosAtNamedPlace.mockRejectedValue(new Error('connection reset'));
 
@@ -439,7 +439,7 @@ describe('AskExecutorService photos at a named place', () => {
   it('counts videos at the place too for a media ask', async () => {
     const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
 
-    await service.executeWithMeta(
+    const result = await service.executeWithMeta(
       fakeAsk({
         query: { queryType: 'content', dataClass: 'media', prompt: 'Any media from Blue Bottle Coffee?' },
       }),
@@ -452,5 +452,83 @@ describe('AskExecutorService photos at a named place', () => {
       50,
       { kind: 'media' },
     );
+    expect(result.totalMatches).toBe(8);
+  });
+
+  it.each([
+    'Show me photos from Blue Bottle Coffee',
+    'All photos at Blue Bottle Coffee?',
+    'Any photos you took at Blue Bottle Coffee?',
+    'Any shots of Blue Bottle Coffee?',
+  ])('reads the request words of "%s" past the place', async (prompt) => {
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk(prompt), { tier: 'household' });
+
+    expect(result.totalMatches).toBe(8);
+  });
+
+  it("keeps a place name's short words", async () => {
+    const { service } = makeService(noTextMatch, {
+      places: [{ id: 'place-2', name: 'Pier 39' }],
+      fileIds: ['f1'],
+      total: 4,
+    });
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Pier 39?'), {
+      tier: 'household',
+    });
+
+    expect(result.totalMatches).toBe(4);
+  });
+
+  it.each([
+    // Every word of the name is used once: the first "coffee" is what the photo shows.
+    'Do you have photos of coffee at Blue Bottle Coffee?',
+    // A pronoun is ask frame to the text search, but here it is who the photo shows.
+    'Do you have photos of me at Blue Bottle Coffee?',
+    'Any photos with her at Blue Bottle Coffee?',
+  ])('keeps the text search for "%s"', async (prompt) => {
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk(prompt), { tier: 'household' });
+
+    expect(result).toEqual(noTextMatch);
+  });
+
+  it('keeps the text search when the prompt names two places', async () => {
+    // The photos at either place do not answer an ask about both.
+    const { service } = makeService(noTextMatch, {
+      places: [
+        { id: 'place-1', name: 'Blue Bottle Coffee' },
+        { id: 'place-3', name: 'Philz Coffee' },
+      ],
+      fileIds: ['f1', 'f2', 'f3'],
+      total: 8,
+    });
+
+    const result = await service.executeWithMeta(
+      photoAsk('Do you have photos of Blue Bottle Coffee and Philz Coffee?'),
+      { tier: 'household' },
+    );
+
+    expect(result).toEqual(noTextMatch);
+  });
+
+  it('counts the photos at every place sharing the one name', async () => {
+    const { service } = makeService(noTextMatch, {
+      places: [
+        { id: 'place-4', name: 'Starbucks' },
+        { id: 'place-5', name: 'Starbucks' },
+      ],
+      fileIds: ['f1', 'f2'],
+      total: 2,
+    });
+
+    const result = await service.executeWithMeta(photoAsk('Any photos from Starbucks?'), {
+      tier: 'household',
+    });
+
+    expect(result.totalMatches).toBe(2);
   });
 });

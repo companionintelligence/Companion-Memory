@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { PlaceService, queryNamesPlace } from '@ci/domains/memory';
+import { PlaceService, placeNameWords } from '@ci/domains/memory';
 import {
   INDEXABLE_ENTITIES,
   type EntityIdentifier,
@@ -51,11 +51,34 @@ const NAME_SUBJECT_QUERY_TYPES: ReadonlySet<string> = new Set([
 const DEFAULT_MAX_RESULTS = 50;
 
 /**
- * Words of a photo ask that say how the photo relates to a place, not what it
- * shows: "photos taken at", "near". The ask frame words ("do you have", "of",
- * "at") are already gone from {@link buildPromptQuery}'s groups.
+ * Words of a photo ask that say how it asks or how the photo relates to a
+ * place, not what the photo shows: "show me", "all", "taken at", "near",
+ * "shots", "media". Chat's `media.findPhotos` reads the same words past a
+ * place's name. The ask frame words ("do you have", "of", "at") and the loose
+ * photo and video words are already gone from {@link buildPromptQuery}'s groups.
  */
-const PLACE_REQUEST_WORDS: ReadonlySet<string> = new Set(['taken', 'near', 'around', 'by']);
+const PLACE_REQUEST_WORDS: ReadonlySet<string> = new Set([
+  'show',
+  'find',
+  'get',
+  'all',
+  'taken',
+  'took',
+  'near',
+  'around',
+  'by',
+  'shot',
+  'shots',
+  'media',
+]);
+
+/**
+ * A person as what the photo shows: "photos of me at Blue Bottle Coffee",
+ * "with her". {@link buildPromptQuery} drops these pronouns as ask frame, so
+ * without this the place lookup would answer with every photo taken there.
+ */
+const PERSON_SUBJECT_RE =
+  /\b(?:of|with)\s+(?:me|us|you|him|her|them|myself|ourselves|yourself|yourselves|himself|herself|themselves)\b/iu;
 
 /** Coarse data-class → candidate entity-type hints (validated against the taxonomy). */
 const CLASS_TYPE_HINTS: Readonly<Record<string, readonly string[]>> = {
@@ -152,27 +175,29 @@ export class AskExecutorService {
     const mediaEventPlaces =
       options.tier != null && photoAskMayMatchPlaces(options.tier, ask.query.dataClass);
 
-    const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
-    const searched = await this.searchService.searchPrompt(responderContext, {
-      prompt: ask.query.prompt,
-      subjectIsName,
-      maxResults,
-      ...(includeTypes ? { includeTypes } : {}),
-      ...(mediaEvents ? { mediaEvents, mediaEventPlaces } : {}),
-    });
-    // The search above can match a photo by its place only through its event's
+    // The cap `searchPrompt` applies, so both answers below report the same one.
+    const maxResults = Math.max(1, Math.trunc(options.maxResults ?? DEFAULT_MAX_RESULTS));
+    // The text search can match a photo by its place only through its event's
     // `location_name`, which a geocoder writes. Without one (Memory Desktop) that
     // is NULL on every photo, so "photos of Blue Bottle Coffee" answered "They
     // have none." while chat found the photos by where they were taken. The
-    // same lookup chat uses answers instead, under the same tier rule, and only
-    // when the prompt names nothing but the place. The two sets overlap (one
-    // counts a photo's event, the other its file), so they are not added up:
-    // the place answers only when it found more, and never lowers the count a
-    // geocoded box already gave.
-    const atPlace =
+    // same lookup chat uses answers instead, under the same tier rule. It does
+    // so only when the prompt names nothing but the place. The two sets overlap
+    // (one counts a photo's event, the other its file), so they are not added
+    // up. The place answers only when it found more, so it never lowers the
+    // count a geocoded box already gave.
+    const [searched, atPlace] = await Promise.all([
+      this.searchService.searchPrompt(responderContext, {
+        prompt: ask.query.prompt,
+        subjectIsName,
+        maxResults,
+        ...(includeTypes ? { includeTypes } : {}),
+        ...(mediaEvents ? { mediaEvents, mediaEventPlaces } : {}),
+      }),
       mediaEvents && mediaEventPlaces
-        ? await this.photosAtNamedPlace(responderContext, ask, subjectIsName, mediaEvents, maxResults)
-        : null;
+        ? this.photosAtNamedPlace(responderContext, ask, subjectIsName, mediaEvents, maxResults)
+        : null,
+    ]);
     const result = atPlace != null && atPlace.totalMatches > searched.totalMatches ? atPlace : searched;
 
     if (result.truncated) {
@@ -193,11 +218,13 @@ export class AskExecutorService {
    * `media.findPhotos` finds them ({@link PlaceService.photosAtNamedPlace}), or
    * null to keep the text search's answer.
    *
-   * Null unless every word the prompt asks about belongs to the name of a place
-   * it names. The lookup answers with every photo taken there, so "photos of my
-   * dog at Blue Bottle Coffee" must not get "yes" for a coffee shop with no dog
-   * in it. Null too when it finds nothing, or fails (logged). A photos ask
-   * counts only the images taken there, a media ask the videos too.
+   * Null unless the prompt names one place and nothing else it could show
+   * ({@link namesOnlyOnePlace}). The lookup answers with every photo taken
+   * there, so "photos of my dog at Blue Bottle Coffee" must not get "yes" for
+   * a coffee shop with no dog in it. Neither may "photos of me at Blue Bottle
+   * Coffee" ({@link PERSON_SUBJECT_RE}). Null too when it finds nothing or
+   * fails (logged). A photos ask counts only the images taken there; a media
+   * ask counts the videos too.
    */
   private async photosAtNamedPlace(
     context: UserServiceContext,
@@ -206,21 +233,18 @@ export class AskExecutorService {
     kind: 'photos' | 'media',
     maxResults: number,
   ): Promise<AskExecution | null> {
-    const groups = buildPromptQuery(ask.query.prompt, { subjectIsName }).filter(
-      (group) => !PLACE_REQUEST_WORDS.has(group.text.toLowerCase()),
+    const words = buildPromptQuery(ask.query.prompt, { subjectIsName }).flatMap((group) =>
+      placeNameWords(group.text).split(' ').filter(Boolean),
     );
 
-    if (groups.length === 0) {
+    if (words.length === 0 || PERSON_SUBJECT_RE.test(ask.query.prompt)) {
       return null;
     }
 
     try {
       const found = await this.places.photosAtNamedPlace(context, ask.query.prompt, maxResults, { kind });
-      const placeOnly =
-        found.places.length > 0 &&
-        groups.every((group) => found.places.some((place) => queryNamesPlace(place.name, group.text)));
 
-      if (!placeOnly || found.total === 0) {
+      if (found.total === 0 || !namesOnlyOnePlace(words, found.places)) {
         return null;
       }
 
@@ -274,6 +298,40 @@ export type AskExecution = PromptSearchResult;
  */
 function askedClass(query: AskQuery, subjectIsName: boolean): string | null {
   return canonicalDataClass(query.dataClass) ?? promptMediaClass(query.prompt, { subjectIsName });
+}
+
+/**
+ * Whether the prompt's words ({@link placeNameWords} of its query groups) name
+ * one place and nothing else the photo could show.
+ *
+ * Each word of the place's name is used up once, so "photos of coffee at Blue
+ * Bottle Coffee" keeps "coffee" over and asks about more than the place. Only
+ * {@link PLACE_REQUEST_WORDS} may be left. Comparing words, rather than asking
+ * `queryNamesPlace` about each one, also keeps a name's short words. Its floor
+ * of three letters dropped the "39" of "Pier 39".
+ *
+ * Places under two different names fail. The lookup answers with the photos at
+ * either, while "photos of Blue Bottle Coffee and Philz Coffee" asks about both
+ * (the text search ANDs the two names). Places sharing one name all count.
+ */
+function namesOnlyOnePlace(words: readonly string[], places: readonly { name: string }[]): boolean {
+  const names = new Set(places.map((place) => placeNameWords(place.name)));
+
+  if (names.size !== 1) {
+    return false;
+  }
+
+  const left = [...words];
+
+  for (const word of [...names][0].split(' ')) {
+    const at = left.indexOf(word);
+
+    if (at >= 0) {
+      left.splice(at, 1);
+    }
+  }
+
+  return left.every((word) => PLACE_REQUEST_WORDS.has(word));
 }
 
 function toIncludeTypes(canonical: string | null): IndexableEntity[] | undefined {

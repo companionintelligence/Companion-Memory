@@ -70,7 +70,7 @@ function isSnapCellViolation(err: unknown): boolean {
 export const PHOTO_AT_PLACE_METERS = 150;
 
 /** Lowercased words joined by single spaces, for matching a place name inside a query. */
-function placeNameWords(text: string): string {
+export function placeNameWords(text: string): string {
   return text
     .normalize('NFKD')
     .replace(/\p{M}/gu, '')
