@@ -4,6 +4,8 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { serverTimezone, wallClockToUTC, type WallClock } from '@ci/common/time/zoned';
+
 import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -103,23 +105,77 @@ interface ParsedLine {
   text: string;
 }
 
-function parseWALine(line: string): ParsedLine | null {
+/**
+ * An export's wall-clock time as an instant, read in `timeZone`.
+ *
+ * Neither platform writes a zone or an offset: the times are what the phone's
+ * clock read. They used to go through `new Date(…)`, which reads them in the
+ * SERVER's zone, so the same chat landed at different instants on different
+ * machines, and in a UTC container a Pacific account's midnight New Year
+ * messages sat at 4 PM on Dec 31. The importer is told the account's zone
+ * (`ImportParams.timeZone`) and reads them there.
+ *
+ * Out-of-range fields leave the line undated, as `new Date` did.
+ */
+function wallTime(w: WallClock, timeZone: string): Date | undefined {
+  if (
+    w.month < 1 ||
+    w.month > 12 ||
+    w.day < 1 ||
+    w.day > 31 ||
+    w.hour > 23 ||
+    w.minute > 59 ||
+    w.second > 59
+  ) {
+    return undefined;
+  }
+
+  return wallClockToUTC(w, timeZone);
+}
+
+const IOS_TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s?([AP]M)?$/;
+
+/** iOS `M/D/YY` (or `M/D/YYYY`) and `H:MM[:SS][ AM|PM]`. */
+function iosTime(date: string, time: string, timeZone: string): Date | undefined {
+  const [month, day, rawYear] = date.split('/').map(Number);
+  const t = IOS_TIME_RE.exec(time.trim());
+
+  if (t == null) {
+    return undefined;
+  }
+
+  let hour = Number(t[1]);
+
+  if (t[4] === 'PM' && hour < 12) {
+    hour += 12;
+  } else if (t[4] === 'AM' && hour === 12) {
+    hour = 0;
+  }
+
+  // Two-digit years as `new Date` read them: 00-49 are 20xx, 50-99 are 19xx.
+  const year = rawYear < 100 ? rawYear + (rawYear < 50 ? 2000 : 1900) : rawYear;
+
+  return wallTime({ year, month, day, hour, minute: Number(t[2]), second: Number(t[3] ?? 0) }, timeZone);
+}
+
+function parseWALine(line: string, timeZone: string): ParsedLine | null {
   const cleaned = stripLeadingInvisible(line);
   let m = IOS_RE.exec(cleaned);
   if (m) {
-    const ts = new Date(`${m[1]} ${m[2]}`);
-
-    return { ts: isNaN(ts.getTime()) ? undefined : ts, sender: m[3].trim(), text: m[4] };
+    return { ts: iosTime(m[1], m[2], timeZone), sender: m[3].trim(), text: m[4] };
   }
 
   m = ANDROID_RE.exec(cleaned);
   if (m) {
-    // Assume DD/MM/YYYY → YYYY-MM-DD
-    const parts = m[1].split('/');
-    const iso = `${parts[2]}-${parts[1]}-${parts[0]}T${m[2]}:00`;
-    const ts = new Date(iso);
+    // DD/MM/YYYY, HH:MM
+    const [day, month, year] = m[1].split('/').map(Number);
+    const [hour, minute] = m[2].split(':').map(Number);
 
-    return { ts: isNaN(ts.getTime()) ? undefined : ts, sender: m[3].trim(), text: m[4] };
+    return {
+      ts: wallTime({ year, month, day, hour, minute, second: 0 }, timeZone),
+      sender: m[3].trim(),
+      text: m[4],
+    };
   }
 
   return null;
@@ -284,6 +340,7 @@ export class WhatsAppFileImporter implements FileImporter {
 
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
     const conversationName = conversationNameFrom(chatPath);
+    const timeZone = params.timeZone ?? serverTimezone();
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
@@ -411,7 +468,7 @@ export class WhatsAppFileImporter implements FileImporter {
     };
 
     for await (const line of rl) {
-      const parsed = parseWALine(line);
+      const parsed = parseWALine(line, timeZone);
       if (parsed) {
         if (current) {
           flush(current);

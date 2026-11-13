@@ -656,4 +656,68 @@ describe('the system-line filter must not eat human messages', () => {
 
     expect(pipeline).toHaveLength(1);
   });
+
+  describe('times without a zone', () => {
+    const chatIn = async (lines: string[], timeZone?: string): Promise<string[]> => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-'));
+      fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+      const pipeline: EmittedGraph[] = [];
+      await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+        pipeline,
+        timeframe: {},
+        timeZone,
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return pipeline.map((entry) => entry.item.timestamp?.toISOString() ?? 'undated');
+    };
+
+    it("reads an iOS export's wall-clock times in the account's zone", async () => {
+      // Midnight on New Year's Day for a Pacific account is 08:00 UTC. Read in a
+      // UTC container it was stored at 00:00 UTC, which that account sees as
+      // 4 PM on Dec 31, 2020.
+      const times = await chatIn(
+        ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '[1/2/21, 8:15:00 PM] Bob: Good night'],
+        'America/Los_Angeles',
+      );
+
+      expect(times).toEqual(['2021-01-01T08:00:00.000Z', '2021-01-03T04:15:00.000Z']);
+    });
+
+    it('does not depend on the zone the server runs in', async () => {
+      const original = process.env.TZ;
+
+      try {
+        process.env.TZ = 'Asia/Tokyo';
+
+        expect(await chatIn(['[1/1/21, 12:00:00 AM] Alice: Happy New Year!'], 'UTC')).toEqual([
+          '2021-01-01T00:00:00.000Z',
+        ]);
+      } finally {
+        process.env.TZ = original;
+      }
+    });
+
+    it('reads 12-hour, 24-hour and Android times in that zone too', async () => {
+      const times = await chatIn(
+        [
+          '[1/1/21, 12:30:00 PM] Alice: noon and a half',
+          '[1/1/21, 23:15] Bob: a 24-hour iOS export',
+          '01/07/2021, 09:05 - Alice: an Android export, day first',
+        ],
+        'Europe/Berlin',
+      );
+
+      expect(times).toEqual([
+        '2021-01-01T11:30:00.000Z',
+        '2021-01-01T22:15:00.000Z',
+        '2021-07-01T07:05:00.000Z',
+      ]);
+    });
+
+    it('leaves a header with an impossible time undated rather than inventing one', async () => {
+      expect(await chatIn(['[13/1/21, 1:00:00 AM] Alice: month 13'], 'UTC')).toEqual(['undated']);
+    });
+  });
 });
