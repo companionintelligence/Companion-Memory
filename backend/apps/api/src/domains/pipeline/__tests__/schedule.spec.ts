@@ -569,6 +569,218 @@ describe('stageDueness', () => {
     });
   });
 
+  describe('a windowed leg counts its interval in windows', () => {
+    // The default window: 01:00 to 06:00. `at(3)` is 03:00 tonight, so the
+    // window that is open opened at 01:00 and the next one opens at 01:00
+    // tomorrow.
+    const tonight = { opensAt: at(1), closesAt: at(6), nextOpensAt: new Date(at(1).getTime() + 1 * DAYS) };
+
+    // The nightly people work: a new account's first pass of these runs when
+    // its data arrives, during the day, because a never-run leg ignores the
+    // window.
+    const peopleStages = [
+      STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE,
+      STAGE_IDS.ENRICH_PERSON_SELF_CLAIM,
+      STAGE_IDS.ENRICH_PERSON_LINK,
+      STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+    ];
+
+    it('runs a leg first swept at 14:00 yesterday at 03:00 tonight, not the night after', () => {
+      const now = at(3);
+      const yesterdayAfternoon = ago(now, 13 * HOURS);
+
+      for (const stageId of peopleStages) {
+        const decision = stageDueness({
+          stageId,
+          lastStartedAt: yesterdayAfternoon,
+          windowOpen: OPEN,
+          windowBounds: tonight,
+          now,
+        });
+
+        expect(decision.due).toBe(true);
+        expect(decision.reason).toBe('due_before_next_window');
+        expect(decision.overdue).toBe(false);
+        expect(decision.eligibleAt).toBeNull();
+      }
+    });
+
+    it('was too_soon at 03:00 with no window bounds, which is what made the leg skip a night', () => {
+      const now = at(3);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+        lastStartedAt: ago(now, 13 * HOURS),
+        windowOpen: OPEN,
+        now,
+      });
+
+      expect(decision.reason).toBe('too_soon');
+      // 14:00 today: long after tonight's window has shut.
+      expect(decision.eligibleAt).toEqual(at(14));
+    });
+
+    it('runs a leg that started at 01:05 last night as soon as the window opens tonight', () => {
+      // Without this the leg waits until 01:05, then 01:10 the night after. It
+      // creeps later each night until it falls off the end of the window.
+      const now = at(1);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE,
+        lastStartedAt: new Date(at(1, 5).getTime() - 1 * DAYS),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(true);
+      expect(decision.reason).toBe('due_before_next_window');
+    });
+
+    it('does not run a leg twice in one window', () => {
+      const now = at(3);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+        lastStartedAt: at(1, 5),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
+    it('does not run one at 13:00 while the window is shut', () => {
+      const now = at(13);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+        lastStartedAt: ago(now, 23 * HOURS),
+        windowOpen: SHUT,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
+    it("holds a weekly metered geocoder whose week is up after tonight's window shuts", () => {
+      // Its week is up at 14:00 today. Counted to the next window, tonight would
+      // be its turn, eleven hours early; a metered stage waits for the week.
+      const now = at(3);
+      const sevenDaysAgo = new Date(at(14).getTime() - 7 * DAYS);
+
+      for (const stageId of [
+        STAGE_IDS.ENRICH_GEOCODE,
+        STAGE_IDS.ENRICH_EVENT_REVERSE,
+        STAGE_IDS.ENRICH_POSITION_REVERSE,
+      ]) {
+        const decision = stageDueness({
+          stageId,
+          lastStartedAt: sevenDaysAgo,
+          windowOpen: OPEN,
+          windowBounds: tonight,
+          now,
+        });
+
+        expect(decision.due).toBe(false);
+        expect(decision.reason).toBe('too_soon');
+        expect(decision.eligibleAt).toEqual(at(14));
+      }
+    });
+
+    it('starts a weekly metered geocoder at the opening of the window its week runs out in', () => {
+      // It started at 01:05 a week ago, so its week is up at 01:05 tonight,
+      // inside this window: the same window it runs in either way, from the
+      // opening, so the nightly consumers it feeds wait for it.
+      const now = at(1);
+
+      for (const stageId of [
+        STAGE_IDS.ENRICH_GEOCODE,
+        STAGE_IDS.ENRICH_EVENT_REVERSE,
+        STAGE_IDS.ENRICH_POSITION_REVERSE,
+      ]) {
+        const decision = stageDueness({
+          stageId,
+          lastStartedAt: new Date(at(1, 5).getTime() - 7 * DAYS),
+          windowOpen: OPEN,
+          windowBounds: tonight,
+          now,
+        });
+
+        expect(decision.due).toBe(true);
+        expect(decision.reason).toBe('due_before_next_window');
+      }
+    });
+
+    it('does not run the daily metered unfurl twice in a day after a daytime first pass', () => {
+      // Its first pass ran at 14:00 yesterday, so its day is up at 14:00 today,
+      // after tonight's window shuts. It keeps its day, as on a plain interval.
+      const now = at(3);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.ENRICH_UNFURL,
+        lastStartedAt: ago(now, 13 * HOURS),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
+    it('does not give the daily metered unfurl a second run in the window after an overdue one', () => {
+      // An overdue leg ignores the window, so it can start at 00:58. Counted in
+      // windows it would be due again at 01:00: a second `perRunCap` against
+      // somebody else's server two minutes after the first.
+      const now = at(1);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.ENRICH_UNFURL,
+        lastStartedAt: at(0, 58),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.due).toBe(false);
+      expect(decision.reason).toBe('too_soon');
+    });
+
+    it('still runs a local leg in the window after it was swept overdue just before it opened', () => {
+      // The same 00:58 start on a local stage: tonight's window is its turn.
+      const now = at(1);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.CLEAN_DUPLICATE_DETECT,
+        lastStartedAt: at(0, 58),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.reason).toBe('due_before_next_window');
+    });
+
+    it('leaves an unwindowed stage on its plain interval', () => {
+      const now = at(3);
+
+      const decision = stageDueness({
+        stageId: STAGE_IDS.INDEX_EMBED,
+        lastStartedAt: ago(now, 30 * 60 * SECONDS),
+        windowOpen: OPEN,
+        windowBounds: tonight,
+        now,
+      });
+
+      expect(decision.reason).toBe('too_soon');
+    });
+  });
+
   describe('maxStaleness — the escape from the window', () => {
     it('makes a windowed stage due with the window shut, once it is overdue', () => {
       // An appliance that is powered down every night has an enrichment window
