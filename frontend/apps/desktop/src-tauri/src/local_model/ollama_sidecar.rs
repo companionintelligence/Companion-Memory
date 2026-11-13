@@ -3,9 +3,11 @@
 //! `http://host.docker.internal:11434`, i.e. whatever's on the HOST's port
 //! 11434) for users who don't already run Ollama themselves. This module
 //! never writes that config or stack_manager's `.env` itself — it only makes
-//! sure port 11434 is answering, in one of three ways, cheapest first (the
-//! one value it exports into `.env` is DEFAULT_CHAT_MODEL, which
-//! stack_manager::write_env_file reads; see that constant's comment):
+//! sure port 11434 is answering, in one of three ways, cheapest first. What
+//! reaches `.env` from here is a chat model name: DEFAULT_CHAT_MODEL, which
+//! stack_manager::write_env_file reads (see that constant's comment), or on
+//! the first branch host_ollama_chat_model's pick, which
+//! stack_manager::apply_llm_env_override writes over it:
 //!
 //!   1. Already running (the user's own Ollama) → nothing to do.
 //!   2. `ollama` is installed but not running → launch it with its own
@@ -515,6 +517,132 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct TagsResponse {
+    #[serde(default)]
+    models: Vec<TagsModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagsModel {
+    name: String,
+    /// Set on an Ollama Cloud model (`gpt-oss:120b-cloud` and the like): a
+    /// stub that forwards every prompt to ollama.com.
+    #[serde(default)]
+    remote_host: Option<String>,
+    #[serde(default)]
+    remote_model: Option<String>,
+}
+
+impl TagsModel {
+    /// Runs on this machine. The desktop app writes CI_LOCAL_ONLY=true, so a
+    /// cloud model is never named for chat or background work: every job
+    /// would send the user's data to ollama.com.
+    fn is_local(&self) -> bool {
+        let remote = |field: &Option<String>| field.as_deref().is_some_and(|value| !value.is_empty());
+        let tag = self.name.rsplit_once(':').map_or("", |(_, tag)| tag);
+
+        !remote(&self.remote_host) && !remote(&self.remote_model) && tag != "cloud" && !tag.ends_with("-cloud")
+    }
+}
+
+/// The models an Ollama runs locally, in the order `/api/tags` lists them.
+/// Cloud models are left out; see TagsModel::is_local.
+fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/tags"))
+        .send()
+        .map_err(|e| format!("Failed to list models: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Listing models failed: HTTP {}", response.status()));
+    }
+    let tags: TagsResponse = response.json().map_err(|e| format!("Unreadable model list: {e}"))?;
+
+    Ok(tags.models.into_iter().filter(TagsModel::is_local).map(|model| model.name).collect())
+}
+
+/// Ollama reads a bare name as its `:latest` tag. Compares with the suffix
+/// stripped, like the api's sameBaseModel (servedModels.ts), so a registry
+/// host with a port (`localhost:5000/model`) is not mistaken for a tag.
+fn same_model(served: &str, wanted: &str) -> bool {
+    let base = |name: &str| name.strip_suffix(":latest").unwrap_or(name).to_string();
+
+    base(served) == base(wanted)
+}
+
+/// Mirrors the name rule the api uses to keep embedders and other non-chat
+/// models out of chat (backend/apps/api/src/domains/llm/services/
+/// servedModels.ts, NON_CHAT_NAME). Ollama publishes no labels, so the name
+/// is all there is.
+fn is_chat_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if ["embed", "rerank", "whisper", "kokoro", "minilm"].iter().any(|part| name.contains(part)) {
+        return false;
+    }
+
+    !name.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "tts" || word == "bge")
+}
+
+/// The chat model to ask a user's own Ollama for, when it is not
+/// DEFAULT_CHAT_MODEL: None when it serves the default (nothing to change)
+/// or serves no local chat model at all (nothing better to name). Otherwise
+/// the first local chat model it lists, so chat and background work end up
+/// on the same model the user already has on disk.
+fn choose_host_chat_model(served: &[String]) -> Option<String> {
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    served.iter().find(|name| is_chat_model_name(name)).cloned()
+}
+
+/// What to write as the chat model when reusing the user's own Ollama.
+///
+/// This app pulls nothing into an Ollama it does not own. It used to name
+/// DEFAULT_CHAT_MODEL regardless, so where that Ollama lacked it chat quietly
+/// ran on whatever it listed first while every background job failed with
+/// "Invalid model specified: gemma4:e4b". Logged either way, with the command
+/// that gets the default model. The embedding model search needs is logged
+/// the same way and has no substitute: the index is built with it.
+pub fn host_ollama_chat_model(port: u16) -> Option<String> {
+    let served = match served_model_names(port) {
+        Ok(served) => served,
+        Err(e) => {
+            log::warn!("Could not ask your Ollama which models it has ({e}); asking it for {DEFAULT_CHAT_MODEL}.");
+            return None;
+        }
+    };
+
+    if !served.iter().any(|name| same_model(name, DEFAULT_EMBED_MODEL)) {
+        log::warn!(
+            "Your Ollama does not have {DEFAULT_EMBED_MODEL}, which search needs. \
+             Run `ollama pull {DEFAULT_EMBED_MODEL}` to add it."
+        );
+    }
+
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    let chosen = choose_host_chat_model(&served);
+    match &chosen {
+        Some(model) => log::warn!(
+            "Your Ollama does not have {DEFAULT_CHAT_MODEL}; chat and background work will use {model}, \
+             the first local chat model it lists. Run `ollama pull {DEFAULT_CHAT_MODEL}` to use the default."
+        ),
+        None => log::warn!(
+            "Your Ollama has no local chat model; background work will fail until it has one. \
+             Run `ollama pull {DEFAULT_CHAT_MODEL}` to add the default."
+        ),
+    }
+
+    chosen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +733,67 @@ mod tests {
 
         let nobody = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(nobody));
+    }
+
+    /// A user's own Ollama gets nothing pulled into it, so the app names a
+    /// model it has. The default stays when it is there (bare or `:latest`
+    /// spellings included). Embedders are never picked for chat. An Ollama
+    /// with no chat model leaves the default in place rather than naming an
+    /// embedder.
+    #[test]
+    fn a_users_own_ollama_is_asked_for_a_chat_model_it_has() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(choose_host_chat_model(&names(&["qwen3.5:122b", DEFAULT_CHAT_MODEL])), None);
+        assert_eq!(
+            choose_host_chat_model(&names(&["nomic-embed-text:latest", "qwen3.5:122b", "qwen3.5:4b"])),
+            Some("qwen3.5:122b".to_string()),
+        );
+        assert_eq!(
+            choose_host_chat_model(&names(&["bge-m3:latest", "mxbai-embed-large:latest", "llama3.2:latest"])),
+            Some("llama3.2:latest".to_string()),
+        );
+        assert_eq!(choose_host_chat_model(&names(&["nomic-embed-text:latest"])), None);
+        assert_eq!(choose_host_chat_model(&[]), None);
+
+        assert!(same_model("nomic-embed-text:latest", DEFAULT_EMBED_MODEL));
+        assert!(same_model("nomic-embed-text", "nomic-embed-text:latest"));
+        assert!(same_model("localhost:5000/team/model", "localhost:5000/team/model:latest"));
+        assert!(!same_model("nomic-embed-text:v1.5", DEFAULT_EMBED_MODEL));
+        assert!(!same_model("gemma4:e2b", DEFAULT_CHAT_MODEL));
+        assert!(is_chat_model_name("gemma4:e4b"));
+        assert!(!is_chat_model_name("snowflake-arctic-embed2:latest"));
+        assert!(!is_chat_model_name("kokoro-tts:latest"));
+    }
+
+    /// The model list comes from Ollama's own `/api/tags` (every model on
+    /// disk, not `/api/ps`'s loaded few), in its order. Cloud models are left
+    /// out: the app runs with CI_LOCAL_ONLY=true, so naming one would send
+    /// every chat and background job to ollama.com.
+    #[test]
+    fn served_model_names_reads_ollamas_tag_list() {
+        let port = serve(|request| {
+            if request.url() != "/api/tags" {
+                return respond(request, 404, "not found");
+            }
+            respond(
+                request,
+                200,
+                r#"{"models":[
+                    {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":384},
+                    {"name":"glm-4.6:cloud","size":384},
+                    {"name":"qwen3.5:122b","size":1},
+                    {"name":"nomic-embed-text:latest","size":2}
+                ]}"#,
+            )
+        });
+        assert_eq!(
+            served_model_names(port).unwrap(),
+            vec!["qwen3.5:122b".to_string(), "nomic-embed-text:latest".to_string()]
+        );
+
+        let broken = serve(|request| respond(request, 500, "internal server error"));
+        assert!(served_model_names(broken).is_err());
     }
 
     /// The wire shape Ollama's own `/api/pull` expects. `model` is the current
