@@ -574,3 +574,31 @@ export const MY_HOUSEHOLD_TIERS = gql(`
     }
   }
 `);
+
+/**
+ * Cryptographic provenance for ONE disclosure row, loaded lazily inside the receipt modal:
+ * CESR `I`-prefixed SAID + ISO/IEC TS 27560 + DPV v2 consent receipt.
+ */
+export const ASK_AUDIT_RECEIPT = gql(`
+  query AskAuditReceipt($id: ID!) {
+    askAuditReceipt(id: $id) {
+      auditId
+      askId
+      auditSaid
+      receipt {
+        d
+        schemaVersion
+        recordId
+        piiPrincipalId
+        recipient
+        legalBasis
+        purposes
+        processing
+        consentBasis
+        outcome
+        disclosedCount
+        issuedAt
+      }
+    }
+  }
+`);

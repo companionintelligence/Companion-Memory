@@ -2,7 +2,13 @@ import { GUARDS_METADATA } from '@nestjs/common/constants';
 
 import { type RequestContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import {
+  ISO_27560_DPV_SCHEMA_VERSION,
+  type Iso27560ConsentReceipt,
+  verifyIso27560ConsentReceipt,
+} from '@ci/domains/asks';
 
+import { GlobalUID } from '../../types/GlobalUID';
 import { AskResolver } from '../AskResolver';
 
 /**
@@ -52,6 +58,7 @@ describe('the Asks GraphQL surface is signed-in only', () => {
     'myAskGrantHistory',
     'askGrant',
     'askDisclosureHistory',
+    'askAuditReceipt',
   ])('covers %s', (operation) => {
     // Every operation named here exists (a rename must not silently drop one
     // out of this list) and inherits the class guard, because none of them
@@ -151,5 +158,125 @@ describe('askDisclosureHistory is scoped to the caller', () => {
       await resolver.askDisclosureHistory({ userId: 'responder-1' } as unknown as RequestContext),
     ).toEqual({ rows: [], truncated: false });
     expect(auditService.listForResponder).not.toHaveBeenCalled();
+  });
+});
+
+describe('askAuditReceipt is responder-scoped and returns verifiable ISO 27560 + SAID proofs', () => {
+  it('returns null when the feature flag is off or the id is not a valid ask-audit GlobalUID', async () => {
+    const findByIdForResponder = jest.fn();
+    const disabledResolver = new AskResolver(
+      {} as never,
+      {} as never,
+      { findByIdForResponder } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { tierFor: jest.fn(), listForOwner: jest.fn(), setTier: jest.fn() } as never,
+      {
+        create: jest.fn(),
+        listForAsker: jest.fn(),
+        asksForBroadcasts: jest.fn(),
+        findForAsker: jest.fn(),
+      } as never,
+      { isFeatureEnabled: jest.fn().mockResolvedValue(false) } as never,
+    );
+
+    const validGlobalId = GlobalUID.encode('ask-audit', '11111111-1111-4111-8111-111111111111');
+    expect(
+      await disabledResolver.askAuditReceipt(
+        { userId: 'responder-1' } as unknown as RequestContext,
+        validGlobalId,
+      ),
+    ).toBeNull();
+    expect(findByIdForResponder).not.toHaveBeenCalled();
+
+    const enabledResolver = new AskResolver(
+      {} as never,
+      {} as never,
+      { findByIdForResponder } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { tierFor: jest.fn(), listForOwner: jest.fn(), setTier: jest.fn() } as never,
+      {
+        create: jest.fn(),
+        listForAsker: jest.fn(),
+        asksForBroadcasts: jest.fn(),
+        findForAsker: jest.fn(),
+      } as never,
+      { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
+    );
+
+    expect(
+      await enabledResolver.askAuditReceipt(
+        { userId: 'responder-1' } as unknown as RequestContext,
+        GlobalUID.encode('ask', '11111111-1111-4111-8111-111111111111'),
+      ),
+    ).toBeNull();
+    expect(
+      await enabledResolver.askAuditReceipt(
+        { userId: 'responder-1' } as unknown as RequestContext,
+        'not-base64-id!',
+      ),
+    ).toBeNull();
+    expect(findByIdForResponder).not.toHaveBeenCalled();
+  });
+
+  it('decodes the GlobalUID, scopes lookup to the caller, and builds a verifiable ISO 27560 receipt', async () => {
+    const rawAuditId = '11111111-1111-4111-8111-111111111111';
+    const rawAskId = '22222222-2222-4222-8222-222222222222';
+    const findByIdForResponder = jest.fn().mockResolvedValue({
+      id: rawAuditId,
+      askId: rawAskId,
+      askerUserId: 'asker-1',
+      peerLinkId: null,
+      peerHandle: 'alice@example.ts.net',
+      responderUserId: 'responder-1',
+      query: { queryType: 'photos', prompt: 'recent trip' },
+      disclosedEntities: ['entity-1'],
+      disclosedCount: 1,
+      consentBasis: 'owner_approved',
+      outcome: 'answered',
+      createdAt: new Date('2026-11-12T10:00:00Z'),
+    });
+
+    const resolver = new AskResolver(
+      {} as never,
+      {} as never,
+      { findByIdForResponder } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { tierFor: jest.fn(), listForOwner: jest.fn(), setTier: jest.fn() } as never,
+      {
+        create: jest.fn(),
+        listForAsker: jest.fn(),
+        asksForBroadcasts: jest.fn(),
+        findForAsker: jest.fn(),
+      } as never,
+      { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
+    );
+
+    const payload = await resolver.askAuditReceipt(
+      { userId: 'responder-1' } as unknown as RequestContext,
+      GlobalUID.encode('ask-audit', rawAuditId),
+    );
+
+    expect(findByIdForResponder).toHaveBeenCalledWith({ userId: 'responder-1' }, rawAuditId);
+    expect(payload).not.toBeNull();
+    expect(payload?.auditId).toBe(GlobalUID.encode('ask-audit', rawAuditId));
+    expect(payload?.askId).toBe(GlobalUID.encode('ask', rawAskId));
+    expect(payload?.auditSaid).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(payload?.receipt.d).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(payload?.receipt.schemaVersion).toBe('iso-27560:2023+dpv:v2');
+    expect(payload?.receipt.schemaVersion).toBe(ISO_27560_DPV_SCHEMA_VERSION);
+    expect(payload?.receipt.legalBasis).toBe('dpv:ExplicitConsent');
+    expect(verifyIso27560ConsentReceipt(payload!.receipt as unknown as Iso27560ConsentReceipt)).toBe(true);
   });
 });

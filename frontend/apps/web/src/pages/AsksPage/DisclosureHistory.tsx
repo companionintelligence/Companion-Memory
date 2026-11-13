@@ -15,7 +15,7 @@ import {
 } from './askPresentation';
 import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
 import { ConsentLock } from './ConsentLock';
-import { consentLockState } from './consentProvenance';
+import { type AskAuditReceiptData, consentLockState } from './consentProvenance';
 import { PeerText } from './PeerText';
 
 export interface DisclosureRow {
@@ -38,6 +38,7 @@ export interface DisclosureRow {
 
 interface Props {
   rows: readonly DisclosureRow[];
+  onLoadReceipt?: (auditId: string) => Promise<AskAuditReceiptData | null>;
 }
 
 /**
@@ -72,7 +73,7 @@ interface Props {
  * history, and a history entry that reads as the app narrating is worse than a
  * request that does — it is a claim about something that already happened.
  */
-export function DisclosureHistory({ rows }: Props) {
+export function DisclosureHistory({ rows, onLoadReceipt }: Props) {
   // One modal for the whole list rather than one per row: the detail is a
   // focused read of a single disclosure, and mounting a dialog per row would
   // put N of them in the tree for a list that is meant to be scanned.
@@ -145,7 +146,14 @@ export function DisclosureHistory({ rows }: Props) {
         );
       })}
 
-      {open ? <ConsentDetailModal record={open} onClose={() => setOpen(null)} /> : null}
+      {open ? (
+        <ConsentDetailModal
+          key={open.auditId ?? open.arrivedAt}
+          record={open}
+          onClose={() => setOpen(null)}
+          onLoadReceipt={onLoadReceipt}
+        />
+      ) : null}
     </ul>
   );
 }
@@ -176,6 +184,7 @@ function consentOf(row: DisclosureRow): ConsentRecord['consent'] {
 
 function recordFor(row: DisclosureRow): ConsentRecord {
   return {
+    auditId: row.id,
     askerName: row.askerName,
     consent: consentOf(row),
     channel: UNRECORDED_CHANNEL,

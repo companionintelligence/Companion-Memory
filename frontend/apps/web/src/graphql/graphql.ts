@@ -220,6 +220,14 @@ export type AskAuditOutcome =
   | 'declined'
   | 'expired';
 
+export type AskAuditReceiptPayload = {
+  __typename?: 'AskAuditReceiptPayload';
+  askId?: Maybe<Scalars['ID']['output']>;
+  auditId: Scalars['ID']['output'];
+  auditSaid: Scalars['String']['output'];
+  receipt: AskConsentReceiptType;
+};
+
 export type AskAuditType = {
   __typename?: 'AskAuditType';
   askId?: Maybe<Scalars['ID']['output']>;
@@ -250,6 +258,22 @@ export type AskChannelType = {
   covered: Array<Scalars['String']['output']>;
   keyThumbprint: Scalars['String']['output'];
   verifiedAt: Scalars['DateTime']['output'];
+};
+
+export type AskConsentReceiptType = {
+  __typename?: 'AskConsentReceiptType';
+  consentBasis?: Maybe<Scalars['String']['output']>;
+  d: Scalars['String']['output'];
+  disclosedCount: Scalars['Int']['output'];
+  issuedAt: Scalars['String']['output'];
+  legalBasis: Scalars['String']['output'];
+  outcome: Scalars['String']['output'];
+  piiPrincipalId?: Maybe<Scalars['String']['output']>;
+  processing: Array<Scalars['String']['output']>;
+  purposes: Array<Scalars['String']['output']>;
+  recipient?: Maybe<Scalars['String']['output']>;
+  recordId: Scalars['String']['output'];
+  schemaVersion: Scalars['String']['output'];
 };
 
 export type AskDisclosureHistoryInput = {
@@ -3463,6 +3487,7 @@ export type Query = {
   answers: AnswerConnection;
   ask?: Maybe<AskType>;
   askAnswer?: Maybe<AskAnswerType>;
+  askAuditReceipt?: Maybe<AskAuditReceiptPayload>;
   askDisclosureHistory: AskDisclosureHistoryPayload;
   askDisclosureSummary: AskDisclosureSummaryPayload;
   askGrant?: Maybe<AskGrantType>;
@@ -3646,6 +3671,11 @@ export type QueryAskArgs = {
 
 
 export type QueryAskAnswerArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QueryAskAuditReceiptArgs = {
   id: Scalars['ID']['input'];
 };
 
@@ -5958,6 +5988,13 @@ export type MyHouseholdTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type MyHouseholdTiersQuery = { __typename?: 'Query', myHouseholdTiers: Array<{ __typename?: 'HouseholdTierType', id: string, memberId: string, trustTier: string, updatedAt: any }> };
 
+export type AskAuditReceiptQueryVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type AskAuditReceiptQuery = { __typename?: 'Query', askAuditReceipt?: { __typename?: 'AskAuditReceiptPayload', auditId: string, askId?: string | null, auditSaid: string, receipt: { __typename?: 'AskConsentReceiptType', d: string, schemaVersion: string, recordId: string, piiPrincipalId?: string | null, recipient?: string | null, legalBasis: string, purposes: Array<string>, processing: Array<string>, consentBasis?: string | null, outcome: string, disclosedCount: number, issuedAt: string } } | null };
+
 export type GetCommunicationQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
@@ -7512,6 +7549,7 @@ export const UpdatePeerLinkDocument = {"kind":"Document","definitions":[{"kind":
 export const RevokePeerLinkDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RevokePeerLink"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"revokePeerLink"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"peerLink"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"peerHandle"}},{"kind":"Field","name":{"kind":"Name","value":"avatarUrl"}},{"kind":"Field","name":{"kind":"Name","value":"trustTier"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revokedAt"}}]}}]}}]}}]} as unknown as DocumentNode<RevokePeerLinkMutation, RevokePeerLinkMutationVariables>;
 export const SetHouseholdTierDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SetHouseholdTier"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"SetHouseholdTierInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"setHouseholdTier"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"memberId"}},{"kind":"Field","name":{"kind":"Name","value":"trustTier"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<SetHouseholdTierMutation, SetHouseholdTierMutationVariables>;
 export const MyHouseholdTiersDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"MyHouseholdTiers"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"myHouseholdTiers"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"memberId"}},{"kind":"Field","name":{"kind":"Name","value":"trustTier"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<MyHouseholdTiersQuery, MyHouseholdTiersQueryVariables>;
+export const AskAuditReceiptDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"AskAuditReceipt"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"askAuditReceipt"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"auditId"}},{"kind":"Field","name":{"kind":"Name","value":"askId"}},{"kind":"Field","name":{"kind":"Name","value":"auditSaid"}},{"kind":"Field","name":{"kind":"Name","value":"receipt"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"d"}},{"kind":"Field","name":{"kind":"Name","value":"schemaVersion"}},{"kind":"Field","name":{"kind":"Name","value":"recordId"}},{"kind":"Field","name":{"kind":"Name","value":"piiPrincipalId"}},{"kind":"Field","name":{"kind":"Name","value":"recipient"}},{"kind":"Field","name":{"kind":"Name","value":"legalBasis"}},{"kind":"Field","name":{"kind":"Name","value":"purposes"}},{"kind":"Field","name":{"kind":"Name","value":"processing"}},{"kind":"Field","name":{"kind":"Name","value":"consentBasis"}},{"kind":"Field","name":{"kind":"Name","value":"outcome"}},{"kind":"Field","name":{"kind":"Name","value":"disclosedCount"}},{"kind":"Field","name":{"kind":"Name","value":"issuedAt"}}]}}]}}]}}]} as unknown as DocumentNode<AskAuditReceiptQuery, AskAuditReceiptQueryVariables>;
 export const GetCommunicationDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetCommunication"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"communication"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"type"}},{"kind":"Field","name":{"kind":"Name","value":"subject"}},{"kind":"Field","name":{"kind":"Name","value":"preview"}},{"kind":"Field","name":{"kind":"Name","value":"content"}},{"kind":"Field","name":{"kind":"Name","value":"time"}},{"kind":"Field","name":{"kind":"Name","value":"direction"}},{"kind":"Field","name":{"kind":"Name","value":"from"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"to"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"edges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"node"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"tags"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}}]}}]}}]}}]} as unknown as DocumentNode<GetCommunicationQuery, GetCommunicationQueryVariables>;
 export const UpdateCommunicationPageFieldsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"UpdateCommunicationPageFields"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"UpdateCommunicationInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"updateCommunication"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"subject"}},{"kind":"Field","name":{"kind":"Name","value":"content"}}]}}]}}]} as unknown as DocumentNode<UpdateCommunicationPageFieldsMutation, UpdateCommunicationPageFieldsMutationVariables>;
 export const GetConceptDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetConcept"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"concept"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"tags"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}}]}}]}}]}}]} as unknown as DocumentNode<GetConceptQuery, GetConceptQueryVariables>;

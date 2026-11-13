@@ -107,5 +107,42 @@ describe('VtcController', () => {
       },
     });
     expect(keriRes.valid).toBe(false);
+
+    // expectedCommunity mismatch fails closed with UNRECOGNIZED_COMMUNITY
+    const wrongCommunity = await controller.verifyCredential({
+      credential: signedDoc,
+      expectedCommunity: 'did:key:z6MkwWrongCommunity',
+    });
+    expect(wrongCommunity).toEqual({ valid: false, reason: 'UNRECOGNIZED_COMMUNITY' });
+
+    // requireStatus without any status entry fails closed with STATUS_REQUIRED
+    const missingStatus = await controller.verifyCredential({
+      credential: signedDoc,
+      requireStatus: true,
+    });
+    expect(missingStatus).toEqual({ valid: false, reason: 'STATUS_REQUIRED' });
+  });
+
+  it('rejects malformed inputs on evaluateStatusList without network calls', async () => {
+    const controller = new VtcController({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    } as never);
+
+    expect(await controller.evaluateStatusList({ entry: { id: 'x' } })).toEqual({
+      valid: false,
+      reason: 'STATUS_VERIFICATION_ERROR: credentialStatus is not a BitstringStatusListEntry',
+    });
+
+    expect(
+      await controller.evaluateStatusList({
+        entry: {
+          id: 'https://community.example/list#1',
+          type: 'BitstringStatusListEntry',
+          statusPurpose: 'revocation',
+          statusListIndex: '1',
+          statusListCredential: 'https://community.example/list',
+        },
+      }),
+    ).toEqual({ valid: false, reason: 'STATUS_LIST_MISSING' });
   });
 });

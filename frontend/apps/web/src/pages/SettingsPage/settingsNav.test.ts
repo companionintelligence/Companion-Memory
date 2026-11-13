@@ -49,4 +49,8 @@ describe('SETTINGS_SECTIONS', () => {
     expect(visibleSettingsSections().some((section) => section.id === 'about-you')).toBe(false);
     expect(visibleSettingsSections().some((section) => section.id === 'account')).toBe(false);
   });
+
+  it('exposes Trust & protocols section in visible settings destinations', () => {
+    expect(visibleSettingsSections().some((section) => section.id === 'protocols')).toBe(true);
+  });
 });
