@@ -617,6 +617,7 @@ dependencies = [
  "chrono",
  "env_logger",
  "flate2",
+ "gtk",
  "log",
  "open",
  "reqwest 0.12.28",

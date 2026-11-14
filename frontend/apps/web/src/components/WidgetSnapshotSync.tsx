@@ -14,6 +14,7 @@ import {
 } from '@ci/common';
 
 import { useAuth } from '@/hooks';
+import { classTitle } from '@/lib/activityPalette';
 
 const WIDGET_TASKS = gql(
   'query CompanionWidgetTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
@@ -188,9 +189,11 @@ export function WidgetSnapshotSync() {
       }
 
       if (hasSnapshotDataRef.current && receivedFreshData) {
-        await publishWidgetSnapshot(buildWidgetSnapshot({ ...sourceRef.current, now: new Date() })).catch(
-          () => undefined,
-        );
+        // The home-screen widgets print the prediction as it is, so it goes out
+        // in the calendar legend's words ("Work", "Unsorted"), not "WORK".
+        await publishWidgetSnapshot(
+          buildWidgetSnapshot({ ...sourceRef.current, now: new Date(), predictionLabel: classTitle }),
+        ).catch(() => undefined);
         // A sign-out can race the native write. Clear again after it settles so an
         // older authenticated request cannot repopulate the app-group cache.
         if (!hasActiveSession()) {
