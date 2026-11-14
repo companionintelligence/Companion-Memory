@@ -269,7 +269,7 @@ describe('MobileNavigation', () => {
     drag(row, [280, 230, 120]);
 
     // Let go short of halfway shut: on its way out.
-    expect(nav.style.translate).toBe('-100% 0');
+    expect(nav.style.translate).toBe('-100%');
 
     await waitFor(() => {
       expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
@@ -436,7 +436,7 @@ describe('MobileNavigation', () => {
       fireEvent.touchStart(page, touchAt(8));
       fireEvent.touchMove(page, touchAt(68));
       // 60px of a 300px drawer: a fifth of the way out, under the finger.
-      expect(nav.style.translate).toBe('-240px 0');
+      expect(nav.style.translate).toBe('-240px');
       // Open from the moment the drag claims the touch, so what slides out is
       // the labelled drawer, not the icon-only rows it keeps while shut.
       expect(nav).toHaveAttribute('data-state', 'expanded');
@@ -444,7 +444,7 @@ describe('MobileNavigation', () => {
       expect(screen.getByRole('button', { name: 'Dismiss menu' }).style.opacity).toBe('0.2');
 
       fireEvent.touchMove(page, touchAt(158));
-      expect(nav.style.translate).toBe('-150px 0');
+      expect(nav.style.translate).toBe('-150px');
       // The scrim darkens with it: half out, half dark.
       expect(screen.getByRole('button', { name: 'Dismiss menu' }).style.opacity).toBe('0.5');
 
