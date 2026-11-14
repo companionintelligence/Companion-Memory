@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import { LoadMoreFailed } from '@/components/InfiniteList';
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
 import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import { formatEnumLabel } from '@/lib/utils';
 
@@ -175,8 +176,15 @@ export function TimelineView({
     );
   }
 
+  // This list is the map's side panel, laid straight over the satellite
+  // imagery, where bare text is hard to read. Its errors sit on the same card
+  // as the map's own "Couldn't load the map" (MapStatusOverlay).
   if (error && timelineData.length === 0) {
-    return <ErrorState onRetry={refetch} />;
+    return (
+      <div className={cn('m-3', MAP_CARD_CLASS)}>
+        <ErrorState onRetry={refetch} className="px-4 py-6" />
+      </div>
+    );
   }
 
   if (timelineData.length === 0) {
@@ -263,7 +271,13 @@ export function TimelineView({
         {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
 
         {pageFailed && (
-          <LoadMoreFailed noun="events" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+          <div className={cn('ml-8 mt-4', MAP_CARD_CLASS)}>
+            <LoadMoreFailed
+              noun="events"
+              message={error.message}
+              onRetry={hasNextPage ? loadMore : refetch}
+            />
+          </div>
         )}
       </div>
     </div>
