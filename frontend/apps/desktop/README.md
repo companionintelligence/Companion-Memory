@@ -24,7 +24,10 @@ for them to become healthy, then shows the real web UI.
    app, served by the `gateway` container, on a normal same-origin browser
    session (standard cookie auth — no CORS/CSRF wiring needed for this app).
 5. A tray icon lets you show/hide the window, manually start/stop the stack,
-   and view the desktop log, without quitting.
+   and view the desktop log, without quitting. Quit leaves the containers
+   running unless the app itself serves their model (its own Ollama, the
+   relay in front of one or the Apple bridge, which all stop with it). Then
+   Quit stops the stack too and the next launch starts it again.
 
 Images are pulled from `ghcr.io/companionintelligence/companion/*` (see
 `../../../scripts/publish/images.sh`) at a version tag resolved at build time
@@ -112,7 +115,12 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is, unchanged. Nothing else in this list applies.
+   as-is. Nothing else in this list applies and nothing is pulled into it.
+   If it lacks the default chat model (`gemma4:e4b`, see option 3), Memory
+   uses the first local chat model it lists for chat and background work
+   instead (Ollama Cloud models are skipped). `desktop.log` says so along
+   with the `ollama pull` command that adds the default. Search needs
+   `nomic-embed-text` there too; the log says when it is missing.
 2. **Apple on-device (macOS only)** — if Apple Intelligence is available
    (Apple Silicon, macOS 26+, enabled in System Settings), chat is served by
    Apple's on-device `FoundationModels` framework via a small bundled Swift

@@ -36,6 +36,7 @@ import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
 import { forgetFeatures } from '@/common/feature/rememberedFeatures';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
 
+import { DeviceKeyNotSavedError } from './deviceKeyNotSaved';
 import { forgetUser, MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 
 const authChannel = new BroadcastChannel('auth');
@@ -51,11 +52,16 @@ const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 // The paired Memory origin, mirrored into the keystore for native consumers.
 const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
 
-/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
-async function removeStoredDeviceKey(): Promise<void> {
+/** Forget this device's stored key, its id and its capability. Never rejects: secureStorageRemove swallows a refused delete. */
+async function removeStoredKeyEntries(): Promise<void> {
   await secureStorageRemove(API_KEY_STORAGE);
   await secureStorageRemove(API_KEY_ID_STORAGE);
   await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+}
+
+/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
+async function removeStoredDeviceKey(): Promise<void> {
+  await removeStoredKeyEntries();
   forgetUser();
   forgetFeatures();
 }
@@ -265,6 +271,27 @@ async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }
 /** How often the session check is repeated while Memory does not answer it. */
 const UNREACHABLE_RETRY_MS = 5000;
 
+/** How often the desktop window asks Memory whether its sign-in key still works. */
+const DEVICE_KEY_CHECK_MS = 60_000;
+
+/**
+ * Whether Memory says `key` no longer works. True only on its 401: a Memory that did not answer
+ * (the stack stopped, a timeout) says nothing about the key and must not sign anyone out.
+ */
+async function deviceKeyRevoked(key: string): Promise<boolean> {
+  try {
+    await fetchJson('/api/keys/check', {
+      skipApiKey: true,
+      headers: { 'x-api-key': key },
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
+    });
+
+    return false;
+  } catch (error) {
+    return error instanceof FetchJsonError && error.status === 401;
+  }
+}
+
 /**
  * Whether a session call was cut off by its own deadline (`MEMORY_ANSWER_DEADLINE_MS`).
  * None of these calls is handed a caller signal, so an abort here can only be that
@@ -356,7 +383,8 @@ function bumpNativeCredentialEpoch(): void {
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
 async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<string | null> {
   const origin = memoryOrigin || getApiBaseUrl();
-  const keysUrl = /^https?:\/\//i.test(origin) ? `${origin.replace(/\/+$/, '')}/api/keys` : '/api/keys';
+  const base = /^https?:\/\//i.test(origin) ? origin.replace(/\/+$/, '') : '';
+  const keysUrl = `${base}/api/keys`;
   const created = await fetchJson<CreateApiKeyResponse>(keysUrl, {
     method: 'POST',
     skipApiKey: true,
@@ -377,9 +405,24 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     return null;
   }
 
-  await secureStorageSet(API_KEY_STORAGE, created.key);
-  await secureStorageSet(API_KEY_ID_STORAGE, created.id);
-  await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
+  try {
+    await secureStorageSet(API_KEY_STORAGE, created.key);
+    await secureStorageSet(API_KEY_ID_STORAGE, created.id);
+    await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
+  } catch (error) {
+    // The key is live on the server, but this device could not keep it. Nothing would ever use
+    // it and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
+    // Service) left one such full-access key behind on every try. Give it back first.
+    await revokeDeviceKey(created.key, `${base}/api/keys/current`);
+
+    // A write that got partway kept the key just revoked; nothing may read that back.
+    if ((await storedDeviceKey()) === created.key) {
+      await removeStoredKeyEntries();
+    }
+
+    throw new DeviceKeyNotSavedError(error);
+  }
+
   setApiKey(created.key);
 
   return created.key;
@@ -471,9 +514,9 @@ async function storedDeviceKey(): Promise<string | null> {
  * effort and bounded, because signing out must finish whether or not the appliance answers;
  * a key that could not be revoked here is still listed under Settings > API keys.
  */
-async function revokeDeviceKey(key: string): Promise<void> {
+async function revokeDeviceKey(key: string, url = '/api/keys/current'): Promise<void> {
   try {
-    await fetchJson('/api/keys/current', {
+    await fetchJson(url, {
       method: 'DELETE',
       skipApiKey: true,
       headers: { 'x-api-key': key },
@@ -864,6 +907,66 @@ function useAuth(): ReturnValue {
     },
     [signOut],
   );
+
+  // `logout` changes on every page change (it closes over `navigate`, which React Router renews
+  // with the path). The key check below reads it from here so a page change does not restart it.
+  const logoutRef = useRef(logout);
+
+  useEffect(() => {
+    logoutRef.current = logout;
+  }, [logout]);
+
+  // Desktop only. The window's Companion sign-in holds its own key. Nothing ended that sign-in
+  // when the key was revoked somewhere else (a password change, Sign out everywhere, deleting
+  // it under Settings > API keys): every request got 401 and each page said this device could
+  // not reach Memory, for as long as the window stayed open. A browser session finds out at its
+  // next renewal. This asks about the key on a similar schedule while the window is in view and
+  // again whenever it comes back into view. Once Memory says the key is gone, it signs the
+  // window out.
+  useEffect(() => {
+    if (!isTauriPlatform() || !nativeApiKey) {
+      return;
+    }
+
+    let stopped = false;
+    let asking = false;
+
+    const check = () => {
+      if (asking) {
+        return;
+      }
+
+      asking = true;
+      void deviceKeyRevoked(nativeApiKey)
+        .then((revoked) => {
+          // Only the key this check asked about: a sign-in since then holds another one.
+          if (revoked && !stopped && getApiKey() === nativeApiKey) {
+            void logoutRef.current();
+          }
+        })
+        .finally(() => {
+          asking = false;
+        });
+    };
+
+    // A hidden window (closed to the tray) has nobody to sign out; it asks when it is shown again.
+    const checkWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        check();
+      }
+    };
+
+    const timer = setInterval(checkWhenVisible, DEVICE_KEY_CHECK_MS);
+    document.addEventListener('visibilitychange', checkWhenVisible);
+    window.addEventListener('focus', check);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', checkWhenVisible);
+      window.removeEventListener('focus', check);
+    };
+  }, [nativeApiKey]);
 
   const confirmSignOut = useCallback(async () => {
     setSignOutPrompt((prompt) => ({ ...prompt, open: false }));

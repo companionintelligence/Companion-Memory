@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { fetchJson, GlobalUID } from '@ci/common';
 
@@ -6,9 +6,6 @@ import { useSessionAuth } from '@/hooks/useSessionAuth';
 import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
-
-/** How many threads a compact list (the rail submenu) will ever show. */
-export const RECENT_THREAD_LIMIT = 10;
 
 /** Skip a refetch if the list we already have is younger than this. */
 const STALE_MS = 30_000;
@@ -124,7 +121,6 @@ interface Options {
    * actually expanded, and not again until the answer goes stale.
    */
   enabled: boolean;
-  limit?: number;
 }
 
 interface RecentThreads {
@@ -134,13 +130,16 @@ interface RecentThreads {
 }
 
 /**
- * The newest threads, for picking one — not for managing them.
+ * Every thread, newest first, for picking one from the navigation. The rail's
+ * "All chats" opens the whole list, and on a phone that is how you reach an
+ * older chat from anywhere in the app.
  *
  * {@link useThreadListService} is the Chat page's full-fat version: it deletes,
- * polls while a generation runs, and owns the sidebar's state. This is the
- * read-only slice the navigation needs, capped, and idle until asked.
+ * polls while a generation runs, and owns the sidebar's state. This one only
+ * reads, and stays idle until asked. The API already orders the list by
+ * `updatedAt`, newest first, so there is no client-side sort.
  */
-export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Options): RecentThreads {
+export function useRecentThreads({ enabled }: Options): RecentThreads {
   const { ready, headers } = useSessionAuth();
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
@@ -160,6 +159,7 @@ export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Optio
     }
 
     let cancelled = false;
+    let settled = false;
     fetchedAt.current = Date.now();
     setLoading(true);
     setError(null);
@@ -183,6 +183,8 @@ export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Optio
         }
       })
       .finally(() => {
+        settled = true;
+
         if (!cancelled) {
           setLoading(false);
         }
@@ -190,12 +192,15 @@ export function useRecentThreads({ enabled, limit = RECENT_THREAD_LIMIT }: Optio
 
     return () => {
       cancelled = true;
+
+      // A hover flicker or a token refresh while the request is still out drops its answer. Without this
+      // the next run would take the list as fresh and skip the fetch, leaving "Loading threads…" up until
+      // the stale window passed and the menu was opened again.
+      if (!settled) {
+        fetchedAt.current = 0;
+      }
     };
   }, [enabled, ready, headers]);
 
-  // The API orders by `updatedAt` descending, so the head of the list is the
-  // most recent — no client-side sort, just a cap.
-  const recent = useMemo(() => threads.slice(0, limit), [threads, limit]);
-
-  return { threads: recent, loading, error };
+  return { threads, loading, error };
 }
