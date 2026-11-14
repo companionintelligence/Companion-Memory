@@ -75,8 +75,12 @@ afterEach(() => {
   localStorage.removeItem('ci.apiBaseUrl');
   localStorage.removeItem('ci.oidc.pendingNativeSignIn');
   setApiBaseUrl('');
-  // Drop the native runtime stub so the web-path tests aren't seen as native.
+  // Drop the native and desktop runtime stubs so the web-path tests aren't seen as native.
   delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+  delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  // A key a test minted stays active in the module; a later web test would read it as this
+  // device's key.
+  setApiKey(null);
   bindPowerSyncDatabase(null);
 });
 
@@ -1536,6 +1540,11 @@ describe('useAuth', () => {
     // The code alone redeems nothing: the verifier this app kept goes with it.
     expect(JSON.parse(String(exchange?.[1]?.body))).toEqual({ code: 'otc-ios', code_verifier: verifier });
     expect(secureStore.get('ci.apiKey')).toBe('stored-api-key');
+    // The phone keeps the name old app builds sent, which the server still reads as a phone's key.
+    const mint = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys'));
+    expect((JSON.parse(String(mint?.[1]?.body)) as { name: string }).name).toMatch(
+      /^Companion mobile · \d{4}-\d{2}-\d{2}$/,
+    );
     // Spent: the same state cannot complete a second sign-in.
     expect(localStorage.getItem('ci.oidc.pendingNativeSignIn')).toBeNull();
   });
@@ -2176,6 +2185,55 @@ describe('useAuth', () => {
     expect(revoke?.[1]?.method).toBe('DELETE');
     expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'unsaved-phone-key' });
     expect(result.current[0].authenticated).toBe(false);
+  });
+
+  it('desktop: names the key it mints at sign-in after the desktop app, not the phone', async () => {
+    // What the sign-in button kept before it opened the browser; the shell hands the callback
+    // over through take_pending_deep_link_command, as it does for a link that started the app.
+    const { appState } = await beginNativeOidcSignIn();
+    const keychain = new Map<string, string>();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+        switch (command) {
+          case 'take_pending_deep_link_command':
+            return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+          case 'plugin:ci-auth|secure_get':
+            return { value: keychain.get(args?.key ?? '') ?? null };
+          case 'plugin:ci-auth|secure_set':
+            keychain.set(args?.key ?? '', args?.value ?? '');
+
+            return null;
+          default:
+            return null;
+        }
+      }),
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        return jsonResponse({ accessToken: 'desktop-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-d', key: 'desktop-key' });
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+    const mint = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys'));
+    const body = JSON.parse(String(mint?.[1]?.body)) as {
+      name: string;
+      capability: string;
+      sign_in: boolean;
+    };
+    expect(body.name).toMatch(/^Companion desktop · \d{4}-\d{2}-\d{2}$/);
+    // This name gets no `full` from the server's phone-name fallback, so the app has to ask for it.
+    expect(body.capability).toBe('full');
+    expect(body.sign_in).toBe(true);
+    expect(keychain.get('memory:ci.apiKey')).toBe('desktop-key');
   });
 
   it('web logout revokes no key: a browser session holds none', async () => {

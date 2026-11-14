@@ -378,6 +378,19 @@ function bumpNativeCredentialEpoch(): void {
   nativeCredentialEpoch += 1;
 }
 
+/**
+ * The name Settings > API keys shows for the key this device mints at sign-in, so a person can
+ * tell the desktop app's key from a phone's. Only the phone keeps "Companion mobile": the server
+ * still reads that name as a phone's sign-in key from old app builds that sent nothing else
+ * (`PHONE_KEY_NAME`), while every build that runs this code also sends the capability and
+ * `sign_in` with it.
+ */
+function deviceKeyName(): string {
+  const day = new Date().toISOString().slice(0, 10);
+
+  return `${isTauriPlatform() ? 'Companion desktop' : 'Companion mobile'} · ${day}`;
+}
+
 // Exchange a freshly-issued JWT for a long-lived API key (the /api/keys endpoint is
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
@@ -393,7 +406,7 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
       Authorization: `Bearer ${jwt}`,
     },
     body: JSON.stringify({
-      name: `Companion mobile · ${new Date().toISOString().slice(0, 10)}`,
+      name: deviceKeyName(),
       capability: NATIVE_KEY_CAPABILITY,
       // A signed-in device, not a key handed to a tool: a password change, "Sign out
       // everywhere" and this app's own sign-out revoke it.
