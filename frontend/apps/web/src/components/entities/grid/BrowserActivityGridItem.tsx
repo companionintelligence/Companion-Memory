@@ -2,6 +2,7 @@ import { type MouseEvent, useMemo } from 'react';
 
 import { BrowserActivityIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { webAddress } from '@/lib/webAddress';
 
 import { EntityGridItem } from './EntityGridItem';
 
@@ -21,15 +22,7 @@ interface Props {
 export function BrowserActivityGridItem({ browserActivity, onClick }: Props) {
   const data = useFragment(BROWSER_ACTIVITY_FRAGMENT, browserActivity);
 
-  const domain = useMemo(() => {
-    try {
-      const urlObj = new URL(data.url);
-
-      return urlObj.hostname;
-    } catch {
-      return data.url;
-    }
-  }, [data.url]);
+  const address = useMemo(() => webAddress(data.url), [data.url]);
 
   return (
     <EntityGridItem onClick={onClick}>
@@ -41,15 +34,20 @@ export function BrowserActivityGridItem({ browserActivity, onClick }: Props) {
 
       <EntityGridItem.Content className="min-w-0 items-center justify-center gap-2 text-center">
         <div className="line-clamp-3 w-full min-w-0 break-words leading-tight">{data.title}</div>
-        <a
-          href={data.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block w-full min-w-0 truncate text-blue-600 hover:text-blue-800 hover:underline"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {domain}
-        </a>
+        {address ? (
+          <a
+            href={address.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full min-w-0 truncate text-blue-600 hover:text-blue-800 hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {address.hostname}
+          </a>
+        ) : data.url !== data.title ? (
+          // Not an address (see webAddress), so not a link.
+          <div className="w-full min-w-0 truncate text-muted-foreground">{data.url}</div>
+        ) : null}
       </EntityGridItem.Content>
 
       <EntityGridItem.Footer className="self-end">

@@ -619,6 +619,7 @@ dependencies = [
  "flate2",
  "gtk",
  "log",
+ "open",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

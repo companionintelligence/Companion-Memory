@@ -44,8 +44,12 @@ tiny_http = "0.12"
 
 # The window's content box (main.rs, hold_minimum_content_size). The same gtk the
 # Tauri runtime is built on.
+#
+# The browser launchers tauri-plugin-opener uses (open::commands), started by
+# main.rs's open_in_browser instead, so a browser that fails to open is reported.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+open = "5"
 
 # GTK3's current Tauri bindings require glib 0.18, whose VariantStrIter fix only
 # landed in glib 0.20. Keep the compatible version and backport the exact

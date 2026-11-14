@@ -21,6 +21,7 @@ import { listLocalPins } from '@/api/powersync/localList';
 import { getReplicaDatabase } from '@/api/powersync/session';
 import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map, MapAttribution } from '@/components/Map';
+import { centerBesidePanel, fitPadding } from '@/components/Map/framing';
 import { useMapIsolation } from '@/components/Map/mapIsolation';
 import { type MarkerVariant } from '@/components/Map/Marker';
 import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
@@ -452,6 +453,11 @@ const VIEWPORT_PAD = 0.25;
 const MAX_ROUTE_POINTS = 50;
 /** Regional context around the latest located event, rather than the whole memory globe. */
 const MOBILE_RECENT_MAP_ZOOM = 10;
+/**
+ * Width of the desktop timeline panel (its `w-[300px]`), which lies over the
+ * map's left edge. Framing pins, a cluster or the trace keeps them right of it.
+ */
+const TIMELINE_PANEL_PX = 300;
 
 type Cluster = { id: string; lat: number; lng: number; items: Pin[] };
 
@@ -610,12 +616,15 @@ function ClusterMarker({
   cluster,
   onSelect,
   onZoom,
+  panelInset = 0,
 }: {
   position: [number, number];
   count: number;
   cluster: Cluster;
   onSelect: (pin: Pin) => void;
   onZoom: () => void;
+  /** How much of the map's left edge a panel covers; the popup auto-pans clear of it. */
+  panelInset?: number;
 }) {
   const map = useLeafletMap();
   const icon = useMemo(() => makeClusterIcon(count), [count]);
@@ -638,26 +647,35 @@ function ClusterMarker({
 
   return (
     <LeafletMarker position={position} icon={icon} eventHandlers={eventHandlers} zIndexOffset={300}>
-      <Popup className="custom-popup memory-map-cluster-popup" minWidth={288} maxWidth={320}>
+      <Popup
+        className="custom-popup memory-map-cluster-popup"
+        minWidth={288}
+        maxWidth={320}
+        // Leaflet keeps a popup 5px inside the map. Counting the panel too
+        // stops a group beside it opening its popup half under the timeline.
+        autoPanPaddingTopLeft={[panelInset + 5, 5]}
+      >
         <ClusterPopupContent cluster={cluster} onSelect={handleSelect} onZoom={onZoom} />
       </Popup>
     </LeafletMarker>
   );
 }
 
-function zoomToCluster(map: L.Map, cluster: Cluster) {
+function zoomToCluster(map: L.Map, cluster: Cluster, panelInset: number) {
   const points = cluster.items.map((item) => [item.coords.lat, item.coords.lng] as [number, number]);
   const bounds = L.latLngBounds(points);
 
   // All members share (nearly) the same point — zooming can't separate them, so
   // just step in towards them.
   if (bounds.getNorthEast().equals(bounds.getSouthWest())) {
-    map.setView(points[0], Math.min(map.getZoom() + 2, 18));
+    const zoom = Math.min(map.getZoom() + 2, 18);
+
+    map.setView(centerBesidePanel(map, points[0], zoom, panelInset), zoom);
 
     return;
   }
 
-  map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+  map.flyToBounds(bounds, { ...fitPadding(panelInset), maxZoom: 17 });
 }
 
 /**
@@ -682,10 +700,13 @@ function ClusteredMarkers({
   pins,
   onSelect,
   onHoverPin,
+  panelInset = 0,
 }: {
   pins: Pin[];
   onSelect: (pin: Pin) => void;
   onHoverPin?: (pin: Pin | null) => void;
+  /** How much of the map's left edge a panel covers; zooming to a cluster frames it right of that. */
+  panelInset?: number;
 }) {
   const map = useLeafletMap();
   const fmt = useDateTimeFormat();
@@ -770,7 +791,8 @@ function ClusteredMarkers({
             count={cluster.items.length}
             cluster={cluster}
             onSelect={onSelect}
-            onZoom={() => zoomToCluster(map, cluster)}
+            onZoom={() => zoomToCluster(map, cluster, panelInset)}
+            panelInset={panelInset}
           />
         );
       })}
@@ -1132,6 +1154,20 @@ function MapStatusOverlay({
   );
 }
 
+/** The part of the map a panel `panelInset` px wide over its left edge leaves uncovered. */
+function uncoveredBounds(map: L.Map, panelInset: number): L.LatLngBounds {
+  if (panelInset <= 0) {
+    return map.getBounds();
+  }
+
+  const size = map.getSize();
+
+  return L.latLngBounds(
+    map.containerPointToLatLng([panelInset, size.y]),
+    map.containerPointToLatLng([size.x, 0]),
+  );
+}
+
 /**
  * Fit the viewport to the pins whenever a NEW set arrives — pins are often
  * scattered far from the default centre (different cities, countries), which is
@@ -1147,11 +1183,14 @@ function FitBoundsToPins({
   pins,
   areas,
   skip = false,
+  panelInset = 0,
 }: {
   pins: Pin[];
   /** The map areas `pins` were fetched with, or null — see `fitActionFor`. Framed as one: their union. */
   areas: readonly Bbox[] | null;
   skip?: boolean;
+  /** How much of the map's left edge a panel covers; what is framed lands right of it. */
+  panelInset?: number;
 }) {
   const map = useLeafletMap();
   const fittedSignature = useRef<string | null>(null);
@@ -1173,7 +1212,9 @@ function FitBoundsToPins({
     // while its siblings are off it, and framing the union then would zoom
     // the person out of the box they were working on. A saved search that
     // arrives from elsewhere has none of its boxes on screen, so it frames.
-    const viewport = map.getBounds().pad(0.05);
+    // Only what the panel leaves uncovered counts: a box sitting under it is
+    // not on screen for the person, and has to be framed like any other.
+    const viewport = uncoveredBounds(map, panelInset).pad(0.05);
     const areaInView =
       areaBound &&
       areas.some(([minLon, minLat, maxLon, maxLat]) =>
@@ -1192,9 +1233,9 @@ function FitBoundsToPins({
     if (action === 'pins') {
       const points = pins.map((pin) => [pin.coords.lat, pin.coords.lng] as [number, number]);
 
-      map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 13 });
+      map.fitBounds(L.latLngBounds(points), { ...fitPadding(panelInset), maxZoom: 13 });
     } else if (action === 'area' && areaBounds != null) {
-      map.fitBounds(areaBounds);
+      map.fitBounds(areaBounds, fitPadding(panelInset, 0));
     }
 
     // Adopted even when nothing moved: this set (and this area) is now the one
@@ -1202,7 +1243,7 @@ function FitBoundsToPins({
     fittedSignature.current = signature;
     lastAreaBound.current = areaBound;
     lastAreaKey.current = areaKey;
-  }, [skip, signature, pins, areas, areaBound, areaKey, map]);
+  }, [skip, signature, pins, areas, areaBound, areaKey, map, panelInset]);
 
   return null;
 }
@@ -1559,7 +1600,7 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
 
   return (
     <Map center={[37.7749, -122.4194]} autoCenterMarkers={false} attributionControl={false}>
-      <Map.Controls position="top-right" />
+      <Map.Controls position="top-right" panelInset={TIMELINE_PANEL_PX} />
       <Map.Panel position="left" className="w-[300px] relative">
         <TimelineView
           activeEntityId={timelineActiveId}
@@ -1588,7 +1629,13 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
       ) : (
         <OwnedAreaLayer mode={areaMode} onModeChange={setAreaMode} />
       )}
-      {!readOnly && <PositionTraceLayer enabled={showTrace} fitToTrace={pins.length === 0} />}
+      {!readOnly && (
+        <PositionTraceLayer
+          enabled={showTrace}
+          fitToTrace={pins.length === 0}
+          panelInset={TIMELINE_PANEL_PX}
+        />
+      )}
       {readOnly && (
         <LoadMorePinsControl
           shown={pins.length}
@@ -1605,11 +1652,16 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
       <MapTimelineConnector active={playing ? null : activePin} rowElementsRef={rowElementsRef} />
       <Map.RouteLayer locations={routeLocations} />
       <PlaybackTrackLayer />
-      <ClusteredMarkers pins={revealedPins} onSelect={handlePinSelect} onHoverPin={handlePinHover} />
+      <ClusteredMarkers
+        pins={revealedPins}
+        onSelect={handlePinSelect}
+        onHoverPin={handlePinHover}
+        panelInset={TIMELINE_PANEL_PX}
+      />
       {/* Fitted to the WHOLE set, never the revealed subset — otherwise every
           pin the playhead crossed would re-fit the viewport and fight the
           playback camera for control of it. */}
-      <FitBoundsToPins pins={pins} areas={searchAreas} />
+      <FitBoundsToPins pins={pins} areas={searchAreas} panelInset={TIMELINE_PANEL_PX} />
       {/* Padded past the 300px timeline panel so the state reads over the map
           itself rather than half-hidden behind the panel. Padding, not `left`,
           so it cannot collide with the `inset-0` on the same element. */}

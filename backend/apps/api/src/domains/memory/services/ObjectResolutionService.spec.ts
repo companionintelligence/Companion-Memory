@@ -270,6 +270,9 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     harness.findById.mockResolvedValue(
       observation({ attributes: { identifier_codes: { gtin: '012345678905' } } }),
     );
+    harness.resolveObservation.mockResolvedValue(
+      observation({ resolvedObjectId: OBJECT, resolutionMethod: 'identifier' }),
+    );
 
     const outcome = await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
 
@@ -284,6 +287,28 @@ describe('ObjectResolutionService.resolveAndApply', () => {
     const touch = harness.statements.find(({ sql }) => sql.includes('SET last_seen_at'));
     // Guarded so a backfill of old photos cannot walk "last seen" backwards.
     expect(touch?.sql).toContain('last_seen_at IS NULL OR last_seen_at < $3');
+    expect(touch?.params.slice(0, 2)).toEqual([USER, OBJECT]);
+  });
+
+  it('leaves "last seen" alone when a person answered the sighting before the write', async () => {
+    const harness = makeHarness();
+    harness.resolveIdentifier.mockResolvedValue({
+      subjectType: 'object_instance',
+      subjectId: OBJECT,
+      namespace: 'gtin',
+      valueNormalized: '00012345678905',
+    });
+    harness.findById.mockResolvedValue(
+      observation({ attributes: { identifier_codes: { gtin: '012345678905' } } }),
+    );
+    // `resolve` hands back the row unchanged: the person linked it to another thing first.
+    harness.resolveObservation.mockResolvedValue(
+      observation({ confirmedByUser: true, resolvedObjectId: OTHER_OBJECT, resolutionMethod: 'user' }),
+    );
+
+    await harness.service.resolveAndApply(CONTEXT, OBSERVATION);
+
+    expect(harness.statements.some(({ sql }) => sql.includes('SET last_seen_at'))).toBe(false);
   });
 
   it('leaves a below-threshold candidate unwritten', async () => {

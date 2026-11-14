@@ -253,6 +253,15 @@ export class ForecastResolver {
     }
 
     try {
+      const singletonKey = `fn:nightly:${context.userId}:manual`;
+
+      // The queue refuses a second Predict only while the first is still
+      // waiting. Once that one is running (under a second after the click, on a
+      // quiet box), a second click started another hour-long run beside it.
+      if (await this.pythonFunctionService.hasLiveJob('hbpe', singletonKey)) {
+        return 'already_running';
+      }
+
       // The nightly pipeline covers cold start too: its bootstrap check trains
       // the model when the checkpoint is missing or stale. Routed through
       // pg-boss so the run gets retries and shows up in the jobs monitor.
@@ -262,7 +271,7 @@ export class ForecastResolver {
         context.userId,
         {},
         {
-          singletonKey: `fn:nightly:${context.userId}:manual`,
+          singletonKey,
         },
       );
 
