@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bindPowerSyncDatabase } from '@/api/powersync/session';
 
+import { DeviceKeyNotSavedError } from './deviceKeyNotSaved';
 import { MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 import { AuthProvider, useAuth } from './useAuth';
 
@@ -2030,6 +2031,151 @@ describe('useAuth', () => {
       expect(result.current[0].authenticated).toBe(true);
       expect(getApiKey()).toBe('desktop-key');
     });
+  });
+
+  it('desktop: gives the new key back when the keychain will not save it', async () => {
+    // A Linux desktop with no default keyring: the server makes the key, the keychain refuses it.
+    const { appState } = await beginNativeOidcSignIn();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (command: string) => {
+        switch (command) {
+          case 'take_pending_deep_link_command':
+            return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+          case 'plugin:ci-auth|secure_get':
+            return { value: null };
+          case 'plugin:ci-auth|secure_set':
+            throw new Error('No default keyring');
+          default:
+            return null;
+        }
+      }),
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        return jsonResponse({ accessToken: 'desktop-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-d', key: 'unsaved-key' });
+      }
+
+      return emptyResponse(true, 204);
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].error).toBeInstanceOf(DeviceKeyNotSavedError));
+
+      const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revoke?.[1]?.method).toBe('DELETE');
+      expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'unsaved-key' });
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiKey()).toBeNull();
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it('desktop: drops a revoked key the keychain kept before refusing the rest', async () => {
+    // The key itself was written, then the keychain refused its id. Left there, the stored copy
+    // would be a key the server no longer takes.
+    const { appState } = await beginNativeOidcSignIn();
+    const keychain = new Map<string, string>();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+        switch (command) {
+          case 'take_pending_deep_link_command':
+            return `companion://oidc/callback?code=otc-partial&state=${appState}`;
+          case 'plugin:ci-auth|secure_get':
+            return { value: keychain.get(args?.key ?? '') ?? null };
+          case 'plugin:ci-auth|secure_set':
+            if (args?.key !== 'memory:ci.apiKey') {
+              throw new Error('Keychain locked');
+            }
+
+            keychain.set(args.key, args.value ?? '');
+
+            return null;
+          case 'plugin:ci-auth|secure_remove':
+            keychain.delete(args?.key ?? '');
+
+            return null;
+          default:
+            return null;
+        }
+      }),
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        return jsonResponse({ accessToken: 'desktop-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-p', key: 'half-saved-key' });
+      }
+
+      return emptyResponse(true, 204);
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].error).toBeInstanceOf(DeviceKeyNotSavedError));
+
+      const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'half-saved-key' });
+      expect(keychain.has('memory:ci.apiKey')).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it('native: a keystore that refuses the new key gives it back and says so in phone terms', async () => {
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async () => {
+            throw new Error('not found');
+          }),
+          set: vi.fn(async () => {
+            throw new Error('Keystore unavailable');
+          }),
+          remove: vi.fn(async () => ({ value: true })),
+        },
+      },
+    };
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/csrf')) {
+        return jsonBodyResponse({ csrfToken: 'native-csrf' });
+      }
+
+      if (url.endsWith('/api/authenticate')) {
+        return jsonResponse({ accessToken: 'native-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-n', key: 'unsaved-phone-key' });
+      }
+
+      return emptyResponse(true, 204);
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    await act(async () => {
+      await result.current[1].login('jsmith@example.com', 'pw');
+    });
+
+    const { error } = result.current[0];
+    expect(error).toBeInstanceOf(DeviceKeyNotSavedError);
+    // Email and password is what just failed. A phone has no keyring to set up either.
+    expect((error as Error).message).not.toMatch(/keyring|email and password/);
+    const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+    expect(revoke?.[1]?.method).toBe('DELETE');
+    expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'unsaved-phone-key' });
+    expect(result.current[0].authenticated).toBe(false);
   });
 
   it('web logout revokes no key: a browser session holds none', async () => {

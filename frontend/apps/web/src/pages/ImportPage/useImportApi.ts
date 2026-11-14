@@ -522,9 +522,18 @@ export function useImportApi() {
           xhr.setRequestHeader(name, value);
         }
 
+        // `event.total` is the whole multipart body: the file plus its boundary
+        // and part headers, a few hundred bytes the file itself does not have.
+        // Callers measure against `file.size`, so passing the raw count read
+        // "636 B of 435 B" and 146% on a small contacts.vcf. Report the file's
+        // share of what has gone instead. It rounds down and is capped at the
+        // file's size, so it reaches 100% only once the whole body is sent.
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
-            onProgress?.(event.loaded, event.total);
+            const share = event.total > 0 ? event.loaded / event.total : 0;
+            const sent = Math.min(file.size, Math.floor(share * file.size));
+
+            onProgress?.(sent, file.size);
           }
         };
 

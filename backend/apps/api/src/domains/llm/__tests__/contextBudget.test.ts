@@ -4,6 +4,7 @@ import {
   INLINE_TEXT_BUDGET_SHARE,
   MAX_INLINE_IMAGE_MESSAGES,
   NUM_CTX_ENV_VAR,
+  TOOL_DEFINITION_BYTES_PER_TOKEN,
   attachmentStub,
   isContextOverflowError,
   messageBytes,
@@ -109,6 +110,114 @@ describe('resolveContextBudget', () => {
     const budget = resolveContextBudget({ env: { [NUM_CTX_ENV_VAR]: '512' } });
 
     expect(budget.promptBudgetBytes).toBe(2048);
+  });
+});
+
+/**
+ * Every round that offers tools sends their definitions: 35 tools, 31,386 bytes, about 5,400 tokens on gemma4:e4b.
+ * Planned without them, the 8k default left the answer a few hundred tokens and most tools-on turns on Memory Desktop
+ * stopped on "length" with nothing written.
+ */
+describe('resolveContextBudget with tool definitions', () => {
+  const TOOL_BYTES = 31_386;
+  const toolTokens = Math.ceil(TOOL_BYTES / TOOL_DEFINITION_BYTES_PER_TOKEN);
+
+  it('changes nothing for a turn without tools', () => {
+    const without = resolveContextBudget({ env: {} });
+    const zero = resolveContextBudget({ env: {}, toolDefinitionBytes: 0 });
+
+    expect(zero).toEqual(without);
+    expect(without.reservedToolTokens).toBe(0);
+    expect(without.plannedContextTokens).toBe(without.maxContextTokens);
+  });
+
+  it('grows the 8k default to the rung that leaves the default window beside the tools', () => {
+    const budget = resolveContextBudget({ env: {}, toolDefinitionBytes: TOOL_BYTES });
+
+    expect(budget.plannedContextTokens).toBe(8192);
+    expect(budget.maxContextTokens).toBe(16_384);
+    expect(budget.reservedToolTokens).toBe(toolTokens);
+    expect(budget.maxContextTokens - budget.reservedToolTokens).toBeGreaterThanOrEqual(
+      TIER_PROFILES.on_device.maxContextTokens,
+    );
+  });
+
+  it('plans the answer, the system prompt and the history on what the tools leave', () => {
+    const budget = resolveContextBudget({ env: {}, toolDefinitionBytes: TOOL_BYTES });
+    const total =
+      budget.reservedToolTokens +
+      budget.reservedOutputTokens +
+      budget.reservedSystemTokens +
+      budget.promptBudgetBytes;
+
+    expect(total).toBeLessThanOrEqual(budget.maxContextTokens);
+    expect(budget.reservedOutputTokens).toBeGreaterThanOrEqual(2048);
+  });
+
+  it("grows a planner's window the same way and keeps the grown window on the next turn", () => {
+    const grown = resolveContextBudget({
+      env: {},
+      measuredContextTokens: 8192,
+      toolDefinitionBytes: TOOL_BYTES,
+    });
+    // Next turn the model is resident at the grown window. The planner reports that.
+    const next = resolveContextBudget({
+      env: {},
+      measuredContextTokens: grown.maxContextTokens,
+      toolDefinitionBytes: TOOL_BYTES,
+    });
+
+    expect(grown.maxContextTokens).toBe(16_384);
+    expect(next.maxContextTokens).toBe(16_384);
+    expect(next.promptBudgetBytes).toBe(grown.promptBudgetBytes);
+  });
+
+  it('keeps a window that already has room beside the tools', () => {
+    const budget = resolveContextBudget({
+      env: {},
+      measuredContextTokens: 65_536,
+      toolDefinitionBytes: TOOL_BYTES,
+    });
+
+    expect(budget.maxContextTokens).toBe(65_536);
+    expect(budget.plannedContextTokens).toBe(65_536);
+  });
+
+  it('never grows a window CI-Hub or an operator configured, but still holds the tools out of it', () => {
+    const budget = resolveContextBudget({
+      env: { [NUM_CTX_ENV_VAR]: '8192' },
+      toolDefinitionBytes: TOOL_BYTES,
+    });
+
+    expect(budget.maxContextTokens).toBe(8192);
+    expect(budget.promptBudgetBytes).toBe(2048);
+  });
+
+  it('never grows a window the backend fixes itself, but still holds the tools out of it', () => {
+    // An OpenAI-compatible server runs the window it reports and ignores `num_ctx`.
+    const budget = resolveContextBudget({
+      env: {},
+      measuredContextTokens: 8192,
+      toolDefinitionBytes: TOOL_BYTES,
+      windowCanGrow: false,
+    });
+
+    expect(budget.maxContextTokens).toBe(8192);
+    expect(budget.reservedToolTokens).toBe(toolTokens);
+    expect(budget.promptBudgetBytes).toBe(2048);
+  });
+
+  it('treats a tool size that is not a finite number as no tools', () => {
+    const without = resolveContextBudget({ env: {} });
+
+    expect(resolveContextBudget({ env: {}, toolDefinitionBytes: Number.NaN })).toEqual(without);
+    expect(resolveContextBudget({ env: {}, toolDefinitionBytes: Number.POSITIVE_INFINITY })).toEqual(without);
+  });
+
+  it('stops at the top rung however long the tool list is', () => {
+    const budget = resolveContextBudget({ env: {}, toolDefinitionBytes: 200_000 });
+
+    expect(budget.maxContextTokens).toBe(32_768);
   });
 });
 

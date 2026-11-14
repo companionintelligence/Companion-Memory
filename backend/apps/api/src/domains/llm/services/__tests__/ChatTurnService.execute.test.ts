@@ -85,7 +85,7 @@ function buildService(
     { isFeatureEnabled: jest.fn(async () => false) } as never,
   );
 
-  return { service, broker, messageService, ollamaService };
+  return { service, broker, messageService, ollamaService, threadService };
 }
 
 describe('persistedAssistantContent', () => {
@@ -256,5 +256,314 @@ describe('ChatTurnService.execute providers', () => {
     await service.execute(payload);
 
     expect(published).not.toContainEqual({ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
+  });
+});
+
+/**
+ * Stop keeps what streamed. `canceled` is stored in `is_deleted`, which every read leaves out, so a stopped reply
+ * marked canceled vanished on reload while the database still held its text.
+ */
+describe('ChatTurnService.execute with a reply stopped part way', () => {
+  /** A stream that yields `chunks`, then has the person press Stop before it ends. */
+  function stoppedStream(
+    broker: ChatGenerationBroker,
+    chunks: Array<{ message: { content?: string; thinking?: string } }>,
+    accumulated: Array<{ role: string; content: string; tool_calls?: unknown[] }>,
+  ) {
+    const generator = (async function* () {
+      for (const chunk of chunks) {
+        yield chunk;
+      }
+
+      broker.abort(payload.threadId);
+    })();
+
+    Object.defineProperty(generator, 'messages', { get: () => accumulated });
+    Object.defineProperty(generator, 'error', { get: () => undefined });
+
+    return generator;
+  }
+
+  function build(
+    stream: (broker: ChatGenerationBroker) => ReturnType<typeof stoppedStream>,
+  ): ReturnType<typeof buildService> & { messageService: { create: jest.Mock } } {
+    const messageService = {
+      findByThreadId: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+    const chatStream = jest.fn();
+    const built = buildService(chatStream, messageService);
+
+    chatStream.mockImplementation(async () => stream(built.broker));
+
+    return { ...built, messageService };
+  }
+
+  it('keeps the part that streamed when the stream accumulated no message', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { thinking: 'hmm' } }, { message: { content: 'The first half' } }],
+        [],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '<think>hmm</think>The first half', canceled: false }),
+    );
+  });
+
+  it('keeps the cut-off reply when the stream accumulated it', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'The first half' } }],
+        [{ role: 'assistant', content: 'The first half' }],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'The first half', canceled: false }),
+    );
+  });
+
+  it('keeps the last row of a stopped tool turn that has text', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'Found it, here' } }],
+        [
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+          { role: 'tool', content: '[]' },
+          { role: 'assistant', content: 'Found it, here' },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: 'Found it, here', canceled: false }),
+    );
+    // The tool-call row keeps its own (empty) text. Given the streamed text too, the reply showed twice on reload.
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({
+        content: '',
+        canceled: false,
+        toolCalls: [{ function: { name: 'memory.search', arguments: {} } }],
+      }),
+    );
+  });
+
+  it('keeps the thinking of a reply stopped before its tool call ran, without the call', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { thinking: 'I should search' } }],
+        [
+          {
+            role: 'assistant',
+            content: '<think>I should search</think>',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({
+        content: '<think>I should search</think>',
+        canceled: false,
+        toolCalls: null,
+      }),
+    );
+  });
+
+  it('drops the unrun call of the last row of a stopped tool turn', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { thinking: 'one more' } }],
+        [
+          {
+            role: 'assistant',
+            content: '<think>first</think>',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+          { role: 'tool', content: '[]' },
+          {
+            role: 'assistant',
+            content: '<think>one more</think>',
+            tool_calls: [{ function: { name: 'memory.search', arguments: { q: 'x' } } }],
+          },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ toolCalls: [{ function: { name: 'memory.search', arguments: {} } }] }),
+    );
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: '<think>one more</think>', canceled: false }),
+    );
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ toolCalls: expect.anything() }),
+    );
+  });
+
+  it('hides a stopped reply whose thinking is only whitespace', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(broker, [{ message: { thinking: '\n\n' } }], []),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '<think>\n\n</think>', canceled: true }),
+    );
+  });
+
+  it('still hides a stopped reply that has nothing in it', async () => {
+    const { service, messageService } = build((broker) => stoppedStream(broker, [], []));
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '', canceled: true }),
+    );
+  });
+
+  it('still hides an empty last row of a stopped tool turn', async () => {
+    const { service, messageService } = build((broker) =>
+      stoppedStream(
+        broker,
+        [{ message: { content: 'Let me look' } }],
+        [
+          {
+            role: 'assistant',
+            content: 'Let me look',
+            tool_calls: [{ function: { name: 'memory.search', arguments: {} } }],
+          },
+          { role: 'tool', content: '[]' },
+          { role: 'assistant', content: '' },
+        ],
+      ),
+    );
+
+    await service.execute(payload);
+
+    expect(messageService.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'Let me look', canceled: false }),
+    );
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: '', canceled: true }),
+    );
+  });
+});
+
+/**
+ * Stop can land before the worker runs the job: the thread is already idle, so the turn is closed without a model
+ * call. The placeholder row is normally empty and hidden, but a job retried after an API restart may already have
+ * streamed into it.
+ */
+describe('ChatTurnService.execute on a turn stopped before it ran', () => {
+  function build(rowContent: string) {
+    const messageService = {
+      findByThreadId: jest.fn(),
+      findById: jest.fn(async () => ({ id: 'assistant-msg', role: 'assistant', content: rowContent })),
+      update: jest.fn(),
+    };
+    const chatStream = jest.fn();
+    const built = buildService(chatStream, messageService);
+
+    built.threadService.findById.mockResolvedValue({ id: 'thread-1', name: null, generationStatus: 'idle' });
+
+    return { ...built, chatStream, messageService };
+  }
+
+  it('hides the empty placeholder row', async () => {
+    const { service, messageService, chatStream } = build('');
+
+    await service.execute(payload);
+
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(messageService.update).toHaveBeenCalledWith(expect.anything(), 'assistant-msg', {
+      canceled: true,
+    });
+  });
+
+  it('keeps a row an earlier run already streamed into', async () => {
+    const { service, messageService, chatStream } = build('<think>hmm</think>The first half');
+
+    await service.execute(payload);
+
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(messageService.update).not.toHaveBeenCalledWith(expect.anything(), 'assistant-msg', {
+      canceled: true,
+    });
+  });
+});
+
+describe('ChatTurnService.execute on a finished tool turn', () => {
+  it('stores the answer once when the first round was only a tool call', async () => {
+    const messageService = {
+      findByThreadId: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+    const chatStream = jest.fn(async () =>
+      streamFrom([{ message: { content: 'Nothing about coffee.' } }], [
+        { role: 'assistant', content: '', tool_calls: [{ function: { name: 'knowledge', arguments: {} } }] },
+        { role: 'tool', content: '[]' },
+        { role: 'assistant', content: 'Nothing about coffee.' },
+      ] as Array<{ role: string; content: string }>),
+    );
+    const { service } = buildService(chatStream, messageService);
+
+    await service.execute(payload);
+
+    // The tool-call row used to take every round's streamed text, so the answer showed twice after a reload.
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: '', canceled: false }),
+    );
+    expect(messageService.create).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: 'Nothing about coffee.', canceled: false }),
+    );
   });
 });

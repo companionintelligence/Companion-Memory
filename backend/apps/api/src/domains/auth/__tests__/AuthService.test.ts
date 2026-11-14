@@ -3,7 +3,7 @@ import { createHmac } from 'crypto';
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
-import type { Repository } from 'typeorm';
+import { FindOperator, type Repository } from 'typeorm';
 
 import config from '@ci/configuration';
 
@@ -183,16 +183,32 @@ describe('AuthService — session id binding', () => {
 
       const matchesWhere = (row: SessionEntity, where: Record<string, unknown>): boolean =>
         Object.entries(where).every(([key, value]) => {
+          // What TypeORM 1.x does with `undefined` or `null` in a where condition by
+          // default: refuse the whole query. A NULL match has to ask for IsNull().
+          if (value === undefined || value === null) {
+            throw new Error(
+              `${value === undefined ? 'Undefined' : 'Null'} value encountered in property 'SessionEntity.${key}' of a where condition.`,
+            );
+          }
+
+          const cell = (row as unknown as Record<string, unknown>)[key];
+
           if (key === 'user') {
-            return (row as unknown as { user: { id: string } }).user?.id === (value as { id: string }).id;
+            return (cell as { id: string } | undefined)?.id === (value as { id: string }).id;
           }
 
-          // MoreThan(now) FindOperator — compare against its wrapped value.
-          if (value && typeof value === 'object' && 'value' in (value as Record<string, unknown>)) {
-            return (row as unknown as Record<string, Date>)[key] > (value as { value: Date }).value;
+          if (value instanceof FindOperator) {
+            switch (value.type) {
+              case 'isNull':
+                return cell == null;
+              case 'moreThan':
+                return (cell as Date) > (value.value as Date);
+              default:
+                throw new Error(`This test repository does not handle the '${value.type}' operator.`);
+            }
           }
 
-          return (row as unknown as Record<string, unknown>)[key] === value;
+          return cell === value;
         });
 
       return {
@@ -266,6 +282,66 @@ describe('AuthService — session id binding', () => {
       const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
 
       await scopedService.invalidateSession('user-1', rawToken, meta);
+
+      expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+    });
+
+    it('rotateSessionToken: a request with no User-Agent is refused as an invalid session, not a query error', async () => {
+      const repo = makeScopedSessionRepository([sessionRowForUser('sess-1', 'user-1')]);
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await expect(scopedService.rotateSessionToken('user-1', rawToken, { ip: meta.ip })).rejects.toThrow(
+        new UnauthorizedException('Invalid session'),
+      );
+    });
+
+    it('rotateSessionToken: a session signed in with no User-Agent rotates for a request with none', async () => {
+      // issueSessionToken stores NULL when the sign-in had no User-Agent header.
+      const signedInWithout = () =>
+        makeScopedSessionRepository([{ ...sessionRowForUser('sess-1', 'user-1'), user_agent: null }]);
+
+      const scopedService = new AuthService(
+        jwtService,
+        signedInWithout() as unknown as Repository<SessionEntity>,
+      );
+      const result = await scopedService.rotateSessionToken('user-1', rawToken, { ip: meta.ip });
+
+      expect(result.sessionId).toBe('sess-1');
+
+      // The binding still holds the other way: a User-Agent the session was not signed in with.
+      const other = new AuthService(jwtService, signedInWithout() as unknown as Repository<SessionEntity>);
+
+      await expect(other.rotateSessionToken('user-1', rawToken, meta)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
+
+    it('rotateSessionToken: inside the grace window, a session signed in with no address or User-Agent matches its previous token', async () => {
+      const repo = makeScopedSessionRepository([
+        {
+          ...sessionRowForUser('sess-1', 'user-1'),
+          token: digest('already-rotated-token'),
+          previous_token: digest(rawToken),
+          rotated_at: new Date(),
+          ip: null,
+          user_agent: null,
+        },
+      ]);
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await expect(scopedService.rotateSessionToken('user-1', rawToken, {})).resolves.toEqual({
+        sessionToken: null,
+        sessionId: 'sess-1',
+      });
+    });
+
+    it('invalidateSession: a session signed in with no User-Agent signs out from a request with none', async () => {
+      const repo = makeScopedSessionRepository([
+        { ...sessionRowForUser('sess-1', 'user-1'), user_agent: null },
+      ]);
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await scopedService.invalidateSession('user-1', rawToken, { ip: meta.ip });
 
       expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
     });

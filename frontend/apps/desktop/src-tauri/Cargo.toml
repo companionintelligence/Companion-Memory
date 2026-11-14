@@ -42,6 +42,11 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # protocol.
 tiny_http = "0.12"
 
+# The browser launchers tauri-plugin-opener uses (open::commands), started by
+# main.rs's open_in_browser instead, so a browser that fails to open is reported.
+[target.'cfg(target_os = "linux")'.dependencies]
+open = "5"
+
 # GTK3's current Tauri bindings require glib 0.18, whose VariantStrIter fix only
 # landed in glib 0.20. Keep the compatible version and backport the exact
 # upstream pointer-mutability fix until the GTK/Tauri stack can move to glib 0.20.
