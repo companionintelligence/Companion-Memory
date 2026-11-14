@@ -1,4 +1,5 @@
 import {
+  compactSpellingsOf,
   computeQualifier,
   detectObjectIdentifier,
   isGloballyUniqueNamespace,
@@ -323,5 +324,51 @@ describe('computeQualifier', () => {
 
   it('returns empty when nothing is known', () => {
     expect(computeQualifier('serial', {})).toBe('');
+  });
+});
+
+describe('compactSpellingsOf', () => {
+  const backToSelf = (namespace: ObjectIdentifierNamespace, value: string, spellings: string[]) => {
+    for (const spelling of spellings) {
+      // The bag key decides the namespace a raw code is read as; any of these
+      // three lands a book or a barcode where it belongs.
+      const read =
+        normalizeObjectIdentifier(namespace, spelling) ??
+        normalizeObjectIdentifier('gtin', spelling) ??
+        normalizeObjectIdentifier('asin', spelling);
+
+      expect({ spelling, value: read?.valueNormalized }).toEqual({ spelling, value });
+    }
+  };
+
+  it('spells a GTIN-14 as the EAN-13 and UPC-A its zeros pad', () => {
+    const spellings = compactSpellingsOf('gtin', '00012345678905');
+
+    expect(spellings).toEqual(['00012345678905', '0012345678905', '012345678905']);
+    backToSelf('gtin', '00012345678905', spellings);
+  });
+
+  it('spells a padded GTIN-8 as itself', () => {
+    expect(compactSpellingsOf('gtin', '00000096385074')).toContain('96385074');
+    backToSelf('gtin', '00000096385074', compactSpellingsOf('gtin', '00000096385074'));
+  });
+
+  it('spells a 978 ISBN-13 as its GTIN-14 and the ISBN-10 Amazon files as an ASIN', () => {
+    const spellings = compactSpellingsOf('isbn', '9780306406157');
+
+    expect(spellings).toEqual(['9780306406157', '09780306406157', '0306406152']);
+    backToSelf('isbn', '9780306406157', spellings);
+  });
+
+  it("writes an ISBN-10 check digit of 10 as 'X'", () => {
+    const isbn13 = normalizeObjectIdentifier('isbn', '080442957X')?.valueNormalized ?? '';
+
+    expect(compactSpellingsOf('isbn', isbn13)).toContain('080442957X');
+  });
+
+  it('leaves a 979 ISBN-13, which has no ISBN-10, and other namespaces as they are', () => {
+    expect(compactSpellingsOf('isbn', '9791034304380')).toEqual(['9791034304380', '09791034304380']);
+    expect(compactSpellingsOf('asin', 'B09M95S7ZN')).toEqual(['B09M95S7ZN']);
+    expect(compactSpellingsOf('sku', 'ABC-123')).toEqual(['ABC-123']);
   });
 });

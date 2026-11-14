@@ -9,11 +9,14 @@ jest.mock('../llmEndpointShared', () => {
     ...actual,
     readSharedConfig: jest.fn(() => null),
     writeSharedConfig: jest.fn(),
+    // update() would otherwise rewrite $APP_DATA_DIR/app.env with the test's keys.
+    syncAppEnvLlmVars: jest.fn(),
   };
 });
 
 jest.mock('@ci/configuration', () => ({
   __esModule: true,
+  LLM_API_KEY_PLACEHOLDER: 'ollama',
   default: {
     logging: { level: 'error' },
     services: { ollama: { host: 'http://localhost:11434' } },
@@ -45,9 +48,52 @@ describe('LlmEndpointService', () => {
       hostGateway: 'localhost',
       locked: false,
       endpoint: 'http://localhost:11434',
-      apiKeyConfigured: true,
+      // 'ollama' is the built-in stand-in for an empty LLM_API_KEY, not a key anyone set.
+      apiKeyConfigured: false,
     });
     expect(service.usesOpenAiDriver()).toBe(false);
+  });
+
+  it('does not report the built-in placeholder as a credential on an OpenAI-compatible backend', async () => {
+    const service = new LlmEndpointService(logger as never);
+    service.onModuleInit();
+
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1' });
+
+    expect(service.getView().apiKeyConfigured).toBe(false);
+
+    // The placeholder is still what goes out, as before: some servers want a bearer of any value.
+    const fetchImpl = jest.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await service.preflight(fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://localhost:13305/api/v1/models',
+      expect.objectContaining({ headers: { authorization: 'Bearer ollama' } }),
+    );
+
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1', apiKey: 'real-key' });
+
+    expect(service.getView().apiKeyConfigured).toBe(true);
+  });
+
+  it('still counts a saved key that is the placeholder word, so Settings can remove it', () => {
+    (config as { llm: { apiBase?: string; apiKey: string } }).llm.apiKey = 'deployment-key';
+    const service = new LlmEndpointService(logger as never);
+    service.onModuleInit();
+
+    // Saved in the appliance, it wins over LLM_API_KEY and is what goes out.
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1', apiKey: 'ollama' });
+
+    expect(service.getView().apiKeyConfigured).toBe(true);
+
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1', clearApiKey: true });
+
+    // Removed, the deployment key is the one in use, and it is a real one.
+    expect(service.getView().apiKeyConfigured).toBe(true);
+
+    (config as { llm: { apiBase?: string; apiKey: string } }).llm.apiKey = 'ollama';
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1' });
+
+    expect(service.getView().apiKeyConfigured).toBe(false);
   });
 
   it('switches to an OpenAI-compatible driver when settings are updated', () => {
@@ -193,6 +239,7 @@ describe('LlmEndpointService', () => {
   });
 
   it('does not expose a configured key when an endpoint is read', () => {
+    (config as { llm: { apiBase?: string; apiKey: string } }).llm.apiKey = 'deployment-key';
     const service = new LlmEndpointService(logger as never);
     service.onModuleInit();
 

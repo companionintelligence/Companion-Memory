@@ -172,6 +172,46 @@ describeWithDatabase(`SearchService scoping against a live Postgres (${availabil
       expect(results).toHaveLength(1);
       expect(results[0].type).toBe('person');
     });
+
+    it('prefix: a half-typed name finds the whole one, and only for this user', async () => {
+      const jordanLee = await seedVector(userA, 'person', 'Jordan Lee');
+      const jordanHale = await seedVector(userA, 'person', 'Jordan Hale');
+      await seedVector(userA, 'person', 'Casey Brooks');
+      await seedVector(userB, 'person', 'Jordan Kim');
+
+      // Whole words only without the flag: "Jor" is not a word anybody wrote.
+      expect(await service.search(contextA, { query: 'Jor', mode: 'keyword' })).toEqual([]);
+
+      const results = await service.search(contextA, { query: 'Jor', mode: 'keyword', prefix: true });
+
+      expect(results.map(({ id }) => id).sort()).toEqual([jordanLee, jordanHale].sort());
+
+      // The earlier words still match whole, and rank the row with both first.
+      const both = await service.search(contextA, { query: 'Jordan Ha', mode: 'keyword', prefix: true });
+
+      expect(both[0]?.id).toBe(jordanHale);
+    });
+
+    it('prefix: finds the part of a name after an apostrophe, as Postgres indexes it', async () => {
+      const obrien = await seedVector(userA, 'person', "Pat O'Brien");
+
+      const results = await service.search(contextA, { query: "O'Br", mode: 'keyword', prefix: true });
+
+      expect(results.map(({ id }) => id)).toEqual([obrien]);
+    });
+
+    it('prefix: reads the half-typed word the way Postgres read the indexed one', async () => {
+      // Postgres lowers "İ" to "i"; JavaScript to "i" plus a combining dot.
+      const istanbul = await seedVector(userA, 'place', 'İstanbul');
+      // The vowel signs are combining marks, and Postgres keeps them inside the word.
+      const rahul = await seedVector(userA, 'person', 'राहुल शर्मा');
+
+      const turkish = await service.search(contextA, { query: 'İst', mode: 'keyword', prefix: true });
+      const hindi = await service.search(contextA, { query: 'राहु', mode: 'keyword', prefix: true });
+
+      expect(turkish.map(({ id }) => id)).toEqual([istanbul]);
+      expect(hindi.map(({ id }) => id)).toEqual([rahul]);
+    });
   });
 
   describe('semanticSearch (mode: semantic)', () => {

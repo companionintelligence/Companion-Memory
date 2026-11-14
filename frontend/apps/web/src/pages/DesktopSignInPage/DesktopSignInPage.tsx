@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import { OidcButton } from '@/components/OidcButton';
 import { QrCode } from '@/components/QrCode';
 import { useAuth } from '@/hooks';
+import { DeviceKeyNotSavedError } from '@/hooks/deviceKeyNotSaved';
 import { BrainMark, DESKTOP_MARK_SIZE, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
 
 /**
@@ -23,6 +24,11 @@ function describeSignInError(error: unknown): { message: string; needsInvitation
       message: 'This Memory already belongs to someone. Ask its owner for an invitation and enter it below.',
       needsInvitation: true,
     };
+  }
+
+  // Trying again cannot help while the keyring refuses, so it says what to fix.
+  if (error instanceof DeviceKeyNotSavedError) {
+    return { message: error.message, needsInvitation: false };
   }
 
   return { message: 'Sign in failed. Please try again.', needsInvitation: false };

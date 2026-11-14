@@ -159,6 +159,11 @@ export function GlobalSearchBox() {
         // which then deletes `search` right back out of the URL. Leaving the
         // input alone means there's nothing to resync — it already shows
         // exactly what was just committed.
+        //
+        // An Enter inside the debounce cancels the auto-submit, so the
+        // suggestions would stay on the last debounced prefix; follow the
+        // committed text instead.
+        setQuery(trimmed);
         setSearchParams((params) => {
           params.set('search', trimmed);
 
@@ -432,6 +437,11 @@ export function GlobalSearchBox() {
     tags,
   ]);
 
+  // The rows above always lead with Clear and Search-for once there is a query,
+  // so SearchBox is told outright when the search came back empty.
+  const noMatches =
+    Boolean(query?.trim()) && !loading && !error && tags.length === 0 && suggestions.length === 0;
+
   // Live, debounced. Drives the suggestion query everywhere, and on a live-search
   // page also writes `?search` so the page filters as you type (replace: keep
   // history clean).
@@ -456,7 +466,7 @@ export function GlobalSearchBox() {
         );
       }
     },
-    [onMemoryExplorer, setSearchParams],
+    [onLiveSearchPage, setSearchParams],
   );
 
   // The X on the explorer is a full reset: the query, every explorer filter
@@ -639,12 +649,19 @@ export function GlobalSearchBox() {
           placeholder="Search memory…"
           fullWidthOnPhone
           autoSubmit
-          autoSubmitEmpty={onLiveSearchPage}
+          // Everywhere, not just on list pages: `query` has to empty with the
+          // input, or a launcher page keeps the last query's rows (and its "No
+          // results found.") under an empty box instead of the recent searches.
+          // handleSearch only writes `?search` on a list page.
+          autoSubmitEmpty
           displayResults
           openOnFocus
           loading={loading}
           error={error}
           results={results}
+          noMatches={noMatches}
+          // A miss in this phone's synced index is not the server's answer.
+          noMatchesHeading={source === 'device' ? t('SEARCH_FROM_THIS_PHONE_HEADING') : undefined}
           showClear={activeFilterCount > 0 || Boolean(onLiveSearchPage ? urlSearch : query?.trim())}
           panelFooter={
             explorerFiltersApply && !onMemoryExplorer ? (

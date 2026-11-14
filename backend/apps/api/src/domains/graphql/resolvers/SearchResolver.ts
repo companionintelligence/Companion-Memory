@@ -558,6 +558,7 @@ export class SearchResolver {
         includeTypes: input.includeTypes,
         excludeTypes: input.excludeTypes,
         semantic: input.semantic === true,
+        prefix: input.prefix === true,
         maxResults: Math.max(pinLimit, QUERY_CANDIDATE_LIMIT),
       });
 
@@ -784,6 +785,7 @@ export class SearchResolver {
         excludeTypes: input.excludeTypes,
         // Force conceptual ranking when the caller asked for semantic search.
         semantic: input.semantic === true,
+        prefix: input.prefix === true,
         // Always fetch a deep candidate pool so the in-memory Paginator can page
         // past the first client window (>= `first` guarantees a full page).
         maxResults: Math.max(first, QUERY_CANDIDATE_LIMIT),
@@ -1079,12 +1081,15 @@ export class SearchResolver {
       includeTypes,
       excludeTypes,
       semantic,
+      prefix,
       maxResults,
     }: {
       query: string;
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       semantic?: boolean;
+      /** Search as you type (`SearchInput.prefix`): keyword mode, last word matched as a prefix. */
+      prefix?: boolean;
       maxResults?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
@@ -1095,6 +1100,10 @@ export class SearchResolver {
     // Conceptual ranking on request; otherwise SearchService picks a mode by heuristic.
     if (semantic) {
       Object.assign(options, { mode: 'semantic' });
+    } else if (prefix) {
+      // Keyword only: the prefix match is a keyword-mode feature, and a menu
+      // that searches on every keystroke has no use for an embedding call.
+      Object.assign(options, { mode: 'keyword', prefix: true });
     }
 
     if (excludeTypes && excludeTypes.length > 0) {
@@ -1116,7 +1125,7 @@ export class SearchResolver {
     const viaMedia = await eventsForMatchingMedia(
       { searchService: this.searchService, contentService: this.contentService },
       context,
-      { query, maxResults: options.maxResults, semantic },
+      { query, maxResults: options.maxResults, semantic, prefix },
     );
 
     return mergeIdentifiers(direct, viaMedia);

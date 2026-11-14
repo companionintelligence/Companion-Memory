@@ -39,6 +39,39 @@ describe('redactRequestPath', () => {
     );
   });
 
+  /**
+   * A Companion sign-in's start and callback carry an invitation, a PKCE
+   * challenge, the native client's state, the Portal's authorization code and
+   * the OAuth state in the query. They are single-use, but logs get pasted into
+   * bug reports.
+   */
+  it('redacts the credentials in a Companion sign-in query, keeping the parameter names', () => {
+    expect(redactRequestPath('/authenticate/oidc/callback?code=abc123&state=def456')).toBe(
+      '/authenticate/oidc/callback?code=REDACTED&state=REDACTED',
+    );
+    expect(
+      redactRequestPath(
+        '/authenticate/oidc?signup_code=INVITE&client=native&code_challenge=xyz&app_state=s1&redirect=%2Fchat',
+      ),
+    ).toBe(
+      '/authenticate/oidc?signup_code=REDACTED&client=native&code_challenge=REDACTED&app_state=REDACTED&redirect=%2Fchat',
+    );
+    // Behind a proxy that keeps the prefix, and with a name sent percent-encoded.
+    expect(redactRequestPath('/api/authenticate/oidc/callback?c%6Fde=abc123&error=access_denied')).toBe(
+      '/api/authenticate/oidc/callback?c%6Fde=REDACTED&error=access_denied',
+    );
+    // Express matches routes case-insensitively, so this reaches the callback too.
+    expect(redactRequestPath('/Authenticate/OIDC/callback?code=abc123&state=def456')).toBe(
+      '/Authenticate/OIDC/callback?code=REDACTED&state=REDACTED',
+    );
+  });
+
+  it('leaves the query of other routes alone, including a `state` that is a filter', () => {
+    for (const url of ['/jobs?state=failed&limit=50', '/authenticate/oidc', '/authenticate/oidcfoo?code=1']) {
+      expect(redactRequestPath(url)).toBe(url);
+    }
+  });
+
   it('leaves every other path alone', () => {
     for (const url of [
       '/api/bluebubbles/config',

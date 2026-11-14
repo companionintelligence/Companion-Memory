@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DeviceKeyNotSavedError } from '@/hooks/deviceKeyNotSaved';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { DesktopSignInPage } from './DesktopSignInPage';
@@ -160,6 +161,14 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Sign in failed. Please try again.');
     expect(screen.queryByLabelText('Invitation')).not.toBeInTheDocument();
+  });
+
+  it('says the keyring is the problem when it would not save the sign-in', () => {
+    authError = new DeviceKeyNotSavedError(new Error('No default keyring'));
+    renderPage();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/keyring would not save your sign-in/);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Please try again.');
   });
 
   it('asks for an invitation when this Memory already has an owner, and sends it with the next attempt', () => {

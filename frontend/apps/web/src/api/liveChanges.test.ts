@@ -135,6 +135,106 @@ describe('liveChanges', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('announces every topic once when a dropped stream comes back but not on the first connect', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok');
+    const tasks = vi.fn();
+    const calendar = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    subscribeLiveChanges(['calendar'], calendar);
+    await first.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(tasks).not.toHaveBeenCalled();
+    expect(calendar).not.toHaveBeenCalled();
+
+    // Whatever changed while the stream was down was never announced.
+    const second = openStream();
+    first.close();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).toHaveBeenCalledTimes(1);
+    expect(calendar).toHaveBeenCalledTimes(1);
+
+    // An open stream announces only what the server sends.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces nothing to subscribers who arrive after everyone had left', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok');
+    const off = subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+    first.close();
+    await flush();
+    off();
+
+    const second = openStream();
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).not.toHaveBeenCalled();
+  });
+
+  it('reconnects at once when the browser comes back online', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+
+    const second = openStream();
+    first.close();
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    // Well inside the 1 s backoff.
+    window.dispatchEvent(new Event('online'));
+    await flush();
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    await second.opened;
+  });
+
+  it('replaces a stream still held when the browser comes back online and catches up', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+
+    // The offline spell never failed the open fetch.
+    const second = openStream();
+    window.dispatchEvent(new Event('online'));
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('catches up after a lapsed session while listeners stayed mounted', async () => {
+    const first = openStream();
+    setLiveChangesAuth('tok-1');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+
+    setLiveChangesAuth(null);
+    expect(isLiveChangesConnected()).toBe(false);
+
+    const second = openStream();
+    setLiveChangesAuth('tok-2');
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry a refused token, and connects when a new one is set', async () => {
     const refused = openStream(401);
     setLiveChangesAuth('stale');

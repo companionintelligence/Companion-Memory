@@ -6,6 +6,11 @@ import { v7 as uuid7 } from 'uuid';
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  compactSpellingsOf,
+  isGloballyUniqueNamespace,
+  type ObjectIdentifierNamespace,
+} from '@ci/common/objectIdentifier/normalizeObjectIdentifier';
+import {
   type BulkInsertResult,
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
@@ -37,6 +42,14 @@ const DEFAULT_ITEM_PAGE_SIZE = 50;
 
 /** Hard ceiling on a page, so `limit: 100000` still costs one page. */
 const MAX_ITEM_PAGE_SIZE = 200;
+
+/**
+ * The `identifier_codes` keys a model code may sit under. One family, because
+ * the spellings tell them apart: a GTIN is also filed as `upc` or `ean`, and a
+ * book's ISBN as its barcode (`gtin`, `ean`) or, by Amazon, as an all-digit
+ * `asin`. The aliases are `ReceiptService.CODE_KEY_NAMESPACES`' own.
+ */
+const MODEL_CODE_BAG_KEYS: readonly string[] = ['gtin', 'upc', 'ean', 'isbn', 'asin'];
 
 /**
  * Spanning-aggregate service for the object CTI split: an item is ONE
@@ -762,6 +775,56 @@ export class ItemService {
     const [item] = await this.composeMany([entity]);
 
     return item;
+  }
+
+  /**
+   * The unit you own of a product model, or `null` when you own none.
+   *
+   * Found by the unit's product link, or by the model's code in the unit's own
+   * `identifier_codes`, which is where an import such as Amazon's leaves it:
+   * the ASIN is claimed by the catalog model, and the unit's `product_id` stays
+   * empty. The bag keeps codes as their source wrote them, so a GTIN is looked
+   * for under its aliases and in every spelling that normalizes to it
+   * ({@link compactSpellingsOf}): `upc: '012345678905'`, or a book's ISBN-10
+   * under `asin`. A SKU or MPN is unique only within its brand, which the bag
+   * does not record, so for those only the product link counts.
+   *
+   * Of several units, one you still have (active, stored or lent out) comes
+   * first, then the most recently acquired.
+   */
+  async findOwnedUnitOfModel(
+    context: UserServiceContext,
+    productId: string,
+    code: { namespace: ObjectIdentifierNamespace; value: string },
+  ): Promise<Item | null> {
+    const bagKeys = !isGloballyUniqueNamespace(code.namespace)
+      ? []
+      : MODEL_CODE_BAG_KEYS.includes(code.namespace)
+        ? MODEL_CODE_BAG_KEYS
+        : [code.namespace];
+
+    const rows: Array<{ object_id: string }> = await this.itemRepository.query(
+      `SELECT o.object_id
+         FROM ci.objects o
+        WHERE o.user_id = $1::uuid
+          AND o.merged_into_object_id IS NULL
+          AND (
+                o.product_id = $2::uuid
+             OR EXISTS (
+                  SELECT 1
+                    FROM unnest($3::text[]) AS bag(key)
+                   WHERE upper(regexp_replace(o.identifier_codes ->> bag.key, '[^0-9A-Za-z]', '', 'g'))
+                         = ANY($4::text[])
+                )
+              )
+        ORDER BY (o.lifecycle_state IN ('active', 'stored', 'lent_out')) DESC,
+                 o.acquired_at DESC NULLS LAST,
+                 o.object_id DESC
+        LIMIT 1`,
+      [context.userId, productId, bagKeys, compactSpellingsOf(code.namespace, code.value)],
+    );
+
+    return rows.length === 0 ? null : this.findById(context, rows[0].object_id);
   }
 
   /**

@@ -644,7 +644,7 @@ row-level expiry and the in-process execution deadline, and a blank one means
 | `geocode` | 6 | web | — | — | `event.geocode-batch-request` |
 | `estimate-location` | 6 | web | — | — | `event.estimate-location-batch-request` |
 | `media-dimensions` | 6 | web | — | — | `file.media-dimensions-backfill-request` *(deprecated shim)* |
-| `document-parsing` | 6 | web | — | — | `file.uploaded` → text extraction |
+| `document-parsing` | 6 | web | — | — | `file.uploaded` → text extraction. `retryLimit 5`, `retryDelay 30`, so a document outlasts a parser restart |
 | `file-preview-generation` | 6 | web | — | — | `file.uploaded` → thumbnails |
 | `memory-file-entity` | 6 | web | — | — | `file.uploaded` → graph File node |
 | `import-inbox-provision` | 6 | web | — | — | `user.created` → inbox drop folders |
