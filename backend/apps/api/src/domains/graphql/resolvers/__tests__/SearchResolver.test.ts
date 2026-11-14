@@ -41,6 +41,8 @@ function makeResolver() {
     countEntitiesForContents: jest.fn().mockResolvedValue(0),
     // The How filter's ledger lookup for content candidates; none match by default.
     idsMatchingSourceSystems: jest.fn().mockResolvedValue(new Set<string>()),
+    // Which content hits are a note's Content mirror; none, unless a test says so.
+    noteMirrorIds: jest.fn(async (_context: unknown, _ids: string[]) => new Set<string>()),
   };
   const itemService = {
     getEntitiesForItems: jest.fn().mockResolvedValue([] as Identifier[]),
@@ -525,6 +527,84 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
     expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({
       excludeEventLinked: true,
     });
+  });
+
+  // A note folded into the graph (`fold-notes`) gets a Content row with the
+  // note's own id and its stored HTML as text, so the list showed every folded
+  // note twice, the second time as raw markup.
+  it("drops notes' Content mirrors from the browse fetch and from its total", async () => {
+    const { resolver, contentService } = makeResolver();
+
+    await resolver.search(ctx, {} as SearchInput);
+
+    expect(contentService.getEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
+    expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
+  });
+
+  it("drops a note's Content mirror from a query and keeps the note", async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon' } as SearchInput);
+
+    expect(contentService.noteMirrorIds).toHaveBeenCalledWith(ctx, ['n1', 'c1']);
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+  });
+
+  // The note's own entry can be missing from the index, or ranked past the
+  // candidate cut while its mirror made it in.
+  it('lists the note in place of a mirror that was found without it', async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'content', id: 'c1' },
+      { type: 'content', id: 'n1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon' } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+      { type: 'content', id: 'c1' },
+      { type: 'note', id: 'n1' },
+    ]);
+  });
+
+  it('drops the mirror outright where notes are filtered out', async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'content', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon', includeTypes: ['content'] } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([{ type: 'content', id: 'c1' }]);
+  });
+
+  it("lists a tagged note's mirror as the note, once", async () => {
+    const { resolver, tagService, contentService, entityResolutionService } = makeResolver();
+    tagService.getEntitiesForTags.mockResolvedValue([
+      { type: 'content', id: 'n1' },
+      { type: 'note', id: 'n1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { tags: ['trip'] } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([{ type: 'note', id: 'n1' }]);
   });
 
   it('does not apply the event-linked exclusion to a tag search', async () => {

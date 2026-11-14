@@ -3,6 +3,8 @@
 //! auto-restart of a crashed stack in v1 — this loop only reports status and
 //! offers manual controls.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -13,6 +15,19 @@ use tauri_plugin_opener::OpenerExt;
 use crate::{local_model, stack_manager, StackPathsState};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(9);
+
+/// How long Quit waits for the stack to stop before it quits anyway. Compose
+/// gives each container 10s to stop, across a few dependency tiers, and the
+/// wait can include an `up` that was already running. A Docker daemon that
+/// never answers (Docker Desktop wedged after a sleep, say) must not leave an
+/// app that cannot be quit.
+const QUIT_STOP_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Set once Quit starts stopping the stack. The tray stays up for the seconds
+/// that takes and every menu item is ignored from then on: a second Quit or a
+/// Stop would run a second `docker compose down` beside the first, and if that
+/// one returned first the app would exit with the first still running.
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Companion Memory", true, None::<&str>)?;
@@ -56,6 +71,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn handle_menu_event(app: &AppHandle, id: &str) {
+    if QUITTING.load(Ordering::SeqCst) {
+        return;
+    }
+
     match id {
         "show" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -79,8 +98,44 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             // the same treatment: kill them before quitting, or an orphaned
             // Ollama sidecar / Apple bridge process lingers with nothing left
             // to talk to it.
-            app.state::<local_model::LocalModelHandles>().shutdown();
-            app.exit(0);
+            //
+            // Which means that when this app is what serves the stack its
+            // model, quitting takes the model away from containers that keep
+            // running: Memory went on answering in a browser and to agents
+            // while chat, search and summaries all failed with nothing to say
+            // the app had been closed. So in that case Quit stops the stack
+            // first. It starts again with the app.
+            let handles = app.state::<local_model::LocalModelHandles>();
+            if !handles.serves_the_stack() {
+                handles.shutdown();
+                app.exit(0);
+                return;
+            }
+
+            QUITTING.store(true, Ordering::SeqCst);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let paths = app.state::<StackPathsState>().0.clone();
+            let app = app.clone();
+            // `docker compose down` takes seconds; off the event loop.
+            std::thread::spawn(move || {
+                log::info!("Quit: stopping the stack, which loses its model when this app exits");
+                let (stopped_tx, stopped_rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = stopped_tx.send(stack_manager::stop_stack_for_quit(&paths));
+                });
+                match stopped_rx.recv_timeout(QUIT_STOP_TIMEOUT) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => log::error!("Quit: could not stop the stack: {e}"),
+                    Err(_) => log::error!(
+                        "Quit: the stack had not stopped after {}s; quitting anyway",
+                        QUIT_STOP_TIMEOUT.as_secs()
+                    ),
+                }
+                app.state::<local_model::LocalModelHandles>().shutdown();
+                app.exit(0);
+            });
         }
         _ => {}
     }
