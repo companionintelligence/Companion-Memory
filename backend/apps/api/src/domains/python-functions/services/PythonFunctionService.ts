@@ -69,4 +69,14 @@ export class PythonFunctionService {
 
     return enqueued;
   }
+
+  /**
+   * Whether a job with this singletonKey is still waiting, retrying or running
+   * on `target`'s queue. `dispatch` alone cannot say: the queues' `short` policy
+   * refuses a duplicate only while the first copy is still waiting, so once it
+   * is running a second dispatch is accepted and both run side by side.
+   */
+  async hasLiveJob(target: PythonFunctionTarget, singletonKey: string): Promise<boolean> {
+    return this.eventService.hasLiveJob(PYTHON_FUNCTION_QUEUES[target], singletonKey);
+  }
 }

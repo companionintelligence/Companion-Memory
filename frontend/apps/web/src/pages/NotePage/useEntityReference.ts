@@ -40,7 +40,7 @@ const MAX_RESULTS = 8;
 
 const REFERENCE_SEARCH = gql(`
   query NoteReferenceSearch($query: String!, $includeTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes }) {
+    search(input: { query: $query, includeTypes: $includeTypes, prefix: true }) {
       edges {
         node {
           __typename

@@ -171,6 +171,27 @@ describe('EntityRelationshipCards', () => {
     expect(screen.getAllByText('Frida Friend')).toHaveLength(1);
   });
 
+  it('says "you" in a client card on the owner\'s own page and "them" on anyone else\'s', () => {
+    const clientOf = (focusProperties: Record<string, unknown>): Subgraph => ({
+      nodes: [{ ...SUBGRAPH.nodes[0], properties: focusProperties }, SUBGRAPH.nodes[1]],
+      links: [{ ...SUBGRAPH.links[0], relationship_type: 'CLIENT_OF' }],
+    });
+
+    useNodeGraphServiceMock.mockReturnValue({
+      data: clientOf({ is_self: true }),
+      loading: false,
+      error: null,
+    });
+    const { unmount } = renderCards();
+    // Wraps instead of cutting to one line, so a long phrase stays readable on a narrow card.
+    expect(screen.getByText('Has you as a client')).toHaveClass('line-clamp-3');
+    unmount();
+
+    useNodeGraphServiceMock.mockReturnValue({ data: clientOf({}), loading: false, error: null });
+    renderCards();
+    expect(screen.getByText('Has them as a client')).toBeInTheDocument();
+  });
+
   it('filters cards down to the given neighbor entity types', () => {
     useNodeGraphServiceMock.mockReturnValue({
       data: {

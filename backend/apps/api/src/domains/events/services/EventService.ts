@@ -73,6 +73,15 @@ export abstract class EventService {
   abstract getJob(queue: string, jobId: string): Promise<QueuedJob | null>;
 
   /**
+   * Whether a job with `singletonKey` on `queue` is still waiting, retrying or
+   * running. A `short` queue refuses a duplicate key only while the first copy
+   * is still waiting; once it is running, the next send is accepted. A caller
+   * that must not start a second copy of a long run asks this first. Always
+   * false where there is no persistent queue (LocalEventService).
+   */
+  abstract hasLiveJob(queue: string, singletonKey: string): Promise<boolean>;
+
+  /**
    * Every queue that exists — the union of all listener queues plus the default.
    * This is the set of queues to CREATE and to run workers for, and the set an
    * explicitly requested `options.queue` is validated against.
