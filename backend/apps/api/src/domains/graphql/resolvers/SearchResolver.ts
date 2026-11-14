@@ -779,20 +779,32 @@ export class SearchResolver {
 
     if (query != null) {
       candidateSource = 'query';
-      identifiers = await this.searchByQuery(serviceContext, {
-        query,
-        includeTypes: input.includeTypes,
-        excludeTypes: input.excludeTypes,
-        // Force conceptual ranking when the caller asked for semantic search.
-        semantic: input.semantic === true,
-        prefix: input.prefix === true,
-        // Always fetch a deep candidate pool so the in-memory Paginator can page
-        // past the first client window (>= `first` guarantees a full page).
-        maxResults: Math.max(first, QUERY_CANDIDATE_LIMIT),
-      });
+      // A folded note's mirror is the note (foldNoteMirrors); the index already
+      // applied the type filter, so a mirror only stands in for its note where
+      // notes are wanted.
+      identifiers = await this.foldNoteMirrors(
+        serviceContext,
+        await this.searchByQuery(serviceContext, {
+          query,
+          includeTypes: input.includeTypes,
+          excludeTypes: input.excludeTypes,
+          // Force conceptual ranking when the caller asked for semantic search.
+          semantic: input.semantic === true,
+          prefix: input.prefix === true,
+          // Always fetch a deep candidate pool so the in-memory Paginator can page
+          // past the first client window (>= `first` guarantees a full page).
+          maxResults: Math.max(first, QUERY_CANDIDATE_LIMIT),
+        }),
+        this.matchesTypeFilter('note', input.includeTypes, input.excludeTypes),
+      );
     } else if (tags != null) {
       candidateSource = 'tags';
-      identifiers = await this.searchByTags(serviceContext, tags);
+      // The type filter runs on these below, after the mirrors became notes.
+      identifiers = await this.foldNoteMirrors(
+        serviceContext,
+        await this.searchByTags(serviceContext, tags),
+        true,
+      );
     } else {
       candidateSource = 'timed';
       // Which way every table is read: upwards only for an explicit "oldest first", so that each
@@ -1131,6 +1143,59 @@ export class SearchResolver {
     return mergeIdentifiers(direct, viaMedia);
   }
 
+  /**
+   * Turn the `content` hits that are a note's Content mirror into the note:
+   * the row `NoteContentFoldService` writes with the note's own id and its
+   * stored HTML as text. The search index and the tags hold the note and the
+   * mirror as two entries, so a folded note came back twice, once as raw
+   * markup.
+   *
+   * The mirror's hit stands in for the note at its own rank rather than being
+   * dropped: the note's entry can be missing from the index, or ranked past the
+   * candidate cut while the mirror made it. A note reached both ways keeps its
+   * first place. Where notes are filtered out (`keepNotes` false) the mirror
+   * goes with them, and a deleted note's mirror resolves to nothing.
+   */
+  private async foldNoteMirrors<T extends IndexableEntity | TaggableEntity>(
+    context: UserServiceContext,
+    identifiers: EntityIdentifier<T>[],
+    keepNotes: boolean,
+  ): Promise<EntityIdentifier<T>[]> {
+    const contentIds = identifiers.filter(({ type }) => type === 'content').map(({ id }) => id);
+
+    if (contentIds.length === 0) {
+      return identifiers;
+    }
+
+    const mirrors = await this.contentService.noteMirrorIds(context, contentIds);
+
+    if (mirrors.size === 0) {
+      return identifiers;
+    }
+
+    const notesSeen = new Set<string>();
+
+    return identifiers.flatMap((identifier) => {
+      const isMirror = identifier.type === 'content' && mirrors.has(identifier.id);
+
+      if (isMirror && !keepNotes) {
+        return [];
+      }
+
+      const kept = isMirror ? { ...identifier, type: 'note' as T } : identifier;
+
+      if (kept.type === 'note') {
+        if (notesSeen.has(kept.id)) {
+          return [];
+        }
+
+        notesSeen.add(kept.id);
+      }
+
+      return [kept];
+    });
+  }
+
   private async searchByTags(
     context: UserServiceContext,
     tags: string[],
@@ -1362,11 +1427,13 @@ export class SearchResolver {
       wants('file-chunk') ? this.fileChunkService.getEntitiesForFileChunks(context, fileChunkOptions) : [],
       wants('note') ? this.noteService.getEntitiesForNotes(context, rowTimeOptions) : [],
       // Event-linked content is a facet of an event the same merge already
-      // returns — see ContentService.getEntitiesForContents.
+      // returns, and a note's Content mirror is a copy of the note. See
+      // ContentService.getEntitiesForContents.
       wants('content')
         ? this.contentService.getEntitiesForContents(context, {
             ...sourcedRowTimeOptions,
             excludeEventLinked: true,
+            excludeNoteMirrors: true,
           })
         : [],
       wants('person') ? this.personService.getEntitiesForPeople(context, rowTimeOptions) : [],
@@ -1486,6 +1553,7 @@ export class SearchResolver {
         ? this.contentService.countEntitiesForContents(context, {
             ...sourcedOptions,
             excludeEventLinked: true,
+            excludeNoteMirrors: true,
           })
         : 0,
       wants('person') ? this.personService.countEntitiesForPeople(context, dateOptions) : 0,
