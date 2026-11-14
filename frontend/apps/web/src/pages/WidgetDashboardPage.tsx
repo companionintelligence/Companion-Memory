@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { gql } from '@apollo/client';
@@ -12,6 +12,7 @@ import { Link } from 'react-router-dom';
 import { useFeatures } from '@/common/feature';
 import { forecastStatusLabel } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
+import { useSessionAuth } from '@/hooks';
 import { classTitle } from '@/lib/activityPalette';
 import { starterPromptsFor } from '@/pages/ChatPage/starterPrompts';
 
@@ -314,12 +315,28 @@ export default function WidgetDashboardPage() {
   });
   const [jobs, setJobs] = useState<JobsData | null>(null);
   const [jobsUpdatedAt, setJobsUpdatedAt] = useState<string | null>(null);
+  // `/api/jobs/dashboard` is REST, so nothing adds the session's token the way
+  // Apollo does for the other three cards. Without it a browser session got 401
+  // on every load and the card never left "Waiting for sync". These are the
+  // headers the Jobs page sends: the bearer on web, none on native, where
+  // `fetchJson` adds the API key.
+  const { ready: jobsAuthReady, headers: jobsHeaders } = useSessionAuth();
+  // Read at request time rather than listed as a dependency. The web JWT is
+  // rotated every few minutes, and re-running the effect on each rotation would
+  // fetch the dashboard again straight away and restart the 15-minute timer, so
+  // the card would poll at the rotation rate instead.
+  const jobsHeadersRef = useRef(jobsHeaders);
+  jobsHeadersRef.current = jobsHeaders;
 
   useEffect(() => {
+    if (!jobsAuthReady) {
+      return;
+    }
+
     let active = true;
     const refresh = async () => {
       try {
-        const result = await fetchJson<JobsData>('/api/jobs/dashboard');
+        const result = await fetchJson<JobsData>('/api/jobs/dashboard', { headers: jobsHeadersRef.current });
         if (active && result?.summary) {
           setJobs(result);
           setJobsUpdatedAt(new Date().toISOString());
@@ -336,7 +353,19 @@ export default function WidgetDashboardPage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [jobsAuthReady]);
+
+  // Each card's "Updated" time follows its own data. Stamped inside the snapshot
+  // memo, a Jobs refresh would move the Plan and Stats times to now even though
+  // neither query had run again.
+  const tasksUpdatedAt = useMemo(
+    () => (tasks.data?.tasks ? new Date().toISOString() : null),
+    [tasks.data?.tasks],
+  );
+  const metricsUpdatedAt = useMemo(
+    () => (metrics.data?.dailyMetrics ? new Date().toISOString() : null),
+    [metrics.data?.dailyMetrics],
+  );
 
   const snapshot = useMemo(
     () =>
@@ -345,13 +374,21 @@ export default function WidgetDashboardPage() {
         forecast: forecast.data?.forecast,
         metrics: metrics.data?.dailyMetrics,
         jobs,
-        tasksUpdatedAt: tasks.data?.tasks ? new Date().toISOString() : null,
-        metricsUpdatedAt: metrics.data?.dailyMetrics ? new Date().toISOString() : null,
+        tasksUpdatedAt,
+        metricsUpdatedAt,
         jobsUpdatedAt,
         // The calendar legend's words, as the phone's widgets get them too.
         predictionLabel: classTitle,
       }),
-    [forecast.data?.forecast, jobs, jobsUpdatedAt, metrics.data?.dailyMetrics, tasks.data?.tasks],
+    [
+      forecast.data?.forecast,
+      jobs,
+      jobsUpdatedAt,
+      metrics.data?.dailyMetrics,
+      metricsUpdatedAt,
+      tasks.data?.tasks,
+      tasksUpdatedAt,
+    ],
   );
 
   const promptList = starterPromptsFor(isFeatureEnabled).slice(0, 3);

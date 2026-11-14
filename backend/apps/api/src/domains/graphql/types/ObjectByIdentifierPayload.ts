@@ -27,9 +27,9 @@ registerEnumType(ObjectIdentifierSubjectKind, {
  * The entry point for the barcode flow, and deliberately not a bare item —
  * subject-polymorphism is the whole reason `ci.object_identifiers` exists. A
  * GTIN identifies the MODEL (`product` is set, `item` is not, and the caller is
- * being told "you know what this is, you do not own one yet"); a serial
- * identifies one owned INSTANCE (`item` is set). `matched: false` means the
- * code normalized fine and nothing claims it.
+ * being told "you know what this is"; `ownedItem` says whether you own one); a
+ * serial identifies one owned INSTANCE (`item` is set). `matched: false` means
+ * the code normalized fine and nothing claims it.
  *
  * A code that cannot be normalized at all — an unreadable barcode, a failed
  * check digit — also comes back unmatched rather than as an error: an
@@ -59,6 +59,20 @@ export class ObjectByIdentifierPayload {
   /** Set when the code identifies one owned unit (a serial, an IMEI, a VIN). */
   @Field(() => ItemType, { nullable: true })
   item?: ItemType | null;
+
+  /**
+   * For a model code, a unit of that model you own: linked to the model, or
+   * carrying the code in its own `identifier_codes`, which is where an Amazon
+   * import leaves an ASIN. One you still have comes first; a unit you returned
+   * or used up is answered only when it is the only one. Null when you have no
+   * unit of the model, and for an instance code.
+   *
+   * Not the claim holder, which is why it is not `item`: a caller asking who
+   * holds a code (to offer a merge) must not be handed a unit that merely
+   * shares the model.
+   */
+  @Field(() => ItemType, { nullable: true })
+  ownedItem?: ItemType | null;
 
   /**
    * Set when the code identifies a catalog model (a GTIN, an ASIN).

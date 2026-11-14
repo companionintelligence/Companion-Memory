@@ -40,6 +40,45 @@ describe('formatRelationshipPhrase', () => {
     ).toBe('You emailed');
   });
 
+  it('names the neighbor as the parent or child of the page it is on, not "your parent"', () => {
+    // You PARENT_OF your child: on the child's page your card is their parent.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: false })).toBe('Parent');
+    // Your parent PARENT_OF you: on your parent's page your card is their child.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true })).toBe('Child');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: true })).toBe('Parent');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: false })).toBe('Child');
+  });
+
+  it('names a client or an emergency contact the right way round', () => {
+    // You CLIENT_OF your accountant: on your page their card must not say "Your client".
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: true })).toBe('Has them as a client');
+    // On the accountant's page your card is their client.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: false })).toBe('Client');
+    // Your sister EMERGENCY_CONTACT_FOR you: on your page she is your emergency contact.
+    expect(formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: false })).toBe(
+      'Emergency contact',
+    );
+    // On her page your card has her as emergency contact; it used to say you were hers.
+    expect(formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: true })).toBe(
+      'Has them as emergency contact',
+    );
+  });
+
+  it('says "you" for the page\'s person on the owner\'s own page', () => {
+    // You CLIENT_OF your accountant: on your own Self page their card has you as a client.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe(
+      'Has you as a client',
+    );
+    expect(
+      formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: true, focusIsOwner: true }),
+    ).toBe('Has you as emergency contact');
+    // Phrases that never name the page's person read the same on any page.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: false, focusIsOwner: true })).toBe(
+      'Client',
+    );
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe('Child');
+  });
+
   it('hides leftover associated-with edges that have no original type', () => {
     expect(formatRelationshipPhrase('ASSOCIATED_WITH', { focusIsSource: true })).toBeNull();
   });

@@ -23,7 +23,9 @@ vi.mock('@/common/feature', async () => {
 });
 
 vi.mock('./useFeedBadgeCount', () => ({ useFeedBadgeCount: () => 0 }));
-vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount: () => h.planBadgeCount }));
+const usePlanBadgeCount = vi.hoisted(() => vi.fn((_enabled?: boolean) => 0));
+
+vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount }));
 
 function renderSubmenu(route = '/plan', { expanded = true }: { expanded?: boolean } = {}) {
   if (expanded) {
@@ -46,6 +48,7 @@ describe('PlanningSubmenu', () => {
     localStorage.removeItem(STORAGE_KEY);
     h.planningPageEnabled = true;
     h.planBadgeCount = 0;
+    usePlanBadgeCount.mockImplementation(() => h.planBadgeCount);
   });
 
   it('collapses to a single icon link to /plan when the rail is collapsed', () => {
@@ -92,6 +95,8 @@ describe('PlanningSubmenu', () => {
 
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    // Its count would be shown nowhere, so it is not fetched or kept live either.
+    expect(usePlanBadgeCount).toHaveBeenLastCalledWith(false);
   });
 
   // Tasks and Calendar start on Planning's label column, hung off a guide
