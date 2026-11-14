@@ -30,6 +30,11 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   chromium: 'Chrome',
   claude: 'Claude',
   chatgpt: 'ChatGPT',
+  // Agents that store their conversations with the owner (POST /memory/turn). Hidden from the
+  // explorer until How names one of these.
+  openclaw: 'OpenClaw',
+  hermes: 'Hermes',
+  agent: 'Agent',
   github_events: 'GitHub',
   reddit: 'Reddit',
   reddit_posts: 'Reddit',

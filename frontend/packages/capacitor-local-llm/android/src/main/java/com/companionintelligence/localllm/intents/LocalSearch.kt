@@ -98,6 +98,9 @@ object LocalSearch {
      */
     private const val RANK_WEIGHTS = "10.0, 1.0"
 
+    /** Leaves out the messages an agent stored as its side of a chat with the owner. */
+    const val AGENT_TURN_EXCLUDED = "json_extract(d.detail, '$.agent_turn') IS NULL"
+
     data class Statement(val sql: String, val params: List<String>)
 
     /** The scope a call asks for: the lean kinds it names, else every lean kind. */
@@ -171,6 +174,10 @@ object LocalSearch {
 
         where += "$typeTerm IN (${types.joinToString(", ") { "?" }})"
         params += types
+        // An agent's chats with the owner (entityDeviceRecord version 6) stay out, as the appliance's
+        // knowledge.search leaves them out by default. Read from `detail`, not the replica's
+        // generated `agent_turn` column: the web layer adds that column, and this can run first.
+        where += AGENT_TURN_EXCLUDED
 
         args.since?.let { occurredAtBound(it, Edge.LOWER) }?.let {
             where += "d.occurred_at >= ?"
@@ -284,7 +291,7 @@ object LocalSearch {
         return item
     }
 
-    private val HIDDEN_DETAIL_KEYS = setOf("from_id", "to_ids", "people", "location_id", "participants_truncated")
+    private val HIDDEN_DETAIL_KEYS = setOf("from_id", "to_ids", "people", "location_id", "participants_truncated", "agent_turn")
 
     private fun scopeLabel(scope: List<String>): String =
         if (scope.toSet() == LEAN_ENTITY_TYPES.toSet()) "entries" else scope.joinToString(", ") { plural(it) }

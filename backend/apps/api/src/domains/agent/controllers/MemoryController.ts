@@ -21,7 +21,9 @@ import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import {
+  adoptIngestIdentity,
   AGENT_TURN_MESSAGE_CATEGORY,
+  agentTurnSourceSystem,
   CommunicationService,
   CommunicationType,
   UserContextService,
@@ -249,6 +251,9 @@ export class MemoryController {
       );
     let created = 0;
     let skipped = 0;
+    // The agent is the turn's source, so the explorer's How filter can offer it by name and keep
+    // every agent turn out of the default views (AGENT_TURN_MESSAGE_CATEGORY).
+    const sourceSystem = agentTurnSourceSystem(platform);
 
     for (const message of persistableMessages) {
       const content = message.content.trim();
@@ -286,6 +291,9 @@ export class MemoryController {
           content,
           preview: content.slice(0, 240),
           category: AGENT_TURN_MESSAGE_CATEGORY,
+          source_type: 'agent-turn',
+          source_system: sourceSystem,
+          source_id: adoptIngestIdentity(sourceSystem, id).id,
         });
         created += 1;
       } catch (err) {

@@ -64,4 +64,27 @@ describe('MemoryController POST /memory/turn', () => {
       ['assistant', 'inbound'],
     ]);
   });
+
+  it('records the agent as the source, so the How filter can name it', async () => {
+    const { controller, created } = makeController();
+
+    await controller.turn({ userId: USER_ID } as RequestContext, {
+      platform: 'OpenClaw',
+      sessionId: 'session-1',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    await controller.turn(
+      { userId: USER_ID } as RequestContext,
+      {
+        sessionId: 'session-2',
+        messages: [{ role: 'user', content: 'hello again' }],
+      } as never,
+    );
+
+    expect(created.map((row) => [row.source_type, row.source_system, row.source_id === row.id])).toEqual([
+      ['agent-turn', 'openclaw', true],
+      ['agent-turn', 'agent', true],
+    ]);
+    expect(created.every((row) => row.category === 'agent-turn')).toBe(true);
+  });
 });

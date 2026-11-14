@@ -162,12 +162,19 @@ export class ActivityTimelineService {
     const query = filters.query?.trim();
 
     if (query) {
+      // Agents' conversation turns count only when How names the agent, as the explorer lists them.
+      const showAgentTurnsFrom = filters.connectors?.filter(Boolean) ?? [];
       const searchOptions =
         filters.includeTypes != null && filters.includeTypes.length > 0
-          ? { query, maxResults: SEARCH_BUCKET_LIMIT, includeTypes: filters.includeTypes }
+          ? { query, maxResults: SEARCH_BUCKET_LIMIT, includeTypes: filters.includeTypes, showAgentTurnsFrom }
           : filters.excludeTypes != null && filters.excludeTypes.length > 0
-            ? { query, maxResults: SEARCH_BUCKET_LIMIT, excludeTypes: filters.excludeTypes }
-            : { query, maxResults: SEARCH_BUCKET_LIMIT };
+            ? {
+                query,
+                maxResults: SEARCH_BUCKET_LIMIT,
+                excludeTypes: filters.excludeTypes,
+                showAgentTurnsFrom,
+              }
+            : { query, maxResults: SEARCH_BUCKET_LIMIT, showAgentTurnsFrom };
 
       identifiers = await this.searchService.search(context, searchOptions);
 

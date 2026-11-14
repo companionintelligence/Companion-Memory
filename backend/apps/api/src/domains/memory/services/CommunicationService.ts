@@ -44,7 +44,7 @@ import {
   ContentRemovedEvent,
 } from '../events';
 import { ledgerPlatform } from '../identity';
-import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
+import { AGENT_TURN_MESSAGE_CATEGORY, CreateCommunicationDto, UpdateCommunicationDto } from '../types';
 
 import { type PurgedCommunications, purgeCommunicationAggregates } from './communicationPurge';
 import { CtiAggregate, detailChanged, type RepositoryProvider } from './CtiAggregate';
@@ -1053,6 +1053,12 @@ export class CommunicationService {
       query = query.andWhere('communications.source_system IN (:...connectors)', {
         connectors: options.connectors,
       });
+    } else {
+      // An agent's conversation turns stay out of the explorer until its How filter names that
+      // agent; the IN above already admits exactly the named agents' turns.
+      query = query.andWhere('communications.category IS DISTINCT FROM :agentTurn', {
+        agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
+      });
     }
 
     if (options.people && options.people.length > 0) {
@@ -1096,6 +1102,12 @@ export class CommunicationService {
     if (options.connectors && options.connectors.length > 0) {
       query = query.andWhere('communications.source_system IN (:...connectors)', {
         connectors: options.connectors,
+      });
+    } else {
+      // An agent's conversation turns stay out of the explorer until its How filter names that
+      // agent; the IN above already admits exactly the named agents' turns.
+      query = query.andWhere('communications.category IS DISTINCT FROM :agentTurn', {
+        agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
       });
     }
 
@@ -1173,6 +1185,11 @@ export class CommunicationService {
         .select('communication.userId', 'user_id')
         .addSelect(`date_trunc('hour', communication.time, 'UTC')`, 'bucket_start')
         .addSelect('COUNT(*)::int', 'count')
+        // The heatmap's default (no How) leaves agents' conversation turns out, as the explorer
+        // does; a How that names an agent counts its turns from the table, not this rollup.
+        .where('communication.category IS DISTINCT FROM :agentTurn', {
+          agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
+        })
         .groupBy('user_id')
         .addGroupBy('bucket_start')
         .getRawMany();

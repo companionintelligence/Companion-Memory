@@ -50,8 +50,11 @@
  * 4: a place's time became its latest visit, not its promotion time.
  * 5: a photo's or video's time (content, and a file through its content row) became when it was
  *    taken, its media event's start, not when it was imported; an undated one has none.
+ * 6: a message an agent stored as one side of its conversation with the owner (POST /memory/turn)
+ *    carries `agent_turn: true`, so the phone hides it by default as the appliance does. Its own
+ *    key, not `category`: the event leg already writes `category`, for the event's category.
  */
-export const DEVICE_RECORD_VERSION = 5;
+export const DEVICE_RECORD_VERSION = 6;
 
 /**
  * Fixed namespace for the conversation uuid (`uuid_generate_v5`). Arbitrary but
@@ -116,7 +119,8 @@ export function entityDeviceRecordSql(alias: string): string {
                                       ELSE jsonb_strip_nulls(jsonb_build_object('from', c.participants_metadata -> 'from'))
                                  END,
                  'participants_truncated', CASE WHEN length(c.participants_metadata::text) > ${DEVICE_PARTICIPANTS_MAX_CHARS}
-                                                THEN true END`)}
+                                                THEN true END,
+                 'agent_turn', CASE WHEN c.category = 'agent-turn' THEN true END`)}
           FROM ci.communications c
          WHERE ${type} = 'communication' AND c.id = ${id}
 
