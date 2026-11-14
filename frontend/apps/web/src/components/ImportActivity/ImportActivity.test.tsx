@@ -412,6 +412,20 @@ describe('ImportActivityCard', () => {
     );
   });
 
+  it('says where a failed stage stopped as a stop, not as work in progress', () => {
+    const failed = stage({
+      kind: 'parse',
+      status: 'failed',
+      queueState: 'done',
+      phase: 'parsing gmail (3/13)',
+      processed: 8_141,
+      total: null,
+      error: 'parse [phase=parsing gmail (3/13)] unexpected end of mbox',
+    });
+
+    expect(describeStage(failed)).toBe('failed while parsing gmail (3/13) · 8.1k');
+  });
+
   /**
    * Reproduced 2026-09-29: a worker restarted mid-parse, and this line went on
    * pulsing "running" over counts frozen at 8141, with no error, for the twelve

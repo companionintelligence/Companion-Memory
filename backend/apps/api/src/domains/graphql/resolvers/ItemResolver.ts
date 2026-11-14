@@ -456,7 +456,10 @@ export class ItemResolver {
    * Subject-polymorphic by design. A GTIN answers with a product MODEL — you
    * know what it is, you may not own one — and a serial answers with the owned
    * INSTANCE. An instance answer carries its model too, so one scan resolves
-   * both "which one" and "what is it".
+   * both "which one" and "what is it". A model answer carries the unit you own
+   * of that model as `ownedItem`, when there is one
+   * ({@link ItemService.findOwnedUnitOfModel}), so scanning the box of something
+   * you bought opens it.
    *
    * An unreadable code (failed check digit, wrong length) comes back unmatched
    * rather than as an error: a bad scan is a scan, not a client bug.
@@ -493,6 +496,13 @@ export class ItemResolver {
 
     if (match.subjectType === 'product_model') {
       const product = await this.productModelService.findById(serviceContext, match.subjectId);
+      const owned =
+        product == null
+          ? null
+          : await this.itemService.findOwnedUnitOfModel(serviceContext, product.id, {
+              namespace: match.namespace,
+              value: match.valueNormalized,
+            });
 
       return {
         matched: product != null,
@@ -500,6 +510,8 @@ export class ItemResolver {
         value: match.valueNormalized,
         subjectType: match.subjectType,
         confidence: match.confidence,
+        item: null,
+        ownedItem: owned ? ItemType.toType(owned) : null,
         product: product ? ProductModelType.toType(product) : null,
       };
     }

@@ -19,6 +19,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserEntity } from '@ci/domains/user';
 
@@ -58,6 +59,8 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
       UserEntity,
     ]),
     SearchNextModule,
+    // PlaceService: a photo ask finds photos by the place they were taken, as chat does.
+    MemoryModule,
   ],
   providers: [
     AskService,
