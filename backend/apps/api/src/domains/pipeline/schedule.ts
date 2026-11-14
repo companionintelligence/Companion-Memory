@@ -923,6 +923,14 @@ export type DuenessReason =
    * not folded into it.
    */
   | 'retry_due'
+  /**
+   * Swept more recently than `minInterval` but not yet in the window that is
+   * open now, while the interval runs out before the next one opens. Skipping
+   * this window would hold the leg back a whole extra night, so this window is
+   * its turn. A metered stage takes it only when its interval runs out
+   * before THIS window shuts, so it never gains a window.
+   */
+  | 'due_before_next_window'
   /** Swept more recently than `minInterval`, and nothing of it is a due retry. */
   | 'too_soon'
   /** Due by interval, but the window is shut and it is not yet overdue. */
@@ -962,7 +970,8 @@ export interface StageDueness {
   /**
    * The instant `minInterval` elapses for this leg — the earliest moment it
    * could become due. `null` when the interval has already elapsed, when the leg
-   * has never run, and for a manual stage.
+   * has never run, for a manual stage and whenever the leg is due anyway
+   * (`retry_due`, `due_before_next_window`).
    *
    * Deliberately NOT "when will this next run": that also depends on when the
    * enrichment window next opens, which is `WindowStatus.nextOpensAt`'s answer
@@ -974,6 +983,18 @@ export interface StageDueness {
 
   /** The declaration this decision came from. Carried so a caller need not re-read it. */
   schedule: StageSchedule;
+}
+
+/**
+ * The open window's edges, as {@link stageDueness} reads them: `WindowStatus.opensAt`,
+ * `closesAt` and `nextOpensAt`. Declared here rather than picked off `WindowStatus` so this
+ * file stays free of the service that owns the clock.
+ */
+export interface WindowBounds {
+  opensAt: Date;
+  /** When the open window shuts on the clock, budget aside. Read for a metered leg. */
+  closesAt: Date;
+  nextOpensAt: Date;
 }
 
 /**
@@ -1014,13 +1035,15 @@ export interface StageDueness {
  *
  * ── The order of the checks is the policy ──────────────────────────────────
  *
- * `manual` → `maxStaleness` → `minInterval` → `retryDue` → `window`. Staleness
- * is tested BEFORE the window because it is the window's override; testing it
- * after would make an appliance that is asleep every night permanently
- * un-enriched, which is the failure this whole rebuild exists to delete.
- * `minInterval` is tested before the window because a leg swept an hour ago is
- * not due at any hour, and reporting `outside_window` for it would send a
- * reader looking at the clock instead of at the interval.
+ * `manual` → `maxStaleness` → `minInterval` (counted in windows for a
+ * windowed leg, see below) → `retryDue` → `window`. Staleness is tested BEFORE
+ * the window because it is the window's override; testing it after would make
+ * an appliance that is asleep every night permanently un-enriched, which is the
+ * failure this whole rebuild exists to delete. `minInterval` is tested before
+ * the window because a leg swept an hour ago is not due at any hour (unless the
+ * window has opened since, see below), and reporting
+ * `outside_window` for it would send a reader looking at the clock instead of
+ * at the interval.
  *
  * ── Why `hasOverdueRetry` is a THIRD input, next to the clock and the window ─
  *
@@ -1040,6 +1063,34 @@ export interface StageDueness {
  * unbounded spend `minInterval` exists to prevent (see {@link
  * StageDueness.overdue} for why it still respects the window, unlike
  * `maxStaleness`).
+ *
+ * ── Why a windowed leg counts its interval in WINDOWS ──────────────────────
+ *
+ * A never-run leg ignores the window, so a new account's nightly legs first
+ * run in the afternoon. Measured in plain hours, `minInterval: 1 * DAYS` from
+ * a 14:00 start is not up until 14:00 tomorrow, after that night's 01:00 to
+ * 06:00 window has shut, so the leg skipped its first night and ran on the
+ * second: people added on day one got their merge suggestions on the third
+ * morning. The same arithmetic let a leg that started at 01:05 last night wait
+ * until 01:05 tonight, creeping later each night until it fell off the end of
+ * the window. `windowBounds` closes both: while the window is open, a leg that
+ * has not started in THIS window and whose interval runs out before the NEXT
+ * window opens is due now (`due_before_next_window`). It still runs at most
+ * once per window, since a start inside it is not before `opensAt`.
+ *
+ * A METERED leg only counts up to the end of THIS window: it is due early
+ * when its interval runs out before the open window shuts (`closesAt`), not
+ * before the next one opens. That moves its start to the window's opening, in
+ * the window it would have run in anyway, and never gives it an extra one.
+ * Measured to `nextOpensAt` instead, a daily leg swept at 00:58 by
+ * `maxStaleness` would be swept again when the window opens at 01:00, and a
+ * weekly one would come round after six days: a second `perRunCap` against
+ * somebody else's server sooner than `minInterval` allows. A local leg is
+ * allowed that, which is what gives a leg first swept in the afternoon that
+ * night's window. Taking its window at the opening also keeps a weekly metered
+ * producer due on the same tick as the nightly consumers it feeds
+ * (`enrich.geocode` before `enrich.estimate_location` and `promote.place`),
+ * so they wait for it rather than sweep first and miss its output by a night.
  */
 export function stageDueness(input: {
   stageId: string;
@@ -1055,10 +1106,18 @@ export function stageDueness(input: {
    * rather than a silent, permanent bypass of `minInterval`.
    */
   hasOverdueRetry?: boolean;
+  /**
+   * `WindowStatus.opensAt`, `closesAt` and `nextOpensAt`: when the window that
+   * is open now opened and shuts, and when the next one opens. What lets a
+   * windowed leg take the window its interval would otherwise just miss.
+   * Omitted or `null` (a window that is disabled or could not be read) leaves
+   * `minInterval` as the only floor.
+   */
+  windowBounds?: WindowBounds | null;
   /** Defaults to now. Injected by tests, and by anything asking "what happens at 03:00?". */
   now?: Date;
 }): StageDueness {
-  const { stageId, lastStartedAt, windowOpen, hasOverdueRetry = false } = input;
+  const { stageId, lastStartedAt, windowOpen, hasOverdueRetry = false, windowBounds = null } = input;
   const now = input.now ?? new Date();
 
   const schedule = stageSchedule(stageId);
@@ -1095,6 +1154,17 @@ export function stageDueness(input: {
   const eligibleAt = new Date(lastStartedAt.getTime() + schedule.minInterval * 1000);
 
   if (staleness < schedule.minInterval) {
+    if (
+      schedule.window === 'enrichment' &&
+      windowOpen &&
+      windowBounds != null &&
+      lastStartedAt.getTime() < windowBounds.opensAt.getTime() &&
+      eligibleAt.getTime() <
+        (schedule.cost === 'metered' ? windowBounds.closesAt : windowBounds.nextOpensAt).getTime()
+    ) {
+      return decide(true, 'due_before_next_window', false, null);
+    }
+
     if (!hasOverdueRetry) {
       return decide(false, 'too_soon', false, eligibleAt);
     }

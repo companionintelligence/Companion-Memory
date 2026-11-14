@@ -29,28 +29,31 @@ pub struct BundledImageTag(pub String);
 
 /// A deep link that arrived before the frontend had a listener up — the cold-start
 /// case (app not yet running when the OS delivers the URL) and, defensively, any
-/// warm-start delivery that raced page load. `main.tsx`'s deep-link wiring drains
-/// this via take_pending_deep_link_command on mount, THEN subscribes to the live
-/// `companion-deep-link` DOM event for anything that arrives after — the same
-/// two-mechanism shape iOS's getLaunchUrl (cold start) + appUrlOpen (live) already
-/// uses, just adapted to Tauri's own event surface instead of Capacitor's.
+/// warm-start delivery that raced page load. The web app's addAppUrlOpenListener
+/// (nativeBridge.ts) subscribes to the live `companion-deep-link` DOM event first,
+/// then takes this once per page load via take_pending_deep_link_command and
+/// dispatches it as that same event, so every listener mounted at that moment gets
+/// it. It is the two-mechanism shape iOS's getLaunchUrl (cold start) + appUrlOpen
+/// (live) already uses, adapted to Tauri's own event surface instead of Capacitor's.
 #[derive(Default)]
 struct PendingDeepLink(Mutex<Option<String>>);
 
 /// Deliver a deep-link URL to the frontend: dispatch it live if a window exists
 /// (covers the warm-start case, where the page — and hopefully its listener — is
 /// already up), and ALWAYS also record it in PendingDeepLink so
-/// take_pending_deep_link_command can hand it to a listener that mounts later,
-/// whether that's because this delivery raced page load or because it arrived
-/// before any window existed at all (true cold start).
+/// take_pending_deep_link_command can hand it to the listeners of a page that
+/// loads later, whether that's because this delivery raced page load or because
+/// it arrived before any window existed at all (true cold start). The page takes
+/// it once, when its first listener subscribes, so a link that reached a live
+/// listener stays here until the next page load takes it.
 ///
-/// The single caller is the on_open_url listener registered in .setup() below —
-/// every platform's delivery mechanism (macOS/iOS's RunEvent::Opened, and
-/// Windows/Linux's CLI-arg handling, both the plugin's own cold-start scan AND
-/// the warm-start relaunch we feed it explicitly in the single-instance callback)
-/// funnels through the SAME "deep-link://new-url" Tauri event the plugin emits,
-/// so there is exactly one place downstream of the OS that needs to know how to
-/// reach the frontend.
+/// Two callers, both in .setup() below. The on_open_url listener takes every
+/// link that arrives while the app runs: macOS/iOS's RunEvent::Opened and the
+/// warm-start relaunch we feed the plugin in the single-instance callback both
+/// funnel through the SAME "deep-link://new-url" Tauri event the plugin emits.
+/// The other caller hands over the Windows/Linux link that STARTED the app,
+/// which the plugin emitted before that listener existed (see
+/// deliver_cold_start_deep_link).
 fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     log::info!("deep link received: {}", redacted_url_log_label(url));
 
@@ -101,6 +104,31 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
             "deep-link",
             "no main window yet; held for take_pending_deep_link_command",
         );
+    }
+}
+
+/// Hand over the deep link that started the app on Windows and Linux.
+///
+/// There the OS starts the app with the link as its one CLI argument, and
+/// tauri_plugin_deep_link::init() reads it inside the plugin's own setup and
+/// emits "deep-link://new-url" at once. That is before .setup() registers the
+/// on_open_url listener, so the event reached nobody: a Companion sign-in
+/// finished in the browser after the app was quit started the app and was
+/// dropped. The window stayed on the sign-in screen. The plugin keeps the
+/// link it read in get_current(), so it is taken from there instead.
+///
+/// macOS is left out: it delivers through RunEvent::Opened, which only fires
+/// once the event loop runs, after the listener is up, so the link reaches
+/// on_open_url and must not be handed over a second time here.
+fn deliver_cold_start_deep_link(app: &tauri::AppHandle) {
+    if !cfg!(any(windows, target_os = "linux")) {
+        return;
+    }
+
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        if let Some(url) = urls.first() {
+            dispatch_deep_link(app, url.as_str());
+        }
     }
 }
 
@@ -318,9 +346,8 @@ fn main() {
             // "deep-link://new-url" event our on_open_url listener below already
             // handles, so this path and every other one converge on one place.
             //
-            // The plugin's own cold-start scan (this app's FIRST launch, not a
-            // relaunch) already runs automatically inside tauri_plugin_deep_link's
-            // own init() against std::env::args() — nothing to do for that case here.
+            // The link that STARTS the app (its first launch, not a relaunch)
+            // never comes through here: see deliver_cold_start_deep_link.
             app.deep_link().handle_cli_arguments(args.iter());
         }))
         .plugin(tauri_plugin_opener::init())
@@ -356,9 +383,8 @@ fn main() {
 
             tray::create_tray(app.handle())?;
 
-            // The one listener every deep-link delivery path (macOS/iOS's
-            // RunEvent::Opened, and both the plugin's automatic Windows/Linux
-            // cold-start argv scan and our own warm-start relaunch handling above)
+            // The listener every deep link delivered while the app runs (macOS/iOS's
+            // RunEvent::Opened and our own warm-start relaunch handling above)
             // converges on — see dispatch_deep_link's doc comment.
             let deep_link_handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
@@ -366,6 +392,7 @@ fn main() {
                     dispatch_deep_link(&deep_link_handle, url.as_str());
                 }
             });
+            deliver_cold_start_deep_link(app.handle());
 
             // Kick off the stack in the background so the window can appear
             // immediately instead of blocking startup on `docker compose up`
@@ -584,13 +611,95 @@ fn is_openable_external_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
+/// How long a browser launcher gets to fail before the open counts as done.
+///
+/// An `xdg-open` that cannot run the browser exits non-zero within a moment.
+/// One that started the browser in the foreground (a BROWSER program that only
+/// returns when the browser closes) is still running after this. That is a
+/// browser that opened.
+#[cfg(target_os = "linux")]
+const BROWSER_LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Open `url` in the default browser. Fail when the launcher says it could not.
+///
+/// On Linux tauri_plugin_opener starts `xdg-open` detached and returns Ok as soon
+/// as the process exists. So a launcher that then failed to run the browser (a
+/// BROWSER pointing at a missing program, an http handler whose desktop entry is
+/// gone) left Sign in with Companion account doing nothing: the system showed
+/// its own error, desktop.log said "opened" and the window said nothing, because
+/// its "Could not open your browser" message only shows when this command fails.
+/// The same launchers are tried in the same order (open::commands, which the
+/// plugin uses). The first one that starts gets BROWSER_LAUNCH_GRACE to fail.
+/// When none starts, the error names every launcher tried and why it failed.
+#[cfg(target_os = "linux")]
+fn open_in_browser(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Stdio;
+
+    let mut not_started = Vec::new();
+    for mut command in open::commands(url) {
+        let launcher = command.get_program().to_string_lossy().into_owned();
+        // Detached from the app's process group and its output, as the plugin's
+        // own launch is, so a browser started in the foreground outlives Quit.
+        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+
+        match command.spawn() {
+            Ok(child) => return launcher_outcome(child, &launcher, BROWSER_LAUNCH_GRACE),
+            Err(e) => not_started.push(format!("{launcher}: {e}")),
+        }
+    }
+
+    if not_started.is_empty() {
+        return Err("no browser launcher could be started".to_string());
+    }
+
+    Err(not_started.join("; "))
+}
+
+/// macOS and Windows already report a launch that failed: the plugin waits for
+/// `open` there and ShellExecute answers directly.
+#[cfg(not(target_os = "linux"))]
+fn open_in_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    app.opener().open_url(url, None::<String>).map_err(|e| e.to_string())
+}
+
+/// What a started launcher did within `grace`: its exit status if it ended,
+/// otherwise success. A launcher still running is left to finish on a thread
+/// that waits for it, so it does not stay behind as a zombie.
+#[cfg(target_os = "linux")]
+fn launcher_outcome(
+    mut child: std::process::Child,
+    launcher: &str,
+    grace: std::time::Duration,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + grace;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("{launcher} could not open the browser ({status})")),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(format!("{launcher}: {e}")),
+        }
+    }
+}
+
 /// Open an arbitrary URL in the system's default browser. The one caller today is
 /// "Sign in with CI Portal" (see OidcButton.tsx): OAuth must run in a browser the
 /// user already trusts and may already be signed into, not this app's own webview.
 /// Restricted to http(s) so a compromised webview can't use this as a generic
 /// local-file/other-scheme open primitive.
+///
+/// Async because open_in_browser can wait out BROWSER_LAUNCH_GRACE. A
+/// synchronous command runs on the main thread, which would freeze the window.
 #[tauri::command]
-fn open_external_url_command(
+async fn open_external_url_command(
     app: tauri::AppHandle,
     state: tauri::State<'_, StackPathsState>,
     url: String,
@@ -609,7 +718,10 @@ fn open_external_url_command(
         return Err("open_external_url_command only accepts http(s) URLs".to_string());
     }
 
-    let result = app.opener().open_url(&url, None::<String>).map_err(|e| e.to_string());
+    let result = tokio::task::spawn_blocking(move || open_in_browser(&app, &url))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))
+        .and_then(|opened| opened);
 
     match &result {
         Ok(()) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("opened {label}")),
@@ -698,6 +810,29 @@ mod tests {
         // A prefix that merely starts the same way is not the scheme.
         assert!(!is_openable_external_url("https:/example.com"));
         assert!(!is_openable_external_url("httpsx://example.com"));
+    }
+
+    /// The launcher's exit is what tells the window whether a browser opened:
+    /// an early non-zero exit is the failure the sign-in button must show. A
+    /// launcher still running after the grace period is a browser that
+    /// started in the foreground, not a failure.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launcher_that_fails_within_the_grace_period_is_reported() {
+        let grace = std::time::Duration::from_secs(5);
+        let spawn = |script: &str| {
+            std::process::Command::new("sh").args(["-c", script]).spawn().expect("sh starts")
+        };
+
+        assert_eq!(launcher_outcome(spawn("exit 0"), "xdg-open", grace), Ok(()));
+
+        let failed = launcher_outcome(spawn("exit 3"), "xdg-open", grace).unwrap_err();
+        assert!(failed.starts_with("xdg-open could not open the browser"), "{failed}");
+
+        let started = std::time::Instant::now();
+        let short = std::time::Duration::from_millis(200);
+        assert_eq!(launcher_outcome(spawn("sleep 5"), "xdg-open", short), Ok(()));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "it must not wait for the browser to close");
     }
 
     /// The panic hook exists because a packaged .app has no stderr, so this

@@ -394,9 +394,10 @@ interface StageStateRow {
  * build cannot resolve, and that letter is routed like any other.
  *
  * Every other letter goes back to the queue it failed on: the stage queue
- * `PipelineSliceListener` wrote, or the `output.queue` the reaper copied. Only
- * a reaped letter that names no queue (pg-boss expired the job itself, or it
- * failed before failures recorded their queue) still says `dead-letter`. That
+ * `PipelineSliceListener` wrote, or the queue the reaper read from the failure's
+ * `queue` field or from pg-boss's `source_name`. Only a reaped letter that names
+ * no queue still says `dead-letter`: a copy pg-boss 10 made of a job that failed
+ * before failures recorded their queue (or that pg-boss expired itself). That
  * queue has no worker, so those are routed by listener registration, which
  * reaches every queue listening for the event.
  *

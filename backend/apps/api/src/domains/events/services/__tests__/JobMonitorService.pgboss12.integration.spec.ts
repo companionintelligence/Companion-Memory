@@ -181,6 +181,38 @@ describeWithDatabase(`Jobs page on pg-boss 12's own schema (${availability.targe
     );
   });
 
+  // pg-boss 12 copies a job that ran out of retries onto the dead-letter queue
+  // as a new job that has not run: its own `output` is empty and the failure is
+  // in `source_output`. Reading `output` alone showed that row with no error.
+  it('shows a dead-lettered job with the failure it died with', async () => {
+    const { items } = await query.list(context, { state: DEAD_LETTER_QUEUE });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      event: 'finished.bad',
+      deadLettered: true,
+      failure: { message: 'boom' },
+    });
+
+    const { jobs } = await monitor.getDashboard(context);
+    const copy = jobs.find((job) => job.queue === DEAD_LETTER_QUEUE);
+
+    expect(copy).toMatchObject({ event: 'finished.bad', failure: { message: 'boom' } });
+  });
+
+  it('finds a dead-lettered job by the failure it died with, for its owner only', async () => {
+    const asOwner = await query.list(context, { state: DEAD_LETTER_QUEUE, search: 'boom' });
+
+    expect(asOwner.items.map((item) => item.event)).toEqual(['finished.bad']);
+
+    const asStranger = await query.list({ userId: uuidv7() } as RequestContext, {
+      state: DEAD_LETTER_QUEUE,
+      search: 'boom',
+    });
+
+    expect(asStranger.items).toEqual([]);
+  });
+
   it('reports each queue with the retention pg-boss stores in seconds, in minutes', async () => {
     const { queues } = await monitor.getDashboard(context);
 

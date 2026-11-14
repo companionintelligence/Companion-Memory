@@ -59,6 +59,18 @@ describe('eventsForMatchingMedia', () => {
 
     expect(search).toHaveBeenCalledWith(CONTEXT, expect.objectContaining({ mode: 'semantic' }));
   });
+
+  it('matches a half-typed word in keyword mode when the caller searches as you type', async () => {
+    const search = jest.fn(async () => []);
+
+    await eventsForMatchingMedia(
+      { searchService: { search }, contentService: { findEventIdsForMedia: jest.fn(async () => []) } },
+      CONTEXT,
+      { query: 'squi', prefix: true },
+    );
+
+    expect(search).toHaveBeenCalledWith(CONTEXT, expect.objectContaining({ mode: 'keyword', prefix: true }));
+  });
 });
 
 describe('mergeIdentifiers', () => {

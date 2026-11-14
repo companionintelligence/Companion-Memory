@@ -27,6 +27,8 @@ import { isSeq, parseDocument } from 'yaml';
 
 const ROOT = process.cwd();
 const DESKTOP_OVERLAY = 'frontend/apps/desktop/src-tauri/resources/docker-compose.desktop.yml';
+/** The three files, in order, that stack_manager.rs's compose_command passes (with the `production` profile). */
+const DESKTOP_STACK = ['docker-compose.yml', 'docker-compose.production.yml', DESKTOP_OVERLAY];
 
 interface RenderedPort {
   host_ip?: string;
@@ -35,7 +37,7 @@ interface RenderedPort {
 }
 
 interface Rendered {
-  services: Record<string, { ports?: RenderedPort[] }>;
+  services: Record<string, { ports?: RenderedPort[]; environment?: Record<string, string | null> }>;
 }
 
 const composeAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
@@ -95,18 +97,40 @@ test('rendered as the desktop app runs it, the gateway listens on 127.0.0.1:8642
     return;
   }
 
-  // The three files and the profile stack_manager.rs's compose_command passes.
-  const config = render(
-    t,
-    ['docker-compose.yml', 'docker-compose.production.yml', DESKTOP_OVERLAY],
-    ['production'],
-    { CI_SERVER_IMAGE_TAG: '2026.10.2' },
-  );
+  const config = render(t, DESKTOP_STACK, ['production'], { CI_SERVER_IMAGE_TAG: '2026.10.2' });
 
   assert.deepEqual(
     config.services.gateway.ports?.map(({ host_ip, target, published }) => ({ host_ip, target, published })),
     [{ host_ip: '127.0.0.1', target: 8642, published: '8642' }],
   );
+});
+
+test('rendered as the desktop app runs it, the api sends OAuth services back to the gateway', (t) => {
+  if (!composeAvailable) {
+    t.skip('docker compose is not installed');
+
+    return;
+  }
+
+  // APP_BASE_URL as stack_manager.rs writes it into the desktop `.env`. Unset, the
+  // api built "undefined/oauth/callback" and no service could be connected.
+  const config = render(t, DESKTOP_STACK, ['production'], {
+    CI_SERVER_IMAGE_TAG: '2026.10.2',
+    APP_BASE_URL: 'http://127.0.0.1:8642',
+  });
+
+  assert.equal(config.services.api.environment?.OAUTH_CALLBACK_URL, 'http://127.0.0.1:8642/oauth/callback');
+  assert.equal(config.services.api.environment?.OPENID_CALLBACK_URL, 'http://127.0.0.1:8642/openid/callback');
+
+  // With APP_BASE_URL empty, `:+` leaves both empty and the api keeps its own fallbacks. A `:-`
+  // or a bare `${APP_BASE_URL}/oauth/callback` would hand it a host-less "/oauth/callback".
+  const unset = render(t, DESKTOP_STACK, ['production'], {
+    CI_SERVER_IMAGE_TAG: '2026.10.2',
+    APP_BASE_URL: '',
+  });
+
+  assert.equal(unset.services.api.environment?.OAUTH_CALLBACK_URL, '');
+  assert.equal(unset.services.api.environment?.OPENID_CALLBACK_URL, '');
 });
 
 /** Every `ports:` entry of the data services, in every compose file in the repo root. */

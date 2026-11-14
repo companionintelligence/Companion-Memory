@@ -16,6 +16,8 @@ import {
   UNCLASSIFIED_CATEGORY,
 } from '../taxonomy';
 
+import { jobFailure } from './JobMonitorService';
+
 export interface JobListItemDto {
   readonly id: string;
   readonly queue: string;
@@ -759,6 +761,12 @@ export class JobQueryService {
             .orWhere(`job.output->>'message' ILIKE :term AND job.data->>'userId' = :userId`, {
               term,
               userId,
+            })
+            // A dead-lettered row shows the failure it was copied for, so it
+            // must be findable by it too.
+            .orWhere(`job.source_output->>'message' ILIKE :term AND job.data->>'userId' = :userId`, {
+              term,
+              userId,
             });
         }),
       );
@@ -900,28 +908,8 @@ export class JobQueryService {
       retryCount: job.retryCount,
       retryLimit: job.retryLimit,
       payloadBytes: this.byteLength(data),
-      failure: this.toFailure(job.output),
+      failure: jobFailure(job),
       deadLettered: job.name === DEAD_LETTER_QUEUE,
-    };
-  }
-
-  private toFailure(
-    output: Record<string, unknown> | null,
-  ): { message: string; stack?: string; failedAt?: string } | null {
-    if (!output || typeof output !== 'object') {
-      return null;
-    }
-
-    const message = typeof output['message'] === 'string' ? output['message'].trim() : '';
-
-    if (!message) {
-      return null;
-    }
-
-    return {
-      message,
-      stack: typeof output['stack'] === 'string' ? output['stack'] : undefined,
-      failedAt: typeof output['failedAt'] === 'string' ? output['failedAt'] : undefined,
     };
   }
 
