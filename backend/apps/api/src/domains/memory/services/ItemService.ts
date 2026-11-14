@@ -6,17 +6,17 @@ import { v7 as uuid7 } from 'uuid';
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  compactSpellingsOf,
+  isGloballyUniqueNamespace,
+  type ObjectIdentifierNamespace,
+} from '@ci/common/objectIdentifier/normalizeObjectIdentifier';
+import {
   type BulkInsertResult,
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
   keysetSeek,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
-import {
-  compactSpellingsOf,
-  isGloballyUniqueNamespace,
-  type ObjectIdentifierNamespace,
-} from '@ci/domains/graph/utils/normalizeObjectIdentifier';
 import { ItemCreatedEvent, ItemUpdatedEvent, ItemRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
