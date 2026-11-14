@@ -2,6 +2,8 @@ import { fireEvent, render, screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
+
 import type { EntityItem } from '../useEntityService';
 
 const mocks = vi.hoisted(() => ({
@@ -137,6 +139,14 @@ describe('TimelineView', () => {
     expect(refetch).toHaveBeenCalledOnce();
   });
 
+  it('puts the first-page error on a card, since the panel lies over the map imagery', () => {
+    mocks.useEntityService.mockReturnValue(baseService({ error: new Error('offline') }));
+
+    renderTimeline('/memory?view=map');
+
+    expect(screen.getByRole('alert').parentElement).toHaveClass(MAP_CARD_CLASS);
+  });
+
   it('keeps the map side panel blank when there are no timeline rows', () => {
     mocks.useEntityService.mockReturnValue(baseService());
 
@@ -257,6 +267,18 @@ describe('TimelineView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(loadMore).toHaveBeenCalledOnce();
+  });
+
+  it('puts a later page error on the same card, since it sits over the map imagery too', () => {
+    mocks.useEntityService.mockReturnValue(
+      baseService({ data: [event('a', 'visited')], hasNextPage: true, error: new Error('timed out') }),
+    );
+
+    renderTimeline('/memory?view=map');
+
+    expect(screen.getByText("Couldn't load more events: timed out").closest('.rounded-lg')).toHaveClass(
+      MAP_CARD_CLASS,
+    );
   });
 
   it('loads the next page only when the sentinel intersects the viewport', () => {

@@ -1,6 +1,7 @@
 export const WIDGET_SNAPSHOT_VERSION = 1 as const;
 const MAX_WIDGET_COUNT = 1_000_000_000;
 const MAX_WIDGET_KILOMETERS = 1_000_000_000;
+const DAY_MS = 86_400_000;
 
 export interface WidgetTask {
   id: string;
@@ -80,6 +81,12 @@ export interface WidgetSnapshotInput {
   metricsUpdatedAt?: unknown;
   jobsUpdatedAt?: unknown;
   now?: Date;
+  /**
+   * Words for the predicted activity class, for every surface that prints the
+   * snapshot: the Widgets page and the phone's home-screen widgets. Without it
+   * the forecast's own label ("WORK", "UNKNOWN") is passed through as it is.
+   */
+  predictionLabel?: (predictedL0: string) => string;
 }
 
 function safeLabel(value: unknown, maxLength = 72): string | null {
@@ -160,15 +167,32 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
     })
     .slice(0, 3);
 
-  const forecastBucket =
-    input.forecast?.buckets?.find((bucket) => {
-      const startTime = safeDate(bucket.startTime);
+  // The 24h forecast is one typical day binned by UTC time of day, dated from
+  // the next UTC midnight, so every bucket starts after `now` and "the first
+  // bucket after now" was always the 00:00 UTC one. Compare times of day: take
+  // the bucket that starts soonest at or after now's, wrapping past midnight.
+  let forecastBucket = input.forecast?.buckets?.[0];
+  let soonestWait = Number.POSITIVE_INFINITY;
+  for (const bucket of input.forecast?.buckets ?? []) {
+    const startTime = safeDate(bucket.startTime);
+    if (startTime === null) {
+      continue;
+    }
 
-      return startTime !== null && new Date(startTime).getTime() >= now.getTime();
-    }) ?? input.forecast?.buckets?.[0];
-  const prediction = safeLabel(forecastBucket?.predictedL0, 48);
+    const wait = (((new Date(startTime).getTime() - now.getTime()) % DAY_MS) + DAY_MS) % DAY_MS;
+    if (wait < soonestWait) {
+      soonestWait = wait;
+      forecastBucket = bucket;
+    }
+  }
+
+  const predictedClass = safeLabel(forecastBucket?.predictedL0, 48);
   const matchingProbability =
-    forecastBucket?.l0Probs?.find((entry) => entry.label === prediction)?.probability ?? null;
+    forecastBucket?.l0Probs?.find((entry) => entry.label === predictedClass)?.probability ?? null;
+  const prediction =
+    predictedClass && input.predictionLabel
+      ? (safeLabel(input.predictionLabel(predictedClass), 48) ?? predictedClass)
+      : predictedClass;
   const probabilityEntries = (forecastBucket?.l0Probs ?? [])
     .filter((entry) => typeof entry.probability === 'number' && Number.isFinite(entry.probability))
     .map((entry) => Math.max(0, Math.min(1, entry.probability as number)));
