@@ -50,6 +50,59 @@ describe('native widget snapshot', () => {
     expect(JSON.stringify(snapshot)).not.toMatch(/script|note body|apiKey/i);
   });
 
+  it('words the prediction with predictionLabel and still finds its probability under the raw label', () => {
+    const forecast = {
+      generatedAt: '2026-11-11T11:00:00Z',
+      systemStatus: 'READY',
+      buckets: [
+        {
+          startTime: '2026-11-11T12:30:00Z',
+          predictedL0: 'UNKNOWN',
+          l0Probs: [
+            { label: 'WORK', probability: 0.9 },
+            { label: 'UNKNOWN', probability: 0.4 },
+          ],
+        },
+      ],
+    };
+    const now = new Date('2026-11-11T12:00:00.000Z');
+
+    const worded = buildWidgetSnapshot({
+      now,
+      forecast,
+      predictionLabel: (raw) => `<b>${raw.toLowerCase()}</b>`,
+    });
+
+    expect(worded.insight.prediction).toBe('unknown');
+    expect(worded.insight.confidence).toBe(0.4);
+    expect(buildWidgetSnapshot({ now, forecast }).insight.prediction).toBe('UNKNOWN');
+  });
+
+  // HBPE dates the 24h histogram from the next UTC midnight, so every bucket is
+  // in the future; the first one after `now` was always 00:00 UTC.
+  it('picks the bucket for the next slot by time of day, not the first one dated after now', () => {
+    const bucket = (startTime: string, predictedL0: string) => ({
+      startTime,
+      predictedL0,
+      l0Probs: [{ label: predictedL0, probability: 0.6 }],
+    });
+    const snapshot = buildWidgetSnapshot({
+      now: new Date('2026-11-11T12:05:00.000Z'),
+      forecast: {
+        generatedAt: '2026-11-11T11:00:00Z',
+        systemStatus: 'READY',
+        buckets: [
+          bucket('2026-11-12T00:00:00Z', 'SLEEP'),
+          bucket('2026-11-12T12:00:00Z', 'SOCIAL'),
+          bucket('2026-11-12T12:15:00Z', 'WORK'),
+          bucket('2026-11-12T12:30:00Z', 'ERRAND'),
+        ],
+      },
+    });
+
+    expect(snapshot.insight.prediction).toBe('WORK');
+  });
+
   it('caps extreme server counts so native Int-backed widgets can still decode the snapshot', () => {
     const snapshot = buildWidgetSnapshot({
       now: new Date('2026-11-11T12:00:00.000Z'),
