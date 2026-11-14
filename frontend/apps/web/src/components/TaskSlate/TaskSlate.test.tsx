@@ -1,5 +1,5 @@
 import type { MockedResponse } from '@apollo/client/testing';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -249,6 +249,102 @@ describe('TaskSlateDrawer — Plan backlog', () => {
 
     expect(await screen.findByText('Call Mum')).toBeInTheDocument();
     expect(screen.queryByLabelText('Dismiss Call Mum')).not.toBeInTheDocument();
+  });
+
+  it('leaves Enter and Space on Dismiss to the button instead of placing the task', async () => {
+    // The card is a role="button" <li> that places on Enter and Space. The
+    // Dismiss button's key presses bubbled up to it. The task was placed and
+    // the card's preventDefault() cancelled the button's own click.
+    const onPlace = vi.fn();
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onPlace={onPlace}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    const dismiss = await screen.findByLabelText('Dismiss Try this');
+
+    // `false` would mean a handler called preventDefault().
+    expect(fireEvent.keyDown(dismiss, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(dismiss, { key: ' ' })).toBe(true);
+    expect(onPlace).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /Add Try this at this time/ }), { key: 'Enter' });
+    expect(onPlace).toHaveBeenCalledWith('p1');
+  });
+
+  it('places once per key press on the card, Space as well as Enter, even when the key is held', async () => {
+    const onPlace = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'u1', title: 'Call Mum' })])}
+        {...NOOP}
+        onPlace={onPlace}
+      />,
+    );
+
+    const card = await screen.findByRole('button', { name: /Add Call Mum at this time/ });
+
+    expect(fireEvent.keyDown(card, { key: ' ' })).toBe(false);
+    expect(onPlace).toHaveBeenCalledTimes(1);
+
+    // Each repeat still swallows the key, so a held Space does not scroll the sheet.
+    expect(fireEvent.keyDown(card, { key: ' ', repeat: true })).toBe(false);
+    fireEvent.keyDown(card, { key: 'Enter', repeat: true });
+    expect(onPlace).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not place the task from a click on the Dismiss toolbar or its tooltip', async () => {
+    const onPlace = vi.fn();
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onPlace={onPlace}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    const dismiss = await screen.findByLabelText('Dismiss Try this');
+
+    // The toolbar's padding around the X.
+    fireEvent.click(dismiss.parentElement as HTMLElement);
+
+    // The "Dismiss" bubble sits in a portal, but React still bubbles its
+    // click through the card.
+    act(() => dismiss.focus());
+    const bubble = await waitFor(() => {
+      const element = document.querySelector('[data-slot="tooltip-content"]');
+
+      expect(element).not.toBeNull();
+
+      return element as HTMLElement;
+    });
+
+    fireEvent.click(bubble);
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(onDismissProposed).not.toHaveBeenCalled();
+
+    fireEvent.click(dismiss);
+    expect(onDismissProposed).toHaveBeenCalledWith('p1');
+    expect(onPlace).not.toHaveBeenCalled();
   });
 
   /**

@@ -299,7 +299,7 @@ describe('DatabaseSearchTool drops the account record', () => {
     emailProvenAt: new Date('2026-10-01T00:00:00Z'),
   };
 
-  it('keeps it out of thread and answer hits but keeps every other field', async () => {
+  it('keeps it out of thread and answer hits but keeps every field that has a value', async () => {
     const thread = {
       id: 't1',
       name: 'Blue Bottle Coffee',
@@ -320,12 +320,11 @@ describe('DatabaseSearchTool drops the account record', () => {
     });
 
     const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
-    const { user: _threadUser, ...threadFields } = thread;
-    const { user: _answerUser, ...answerFields } = answer;
 
+    // `description: null` and `isArchived: false` are unset columns: compactSearchHit drops them.
     expect(result.data?.items).toEqual([
-      { ...threadFields, type: 'thread' },
-      { ...answerFields, type: 'answer' },
+      { id: 't1', type: 'thread', name: 'Blue Bottle Coffee', generationStatus: 'idle', kind: 'chat' },
+      { id: 'a1', type: 'answer', answer: 'Oat milk flat white' },
     ]);
     const sent = JSON.stringify(result.data);
     expect(sent).not.toContain('tester@example.com');
@@ -352,12 +351,16 @@ describe('DatabaseSearchTool drops the account record', () => {
     });
 
     const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
-    const { user: _placeUser, ...placeFields } = place;
-    const { user: _visitUser, ...visitFields } = visit;
 
+    // The owner's id goes with the owner record (`userId` / `user_id` are bookkeeping).
     expect(result.data?.items).toEqual([
-      { ...placeFields, type: 'place', link: '/places/pl1' },
-      { ...visitFields, type: 'browser-activity' },
+      { id: 'pl1', type: 'place', link: '/places/pl1', name: 'Blue Bottle Coffee' },
+      {
+        id: 'b1',
+        type: 'browser-activity',
+        url: 'https://bluebottlecoffee.com',
+        title: 'Blue Bottle Coffee',
+      },
     ]);
     const sent = JSON.stringify(result.data);
     expect(sent).not.toContain('tester@example.com');

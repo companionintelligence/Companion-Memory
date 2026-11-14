@@ -55,7 +55,9 @@ vi.mock('@/components/Chat', () => ({
 }));
 
 vi.mock('@/components/ChatWithAgent', () => ({
-  ChatWithAgentMenu: () => null,
+  ChatWithAgentMenu: ({ size }: { size?: string }) => (
+    <div data-testid="chat-with-agent" data-size={size ?? 'icon'} />
+  ),
 }));
 
 function setViewport(mobile: boolean) {
@@ -116,6 +118,19 @@ describe('FeedModal — mobile action chat', () => {
     expect(chrome.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
     expect(dialog).toHaveAttribute('aria-label', 'Pack lunch');
     expect(screen.getByTestId('action-chat')).toHaveAttribute('data-autofocus', 'true');
+  });
+
+  it('keeps Close in the header beside a one-icon chat menu', async () => {
+    // The labelled "Open chat" and "Chat with an agent" buttons pushed Close off
+    // a 390 px screen, leaving no way out on a phone.
+    renderWithProviders(<FeedModal />, { path: '/calendar/:id', route: '/calendar/a1' });
+
+    expect(await screen.findByTestId('chat-with-agent')).toHaveAttribute('data-size', 'icon');
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+
+    // A title with one long word (a pasted address) has to be able to wrap, or
+    // it pushes the buttons past the edge just the same.
+    expect(screen.getByText('Pack lunch')).toHaveClass('min-w-0', 'break-words');
   });
 
   it('shows the action once when the thread the server opened already starts with it', async () => {

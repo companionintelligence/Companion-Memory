@@ -2007,6 +2007,27 @@ export class OllamaService implements OnModuleInit {
   }
 
   /**
+   * Bytes of the tool definitions {@link chatStream} would offer this caller,
+   * as the JSON it sends them in, or 0 when it would offer none. The chat
+   * path holds them out of the context window before it plans the rest.
+   */
+  toolDefinitionBytes(context: ChatRequestContext): number {
+    const tools = this.toolsWithinCapability(context).map(this.convertToOllamaTool);
+
+    return tools.length > 0 ? Buffer.byteLength(JSON.stringify(tools), 'utf8') : 0;
+  }
+
+  /**
+   * Whether a chat request can ask for its own window. Ollama loads the model
+   * with the `num_ctx` a request names. An OpenAI-compatible server runs the
+   * window it was started with and ignores `num_ctx`, so a plan that grew past
+   * that window would only admit more than fits.
+   */
+  chatWindowCanGrow(): boolean {
+    return this.llmEndpointService.getOpenAiDriver() == null;
+  }
+
+  /**
    * The tools to advertise to the model for this caller.
    *
    * Mirrors what MCP's `getToolsForRequest` does for its catalog: do not offer a read-only caller

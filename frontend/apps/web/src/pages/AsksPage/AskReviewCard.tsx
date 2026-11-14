@@ -167,32 +167,39 @@ export function AskReviewCard({
           row, so the decision the owner is looking at reads at a glance
           instead of as a stacked block. Decline stays below, beside the
           share-with-less options it belongs with — it is the alternative to
-          the primary action, not a second one competing with it here. */}
+          the primary action, not a second one competing with it here.
+          The avatar, name and badges ask for 14.75rem (2rem avatar, 0.75rem
+          gap, 12rem for the name and badges) before the button shares their
+          line, so on a phone the button drops below them instead of covering
+          a badge. The avatar is inside that block so a very narrow card keeps
+          it beside the name. */}
       <div className="flex flex-wrap items-center gap-3">
-        <PersonAvatar name={askerName} avatarUrl={askerAvatarUrl} size="sm" />
+        <div className="flex min-w-0 flex-1 basis-[14.75rem] items-center gap-3">
+          <PersonAvatar name={askerName} avatarUrl={askerAvatarUrl} size="sm" />
 
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <span className="font-medium truncate">{askerName}</span>
-          <Badge variant={decision === 'unreviewed' ? 'outline' : 'secondary'} className="text-xs">
-            {tier}
-          </Badge>
-          {/* The decision state is its own badge because the tier badge beside
-              it answers a different question — "do I know them", not "is this
-              still mine to decide". */}
-          {preAuthorized ? (
-            <Badge variant="secondary" className="text-xs">
-              Already authorized
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <span className="font-medium truncate">{askerName}</span>
+            <Badge variant={decision === 'unreviewed' ? 'outline' : 'secondary'} className="text-xs">
+              {tier}
             </Badge>
-          ) : null}
-          {/* The lock answers "should I trust this request?", which is a
-              different question from "do I want to answer it?" — and it is the
-              one the owner has no other way to ask. */}
-          {consent ? (
-            <ConsentLock
-              state={consentLockState({ consent: consent.consent, channel: consent.channel })}
-              onOpen={() => setShowConsent(true)}
-            />
-          ) : null}
+            {/* The decision state is its own badge because the tier badge beside
+                it answers a different question — "do I know them", not "is this
+                still mine to decide". */}
+            {preAuthorized ? (
+              <Badge variant="secondary" className="text-xs">
+                Already authorized
+              </Badge>
+            ) : null}
+            {/* The lock answers "should I trust this request?", which is a
+                different question from "do I want to answer it?" — and it is the
+                one the owner has no other way to ask. */}
+            {consent ? (
+              <ConsentLock
+                state={consentLockState({ consent: consent.consent, channel: consent.channel })}
+                onOpen={() => setShowConsent(true)}
+              />
+            ) : null}
+          </div>
         </div>
 
         <Button size="sm" onClick={onApprove} disabled={holdApproval}>

@@ -1157,6 +1157,51 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
 }
 
 /**
+ * Whether this page has asked `take_pending_deep_link_command` yet, per Tauri bridge object.
+ *
+ * The shell keeps one pending link and gives it to the first caller. A page mounts more than
+ * one listener at once: useAuth's sign-in callback and WidgetDeepLinkRouter. When the widget
+ * router asked first, a sign-in link that started the app went to a listener that ignores it and
+ * the window stayed on the sign-in screen. So the page takes the link once and dispatches it as a
+ * live `companion-deep-link` event, which every listener subscribed at that moment receives, each
+ * ignoring what is not for it. A listener that subscribes after that does not get it again, the
+ * same as a live link it missed: the widget router subscribes again on every navigation and would
+ * otherwise send the person back to the same page each time. Keyed by the bridge object, so a page
+ * (and a test that installs its own bridge) takes once.
+ */
+const pendingDeepLinkDeliveries = new WeakMap<object, Promise<void>>();
+
+function deliverPendingDeepLinkOnce(): Promise<void> {
+  const bridge = (window as unknown as { __TAURI_INTERNALS__: object }).__TAURI_INTERNALS__;
+  let delivery = pendingDeepLinkDeliveries.get(bridge);
+
+  if (!delivery) {
+    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
+    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
+    // REJECTION here is therefore always a real failure (an ACL/permission denial is
+    // the one seen in practice: the capability granting this command IPC reachability
+    // must list the origin the webview navigated to). Keep the same `null` fallback so
+    // callers are unaffected, but log the failure instead of silently discarding it.
+    // A failed take handed nothing over, so the next listener that subscribes asks again.
+    delivery = tauriInvoke<string | null>('take_pending_deep_link_command')
+      .catch((err: unknown) => {
+        console.error('take_pending_deep_link_command failed', err);
+        pendingDeepLinkDeliveries.delete(bridge);
+
+        return null;
+      })
+      .then((pending) => {
+        if (pending) {
+          window.dispatchEvent(new CustomEvent('companion-deep-link', { detail: pending }));
+        }
+      });
+    pendingDeepLinkDeliveries.set(bridge, delivery);
+  }
+
+  return delivery;
+}
+
+/**
  * Subscribe to deep links opened into the app (custom URL scheme / universal links).
  * `handler` receives the full URL string. Used to complete native "Sign in with CI
  * Portal": the system browser redirects to `companion://oidc/callback?...` and that
@@ -1169,14 +1214,14 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
  *   (`getLaunchUrl`, see useAuth.ts), not this function.
  * - Tauri (desktop): the Rust side (`main.rs`) already unifies cold-start AND
  *   warm-start delivery into one place, so there is no separate getLaunchUrl-shaped
- *   call needed here — this function alone covers both. It (a) drains
- *   `take_pending_deep_link_command` once, for a URL that arrived before this
- *   listener was up (true cold start, or a warm-start delivery that raced mounting),
- *   then (b) subscribes to the live `companion-deep-link` DOM event `main.rs`
- *   dispatches for anything after. A plain `window.addEventListener` — no
- *   `@tauri-apps/api` import needed, matching this file's Capacitor-free-import
- *   philosophy, because `main.rs` dispatches a standard DOM CustomEvent rather than a
- *   Tauri-specific one.
+ *   call needed here — this function alone covers both. It (a) subscribes to the live
+ *   `companion-deep-link` DOM event `main.rs` dispatches, then (b) has the page take
+ *   the URL that arrived before any listener was up (true cold start, or a warm-start
+ *   delivery that raced page load) once and dispatch it as that same event, so every
+ *   listener mounted alongside this one gets it (see deliverPendingDeepLinkOnce). A
+ *   plain `window.addEventListener` — no `@tauri-apps/api` import needed, matching
+ *   this file's Capacitor-free-import philosophy, because `main.rs` dispatches a
+ *   standard DOM CustomEvent rather than a Tauri-specific one.
  */
 export async function addAppUrlOpenListener(handler: (url: string) => void): Promise<() => void> {
   const app = plugins()?.App;
@@ -1194,24 +1239,6 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   }
 
   if (isTauriPlatform()) {
-    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
-    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
-    // REJECTION here is therefore always a real failure (an ACL/permission denial is
-    // the one seen in practice: the capability granting this command IPC reachability
-    // must list the origin the webview navigated to). Keep the same `null` fallback so
-    // callers are unaffected, but log the failure instead of silently discarding it.
-    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(
-      (err: unknown) => {
-        console.error('take_pending_deep_link_command failed', err);
-
-        return null;
-      },
-    );
-
-    if (pending) {
-      handler(pending);
-    }
-
     const onDeepLink = (event: Event) => {
       const url = (event as CustomEvent<string>).detail;
 
@@ -1220,7 +1247,10 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
       }
     };
 
+    // Subscribed before the pending link is taken, so it reaches this listener as well as the
+    // others the page mounted alongside it.
     window.addEventListener('companion-deep-link', onDeepLink);
+    await deliverPendingDeepLinkOnce();
 
     return () => {
       window.removeEventListener('companion-deep-link', onDeepLink);

@@ -49,7 +49,7 @@ import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event, type RecurrenceDefinition } from '../entities/EventEntity';
 import { PlaceEntity } from '../entities/PlaceEntity';
-import { ledgerPlatform } from '../identity';
+import { FEDERATED_SYSTEMS, ledgerPlatform } from '../identity';
 import { expandAll } from '../recurrence/expandAll';
 import { recurrenceRuleRejection } from '../recurrence/parseRecurrence';
 import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
@@ -244,6 +244,30 @@ export const MAX_EXPANDED_OCCURRENCES = 1000;
  * which only covered the browser fold (itself reverted in 20260812144811).
  */
 const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'planned_block'] as const;
+
+/**
+ * Calendar files (.ics) brought in through Import, which the allowlist above
+ * cannot name by type alone.
+ *
+ * The file importer (`datasources/calendar.ts`, importer `calendar`) writes
+ * every VEVENT as `event`, a type it shares with Facebook events and Google
+ * reservations. Adding `event` to the allowlist would put those on the grid
+ * too, so the source has to say it is a calendar. Without this arm an imported
+ * calendar never showed at all, and on a box with no Google or Outlook
+ * connection that is every calendar the person has.
+ *
+ * The importer keeps only whether a VEVENT had an RRULE, not the rule itself,
+ * so an imported series is drawn at its DTSTART and nowhere else until the
+ * import carries the rule through (see `seriesRuleOf`). A row a Google sync
+ * later converged onto does carry it and expands like any other.
+ */
+const IMPORTED_CALENDAR_EVENT_SQL = `(event.event_type = 'event' AND event.source_system = '${FEDERATED_SYSTEMS.calendar}')`;
+
+/** The event-type half of every schedule read: the allowlist, NULL, or an imported calendar file. */
+const SCHEDULE_EVENT_TYPE_SQL = `(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes) OR ${IMPORTED_CALENDAR_EVENT_SQL})`;
+
+/** A row carries an RRULE in one of the two places `seriesRuleOf` reads it from. */
+const SERIES_RULE_PRESENT_SQL = `((event.metadata -> 'recurrenceRule') IS NOT NULL OR (event.recurrence_pattern -> 'rrule') IS NOT NULL)`;
 
 /**
  * "This event did not happen" — the one status vocabulary the calendar and the
@@ -1966,7 +1990,8 @@ export class CalendarEventService {
    * NULL arm is load-bearing, not a fallthrough: events the user creates through
    * EventResolver and events materialized by CandidateService when a schedule
    * suggestion is accepted both leave `event_type` unset, and dropping them
-   * would empty the calendar of exactly the entries the user put there.
+   * would empty the calendar of exactly the entries the user put there. Imported
+   * calendar files get their own arm too (IMPORTED_CALENDAR_EVENT_SQL).
    *
    * ═══ RECURRING SERIES ARE EXPANDED HERE, AND ONLY HERE ═══
    * `ci.events` holds one row per recurring SERIES, not one per occurrence —
@@ -2001,7 +2026,7 @@ export class CalendarEventService {
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .orderBy('event.start_time', 'ASC')
@@ -2055,6 +2080,12 @@ export class CalendarEventService {
    * Everything else — the tombstone check, LIVE_EVENT_SQL and the event-type
    * allowlist — is repeated verbatim so an occurrence can never appear on the
    * grid under rules its own master would have been hidden by.
+   *
+   * One extra filter: the row has to hold a rule where `seriesRuleOf` looks for
+   * one. `is_recurring` alone also marks Outlook's server-expanded instances and
+   * every series from an imported .ics (which keeps no rule), and none of those
+   * can expand. Left in, they spent the MAX_RECURRING_MASTERS budget and could
+   * push an older series that does have a rule out of it.
    */
   private recurringMasters(userId: string, to: Date): Promise<EventEntity[]> {
     return this.dataSource
@@ -2063,8 +2094,9 @@ export class CalendarEventService {
       .where('event.is_deleted = false')
       .andWhere(LIVE_EVENT_SQL)
       .andWhere('event.is_recurring = true')
+      .andWhere(SERIES_RULE_PRESENT_SQL)
       .andWhere('event.start_time < :to', { to })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .andWhere('event.user_id = :userId', { userId })
