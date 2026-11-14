@@ -271,6 +271,27 @@ async function alignHubSession(): Promise<(AuthResponse & { replaced?: boolean }
 /** How often the session check is repeated while Memory does not answer it. */
 const UNREACHABLE_RETRY_MS = 5000;
 
+/** How often the desktop window asks Memory whether its sign-in key still works. */
+const DEVICE_KEY_CHECK_MS = 60_000;
+
+/**
+ * Whether Memory says `key` no longer works. True only on its 401: a Memory that did not answer
+ * (the stack stopped, a timeout) says nothing about the key and must not sign anyone out.
+ */
+async function deviceKeyRevoked(key: string): Promise<boolean> {
+  try {
+    await fetchJson('/api/keys/check', {
+      skipApiKey: true,
+      headers: { 'x-api-key': key },
+      timeout: MEMORY_ANSWER_DEADLINE_MS,
+    });
+
+    return false;
+  } catch (error) {
+    return error instanceof FetchJsonError && error.status === 401;
+  }
+}
+
 /**
  * Whether a session call was cut off by its own deadline (`MEMORY_ANSWER_DEADLINE_MS`).
  * None of these calls is handed a caller signal, so an abort here can only be that
@@ -357,6 +378,19 @@ function bumpNativeCredentialEpoch(): void {
   nativeCredentialEpoch += 1;
 }
 
+/**
+ * The name Settings > API keys shows for the key this device mints at sign-in, so a person can
+ * tell the desktop app's key from a phone's. Only the phone keeps "Companion mobile": the server
+ * still reads that name as a phone's sign-in key from old app builds that sent nothing else
+ * (`PHONE_KEY_NAME`), while every build that runs this code also sends the capability and
+ * `sign_in` with it.
+ */
+function deviceKeyName(): string {
+  const day = new Date().toISOString().slice(0, 10);
+
+  return `${isTauriPlatform() ? 'Companion desktop' : 'Companion mobile'} · ${day}`;
+}
+
 // Exchange a freshly-issued JWT for a long-lived API key (the /api/keys endpoint is
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
@@ -372,7 +406,7 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
       Authorization: `Bearer ${jwt}`,
     },
     body: JSON.stringify({
-      name: `Companion mobile · ${new Date().toISOString().slice(0, 10)}`,
+      name: deviceKeyName(),
       capability: NATIVE_KEY_CAPABILITY,
       // A signed-in device, not a key handed to a tool: a password change, "Sign out
       // everywhere" and this app's own sign-out revoke it.
@@ -886,6 +920,66 @@ function useAuth(): ReturnValue {
     },
     [signOut],
   );
+
+  // `logout` changes on every page change (it closes over `navigate`, which React Router renews
+  // with the path). The key check below reads it from here so a page change does not restart it.
+  const logoutRef = useRef(logout);
+
+  useEffect(() => {
+    logoutRef.current = logout;
+  }, [logout]);
+
+  // Desktop only. The window's Companion sign-in holds its own key. Nothing ended that sign-in
+  // when the key was revoked somewhere else (a password change, Sign out everywhere, deleting
+  // it under Settings > API keys): every request got 401 and each page said this device could
+  // not reach Memory, for as long as the window stayed open. A browser session finds out at its
+  // next renewal. This asks about the key on a similar schedule while the window is in view and
+  // again whenever it comes back into view. Once Memory says the key is gone, it signs the
+  // window out.
+  useEffect(() => {
+    if (!isTauriPlatform() || !nativeApiKey) {
+      return;
+    }
+
+    let stopped = false;
+    let asking = false;
+
+    const check = () => {
+      if (asking) {
+        return;
+      }
+
+      asking = true;
+      void deviceKeyRevoked(nativeApiKey)
+        .then((revoked) => {
+          // Only the key this check asked about: a sign-in since then holds another one.
+          if (revoked && !stopped && getApiKey() === nativeApiKey) {
+            void logoutRef.current();
+          }
+        })
+        .finally(() => {
+          asking = false;
+        });
+    };
+
+    // A hidden window (closed to the tray) has nobody to sign out; it asks when it is shown again.
+    const checkWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        check();
+      }
+    };
+
+    const timer = setInterval(checkWhenVisible, DEVICE_KEY_CHECK_MS);
+    document.addEventListener('visibilitychange', checkWhenVisible);
+    window.addEventListener('focus', check);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', checkWhenVisible);
+      window.removeEventListener('focus', check);
+    };
+  }, [nativeApiKey]);
 
   const confirmSignOut = useCallback(async () => {
     setSignOutPrompt((prompt) => ({ ...prompt, open: false }));

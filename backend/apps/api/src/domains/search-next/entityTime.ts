@@ -27,10 +27,17 @@
  * recent", outside any window), not its import time, which would put every undated photo above
  * every dated one; only a taken-at source dates a photo. Content and files that are not media (a
  * Drive document, a YouTube like, a PDF) keep their own time.
+ *
+ * `alias` is required, and must name the index row's table. Inside each subquery a bare
+ * `entity_id` binds to the subquery's own table first, and `ci.entities` has one: unqualified,
+ * the person / concept lookup read `en.entity_id = en.entity_id`, matched every entity, and
+ * Postgres failed the whole search with "more than one row returned by a subquery used as an
+ * expression" (seen 2026-11-13: every `sort: 'recent'` keyword search whose matches included
+ * a person).
  */
-export function entityTimeSql(alias?: string): string {
-  const type = alias ? `${alias}.entity_type` : 'entity_type';
-  const id = alias ? `${alias}.entity_id` : 'entity_id';
+export function entityTimeSql(alias: string): string {
+  const type = `${alias}.entity_type`;
+  const id = `${alias}.entity_id`;
 
   return `(CASE ${type}
     WHEN 'communication' THEN (SELECT c.time FROM ci.communications c WHERE c.id = ${id})

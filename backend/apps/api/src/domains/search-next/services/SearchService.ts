@@ -171,6 +171,15 @@ export type SemanticSearchScope = {
    */
   mediaContentOnly?: boolean;
   /**
+   * Leave out the conversation turns agents stored (`POST /memory/turn`, category
+   * `agent-turn`), except those from the agents listed by `source_system` (`openclaw`,
+   * `hermes`). `[]` leaves every one out. Absent: no filter, which is what recall and the
+   * agents' own memory lookups need, since remembering past conversations is why turns are
+   * stored. Everything a person reads passes it: the explorer, the agent search intents,
+   * asks, the activity timeline. See {@link agentTurnClause}.
+   */
+  showAgentTurnsFrom?: readonly string[];
+  /**
    * Cosine-distance floor, overriding {@link SEMANTIC_DISTANCE_THRESHOLD}.
    * Smaller = stricter. Callers that need a tighter relevance bar than plain
    * search (evidence retrieval, where a merely-word-adjacent row is worse than
@@ -240,6 +249,8 @@ type BaseSearchOptions = {
   sort?: 'relevance' | 'recent';
   /** See {@link SemanticSearchScope.mediaContentOnly}. */
   mediaContentOnly?: boolean;
+  /** See {@link SemanticSearchScope.showAgentTurnsFrom}. */
+  showAgentTurnsFrom?: readonly string[];
   /**
    * `keyword` mode only: also match the query's last word as the START of a
    * word, so "Jor" finds Jordan. For menus that search as you type, such as a
@@ -299,7 +310,7 @@ export function reciprocalRankFusion<T extends { id: string; type: IndexableEnti
 function buildTimeFilter(
   options: { since?: Date; until?: Date },
   paramOffset: number,
-  alias?: string,
+  alias: string,
 ): { clause: string; params: string[] } {
   const clauses: string[] = [];
   const params: string[] = [];
@@ -319,7 +330,7 @@ function buildTimeFilter(
 }
 
 /** The ORDER BY a lexical page runs: rank, or each row's own time newest first with rank as the tie-break. */
-function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias?: string): string {
+function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias: string): string {
   return sort === 'recent' ? `${entityTimeSql(alias)} DESC NULLS LAST, score DESC` : 'score DESC';
 }
 
@@ -468,7 +479,13 @@ export interface SearchPage {
  * term, which a tool that demanded one turned into a validation error
  * (measured live 2026-09-16: the model sent `query: ""` and the turn died).
  */
-type CountOptions = { query?: string; since?: Date; until?: Date; mediaContentOnly?: boolean } & (
+type CountOptions = {
+  query?: string;
+  since?: Date;
+  until?: Date;
+  mediaContentOnly?: boolean;
+  showAgentTurnsFrom?: readonly string[];
+} & (
   | { includeTypes: IndexableEntity[]; excludeTypes?: never }
   | { excludeTypes: IndexableEntity[]; includeTypes?: never }
   | { includeTypes?: never; excludeTypes?: never }
@@ -715,11 +732,14 @@ export class SearchService {
   private buildKeywordCountPlan(
     userId: string,
     query: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
+    scope: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+    >,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 3);
-    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0));
+    const typeFilter = this.buildTypeFilter(scope, 3, 'v');
+    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
       WITH q AS (
@@ -727,11 +747,11 @@ export class SearchService {
       )
       SELECT count(*) AS total_matches
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
         ${timeFilter.clause}
     `;
@@ -750,16 +770,19 @@ export class SearchService {
   /** `count(*)` of every indexed row in scope, no text match — "how many photos do I have". */
   private buildScopeCountPlan(
     userId: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
+    scope: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+    >,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 2);
-    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0));
+    const typeFilter = this.buildTypeFilter(scope, 2, 'v');
+    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
       SELECT count(*) AS total_matches
-      FROM ci_search.vectors
-      WHERE user_id = $1
+      FROM ci_search.vectors v
+      WHERE v.user_id = $1
         ${typeFilter.clause}
         ${timeFilter.clause}
     `;
@@ -848,6 +871,9 @@ export class SearchService {
       query: prompt,
       ...(options.includeTypes ? { includeTypes: options.includeTypes } : {}),
       ...(options.excludeTypes ? { excludeTypes: options.excludeTypes } : {}),
+      // A prompt search answers someone else's ask: the owner's chats with their own agents are
+      // never part of an answer to another person.
+      showAgentTurnsFrom: [],
     } as SearchOptions);
 
     const typeFilter = this.buildTypeFilter(resolvedOptions, 4, 'v');
@@ -1370,7 +1396,7 @@ export class SearchService {
   ): SemanticSearchPlan {
     const { maxResults = SEMANTIC_MAX_RESULTS, distanceThreshold = SEMANTIC_DISTANCE_THRESHOLD } = scope;
 
-    const typeFilter = this.buildTypeFilter(scope, 4);
+    const typeFilter = this.buildTypeFilter(scope, 4, 'se');
 
     // Cosine distance (<=>), NOT L2 (<->): embeddings are unnormalised, so the
     // L2 distance is ~22 and never < 0.5 — the threshold made semantic search
@@ -1387,16 +1413,16 @@ export class SearchService {
     // come back short of its LIMIT, and why the recall probe exists.
     const sql = `
       SELECT
-        entity_id,
-        entity_type,
-        1 - (embedding <=> $2) as score
+        se.entity_id,
+        se.entity_type,
+        1 - (se.embedding <=> $2) as score
       FROM
-        ci_search.embeddings
-      WHERE user_id = $1
-        AND embedding IS NOT NULL
-        AND (embedding <=> $2) < $3::double precision
+        ci_search.embeddings se
+      WHERE se.user_id = $1
+        AND se.embedding IS NOT NULL
+        AND (se.embedding <=> $2) < $3::double precision
         ${typeFilter.clause}
-      ORDER BY embedding <=> $2
+      ORDER BY se.embedding <=> $2
       LIMIT ${maxResults}
     `;
 
@@ -1495,9 +1521,9 @@ export class SearchService {
   private async keywordSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
-    const typeFilter = this.buildTypeFilter(options, 3);
+    const typeFilter = this.buildTypeFilter(options, 3, 'v');
     const timeParamOffset = 3 + (typeFilter.param ? 1 : 0);
-    const timeFilter = buildTimeFilter(options, timeParamOffset);
+    const timeFilter = buildTimeFilter(options, timeParamOffset, 'v');
     const { weights } = await this.rankingLiterals();
 
     // The whole-word query OR'd with the last word as a prefix. 'simple', not
@@ -1520,19 +1546,19 @@ export class SearchService {
         SELECT ${tsquery} AS tq
       )
       SELECT
-        entity_id,
-        entity_type,
-        ts_rank('${weights}', vector, q.tq) as score,
+        v.entity_id,
+        v.entity_type,
+        ts_rank('${weights}', v.vector, q.tq) as score,
         count(*) OVER () AS total_matches
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
         ${timeFilter.clause}
-      ORDER BY ${lexicalOrderSql(options.sort)}
+      ORDER BY ${lexicalOrderSql(options.sort, 'v')}
       LIMIT ${maxResults}
     `;
 
@@ -1640,12 +1666,19 @@ export class SearchService {
   }
 
   private buildTypeFilter(
-    options: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes' | 'mediaContentOnly'>,
+    options: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+    >,
     paramOffset: number,
     tableAlias?: string,
   ): { clause: string; param: string[] | null } {
     const column = tableAlias ? `${tableAlias}.entity_type` : 'entity_type';
-    const media = options.mediaContentOnly ? `\n        ${mediaContentClause(tableAlias)}` : '';
+    const media =
+      (options.mediaContentOnly ? `\n        ${mediaContentClause(tableAlias)}` : '') +
+      (options.showAgentTurnsFrom && tableAlias
+        ? `\n        ${agentTurnClause(tableAlias, options.showAgentTurnsFrom)}`
+        : '');
 
     if (options.includeTypes && options.includeTypes.length > 0) {
       return {
@@ -1686,6 +1719,38 @@ export function mediaContentClause(tableAlias?: string): string {
   const id = tableAlias ? `${tableAlias}.entity_id` : 'entity_id';
 
   return `AND (${type} <> 'content' OR ${id} IN (SELECT mc.id FROM ci.content mc WHERE mc.type = 'media'))`;
+}
+
+/**
+ * `AGENT_TURN_MESSAGE_CATEGORY` from `@ci/domains/memory`, repeated because memory imports this
+ * domain. SearchService.agentTurns.test pins the two together.
+ */
+export const AGENT_TURN_CATEGORY = 'agent-turn';
+
+/** An agent's `source_system` as `agentTurnSourceSystem` writes it; anything else is never bound. */
+const AGENT_SOURCE = /^[a-z0-9_]+$/;
+
+/**
+ * {@link SemanticSearchScope.showAgentTurnsFrom} as SQL: a communication hit that is an agent turn
+ * stays only when its agent is listed. A correlated primary-key probe per communication hit, like
+ * {@link entityTimeSql}'s. `alias` names the index row's table and is required: unqualified, a
+ * bare `entity_id` inside a subquery binds to that subquery's own table first. The sources are
+ * written into the text (no caller's parameter numbering moves), so only slugs pass.
+ */
+export function agentTurnClause(alias: string, showFrom: readonly string[]): string {
+  const sources = showFrom.filter((source) => AGENT_SOURCE.test(source));
+  const kept =
+    sources.length > 0
+      ? ` AND (agent_turn.source_system IS NULL OR agent_turn.source_system <> ALL (ARRAY[${sources
+          .map((source) => `'${source}'`)
+          .join(', ')}]::text[]))`
+      : '';
+
+  return (
+    `AND (${alias}.entity_type <> 'communication' OR NOT EXISTS (` +
+    `SELECT 1 FROM ci.communications agent_turn WHERE agent_turn.id = ${alias}.entity_id ` +
+    `AND agent_turn.category = '${AGENT_TURN_CATEGORY}'${kept}))`
+  );
 }
 
 /**

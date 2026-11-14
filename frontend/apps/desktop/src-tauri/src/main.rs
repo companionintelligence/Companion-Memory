@@ -107,6 +107,47 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
+/// A window's minimum width and height from tauri.conf.json. Tauri applies each one on its
+/// own, so a config may name either without the other.
+#[cfg(any(target_os = "linux", test))]
+fn configured_minimum(config: &tauri::Config, label: &str) -> (Option<f64>, Option<f64>) {
+    config
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == label)
+        .map_or((None, None), |window| (window.min_width, window.min_height))
+}
+
+/// Keep the window's content at least its configured minimum on Linux.
+///
+/// tao passes the minimum to GTK as geometry hints for the whole window. With GTK's own
+/// decorations (GNOME on Wayland) the whole window includes its drop shadow. GTK takes the
+/// shadow off again before it tells the compositor, so the window could be dragged down to a
+/// 908 x 588 frame although tauri.conf.json says 960 x 640; a plain GTK window given the same
+/// hints stops at the same size. A size request on the box that holds the webview is measured
+/// without the shadow, so the content keeps the minimum the config names, as it does on macOS
+/// and Windows.
+///
+/// GTK objects belong to the main thread, which is where `setup` runs.
+#[cfg(target_os = "linux")]
+fn hold_minimum_content_size(window: &tauri::WebviewWindow, config: &tauri::Config) {
+    use gtk::prelude::WidgetExt;
+
+    let (width, height) = configured_minimum(config, window.label());
+    if width.is_none() && height.is_none() {
+        return;
+    }
+
+    // GTK reads -1 as no request for that dimension.
+    let pixels = |value: Option<f64>| value.map_or(-1, |value| value.round() as i32);
+
+    match window.default_vbox() {
+        Ok(content) => content.set_size_request(pixels(width), pixels(height)),
+        Err(e) => log::warn!("could not hold the window's minimum size: {e}"),
+    }
+}
+
 /// Hand over the deep link that started the app on Windows and Linux.
 ///
 /// There the OS starts the app with the link as its one CLI argument, and
@@ -422,6 +463,9 @@ fn main() {
             // Hide to tray on close instead of quitting — the stack keeps running.
             let paths_for_events = paths_for_log.clone();
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "linux")]
+                hold_minimum_content_size(&window, app.config());
+
                 let hide_target = window.clone();
                 let event_paths = paths_for_events.clone();
                 window.on_window_event(move |event| {
@@ -910,6 +954,27 @@ mod tests {
 
         let verbose = ShellLogger { level: log::LevelFilter::Trace };
         assert!(verbose.enabled(&metadata(log::Level::Trace)));
+    }
+
+    /// The Linux size request is built from these numbers, so a config that stopped naming a
+    /// minimum would quietly leave GNOME shrinking the window below it again.
+    #[test]
+    fn the_main_window_minimum_is_read_from_the_config() {
+        let config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+
+        assert_eq!(configured_minimum(&config, "main"), (Some(960.0), Some(640.0)));
+        assert_eq!(configured_minimum(&config, "no-such-window"), (None, None));
+
+        // On Linux Tauri merges tauri.linux.conf.json over that file as a JSON merge patch,
+        // which replaces arrays whole. A `windows` list there would drop the minimum at run time
+        // while the check above still passed.
+        let linux: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.linux.conf.json")).expect("tauri.linux.conf.json parses");
+        assert!(
+            linux.pointer("/app/windows").is_none(),
+            "tauri.linux.conf.json would replace the window list, minimum included"
+        );
     }
 
     /// On Linux the browser returns sign-in as `companion://oidc/callback?code=...`

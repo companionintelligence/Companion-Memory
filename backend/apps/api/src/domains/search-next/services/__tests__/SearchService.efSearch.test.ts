@@ -245,7 +245,7 @@ describe('SearchService semantic leg — LIMIT vs hnsw.ef_search', () => {
 
     // Widening the candidate list must not change the plan shape: HNSW only
     // accelerates `ORDER BY col <=> const ASC LIMIT k`.
-    expect(semantic).toMatch(/ORDER BY embedding <=> \$2\s*\n\s*LIMIT/);
+    expect(semantic).toMatch(/ORDER BY se\.embedding <=> \$2\s*\n\s*LIMIT/);
     expect(semantic).not.toMatch(/ORDER BY score DESC/);
   });
 

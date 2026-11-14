@@ -986,6 +986,30 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
 const STOP_ARGS: [&str; 1] = ["stop"];
 
 pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
+    compose_down(paths)?;
+    mark_user_stopped(paths);
+    Ok(())
+}
+
+/// Quit's `docker compose down`, for when the stack loses its model with the app.
+///
+/// Waits for an `up` already running to finish, then keeps START_IN_FLIGHT
+/// held for the rest of this process's life. A `down` beside an in-flight
+/// `up` leaves whatever that `up` creates after it, and its stale-network
+/// self-heal can run a whole new `up`. An `up` that starts after the `down`
+/// brings the stack back with nothing to serve it, and startup's own start
+/// does exactly that once Quit has killed the sidecar: its model pull fails
+/// and ensure_local_model_then_start_stack goes on to `up` anyway.
+///
+/// Leaves no user-stopped marker. The user quit the app rather than stopping
+/// the stack and the next launch starts it again, so a marker would only have
+/// the tray read "Stopped" and offer Start for the whole of that start.
+pub fn stop_stack_for_quit(paths: &StackPaths) -> Result<(), String> {
+    std::mem::forget(START_IN_FLIGHT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    compose_down(paths)
+}
+
+fn compose_down(paths: &StackPaths) -> Result<(), String> {
     let output = compose_command(paths)
         .args(STOP_ARGS)
         .output()
@@ -999,7 +1023,6 @@ pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    mark_user_stopped(paths);
     Ok(())
 }
 

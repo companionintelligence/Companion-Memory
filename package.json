@@ -96,7 +96,7 @@
     "@types/pg": "^8",
     "@yarnpkg/sdks": "^3.3.1",
     "deepmerge": "patch:deepmerge@npm%3A4.3.1#~/.yarn/patches/deepmerge-npm-4.3.1-4f751a0844.patch",
-    "dotenv": "^18.0.9",
+    "dotenv": "^18.0.10",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-import-resolver-typescript": "^4.4.4",
@@ -104,12 +104,12 @@
     "globals": "^17.14.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
-    "oxlint": "^1.91.0",
+    "oxlint": "^1.93.0",
     "prettier": "^3.9.10",
     "tsx": "^4.7.0",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.72.1",
-    "vite": "^8.3.5",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
     "yaml": "^2.8.1"
   }
 }

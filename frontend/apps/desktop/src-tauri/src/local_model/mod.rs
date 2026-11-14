@@ -107,11 +107,13 @@ impl ResolutionState {
 }
 
 /// Holds whatever child processes this module itself spawned, so main.rs can
-/// tear them down on quit. Never holds a handle for an instance we detected
-/// but don't own (the user's own pre-existing Ollama).
+/// tear them down on quit. Never holds the process of an instance we detected
+/// but don't own (the user's own pre-existing Ollama), only, on Linux, the
+/// relay this app may put in front of it.
 ///
-/// Both `ollama_child` and `ollama_relay` are populated by
-/// `ollama_sidecar::ensure_available` itself, directly, as soon as each
+/// Both `ollama_child` and `ollama_relay` are populated from inside
+/// `ollama_sidecar` (`ensure_available`, plus `reach_host_ollama` for a relay
+/// in front of the user's own Ollama), directly, as soon as each
 /// resource exists — not by its caller after the whole (potentially
 /// multi-minute, model-download-and-pull) call returns. A quit signal
 /// arriving mid-resolution must still be able to find and kill whatever has
@@ -119,8 +121,9 @@ impl ResolutionState {
 /// would leave that window unguarded.
 pub struct LocalModelHandles {
     ollama_child: Mutex<Option<Child>>,
-    /// Linux only in practice: the bridge-gateway relay in front of the
-    /// loopback-bound Ollama sidecar. Held for the same reason as
+    /// Linux only in practice: the bridge-gateway relay in front of a
+    /// loopback-bound Ollama, either the sidecar or the user's own (see
+    /// ollama_sidecar::reach_host_ollama). Held for the same reason as
     /// `ollama_child` — it owns a listening socket that must be released on
     /// quit, or a relaunch cannot bind the gateway address again.
     ollama_relay: Mutex<Option<bridge_relay::RelayHandle>>,
@@ -194,6 +197,21 @@ impl LocalModelHandles {
                 handle.shutdown();
             }
         }
+    }
+
+    /// Whether the stack gets its model through something this app runs: its
+    /// own Ollama, the relay in front of an Ollama or the Apple bridge. All of
+    /// them stop with the app, so the containers lose their model when it
+    /// quits.
+    pub fn serves_the_stack(&self) -> bool {
+        let child = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        let relay = self.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        #[cfg(target_os = "macos")]
+        let apple = self.apple_bridge.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        #[cfg(not(target_os = "macos"))]
+        let apple = false;
+
+        child || relay || apple
     }
 
     pub fn status(&self) -> Option<LocalModelResolution> {
@@ -280,21 +298,18 @@ fn resolve_and_start(
         let instance = ollama_sidecar::ensure_available(data_dir, logs_dir, need_chat_model, handles)?;
         log::info!("Local Ollama instance answering on port {}", instance.port);
     } else {
-        // Reusing an already-answering instance we did not start — nothing to
-        // register in `handles` (we own neither the process nor, on Linux, a
-        // relay for it: see ensure_available's own "somebody else's Ollama"
-        // comment). Logged, not silent, because this is exactly the case
-        // where container reachability now depends entirely on how THAT
-        // instance happens to be bound, and there is nothing else here that
-        // will say so.
+        // Reusing an already-answering instance we did not start. We never own
+        // its process. On Linux we may own a relay in front of it, when it
+        // answers on loopback only and the containers could not otherwise
+        // reach it; reach_host_ollama decides and registers that relay in
+        // `handles` itself, so quitting the app removes it.
         #[cfg(target_os = "linux")]
         log::info!(
-            "An Ollama instance is already answering on port {} — reusing it as-is, no bridge relay \
-             started. If the appliance's containers report model errors, this is the instance to check: \
-             it needs to be reachable from the docker bridge gateway, which this app made no decision \
-             about since it isn't the one that started it.",
+            "An Ollama instance is already answering on port {}. Reusing it after checking that the \
+             appliance's containers can reach it.",
             ollama_sidecar::OLLAMA_PORT
         );
+        ollama_sidecar::reach_host_ollama(handles);
 
         // Nothing is pulled into an Ollama this app does not own. If it lacks
         // the default model, name one it has instead: asking for a model it
@@ -384,6 +399,31 @@ mod tests {
 
         assert_eq!(backend, ChatBackend::HostOllama);
         assert_eq!(probes.get(), 0, "the Apple bridge should not have been probed at all");
+    }
+
+    /// Tray > Quit stops the stack only when quitting would leave it without a
+    /// model, and that decision is this answer. It has to follow what is
+    /// actually registered: nothing for a user's own Ollama the containers
+    /// reach directly, yes for a relay or an Ollama this app started.
+    #[test]
+    fn the_stack_depends_on_the_app_only_while_the_app_runs_something_for_it() {
+        let handles = LocalModelHandles::default();
+        assert!(!handles.serves_the_stack(), "nothing registered, nothing for Quit to take away");
+
+        let relay = bridge_relay::spawn(std::net::Ipv4Addr::LOCALHOST, 0).expect("bind a relay on an ephemeral port");
+        *handles.ollama_relay_slot().lock().unwrap() = Some(relay);
+        assert!(handles.serves_the_stack(), "a relay in front of an Ollama");
+        handles.shutdown();
+        assert!(!handles.serves_the_stack(), "shutdown removes the relay");
+
+        #[cfg(unix)]
+        {
+            let child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn a stand-in child");
+            *handles.ollama_child_slot().lock().unwrap() = Some(child);
+            assert!(handles.serves_the_stack(), "an Ollama this app started");
+            handles.shutdown();
+            assert!(!handles.serves_the_stack(), "shutdown kills and forgets the child");
+        }
     }
 
     /// The splash's start call arrives moments after main.rs's own and waits

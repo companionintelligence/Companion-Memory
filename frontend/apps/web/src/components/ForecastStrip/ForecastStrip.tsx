@@ -347,6 +347,26 @@ const STATUS_LABELS: Record<string, string> = {
   'NIGHTLY:cache': 'Refreshing predictions...',
 };
 
+/**
+ * Words for a forecast `systemStatus`, or null when there is nothing worth
+ * saying: READY, or a value this list does not know. A pipeline step it does
+ * not name still reads as an update in progress rather than as the raw
+ * `STAGE:step` string.
+ */
+export function forecastStatusLabel(systemStatus: string): string | null {
+  if (systemStatus === 'READY') {
+    return null;
+  }
+
+  // Own keys only: a plain index would hand back Object.prototype's
+  // `constructor` or `toString` for a status spelled that way.
+  if (Object.hasOwn(STATUS_LABELS, systemStatus)) {
+    return STATUS_LABELS[systemStatus];
+  }
+
+  return systemStatus.includes(':') ? STATUS_LABELS['NIGHTLY:queued'] : null;
+}
+
 export function formatEta(seconds: number): string {
   if (seconds >= 3300) {
     const hours = Math.round(seconds / 3600);

@@ -75,6 +75,7 @@ const DatabaseSearchInputSchema = z
     since: unwrapped(isoDate()).optional(),
     until: unwrapped(isoDate()).optional(),
     sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
+    includeAgentConversations: booleanish().optional(),
   })
   .superRefine(requireQueryUnlessCounting);
 
@@ -412,6 +413,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
             'recent = newest first by each entry\'s own time, for "most recent" / "latest" / "last" questions. ' +
             'Forces keyword matching. Default: relevance.',
         },
+        includeAgentConversations: {
+          type: 'boolean',
+          description:
+            "Also search the user's earlier chats with AI agents (this one included). Off by default, " +
+            "so a search finds the user's own mail, messages and records, not past agent replies.",
+        },
       },
       required: [],
       additionalProperties: false,
@@ -466,6 +473,10 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     const serviceContext = toServiceContext(context);
     const includeTypes = input.entityTypes as IndexableEntity[];
     const mediaContentOnly = scope.mediaContentOnly === true;
+    // Agents store every turn they hold with the user (POST /memory/turn). Searched by default,
+    // those turns answered for the mail: on 2026-11-13 OpenClaw's newest-first "email" search
+    // returned its own earlier replies. They stay out unless the agent asks for them.
+    const agentTurns = input.includeAgentConversations === true ? {} : { showAgentTurnsFrom: [] };
 
     if (input.countOnly) {
       // A count is a `count(*)` against the full-text index: no cap, no rows,
@@ -481,6 +492,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         this.searchService.count(serviceContext, {
           query,
           includeTypes,
+          ...agentTurns,
           ...(mediaContentOnly ? { mediaContentOnly } : {}),
           ...(input.since != null ? { since: new Date(input.since) } : {}),
           ...(input.until != null ? { until: new Date(input.until) } : {}),
@@ -510,6 +522,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       query: input.query ?? '',
       mode: timed ? 'keyword' : input.searchMode,
       includeTypes,
+      ...agentTurns,
       maxResults: input.maxResults,
       ...(mediaContentOnly ? { mediaContentOnly } : {}),
       ...(input.since != null ? { since: new Date(input.since) } : {}),

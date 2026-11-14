@@ -401,12 +401,14 @@ export function localSearchStatement(options: LocalSearchOptions): { sql: string
     // keeps the type term off the (entity_type, occurred_at) index: offered
     // it, SQLite's planner scans every row of those types and probes the FTS
     // index per row — 15 s per keystroke for "lunch" on the S23U, ~0 with
-    // the FTS scan driving (see localList.ts, typeTerm).
+    // the FTS scan driving (see localList.ts, typeTerm). An agent's chats with the owner never
+    // answer the header search, which has no How filter (see localList.ts).
     sql: `SELECT d.id, d.entity_type, d.entity_id, d.title, d.body, d.occurred_at, d.related_id, d.detail
             FROM ${DOCUMENTS_FTS_TABLE}
             JOIN ${DOCUMENTS_TABLE} d ON d.rowid = ${DOCUMENTS_FTS_TABLE}.rowid
            WHERE ${DOCUMENTS_FTS_TABLE} MATCH ?
              AND +d.entity_type IN (${placeholders})
+             AND d.agent_turn IS NULL
            ORDER BY bm25(${DOCUMENTS_FTS_TABLE}, ${FTS_RANK_WEIGHTS})
            LIMIT ?`,
     params: [match, ...types, limit],

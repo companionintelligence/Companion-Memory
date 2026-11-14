@@ -50,6 +50,7 @@ import {
   contentTypeOptions,
   distinctColumnSql,
   effectiveSourceSystemPredicate,
+  noteMirrorSql,
 } from './contentFacetsSql';
 import { type PurgedContentAggregates, purgeContentAggregates, purgeFilesWrappedBy } from './contentPurge';
 import { CtiAggregate, detailChanged } from './CtiAggregate';
@@ -740,9 +741,15 @@ export class ContentService {
       timeProp: 'createdAt',
       userId: context.userId,
       // Same rule as findById/findByIds: a deleted event's photo must not resurface
-      // in the paginated library (and must not inflate totalCount).
+      // in the paginated library (and must not inflate totalCount). A note's
+      // Content mirror is a copy of the note with its HTML as text, so the
+      // library leaves it out as the explorer's browse does.
       scope: (qb) =>
-        this.applyContentsFilter(this.excludeDeletedEventMedia(qb, 'content'), 'content', filter),
+        this.applyContentsFilter(
+          this.excludeNoteMirrors(this.excludeDeletedEventMedia(qb, 'content'), 'content'),
+          'content',
+          filter,
+        ),
     });
 
     return {
@@ -915,6 +922,40 @@ export class ContentService {
     }
 
     return scoped;
+  }
+
+  /**
+   * Hides the Content mirror `NoteContentFoldService` gives a note: same id as
+   * the note, the note's stored HTML as its text. Wherever the note itself is
+   * listed, or a list is of content the user brought in, the mirror is a second,
+   * raw copy of the note. Keyed on the mirror's own base row
+   * ({@link noteMirrorSql}), not on the note, so deleting the note does not
+   * bring its copy back.
+   */
+  private excludeNoteMirrors<T extends ObjectLiteral>(
+    query: SelectQueryBuilder<T>,
+    alias: string,
+  ): SelectQueryBuilder<T> {
+    return query.andWhere(`NOT ${noteMirrorSql(alias)}`);
+  }
+
+  /**
+   * Which of these content ids are a note's Content mirror (see
+   * {@link excludeNoteMirrors}). For the search paths, which pick their
+   * candidates from the index before any SQL scope applies.
+   */
+  async noteMirrorIds(context: UserServiceContext, ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ id: string }> = await this.contentRepository.manager.query(
+      `SELECT e.entity_id AS id FROM ci.entities e
+        WHERE e.entity_id = ANY($1::uuid[]) AND e.owner_user_id = $2 AND e.linked_table = 'notes'`,
+      [ids, context.userId],
+    );
+
+    return new Set(rows.map((row) => row.id));
   }
 
   /**
@@ -1130,6 +1171,11 @@ export class ContentService {
    * Applied only by the chronological browse. Query, tag and type-filtered
    * searches still return these rows — a user who searches for a photo, or
    * filters to Content, must still find it.
+   *
+   * `excludeNoteMirrors` drops the Content mirror `NoteContentFoldService`
+   * gives a note: same id as the note, and the note's stored HTML as its text.
+   * The feed already lists the note itself, so the mirror was a second copy of
+   * every folded note with its markup on show.
    */
   async getEntitiesForContents(
     context: ServiceContext,
@@ -1143,6 +1189,8 @@ export class ContentService {
       order?: 'ASC' | 'DESC';
       /** Drop rows that belong to an event (see the method docstring). */
       excludeEventLinked?: boolean;
+      /** Drop the Content mirrors of notes (see the method docstring). */
+      excludeNoteMirrors?: boolean;
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.excludeDeletedEventMedia(
@@ -1155,6 +1203,10 @@ export class ContentService {
 
     if (options.excludeEventLinked) {
       query = query.andWhere('content.event_id IS NULL');
+    }
+
+    if (options.excludeNoteMirrors) {
+      query = this.excludeNoteMirrors(query, 'content');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table
@@ -1207,7 +1259,13 @@ export class ContentService {
    */
   async countEntitiesForContents(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date; connectors?: string[]; excludeEventLinked?: boolean },
+    options: {
+      startTime?: Date;
+      endTime?: Date;
+      connectors?: string[];
+      excludeEventLinked?: boolean;
+      excludeNoteMirrors?: boolean;
+    },
   ): Promise<number> {
     let query = this.excludeDeletedEventMedia(
       this.contentRepository
@@ -1218,6 +1276,10 @@ export class ContentService {
 
     if (options.excludeEventLinked) {
       query = query.andWhere('content.event_id IS NULL');
+    }
+
+    if (options.excludeNoteMirrors) {
+      query = this.excludeNoteMirrors(query, 'content');
     }
 
     // The How filter: keep rows from the named sources. Every browsed table

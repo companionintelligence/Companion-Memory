@@ -27,9 +27,9 @@
     "eslint-plugin-import": "patch:eslint-plugin-import@npm%3A2.32.0#~/.yarn/patches/eslint-plugin-import-npm-2.32.0-a1643bce9b.patch",
     "globals": "^17.14.0",
     "jest": "^30.0.4",
-    "oxlint": "^1.91.0",
+    "oxlint": "^1.93.0",
     "rimraf": "^6.1.4",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.72.2"
   }
 }

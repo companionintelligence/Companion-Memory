@@ -245,6 +245,35 @@ describeWithDatabase(`SearchService photo time and media scope (${availability.t
       expect(ids(page.items)).toEqual([newPhoto, oldPhoto, undatedPhoto]);
     });
 
+    // A person's time is looked up in ci.entities, which has its own `entity_id` column. With the
+    // index row unaliased, the lookup compared that column with itself, matched every entity, and
+    // Postgres refused the search: "more than one row returned by a subquery used as an
+    // expression" (2026-11-13, every recent-first keyword search whose matches held a person).
+    it('sorts a page that includes a person without failing', async () => {
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id, linked_table, linked_id)
+         VALUES ($1::uuid, 'Person', 'cat lady', $2::uuid, 'people', $1::uuid)
+         ON CONFLICT (entity_id) DO NOTHING`,
+        [person, userId],
+      );
+
+      const page = await service.searchPage(context, {
+        query: 'cat',
+        mode: 'keyword',
+        includeTypes: ['person', 'content'],
+        sort: 'recent',
+      });
+
+      expect(ids(page.items)).toContain(person);
+
+      await expect(
+        service.count(context, { query: 'cat', includeTypes: ['person'], since: new Date('2000-01-01Z') }),
+      ).resolves.toBe(1);
+      await expect(
+        service.count(context, { includeTypes: ['person'], since: new Date('2000-01-01Z') }),
+      ).resolves.toBe(1);
+    });
+
     it('keeps the import time of content that is not a photo', async () => {
       const page = await service.searchPage(context, {
         query: 'sitter',

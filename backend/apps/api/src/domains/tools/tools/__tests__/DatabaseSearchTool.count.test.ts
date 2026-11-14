@@ -133,7 +133,7 @@ describe('DatabaseSearchTool — honest counts', () => {
     });
     expect(count).toHaveBeenCalledWith(
       { userId: CONTEXT.userId },
-      { query: 'rabbit', includeTypes: ['concept'] },
+      { query: 'rabbit', includeTypes: ['concept'], showAgentTurnsFrom: [] },
     );
     expect(searchPage).not.toHaveBeenCalled();
   });
@@ -162,7 +162,7 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(result.success).toBe(true);
     expect(count).toHaveBeenCalledWith(
       { userId: CONTEXT.userId },
-      { query: undefined, includeTypes: ['file'] },
+      { query: undefined, includeTypes: ['file'], showAgentTurnsFrom: [] },
     );
     expect(result.data?.totalMatches).toBe(23_592);
     expect(result.data?.summary).toMatch(/^23592 file entries in Memory \(exact count/);
@@ -177,8 +177,25 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(result.success).toBe(true);
     expect(count).toHaveBeenCalledWith(
       { userId: CONTEXT.userId },
-      { query: undefined, includeTypes: ['file'] },
+      { query: undefined, includeTypes: ['file'], showAgentTurnsFrom: [] },
     );
+  });
+
+  it("leaves agents' chats out unless the call asks for them", async () => {
+    const searchPage = jest.fn().mockResolvedValue({
+      items: [],
+      totalMatches: 0,
+      truncated: false,
+      limit: 25,
+      modeTaken: 'keyword',
+    });
+    const { tool } = makeTool({ search: { searchPage } });
+
+    await tool.execute(CONTEXT, { query: 'email' });
+    await tool.execute(CONTEXT, { query: 'email', includeAgentConversations: true });
+
+    expect(searchPage.mock.calls[0][1]).toEqual(expect.objectContaining({ showAgentTurnsFrom: [] }));
+    expect(searchPage.mock.calls[1][1]).not.toHaveProperty('showAgentTurnsFrom');
   });
 
   it('a page still requires a query — there is nothing to rank without one', async () => {
@@ -241,7 +258,7 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(count).toHaveBeenNthCalledWith(
       1,
       { userId: CONTEXT.userId },
-      { query: 'rabbit', includeTypes: ['content'], mediaContentOnly: true },
+      { query: 'rabbit', includeTypes: ['content'], mediaContentOnly: true, showAgentTurnsFrom: [] },
     );
     // Says what was counted, and how many photos a subject word can see at all.
     expect(withQuery.data?.summary).toMatch(/^5 photos and videos match "rabbit"/);
@@ -250,7 +267,7 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(count).toHaveBeenNthCalledWith(
       2,
       { userId: CONTEXT.userId },
-      { query: undefined, includeTypes: ['content'], mediaContentOnly: true },
+      { query: undefined, includeTypes: ['content'], mediaContentOnly: true, showAgentTurnsFrom: [] },
     );
   });
 

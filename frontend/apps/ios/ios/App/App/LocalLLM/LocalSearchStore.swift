@@ -195,6 +195,10 @@ final class LocalSearchStore {
     let typeTerm = (hasQuery || (timeOrdered && broad)) ? "+d.entity_type" : "d.entity_type"
     whereParts.append("\(typeTerm) IN (\(types.map { _ in "?" }.joined(separator: ", ")))")
     params.append(contentsOf: types)
+    // An agent's chats with the owner (entityDeviceRecord version 6) stay out, as the appliance's
+    // knowledge.search leaves them out by default. Read from `detail`, not the replica's generated
+    // `agent_turn` column: the web layer adds that column, and this can run first. Same as Android.
+    whereParts.append("json_extract(d.detail, '$.agent_turn') IS NULL")
 
     if let since = args.since, let lower = occurredAtBound(since, upper: false) {
       whereParts.append("d.occurred_at >= ?")
@@ -225,7 +229,7 @@ final class LocalSearchStore {
 
   // MARK: - Envelope (mirrors LocalSearch.kt)
 
-  private static let hiddenDetailKeys: Set<String> = ["from_id", "to_ids", "people", "location_id", "participants_truncated"]
+  private static let hiddenDetailKeys: Set<String> = ["from_id", "to_ids", "people", "location_id", "participants_truncated", "agent_turn"]
 
   static func item(_ row: Row) -> [String: Any] {
     var item: [String: Any] = [

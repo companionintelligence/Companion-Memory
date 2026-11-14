@@ -10,8 +10,10 @@ import type { LucideIcon } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { forecastStatusLabel } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
 import { useSessionAuth } from '@/hooks';
+import { classTitle } from '@/lib/activityPalette';
 import { starterPromptsFor } from '@/pages/ChatPage/starterPrompts';
 
 const WIDGET_TASKS = gql(
@@ -157,6 +159,7 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
   const metricsAvailable = snapshot.insight.metricsUpdatedAt !== null;
   const tasksAvailable = snapshot.plan.updatedAt !== null;
   const jobsAvailable = snapshot.jobs.updatedAt !== null;
+  const forecastStatus = forecastStatusLabel(snapshot.insight.systemStatus);
 
   return (
     <>
@@ -234,9 +237,7 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
                   : `${Math.round(snapshot.insight.confidence * 100)}% likely`}
                 {snapshot.insight.stillLearning ? ' · still learning' : ''}
               </p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Forecast status: {snapshot.insight.systemStatus}
-              </p>
+              {forecastStatus ? <p className="mt-2 text-xs text-muted-foreground">{forecastStatus}</p> : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">No current forecast is available.</p>
@@ -376,6 +377,8 @@ export default function WidgetDashboardPage() {
         tasksUpdatedAt,
         metricsUpdatedAt,
         jobsUpdatedAt,
+        // The calendar legend's words, as the phone's widgets get them too.
+        predictionLabel: classTitle,
       }),
     [
       forecast.data?.forecast,

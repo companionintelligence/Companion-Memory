@@ -11,6 +11,7 @@ export {
   PLATFORM_SYSTEMS,
   SYSTEM_ALIASES,
   adoptIngestIdentity,
+  agentTurnSourceSystem,
   attachmentIdentity,
   canonicalSystem,
   fallbackId,

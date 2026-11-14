@@ -177,6 +177,16 @@ describe('structured filters', () => {
     expect(statement.params).toContain('gmail');
   });
 
+  it("leaves an agent's chats with the owner out until How names a source, as the appliance does", () => {
+    const browse = localListStatement({ query: '', sort: 'newest' }, page)!;
+    const named = localListStatement({ query: '', sort: 'newest', connectors: ['openclaw'] }, page)!;
+
+    expect(browse.sql).toContain('d.agent_turn IS NULL');
+    expect(named.sql).not.toContain('agent_turn');
+    expect(named.params).toContain('openclaw');
+    expect(localListCountStatement({ query: '', sort: 'newest' })!.sql).toContain('d.agent_turn IS NULL');
+  });
+
   it('a place filter drives through its own indexes, so the type term stays off the type index', () => {
     expect(localListStatement({ query: '', sort: 'newest', places: ['Irvine'] }, page)!.sql).toContain(
       '+d.entity_type IN (',
