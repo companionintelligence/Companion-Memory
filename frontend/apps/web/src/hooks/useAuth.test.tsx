@@ -6,6 +6,7 @@ import {
   getApiKey,
   needsNativeCloudConnect,
   setApiBaseUrl,
+  setApiKey,
 } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
@@ -1907,6 +1908,129 @@ describe('useAuth', () => {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       localStorage.removeItem('ci.apiKey');
     }
+  });
+
+  describe('desktop: a sign-in key revoked somewhere else', () => {
+    /** A desktop window signed in with Companion, answering /api/keys/check with `check`. */
+    async function signedInDesktop(check: () => Response) {
+      const { appState } = await beginNativeOidcSignIn();
+      const keychain = new Map<string, string>();
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+        invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+          switch (command) {
+            case 'take_pending_deep_link_command':
+              return `companion://oidc/callback?code=otc-desktop&state=${appState}`;
+            case 'plugin:ci-auth|secure_get':
+              return { value: keychain.get(args?.key ?? '') ?? null };
+            case 'plugin:ci-auth|secure_set':
+              keychain.set(args?.key ?? '', args?.value ?? '');
+
+              return null;
+            case 'plugin:ci-auth|secure_remove':
+              keychain.delete(args?.key ?? '');
+
+              return null;
+            default:
+              return null;
+          }
+        }),
+      };
+      const fetchMock = setFetch((url) => {
+        if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+          return jsonResponse({ accessToken: 'desktop-jwt' });
+        }
+
+        if (url.endsWith('/api/keys')) {
+          return jsonResponse({ id: 'key-d', key: 'desktop-key' });
+        }
+
+        if (url.endsWith('/api/keys/check')) {
+          return check();
+        }
+
+        return emptyResponse(true, 204);
+      });
+
+      let navigate: ((to: string) => void) | undefined;
+      const rendered = renderHook(
+        () => {
+          navigate = useNavigate();
+
+          return useAuth();
+        },
+        { wrapper },
+      );
+      await waitFor(() => expect(rendered.result.current[0].authenticated).toBe(true));
+      expect(keychain.get('memory:ci.apiKey')).toBe('desktop-key');
+
+      return { ...rendered, fetchMock, keychain, navigateTo: (to: string) => navigate?.(to) };
+    }
+
+    const keyChecks = (fetchMock: ReturnType<typeof setFetch>) =>
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/keys/check')).length;
+
+    afterEach(() => {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      setApiKey(null);
+    });
+
+    it('signs the window out when Memory says the key no longer works', async () => {
+      const { result, fetchMock, keychain } = await signedInDesktop(() =>
+        jsonResponse({ message: 'Unauthorized' }, false, 401),
+      );
+
+      // Coming back to the window asks at once, without waiting for the next scheduled check.
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() => expect(result.current[0].authenticated).toBe(false));
+      const check = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/check'));
+      expect(check?.[1]?.headers).toMatchObject({ 'x-api-key': 'desktop-key' });
+      expect(getApiKey()).toBeNull();
+      // The keychain copy goes at the end of the sign-out, after `authenticated` has already turned false.
+      await waitFor(() => expect(keychain.has('memory:ci.apiKey')).toBe(false));
+    });
+
+    it('asks every minute while the person moves between pages', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      try {
+        const { result, fetchMock, navigateTo } = await signedInDesktop(() =>
+          jsonResponse({ message: 'Unauthorized' }, false, 401),
+        );
+
+        // A new page every 40 seconds with no focus change: the minute must not start over on each one.
+        for (const page of ['/planning', '/memory', '/chat']) {
+          act(() => navigateTo(page));
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(40_000);
+          });
+        }
+
+        expect(keyChecks(fetchMock)).toBeGreaterThan(0);
+        await waitFor(() => expect(result.current[0].authenticated).toBe(false));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays signed in when Memory does not answer the check', async () => {
+      const { result, fetchMock } = await signedInDesktop(() => {
+        throw new TypeError('Failed to fetch');
+      });
+
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() => expect(keyChecks(fetchMock)).toBeGreaterThan(0));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(result.current[0].authenticated).toBe(true);
+      expect(getApiKey()).toBe('desktop-key');
+    });
   });
 
   it('desktop: gives the new key back when the keychain will not save it', async () => {
