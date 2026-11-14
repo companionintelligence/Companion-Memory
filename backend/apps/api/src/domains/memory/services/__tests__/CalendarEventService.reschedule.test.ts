@@ -229,6 +229,9 @@ describe('CalendarEventService.create — provenance survives the DTO mapping', 
   let savedBase: EventBaseEntity | undefined;
 
   const userCtx = { userId: 'user-1' } as UserServiceContext;
+  // refuseForeignLinks refuses a link id that is not a uuid before it asks anything.
+  const ORGANIZER = '00000000-0000-4000-8000-0000000000e1';
+  const PARTICIPANT = '00000000-0000-4000-8000-0000000000e2';
 
   async function setup() {
     saved = undefined;
@@ -361,8 +364,8 @@ describe('CalendarEventService.create — provenance survives the DTO mapping', 
         return { source_system: identity.system, source_id: identity.id };
       })(),
       location_name: 'Room 3',
-      organizer_entity_id: 'entity-1',
-      participant_entity_ids: ['entity-2'],
+      organizer_entity_id: ORGANIZER,
+      participant_entity_ids: [PARTICIPANT],
       sharing_level: 'household',
     });
 
@@ -377,8 +380,8 @@ describe('CalendarEventService.create — provenance survives the DTO mapping', 
       sourceSystem: 'google_calendar',
       sourceId: 'gcal-1',
       locationName: 'Room 3',
-      organizerEntityId: 'entity-1',
-      participantEntityIds: ['entity-2'],
+      organizerEntityId: ORGANIZER,
+      participantEntityIds: [PARTICIPANT],
       sharingLevel: 'household',
     });
   });

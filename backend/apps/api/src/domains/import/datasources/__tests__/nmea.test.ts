@@ -150,4 +150,33 @@ describe('NMEA datasource', () => {
     // The fix itself is still parsed — only the invented date is gone.
     expect(items[0].item.location!.latitude).toBeCloseTo(37 + 45.1234 / 60, 6);
   });
+
+  it('reads a two-digit year from 80 to 99 as 19xx, since GPS time starts in 1980', async () => {
+    // The textbook RMC/GGA pair: 23 March 1994. Every `yy` used to become 20yy,
+    // so this fix was stored at 2094-03-23 and read as the newest one there was.
+    const lines = [
+      '$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A',
+      '$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47',
+      '$GPRMC,000000,A,4807.038,N,01131.000,E,022.4,084.4,010180,003.1,W*60',
+      '$GPRMC,000000,A,4807.038,N,01131.000,E,022.4,084.4,311279,003.1,W*67',
+      '$GPRMC,000000,A,4807.038,N,01131.000,E,022.4,084.4,010100,003.1,W*68',
+    ];
+    const f = makeNMEAFile('two-digit-year', lines);
+    const fi = new NMEAFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(f), fullPath: f }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const times = pipeline.filter((p) => p.item).map((p) => p.item.timestamp?.toISOString());
+    expect(times).toEqual([
+      '1994-03-23T12:35:19.000Z',
+      '1994-03-23T12:35:19.000Z',
+      '1980-01-01T00:00:00.000Z',
+      '2079-12-31T00:00:00.000Z',
+      '2000-01-01T00:00:00.000Z',
+    ]);
+  });
 });

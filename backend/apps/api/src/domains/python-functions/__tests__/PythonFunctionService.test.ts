@@ -59,4 +59,12 @@ describe('PythonFunctionService', () => {
 
     expect(enqueued).toBe(false);
   });
+
+  it('asks the target queue whether a job with the key is still live', async () => {
+    const eventService = { hasLiveJob: jest.fn().mockResolvedValue(true) } as unknown as EventService;
+    const service = new PythonFunctionService(eventService, logger);
+
+    await expect(service.hasLiveJob('hbpe', 'fn:nightly:user-1:manual')).resolves.toBe(true);
+    expect(eventService.hasLiveJob).toHaveBeenCalledWith('py-fn-hbpe', 'fn:nightly:user-1:manual');
+  });
 });

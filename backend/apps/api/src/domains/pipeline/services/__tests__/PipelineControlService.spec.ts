@@ -9,7 +9,7 @@ import { LoggerService } from '@ci/common/logging';
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
 import { SHARD_LEASE_SECONDS, STAGE_IDS, STAGE_ID_LIST, type StageId } from '../../constants';
 import { PIPELINE_TICK, PipelineTickCron } from '../../listeners/PipelineTickCron';
-import { automaticStageIds, stageDueness, stageSchedule } from '../../schedule';
+import { automaticStageIds, stageDueness, stageSchedule, type WindowBounds } from '../../schedule';
 import type { Stage } from '../../types';
 import { BackpressureService } from '../BackpressureService';
 import { EnrichmentWindowService } from '../EnrichmentWindowService';
@@ -144,6 +144,16 @@ interface ControlOptions {
 
   /** `WindowStatus.open`. Defaults to open, so a test opts in to the night. */
   windowOpen?: boolean;
+
+  /**
+   * `WindowStatus.opensAt` and `nextOpensAt`. Defaults to a window long past,
+   * which no leg in these tests started before, so it changes no answer unless
+   * a test sets it.
+   */
+  windowBounds?: WindowBounds;
+
+  /** `enrichment.window.enabled` is false: open, free-running, state `disabled`. */
+  windowDisabled?: boolean;
 
   /** Make the window unreadable, the way an unmigrated `ci.pipeline_turns` is. */
   windowThrows?: boolean;
@@ -421,22 +431,24 @@ function makeControl(options: ControlOptions = {}) {
     verbose: jest.fn(),
   };
 
-  // Only `status()` is ever called, and only for `.open` — the tick reads the
-  // window, it never takes a turn or charges the budget. The rest of
-  // `WindowStatus` is filled in because `tickConditions` logs `state` and
-  // `nextOpensAt` when the window is shut.
+  // Only `status()` is ever called, for `.open`, `state` and the window's
+  // bounds. The tick reads the window; it never takes a turn or charges the
+  // budget. `opensAt` and `nextOpensAt` become `stageDueness`'s `windowBounds`
+  // unless the window is disabled.
   const windowService = {
     status: jest.fn(async () => {
       if (options.windowThrows === true) {
         throw new Error('ci.pipeline_turns is not migrated on this database');
       }
 
-      const open = options.windowOpen ?? true;
+      const open = options.windowDisabled === true || (options.windowOpen ?? true);
 
       return {
         open,
-        state: open ? 'open' : 'closed',
-        nextOpensAt: new Date('2026-08-10T01:00:00.000Z'),
+        state: options.windowDisabled === true ? 'disabled' : open ? 'open' : 'closed',
+        opensAt: options.windowBounds?.opensAt ?? new Date('2026-08-09T01:00:00.000Z'),
+        closesAt: options.windowBounds?.closesAt ?? new Date('2026-08-09T06:00:00.000Z'),
+        nextOpensAt: options.windowBounds?.nextOpensAt ?? new Date('2026-08-10T01:00:00.000Z'),
       };
     }),
   };
@@ -978,6 +990,39 @@ describe('PipelineControlService', () => {
       expect(h.swept()).toEqual([STAGE_IDS.ENRICH_ESTIMATE_LOCATION]);
     });
 
+    it('sweeps a weekly producer before its nightly consumer on the night its week runs out', async () => {
+      // Geocode started a minute into last week's window and the estimator a
+      // minute into last night's. Both take tonight's window from the opening,
+      // so the producer is due on the same tick and the consumer waits for it
+      // instead of sweeping first and missing this week's coordinates.
+      const minute = 60 * 1000;
+      const day = 24 * 60 * minute;
+      const now = Date.now();
+      const h = makeControl({
+        users: [
+          runningRun({
+            detail: { stages: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION] },
+          }),
+        ],
+        stale: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION],
+        lastStartedAt: {
+          [STAGE_IDS.ENRICH_GEOCODE]: new Date(now - 7 * day + minute),
+          [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: new Date(now - day + minute),
+        },
+        windowOpen: true,
+        windowBounds: {
+          opensAt: new Date(now - minute),
+          closesAt: new Date(now + 5 * 60 * minute),
+          nextOpensAt: new Date(now + day - minute),
+        },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.ENRICH_GEOCODE]);
+      expect(report.legsBlocked).toBe(1);
+    });
+
     it('does not let a producer that is not DUE block anything', async () => {
       // THE BUG the dueness filter fixes, and it is a real one rather than a
       // hypothetical: `enrich.estimate_location` and `promote.place` are NIGHTLY
@@ -1309,6 +1354,74 @@ describe('PipelineControlService', () => {
 
       // Past its 1-day interval, inside its 3-day maxStaleness: due by the clock
       // and waiting on the window.
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
+    });
+
+    it("sweeps a nightly leg first swept yesterday afternoon in tonight's window, not the night after", async () => {
+      // A new account's nightly legs first run when its data arrives, during
+      // the day. Thirteen hours later the window is open but the 1-day interval
+      // is not up. By the time it is, the window has shut again.
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
+        windowOpen: true,
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
+      });
+
+      await h.service.tick();
+
+      expect(h.swept()).toEqual([STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]);
+    });
+
+    it('keeps a free-running appliance on the plain interval', async () => {
+      // A disabled window reports itself open with the default night's bounds.
+      // There is no nightly turn to line up with, so a leg swept 13 hours ago
+      // waits out its day as it always has.
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 13 * hour) },
+        windowDisabled: true,
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.swept()).toEqual([]);
+      expect(report.legsNotDue).toBe(1);
+    });
+
+    it('does not sweep a nightly leg twice in one window', async () => {
+      const hour = 60 * 60 * 1000;
+      const now = Date.now();
+      const h = makeControl({
+        users: [runningRun()],
+        stale: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
+        lastStartedAt: { [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: new Date(now - 1 * hour) },
+        windowOpen: true,
+        windowBounds: {
+          opensAt: new Date(now - 2 * hour),
+          closesAt: new Date(now + 3 * hour),
+          nextOpensAt: new Date(now + 22 * hour),
+        },
+      });
+
+      const report = await h.service.tick();
+
       expect(h.swept()).toEqual([]);
       expect(report.legsNotDue).toBe(1);
     });

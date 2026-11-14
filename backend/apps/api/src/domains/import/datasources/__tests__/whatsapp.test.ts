@@ -656,6 +656,124 @@ describe('the system-line filter must not eat human messages', () => {
 
     expect(pipeline).toHaveLength(1);
   });
+
+  describe('times without a zone', () => {
+    const chatIn = async (lines: string[], timeZone?: string): Promise<string[]> => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-'));
+
+      try {
+        fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+        const pipeline: EmittedGraph[] = [];
+        await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+          pipeline,
+          timeframe: {},
+          timeZone,
+          log: () => {},
+        } as unknown as ImportParams);
+
+        return pipeline.map((entry) => entry.item.timestamp?.toISOString() ?? 'undated');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    it("reads an iOS export's wall-clock times in the account's zone", async () => {
+      // Midnight on New Year's Day for a Pacific account is 08:00 UTC. Read in a
+      // UTC container it was stored at 00:00 UTC, which that account sees as
+      // 4 PM on Dec 31, 2020.
+      const times = await chatIn(
+        ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '[1/2/21, 8:15:00 PM] Bob: Good night'],
+        'America/Los_Angeles',
+      );
+
+      expect(times).toEqual(['2021-01-01T08:00:00.000Z', '2021-01-03T04:15:00.000Z']);
+    });
+
+    it('does not depend on the zone the server runs in', async () => {
+      // Setting process.env.TZ here would not move this process's zone, because
+      // jest gives each test file its own copy of process.env. The same line read
+      // in two account zones covers it instead. At least one of them is not the
+      // zone this process runs in.
+      const line = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!'];
+
+      expect(await chatIn(line, 'UTC')).toEqual(['2021-01-01T00:00:00.000Z']);
+      expect(await chatIn(line, 'Asia/Tokyo')).toEqual(['2020-12-31T15:00:00.000Z']);
+    });
+
+    it('reads 12-hour, 24-hour and Android times in that zone too', async () => {
+      const times = await chatIn(
+        [
+          '[1/1/21, 12:30:00 PM] Alice: noon and a half',
+          '[1/1/21, 23:15] Bob: a 24-hour iOS export',
+          '01/07/2021, 09:05 - Alice: an Android export, day first',
+        ],
+        'Europe/Berlin',
+      );
+
+      expect(times).toEqual([
+        '2021-01-01T11:30:00.000Z',
+        '2021-01-01T22:15:00.000Z',
+        '2021-07-01T07:05:00.000Z',
+      ]);
+    });
+
+    it('leaves a header with an impossible time undated rather than inventing one', async () => {
+      expect(await chatIn(['[13/1/21, 1:00:00 AM] Alice: month 13'], 'UTC')).toEqual(['undated']);
+    });
+
+    it('keeps the message ids it made before, whatever zone the account is in', async () => {
+      // The id carries a time. Built from the account-zone instant, a chat
+      // imported before this change would get new ids. Importing a newer export
+      // of it would then save every old message again. It stays the server's
+      // reading, which is what `new Date` gave the old code in this process.
+      const lines = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '01/07/2021, 09:05 - Bob: Android'];
+      const imported = async (timeZone?: string): Promise<EmittedGraph[]> => {
+        const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-id-'));
+        const root = path.join(parent, 'chat');
+
+        try {
+          fs.mkdirSync(root);
+          fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+          const pipeline: EmittedGraph[] = [];
+          await new WhatsAppFileImporter().fileImport({}, { filename: 'chat', fullPath: root }, {
+            pipeline,
+            timeframe: {},
+            timeZone,
+            log: () => {},
+          } as unknown as ImportParams);
+
+          return pipeline;
+        } finally {
+          fs.rmSync(parent, { recursive: true, force: true });
+        }
+      };
+
+      const legacy = [
+        `whatsapp:chat:${new Date('1/1/21 12:00:00 AM').toISOString()}:0`,
+        `whatsapp:chat:${new Date('2021-07-01T09:05:00').toISOString()}:1`,
+      ];
+
+      // Two zones at least one of which is not this process's, so the stored
+      // instants move while the ids must not.
+      for (const timeZone of ['America/Los_Angeles', 'Pacific/Kiritimati', undefined]) {
+        const items = await imported(timeZone);
+
+        expect(items.map((entry) => entry.item.id)).toEqual(legacy);
+      }
+
+      expect((await imported('Pacific/Kiritimati'))[0].item.timestamp?.toISOString()).toBe(
+        '2020-12-31T10:00:00.000Z',
+      );
+
+      // With no account zone the stored time is the old reading too.
+      expect((await imported(undefined)).map((entry) => entry.item.timestamp?.toISOString())).toEqual([
+        new Date('1/1/21 12:00:00 AM').toISOString(),
+        new Date('2021-07-01T09:05:00').toISOString(),
+      ]);
+    });
+  });
 });
 
 describe('a _chat.txt in a folder the system named', () => {

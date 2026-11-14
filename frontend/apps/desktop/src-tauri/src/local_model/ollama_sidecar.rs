@@ -3,9 +3,11 @@
 //! `http://host.docker.internal:11434`, i.e. whatever's on the HOST's port
 //! 11434) for users who don't already run Ollama themselves. This module
 //! never writes that config or stack_manager's `.env` itself — it only makes
-//! sure port 11434 is answering, in one of three ways, cheapest first (the
-//! one value it exports into `.env` is DEFAULT_CHAT_MODEL, which
-//! stack_manager::write_env_file reads; see that constant's comment):
+//! sure port 11434 is answering, in one of three ways, cheapest first. What
+//! reaches `.env` from here is a chat model name: DEFAULT_CHAT_MODEL, which
+//! stack_manager::write_env_file reads (see that constant's comment), or on
+//! the first branch host_ollama_chat_model's pick, which
+//! stack_manager::apply_llm_env_override writes over it:
 //!
 //!   1. Already running (the user's own Ollama) → nothing to do.
 //!   2. `ollama` is installed but not running → launch it with its own
@@ -288,17 +290,106 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
     }
 }
 
+/// Where an unpacked release archive keeps the program. The macOS `.tgz` and
+/// the Windows `.zip` put it at the top, next to their libraries. The Linux
+/// `.tar.zst` puts it in `bin/` with its libraries in `lib/ollama/`. Ollama
+/// finds those relative to its own path, so it runs from `bin/` where it was
+/// unpacked rather than being moved.
+fn unpacked_binary(dest_dir: &Path) -> Option<PathBuf> {
+    [dest_dir.join(binary_name()), dest_dir.join("bin").join(binary_name())]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+/// Written into the runtime folder once an archive has been unpacked in full.
+/// The Linux archive lists `bin/ollama` first and about 2 GB of libraries
+/// after it, so an unpack cut short (the app quit during the first start, a
+/// full disk) leaves a program that starts but has nothing to run a model
+/// with. Finding the program alone would take that for a finished download at
+/// every later launch, so only this marker does. Named after the release, so
+/// a newer OLLAMA_VERSION is downloaded rather than the old one reused.
+fn unpacked_marker(dest_dir: &Path, asset_name: &str) -> PathBuf {
+    dest_dir.join(format!(".{asset_name}-{OLLAMA_VERSION}.unpacked"))
+}
+
+/// The program from an earlier unpack of this release that finished.
+fn previously_unpacked(dest_dir: &Path, asset_name: &str) -> Option<PathBuf> {
+    if !unpacked_marker(dest_dir, asset_name).is_file() {
+        return None;
+    }
+    unpacked_binary(dest_dir)
+}
+
+/// Removes the folders an earlier unpack put in `dest_dir`. One cut short may
+/// hold entries the tar crate will not write over (it refuses a hard link
+/// whose name exists). One from an older OLLAMA_VERSION would leave that
+/// release's GPU backends in `lib/ollama/` for the new program to load beside
+/// its own. `models/`, the archive and the markers stay where they are.
+fn clear_earlier_unpack(dest_dir: &Path) {
+    for folder in ["bin", "lib"] {
+        let path = dest_dir.join(folder);
+        if path.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::warn!("Could not remove {} before unpacking: {e}", path.display());
+            }
+        }
+    }
+}
+
+/// Unpacks a verified archive into `dest_dir` once what an earlier unpack left
+/// there is cleared. Returns the program in it. The marker is written
+/// once the program has been found. The archive goes last, so an unpack cut
+/// short leaves it for the next launch to unpack again without a download.
+fn unpack(archive_path: &Path, asset_name: &str, dest_dir: &Path) -> Result<PathBuf, String> {
+    clear_earlier_unpack(dest_dir);
+    extract_archive(archive_path, asset_name, dest_dir)?;
+
+    let Some(binary_path) = unpacked_binary(dest_dir) else {
+        let _ = std::fs::remove_file(archive_path);
+        return Err(format!("{asset_name} did not contain {}", binary_name()));
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&binary_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&binary_path, perms);
+        }
+    }
+
+    let marker = unpacked_marker(dest_dir, asset_name);
+    if let Err(e) = std::fs::write(&marker, b"") {
+        // Costs a second download at the next launch, nothing more.
+        log::warn!("Could not write {}: {e}", marker.display());
+    }
+    let _ = std::fs::remove_file(archive_path);
+
+    Ok(binary_path)
+}
+
 fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
     let asset = release_asset()
         .ok_or_else(|| format!("No prebuilt Ollama release for {}/{}", std::env::consts::OS, std::env::consts::ARCH))?;
 
-    let binary_path = dest_dir.join(binary_name());
-    if binary_path.is_file() {
+    if let Some(binary_path) = previously_unpacked(dest_dir, asset.name) {
         // Fetched by a previous run of this app — no need to re-download.
         return Ok(binary_path);
     }
 
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create {}: {e}", dest_dir.display()))?;
+
+    // The app quitting during an unpack leaves the verified archive behind.
+    // Unpacking that again beats fetching another 1 GB. A download cut short
+    // fails the checksum and is fetched again.
+    let archive_path = dest_dir.join(asset.name);
+    if archive_path.is_file() {
+        if verify_checksum(&archive_path, asset.sha256).is_ok() {
+            return unpack(&archive_path, asset.name, dest_dir);
+        }
+        let _ = std::fs::remove_file(&archive_path);
+    }
 
     let url = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_VERSION}/{}", asset.name);
     let client = reqwest::blocking::Client::builder()
@@ -310,7 +401,6 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         return Err(format!("Failed to download {url}: HTTP {}", response.status()));
     }
 
-    let archive_path = dest_dir.join(asset.name);
     {
         let mut file = std::fs::File::create(&archive_path)
             .map_err(|e| format!("Failed to create {}: {e}", archive_path.display()))?;
@@ -323,23 +413,7 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         return Err(e);
     }
 
-    extract_archive(&archive_path, asset.name, dest_dir)?;
-    let _ = std::fs::remove_file(&archive_path);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&binary_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            let _ = std::fs::set_permissions(&binary_path, perms);
-        }
-    }
-
-    if !binary_path.is_file() {
-        return Err(format!("{} did not contain {}", asset.name, binary_name()));
-    }
-    Ok(binary_path)
+    unpack(&archive_path, asset.name, dest_dir)
 }
 
 /// Lowercase hex of a digest. sha2 0.11 returns a `hybrid_array::Array`, which has no `LowerHex`
@@ -515,6 +589,132 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct TagsResponse {
+    #[serde(default)]
+    models: Vec<TagsModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagsModel {
+    name: String,
+    /// Set on an Ollama Cloud model (`gpt-oss:120b-cloud` and the like): a
+    /// stub that forwards every prompt to ollama.com.
+    #[serde(default)]
+    remote_host: Option<String>,
+    #[serde(default)]
+    remote_model: Option<String>,
+}
+
+impl TagsModel {
+    /// Runs on this machine. The desktop app writes CI_LOCAL_ONLY=true, so a
+    /// cloud model is never named for chat or background work: every job
+    /// would send the user's data to ollama.com.
+    fn is_local(&self) -> bool {
+        let remote = |field: &Option<String>| field.as_deref().is_some_and(|value| !value.is_empty());
+        let tag = self.name.rsplit_once(':').map_or("", |(_, tag)| tag);
+
+        !remote(&self.remote_host) && !remote(&self.remote_model) && tag != "cloud" && !tag.ends_with("-cloud")
+    }
+}
+
+/// The models an Ollama runs locally, in the order `/api/tags` lists them.
+/// Cloud models are left out; see TagsModel::is_local.
+fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/tags"))
+        .send()
+        .map_err(|e| format!("Failed to list models: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Listing models failed: HTTP {}", response.status()));
+    }
+    let tags: TagsResponse = response.json().map_err(|e| format!("Unreadable model list: {e}"))?;
+
+    Ok(tags.models.into_iter().filter(TagsModel::is_local).map(|model| model.name).collect())
+}
+
+/// Ollama reads a bare name as its `:latest` tag. Compares with the suffix
+/// stripped, like the api's sameBaseModel (servedModels.ts), so a registry
+/// host with a port (`localhost:5000/model`) is not mistaken for a tag.
+fn same_model(served: &str, wanted: &str) -> bool {
+    let base = |name: &str| name.strip_suffix(":latest").unwrap_or(name).to_string();
+
+    base(served) == base(wanted)
+}
+
+/// Mirrors the name rule the api uses to keep embedders and other non-chat
+/// models out of chat (backend/apps/api/src/domains/llm/services/
+/// servedModels.ts, NON_CHAT_NAME). Ollama publishes no labels, so the name
+/// is all there is.
+fn is_chat_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if ["embed", "rerank", "whisper", "kokoro", "minilm"].iter().any(|part| name.contains(part)) {
+        return false;
+    }
+
+    !name.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "tts" || word == "bge")
+}
+
+/// The chat model to ask a user's own Ollama for, when it is not
+/// DEFAULT_CHAT_MODEL: None when it serves the default (nothing to change)
+/// or serves no local chat model at all (nothing better to name). Otherwise
+/// the first local chat model it lists, so chat and background work end up
+/// on the same model the user already has on disk.
+fn choose_host_chat_model(served: &[String]) -> Option<String> {
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    served.iter().find(|name| is_chat_model_name(name)).cloned()
+}
+
+/// What to write as the chat model when reusing the user's own Ollama.
+///
+/// This app pulls nothing into an Ollama it does not own. It used to name
+/// DEFAULT_CHAT_MODEL regardless, so where that Ollama lacked it chat quietly
+/// ran on whatever it listed first while every background job failed with
+/// "Invalid model specified: gemma4:e4b". Logged either way, with the command
+/// that gets the default model. The embedding model search needs is logged
+/// the same way and has no substitute: the index is built with it.
+pub fn host_ollama_chat_model(port: u16) -> Option<String> {
+    let served = match served_model_names(port) {
+        Ok(served) => served,
+        Err(e) => {
+            log::warn!("Could not ask your Ollama which models it has ({e}); asking it for {DEFAULT_CHAT_MODEL}.");
+            return None;
+        }
+    };
+
+    if !served.iter().any(|name| same_model(name, DEFAULT_EMBED_MODEL)) {
+        log::warn!(
+            "Your Ollama does not have {DEFAULT_EMBED_MODEL}, which search needs. \
+             Run `ollama pull {DEFAULT_EMBED_MODEL}` to add it."
+        );
+    }
+
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    let chosen = choose_host_chat_model(&served);
+    match &chosen {
+        Some(model) => log::warn!(
+            "Your Ollama does not have {DEFAULT_CHAT_MODEL}; chat and background work will use {model}, \
+             the first local chat model it lists. Run `ollama pull {DEFAULT_CHAT_MODEL}` to use the default."
+        ),
+        None => log::warn!(
+            "Your Ollama has no local chat model; background work will fail until it has one. \
+             Run `ollama pull {DEFAULT_CHAT_MODEL}` to add the default."
+        ),
+    }
+
+    chosen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +805,67 @@ mod tests {
 
         let nobody = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(nobody));
+    }
+
+    /// A user's own Ollama gets nothing pulled into it, so the app names a
+    /// model it has. The default stays when it is there (bare or `:latest`
+    /// spellings included). Embedders are never picked for chat. An Ollama
+    /// with no chat model leaves the default in place rather than naming an
+    /// embedder.
+    #[test]
+    fn a_users_own_ollama_is_asked_for_a_chat_model_it_has() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(choose_host_chat_model(&names(&["qwen3.5:122b", DEFAULT_CHAT_MODEL])), None);
+        assert_eq!(
+            choose_host_chat_model(&names(&["nomic-embed-text:latest", "qwen3.5:122b", "qwen3.5:4b"])),
+            Some("qwen3.5:122b".to_string()),
+        );
+        assert_eq!(
+            choose_host_chat_model(&names(&["bge-m3:latest", "mxbai-embed-large:latest", "llama3.2:latest"])),
+            Some("llama3.2:latest".to_string()),
+        );
+        assert_eq!(choose_host_chat_model(&names(&["nomic-embed-text:latest"])), None);
+        assert_eq!(choose_host_chat_model(&[]), None);
+
+        assert!(same_model("nomic-embed-text:latest", DEFAULT_EMBED_MODEL));
+        assert!(same_model("nomic-embed-text", "nomic-embed-text:latest"));
+        assert!(same_model("localhost:5000/team/model", "localhost:5000/team/model:latest"));
+        assert!(!same_model("nomic-embed-text:v1.5", DEFAULT_EMBED_MODEL));
+        assert!(!same_model("gemma4:e2b", DEFAULT_CHAT_MODEL));
+        assert!(is_chat_model_name("gemma4:e4b"));
+        assert!(!is_chat_model_name("snowflake-arctic-embed2:latest"));
+        assert!(!is_chat_model_name("kokoro-tts:latest"));
+    }
+
+    /// The model list comes from Ollama's own `/api/tags` (every model on
+    /// disk, not `/api/ps`'s loaded few), in its order. Cloud models are left
+    /// out: the app runs with CI_LOCAL_ONLY=true, so naming one would send
+    /// every chat and background job to ollama.com.
+    #[test]
+    fn served_model_names_reads_ollamas_tag_list() {
+        let port = serve(|request| {
+            if request.url() != "/api/tags" {
+                return respond(request, 404, "not found");
+            }
+            respond(
+                request,
+                200,
+                r#"{"models":[
+                    {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":384},
+                    {"name":"glm-4.6:cloud","size":384},
+                    {"name":"qwen3.5:122b","size":1},
+                    {"name":"nomic-embed-text:latest","size":2}
+                ]}"#,
+            )
+        });
+        assert_eq!(
+            served_model_names(port).unwrap(),
+            vec!["qwen3.5:122b".to_string(), "nomic-embed-text:latest".to_string()]
+        );
+
+        let broken = serve(|request| respond(request, 500, "internal server error"));
+        assert!(served_model_names(broken).is_err());
     }
 
     /// The wire shape Ollama's own `/api/pull` expects. `model` is the current
@@ -709,6 +970,106 @@ mod tests {
         let err = extract_archive(&tgz_path, "ollama-linux-amd64.deb", &dest)
             .expect_err("an unhandled archive format must be an error");
         assert!(err.contains("Unrecognized archive format"), "{err}");
+    }
+
+    /// A `.tar.zst` in the Linux release's layout and order: the program in
+    /// `bin/` first, then its libraries in `lib/ollama/`.
+    fn write_linux_layout_archive(path: &Path, program: &[u8]) {
+        let file = std::fs::File::create(path).unwrap();
+        let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap().auto_finish();
+        let mut builder = tar::Builder::new(encoder);
+        let entries = [
+            (format!("bin/{}", binary_name()), program),
+            ("lib/ollama/libggml-base.so".to_string(), &b"not really a library"[..]),
+        ];
+        for (path, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body).unwrap();
+        }
+        builder.into_inner().unwrap();
+    }
+
+    /// Ollama's Linux archive keeps the program in `bin/` with its libraries
+    /// in `lib/ollama/`; the macOS and Windows archives keep it at the top.
+    /// Looking only at the top is how every Linux machine without Ollama
+    /// downloaded about 1 GB, unpacked it and then logged "did not contain
+    /// ollama", at every launch. The Linux layout is built here as a real
+    /// .tar.zst; the top-level one only needs the file in place.
+    #[test]
+    fn the_program_is_found_where_each_release_archive_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = b"#!/bin/sh\necho ollama\n";
+
+        let linux_archive = dir.path().join("ollama-linux-amd64.tar.zst");
+        write_linux_layout_archive(&linux_archive, program);
+
+        let linux = dir.path().join("linux");
+        std::fs::create_dir_all(&linux).unwrap();
+        extract_archive(&linux_archive, "ollama-linux-amd64.tar.zst", &linux).expect("a .tar.zst should unpack");
+        let found = unpacked_binary(&linux).expect("the Linux layout keeps the program in bin/");
+        assert_eq!(found, linux.join("bin").join(binary_name()));
+        assert_eq!(std::fs::read(&found).unwrap(), program);
+
+        let top_level = dir.path().join("top-level");
+        std::fs::create_dir_all(&top_level).unwrap();
+        std::fs::write(top_level.join(binary_name()), program).unwrap();
+        assert_eq!(unpacked_binary(&top_level), Some(top_level.join(binary_name())));
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(empty.join("bin")).unwrap();
+        assert_eq!(unpacked_binary(&empty), None, "a directory named bin is not the program");
+    }
+
+    /// The Linux archive lists `bin/ollama` before its libraries, so an unpack
+    /// cut short leaves the program without them. Only a finished unpack may
+    /// be reused at the next launch. One cut short is unpacked again from
+    /// scratch and only then marked finished.
+    #[test]
+    fn only_a_finished_unpack_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        // What an unpack cut short after its first entry leaves behind.
+        let runtime = dir.path().join("ollama-runtime");
+        std::fs::create_dir_all(runtime.join("bin")).unwrap();
+        std::fs::write(runtime.join("bin").join(binary_name()), b"#!/bin/sh\n").unwrap();
+        assert_eq!(previously_unpacked(&runtime, asset), None, "a cut-short unpack is not a finished one");
+
+        let found = unpack(&archive, asset, &runtime).expect("the archive should unpack over the partial one");
+        assert_eq!(found, runtime.join("bin").join(binary_name()));
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file(), "the libraries are there now");
+        assert!(!archive.exists(), "the archive is removed once unpacked");
+        assert_eq!(previously_unpacked(&runtime, asset), Some(found));
+    }
+
+    /// A newer OLLAMA_VERSION is unpacked where the older one was. Its GPU
+    /// backends in `lib/ollama/` must not sit beside the new ones, where the
+    /// new program would load them, while the pulled models stay put.
+    #[test]
+    fn an_unpack_clears_the_earlier_releases_libraries_but_keeps_the_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        let runtime = dir.path().join("ollama-runtime");
+        let old_backend = runtime.join("lib/ollama/cuda_v11/libggml-cuda.so");
+        std::fs::create_dir_all(old_backend.parent().unwrap()).unwrap();
+        std::fs::write(&old_backend, b"an older release's backend").unwrap();
+        let model = runtime.join("models/blobs/sha256-abc");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::write(&model, b"weights").unwrap();
+
+        unpack(&archive, asset, &runtime).expect("the archive should unpack");
+
+        assert!(!old_backend.exists(), "the older release's backend should be gone");
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file());
+        assert_eq!(std::fs::read(&model).unwrap(), b"weights", "the models are not the unpack's to clear");
     }
 
     /// Exercises real process spawning against whatever `ollama` binary is

@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 import { AlertDialog, Collapsible, Popover, cn } from '@ci/shadcn';
 import { ChevronRight, LogOut, Palette } from '@ci/shadcn/icons';
@@ -120,6 +120,11 @@ function ThemeSubmenu() {
   const { themeState, setTheme } = useTheme();
   const { expanded, setHoldOpen } = usePowerRail();
 
+  // The picker can go away while it is open without ever reporting a close:
+  // browser Back off /self folds the Self group it sits in. Let go of the
+  // rail with it, or nothing is left to release the hold.
+  useEffect(() => () => setHoldOpen(false), [setHoldOpen]);
+
   return (
     // A column, so the indented trigger stretches the way SubRow does.
     <Collapsible className="flex flex-col">
@@ -172,7 +177,11 @@ function ThemeSubmenu() {
             </div>
           </div>
 
-          <Popover onOpenChange={setHoldOpen}>
+          {/* Holds an already-wide rail open while the picker is up; never widens a
+              collapsed one. Widening swaps the rail's collapsed tree for the
+              expanded one, which remounts this popover closed: the picker never
+              opened, and with no close to report the hold, the rail stayed wide. */}
+          <Popover onOpenChange={(open) => setHoldOpen(open && expanded)}>
             <Popover.Trigger
               className={cn(
                 'flex cursor-pointer items-center gap-1.5 rounded-md text-left text-xs text-muted-foreground transition',
