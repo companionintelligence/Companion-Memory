@@ -50,7 +50,7 @@ export function InsightCard({ insight, onClick, onDismiss, isSeen = false, class
       </div>
 
       {data.keyActions && data.keyActions.length > 0 && (
-        <div className="mt-1">
+        <div className="mt-1" data-row-extra>
           <div className="text-xs font-medium text-muted-foreground mb-1.5 ">Suggested Actions</div>
           <ul className="space-y-2">
             {data.keyActions.map((action, idx) => (

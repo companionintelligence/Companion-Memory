@@ -2,6 +2,9 @@ import { useQuery } from '@apollo/client/react';
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
+
 import { usePlanBadgeCount } from './usePlanBadgeCount';
 
 // Same technique as usePlanTasks.test.ts: mock Apollo's hook directly so the
@@ -11,6 +14,9 @@ vi.mock('@apollo/client/react', async (orig) => ({
   ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
+
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
 
 const mockedUseQuery = vi.mocked(useQuery);
 
@@ -48,5 +54,38 @@ describe('usePlanBadgeCount', () => {
     // t1/t2/t3 by status. t4 is done, so its leftover pending change does not
     // bring it back into the count.
     expect(renderHook(() => usePlanBadgeCount()).result.current).toBe(3);
+  });
+
+  // The badge used to move only when a page refetched it by name, which the
+  // new-task form did not; a task added there, on another device or by a scan
+  // left the old number up until a reload.
+  it('re-reads on a task change from the server and on return to the tab', () => {
+    const refetch = vi.fn();
+    mockedUseQuery.mockReturnValue({ data: undefined, refetch } as never);
+
+    renderHook(() => usePlanBadgeCount());
+
+    expect(vi.mocked(useLiveChanges)).toHaveBeenCalledWith(['tasks'], expect.any(Function));
+    vi.mocked(useLiveChanges).mock.calls.at(-1)?.[1]();
+    expect(refetch).toHaveBeenCalledTimes(1);
+
+    vi.mocked(useRefetchOnReturn).mock.calls.at(-1)?.[0]();
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  // With the Tasks row hidden the count is shown nowhere: no query, and no
+  // live stream held open on every page for it.
+  it('neither asks nor listens while the Tasks row is hidden', () => {
+    const refetch = vi.fn();
+    mockedUseQuery.mockReturnValue({ data: { tasks: { edges: [node('t1', 'open')] } }, refetch } as never);
+
+    const { result } = renderHook(() => usePlanBadgeCount(false));
+
+    expect(result.current).toBe(0);
+    expect(mockedUseQuery.mock.calls.at(-1)?.[1]).toMatchObject({ skip: true });
+    expect(vi.mocked(useLiveChanges)).toHaveBeenLastCalledWith([], expect.any(Function));
+
+    vi.mocked(useRefetchOnReturn).mock.calls.at(-1)?.[0]();
+    expect(refetch).not.toHaveBeenCalled();
   });
 });

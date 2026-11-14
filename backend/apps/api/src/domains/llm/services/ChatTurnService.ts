@@ -168,6 +168,15 @@ export function persistedAssistantContent(thinking: string, text: string): strin
 }
 
 /**
+ * Whether a stored assistant row has nothing to show: no text and no thinking
+ * once the `<think>` wrap is taken off. Only such a row of a stopped turn is
+ * marked canceled; one with text stays visible.
+ */
+function isBlankAssistantContent(content: string | null | undefined): boolean {
+  return !(content ?? '').replace(/<\/?think>/g, '').trim();
+}
+
+/**
  * How many times one turn asks the backend before giving up on it, when the
  * backend sends NO response at all (`LlmFirstResponseTimeoutError`). A fresh
  * request re-enters the backend's queue at the back with nothing lost —
@@ -573,8 +582,18 @@ export class ChatTurnService {
     });
   }
 
+  /**
+   * A placeholder row is empty unless an earlier run of this job streamed into
+   * it before the API restarted. That text stays, the same as any stopped reply
+   * keeps what it showed (see {@link persistTurn}).
+   */
   private async finishCanceled(context: ServiceContext, payload: ChatGeneratePayload): Promise<void> {
-    await this.messageService.update(context, payload.assistantMessageId, { canceled: true });
+    const row = await this.messageService.findById(context, payload.assistantMessageId);
+
+    if (isBlankAssistantContent(row?.content)) {
+      await this.messageService.update(context, payload.assistantMessageId, { canceled: true });
+    }
+
     await this.setGenerationStatus(context, payload.threadId, 'idle');
     this.broker.complete(payload.threadId);
   }
@@ -584,6 +603,17 @@ export class ChatTurnService {
    * input messages back — so the in-flight turn-context message cannot be
    * persisted here. Keep it that way: messages are re-read from Postgres every
    * turn, so a persisted snapshot would accumulate one copy per turn.
+   *
+   * A stopped turn keeps what it streamed. `canceled` is stored in the same
+   * `is_deleted` column a deleted message uses. Every read leaves those rows
+   * out, so marking the cut-off reply canceled made the part the person
+   * watched arrive vanish on reload. Only a cut-off row with nothing in it is
+   * marked, as before. Thinking that is only whitespace counts as nothing.
+   *
+   * The last row of a stopped turn never ran its tool calls: the tool loop
+   * checks the signal before it runs them, so no result row follows. They are
+   * not stored. Kept, the row showed a lookup that never happened and replayed
+   * a call with no result into the next turn.
    */
   private async persistTurn(
     context: ServiceContext,
@@ -594,25 +624,39 @@ export class ChatTurnService {
     streamedText: string,
     streamedThink: string,
   ): Promise<void> {
+    const stoppedEmpty = (content: string | null | undefined) => aborted && isBlankAssistantContent(content);
+    const toolCallsOf = (message: OllamaMessage, last: boolean) =>
+      aborted && last
+        ? undefined
+        : (message.tool_calls as unknown[] as Record<string, unknown>[] | undefined);
+
     if (generated.length === 0) {
+      const content = persistedAssistantContent(streamedThink, streamedText);
+
       await this.messageService.update(context, payload.assistantMessageId, {
-        content: persistedAssistantContent(streamedThink, streamedText),
-        canceled: aborted,
+        content,
+        canceled: stoppedEmpty(content),
       });
 
       return;
     }
 
     const [first, ...rest] = generated;
+    // `streamedText` is every round's text. Only a lone row may take it: with
+    // rows after it, the text it would borrow is already theirs, and the reply
+    // showed twice on reload.
+    const firstContent = first.content || (rest.length === 0 ? streamedText : '');
 
     await this.messageService.update(context, payload.assistantMessageId, {
-      content: first.content || streamedText,
-      canceled: aborted && rest.length === 0,
-      toolCalls: (first.tool_calls as unknown[] as Record<string, unknown>[]) ?? null,
+      content: firstContent,
+      canceled: rest.length === 0 && stoppedEmpty(firstContent),
+      toolCalls: toolCallsOf(first, rest.length === 0) ?? null,
     });
 
     for (let i = 0; i < rest.length; i++) {
       const message = rest[i];
+      const last = i === rest.length - 1;
+      const toolCalls = toolCallsOf(message, last);
 
       await this.messageService.create(
         { userId: payload.ownerId },
@@ -620,11 +664,9 @@ export class ChatTurnService {
           model,
           role: message.role,
           content: message.content,
-          canceled: aborted && i === rest.length - 1,
+          canceled: last && stoppedEmpty(message.content),
           threadId: payload.threadId,
-          ...(message.tool_calls && {
-            toolCalls: message.tool_calls as unknown[] as Record<string, unknown>[],
-          }),
+          ...(toolCalls && { toolCalls }),
           promptMessageId: payload.promptMessageId,
         },
       );
@@ -668,7 +710,20 @@ export class ChatTurnService {
       parseNumCtx(process.env[NUM_CTX_ENV_VAR]) == null
         ? ((await this.ollamaService.resolveChatContextTokens?.(payload.model)) ?? null)
         : null;
-    const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel, measuredContextTokens });
+    const budget = resolveContextBudget({
+      shrinkLevel: options.shrinkLevel,
+      measuredContextTokens,
+      // Every round that offers tools sends their definitions, about 5,400
+      // tokens for today's list. That is more than half of the 8k default
+      // window. Left out of this plan they took the room kept for the answer.
+      // Sized from the request, before `resolveModel` decides. A model without
+      // tools still gets the grown window here (a bigger `num_ctx` it does not
+      // need). A pinned demo model that turns tools on gets no reserve at all.
+      toolDefinitionBytes: payload.enableTools
+        ? (this.ollamaService.toolDefinitionBytes?.(requestContext) ?? 0)
+        : 0,
+      windowCanGrow: this.ollamaService.chatWindowCanGrow?.() ?? true,
+    });
 
     // Which messages re-send their attachments is settled over the whole thread, BEFORE admission,
     // because the text of an attachment (unlike an image) costs what it weighs and so has to be
@@ -761,6 +816,8 @@ export class ChatTurnService {
       model,
       budgetSource: budget.source,
       maxContextTokens: budget.maxContextTokens,
+      plannedContextTokens: budget.plannedContextTokens,
+      reservedToolTokens: budget.reservedToolTokens,
       promptBudgetBytes: budget.promptBudgetBytes,
       shrinkLevel: budget.shrinkLevel,
       admittedMessages: plan.admitted.length,
@@ -770,7 +827,10 @@ export class ChatTurnService {
       systemPromptOverReserve: systemPromptBytes > budget.reservedSystemTokens,
       inlineAttachmentMessages: plan.admitted.filter((index) => inlineAttachments[index]).length,
       attachmentTextBytes: plan.admitted.reduce((total, index) => total + attachmentTextBytes[index], 0),
-      estimatedPromptTokensUpperBound: systemPromptBytes + plan.admittedBytes,
+      // The tool reserve is an estimate rather than a bound. It counts only
+      // when the model is offered the tools at all.
+      estimatedPromptTokensUpperBound:
+        systemPromptBytes + plan.admittedBytes + (enableTools ? budget.reservedToolTokens : 0),
       overBudget: plan.overBudget,
     });
 

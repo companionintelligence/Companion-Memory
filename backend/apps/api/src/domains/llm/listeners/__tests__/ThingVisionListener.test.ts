@@ -227,6 +227,21 @@ describe('ThingVisionListener — a vision guess is recorded as a sighting', () 
     );
   });
 
+  it('starts the minted thing "last seen" when the photo was taken', async () => {
+    const { listener, itemService } = makeListener({
+      externalCreatedAt: new Date('2018-03-09T08:00:00.000Z'),
+    });
+
+    await listener.handleFileUploaded(upload());
+
+    expect(itemService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ lastSeenAt: new Date('2018-03-09T08:00:00.000Z') }),
+    );
+    // The sighting has no place, so neither does the thing.
+    expect(itemService.create.mock.calls[0][1]).not.toHaveProperty('lastSeenPlaceEntityId');
+  });
+
   it('NEVER invents a detection confidence', async () => {
     const { listener, observationService } = makeListener();
 

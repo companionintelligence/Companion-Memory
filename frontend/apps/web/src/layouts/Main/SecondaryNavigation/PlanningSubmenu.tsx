@@ -48,7 +48,7 @@ export function PlanningSubmenu() {
     pathname.startsWith('/today/');
   const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen('plan', routeOpen);
 
-  const planBadgeCount = usePlanBadgeCount();
+  const planBadgeCount = usePlanBadgeCount(isFeatureEnabled('planning.page'));
   const feedBadgeCount = useFeedBadgeCount();
 
   // The unseen-actions/summaries badge belongs to Today, the page that can

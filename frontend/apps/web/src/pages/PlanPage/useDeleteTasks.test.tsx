@@ -13,6 +13,10 @@ import { DELETE_TASK, useDeleteTasks } from './useDeleteTasks';
 
 const toastError = vi.hoisted(() => vi.fn());
 
+// The badge also re-reads on the live task stream, which needs a signed-in
+// session this harness does not have; this file is about the delete path.
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+
 vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 

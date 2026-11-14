@@ -264,10 +264,15 @@ export function FeedModal({ onClose }: Props) {
               model selector that used to sit here now lives in Settings ▸ Model. */}
           <div className="flex-1" />
 
-          <div className="font-bold">{action?.title}</div>
+          {/* min-w-0 and break-words let a title with one long word (a pasted
+              address) wrap instead of pushing the buttons past the edge. */}
+          <div className="min-w-0 break-words font-bold">{action?.title}</div>
 
           <div className="flex flex-1 justify-end gap-1">
-            {chatContext ? <ChatWithAgentMenu context={chatContext} size="sm" /> : null}
+            {/* The icon menu, not the two labelled buttons: at phone width those
+                pushed Close past the right edge. With no keyboard there was
+                then no way out. The menu still opens with "Open chat". */}
+            {chatContext ? <ChatWithAgentMenu context={chatContext} /> : null}
             <IconButton variant="ghost" onClick={onClose} label={t('COMMON_CLOSE')}>
               <X />
             </IconButton>

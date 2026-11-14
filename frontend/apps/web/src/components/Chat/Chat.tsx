@@ -161,6 +161,19 @@ export function Chat({
     // of a block. These refs will not be set until the next React render cycle and
     // we want to pause the text stream until they fixate on the newly created stream
     // receiver elements.
+    //
+    // End both parsers first. `streaming-markdown` keeps back the last character it was given, whatever it is, until
+    // the next one shows whether it starts markdown (at the start of a line it keeps more, as `1.` or `#` could still
+    // become a list or a heading). A bare URL gets its `href` only once something follows it. `parser_end` writes all
+    // of that out, so a block dropped without it stayed a character short until a reload.
+    if (textParserRef.current) {
+      smd.parser_end(textParserRef.current);
+    }
+
+    if (thinkParserRef.current) {
+      smd.parser_end(thinkParserRef.current);
+    }
+
     textStreamingRef.current = null;
     textParserRef.current = null;
     thinkStreamingRef.current = null;
@@ -240,8 +253,6 @@ export function Chat({
         if (chunk.channel === Channel.TEXT) {
           targetRef = textStreamingRef;
           parserRef = textParserRef;
-          // Accumulate text for TTS
-          accumulatedTextRef.current += payload;
         } else if (chunk.channel === Channel.THINK) {
           targetRef = thinkStreamingRef;
           parserRef = thinkParserRef;
@@ -257,6 +268,12 @@ export function Chat({
 
         if (parser == null) {
           return false; // not ready → buffer it
+        }
+
+        // Accumulate text for TTS, only once the chunk is written. A buffered chunk comes back for another try, so adding
+        // it before the checks above handed `onResponseFinished` the first chunk after a block change twice.
+        if (chunk.channel === Channel.TEXT) {
+          accumulatedTextRef.current += payload;
         }
 
         smd.parser_write(parser, payload);

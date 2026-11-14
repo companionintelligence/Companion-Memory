@@ -19,9 +19,11 @@ interface PowerRailContextValue {
   /** Pinned open by a deliberate click. Persisted; survives a reload. */
   pinned: boolean;
   /**
-   * Held open by an interaction that lives outside the rail DOM (e.g. a
-   * portaled colour picker). Without this, unpinning while it's open — or a
-   * stray mouseleave reaching it — would collapse the rail mid-click.
+   * Keeps an already-wide rail wide while something that lives outside the
+   * rail DOM (the portaled colour picker) is open, so unpinning underneath it
+   * does not collapse the rail mid-click. Set it only while `expanded` is
+   * true: holding a collapsed rail widens it, and the swap to the expanded
+   * tree remounts whatever asked for the hold.
    */
   holdOpen: boolean;
   /** `overlay` is the phone drawer; `dock` is the desktop lane. */
@@ -65,10 +67,9 @@ export function PowerRailProvider({
   variant?: PowerRailVariant;
 }) {
   // The rail only widens on a deliberate click. `pinned` is that decision: it
-  // persists across a reload. `holdOpen` is the one other reason — a
-  // portaled popover (Colours) is open, so the pointer left the rail DOM on
-  // purpose and must not collapse it underneath, including if the click that
-  // opened it also unpins the rail.
+  // persists across a reload. `holdOpen` only keeps a wide rail wide: while a
+  // portaled popover (Colours) opened from it is up, unpinning underneath must
+  // not collapse it. It never widens a collapsed rail.
   //
   // Overlay (phone) is a third case: a swipe or the edge control opens a
   // drawer over the page. It is not pinned and not stored.

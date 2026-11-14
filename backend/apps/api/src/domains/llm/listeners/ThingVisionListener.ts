@@ -410,6 +410,10 @@ export class ThingVisionListener {
         // the schema's 1.0 default would claim the latter.
         identityMethod: 'vision',
         identityConfidence: VISION_IDENTITY_CONFIDENCE,
+        // The photo is a sighting of it, linked below, so the thing starts out
+        // last seen when it was taken, as a sighting a match or a person links does.
+        lastSeenAt: observedAt,
+        ...(observation.placeEntityId != null && { lastSeenPlaceEntityId: observation.placeEntityId }),
         ...this.physicalPropertiesOf(itemData),
         metadata: {
           original_analysis: itemData,

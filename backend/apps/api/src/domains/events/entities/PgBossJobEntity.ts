@@ -49,4 +49,12 @@ export class PgBossJobEntity {
 
   @Column({ name: 'output', type: 'jsonb', nullable: true })
   output!: Record<string, unknown> | null;
+
+  /**
+   * On a dead-letter copy, the output of the job that failed. Since pg-boss 12
+   * the copy is a new job that has not run, so its own `output` is empty and
+   * the failure rides along here.
+   */
+  @Column({ name: 'source_output', type: 'jsonb', nullable: true })
+  sourceOutput!: Record<string, unknown> | null;
 }

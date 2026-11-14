@@ -241,6 +241,14 @@ type BaseSearchOptions = {
   /** See {@link SemanticSearchScope.mediaContentOnly}. */
   mediaContentOnly?: boolean;
   /**
+   * `keyword` mode only: also match the query's last word as the START of a
+   * word, so "Jor" finds Jordan. For menus that search as you type, such as a
+   * note's `[[` link menu; `websearch_to_tsquery` alone matches whole
+   * (stemmed) words, so a half-typed name found nothing. `auto` resolves to
+   * keyword when it is set; the other modes ignore it.
+   */
+  prefix?: boolean;
+  /**
    * Hybrid fusion strategy:
    * - `'weighted'` (default): 50/50 normalized score average.
    * - `'rrf'`: Reciprocal Rank Fusion ($\sum_i \frac{1}{k + \text{rank}_i}$, $k=60$),
@@ -493,6 +501,37 @@ const DEFAULT_MAX_RESULTS = 25;
  */
 const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery`;
 
+/**
+ * Shortest half-typed word matched as a prefix. One letter matches a lexeme in
+ * nearly every indexed row, and the keyword query ranks every match before its
+ * LIMIT, so a menu searching on each keystroke would rank the whole corpus on
+ * the first one.
+ */
+const MIN_PREFIX_LENGTH = 2;
+
+/**
+ * The last run of letters, combining marks and digits in a query, for a
+ * `to_tsquery('simple', ... || ':*')` prefix match; `null` when it is shorter
+ * than {@link MIN_PREFIX_LENGTH}. The last RUN, not the last word with its
+ * punctuation squeezed out: Postgres indexes "O'Brien" as `o` and `brien` and
+ * "Jean-Pierre" with a `pierr` part, so "O'Br" has to look for `br` and
+ * "Jean-Pi" for `pi`. Only letters, marks and digits survive, so the bound
+ * value can never carry tsquery syntax of its own.
+ *
+ * Marks belong to the run because Postgres keeps them inside a word: "राहुल"
+ * is one lexeme, and its vowel signs are marks, so without them "राहु" left
+ * a single letter. The case is left alone: the 'simple' dictionary lowers the
+ * term with the database's own rules, the ones the index was built with.
+ * JavaScript's rules differ ("İ" becomes "i" plus a combining dot), so "İst"
+ * lowered here never found İstanbul.
+ */
+export function prefixTermOf(query: string): string | null {
+  const runs = query.match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+  const last = runs[runs.length - 1] ?? '';
+
+  return last.length >= MIN_PREFIX_LENGTH ? last : null;
+}
+
 @Injectable()
 export class SearchService {
   constructor(
@@ -558,7 +597,16 @@ export class SearchService {
     // and can record. Logged as 'auto' it would be unreadable: auto is the
     // default, so it is most calls, and the three strategies it picks between
     // have completely different recall behaviour.
-    const modeTaken: SearchModeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    //
+    // `prefix` is a keyword feature, so it steers 'auto' to keyword: left to
+    // the word count, a four-word query went to boosted and dropped the prefix
+    // without a word.
+    const modeTaken: SearchModeTaken =
+      mode !== 'auto'
+        ? mode
+        : resolvedOptions.prefix === true
+          ? 'keyword'
+          : resolveAutoMode(resolvedOptions.query);
     const startedAt = Date.now();
 
     let outcome: StrategyResult;
@@ -1448,8 +1496,20 @@ export class SearchService {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
     const typeFilter = this.buildTypeFilter(options, 3);
-    const timeFilter = buildTimeFilter(options, 3 + (typeFilter.param ? 1 : 0));
+    const timeParamOffset = 3 + (typeFilter.param ? 1 : 0);
+    const timeFilter = buildTimeFilter(options, timeParamOffset);
     const { weights } = await this.rankingLiterals();
+
+    // The whole-word query OR'd with the last word as a prefix. 'simple', not
+    // 'english': stemming a half-typed word would guess at a word the person
+    // has not finished. The whole words still go through 'english', so a
+    // finished "Jordans" matches as it did before.
+    const prefixTerm = options.prefix === true ? prefixTermOf(query) : null;
+    const prefixParam = timeParamOffset + timeFilter.params.length;
+    const tsquery =
+      prefixTerm == null
+        ? KEYWORD_TSQUERY_SQL
+        : `(${KEYWORD_TSQUERY_SQL}) || to_tsquery('simple', $${prefixParam} || ':*')`;
 
     // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
     // the size of the whole match set on every returned row — and it is free
@@ -1457,7 +1517,7 @@ export class SearchService {
     // LIMIT takes the top of it.
     const sql = `
       WITH q AS (
-        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
+        SELECT ${tsquery} AS tq
       )
       SELECT
         entity_id,
@@ -1483,6 +1543,10 @@ export class SearchService {
     }
 
     params.push(...timeFilter.params);
+
+    if (prefixTerm != null) {
+      params.push(prefixTerm);
+    }
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 

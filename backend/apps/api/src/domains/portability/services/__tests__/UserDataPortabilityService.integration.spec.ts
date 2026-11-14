@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PassThrough } from 'node:stream';
 
 import { DataSource } from 'typeorm';
 
@@ -252,6 +253,53 @@ describeWithDatabase(
 
       const rows = await notesFor();
       expect(rows).toEqual([{ id: freshId, title: 'from-ndjson-stream' }]);
+    });
+
+    it('imports its own streamed export, end record included', async () => {
+      const ids = [randomUUID(), randomUUID()];
+
+      for (const [index, id] of ids.entries()) {
+        await dataSource.query('INSERT INTO ci.notes (id, title, user_id) VALUES ($1::uuid, $2, $3::uuid)', [
+          id,
+          `round-trip-${index}`,
+          testUserId,
+        ]);
+      }
+
+      noopServices.userService.findById = jest.fn().mockResolvedValue(null);
+
+      const res = Object.assign(new PassThrough(), { setHeader: () => undefined });
+      let text = '';
+
+      res.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+      await service.writeExportStream({ userId: testUserId } as never, res as never);
+
+      const records = text
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; rows?: number });
+      const rowRecords = records.filter((record) => record.type === 'row').length;
+
+      expect(records[0]).toMatchObject({ type: 'manifest', version: 2 });
+      expect(records.at(-1)).toEqual({ type: 'end', rows: rowRecords, files: 0 });
+      expect(rowRecords).toBeGreaterThanOrEqual(2);
+
+      await dataSource.query('DELETE FROM ci.notes WHERE user_id = $1::uuid', [testUserId]);
+      noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const importing = {
+        setEncoding: () => undefined,
+
+        [Symbol.asyncIterator]: async function* () {
+          yield text;
+        },
+      } as never;
+
+      await service.importNdjsonStream({ userId: testUserId } as never, importing, 'jane@example.com');
+
+      expect((await notesFor()).map((row) => row.title)).toEqual(['round-trip-0', 'round-trip-1']);
     });
 
     const streamOf = (records: unknown[]): never => {
