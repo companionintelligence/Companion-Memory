@@ -304,6 +304,8 @@ def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], lis
     an ambiguous word would damage that text: a sender called Will would turn "I will" into
     "I [NAME]". An ambiguous word is masked only where it is capitalised, see
     _mask_capitalised_names. Any other single word is denied wherever it occurs.
+    The counts come from the export itself, so a small export can misjudge a name, and then
+    its lower-case uses are kept.
     """
     lower_uses: Counter[str] = Counter()
     capital_uses: Counter[str] = Counter()
