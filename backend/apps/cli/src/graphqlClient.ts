@@ -304,10 +304,9 @@ export class MemoryGraphQLClient {
   // ---------------------------------------------------------------------------
 
   triggerHbpe(): Promise<string> {
-    return this.mutate<{ triggerHbpe: string }>(
-      'triggerHbpe',
-      `mutation TriggerHbpe { triggerHbpe }`,
-    ).then((data) => data.triggerHbpe);
+    return this.mutate<{ triggerHbpe: string }>('triggerHbpe', `mutation TriggerHbpe { triggerHbpe }`).then(
+      (data) => data.triggerHbpe,
+    );
   }
 
   rebuildPlaces(): Promise<string> {

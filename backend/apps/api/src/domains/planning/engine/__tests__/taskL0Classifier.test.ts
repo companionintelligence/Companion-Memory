@@ -36,10 +36,7 @@ describe('taskL0Classifier', () => {
 
   it('weights title matches above secondary description/notes matches', () => {
     expect(
-      classifyTaskL0(
-        'Dentist appointment at 3pm',
-        'Leave right after the sprint review meeting at work',
-      ),
+      classifyTaskL0('Dentist appointment at 3pm', 'Leave right after the sprint review meeting at work'),
     ).toBe('ERRAND');
   });
 

@@ -982,7 +982,10 @@ function detectAutomatedNonActionable(text: string): 'automated_otp' | 'marketin
     return 'automated_otp';
   }
 
-  if (MARKETING_BLAST_RE.test(text) && !/\b(invoice due|action required|please reply|confirm your appointment)\b/i.test(text)) {
+  if (
+    MARKETING_BLAST_RE.test(text) &&
+    !/\b(invoice due|action required|please reply|confirm your appointment)\b/i.test(text)
+  ) {
     return 'marketing_blast';
   }
 

@@ -491,8 +491,7 @@ export class SuggestionSyncService {
           window_start: windowStart,
           window_end: task.dueAt && task.dueAt > windowStart ? task.dueAt : windowEnd,
           time_flex: (task.dueAt ? 'day' : 'week') as 'day' | 'week',
-          duration_minutes:
-            task.estimatedMinutes ?? estimateActivityDurationMinutes(task.title, detail),
+          duration_minutes: task.estimatedMinutes ?? estimateActivityDurationMinutes(task.title, detail),
           ...(l0 !== 'UNKNOWN' ? { l0_class: l0 } : {}),
           dedupe_key: `task:${task.id}`,
           generator: 'adapter/task',
@@ -538,8 +537,7 @@ export class SuggestionSyncService {
 
       stale.push(
         ...adapted.filter(
-          (c) =>
-            c.dedupeKey.startsWith('action:') && !liveActionIds.has(c.dedupeKey.slice('action:'.length)),
+          (c) => c.dedupeKey.startsWith('action:') && !liveActionIds.has(c.dedupeKey.slice('action:'.length)),
         ),
       );
     }

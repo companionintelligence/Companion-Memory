@@ -127,10 +127,7 @@ describe('PlanningDeclineProposedTaskTool', () => {
   it('declines a proposed task through TaskService.declineProposed with a resolved UserServiceContext', async () => {
     const declined = { id: TASK_ID, status: 'archived' } as Task;
     const declineProposed = jest.fn().mockResolvedValue(declined);
-    const tool = new PlanningDeclineProposedTaskTool(
-      { declineProposed } as unknown as TaskService,
-      logger(),
-    );
+    const tool = new PlanningDeclineProposedTaskTool({ declineProposed } as unknown as TaskService, logger());
 
     const result = await tool.execute(CONTEXT, { taskId: TASK_ID });
 
@@ -150,10 +147,7 @@ describe('PlanningDeclineProposedTaskTool', () => {
 
   it('surfaces a clear error if TaskService.declineProposed resolves null (task not found)', async () => {
     const declineProposed = jest.fn().mockResolvedValue(null);
-    const tool = new PlanningDeclineProposedTaskTool(
-      { declineProposed } as unknown as TaskService,
-      logger(),
-    );
+    const tool = new PlanningDeclineProposedTaskTool({ declineProposed } as unknown as TaskService, logger());
 
     const result = await tool.execute(CONTEXT, { taskId: TASK_ID });
 

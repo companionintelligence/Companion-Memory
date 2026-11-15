@@ -2,12 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  loginCommand,
-  logoutCommand,
-  readStoredCredentials,
-  whoamiCommand,
-} from '../commands/auth';
+import { loginCommand, logoutCommand, readStoredCredentials, whoamiCommand } from '../commands/auth';
 import { CliError } from '../context';
 import { resolveTarget } from '../program';
 

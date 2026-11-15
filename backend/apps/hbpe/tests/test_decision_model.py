@@ -234,6 +234,7 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
     # Qwen should have only been called for 1 item (the obscure one)!
     assert qwen_calls == [1]
 
+
 def test_decision_api_routes(monkeypatch):
     """Test the FastAPI /decision/ingress, /decision/rerank, and /decision/l0 endpoints."""
     from fastapi.testclient import TestClient
@@ -284,10 +285,7 @@ def test_decision_api_routes(monkeypatch):
     assert rerank_data["user_id"] == user_id
     assert len(rerank_data["results"]) == 2
     assert rerank_data["results"][0]["id"] == "p-relevant"
-    assert (
-        rerank_data["results"][0]["score"]
-        >= rerank_data["results"][1]["score"]
-    )
+    assert rerank_data["results"][0]["score"] >= rerank_data["results"][1]["score"]
 
     # 3. /decision/l0
     l0_resp = client.post(
@@ -304,6 +302,7 @@ def test_decision_api_routes(monkeypatch):
     assert l0_data["user_id"] == user_id
     assert l0_data["l0_class"] == "EXERCISE"
     assert l0_data["confidence"] > 0.5
+
 
 def test_decision_models_are_off_unless_enabled(monkeypatch):
     """The keyword fallback must not label events unless someone opts in."""

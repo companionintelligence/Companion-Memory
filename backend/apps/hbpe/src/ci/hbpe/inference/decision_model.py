@@ -409,7 +409,8 @@ def score_memory_ingress(text: str) -> dict[str, Any]:
         if intent_res
         else 0.0,
         "intent_distribution": {
-            k: round(v, 4) for k, v in (intent_res.distribution.items() if intent_res else {})
+            k: round(v, 4)
+            for k, v in (intent_res.distribution.items() if intent_res else {})
         },
         "is_commitment": bool(commit_res.value) if commit_res else False,
         "commitment_probability": round(
@@ -419,7 +420,8 @@ def score_memory_ingress(text: str) -> dict[str, Any]:
         else 0.0,
         "sensitivity": int(sens_res.value) if sens_res else 0,
         "sensitivity_distribution": {
-            k: round(v, 4) for k, v in (sens_res.distribution.items() if sens_res else {})
+            k: round(v, 4)
+            for k, v in (sens_res.distribution.items() if sens_res else {})
         },
         "calibrated": bool(
             (intent_res.calibrated if intent_res else True)
@@ -441,9 +443,7 @@ def score_retrieval_relevance(query: str, memory_snippet: str) -> float:
     return round(float(rel.distribution.get("true", rel.probability)), 4)
 
 
-def rerank_passages(
-    query: str, passages: list[dict[str, str]]
-) -> list[dict[str, Any]]:
+def rerank_passages(query: str, passages: list[dict[str, str]]) -> list[dict[str, Any]]:
     """
     Score and rerank candidate retrieval passages using System 1 relevance and
     temporal freshness heads. Returns passages ordered by descending score.
@@ -459,9 +459,7 @@ def rerank_passages(
         rel = res.get("is_relevant")
         fresh = res.get("temporal_freshness")
 
-        rel_prob = (
-            float(rel.distribution.get("true", rel.probability)) if rel else 0.5
-        )
+        rel_prob = float(rel.distribution.get("true", rel.probability)) if rel else 0.5
         fresh_score = int(fresh.value) if fresh else 1
         # Combine calibrated relevance probability with a small freshness tie-breaker
         composite = round(0.85 * rel_prob + 0.15 * (fresh_score / 2.0), 4)
@@ -481,9 +479,7 @@ def rerank_passages(
     return scored
 
 
-def classify_l0_event(
-    title: str, description: str | None = None
-) -> dict[str, Any]:
+def classify_l0_event(title: str, description: str | None = None) -> dict[str, Any]:
     """
     Classify an event or task into one of the 8 canonical L0_CLASSES using the
     System 1 Fast Decision Model (or calibrated local fallback).
@@ -506,4 +502,3 @@ def classify_l0_event(
         "distribution": {k: round(v, 4) for k, v in l0_res.distribution.items()},
         "calibrated": bool(l0_res.calibrated),
     }
-

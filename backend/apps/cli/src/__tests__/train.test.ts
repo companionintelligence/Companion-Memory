@@ -1,8 +1,4 @@
-import {
-  trainCalibrationCommand,
-  trainRebuildPlacesCommand,
-  trainRunCommand,
-} from '../commands/train';
+import { trainCalibrationCommand, trainRebuildPlacesCommand, trainRunCommand } from '../commands/train';
 import { CliError } from '../context';
 
 import { harness } from './support/harness';

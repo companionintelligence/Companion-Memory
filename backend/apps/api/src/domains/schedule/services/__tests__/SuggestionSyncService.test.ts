@@ -461,9 +461,7 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
 
     await service.sync(ctx);
 
-    const taskProposals = proposals().filter(
-      (p: { generator: string }) => p.generator === 'adapter/task',
-    );
+    const taskProposals = proposals().filter((p: { generator: string }) => p.generator === 'adapter/task');
     expect(taskProposals).toHaveLength(1);
     expect(taskProposals[0]).toMatchObject({
       title: 'Schedule dentist appointment and pick up prescription',

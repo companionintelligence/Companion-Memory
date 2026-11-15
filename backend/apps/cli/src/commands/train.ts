@@ -114,7 +114,9 @@ export async function trainRebuildPlacesCommand(
   }
 
   if (result === 'disabled') {
-    throw new CliError('Place transition training is disabled on this appliance (feature flag `hbpe` is off).');
+    throw new CliError(
+      'Place transition training is disabled on this appliance (feature flag `hbpe` is off).',
+    );
   }
 
   if (result === 'error') {

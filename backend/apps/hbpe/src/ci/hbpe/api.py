@@ -426,4 +426,3 @@ async def decision_l0(
 
     result = classify_l0_event(body.title, body.description)
     return {"user_id": user_id, **result}
-
