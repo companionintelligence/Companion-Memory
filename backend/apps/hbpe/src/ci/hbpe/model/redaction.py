@@ -6,9 +6,9 @@ category that matched to its number of replacements, and categories with no matc
 left out. The output depends only on the input and the configured names, so the same
 input always gives the same output, and redacting a second time changes nothing.
 
-Nothing in the runtime calls this module yet. Its only caller is
-``persona_extractor.build_tone_examples``, which is off unless
-``HBPE_TONE_EXAMPLES_ENABLED`` is set.
+Its callers are ``persona_extractor.build_tone_examples``, which is off unless
+``HBPE_TONE_EXAMPLES_ENABLED`` is set, and ``PersonaDataExtractor.extract_decision_items``,
+which redacts every free-text field of the decision export.
 
 Before any rule runs, the text is put into Unicode NFKC form, and Unicode decimal digits
 are written as ASCII digits, so full-width and Arabic-Indic digits are read as digits.
@@ -76,27 +76,31 @@ number on its own with fewer than 8 digits. A bare run of 10 digits whose first 
 fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
 be redacted.
 
-Known gaps, by design. Not covered at all: National Insurance numbers, UK bank account
-numbers and sort codes, and API keys or passwords, so the flag that turns this on must stay
-off until the owner decides on them. Email forms written out in words (``sarah at example
-dot com``), in brackets (``sarah [at] example [dot] com``), with a doubled ``@``, or with a
-quoted local part (``"sarah"@example.com``) are not matched, and nor is a domain written with
-an ideographic full stop. A name is not matched in a spelling other than the precomposed and
-decomposed forms and the German sharp s, nor directly after a dot, as in ``Hi.Sarah``, nor
-before a lowercase word after a dot, as in ``Sarah.pdf``, because a dot after a word marks a
-domain or a file name. A name followed directly by digits, as in ``Sarah2026``, is not
-matched. 7-digit local phone numbers are not matched, and neither are national numbers
-without a plus sign or a 00 prefix outside North America, the UK and France, or written with
-a space after the plus sign or a bracketed zero. A bare run of ten digits is read as a phone
-number when its first and fourth digits are 2 to 9, so order and reference numbers of that
-shape are redacted. Numbers with the shape of a phone number or of a Luhn-valid card are
-redacted whatever they are. Product and venue names such as ``2 Google Drive`` can match the
-address rule. Address ranges, lowercase street names, postcodes, house numbers glued to a
-street name, and cards written with slashes or with line breaks are not matched. Digits glued
-straight to an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have
-the glued group taken into the address, so the rest of the number stays. A UUID in a path is
-not treated as a token, and a short token in a path or query can be kept. The userinfo of a
-URL whose password contains a slash is not stripped.
+Known gaps, some by design: a name directly after a dot, as in ``Hi.Sarah``, or before a
+lowercase word after a dot, as in ``Sarah.pdf``, is not redacted, because a dot after a word
+marks a domain or a file name. 7-digit local phone numbers, including one that follows a
+longer number, lowercase street addresses, postcodes, and names that are not listed. A name
+inside a host label, such as ``sarah.example.com``, is not redacted. Digits glued straight to
+an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have the glued
+group taken into the address, so the rest of the number stays. A product name such as
+``2 Google Drive`` can match the address rule. The userinfo of a URL whose password contains
+a slash is not stripped. A card written with slashes or with line breaks is not recognised,
+and neither is a quoted local part such as ``"sarah"@example.com``. A phone number written
+with a space after the plus sign, such as ``+ 44 20 7946 0958``, or with a bracketed zero,
+such as ``(0)20 7946 0958``, is not matched, and neither is a national number without a plus
+sign or a 00 prefix outside North America, the UK and France. A UUID in a path is not
+treated as a token. A short value followed by two digit groups in a query is kept, as in
+``?ref=abc 12 34``, so a short token there is not removed. A house number glued to a word,
+as in ``Flat221 Baker Street``, is not matched. An unseparated North American number whose
+exchange starts with 0 or 1, such as ``5551234567``, is not read as a phone number, though
+the separated form ``555-123-4567`` is. A query made only of digits and shorter than 20
+characters, such as ``?12345``, is kept. An IBAN of an unlisted country is kept, as
+described above. A secret written outside a URL, such as ``api_key=sk_live_...``, is not
+redacted, and neither are bank sort codes or national insurance numbers. Also not
+matched: UK numbers with a bracketed area code, such as ``(020) 7946 0958``; street
+suffixes outside the list, and ordinal street names such as ``45 West 23rd Street``;
+postcodes; eight- or nine-digit compact numbers; dates of birth in separated or long
+forms; written-out e-mail addresses; and a zero-width space inside a name.
 """
 
 from __future__ import annotations
@@ -828,10 +832,10 @@ def _normalise(text: str) -> str:
 class Redactor:
     """Applies the redaction rules described in the module docstring.
 
-    This is a pure helper. It keeps no state beyond its compiled name patterns, reads no
-    environment variables, and has no caller in the runtime yet. Its only caller is
-    ``persona_extractor.build_tone_examples``, which is off unless
-    ``HBPE_TONE_EXAMPLES_ENABLED`` is set.
+    This is a pure helper. It keeps no state beyond its compiled name patterns, and reads no
+    environment variables. Its callers are ``persona_extractor.build_tone_examples``, which is
+    off unless ``HBPE_TONE_EXAMPLES_ENABLED`` is set, and
+    ``PersonaDataExtractor.extract_decision_items``.
     """
 
     def __init__(
