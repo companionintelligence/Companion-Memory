@@ -24,7 +24,9 @@ Implements T4.4 (CI-Server-k64) and integrates T4.3 ingester.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import date
 
@@ -394,6 +396,19 @@ async def decision_ingress(
     return {"user_id": user_id, **scores}
 
 
+# One rerank pass at a time, as when the pass ran on the event loop. The pass runs
+# in a worker thread (see decision_rerank), so the loop serves other requests while
+# it scores.
+_RERANK_PASS_LOCK = threading.Lock()
+
+
+def _score_rerank_pass(query: str, passages: list[dict[str, str]]) -> list[dict]:
+    from ci.hbpe.inference.decision_model import rerank_passages
+
+    with _RERANK_PASS_LOCK:
+        return rerank_passages(query, passages)
+
+
 @app.post("/decision/rerank")
 async def decision_rerank(
     body: DecisionRerankRequest,
@@ -404,11 +419,12 @@ async def decision_rerank(
     relevance (`is_relevant`) and temporal freshness (`temporal_freshness`) heads.
     """
     user_id = require_user_id(user_id)
-    from ci.hbpe.inference.decision_model import rerank_passages
+    passages = [{"id": p.id, "text": p.text} for p in body.passages]
 
-    results = rerank_passages(
-        body.query, [{"id": p.id, "text": p.text} for p in body.passages]
-    )
+    # The pass is one model call per passage. Run on the loop, it stalls every
+    # other request for its whole length, so it goes to a worker thread.
+    results = await asyncio.to_thread(_score_rerank_pass, body.query, passages)
+
     return {"user_id": user_id, "results": results}
 
 

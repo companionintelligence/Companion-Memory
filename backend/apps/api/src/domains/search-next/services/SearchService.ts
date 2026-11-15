@@ -4,6 +4,9 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { defaultDecisionClient } from '@ci/common/hbpe/decisionClient';
+import { DECISION_FLAGS, isDecisionFlagOn } from '@ci/common/hbpe/decisionFlags';
+import { fuseRerankOrder, RERANK_TOP_N } from '@ci/common/hbpe/rerankFusion';
 import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import { EventService } from '@ci/domains/events';
 import {
@@ -547,6 +550,38 @@ export function prefixTermOf(query: string): string | null {
   const last = runs[runs.length - 1] ?? '';
 
   return last.length >= MIN_PREFIX_LENGTH ? last : null;
+}
+
+/**
+ * How long the passage-text read of the `SEARCH_TRAINED_RERANK` path may take.
+ * The sidecar call has its own 800 ms budget after it, so a rerank that falls
+ * back costs at most this plus that budget. A read that outlasts it is
+ * abandoned, and its statement timeout ends the query on the database side.
+ */
+const RERANK_TEXT_READ_TIMEOUT_MS = 200;
+
+/** One candidate's passage text, as {@link RERANK_PASSAGE_TEXT_SQL} returns it. */
+type PassageTextRow = { entity_type: string; id: string; title: string; body: string };
+
+/** The passage text of the given `(entity_type, entity_id)` pairs, for one user. */
+const RERANK_PASSAGE_TEXT_SQL = `SELECT k.entity_type, d.entity_id::text AS id, d.title, d.body
+  FROM unnest($2::text[], $3::uuid[]) AS k(entity_type, entity_id)
+  JOIN ci_search.mobile_search_documents d
+    ON d.entity_type = k.entity_type AND d.entity_id = k.entity_id
+ WHERE d.user_id = $1::uuid`;
+
+/**
+ * `work`, or `undefined` once `ms` has passed. `work` is not cancelled: the
+ * caller stops waiting for it. Its rejection, if it has one, is not reported
+ * as unhandled, because `Promise.race` has already subscribed to it.
+ */
+function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, ms, undefined);
+  });
+
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
 @Injectable()
@@ -1297,9 +1332,14 @@ export class SearchService {
 
     if (options.fusionMode === 'rrf') {
       const rrfFused = reciprocalRankFusion([semanticResults, keywordResults]);
+      // `SEARCH_TRAINED_RERANK` (default off): the head of the fused list is
+      // re-scored by HBPE. See {@link rerankFusedHead}.
+      const fused = isDecisionFlagOn(DECISION_FLAGS.searchRerank)
+        ? await this.rerankFusedHead(context.userId, options.query, rrfFused)
+        : rrfFused;
 
       return {
-        results: rrfFused.slice(0, maxResults),
+        results: fused.slice(0, maxResults),
         totalMatches: null,
         limit: maxResults,
       };
@@ -1364,6 +1404,78 @@ export class SearchService {
       totalMatches: null,
       limit: maxResults,
     };
+  }
+
+  /**
+   * Re-scores the head of an RRF list with HBPE `/decision/rerank`, the
+   * `SEARCH_TRAINED_RERANK` path. The head is the first {@link RERANK_TOP_N}
+   * candidates, and the combination formula is documented in
+   * {@link fuseRerankOrder}.
+   *
+   * Passage text comes from `ci_search.mobile_search_documents`, the plain-text
+   * projection of the index, which holds the device-indexed types only. A
+   * candidate with no projected text keeps its RRF position. Any failure
+   * (database, sidecar, timeout, malformed reply) returns the list unchanged.
+   */
+  private async rerankFusedHead(
+    userId: string,
+    query: string,
+    fused: ScoredSearchResult[],
+  ): Promise<ScoredSearchResult[]> {
+    const head = fused.slice(0, RERANK_TOP_N);
+    const keyOf = (item: ScoredSearchResult) => `${item.type}:${item.id}`;
+
+    try {
+      // A read that outlasts its budget is abandoned, and the RRF list stands.
+      const texts = await withinBudget(this.rerankPassageTexts(userId, head), RERANK_TEXT_READ_TIMEOUT_MS);
+
+      if (!texts) {
+        return fused;
+      }
+
+      const passages = head.flatMap((item) => {
+        const text = texts.get(keyOf(item));
+
+        return text ? [{ id: keyOf(item), text }] : [];
+      });
+      const ranked = await defaultDecisionClient().rerank(userId, query, passages);
+
+      if (!ranked) {
+        return fused;
+      }
+
+      const scores = new Map(ranked.map((item) => [item.id, item.score] as const));
+
+      return [...fuseRerankOrder(head, keyOf, scores), ...fused.slice(RERANK_TOP_N)];
+    } catch {
+      return fused;
+    }
+  }
+
+  /** `type:id` to passage text, for the given candidates, read from the user's own projection. */
+  private async rerankPassageTexts(
+    userId: string,
+    candidates: readonly ScoredSearchResult[],
+  ): Promise<Map<string, string>> {
+    if (candidates.length === 0) {
+      return new Map();
+    }
+
+    const rows: PassageTextRow[] = await this.dataSource.transaction(async (manager) => {
+      // Scoped to this transaction. The read stops on the database side at the
+      // same bound the caller waits for, so an abandoned read does not run on.
+      await manager.query(`SELECT set_config('statement_timeout', $1, true)`, [
+        `${RERANK_TEXT_READ_TIMEOUT_MS}ms`,
+      ]);
+
+      return manager.query(RERANK_PASSAGE_TEXT_SQL, [
+        userId,
+        candidates.map((item) => item.type),
+        candidates.map((item) => item.id),
+      ]);
+    });
+
+    return new Map(rows.map((row) => [`${row.entity_type}:${row.id}`, `${row.title}\n${row.body}`.trim()]));
   }
 
   /**
