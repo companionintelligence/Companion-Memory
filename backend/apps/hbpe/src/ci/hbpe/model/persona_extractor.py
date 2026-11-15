@@ -13,6 +13,7 @@ import glob
 import io
 import json
 import logging
+import os
 import re
 import zipfile
 from collections.abc import Iterable
@@ -469,9 +470,18 @@ def train_persona_decision_model(
 
 # Tone adapter examples. These are built from the user's own sent messages, and every
 # field goes through a Redactor (ci.hbpe.model.redaction) before it is emitted. The
-# trainer is not here: it needs a GPU and a reviewed dataset.
+# trainer is not here: it needs a GPU and a reviewed dataset. The builder is off unless
+# HBPE_TONE_EXAMPLES_ENABLED is set, so nothing changes by default.
 
+TONE_EXAMPLES_FLAG = "HBPE_TONE_EXAMPLES_ENABLED"
 TONE_DROP_REASONS: tuple[str, ...] = ("empty", "too_short")
+TONE_DISABLED_REASON = "disabled"
+
+
+def tone_examples_enabled() -> bool:
+    """True when HBPE_TONE_EXAMPLES_ENABLED is 1, true, yes or on. Off when unset."""
+    value = os.getenv(TONE_EXAMPLES_FLAG, "")
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass(frozen=True)
@@ -501,18 +511,25 @@ def build_tone_examples(
     Turn the user's sent messages into redacted tone examples.
 
     ``messages`` must be in the order they were sent. A user message whose immediate
-    predecessor in the same thread is inbound becomes a context-reply pair. Any other
-    user message becomes a single-message example.
+    predecessor in the same thread is inbound becomes a context-reply pair. Messages
+    with no thread id neither give nor receive context. Any other user message becomes
+    a single-message example.
 
     Every emitted field, context and reply alike, goes through ``redactor`` first, and
     the length check applies to the redacted reply. Returns the examples and a count of
     dropped user messages by reason: ``empty`` (nothing left after redaction) and
     ``too_short`` (fewer than ``min_words`` words). Inbound messages only supply
     context, so they are never counted as dropped.
+
+    While HBPE_TONE_EXAMPLES_ENABLED is off, returns no examples, counts every user
+    message under ``disabled``, and never calls ``redactor``.
     """
     if min_words < 1:
         raise ValueError("min_words must be at least 1")
     dropped = dict.fromkeys(TONE_DROP_REASONS, 0)
+    if not tone_examples_enabled():
+        dropped[TONE_DISABLED_REASON] = sum(1 for m in messages if m.sent_by_user)
+        return [], dropped
     examples: list[ToneExample] = []
     last_in_thread: dict[str, ToneMessage] = {}
     for message in messages:

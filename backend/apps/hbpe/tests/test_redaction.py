@@ -32,6 +32,24 @@ EMAIL_CASES = [
         id="email-two-addresses",
     ),
     pytest.param(
+        "Mail josé@example.com now",
+        "Mail [EMAIL] now",
+        {"email": 1},
+        id="email-unicode-local-part",
+    ),
+    pytest.param(
+        "Mail o'brien@example.com or first_last@example.com now",
+        "Mail [EMAIL] or [EMAIL] now",
+        {"email": 2},
+        id="email-apostrophe-and-underscore",
+    ),
+    pytest.param(
+        "Mail 'sarah@example.com' now",
+        "Mail '[EMAIL]' now",
+        {"email": 1},
+        id="email-quoted-keeps-quotes",
+    ),
+    pytest.param(
         "Follow @sarah on social",
         "Follow @sarah on social",
         {},
@@ -81,6 +99,30 @@ URL_CASES = [
         "Read example.com/faq later",
         {"url": 1},
         id="url-bare-host-query-dropped",
+    ),
+    pytest.param(
+        "Reset at example.com?token=abc123 today",
+        "Reset at example.com today",
+        {"url": 1},
+        id="url-bare-host-query-without-path",
+    ),
+    pytest.param(
+        "Open example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b now",
+        "Open example.com/verify/[TOKEN] now",
+        {"url": 1},
+        id="url-bare-host-token-path-segment",
+    ),
+    pytest.param(
+        "Open https://example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b.#top now",
+        "Open https://example.com/verify/[TOKEN]. now",
+        {"url": 1},
+        id="url-token-before-punctuation-and-fragment",
+    ),
+    pytest.param(
+        "Read example.com/docs/intro later, or visit example.com today",
+        "Read example.com/docs/intro later, or visit example.com today",
+        {},
+        id="neg-bare-host-without-query",
     ),
     pytest.param(
         "(see https://example.com/a?b=1).",
@@ -171,6 +213,18 @@ PHONE_CASES = [
         "Text [PHONE] or [PHONE]",
         {"phone": 2},
         id="phone-nanp-formats",
+    ),
+    pytest.param(
+        "Call (555)123-4567 today",
+        "Call [PHONE] today",
+        {"phone": 1},
+        id="phone-nanp-paren-no-space",
+    ),
+    pytest.param(
+        "Call 0044 20 7946 0958 today",
+        "Call [PHONE] today",
+        {"phone": 1},
+        id="phone-intl-00-prefix",
     ),
     pytest.param(
         "Ring 555 123 4567 soon",
@@ -399,6 +453,12 @@ NEGATIVE_NON_PII = [
         {},
         id="neg-ordinary-scheduling-sentence",
     ),
+    pytest.param(
+        "Booked 20261114 for lunch",
+        "Booked 20261114 for lunch",
+        {},
+        id="neg-compact-date-eight-digits",
+    ),
 ]
 
 
@@ -513,6 +573,46 @@ NAME_CASES = [
         id="name-not-part-of-longer-word",
     ),
     pytest.param(
+        "Ann Marie called, and Ann too",
+        ["Ann Marie"],
+        ["Ann"],
+        "[NAME] called, and Ann too",
+        {"name": 1},
+        id="allow-does-not-protect-overlapping-denied-name",
+    ),
+    pytest.param(
+        "Mark Twain wrote it",
+        ["Mark Twain"],
+        ["Mark"],
+        "[NAME] wrote it",
+        {"name": 1},
+        id="allow-shorter-phrase-does-not-protect-longer-name",
+    ),
+    pytest.param(
+        "Mo Ray Ban",
+        ["Mo Ray"],
+        ["Ray Ban"],
+        "[NAME] Ban",
+        {"name": 1},
+        id="denied-name-sticking-out-of-allowed-phrase",
+    ),
+    pytest.param(
+        "Ann Marie Curie called",
+        ["Ann Marie"],
+        ["Ann Marie Curie"],
+        "Ann Marie Curie called",
+        {},
+        id="allowed-phrase-containing-denied-name-kept",
+    ),
+    pytest.param(
+        "Ann Marie Curie called",
+        ["Ann Marie", "Marie Curie"],
+        [],
+        "[NAME] called",
+        {"name": 1},
+        id="overlapping-denied-names-redacted-once",
+    ),
+    pytest.param(
         "Nothing to see",
         ["", "   "],
         [],
@@ -582,9 +682,20 @@ def test_all_categories_together() -> None:
         "Mail sarah@example.com, call +44 20 7946 0958 about 10 Downing Street",
         "Card 4111 1111 1111 1111 and IBAN GB82 WEST 1234 5698 7654 32",
         "See https://example.com/reset?token=abc123 and Sarah's notes",
+        "Reset example.com?token=abc123, mail josé@example.com, call (555)123-4567",
+        "Ring 0044 20 7946 0958 about Sarah's flat at Central Park, 12 Oak Road",
+        "Open https://example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b.#top now",
+        "Booked (with Sarah) at www.example.com/x]#Oak[TOKEN][TOKEN] today",
+        # Found by fuzzing: a scheme URL hidden inside a schemeless candidate.
+        "12: : (--'josé,www.5,3@[RoadDowningwww.=https://:1[EMAIL]@0044555b",
     ],
 )
 def test_redaction_is_idempotent(text: str) -> None:
-    redactor = Redactor(deny_names=["Sarah"])
-    once, _ = redactor.redact(text)
+    redactor = Redactor(deny_names=["Sarah"], allow_names=["Central Park"])
+    once, counts = redactor.redact(text)
+    # The first pass must change this input and count what it changed. Otherwise the
+    # second pass proves nothing: a redactor that returned its input unchanged would
+    # pass the last assertion too.
+    assert once != text
+    assert counts and all(count > 0 for count in counts.values())
     assert redactor.redact(once) == (once, {})

@@ -19,6 +19,7 @@ except ImportError:
     pytest = None
 
 from ci.hbpe.model.persona_extractor import (
+    TONE_EXAMPLES_FLAG,
     PersonaDataExtractor,
     ToneExample,
     ToneMessage,
@@ -26,6 +27,7 @@ from ci.hbpe.model.persona_extractor import (
     _infer_l0,
     _infer_urgency,
     build_tone_examples,
+    tone_examples_enabled,
     train_persona_decision_model,
 )
 from ci.hbpe.model.redaction import Redactor
@@ -115,6 +117,13 @@ def test_persona_decision_model_training_end_to_end():
 
 
 # Tone adapter examples: the builder, and the redaction it must always apply.
+
+if has_pytest:
+
+    @pytest.fixture(autouse=True)
+    def _tone_examples_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+        """The builder is off by default, so the tests in this module switch it on."""
+        monkeypatch.setenv(TONE_EXAMPLES_FLAG, "1")
 
 
 class _RecordingRedactor(Redactor):
@@ -287,6 +296,94 @@ def test_tone_examples_never_leave_a_redacted_category_behind():
             assert redactor.redact(text) == (text, {})
 
 
+class _BlankingRedactor(Redactor):
+    """Redactor that empties every text, to test the count of empty replies."""
+
+    def redact(self, text: str) -> tuple[str, dict[str, int]]:
+        return "", {"name": 1}
+
+
+def test_too_short_is_measured_on_the_redacted_reply():
+    # The raw reply has 11 words. Redacted, it reads "Ping me on [CARD] at [ADDRESS]",
+    # six words, so under the minimum of eight it must be dropped.
+    reply = "Ping me on 4111 1111 1111 1111 at 10 Downing Street"
+    assert len(reply.split()) >= 8
+    examples, dropped = build_tone_examples(
+        [ToneMessage(reply, sent_by_user=True)], Redactor()
+    )
+
+    assert examples == []
+    assert dropped == {"empty": 0, "too_short": 1}
+
+
+def test_empty_is_measured_on_the_redacted_reply():
+    # The raw reply is long, so only the redacted text can make it empty.
+    reply = "Sounds good to me, I will bring the slides on Friday morning"
+    examples, dropped = build_tone_examples(
+        [ToneMessage(reply, sent_by_user=True)], _BlankingRedactor()
+    )
+
+    assert examples == []
+    assert dropped == {"empty": 1, "too_short": 0}
+
+
+def test_messages_without_thread_id_never_pair():
+    reply = "Sounds good to me, I will bring the slides on Friday morning"
+    messages = [
+        ToneMessage(
+            "Inbound message with no thread id, so it cannot be context",
+            sent_by_user=False,
+        ),
+        ToneMessage(reply, sent_by_user=True),
+    ]
+    examples, dropped = build_tone_examples(messages, Redactor())
+
+    assert examples == [ToneExample(reply=reply)]
+    assert dropped == {"empty": 0, "too_short": 0}
+
+
+def test_tone_examples_are_off_unless_the_flag_is_set(monkeypatch):
+    monkeypatch.delenv(TONE_EXAMPLES_FLAG, raising=False)
+    redactor = _RecordingRedactor()
+    messages = [
+        ToneMessage(
+            "Are you free for lunch on Thursday to talk about the launch?",
+            sent_by_user=False,
+            thread_id="t",
+        ),
+        ToneMessage(
+            "Yes I can do Thursday at noon, does that work for you both?",
+            sent_by_user=True,
+            thread_id="t",
+        ),
+        ToneMessage(
+            "Sounds good to me, I will bring the slides on Friday morning",
+            sent_by_user=True,
+        ),
+    ]
+    examples, dropped = build_tone_examples(messages, redactor)
+
+    assert examples == []
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 2}
+    assert redactor.seen == []
+
+
+def test_tone_flag_reads_only_true_values(monkeypatch):
+    monkeypatch.delenv(TONE_EXAMPLES_FLAG, raising=False)
+    assert tone_examples_enabled() is False
+    for value, enabled in [
+        ("1", True),
+        ("true", True),
+        ("Yes", True),
+        (" on ", True),
+        ("0", False),
+        ("false", False),
+        ("", False),
+    ]:
+        monkeypatch.setenv(TONE_EXAMPLES_FLAG, value)
+        assert tone_examples_enabled() is enabled, value
+
+
 if __name__ == "__main__":
     print("Running test_keyword_heuristics...")
     test_keyword_heuristics()
@@ -296,6 +393,7 @@ if __name__ == "__main__":
     test_persona_extractor_splits_real_data()
     print("Running test_persona_decision_model_training_end_to_end...")
     test_persona_decision_model_training_end_to_end()
+    os.environ[TONE_EXAMPLES_FLAG] = "1"  # the tone builder is off by default
     print("Running test_tone_examples_pair_reply_with_inbound_context...")
     test_tone_examples_pair_reply_with_inbound_context()
     print("Running test_tone_examples_use_single_message_when_no_inbound_context...")
@@ -306,4 +404,7 @@ if __name__ == "__main__":
     test_tone_examples_count_drop_reasons()
     print("Running test_tone_examples_never_leave_a_redacted_category_behind...")
     test_tone_examples_never_leave_a_redacted_category_behind()
+    test_too_short_is_measured_on_the_redacted_reply()
+    test_empty_is_measured_on_the_redacted_reply()
+    test_messages_without_thread_id_never_pair()
     print("All persona extractor tests passed!")

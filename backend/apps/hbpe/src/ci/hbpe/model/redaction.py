@@ -6,16 +6,23 @@ category that matched to its number of replacements, and categories with no matc
 left out. The output depends only on the input and the configured names, so the same
 input always gives the same output, and redacting a second time changes nothing.
 
+Nothing in the runtime calls this module yet. Its only caller is
+``persona_extractor.build_tone_examples``, which is off unless
+``HBPE_TONE_EXAMPLES_ENABLED`` is set.
+
 Categories, in the order they are applied:
 
 - ``url``: a URL with a query string or fragment, with credentials (``user:pass@``), or
-  with a token-like path segment. The scheme, host and path are kept. The query, the
-  fragment and the credentials are dropped, and a token-like path segment becomes
-  ``[TOKEN]``. A plain URL with none of these is left alone.
-- ``email``: email addresses become ``[EMAIL]``.
+  with a token-like path segment. A URL is text that starts with a scheme or ``www.``,
+  or a host followed by a path, query or fragment, such as ``example.com/pay?x=1``. The
+  scheme, host and path are kept. The query, the fragment and the credentials are
+  dropped. A path segment of at least 20 letters, digits or underscores, with both a
+  letter and a digit, becomes ``[TOKEN]``. A URL with none of these is left alone.
+- ``email``: an address with a dotted domain, such as ``sarah@example.com``, becomes
+  ``[EMAIL]``. Letters from any script count, so ``josé@example.com`` is caught.
 - ``iban``: IBANs that pass the ISO 13616 mod-97 check become ``[IBAN]``.
-- ``phone``: numbers with a leading ``+``, North American numbers, and UK and French
-  style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits.
+- ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
+  French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits.
 - ``card``: runs of 13 to 19 digits, optionally grouped with single spaces or hyphens,
   that pass the Luhn check become ``[CARD]``. A 14-digit run that reads as a
   ``YYYYMMDDhhmmss`` timestamp is not treated as a card.
@@ -24,14 +31,19 @@ Categories, in the order they are applied:
 - ``name``: caller-supplied names, matched case-insensitively as whole words, become
   ``[NAME]``.
 
-Names come in two lists. ``deny_names`` are redacted wherever they appear.
-``allow_names`` are phrases that stay as written even when they contain a denied name:
-``"Central Park"`` when ``"Park"`` is denied, or ``"I will"`` when ``"Will"`` is denied.
-Allowed phrases are protected before denied names are looked for. A name that is on
-both lists is rejected, because the intent is unclear.
+Names come in two lists. ``deny_names`` are redacted wherever they appear, including
+where two denied names overlap. ``allow_names`` are phrases that stay as written when a
+denied name sits wholly inside them: ``"Central Park"`` keeps ``"Park"`` when ``"Park"``
+is denied, and ``"I will"`` keeps ``"Will"`` when ``"Will"`` is denied. A denied name
+that only overlaps an allowed phrase is still redacted. With ``"Ann"`` allowed and
+``"Ann Marie"`` denied, ``"Ann Marie"`` becomes ``[NAME]``. A name that is on both
+lists is rejected, because the intent is unclear.
 
-Dates, times and short numbers are never redacted. Known gaps, by design: 7-digit local
-phone numbers, lowercase street addresses, postcodes, and names that are not listed.
+Dates and times in the usual separated forms are never redacted, and neither is a
+number on its own with fewer than 8 digits. A bare run of 10 digits whose first and
+fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
+be redacted. Known gaps, by design: 7-digit local phone numbers, lowercase street
+addresses, postcodes, and names that are not listed.
 """
 
 from __future__ import annotations
@@ -92,8 +104,10 @@ _SUFFIX_ALTERNATION = "|".join(
 
 _URL_RE = re.compile(
     r"(?<![\w@.-])(?:(?:https?|ftp)://|www\.)[^\s<>\"']+"
-    # Bare host and path with a query, such as example.com/pay?x=1.
-    r"|(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/[^\s<>\"'?#]*[?#][^\s<>\"']+",
+    # A bare host with a path, query or fragment, such as example.com/pay?x=1 or
+    # example.com?token=abc. _sanitise_url decides what, if anything, to remove.
+    r"|(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}"
+    r"(?:/[^\s<>\"']*|[?#][^\s<>\"']+)",
     re.IGNORECASE,
 )
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
@@ -101,9 +115,10 @@ _TOKEN_SEGMENT_RE = re.compile(
     r"(?=[A-Za-z0-9_]*[0-9])(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{20,}"
 )
 
+# Letters from any script count, and an apostrophe may sit inside a local part.
 _EMAIL_RE = re.compile(
-    r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*"
-    r"\.[A-Za-z]{2,}(?![A-Za-z0-9-])"
+    r"(?<![\w.%+-])[\w.%+-][\w.%+'-]*@[\w-]+(?:\.[\w-]+)*"
+    r"\.[^\W\d_]{2,}(?![\w-])"
 )
 
 _IBAN_RE = re.compile(
@@ -115,8 +130,10 @@ _PHONE_RE = re.compile(
     r"(?:"
     # +44 20 7946 0958, +1 (555) 123-4567, +33 6 12 34 56 78
     r"\+[0-9]{1,3}(?:[ .-]?\(?[0-9]{1,4}\)?){2,5}"
-    # (555) 123-4567, 555-123-4567, 555.123.4567
-    r"|(?:\([0-9]{3}\)|[0-9]{3})[ .-][0-9]{3}[ .-][0-9]{4}"
+    # 0044 20 7946 0958
+    r"|00[1-9][0-9]{0,2}(?:[ .-]?\(?[0-9]{1,4}\)?){2,5}"
+    # (555) 123-4567, (555)123-4567, 555-123-4567, 555.123.4567
+    r"|(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
     # 5551234567
     r"|[2-9][0-9]{2}[2-9][0-9]{6}"
     # 020 7946 0958, 0121 496 0000
@@ -140,16 +157,23 @@ _ADDRESS_RE = re.compile(
 )
 
 
+_URL_TRAILING = ".,;:!?)]}"
+
+
 def _sanitise_url(raw: str) -> tuple[str, bool]:
     """Drop the query, fragment, userinfo and token-like path segments from a URL."""
-    core = raw.rstrip(".,;:!?)]}")
+    core = raw.rstrip(_URL_TRAILING)
     trailing = raw[len(core) :]
     cut = min(
         (index for index in (core.find("?"), core.find("#")) if index != -1),
         default=len(core),
     )
     changed = cut != len(core)
-    head = core[:cut]
+    # Punctuation that ends the kept part, such as the dot in "x.#top", moves to the
+    # trailing part. Otherwise the token check would see it, and a second pass would
+    # redact a token that the first pass left in place.
+    head = core[:cut].rstrip(_URL_TRAILING)
+    trailing = core[len(head) : cut] + trailing
     scheme_match = _SCHEME_RE.match(head)
     scheme = scheme_match.group(0) if scheme_match else ""
     rest = head[len(scheme) :]
@@ -298,29 +322,69 @@ def _alternation(names: Iterable[str]) -> str:
     )
 
 
-def _compile_name_pattern(
-    deny: tuple[str, ...], allow: tuple[str, ...]
-) -> re.Pattern[str] | None:
-    if not deny:
+_TOKEN_RE = re.compile(r"\[(?:" + "|".join(_TOKEN_WORDS) + r")\]")
+
+
+def _name_pattern(names: tuple[str, ...]) -> re.Pattern[str] | None:
+    """Whole-word matches of the names, one per start position.
+
+    The lookahead lets a match start inside another match, so overlapping names are all
+    found. Group 1 holds the matched text.
+    """
+    if not names:
         return None
-    alternatives: list[str] = []
-    if allow:
-        alternatives.append(f"(?P<allow>{_alternation(allow)})")
-    alternatives.append(f"(?P<deny>{_alternation(deny)})")
-    keep = r"(?P<keep>(?-i:\[(?:" + "|".join(_TOKEN_WORDS) + r")\]))"
-    body = r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)"
-    return re.compile(keep + "|" + body, re.IGNORECASE)
+    return re.compile(
+        r"(?<!\w)(?=((?:" + _alternation(names) + r")(?!\w)))", re.IGNORECASE
+    )
 
 
-def _redact_names(text: str, pattern: re.Pattern[str], counts: Counter[str]) -> str:
-    def repl(match: re.Match[str]) -> str:
-        if match.group("deny") is None:
-            # An allowed phrase, or a placeholder token that was already written.
-            return match.group(0)
+def _occurrences(pattern: re.Pattern[str], text: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.start() + len(m.group(1))) for m in pattern.finditer(text)]
+
+
+def _merge(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Join spans that share at least one character."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _redact_names(
+    text: str,
+    deny: re.Pattern[str] | None,
+    allow: re.Pattern[str] | None,
+    counts: Counter[str],
+) -> str:
+    """Replace each denied occurrence with [NAME].
+
+    A denied occurrence stays as written only when an allowed occurrence contains it
+    entirely. A denied occurrence that merely overlaps an allowed phrase is redacted. A
+    placeholder token such as [NAME] is never a match. Occurrences that overlap one
+    another become a single [NAME].
+    """
+    if deny is None:
+        return text
+    tokens = [m.span() for m in _TOKEN_RE.finditer(text)]
+    allowed = _occurrences(allow, text) if allow is not None else []
+    targets = [
+        (start, end)
+        for start, end in _occurrences(deny, text)
+        if not any(start < t_end and t_start < end for t_start, t_end in tokens)
+        and not any(a_start <= start and end <= a_end for a_start, a_end in allowed)
+    ]
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in _merge(targets):
+        pieces.append(text[cursor:start])
+        pieces.append("[NAME]")
+        cursor = end
         counts["name"] += 1
-        return "[NAME]"
-
-    return pattern.sub(repl, text)
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 def _clean_names(names: Iterable[str], field: str) -> tuple[str, ...]:
@@ -336,7 +400,13 @@ def _clean_names(names: Iterable[str], field: str) -> tuple[str, ...]:
 
 
 class Redactor:
-    """Applies the redaction rules described in the module docstring."""
+    """Applies the redaction rules described in the module docstring.
+
+    This is a pure helper. It keeps no state beyond its compiled name patterns, reads no
+    environment variables, and has no caller in the runtime yet. Its only caller is
+    ``persona_extractor.build_tone_examples``, which is off unless
+    ``HBPE_TONE_EXAMPLES_ENABLED`` is set.
+    """
 
     def __init__(
         self,
@@ -351,17 +421,30 @@ class Redactor:
             raise ValueError(
                 f"names appear on both deny_names and allow_names: {sorted(clash)}"
             )
-        self._name_pattern = _compile_name_pattern(deny, allow)
+        self._deny_pattern = _name_pattern(deny)
+        self._allow_pattern = _name_pattern(allow)
 
     def redact(self, text: str) -> tuple[str, dict[str, int]]:
-        """Return the redacted text and the number of replacements per category."""
+        """Return the redacted text and the number of replacements per category.
+
+        The rules run again on their own output until a pass changes nothing. The
+        result is a fixed point, so redacting it a second time changes nothing. Each
+        change removes at least one character that is not part of a placeholder, so the
+        loop ends.
+        """
         counts: Counter[str] = Counter()
+        current = text
+        while True:
+            step = self._redact_pass(current, counts)
+            if step == current:
+                return current, dict(counts)
+            current = step
+
+    def _redact_pass(self, text: str, counts: Counter[str]) -> str:
         out = _redact_urls(text, counts)
         out = _redact_emails(out, counts)
         out = _redact_ibans(out, counts)
         out = _redact_phones(out, counts)
         out = _redact_cards(out, counts)
         out = _redact_addresses(out, counts)
-        if self._name_pattern is not None:
-            out = _redact_names(out, self._name_pattern, counts)
-        return out, dict(counts)
+        return _redact_names(out, self._deny_pattern, self._allow_pattern, counts)
