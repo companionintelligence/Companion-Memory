@@ -90,7 +90,7 @@ describe('AgentMemoryService.create with MEMORY_INGRESS_DECISION', () => {
     expect(sends.map((send) => send.name)).toEqual([AgentMemoryCreatedEvent]);
   });
 
-  it('scores the fragment with /decision/ingress and records the scores on the write', async () => {
+  it('scores the fragment with /decision/ingress and logs the scores beside the write, which is unchanged', async () => {
     process.env[FLAG] = 'true';
     const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(ingressReply());
     const { service, sends, log } = build();

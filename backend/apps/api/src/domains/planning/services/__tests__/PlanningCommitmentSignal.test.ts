@@ -18,7 +18,7 @@ const logger = {
   error: () => undefined,
 } as unknown as LoggerService;
 
-function sidecarIngress(isCommitment: boolean): Response {
+function sidecarIngress(isCommitment: boolean, probability = isCommitment ? 0.8 : 0.1): Response {
   return new Response(
     JSON.stringify({
       user_id: USER,
@@ -26,7 +26,7 @@ function sidecarIngress(isCommitment: boolean): Response {
       intent_confidence: 0.6,
       intent_distribution: {},
       is_commitment: isCommitment,
-      commitment_probability: isCommitment ? 0.8 : 0.1,
+      commitment_probability: probability,
       sensitivity: 0,
       sensitivity_distribution: {},
       calibrated: true,
@@ -144,6 +144,24 @@ describe('InboxScanService System 1 pre-filter with PLANNING_COMMITMENT_DECISION
     await expect(inboxPrivate(inboxService()).isSystem1NonActionable(CONTEXT, MESSAGE)).resolves.toBe(false);
   });
 
+  it('keeps an undecided message whose probability is at the threshold, as the pre-filter does', async () => {
+    process.env[FLAG] = 'true';
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(sidecarIngress(false, 0.3));
+
+    await expect(inboxPrivate(inboxService()).isSystem1NonActionable(CONTEXT, MESSAGE)).resolves.toBe(false);
+  });
+
+  it('keeps a message whose text cannot be built, with no sidecar call', async () => {
+    process.env[FLAG] = 'true';
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    const unreadable = { id: 'msg-2', subject: 'Odd', preview: 42 } as unknown as CommunicationEntity;
+
+    await expect(inboxPrivate(inboxService()).isSystem1NonActionable(CONTEXT, unreadable)).resolves.toBe(
+      false,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('keeps an undecided message when the sidecar fails', async () => {
     process.env[FLAG] = 'true';
     jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 500 }));
@@ -212,6 +230,15 @@ describe('TodoScanService System 1 pre-filter with PLANNING_COMMITMENT_DECISION'
     await expect(todoPrivate(todoService()).filterSystem1ActionableHits(CONTEXT, HITS)).resolves.toEqual([
       HITS[1],
     ]);
+  });
+
+  it('keeps a hit whose probability is at the threshold, though is_commitment is false', async () => {
+    process.env[FLAG] = 'true';
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async () => sidecarIngress(false, 0.3));
+
+    await expect(todoPrivate(todoService()).filterSystem1ActionableHits(CONTEXT, HITS)).resolves.toEqual(
+      HITS,
+    );
   });
 
   it('keeps the hits when the sidecar fails', async () => {

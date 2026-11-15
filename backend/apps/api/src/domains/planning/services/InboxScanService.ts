@@ -3,7 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
-import { planningCommitmentSignal } from '@ci/common/hbpe/planningCommitmentSignal';
+import {
+  PLANNING_COMMITMENT_THRESHOLD,
+  planningCommitmentSignal,
+} from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/memory';
@@ -536,13 +539,20 @@ export class InboxScanService {
     context: UserServiceContext,
     message: CommunicationEntity,
   ): Promise<boolean> {
-    const text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
+    let text: string;
+
+    try {
+      text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
+    } catch {
+      // Text that cannot be built has no verdict, and the scan keeps the message.
+      return false;
+    }
 
     if (this.decisionService) {
       try {
         const score = await this.decisionService.scoreIngressCommitment(text, {
           userId: context.userId,
-          threshold: 0.25,
+          threshold: PLANNING_COMMITMENT_THRESHOLD,
         });
 
         return !score.isCommitment;
@@ -552,7 +562,8 @@ export class InboxScanService {
     }
 
     // Undecided (no pre-filter, or it failed), and the scan keeps the message.
-    // With PLANNING_COMMITMENT_DECISION on, HBPE's is_commitment can drop it.
+    // With PLANNING_COMMITMENT_DECISION on, HBPE's verdict, by the pre-filter's
+    // rule, can drop it.
     return (await planningCommitmentSignal(context.userId, text)) === false;
   }
 }

@@ -1,4 +1,4 @@
-import { RERANK_RELEVANCE_WEIGHT, RERANK_TOP_N, fuseRerankOrder } from '../rerankFusion';
+import { fuseRerankOrder } from '../rerankFusion';
 
 type Item = { id: string };
 
@@ -7,11 +7,6 @@ const head = (...ids: string[]): Item[] => ids.map((id) => ({ id }));
 const ids = (items: Item[]) => items.map((item) => item.id);
 
 describe('fuseRerankOrder', () => {
-  it('keeps the head at the documented constants', () => {
-    expect(RERANK_TOP_N).toBe(50);
-    expect(RERANK_RELEVANCE_WEIGHT).toBe(0.5);
-  });
-
   it('orders by 0.5 * relevance + 0.5 * orderScore, with orderScore 1 first and 0 last', () => {
     // N = 3, so orderScore is 1, 0.5, 0 for A, B, C.
     // final: A = 0.5*0.2 + 0.5*1 = 0.60, B = 0.5*0.9 + 0.5*0.5 = 0.70, C = 0.5*0.5 + 0.5*0 = 0.25.
@@ -66,15 +61,42 @@ describe('fuseRerankOrder', () => {
     expect(ids(fuseRerankOrder(head(), key, new Map()))).toEqual([]);
   });
 
-  it('ignores non-finite scores and clamps the rest into [0, 1]', () => {
-    // N = 3: A = 0.5*1 + 0.5*1 = 1.0 (2 clamped to 1), B = 0.5*0.5 + 0.5*0.5 = 0.5, C is not finite and unscored.
+  it('clamps a relevance above 1 to 1, so it cannot outweigh the order it is combined with', () => {
+    // N = 3: B has relevance 1.4 (clamped to 1) and orderScore 1, so final = 0.5 + 0.5 = 1.00.
+    // A has relevance 2 (clamped to 1) and orderScore 0.5, so final = 0.5 + 0.25 = 0.75.
+    // Unclamped, A would be 1.25 and B 1.20, which would put A first.
     const scores = new Map([
+      ['B', 1.4],
       ['A', 2],
-      ['B', 0.5],
-      ['C', Number.NaN],
+    ]);
+
+    expect(ids(fuseRerankOrder(head('B', 'A', 'C'), key, scores))).toEqual(['B', 'A', 'C']);
+  });
+
+  it('clamps a relevance below 0 to 0', () => {
+    // N = 3: A has relevance -1 (clamped to 0) and orderScore 1, so final = 0 + 0.5 = 0.50.
+    // B has relevance 0.2 and orderScore 0.5, so final = 0.10 + 0.25 = 0.35.
+    // Unclamped, A would be 0.00 and B would move ahead of it.
+    const scores = new Map([
+      ['A', -1],
+      ['B', 0.2],
     ]);
 
     expect(ids(fuseRerankOrder(head('A', 'B', 'C'), key, scores))).toEqual(['A', 'B', 'C']);
+  });
+
+  it('leaves a candidate with a NaN score in its own slot while the scored ones move', () => {
+    // N = 4: orderScore A 1, B (unscored), C 1/3, D 0.
+    // final: A = 0.5*0.2 + 0.5*1 = 0.60, C = 0.5*0.9 + 0.5*(1/3) = 0.617, D = 0.5*0.1 + 0 = 0.05.
+    // Scored slots are 0, 2 and 3, so C takes slot 0 and A slot 2. B stays in slot 1.
+    const scores = new Map([
+      ['A', 0.2],
+      ['B', Number.NaN],
+      ['C', 0.9],
+      ['D', 0.1],
+    ]);
+
+    expect(ids(fuseRerankOrder(head('A', 'B', 'C', 'D'), key, scores))).toEqual(['C', 'B', 'A', 'D']);
   });
 
   it('does not mutate the input head', () => {

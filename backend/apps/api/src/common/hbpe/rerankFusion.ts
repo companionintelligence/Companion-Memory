@@ -17,7 +17,11 @@
  * already occupy. A candidate with no score (no passage text, or missing from the
  * reply) keeps its position, so the rest of the head stays where RRF put it.
  */
-export const RERANK_TOP_N = 50;
+/**
+ * Candidates re-scored per query. The sidecar scores passages one at a time, and
+ * 50 was never shown to fit the 800 ms decision budget, so the head stays at 20.
+ */
+export const RERANK_TOP_N = 20;
 
 /** Share of the final order that comes from the sidecar's relevance score. */
 export const RERANK_RELEVANCE_WEIGHT = 0.5;

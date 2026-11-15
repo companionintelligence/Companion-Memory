@@ -23,11 +23,15 @@ describe('isDecisionFlagOn', () => {
     }
   });
 
-  it('keeps the documented environment names', () => {
-    expect(DECISION_FLAGS).toEqual({
-      memoryIngress: 'MEMORY_INGRESS_DECISION',
-      searchRerank: 'SEARCH_TRAINED_RERANK',
-      planningCommitment: 'PLANNING_COMMITMENT_DECISION',
-    });
+  it('turns on only the flag whose variable is set', () => {
+    const env = { SEARCH_TRAINED_RERANK: 'true' };
+
+    expect(isDecisionFlagOn(DECISION_FLAGS.searchRerank, env)).toBe(true);
+    expect(isDecisionFlagOn(DECISION_FLAGS.memoryIngress, env)).toBe(false);
+    expect(isDecisionFlagOn(DECISION_FLAGS.planningCommitment, env)).toBe(false);
+    expect(isDecisionFlagOn(DECISION_FLAGS.memoryIngress, { MEMORY_INGRESS_DECISION: '1' })).toBe(true);
+    expect(
+      isDecisionFlagOn(DECISION_FLAGS.planningCommitment, { PLANNING_COMMITMENT_DECISION: 'TRUE' }),
+    ).toBe(true);
   });
 });

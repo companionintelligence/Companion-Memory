@@ -552,6 +552,38 @@ export function prefixTermOf(query: string): string | null {
   return last.length >= MIN_PREFIX_LENGTH ? last : null;
 }
 
+/**
+ * How long the passage-text read of the `SEARCH_TRAINED_RERANK` path may take.
+ * The sidecar call has its own 800 ms budget after it, so a rerank that falls
+ * back costs at most this plus that budget. A read that outlasts it is
+ * abandoned, and its statement timeout ends the query on the database side.
+ */
+const RERANK_TEXT_READ_TIMEOUT_MS = 200;
+
+/** One candidate's passage text, as {@link RERANK_PASSAGE_TEXT_SQL} returns it. */
+type PassageTextRow = { entity_type: string; id: string; title: string; body: string };
+
+/** The passage text of the given `(entity_type, entity_id)` pairs, for one user. */
+const RERANK_PASSAGE_TEXT_SQL = `SELECT k.entity_type, d.entity_id::text AS id, d.title, d.body
+  FROM unnest($2::text[], $3::uuid[]) AS k(entity_type, entity_id)
+  JOIN ci_search.mobile_search_documents d
+    ON d.entity_type = k.entity_type AND d.entity_id = k.entity_id
+ WHERE d.user_id = $1::uuid`;
+
+/**
+ * `work`, or `undefined` once `ms` has passed. `work` is not cancelled: the
+ * caller stops waiting for it. Its rejection, if it has one, is not reported
+ * as unhandled, because `Promise.race` has already subscribed to it.
+ */
+function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, ms, undefined);
+  });
+
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
 @Injectable()
 export class SearchService {
   constructor(
@@ -1394,7 +1426,13 @@ export class SearchService {
     const keyOf = (item: ScoredSearchResult) => `${item.type}:${item.id}`;
 
     try {
-      const texts = await this.rerankPassageTexts(userId, head);
+      // A read that outlasts its budget is abandoned, and the RRF list stands.
+      const texts = await withinBudget(this.rerankPassageTexts(userId, head), RERANK_TEXT_READ_TIMEOUT_MS);
+
+      if (!texts) {
+        return fused;
+      }
+
       const passages = head.flatMap((item) => {
         const text = texts.get(keyOf(item));
 
@@ -1423,15 +1461,19 @@ export class SearchService {
       return new Map();
     }
 
-    const rows: Array<{ entity_type: string; id: string; title: string; body: string }> =
-      await this.dataSource.query(
-        `SELECT k.entity_type, d.entity_id::text AS id, d.title, d.body
-         FROM unnest($2::text[], $3::uuid[]) AS k(entity_type, entity_id)
-         JOIN ci_search.mobile_search_documents d
-           ON d.entity_type = k.entity_type AND d.entity_id = k.entity_id
-        WHERE d.user_id = $1::uuid`,
-        [userId, candidates.map((item) => item.type), candidates.map((item) => item.id)],
-      );
+    const rows: PassageTextRow[] = await this.dataSource.transaction(async (manager) => {
+      // Scoped to this transaction. The read stops on the database side at the
+      // same bound the caller waits for, so an abandoned read does not run on.
+      await manager.query(`SELECT set_config('statement_timeout', $1, true)`, [
+        `${RERANK_TEXT_READ_TIMEOUT_MS}ms`,
+      ]);
+
+      return manager.query(RERANK_PASSAGE_TEXT_SQL, [
+        userId,
+        candidates.map((item) => item.type),
+        candidates.map((item) => item.id),
+      ]);
+    });
 
     return new Map(rows.map((row) => [`${row.entity_type}:${row.id}`, `${row.title}\n${row.body}`.trim()]));
   }

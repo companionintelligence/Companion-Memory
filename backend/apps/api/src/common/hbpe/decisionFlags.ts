@@ -7,11 +7,11 @@
  * on. Anything else, including unset, leaves the caller on its current path.
  */
 export const DECISION_FLAGS = {
-  /** Score each memory write with HBPE `/decision/ingress`, recorded beside the write. */
+  /** Score each memory write with HBPE `/decision/ingress` and log it beside the write. */
   memoryIngress: 'MEMORY_INGRESS_DECISION',
   /** Re-order the head of an RRF search result by HBPE `/decision/rerank`. */
   searchRerank: 'SEARCH_TRAINED_RERANK',
-  /** Use HBPE `is_commitment` where the planning pre-filter has no verdict. */
+  /** Use HBPE's commitment verdict where the planning pre-filter has none. */
   planningCommitment: 'PLANNING_COMMITMENT_DECISION',
 } as const;
 

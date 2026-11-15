@@ -1,10 +1,9 @@
-import {
-  DECISION_TIMEOUT_MS,
-  DecisionClient,
-  type DecisionPassage,
-  HBPE_DEFAULT_BASE_URL,
-  resolveHbpeBaseUrl,
-} from '../decisionClient';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+import config from '@ci/configuration';
+
+import { DecisionClient, type DecisionPassage } from '../decisionClient';
 
 const USER = '0190c3f2-0000-7000-8000-000000000001';
 const BASE = 'http://hbpe.test:8002';
@@ -41,16 +40,39 @@ function sentBody(fetchMock: jest.Mock, call = 0): unknown {
   return JSON.parse(String(init.body));
 }
 
-describe('resolveHbpeBaseUrl', () => {
-  it('defaults to the local sidecar port when HBPE_BASE_URL is unset or blank', () => {
-    expect(resolveHbpeBaseUrl({})).toBe(HBPE_DEFAULT_BASE_URL);
-    expect(resolveHbpeBaseUrl({ HBPE_BASE_URL: '   ' })).toBe('http://localhost:8002');
+describe('DecisionClient base URL', () => {
+  const previous = process.env.HBPE_BASE_URL;
+
+  afterEach(() => {
+    if (previous === undefined) {
+      delete process.env.HBPE_BASE_URL;
+    } else {
+      process.env.HBPE_BASE_URL = previous;
+    }
   });
 
-  it('reads HBPE_BASE_URL without a trailing slash', () => {
-    expect(resolveHbpeBaseUrl({ HBPE_BASE_URL: 'http://hbpe-service:8002/' })).toBe(
-      'http://hbpe-service:8002',
-    );
+  it('posts to the services.hbpe.host setting, the one HbpeService uses', async () => {
+    const fetchMock = jest.fn(async () => jsonResponse(INGRESS_REPLY));
+    const client = new DecisionClient({ fetch: fetchMock as unknown as typeof fetch, headers: () => ({}) });
+
+    await client.ingress(USER, 'Remind me to call the vet');
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+
+    expect(url).toBe(`${config.services.hbpe.host.replace(/\/+$/, '')}/decision/ingress?user_id=${USER}`);
+  });
+
+  it('ignores HBPE_BASE_URL, so one setting governs both callers', async () => {
+    process.env.HBPE_BASE_URL = 'http://elsewhere.test:9999';
+    const fetchMock = jest.fn(async () => jsonResponse(INGRESS_REPLY));
+    const client = new DecisionClient({ fetch: fetchMock as unknown as typeof fetch, headers: () => ({}) });
+
+    await client.ingress(USER, 'Remind me to call the vet');
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+
+    expect(url).not.toContain('elsewhere.test');
+    expect(url).toContain(config.services.hbpe.host.replace(/\/+$/, ''));
   });
 });
 
@@ -85,12 +107,17 @@ describe('DecisionClient.ingress', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('cuts text to the sidecar limit of 8000 code points', async () => {
+  it('cuts text to 8000 code points, so a supplementary-plane character is never split', async () => {
     const fetchMock = jest.fn(async () => jsonResponse(INGRESS_REPLY));
+    const emoji = '\u{1F600}'; // U+1F600: one code point, two UTF-16 code units.
 
-    await clientWith(fetchMock).ingress(USER, 'a'.repeat(9000));
+    await clientWith(fetchMock).ingress(USER, emoji.repeat(9000));
 
-    expect((sentBody(fetchMock) as { text: string }).text).toHaveLength(8000);
+    const sent = (sentBody(fetchMock) as { text: string }).text;
+
+    expect(Array.from(sent)).toHaveLength(8000);
+    expect(sent).toHaveLength(16000);
+    expect(Array.from(sent).every((character) => character === emoji)).toBe(true);
   });
 
   it('resolves undefined on a non-2xx reply, a malformed body, or a network error', async () => {
@@ -103,6 +130,15 @@ describe('DecisionClient.ingress', () => {
     await expect(clientWith(serverError).ingress(USER, 'x')).resolves.toBeUndefined();
     await expect(clientWith(malformed).ingress(USER, 'x')).resolves.toBeUndefined();
     await expect(clientWith(network).ingress(USER, 'x')).resolves.toBeUndefined();
+  });
+
+  it('resolves undefined when a reply has no numeric commitment probability', async () => {
+    // JSON.stringify drops an undefined property, so the reply goes out without it.
+    const fetchMock = jest.fn(async () =>
+      jsonResponse({ ...INGRESS_REPLY, commitment_probability: undefined }),
+    );
+
+    await expect(clientWith(fetchMock).ingress(USER, 'x')).resolves.toBeUndefined();
   });
 
   it('resolves undefined when the sidecar exceeds the timeout', async () => {
@@ -118,9 +154,37 @@ describe('DecisionClient.ingress', () => {
     ).resolves.toBeUndefined();
     expect(hangsUntilAborted).toHaveBeenCalledTimes(1);
   });
+});
 
-  it('gives the sidecar 800 ms, the budget the decision callers were specified against', () => {
-    expect(DECISION_TIMEOUT_MS).toBe(800);
+describe('DecisionClient against a sidecar that accepts and never answers', () => {
+  let server: Server;
+  let stalledBase: string;
+  let accepted = 0;
+
+  beforeAll(async () => {
+    server = createServer(() => {
+      accepted += 1;
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    stalledBase = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('gives up after the 800 ms default budget and resolves undefined', async () => {
+    const client = new DecisionClient({ baseUrl: stalledBase, headers: () => ({}) });
+    const started = Date.now();
+
+    await expect(client.ingress(USER, 'Remind me to call the vet')).resolves.toBeUndefined();
+
+    const elapsed = Date.now() - started;
+
+    expect(accepted).toBe(1);
+    expect(elapsed).toBeGreaterThanOrEqual(700);
+    expect(elapsed).toBeLessThan(3000);
   });
 });
 
@@ -191,25 +255,5 @@ describe('DecisionClient.rerank', () => {
     const fetchMock = jest.fn(async () => jsonResponse({ user_id: USER, results: [{ id: 'a' }] }));
 
     await expect(clientWith(fetchMock).rerank(USER, 'q', [{ id: 'a', text: 'x' }])).resolves.toBeUndefined();
-  });
-});
-
-describe('DecisionClient.classifyL0', () => {
-  it('sends the title, and the description only when there is one', async () => {
-    const reply = {
-      user_id: USER,
-      l0_class: 'EXERCISE',
-      confidence: 0.6,
-      distribution: { EXERCISE: 0.6 },
-      calibrated: true,
-    };
-    const fetchMock = jest.fn(async () => jsonResponse(reply));
-    const client = clientWith(fetchMock);
-
-    await expect(client.classifyL0(USER, 'Morning run')).resolves.toEqual(reply);
-    await client.classifyL0(USER, 'Morning run', 'Along the river');
-
-    expect(sentBody(fetchMock, 0)).toEqual({ title: 'Morning run' });
-    expect(sentBody(fetchMock, 1)).toEqual({ title: 'Morning run', description: 'Along the river' });
   });
 });

@@ -1,28 +1,25 @@
 import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
+import config from '@ci/configuration';
 
 /**
- * Typed client for the three System 1 decision routes of the HBPE sidecar:
- * `POST /decision/ingress`, `POST /decision/rerank` and `POST /decision/l0`.
+ * Typed client for the two System 1 decision routes of the HBPE sidecar that the
+ * API calls: `POST /decision/ingress` and `POST /decision/rerank`.
  *
  * Every method resolves to `undefined` on any failure (a user id the sidecar
  * would refuse, an empty input, a non-2xx status, a timeout, a network error, a
  * reply of the wrong shape) and never throws, so a caller keeps its current
  * behaviour. Nothing here runs unless a flag in `decisionFlags.ts` asks for it.
  *
- * Wire shapes mirror `backend/apps/hbpe/src/ci/hbpe/api.py`. Inputs are cut to
- * the sidecar's own limits here, measured in code points as Python measures them.
+ * The base URL is the `services.hbpe.host` setting that `HbpeService` uses, so
+ * one setting governs both. Wire shapes mirror `backend/apps/hbpe/src/ci/hbpe/api.py`.
+ * Inputs are cut to the sidecar's own limits here, measured in code points as Python measures them.
  */
-
-export const HBPE_BASE_URL_ENV = 'HBPE_BASE_URL';
-export const HBPE_DEFAULT_BASE_URL = 'http://localhost:8002';
 
 /** The budget for one decision call. A slow sidecar costs the caller nothing but this wait. */
 export const DECISION_TIMEOUT_MS = 800;
 
 const MAX_TEXT = 8000;
 const MAX_QUERY = 2000;
-const MAX_TITLE = 1000;
-const MAX_DESCRIPTION = 4000;
 const MAX_PASSAGES = 100;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -57,17 +54,8 @@ export interface DecisionRerankItem {
   calibrated: boolean;
 }
 
-/** Reply of `POST /decision/l0`. */
-export interface L0Classification {
-  user_id: string;
-  l0_class: string;
-  confidence: number;
-  distribution: Record<string, number>;
-  calibrated: boolean;
-}
-
 export interface DecisionClientOptions {
-  /** Defaults to `HBPE_BASE_URL`, then {@link HBPE_DEFAULT_BASE_URL}. */
+  /** Defaults to the `services.hbpe.host` setting, the one HbpeService uses. */
   baseUrl?: string;
   /** Defaults to {@link DECISION_TIMEOUT_MS}. */
   timeoutMs?: number;
@@ -77,11 +65,9 @@ export interface DecisionClientOptions {
   headers?: () => Record<string, string>;
 }
 
-/** The sidecar base URL from the environment, without a trailing slash. */
-export function resolveHbpeBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env[HBPE_BASE_URL_ENV]?.trim();
-
-  return (configured && configured.length > 0 ? configured : HBPE_DEFAULT_BASE_URL).replace(/\/+$/, '');
+/** The sidecar base URL from the `services.hbpe.host` setting, without a trailing slash. */
+export function resolveHbpeBaseUrl(): string {
+  return config.services.hbpe.host.replace(/\/+$/, '');
 }
 
 export class DecisionClient {
@@ -158,28 +144,6 @@ export class DecisionClient {
     }
   }
 
-  /** The canonical L0 event class of a title and optional description. `undefined` on failure. */
-  async classifyL0(
-    userId: string,
-    title: string,
-    description?: string | null,
-  ): Promise<L0Classification | undefined> {
-    const cleanTitle = clip(title, MAX_TITLE);
-
-    if (cleanTitle === undefined) {
-      return undefined;
-    }
-
-    const cleanDescription = description == null ? undefined : clip(description, MAX_DESCRIPTION);
-
-    return this.post(
-      '/decision/l0',
-      userId,
-      { title: cleanTitle, ...(cleanDescription !== undefined ? { description: cleanDescription } : {}) },
-      isL0Classification,
-    );
-  }
-
   private async post<T>(
     route: string,
     userId: string,
@@ -232,7 +196,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMemoryIngressDecision(value: unknown): value is MemoryIngressDecision {
-  return isRecord(value) && typeof value.is_commitment === 'boolean' && typeof value.intent === 'string';
+  return (
+    isRecord(value) &&
+    typeof value.is_commitment === 'boolean' &&
+    typeof value.intent === 'string' &&
+    typeof value.commitment_probability === 'number' &&
+    Number.isFinite(value.commitment_probability)
+  );
 }
 
 function isDecisionRerankReply(value: unknown): value is { results: DecisionRerankItem[] } {
@@ -247,8 +217,4 @@ function isDecisionRerankReply(value: unknown): value is { results: DecisionRera
         Number.isFinite(item.score),
     )
   );
-}
-
-function isL0Classification(value: unknown): value is L0Classification {
-  return isRecord(value) && typeof value.l0_class === 'string';
 }

@@ -347,10 +347,10 @@ export class AgentMemoryService {
   }
 
   /**
-   * Score a fragment with HBPE `/decision/ingress` and record the scores on the
-   * write's log line. `AgentMemory` has no metadata column and the created event
-   * carries no spare field, so the log is the only place this write's ingress
-   * score can be recorded in this change.
+   * Score a fragment with HBPE `/decision/ingress` and log the scores beside the
+   * write. Nothing on the write path persists a per-write score: `ci.agent_memories`
+   * has no metadata column, and no audit store takes one. The log line is the only
+   * record, so the scores are not stored with the memory.
    */
   private recordMemoryIngress(userId: string, memoryId: string, content: string): void {
     try {

@@ -3,7 +3,10 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
-import { planningCommitmentSignal } from '@ci/common/hbpe/planningCommitmentSignal';
+import {
+  PLANNING_COMMITMENT_THRESHOLD,
+  planningCommitmentSignal,
+} from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY } from '@ci/domains/memory';
@@ -426,14 +429,14 @@ export class TodoScanService {
   /**
    * The System 1 pre-filter's verdict on one memory hit. Undecided (no
    * pre-filter, or it failed) keeps the hit, unless PLANNING_COMMITMENT_DECISION
-   * is on and HBPE's is_commitment says there is no commitment.
+   * is on and HBPE, by the pre-filter's rule, says there is no commitment.
    */
   private async isSystem1Actionable(context: UserServiceContext, text: string): Promise<boolean> {
     if (this.decisionService) {
       try {
         const score = await this.decisionService.scoreIngressCommitment(text, {
           userId: context.userId,
-          threshold: 0.25,
+          threshold: PLANNING_COMMITMENT_THRESHOLD,
         });
 
         return score.isCommitment;
