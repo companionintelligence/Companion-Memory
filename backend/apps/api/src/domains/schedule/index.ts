@@ -23,13 +23,7 @@ import { TaskBreakdownService } from './services/TaskBreakdownService';
     // projection into candidates; the schedule domain deliberately depends on
     // their tables, not on IntelligenceModule/SummariesModule/PlanningModule,
     // to keep the coupling one-way.
-    TypeOrmModule.forFeature([
-      EventCandidateEntity,
-      RhythmEntity,
-      ActionEntity,
-      SummaryEntity,
-      TaskEntity,
-    ]),
+    TypeOrmModule.forFeature([EventCandidateEntity, RhythmEntity, ActionEntity, SummaryEntity, TaskEntity]),
     MemoryModule,
     PersonalizationModule,
     AgentModule,

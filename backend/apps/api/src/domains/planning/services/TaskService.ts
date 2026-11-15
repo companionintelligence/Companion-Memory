@@ -169,9 +169,7 @@ export class TaskService {
     }
 
     const l0Class =
-      data.l0Class !== undefined
-        ? data.l0Class
-        : classifyTaskL0(data.title, data.description, data.notes);
+      data.l0Class !== undefined ? data.l0Class : classifyTaskL0(data.title, data.description, data.notes);
 
     const record = this.taskRepository.create({
       ...data,

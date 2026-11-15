@@ -164,4 +164,3 @@ export interface L0ClassificationResponse {
   distribution: Record<string, number>;
   calibrated: boolean;
 }
-

@@ -80,7 +80,11 @@ export function readStoredCredentials(env: NodeJS.ProcessEnv = process.env): Sto
   try {
     const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<StoredCredentials>;
 
-    if (typeof parsed.apiKey === 'string' && parsed.apiKey.length > 0 && typeof parsed.serverUrl === 'string') {
+    if (
+      typeof parsed.apiKey === 'string' &&
+      parsed.apiKey.length > 0 &&
+      typeof parsed.serverUrl === 'string'
+    ) {
       return {
         serverUrl: parsed.serverUrl,
         apiKey: parsed.apiKey,
@@ -111,9 +115,10 @@ export function writeStoredCredentials(
   return filePath;
 }
 
-export function removeStoredCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-): { removed: boolean; path: string } {
+export function removeStoredCredentials(env: NodeJS.ProcessEnv = process.env): {
+  removed: boolean;
+  path: string;
+} {
   const filePath = resolveCredentialsPath(env, true)!;
 
   if (!existsSync(filePath)) {
