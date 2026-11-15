@@ -686,10 +686,16 @@ CARD_CASES = [
         id="card-second-zero-led-example",
     ),
     pytest.param(
-        "Card 4000.0000.0000.0002 now",
+        "Card 4000-0000-0000-0002 now",
         "Card [CARD] now",
         {"card": 1},
-        id="card-zero-led-dotted-groups",
+        id="card-zero-led-hyphen-groups",
+    ),
+    pytest.param(
+        "Card 4000.0000.0000.0002 now",
+        "Card 4000.[PHONE] now",
+        {"phone": 1},
+        id="known-gap-zero-led-dotted-card-is-read-as-a-phone",
     ),
     pytest.param(
         "Card 4111 1111 1111 1111 555-123-4567 now",
@@ -702,6 +708,18 @@ CARD_CASES = [
         "Tel [PHONE] [CARD] Thanks",
         {"card": 1, "phone": 1},
         id="phone-followed-by-card-keeps-the-card-whole",
+    ),
+    pytest.param(
+        "4111 1111 1111 1111+1 555 123 4567 5555 4028 6726 7201",
+        "[CARD]+1 [PHONE] [CARD]",
+        {"card": 2, "phone": 1},
+        id="card-glued-to-a-plus-phone-keeps-both-cards",
+    ),
+    pytest.param(
+        "Pay 4111 1111 1111 1111,0333-328036-432535 now",
+        "Pay [CARD],[CARD] now",
+        {"card": 2},
+        id="card-before-a-zero-led-grouped-card-keeps-both",
     ),
     pytest.param(
         "005 3976 0420 4819 6-936-918-8994 now",

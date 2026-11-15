@@ -109,7 +109,9 @@ exchange starts with 0 or 1, such as ``5551234567``, is not read as a phone numb
 the separated form ``555-123-4567`` is. A query made only of digits and shorter than 20
 characters, such as ``?12345``, is kept. An IBAN of an unlisted country is kept, as
 described above. A secret written outside a URL, such as ``api_key=sk_live_...``, is not
-redacted, and neither are bank sort codes or national insurance numbers.
+redacted, and neither are bank sort codes or national insurance numbers. A card written
+with dots and a zero-led group, such as ``4000.0000.0000.0002``, and a zero-led card in a
+longer run of digit groups, are partly read as phone numbers.
 """
 
 from __future__ import annotations
@@ -588,41 +590,37 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
     return "".join(pieces)
 
 
-def _redact_lone_cards(text: str, counts: Counter[str]) -> str:
-    """Redact a card written alone as four groups of four digits, before the phone rule.
+def _lone_card_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of digit runs that hold one card: four groups of four digits that pass Luhn.
 
-    The phone rule reads a zero-led run such as "0000 0000 0002" as a phone number, which
-    would cut into a card such as "4000 0000 0000 0002". This pass takes such a card first.
-    A longer run of digit groups is left to the general rules, which run the phone rule
-    first, so a phone that follows a card is never joined into a longer candidate card.
+    Only a run of exactly four groups is taken, so a run with a phone or another card in
+    it is not. A run that overlaps a dotted card is not taken either, so the card rule
+    always reads the whole run.
     """
     masked = _mask_dates(text)
-    found: list[tuple[int, int]] = []
-    for dotted in _DOT_CARD_RE.finditer(masked):
-        if _is_card(dotted.group(0).replace(".", "")):
-            found.append((dotted.start(), dotted.end()))
+    dotted = [(match.start(), match.end()) for match in _DOT_CARD_RE.finditer(masked)]
+    spans: list[tuple[int, int]] = []
     for run in _CARD_RUN_RE.finditer(masked):
         groups = _CARD_GROUP_RE.findall(run.group(0))
         if len(groups) != 4 or any(len(group) != 4 for group in groups):
             continue
-        if _is_card("".join(groups)):
-            found.append((run.start(), run.end()))
-    if not found:
-        return text
-    pieces: list[str] = []
-    cursor = 0
-    for start, end in sorted(found):
-        pieces.append(text[cursor:start])
-        pieces.append("[CARD]")
-        cursor = end
-        counts["card"] += 1
-    pieces.append(text[cursor:])
-    return "".join(pieces)
+        if not _is_card("".join(groups)):
+            continue
+        if any(start < run.end() and run.start() < end for start, end in dotted):
+            continue
+        spans.append((run.start(), run.end()))
+    return spans
 
 
 def _redact_phones(text: str, counts: Counter[str]) -> str:
+    # A phone-shaped run inside a lone card is part of the card, which the card rule takes.
+    # Without this check the zero-led tail of 4000 0000 0000 0002 is read as a phone number.
+    lone = _lone_card_spans(text)
+
     def repl(match: re.Match[str]) -> str:
         candidate = match.group(0)
+        if any(start <= match.start() and match.end() <= end for start, end in lone):
+            return candidate
         span = _phone_span(candidate)
         if span is None:
             return candidate
@@ -902,7 +900,6 @@ class Redactor:
         out = _redact_urls(out, counts)
         out = _redact_emails(out, counts)
         out = _redact_ibans(out, counts)
-        out = _redact_lone_cards(out, counts)
         out = _redact_phones(out, counts)
         out = _redact_cards(out, counts)
         return _redact_addresses(out, counts)
