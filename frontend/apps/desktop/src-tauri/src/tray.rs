@@ -3,6 +3,8 @@
 //! auto-restart of a crashed stack in v1 — this loop only reports status and
 //! offers manual controls.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -10,9 +12,14 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{local_model, stack_manager, StackPathsState};
+use crate::{local_model, presence, stack_manager, StackPathsState};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(9);
+
+/// Set once Quit starts. Every menu item is ignored from then on, so a second
+/// Quit cannot run the teardown again and a Start cannot begin an `up` while the
+/// app exits.
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Companion Memory", true, None::<&str>)?;
@@ -56,6 +63,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn handle_menu_event(app: &AppHandle, id: &str) {
+    if QUITTING.load(Ordering::SeqCst) {
+        return;
+    }
+
     match id {
         "show" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -79,6 +90,16 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             // the same treatment: kill them before quitting, or an orphaned
             // Ollama sidecar / Apple bridge process lingers with nothing left
             // to talk to it.
+            //
+            // When one of them served the stack its model, Memory keeps
+            // running without one. The presence file is what lets Memory say
+            // so: it reads "closed" from here on, and the web app and MCP tell
+            // people that chat, search and summaries come back when the app is
+            // opened again. Nothing here waits on Docker, so Quit cannot hang.
+            QUITTING.store(true, Ordering::SeqCst);
+            stack_manager::refuse_new_starts();
+            log::info!("Quit: marking this app closed for Memory; the containers keep running");
+            app.state::<Arc<presence::Presence>>().mark_closed();
             app.state::<local_model::LocalModelHandles>().shutdown();
             app.exit(0);
         }

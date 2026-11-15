@@ -63,9 +63,7 @@ describe('ComplexityPlugin, a request whose variables do not coerce', () => {
 
     expect(status).toBe(400);
     expect(errors).toHaveLength(1);
-    expect(errors?.[0].message).toBe(
-      'Variable "$id" has invalid value: Expected a value of non-null type "ID!" to be provided.',
-    );
+    expect(errors?.[0].message).toBe('Variable "$id" of required type "ID!" was not provided.');
     expect(errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
     expect(errors?.[0].extensions?.stacktrace).toBeUndefined();
   });
@@ -74,7 +72,7 @@ describe('ComplexityPlugin, a request whose variables do not coerce', () => {
     const { status, errors } = await run({ id: { not: 'an id' } });
 
     expect(status).toBe(400);
-    expect(errors?.[0].message).toMatch(/^Variable "\$id" has invalid value/);
+    expect(errors?.[0].message).toMatch(/^Variable "\$id" got invalid value/);
     expect(errors?.[0].message).not.toBe('Internal server error');
     expect(errors?.[0].extensions?.code).toBe('BAD_USER_INPUT');
   });

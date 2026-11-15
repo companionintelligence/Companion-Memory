@@ -354,10 +354,19 @@ describe('RunPipeline stage sub-label', () => {
     expect(screen.getByText('parsing fitbit (56/57)')).toBeInTheDocument();
   });
 
-  it('keeps where a stage stopped when it failed', () => {
+  it('keeps where a stage stopped when it failed, worded as stopped', () => {
     render(<RunPipeline run={runOf(stageOf({ status: 'failed', error: 'unexpected end of mbox' }))} />);
 
-    expect(screen.getByText('parsing fitbit (56/57)')).toBeInTheDocument();
+    expect(screen.getByText('failed while parsing fitbit (56/57)')).toBeInTheDocument();
+    expect(screen.queryByText('parsing fitbit (56/57)')).not.toBeInTheDocument();
+  });
+
+  it('drops the sub-label of the last attempt once Try again puts the stage back in the queue', () => {
+    const run = { ...runOf(stageOf({ status: 'queued' })), status: 'queued', finishedAt: null };
+
+    render(<RunPipeline run={run} />);
+
+    expect(screen.queryByText(/parsing fitbit/)).not.toBeInTheDocument();
   });
 });
 

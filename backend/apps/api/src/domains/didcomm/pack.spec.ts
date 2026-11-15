@@ -1,17 +1,3 @@
-import { resolveDidKey } from './didKey';
-import { createFromPrior } from './fromPrior';
-import { parseDidDocument, relationshipKeys } from './didDocument';
-import { base58btcEncode, base64urlEncode, utf8Encode } from './encoding';
-import { DidcommError } from './errors';
-import { generateDidKeyIdentity, generateDidPeerIdentity, secretsOf } from './identity';
-import { encryptJwe } from './jwe';
-import { type PrivateJwk, parsePrivateJwk, type PublicJwk } from './jwk';
-import { createJws, parseJws, verifyJwsSignature } from './jws';
-import { createMessage, type DidcommMessage } from './message';
-import { multikeyFromJwk } from './multikey';
-import { packEncrypted, packPlaintext, packSigned, unpack } from './pack';
-import { createDidResolver, firstOf, StaticDidResolver } from './resolver';
-import { InMemorySecretsResolver } from './secrets';
 import {
   ALICE_DID_DOC,
   ALICE_SECRETS,
@@ -28,6 +14,20 @@ import {
   SIGNED_ES256K,
   SIGNED_EDDSA,
 } from './__tests__/vectors';
+import { parseDidDocument, relationshipKeys } from './didDocument';
+import { resolveDidKey } from './didKey';
+import { base58btcEncode, base64urlEncode, utf8Encode } from './encoding';
+import { DidcommError } from './errors';
+import { createFromPrior } from './fromPrior';
+import { generateDidKeyIdentity, generateDidPeerIdentity, secretsOf } from './identity';
+import { encryptJwe } from './jwe';
+import { type PrivateJwk, parsePrivateJwk, type PublicJwk } from './jwk';
+import { createJws, parseJws, verifyJwsSignature } from './jws';
+import { createMessage, type DidcommMessage } from './message';
+import { multikeyFromJwk } from './multikey';
+import { packEncrypted, packPlaintext, packSigned, unpack } from './pack';
+import { createDidResolver, firstOf, StaticDidResolver } from './resolver';
+import { InMemorySecretsResolver } from './secrets';
 
 const aliceDoc = parseDidDocument(ALICE_DID_DOC);
 const bobDoc = parseDidDocument(BOB_DID_DOC);

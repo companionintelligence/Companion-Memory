@@ -13,11 +13,12 @@ import { formatCapabilityInvocation, rootZcapId } from './zcap';
 async function serve(
   maxBodyBytes = 1024 * 1024,
 ): Promise<{ origin: string; close(): Promise<void>; call: Call }> {
-  let handler!: ReturnType<typeof createPwsHandler>;
-  const server: Server = createServer((req, res) => nodeListener(handler, { maxBodyBytes })(req, res));
+  // Filled in once the server's port is known; requests arrive only after that.
+  const ref: { handler?: ReturnType<typeof createPwsHandler> } = {};
+  const server: Server = createServer((req, res) => nodeListener(ref.handler!, { maxBodyBytes })(req, res));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  handler = createPwsHandler({
+  ref.handler = createPwsHandler({
     baseUrl: `${origin}/`,
     store: new MemoryPwsStore(),
     maxUploadBytes: maxBodyBytes,
@@ -41,6 +42,7 @@ async function serve(
           }),
         })
       : { ...(payload ? { 'content-type': type } : {}) };
+
     return new Promise((resolve, reject) => {
       const req = request(url, { method, headers }, (res) => {
         const chunks: Buffer[] = [];
@@ -53,6 +55,7 @@ async function serve(
       req.end(payload);
     });
   };
+
   return { origin, call, close: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 

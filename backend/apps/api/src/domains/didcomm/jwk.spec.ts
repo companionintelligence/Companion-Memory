@@ -1,5 +1,6 @@
 import { createPublicKey } from 'node:crypto';
 
+import { ALICE_DID_DOC, ALICE_SECRETS, BOB_DID_DOC, BOB_SECRETS } from './__tests__/vectors';
 import { GENUINE, WEAK } from './__tests__/weakEd25519';
 import { base64urlDecode, base64urlEncode } from './encoding';
 import { DidcommError } from './errors';
@@ -14,7 +15,6 @@ import {
   publicJwkOf,
   publicKeyObject,
 } from './jwk';
-import { ALICE_DID_DOC, ALICE_SECRETS, BOB_DID_DOC, BOB_SECRETS } from './__tests__/vectors';
 
 const ALL_CURVES: KeyCurve[] = ['Ed25519', 'X25519', 'P-256', 'P-384', 'P-521', 'secp256k1'];
 

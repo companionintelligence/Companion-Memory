@@ -508,6 +508,10 @@ function listClauses(options: LocalListQuery, ordered: boolean, people: PeoplePl
   if (connectors.length > 0) {
     where.push(`${field('source_system')} IN (${connectors.map(() => '?').join(', ')})`);
     params.push(...connectors);
+  } else {
+    // An agent's chats with the owner stay out until How names the agent, as on the appliance
+    // (SearchService showAgentTurnsFrom); the IN above admits exactly the named agents' turns.
+    where.push(`${field('agent_turn')} IS NULL`);
   }
 
   if (options.direction) {

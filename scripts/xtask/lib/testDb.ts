@@ -468,6 +468,7 @@ export function jestFiltersByName(jestArgs: string[]): boolean {
  */
 export const TEST_DATABASE_URL_VARS: readonly string[] = [
   'AGENT_TEST_DATABASE_URL',
+  'ACTIVITY_TEST_DATABASE_URL',
   'ASKS_TEST_DATABASE_URL',
   'AUTH_TEST_DATABASE_URL',
   'BROWSER_ACTIVITY_TEST_DATABASE_URL',

@@ -259,6 +259,7 @@ describe('did:web', () => {
     const resolver = createDidWebResolver({
       fetchJson: async (url) => {
         seen.push(url);
+
         return { id: 'did:web:example.com', verificationMethod: [] };
       },
     });

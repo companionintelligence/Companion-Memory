@@ -69,6 +69,8 @@ function makeResolver() {
       return [{ id: CONTENT.id, type: 'content' as IndexableEntity }];
     }),
     countEntitiesForContents: jest.fn(async () => 1),
+    // No content row here is a note's Content mirror (see SearchResolver.foldNoteMirrors).
+    noteMirrorIds: jest.fn(async () => new Set<string>()),
   };
 
   const entityResolutionService = {

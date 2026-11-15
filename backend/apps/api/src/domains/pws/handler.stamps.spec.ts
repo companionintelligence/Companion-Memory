@@ -1,8 +1,8 @@
+import { ORIGIN, World, alice } from './__tests__/testKit';
 import { createPwsHandler } from './handler';
-import { MemoryPwsStore } from './store';
 import { ORIGIN_ID, compareStamps } from './stamp';
 import type { Stamp } from './stamp';
-import { ORIGIN, World, alice } from './__tests__/testKit';
+import { MemoryPwsStore } from './store';
 
 const S = 'space-1';
 const C = 'messages';
@@ -11,6 +11,7 @@ async function world(): Promise<World> {
   const w = new World();
   await w.createSpace(alice, S);
   await w.createCollection(alice, S, C);
+
   return w;
 }
 
@@ -136,6 +137,7 @@ describe('write stamps on Metadata objects', () => {
       expect(doc.originId).toBe('test-origin');
       expect(doc.updatedAt).toBe('2026-11-05T12:00:05.000Z');
     }
+
     expect(docs[2].meta.originId).toBe('test-origin');
   });
 });

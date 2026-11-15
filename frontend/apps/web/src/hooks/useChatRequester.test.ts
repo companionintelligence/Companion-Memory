@@ -362,6 +362,31 @@ describe('useChatRequester', () => {
     expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('could not answer'));
   });
 
+  // Memory Desktop was closed and took its model with it. "Try again" would fail again; opening the app is the fix.
+  it('says Memory Desktop is closed when the appliance refuses for that reason', async () => {
+    const body = JSON.stringify({
+      statusCode: 503,
+      error: 'Service Unavailable',
+      message: 'Memory Desktop is closed, so chat, search and summaries are off.',
+      code: 'DESKTOP_APP_CLOSED',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(new Response(body, { status: 503, headers: { 'Content-Type': 'application/json' } })),
+      ),
+    );
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'hello', fileIds: [] });
+    });
+
+    expect(h.toastError).toHaveBeenCalledTimes(1);
+    expect(h.toastError).toHaveBeenCalledWith('Memory Desktop is closed. Open it to bring chat back.');
+  });
+
   it('says why when the appliance cannot be reached and nothing on the phone can answer', async () => {
     vi.stubGlobal(
       'fetch',

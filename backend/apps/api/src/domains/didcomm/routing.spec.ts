@@ -1,12 +1,12 @@
+import { createDidPeer2 } from './didPeer';
 import { DidcommError } from './errors';
 import { generateDidKeyIdentity, generateDidPeerIdentity, secretsOf } from './identity';
+import { generateKeyPair } from './jwk';
 import { createMessage, MEDIA_TYPE, parseMessage } from './message';
-import { InMemorySecretsResolver } from './secrets';
 import { packEncrypted, unpack } from './pack';
-import { createDidPeer2 } from './didPeer';
 import { createDidResolver, firstOf, StaticDidResolver } from './resolver';
 import { buildForwardMessage, FORWARD_TYPE, parseForward, prepareDelivery } from './routing';
-import { generateKeyPair } from './jwk';
+import { InMemorySecretsResolver } from './secrets';
 
 const resolver = createDidResolver();
 

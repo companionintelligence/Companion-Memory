@@ -7,6 +7,8 @@
  * policy never grants access to a policy: reading or writing one always needs a capability, so a
  * `PublicCanRead` target does not expose how it is governed.
  */
+import { createHash } from 'node:crypto';
+
 import { isRecognizedPolicy, POLICY_TYPES } from './access';
 import type { NormalizedRequest } from './authn';
 import { evaluatePreconditions } from './conditional';
@@ -14,13 +16,12 @@ import { policyChain } from './context';
 import type { HandlerEnv, OpContext } from './context';
 import { emptyResponse, jsonResponse } from './http';
 import type { PwsResponse } from './http';
-import { PwsError, invalidBody, notFound } from './problems';
+import type { PolicyScope } from './models';
 import { requireCollection } from './opsCollection';
 import { requireSpace } from './opsSpace';
+import { PwsError, invalidBody, notFound } from './problems';
 import { buildServiceDescription } from './serviceDescription';
 import { linkset } from './views';
-import type { PolicyScope } from './models';
-import { createHash } from 'node:crypto';
 
 // --- policy ----------------------------------------------------------------------------------
 
@@ -33,6 +34,7 @@ export async function policyEndpoint(ctx: OpContext, scope: PolicyScope): Promis
   if (collectionId !== undefined) {
     await requireCollection(ctx, spaceId, collectionId);
   }
+
   if (
     resourceId !== undefined &&
     collectionId !== undefined &&
@@ -48,25 +50,32 @@ export async function policyEndpoint(ctx: OpContext, scope: PolicyScope): Promis
       if (!policy) {
         throw notFound();
       }
+
       return ctx.json(200, policy);
     }
+
     case 'PUT': {
       const body = ctx.jsonObjectBody() as { type?: unknown };
       if (typeof body.type !== 'string' || body.type.length === 0) {
         throw invalidBody('A policy needs a string "type".', '/type');
       }
+
       if (!isRecognizedPolicy(body as { type: string })) {
         throw invalidBody(
           `The policy type "${body.type}" is not one this server evaluates (${POLICY_TYPES.join(', ')}).`,
           '/type',
         );
       }
+
       const existed = (await ctx.tx.getPolicy(scope)) !== undefined;
       await ctx.tx.putPolicy(scope, { type: body.type });
+
       return emptyResponse(existed ? 204 : 201);
     }
+
     default:
       await ctx.tx.deletePolicy(scope);
+
       return emptyResponse(204);
   }
 }
@@ -89,12 +98,14 @@ export async function linksetEndpoint(
   if (collectionId !== undefined) {
     await requireCollection(ctx, spaceId, collectionId);
   }
+
   const anchor =
     collectionId === undefined ? urls.spacePath(spaceId) : urls.collectionPath(spaceId, collectionId);
   const policyPath =
     collectionId === undefined
       ? urls.path(`space/${spaceId}/policy`)
       : urls.path(`space/${spaceId}/${collectionId}/policy`);
+
   return jsonResponse(200, linkset(urls, anchor, policyPath), {}, 'application/linkset+json');
 }
 
@@ -122,12 +133,14 @@ export async function unimplementedGroup(
   if (collectionId !== undefined) {
     await requireCollection(ctx, spaceId, collectionId);
   }
+
   if (options.queryProfile) {
     const { profile } = ctx.jsonObjectBody();
     if (typeof profile !== 'string' || profile === '') {
       throw invalidBody('A query body needs a "profile" string.', '/profile');
     }
   }
+
   throw new PwsError(
     'unsupported-operation',
     'This server does not implement that optional group of operations.',
@@ -156,5 +169,6 @@ export function serviceDescriptionResponse(env: HandlerEnv, req: NormalizedReque
   if (precondition === 'not-modified') {
     return emptyResponse(304, headers);
   }
+
   return { status: 200, headers: { ...headers, 'content-length': String(bytes.byteLength) }, body: bytes };
 }

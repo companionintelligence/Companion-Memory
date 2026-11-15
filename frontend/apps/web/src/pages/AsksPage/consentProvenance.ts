@@ -245,3 +245,27 @@ export function formatMoment(iso: string, fmt: DateTimeFormatter): string {
 
   return fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
 }
+
+/**
+ * Cryptographic provenance bundle returned by `askAuditReceipt(id)` for a single disclosure:
+ * deterministic CESR `I`-prefixed audit SAID + ISO/IEC TS 27560 + DPV v2 consent receipt.
+ */
+export interface AskAuditReceiptData {
+  auditId: string;
+  askId?: string | null;
+  auditSaid: string;
+  receipt: {
+    d: string;
+    schemaVersion: string;
+    recordId: string;
+    piiPrincipalId?: string | null;
+    recipient?: string | null;
+    legalBasis: string;
+    purposes: readonly string[];
+    processing: readonly string[];
+    consentBasis?: string | null;
+    outcome: string;
+    disclosedCount: number;
+    issuedAt: string;
+  };
+}

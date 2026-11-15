@@ -9,8 +9,9 @@ import type { AnswerForm } from '@/graphql/graphql';
 import { AskerQuote } from './AskerQuote';
 import {
   purposeAbsentNote,
-  purposeLine,
+  purposeQuote,
   actorIsDelegated,
+  actorLabelQuote,
   actorLine,
   type AskActorView,
   answerFormLabel,
@@ -21,6 +22,7 @@ import {
 import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
 import { ConsentLock } from './ConsentLock';
 import { consentLockState } from './consentProvenance';
+import { PeerText } from './PeerText';
 import type { HiddenCharacterCheck } from './useHiddenCharacterFlags';
 
 export interface AskReviewItem {
@@ -62,8 +64,14 @@ interface Props {
    * appear. `failed` says so on the card and leaves the decision to the owner.
    */
   hiddenCharacterCheck?: HiddenCharacterCheck;
-  /** The structured ask as SENT, rendered legibly. */
-  scopeSummary: string;
+  /**
+   * The structured ask as SENT — RAW, like `prompt`.
+   *
+   * Passed as its parts rather than as a pre-joined summary string because both
+   * parts come from the asker: the card renders each through {@link PeerText}
+   * so neither can be read as the app's own words.
+   */
+  scope: { queryType: string; dataClass?: string | null };
   /**
    * What that scope means for the search that will actually run. Required, not
    * optional: a caller who forgets it is a caller who prints a scope with no
@@ -128,7 +136,7 @@ export function AskReviewCard({
   prompt,
   promptHiddenCharactersRemoved = false,
   hiddenCharacterCheck = 'checked',
-  scopeSummary,
+  scope,
   searchBreadth,
   items = [],
   decision,
@@ -148,6 +156,9 @@ export function AskReviewCard({
   const preAuthorized = decision === 'pre-authorized';
   // Approving discloses; declining doesn't, so only the first waits.
   const holdApproval = busy || hiddenCharacterCheck === 'checking';
+  const purpose = purposeQuote(statedPurpose);
+  const actorSays = actorLine(actor);
+  const actorLabel = actorLabelQuote(actor);
 
   return (
     <Card className="flex flex-col gap-3 p-4">
@@ -156,32 +167,39 @@ export function AskReviewCard({
           row, so the decision the owner is looking at reads at a glance
           instead of as a stacked block. Decline stays below, beside the
           share-with-less options it belongs with — it is the alternative to
-          the primary action, not a second one competing with it here. */}
+          the primary action, not a second one competing with it here.
+          The avatar, name and badges ask for 14.75rem (2rem avatar, 0.75rem
+          gap, 12rem for the name and badges) before the button shares their
+          line, so on a phone the button drops below them instead of covering
+          a badge. The avatar is inside that block so a very narrow card keeps
+          it beside the name. */}
       <div className="flex flex-wrap items-center gap-3">
-        <PersonAvatar name={askerName} avatarUrl={askerAvatarUrl} size="sm" />
+        <div className="flex min-w-0 flex-1 basis-[14.75rem] items-center gap-3">
+          <PersonAvatar name={askerName} avatarUrl={askerAvatarUrl} size="sm" />
 
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <span className="font-medium truncate">{askerName}</span>
-          <Badge variant={decision === 'unreviewed' ? 'outline' : 'secondary'} className="text-xs">
-            {tier}
-          </Badge>
-          {/* The decision state is its own badge because the tier badge beside
-              it answers a different question — "do I know them", not "is this
-              still mine to decide". */}
-          {preAuthorized ? (
-            <Badge variant="secondary" className="text-xs">
-              Already authorized
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <span className="font-medium truncate">{askerName}</span>
+            <Badge variant={decision === 'unreviewed' ? 'outline' : 'secondary'} className="text-xs">
+              {tier}
             </Badge>
-          ) : null}
-          {/* The lock answers "should I trust this request?", which is a
-              different question from "do I want to answer it?" — and it is the
-              one the owner has no other way to ask. */}
-          {consent ? (
-            <ConsentLock
-              state={consentLockState({ consent: consent.consent, channel: consent.channel })}
-              onOpen={() => setShowConsent(true)}
-            />
-          ) : null}
+            {/* The decision state is its own badge because the tier badge beside
+                it answers a different question — "do I know them", not "is this
+                still mine to decide". */}
+            {preAuthorized ? (
+              <Badge variant="secondary" className="text-xs">
+                Already authorized
+              </Badge>
+            ) : null}
+            {/* The lock answers "should I trust this request?", which is a
+                different question from "do I want to answer it?" — and it is the
+                one the owner has no other way to ask. */}
+            {consent ? (
+              <ConsentLock
+                state={consentLockState({ consent: consent.consent, channel: consent.channel })}
+                onOpen={() => setShowConsent(true)}
+              />
+            ) : null}
+          </div>
         </div>
 
         <Button size="sm" onClick={onApprove} disabled={holdApproval}>
@@ -204,15 +222,29 @@ export function AskReviewCard({
           are different consent decisions, and the second is the less familiar
           of the two — it does not belong in the smallest type on the card. */}
       {/* WHY, in their words. Carried and shown, never judged — this box has
-          no way to verify a purpose, so it is attributed like the prompt. */}
+          no way to verify a purpose, so it is attributed like the prompt. The
+          purpose is its own isolated element after fixed copy, never spliced
+          into a sentence: a quote mark in it used to end the quotation. */}
       <p className="text-muted-foreground text-xs">
-        {purposeLine(statedPurpose) ?? purposeAbsentNote(statedPurpose)}
+        {purpose ? (
+          <PeerText attribution={purpose.attribution} text={purpose.text} />
+        ) : (
+          purposeAbsentNote(statedPurpose)
+        )}
       </p>
 
-      {actorLine(actor) ? (
+      {actorSays ? (
         <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
           {actorIsDelegated(actor) ? <Bot className="mt-0.5 size-3 shrink-0" aria-hidden /> : null}
-          <span>{actorLine(actor)}</span>
+          <span>
+            {actorSays}
+            {actorLabel ? (
+              <>
+                {' '}
+                <PeerText attribution={actorLabel.attribution} text={actorLabel.text} />
+              </>
+            ) : null}
+          </span>
         </p>
       ) : null}
 
@@ -221,7 +253,14 @@ export function AskReviewCard({
           searches EVERYTHING, and the owner has to be told that before they
           consent, not after. */}
       <div className="text-muted-foreground bg-muted flex flex-col gap-1 rounded-md px-3 py-2 text-xs">
-        <p>Would search: {scopeSummary}</p>
+        <p>
+          <PeerText attribution="Would search:" text={scope.queryType} />
+        </p>
+        {scope.dataClass ? (
+          <p>
+            <PeerText attribution="Data class they named:" text={scope.dataClass} />
+          </p>
+        ) : null}
         <p>{searchBreadth}</p>
       </div>
 

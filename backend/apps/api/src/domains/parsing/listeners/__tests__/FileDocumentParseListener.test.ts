@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import type { Acknowledgement } from '@ci/domains/events';
+import { type Acknowledgement, EventListenerRegistry } from '@ci/domains/events';
 import type { FileUploadedPayload } from '@ci/domains/files/events';
 
 import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../../services/DocumentExtractor';
 import { type ParsedDocument, ParseStatus } from '../../types';
-import { FileDocumentParseListener } from '../FileDocumentParseListener';
+import { DOCUMENT_PARSING_RETRY, FileDocumentParseListener } from '../FileDocumentParseListener';
 
 function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -278,5 +278,24 @@ describe('FileDocumentParseListener', () => {
     const factors = /^MAX_UPLOAD_BYTES = ([\d* ]+)$/m.exec(worker)?.[1].split('*').map(Number);
 
     expect(factors?.reduce((product, factor) => product * factor, 1)).toBe(MAX_PARSE_BYTES);
+  });
+});
+
+describe('document-parsing queue retries', () => {
+  it('declares its own retry policy on the queue', () => {
+    expect(EventListenerRegistry.getQueueOptions('document-parsing')).toEqual(DOCUMENT_PARSING_RETRY);
+  });
+
+  it('keeps retrying for longer than a parser restart, even at the shortest backoff', () => {
+    // pg-boss waits at least `retryDelay * 2^(n-1)` seconds before retry n. The
+    // queue default (3 retries, 10 s) ran out after about 70 s at the least and
+    // two minutes in practice, which a summary-service update outlasted.
+    const { retryLimit, retryDelay } = DOCUMENT_PARSING_RETRY;
+    const shortestSeconds = Array.from({ length: retryLimit }, (_, n) => retryDelay * 2 ** n).reduce(
+      (sum, wait) => sum + wait,
+      0,
+    );
+
+    expect(shortestSeconds).toBeGreaterThanOrEqual(15 * 60);
   });
 });

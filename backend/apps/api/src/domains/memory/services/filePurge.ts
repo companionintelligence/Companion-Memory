@@ -330,6 +330,179 @@ export async function deleteStoredObjects(
   return { deleted: stored.deleted, kept: stored.kept };
 }
 
+/** The stored objects a purge has queued for deletion after its transaction commits. */
+export interface QueuedObjectDeletes {
+  /** The `ci.stored_object_deletions` rows written, for {@link drainStoredObjectDeletes} to take. */
+  ids: string[];
+  /** How many objects are to be deleted. */
+  deleted: number;
+  /** How many stayed, because a `ci.files` row outside the purge names the same object. */
+  kept: number;
+}
+
+/**
+ * Queues the stored objects of these locked files for deletion, in the caller's transaction, instead of
+ * deleting them there. The other half of {@link drainStoredObjectDeletes}, which deletes them once the
+ * transaction has committed.
+ *
+ * {@link deleteStoredObjects} deletes the bytes inside the transaction, before the rows, so a failure
+ * after it (the teardown, the row deletes, the commit itself) rolls the rows back and not the bytes: a
+ * file the app still lists, whose bytes are gone. This order cannot do that. The queue rows are written
+ * with the purge and go back with it on a rollback, and the bytes are deleted only after the commit, so
+ * a rollback never touches them. A commit leaves a durable record of every object still to delete, so a
+ * store that fails, times out (the deadline does not cancel the call) or deletes only part of a batch
+ * leaves rows that the sweep retries ({@link drainStoredObjectDeletes}); the object store counts a key
+ * that is already gone as deleted, so a retry is always safe.
+ *
+ * Which objects are shared with a `ci.files` row outside the purge is decided here, while the files are
+ * still locked ({@link objectsToDelete}), and decided again when the queue is drained.
+ *
+ * Refused before anything is written when there is something stored to delete and no store to delete
+ * it from, as {@link deleteStoredObjects} refuses.
+ */
+export async function queueStoredObjectDeletes(
+  manager: EntityManager,
+  files: LockedFile[],
+  objects: StoredObjects | undefined,
+): Promise<QueuedObjectDeletes> {
+  const stored = await objectsToDelete(manager, files);
+
+  if (stored.byBucket.size === 0) {
+    return { ids: [], deleted: stored.deleted, kept: stored.kept };
+  }
+
+  if (objects === undefined) {
+    throw new Error(
+      'The stored objects could not be deleted, so nothing was deleted from the database: no object store is configured for this service.',
+    );
+  }
+
+  const buckets: string[] = [];
+  const keys: string[] = [];
+
+  for (const [bucket, bucketKeys] of stored.byBucket) {
+    for (const key of [...bucketKeys].sort()) {
+      buckets.push(bucket);
+      keys.push(key);
+    }
+  }
+
+  const rows: Array<{ id: string }> = await manager.query(
+    `INSERT INTO ci.stored_object_deletions (bucket, object_key)
+     SELECT * FROM unnest($1::text[], $2::text[])
+     RETURNING id`,
+    [buckets, keys],
+  );
+
+  return { ids: rows.map((row) => row.id), deleted: stored.deleted, kept: stored.kept };
+}
+
+/** What one drain of the deletion queue did. */
+export interface DrainedObjectDeletes {
+  /** Objects confirmed deleted from the store, whose queue rows are gone. */
+  deleted: number;
+  /** Queue rows dropped without deleting, because a `ci.files` row names their object again. */
+  skipped: number;
+  /** Queue rows still there, because the store failed or did not answer in time. The sweep retries them. */
+  pending: number;
+  /** Why, one line per bucket that failed. */
+  errors: string[];
+}
+
+/** How many queue rows one sweep takes. */
+export const STORED_OBJECT_SWEEP_BATCH = 500;
+
+/**
+ * Deletes queued objects from the object store ({@link queueStoredObjectDeletes}), outside any purge's
+ * transaction: the given rows, right after the purge that wrote them committed, or the oldest
+ * {@link STORED_OBJECT_SWEEP_BATCH} of them, for the retry sweep.
+ *
+ * Never throws for the store. A row is deleted only once its bucket's delete has answered; a failure, a
+ * timeout or a partial delete leaves the bucket's rows, with the attempt and the reason, for the next
+ * sweep. A row whose object a `ci.files` row names again is dropped, and its object kept: the bytes are
+ * that row's now. Two drains of the same row delete the same key twice, which the store answers as done.
+ */
+export async function drainStoredObjectDeletes(
+  manager: Pick<EntityManager, 'query'>,
+  objects: StoredObjects | undefined,
+  options: { ids?: string[]; deadlineMs?: number; limit?: number } = {},
+): Promise<DrainedObjectDeletes> {
+  const result: DrainedObjectDeletes = { deleted: 0, skipped: 0, pending: 0, errors: [] };
+
+  if (options.ids !== undefined && options.ids.length === 0) {
+    return result;
+  }
+
+  const rows: Array<{ id: string; bucket: string; object_key: string }> =
+    options.ids !== undefined
+      ? await manager.query(
+          `SELECT id, bucket, object_key FROM ci.stored_object_deletions WHERE id = ANY($1::uuid[]) ORDER BY id`,
+          [options.ids],
+        )
+      : await manager.query(
+          `SELECT id, bucket, object_key FROM ci.stored_object_deletions ORDER BY queued_at, id LIMIT $1`,
+          [options.limit ?? STORED_OBJECT_SWEEP_BATCH],
+        );
+
+  if (rows.length === 0) {
+    return result;
+  }
+
+  // An object a file row names again is that row's: keep it, and drop the queue row.
+  const named: Array<{ id: string }> = await manager.query(
+    `SELECT d.id
+       FROM ci.stored_object_deletions d
+      WHERE d.id = ANY($1::uuid[])
+        AND EXISTS (SELECT 1 FROM ci.files f WHERE f.key = d.object_key::uuid AND f.bucket = d.bucket)`,
+    [rows.map((row) => row.id)],
+  );
+  const inUse = new Set(named.map((row) => row.id));
+
+  if (inUse.size > 0) {
+    await manager.query('DELETE FROM ci.stored_object_deletions WHERE id = ANY($1::uuid[])', [[...inUse]]);
+    result.skipped = inUse.size;
+  }
+
+  const byBucket = new Map<string, Array<{ id: string; key: string }>>();
+
+  for (const row of rows) {
+    if (!inUse.has(row.id)) {
+      byBucket.set(row.bucket, [...(byBucket.get(row.bucket) ?? []), { id: row.id, key: row.object_key }]);
+    }
+  }
+
+  for (const [bucket, entries] of byBucket) {
+    const ids = entries.map((entry) => entry.id);
+
+    try {
+      if (objects === undefined) {
+        throw new Error('no object store is configured for this service');
+      }
+
+      await withDeadline(
+        objects.deleteObjects(bucket, [...new Set(entries.map((entry) => entry.key))].sort()),
+        options.deadlineMs ?? STORED_OBJECT_DELETE_DEADLINE_MS,
+        'The object store',
+      );
+      await manager.query('DELETE FROM ci.stored_object_deletions WHERE id = ANY($1::uuid[])', [ids]);
+      result.deleted += entries.length;
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+
+      await manager.query(
+        `UPDATE ci.stored_object_deletions
+            SET attempts = attempts + 1, last_attempt_at = now(), last_error = $2
+          WHERE id = ANY($1::uuid[])`,
+        [ids, reason.slice(0, 2000)],
+      );
+      result.pending += entries.length;
+      result.errors.push(`${bucket}: ${reason}`);
+    }
+  }
+
+  return result;
+}
+
 /** The `File` nodes that shadow some files, and the chunks of their extracted text. */
 export interface FileTrail {
   nodes: Array<{ entity_id: string; linked_id: string }>;

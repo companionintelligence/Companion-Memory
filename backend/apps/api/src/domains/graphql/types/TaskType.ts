@@ -110,12 +110,17 @@ export class TaskType implements Node, Taggable {
   updatedAt!: Date;
 
   static toType(source: Task): TaskType {
+    const mergedDescription =
+      source.description && source.notes && !source.description.includes(source.notes)
+        ? `${source.description}\n\n${source.notes}`
+        : (source.description ?? source.notes);
+
     return {
       __typename: TaskType.name,
       __source: source,
       id: GlobalUID.encode('task', source.id),
       title: source.title,
-      description: source.description,
+      description: mergedDescription,
       notes: source.notes,
       tags: [], // Hydrated by TaskResolver.tags
       status: source.status as TaskStatusEnum,

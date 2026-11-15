@@ -270,7 +270,7 @@ export class GrokFileImporter implements FileImporter {
       return;
     }
 
-    let isDir = false;
+    let isDir: boolean;
     let fpath: string | undefined;
     try {
       const stat = fs.statSync(root);

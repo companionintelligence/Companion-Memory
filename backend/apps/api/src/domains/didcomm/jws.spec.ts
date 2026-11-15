@@ -1,7 +1,15 @@
 import { sign } from 'node:crypto';
 
+import {
+  RUST_FROM_PRIOR_JWT,
+  RUST_SIGNED_MSG_ALICE_KEY_1,
+  RUST_SIGNED_MSG_ALICE_KEY_2,
+  RUST_SIGNED_MSG_ALICE_KEY_3,
+} from './__tests__/rustVectors';
+import { ALICE_DID_DOC, ALICE_SECRETS, SIGNED_ES256, SIGNED_ES256K, SIGNED_EDDSA } from './__tests__/vectors';
 import { base64urlEncode } from './encoding';
 import { DidcommError } from './errors';
+import { generateKeyPair, parsePrivateJwk, parsePublicJwk, privateKeyObject, publicJwkOf } from './jwk';
 import {
   createCompactJws,
   createJws,
@@ -12,14 +20,6 @@ import {
   verifyJws,
   verifyJwsSignature,
 } from './jws';
-import { generateKeyPair, parsePrivateJwk, parsePublicJwk, privateKeyObject, publicJwkOf } from './jwk';
-import {
-  RUST_FROM_PRIOR_JWT,
-  RUST_SIGNED_MSG_ALICE_KEY_1,
-  RUST_SIGNED_MSG_ALICE_KEY_2,
-  RUST_SIGNED_MSG_ALICE_KEY_3,
-} from './__tests__/rustVectors';
-import { ALICE_DID_DOC, ALICE_SECRETS, SIGNED_ES256, SIGNED_ES256K, SIGNED_EDDSA } from './__tests__/vectors';
 
 const alicePublic = (kid: string) => {
   const method = (ALICE_DID_DOC.authentication as Array<{ id: string; publicKeyJwk: unknown }>).find(
@@ -28,6 +28,7 @@ const alicePublic = (kid: string) => {
 
   return parsePublicJwk(method?.publicKeyJwk);
 };
+
 const aliceSecret = (kid: string) => parsePrivateJwk(ALICE_SECRETS.find((secret) => secret.kid === kid));
 
 describe('signature algorithms', () => {

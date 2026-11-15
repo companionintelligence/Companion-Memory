@@ -6,7 +6,7 @@ import { Plus } from '@ci/shadcn/icons';
 
 import { gql } from '@/graphql';
 
-const CREATE_TASK = gql(`
+export const CREATE_TASK = gql(`
   mutation CreateTask($input: CreateTaskInput!) {
     createTask(input: $input) {
       success

@@ -140,8 +140,9 @@ function StageRow({
           <StageStatusIcon status={stage.status} />
           <span className="font-medium">{stageLabel(stage.kind)}</span>
           {/* The sub-label the runner sets: "parsing gmail (1/2)", "expanding".
-              Only while the stage is not done — the runner never clears it, so
-              a completed stage would go on saying what it was doing. */}
+              Shown while the stage runs and as where it stopped once it has
+              failed. The runner never clears it, so a completed, re-queued or
+              cancelled stage would go on saying what it was doing. */}
           {phase ? <span className="truncate text-sm text-muted-foreground">{phase}</span> : null}
         </div>
 

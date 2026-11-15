@@ -115,19 +115,19 @@ function overlappingPairs(boxes: ReturnType<typeof labelBoxes>) {
   return pairs;
 }
 
+/** Frames the component has asked for that haven't run yet (queued by the stub in beforeEach). */
+const queuedFrames = new Set<ReturnType<typeof setTimeout>>();
+
 /** Runs the requestAnimationFrame-driven simulation to completion. */
 async function settle() {
   await waitFor(() => {
     expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
   });
 
-  // The simulation caps at MAX_TICKS; give it room to reach the settle + polish step.
-  await waitFor(
-    () => {
-      expect(overlappingPairs(labelBoxes())).toEqual([]);
-    },
-    { timeout: 4000, interval: 25 },
-  );
+  // The simulation stops asking for frames once it has settled and run its label polish. Wait for
+  // that rather than for a fixed time: on a loaded 4-core runner it took longer than the 4 s this
+  // used to allow. The test then failed on a layout that was still moving.
+  await waitFor(() => expect(queuedFrames.size).toBe(0), { timeout: 15_000, interval: 25 });
 }
 
 describe('ForceGraph', () => {
@@ -143,13 +143,37 @@ describe('ForceGraph', () => {
     // Assigned directly rather than via vi.stubGlobal: `vi.unstubAllGlobals` would also drop the
     // ResizeObserver and IntersectionObserver that src/test/setup.ts stubs once for every file,
     // breaking every test after the first.
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
-      setTimeout(() => callback(performance.now()), 0)) as unknown as typeof requestAnimationFrame;
-    globalThis.cancelAnimationFrame = ((handle: number) =>
-      clearTimeout(handle)) as unknown as typeof cancelAnimationFrame;
+    //
+    // A frame leaves queuedFrames only after its callback returns, so a step that asks for the next
+    // frame never lets the set empty in between.
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      const handle = setTimeout(() => {
+        try {
+          callback(performance.now());
+        } finally {
+          queuedFrames.delete(handle);
+        }
+      }, 0);
+
+      queuedFrames.add(handle);
+
+      return handle;
+    }) as unknown as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((handle: ReturnType<typeof setTimeout>) => {
+      queuedFrames.delete(handle);
+      clearTimeout(handle);
+    }) as unknown as typeof cancelAnimationFrame;
   });
 
   afterEach(() => {
+    // The component unmounts after this hook, in src/test/setup.ts. Its cancelAnimationFrame is
+    // the real one by then and cannot cancel these timeouts, so a simulation left running would
+    // tick on into the next test and keep that test's settle() waiting on frames it never asked for.
+    for (const handle of queuedFrames) {
+      clearTimeout(handle);
+    }
+
+    queuedFrames.clear();
     globalThis.requestAnimationFrame = realRequestAnimationFrame;
     globalThis.cancelAnimationFrame = realCancelAnimationFrame;
   });
@@ -317,6 +341,10 @@ describe('ForceGraph', () => {
     );
 
     const after = labelBoxes().map((box) => `${box.label}@${box.left.toFixed(2)},${box.top.toFixed(2)}`);
+
+    // A relayout starts from the positions it had, so nothing moves until its first tick. That tick
+    // is a queued frame.
+    expect(queuedFrames.size).toBe(0);
 
     // Only the nodes whose emphasis changed may shift — the newly emphasised one grows, the
     // formerly emphasised one gives its extra radius back. Nobody else moves: that would be the
@@ -699,21 +727,7 @@ describe('ForceGraph', () => {
 
     /** Waits for the layout to stop moving the camera, so what a test measures is its own gesture. */
     async function settledCamera() {
-      await waitFor(() => {
-        expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
-      });
-
-      let previous = '';
-      let stableFor = 0;
-      await waitFor(
-        () => {
-          const current = screen.getByTestId('force-camera').getAttribute('transform') ?? '';
-          stableFor = current === previous ? stableFor + 1 : 0;
-          previous = current;
-          expect(stableFor).toBeGreaterThanOrEqual(3);
-        },
-        { timeout: 8000, interval: 40 },
-      );
+      await settle();
 
       return camera();
     }

@@ -7,6 +7,7 @@ async function world(): Promise<World> {
   const w = new World();
   await w.createSpace(alice, S);
   await w.createCollection(alice, S, C);
+
   return w;
 }
 
@@ -118,6 +119,7 @@ describe('Resources: the representation', () => {
       expect(res.status).toBe(501);
       expect(res.type).toBe('unsupported-operation');
     }
+
     expect((await w.send({ method: 'GET', path: r('form'), ...as(w) })).status).toBe(404);
     const mixed = await w.send({
       method: 'PUT',
@@ -210,6 +212,7 @@ describe('Resources: absent and unauthorized look alike', () => {
       expect(res.status).toBe(404);
       bodies.add(res.text);
     }
+
     expect(bodies.size).toBe(1);
   });
 
@@ -248,6 +251,7 @@ describe('Resources: conditional requests', () => {
       expect(res.status).toBe(304);
       expect(res.header('etag')).toBe(etag);
     }
+
     expect(
       (await w.send({ method: 'GET', path: r('doc'), ...as(w), headers: { 'if-none-match': '"other.1"' } }))
         .status,
@@ -339,6 +343,7 @@ describe('Resources: conditional requests', () => {
       seen.add((await w.putResource(alice, S, C, 'doc', { i })).header('etag') as string);
       await w.send({ method: 'DELETE', path: r('doc'), ...as(w) });
     }
+
     expect(seen.size).toBe(3);
   });
 });
@@ -505,8 +510,10 @@ describe('Unique plaintext indexes', () => {
   async function unique(): Promise<World> {
     const w = await world();
     await w.createCollection(alice, S, 'posts', { plaintext: { indexes: [{ name: 'slug', unique: true }] } });
+
     return w;
   }
+
   const put = (w: World, id: string, json: unknown) =>
     w.send({ method: 'PUT', path: `space/${S}/posts/${id}`, ...as(w), json });
 
@@ -540,6 +547,7 @@ describe('Unique plaintext indexes', () => {
     for (const id of ['first', 'second']) {
       await w.putResource(alice, S, 'late', id, { slug: 'same' });
     }
+
     const res = await w.send({
       method: 'PUT',
       path: `space/${S}/late/meta`,

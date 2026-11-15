@@ -8,6 +8,7 @@ import {
   generateCek,
   isContentEncryption,
 } from './contentEncryption';
+import { isDidUrl } from './did';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -17,7 +18,6 @@ import {
   utf8Encode,
 } from './encoding';
 import { DidcommError } from './errors';
-import { isDidUrl } from './did';
 import {
   generateKeyPair,
   isKeyAgreementCurve,

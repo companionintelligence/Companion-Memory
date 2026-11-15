@@ -24,7 +24,13 @@ for them to become healthy, then shows the real web UI.
    app, served by the `gateway` container, on a normal same-origin browser
    session (standard cookie auth — no CORS/CSRF wiring needed for this app).
 5. A tray icon lets you show/hide the window, manually start/stop the stack,
-   and view the desktop log, without quitting.
+   and view the desktop log, without quitting. Quit leaves the containers
+   running, as closing the window does. When the app itself serves their
+   model (its own Ollama, the relay in front of one or the Apple bridge), the
+   model stops with it. The app keeps `compose/desktop-app/presence.json` up
+   to date while it runs (`src-tauri/src/presence.rs`) and the overlay mounts
+   that folder into `api`, so the web app and MCP can say that Memory Desktop
+   is closed and that opening it brings chat, search and summaries back.
 
 Images are pulled from `ghcr.io/companionintelligence/companion/*` (see
 `../../../scripts/publish/images.sh`) at a version tag resolved at build time
@@ -112,7 +118,18 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is, unchanged. Nothing else in this list applies.
+   as-is. Options 2 and 3 are skipped, and nothing is pulled into it. If it
+   lacks the default chat model (`gemma4:e4b`, see option 3), Memory uses the
+   first local chat model it lists for chat and background work instead
+   (Ollama Cloud models are skipped). `desktop.log` says so along with the
+   `ollama pull` command that adds the default. Search needs `nomic-embed-text`
+   there too; the log says when it is missing. On Linux, one part of option 3
+   still applies: when it answers on `127.0.0.1` only (how Ollama's own service
+   binds unless you set `OLLAMA_HOST`), the containers cannot reach it, so the
+   app puts the same bridge relay described under option 3 in front of it while
+   the app runs. The relay holds port 11434 on the bridge gateway address. If
+   you restart your Ollama with `OLLAMA_HOST=0.0.0.0` while the app is running,
+   Ollama fails with "address already in use"; quit the app first.
 2. **Apple on-device (macOS only)** — if Apple Intelligence is available
    (Apple Silicon, macOS 26+, enabled in System Settings), chat is served by
    Apple's on-device `FoundationModels` framework via a small bundled Swift
@@ -213,6 +230,15 @@ This needed two things neither `docker-compose.yml` nor
   `http://127.0.0.1:8642`, and the callback would never arrive. Setting
   `APP_BASE_URL` explicitly skips that derivation.
 
+The browser hands the result back through the `companion://` scheme
+(`companion://oidc/callback?code=...`), and the OS passes that URL to the app
+as a launch argument. On Linux that only works if the installed launcher's
+`Exec` line ends in `%u`, and Tauri's default launcher doesn't. So the deb and
+rpm use our own template, `src-tauri/linux/companion-memory.desktop`. Without
+it the browser's "Open Companion Memory" starts the app with no URL and sign-in
+never finishes. A test in `src/main.rs` checks both the template and the config
+that points at it.
+
 ## A note on the `!override` compose tag
 
 `docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
@@ -245,7 +271,8 @@ Not silently missing — just out of scope for this first pass:
   and offers manual Start/Stop only.
 - mDNS discovery of other appliances on the LAN (not applicable — this app
   only ever manages its own local stack).
-- A deep-link URL scheme / pairing flow (not applicable, for the same reason).
+- Deep-link pairing like the Hub's (not applicable, for the same reason). The
+  `companion://` scheme itself is used, for sign-in; see above.
 - Sentry crash reporting for the desktop shell itself.
 - ARM Linux and Windows-ARM build legs (`desktop-build.yml`/
   `desktop-release.yml` currently build x86_64 Linux/Windows and both macOS

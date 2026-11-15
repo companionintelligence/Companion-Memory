@@ -16,12 +16,12 @@ import { isSpaceReserved } from './ids';
 import { assertDeclarationHolds, assertEnforceable } from './indexes';
 import { bump, etagOf, newValidator } from './models';
 import type { CollectionRecord } from './models';
+import { requireSpace } from './opsSpace';
 import { nextLink, readPageRequest } from './pagination';
 import { PwsError, invalidBody, notFound } from './problems';
-import { requireSpace } from './opsSpace';
-import { collectionView, resourceListItem } from './views';
 import { readCollectionBody, requireUrlSafeId } from './validate';
 import type { CollectionInput } from './validate';
+import { collectionView, resourceListItem } from './views';
 
 export async function requireCollection(
   ctx: OpContext,
@@ -32,6 +32,7 @@ export async function requireCollection(
   if (!collection) {
     throw notFound();
   }
+
   return collection;
 }
 
@@ -43,12 +44,14 @@ function checkSupported(input: CollectionInput): void {
       'This server does not implement client-side encrypted Collections; declare no "encryption" member.',
     );
   }
+
   if (input.backend && input.backend.id !== 'default') {
     throw new PwsError(
       'unsupported-backend',
       `The backend "${input.backend.id}" is not available in this Space.`,
     );
   }
+
   assertEnforceable(input.plaintext?.indexes);
 }
 
@@ -74,12 +77,15 @@ export async function createCollection(ctx: OpContext, spaceId: string): Promise
       throw new PwsError('reserved-id', `"${id}" is a reserved path segment and cannot name a Collection.`);
     }
   }
+
   checkSupported(input);
   // Only now, with the caller authorized, may a conflict be reported (it confirms the id exists).
   if (await ctx.tx.getCollection(spaceId, id)) {
     throw new PwsError('id-conflict', 'A Collection with this id already exists.');
   }
+
   const collection = await insertCollection(ctx, spaceId, id, input, access.invoker ?? space.controller);
+
   return ctx.json(201, collectionView(urls, collection), {
     location: urls.collectionUrl(spaceId, id),
     ...etagHeader(collection.validator),
@@ -110,6 +116,7 @@ async function insertCollection(
     validator: newValidator(),
   };
   await ctx.tx.putCollection(collection);
+
   return collection;
 }
 
@@ -129,10 +136,12 @@ export async function readCollection(
   if (!collection) {
     throw notFound();
   }
+
   const etag = etagOf(collection.validator);
   if (ctx.precondition(etag) === 'not-modified') {
     return emptyResponse(304, { etag });
   }
+
   return ctx.json(200, collectionView(ctx.env.urls, collection), { etag });
 }
 
@@ -160,6 +169,7 @@ export async function putCollection(
   if (input.id !== undefined && input.id !== collectionId) {
     throw invalidBody('"id" must match the Collection in the URL.', '/id');
   }
+
   const existing = await ctx.tx.getCollection(spaceId, collectionId);
   // The exclusion is on the resulting object, so a stored `plaintext` counts too (even an empty one).
   if (input.encryption && existing?.plaintext) {
@@ -168,6 +178,7 @@ export async function putCollection(
       '/encryption',
     );
   }
+
   checkSupported(input);
   ctx.precondition(existing ? etagOf(existing.validator) : undefined);
 
@@ -179,6 +190,7 @@ export async function putCollection(
       input,
       access.invoker ?? space.controller,
     );
+
     return ctx.json(201, collectionView(urls, created), {
       location: urls.collectionUrl(spaceId, collectionId),
       ...etagHeader(created.validator),
@@ -189,6 +201,7 @@ export async function putCollection(
   if (input.plaintext) {
     await assertDeclarationHolds(ctx.tx, { spaceId, collectionId, indexes: input.plaintext.indexes });
   }
+
   const generator = input.generator ?? existing.generator;
   // A full replacement: what the request omits is cleared, except the three kept members
   // (`backend`, `generator`, `plaintext`) and the creation facts.
@@ -208,6 +221,7 @@ export async function putCollection(
     validator: bump(existing.validator),
   };
   await ctx.tx.putCollection(updated);
+
   return emptyResponse(204, etagHeader(updated.validator));
 }
 
@@ -227,6 +241,7 @@ export async function deleteCollection(
   const existing = await ctx.tx.getCollection(spaceId, collectionId);
   ctx.precondition(existing ? etagOf(existing.validator) : undefined);
   await ctx.tx.deleteCollection(spaceId, collectionId);
+
   return emptyResponse(204);
 }
 
@@ -252,6 +267,7 @@ export async function listResources(
     ...(page.after !== undefined ? { after: page.after } : {}),
   });
   const last = listed.items[listed.items.length - 1];
+
   return ctx.json(200, {
     id: collection.id,
     url: scope,

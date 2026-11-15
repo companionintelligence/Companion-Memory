@@ -80,6 +80,8 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
   const theirDevice = uuidv7();
   const theirTask = uuidv7();
   const theirEvent = uuidv7();
+  const theirFile = uuidv7();
+  const myFile = uuidv7();
 
   const signalling = { send: jest.fn(async () => []) } as unknown as EventService;
   const hbpe = {
@@ -133,6 +135,13 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
       [theirEvent, otherId],
     );
 
+    await dataSource.query(
+      `INSERT INTO ci.files (id, filename, content_type, variant, bucket, key, hash, user_id)
+       VALUES ($1, 'their.jpg', 'image/jpeg', 'ORIGINAL', 'static', gen_random_uuid(), $5, $2),
+              ($3, 'mine.jpg', 'image/jpeg', 'ORIGINAL', 'static', gen_random_uuid(), $6, $4)`,
+      [theirFile, otherId, myFile, ownerId, `hash-${theirFile}`, `hash-${myFile}`],
+    );
+
     communications = new CommunicationService(
       dataSource.getRepository(CommunicationEntity),
       signalling,
@@ -184,6 +193,7 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
 
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.files WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.tasks WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.devices WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1::uuid[])', [users]);
@@ -350,6 +360,71 @@ describeWithDb(`Writes that link to another account's rows, in Postgres (${avail
         contents.create(owner, { type: 'note', text: 'theirs', event: { id: theirEvent } }),
       ).rejects.toThrow(refused('event_id', theirEvent, 'ci.events', 'content'));
       expect(await count('SELECT count(*) AS n FROM ci.content WHERE user_id = $1')).toBe(0);
+    });
+
+    // A content row that wraps a file decides that the file goes when the content is deleted, and shows it
+    // while it stays. So a writer may only point content at a file of its own.
+    it("refuses content that wraps another account's file, written one at a time or in a batch", async () => {
+      await expect(
+        contents.create(owner, { type: 'media', text: 'theirs', external_id: theirFile }),
+      ).rejects.toThrow(refused('external_id', theirFile, 'ci.files', 'content'));
+      await expect(
+        contents.createMany(owner, [
+          { type: 'media', text: 'mine', external_id: myFile },
+          { type: 'media', text: 'theirs', external_id: theirFile, external_id_kind: 'file' },
+        ]),
+      ).rejects.toThrow(refused('external_id', theirFile, 'ci.files', 'content'));
+      expect(await count('SELECT count(*) AS n FROM ci.content WHERE user_id = $1')).toBe(0);
+    });
+
+    it("refuses another account's file named in capitals, which the purge would read as the same file", async () => {
+      await expect(
+        contents.create(owner, { type: 'media', text: 'theirs', external_id: theirFile.toUpperCase() }),
+      ).rejects.toThrow(refused('external_id', theirFile, 'ci.files', 'content'));
+      expect(await count('SELECT count(*) AS n FROM ci.content WHERE user_id = $1')).toBe(0);
+    });
+
+    it('takes content that wraps a file of its own, and an id marked as a URI, which is never a file', async () => {
+      await expect(
+        contents.create(owner, { type: 'media', text: 'mine', external_id: myFile }),
+      ).resolves.toHaveLength(1);
+      await expect(
+        contents.create(owner, {
+          type: 'link',
+          text: 'a uri',
+          external_id: theirFile,
+          external_id_kind: 'external_uri',
+        }),
+      ).resolves.toHaveLength(1);
+      expect(await count('SELECT count(*) AS n FROM ci.content WHERE user_id = $1')).toBe(2);
+    });
+
+    it("refuses an update that points content at another account's file, whoever asks", async () => {
+      const [mine] = await contents.create(owner, { type: 'media', text: 'mine', external_id: myFile });
+
+      await expect(contents.update(owner, mine.id, { external_id: theirFile })).rejects.toThrow(
+        refused('external_id', theirFile, 'ci.files', 'content update'),
+      );
+      await expect(contents.update(system, mine.id, { external_id: theirFile })).rejects.toThrow(
+        refused('external_id', theirFile, 'ci.files', 'content update'),
+      );
+      expect(await dataSource.query('SELECT external_id FROM ci.content WHERE id = $1', [mine.id])).toEqual([
+        { external_id: myFile },
+      ]);
+    });
+
+    it("refuses an update that only re-marks an id as a file, when the file is another account's", async () => {
+      const [uri] = await contents.create(owner, {
+        type: 'link',
+        text: 'a uri',
+        external_id: theirFile,
+        external_id_kind: 'external_uri',
+      });
+
+      await expect(contents.update(owner, uri.id, { external_id_kind: 'file' })).rejects.toThrow(
+        refused('external_id', theirFile, 'ci.files', 'content update'),
+      );
+      await expect(contents.update(owner, uri.id, { text: 'still a uri' })).resolves.not.toBeNull();
     });
   });
 });

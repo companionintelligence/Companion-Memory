@@ -13,6 +13,10 @@ import { DELETE_TASK, useDeleteTasks } from './useDeleteTasks';
 
 const toastError = vi.hoisted(() => vi.fn());
 
+// The badge also re-reads on the live task stream, which needs a signed-in
+// session this harness does not have; this file is about the delete path.
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+
 vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 
@@ -146,7 +150,9 @@ describe('useDeleteTasks', () => {
       mocks: [listMock([{ id: 't1', title: 'Write the migration' }]), deleteMock('t1', null)],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    // The row first, so "leaves the row" checks a row that was there, not a list still loading.
+    await screen.findByText('Write the migration');
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not delete this task/i)),

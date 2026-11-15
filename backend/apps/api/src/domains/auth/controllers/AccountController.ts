@@ -129,7 +129,7 @@ export class AccountController {
       email: user.email,
       hasFederatedIdentity: federatedIdentities.length > 0,
       hasOwnPassword: Boolean(user.passwordSetAt),
-      emailManagedByHub: await this.hubBridge.namesAccount(req, user.email),
+      emailManagedByHub: await this.hubBridge.namesAccount(req, user),
     };
   }
 
@@ -232,7 +232,7 @@ export class AccountController {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
 
-    if (await this.hubBridge.namesAccount(req, user.email)) {
+    if (await this.hubBridge.namesAccount(req, user)) {
       throw new ConflictException(EMAIL_MANAGED_BY_HUB);
     }
 

@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 
-import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import {
@@ -9,13 +9,21 @@ import {
   RequireCapability,
   RequireScopes,
   WRITE_CAPABILITY,
+  capabilitySatisfies,
 } from '@ci/common/decorators';
-import { ApiKeyGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import {
+  ApiKeyGuard,
+  type ApiKeyScopedRequest,
+  JwtOrApiKeyAuthGuard,
+  apiKeyCapabilityOf,
+} from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import {
+  adoptIngestIdentity,
   AGENT_TURN_MESSAGE_CATEGORY,
+  agentTurnSourceSystem,
   CommunicationService,
   CommunicationType,
   UserContextService,
@@ -178,6 +186,20 @@ export class MemoryController {
   /**
    * Checks active governed memories for evidence/path drift against a set of
    * modified files (`knowl` staleness drift detection).
+   *
+   * Two operations behind one route, and they do not need the same key.
+   * Detecting drift only reads: the body is a list of changed paths, which is
+   * the whole reason this is a POST, so the route stays at `read` and a
+   * read-only key in a commit hook can ask. `markConflicted: true` also WRITES:
+   * it sets `status = 'conflicted'` on every match, which moves those memories
+   * into the review queue (`GET /memory/conflicts`). That is a change to stored
+   * memory, which `read` promises a key cannot make, so it needs `write`.
+   * Not `full`: nothing is deleted, and the memory is still there to restore.
+   *
+   * The check is made here rather than by a decorator because only the body
+   * says which of the two was asked for. A read-only key that asks to mark is
+   * refused outright rather than answered with an unmarked report, which would
+   * look as if the marking had happened.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireScopes(MEMORY_SCOPE)
@@ -186,8 +208,20 @@ export class MemoryController {
   @Post('drift')
   async drift(
     @Context() context: RequestContext,
+    @Req() request: ApiKeyScopedRequest,
     @Body(new ValidationPipe(memoryDriftSchema)) input: MemoryDriftDto,
   ) {
+    if (input.markConflicted) {
+      const capability = apiKeyCapabilityOf(request);
+
+      if (!capabilitySatisfies(capability, WRITE_CAPABILITY)) {
+        throw new ForbiddenException(
+          `This API key is "${capability}" and cannot mark memories conflicted, which requires "${WRITE_CAPABILITY}" access. ` +
+            'Leave out markConflicted to only detect drift.',
+        );
+      }
+    }
+
     return this.agentMemoryService.detectDrift(toServiceContext(context), input.changedPaths, {
       markConflicted: input.markConflicted,
     });
@@ -217,6 +251,9 @@ export class MemoryController {
       );
     let created = 0;
     let skipped = 0;
+    // The agent is the turn's source, so the explorer's How filter can offer it by name and keep
+    // every agent turn out of the default views (AGENT_TURN_MESSAGE_CATEGORY).
+    const sourceSystem = agentTurnSourceSystem(platform);
 
     for (const message of persistableMessages) {
       const content = message.content.trim();
@@ -254,6 +291,9 @@ export class MemoryController {
           content,
           preview: content.slice(0, 240),
           category: AGENT_TURN_MESSAGE_CATEGORY,
+          source_type: 'agent-turn',
+          source_system: sourceSystem,
+          source_id: adoptIngestIdentity(sourceSystem, id).id,
         });
         created += 1;
       } catch (err) {

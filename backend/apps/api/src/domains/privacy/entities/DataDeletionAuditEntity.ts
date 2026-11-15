@@ -1,5 +1,7 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
 
+import { type RevocationSummary } from '@ci/domains/user';
+
 export type DeletionScope = 'connection' | 'account';
 /**
  * `started`: an account delete ended the account and handed its rows to the
@@ -46,6 +48,14 @@ export class DataDeletionAuditEntity {
   @Column({ type: 'integer', default: 0, name: 'total_deleted' })
   totalDeleted!: number;
 
+  /**
+   * Account-level rows of an account delete: each connection's grant revocation
+   * outcome and the counts (every connection `pending` on `started`). Null on
+   * per-connection rows and on rows written before it existed.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  revocations!: RevocationSummary | null;
+
   @Column({ type: 'text', default: 'completed' })
   status!: DeletionStatus;
 
@@ -66,6 +76,7 @@ export class DataDeletionAuditEntity {
       tokenRevoked: entity.tokenRevoked,
       deletedCounts: entity.deletedCounts,
       totalDeleted: entity.totalDeleted,
+      revocations: entity.revocations,
       status: entity.status,
       error: entity.error,
       createdAt: entity.createdAt,

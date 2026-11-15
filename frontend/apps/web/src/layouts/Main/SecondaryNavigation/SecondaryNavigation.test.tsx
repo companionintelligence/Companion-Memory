@@ -5,10 +5,12 @@
  * account cluster itself. These assertions pin that — present in the rail,
  * not in the account menu — and that expanding the rail reveals labels.
  */
+import { type ReactNode } from 'react';
+
 import { DeviceLayoutProvider } from '@ci/common';
 import { Tooltip } from '@ci/shadcn';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PowerRailProvider } from '../PowerRailContext';
@@ -92,7 +94,7 @@ function renderRail(route = '/plan', { expanded = false }: { expanded?: boolean 
   );
 }
 
-function renderToggleAndRail(route = '/plan') {
+function renderToggleAndRail(route = '/plan', extra?: ReactNode) {
   return render(
     <MemoryRouter initialEntries={[route]}>
       <DeviceLayoutProvider args={[]}>
@@ -100,6 +102,7 @@ function renderToggleAndRail(route = '/plan') {
           <Tooltip.Provider>
             <PowerRailToggle />
             <SecondaryNavigation />
+            {extra}
           </Tooltip.Provider>
         </PowerRailProvider>
       </DeviceLayoutProvider>
@@ -300,6 +303,71 @@ describe('SecondaryNavigation', () => {
     fireEvent.click(screen.getByRole('link', { name: /Test User/ }));
 
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+  });
+
+  // Widening the rail swaps its collapsed tree for the expanded one, which
+  // remounted the picker closed and left the rail stuck wide.
+  it('opens Colours from the collapsed rail beside it, without widening the rail', () => {
+    renderRail('/feed', { expanded: false });
+
+    fireEvent.click(screen.getByRole('link', { name: /Test User/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Colours' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  it('still holds a pinned rail open while Colours is up, even if it is unpinned underneath', () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    renderToggleAndRail('/feed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Colours' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  // Browser Back off /self folds the Self group, which unmounts the open picker
+  // without it ever reporting a close. The hold went with nothing to release
+  // it, so unpinning left the rail wide.
+  it('lets go of the rail when the open picker is unmounted by a route change', () => {
+    function GoToFeed() {
+      const navigate = useNavigate();
+
+      return (
+        <button type="button" onClick={() => navigate('/feed')}>
+          Go to feed
+        </button>
+      );
+    }
+
+    localStorage.setItem(STORAGE_KEY, 'true');
+    renderToggleAndRail('/self', <GoToFeed />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Colours' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go to feed' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
   });
 
   // Support and Docs were two permanent rows for one question.

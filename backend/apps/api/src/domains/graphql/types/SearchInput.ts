@@ -125,6 +125,13 @@ export class SearchInput {
   semantic?: boolean;
 
   /**
+   * Search as you type: also match the last word of `query` as the start of a
+   * word, so "Jor" finds Jordan. Runs keyword search; ignored with `semantic`.
+   */
+  @Field(() => Boolean, { nullable: true })
+  prefix?: boolean;
+
+  /**
    * Shared-search capability token. When set, the search is resolved from the
    * referenced public saved search and run as its owner; all other filter
    * inputs above are ignored (only `first`/`after`/`sortBy`/`sortOrder` apply).

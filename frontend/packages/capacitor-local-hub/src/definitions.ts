@@ -23,6 +23,43 @@ export interface LocalHubSecureGetResult {
   value: string | null;
 }
 
+/** Sanitized, content-limited summary rendered by the iOS and Android home widgets. */
+export interface CompanionWidgetSnapshot {
+  version: 1;
+  generatedAt: string;
+  plan: {
+    openCount: number;
+    tasks: Array<{ id: string; title: string; dueAt: string | null }>;
+    updatedAt: string | null;
+  };
+  insight: {
+    systemStatus: string;
+    stillLearning: boolean;
+    prediction: string | null;
+    confidence: number | null;
+    forecastGeneratedAt: string | null;
+    metricsUpdatedAt: string | null;
+    messages: number;
+    places: number;
+    kilometers: number;
+  };
+  jobs: {
+    pending: number;
+    active: number;
+    failed: number;
+    deadLettered: number;
+    completed: number;
+    updatedAt: string | null;
+  };
+}
+
+export interface CompanionWidgetAction {
+  id: string;
+  type: 'completeTask';
+  taskId: string;
+  createdAt: string;
+}
+
 /**
  * Capacitor plugin surface for the on-device "Local Hub" sidecar: a loopback-only HTTP
  * server embedded in the native app. This interface covers only the *lifecycle* --
@@ -123,6 +160,18 @@ export interface LocalHubPlugin {
   requestLocationAuthorization(options: {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
+
+  /** Writes a small, sanitized widget snapshot; it must never contain credentials or notes. */
+  publishWidgetSnapshot(options: { snapshot: CompanionWidgetSnapshot }): Promise<void>;
+
+  /** Reads queued actions without deleting them; callers acknowledge only after success. */
+  readWidgetActions(): Promise<{ actions: CompanionWidgetAction[] }>;
+
+  /** Removes successfully handled action IDs from the native queue. */
+  acknowledgeWidgetActions(options: { ids: string[] }): Promise<void>;
+
+  /** Clears cached widget data and pending actions on sign-out. */
+  clearWidgetSnapshot(): Promise<void>;
 
   /**
    * Background samples for Always tracking, on both platforms, delivered as

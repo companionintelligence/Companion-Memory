@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { type ContentEncryption } from './contentEncryption';
 import { didOf, isDid, isDidUrl } from './did';
-import { type DidcommEndpoint, didcommEndpoints, type DidResolver } from './didDocument';
+import { type DidcommEndpoint, didcommEndpoints } from './didDocument';
 import { isRecord, parseJsonObject, utf8Decode, utf8Encode } from './encoding';
 import { DidcommError } from './errors';
 import { attachmentBytes, createMessage, type DidcommMessage, MEDIA_TYPE, nowSeconds } from './message';

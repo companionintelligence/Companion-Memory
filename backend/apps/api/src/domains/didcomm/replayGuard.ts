@@ -22,6 +22,7 @@ export interface ReplayGuard {
 
 export class InMemoryReplayGuard implements ReplayGuard {
   private readonly seen = new Map<string, number>();
+
   private readonly maxEntries: number;
 
   constructor(options: { maxEntries?: number } = {}) {

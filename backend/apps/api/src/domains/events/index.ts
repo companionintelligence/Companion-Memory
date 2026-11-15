@@ -29,7 +29,6 @@ import { CronRunEntity } from './entities/CronRunEntity';
 import { JobCategoryMetricEntity } from './entities/JobCategoryMetricEntity';
 import { JobMetricEntity } from './entities/JobMetricEntity';
 import { JobSettingEntity } from './entities/JobSettingEntity';
-import { PgBossArchiveEntity } from './entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from './entities/PgBossJobEntity';
 import { PgBossQueueEntity } from './entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from './entities/PgBossScheduleEntity';
@@ -50,7 +49,6 @@ import { PGBossEventService } from './services/PGBossEventService';
   imports: [
     TypeOrmModule.forFeature([
       PgBossJobEntity,
-      PgBossArchiveEntity,
       PgBossScheduleEntity,
       PgBossQueueEntity,
       JobMetricEntity,

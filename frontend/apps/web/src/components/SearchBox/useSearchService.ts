@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client/react';
 import { useOptionalConnectionMode } from '@ci/common';
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 
 import { isNetworkFailure } from '@/api/apolloErrors';
 import { type LocalSearchNode, searchLocal } from '@/api/powersync/localSearch';
@@ -58,6 +59,10 @@ export type SearchSource = 'appliance' | 'device';
 
 type ApplianceNode = NonNullable<SearchBoxQueryQuery['search']>['edges'][number]['node'];
 
+function toServerEntityType(type: string): string {
+  return ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP] ?? type.toLowerCase();
+}
+
 /**
  * The header box's results: the appliance's `search` query while it answers,
  * and this device's synced search index when it does not.
@@ -94,11 +99,13 @@ export function useSearchService({
   // An includeTypes allowlist takes precedence (the backend ignores excludeTypes
   // when includeTypes is set); otherwise default the global search box to hide
   // answers and raw browser activity, while still honouring a caller override.
+  // The URL spells types as the What picker does (`Thing`, `Browser`); a bare
+  // toLowerCase() sends `thing` / `browser`, which match no entity_type.
   const includeTypesParam =
-    includeTypes && includeTypes.length > 0 ? includeTypes.map((type) => type.toLowerCase()) : undefined;
+    includeTypes && includeTypes.length > 0 ? includeTypes.map(toServerEntityType) : undefined;
   const excludeTypesParam = includeTypesParam
     ? undefined
-    : (excludeTypes ?? ['answer', 'browser-activity']).map((type) => type.toLowerCase());
+    : (excludeTypes ?? ['answer', 'browser-activity']).map(toServerEntityType);
 
   const { data, loading, error } = useQuery(SEARCH_QUERY, {
     variables: {

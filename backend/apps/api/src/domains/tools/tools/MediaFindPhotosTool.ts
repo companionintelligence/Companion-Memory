@@ -62,7 +62,8 @@ function unusedSubjectWords(query: string, placeNames: string[]): string[] {
 
 /**
  * Find photos and videos. A domain-scoped specialization of search: delegates to
- * {@link DatabaseSearchTool} with a fixed `file` entity scope, except when the
+ * {@link DatabaseSearchTool} over photo and video content rows (`ci.content`, type
+ * `media`; see executeInternal for why not files), except when the
  * query names one of the user's places. Then the answer is the photos taken
  * there ({@link PlaceService.photosAtNamedPlace}): a photo's text never names
  * where it was taken, so a text search for the place found none of them, or
@@ -102,11 +103,13 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
       'A query that names one of the user\'s places in full (e.g. "Blue Bottle Coffee") returns the photos ' +
       "taken there instead, so pass a place's whole name, for a count too. " +
       'For "most recent", "latest" or "last" set sort: recent; otherwise results are ordered by relevance. ' +
-      'Photos at a named place always come newest first.',
+      "Photos at a named place always come newest first. Each item's takenAt is when it was taken; " +
+      'give that date, never createdAt, which is when it was imported.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
     // Photos and videos are already ON the device — this is the intent most obviously local.
     localCapable: true,
-    produces: ['file'],
+    // Content rows from the search; files from the named-place path. Both link to the content page.
+    produces: ['content', 'file'],
     phrases: ['Show me photos of $subject', 'Find my videos from $place'],
     parameters: {
       type: 'object',
@@ -159,15 +162,24 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
       return this.photosAtPlace(context, input, atPlace);
     }
 
-    return this.search.run(context, {
-      query: input.query,
-      maxResults: input.maxResults,
-      countOnly: input.countOnly,
-      entityTypes: ['file'],
-      // Asked for and not offered, the model said "let me pull the newest one" and ended its turn
-      // with nothing called: relevance order was all it could get.
-      ...(input.sort ? { sort: input.sort } : {}),
-    });
+    // A photo is searched as its content row, not its file. The two carry the same text, but only
+    // the content row links the media event that dates it (`ci.content.event_id`), so "most
+    // recent" sorted files by when they were imported: a whole Drive library in one evening, 2019
+    // shots beside 2026 ones (2026-11-11). It is also the page the link opens, and `media` keeps
+    // out the other content a file search could not tell apart: documents, YouTube likes.
+    return this.search.run(
+      context,
+      {
+        query: input.query,
+        maxResults: input.maxResults,
+        countOnly: input.countOnly,
+        entityTypes: ['content'],
+        // Asked for and not offered, the model said "let me pull the newest one" and ended its turn
+        // with nothing called: relevance order was all it could get.
+        ...(input.sort ? { sort: input.sort } : {}),
+      },
+      { mediaContentOnly: true },
+    );
   }
 
   /**

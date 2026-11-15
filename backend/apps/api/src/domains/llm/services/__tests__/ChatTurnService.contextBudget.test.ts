@@ -38,6 +38,8 @@ function buildService(options: {
   getFileContent?: jest.Mock;
   /** Absent: the facade has no planner, the shape older tests build. */
   resolveChatContextTokens?: jest.Mock;
+  toolDefinitionBytes?: jest.Mock;
+  chatWindowCanGrow?: jest.Mock;
 }) {
   const broker = new ChatGenerationBroker();
   const threadService = {
@@ -61,6 +63,8 @@ function buildService(options: {
     })),
     chatStream: options.chatStream,
     ...(options.resolveChatContextTokens && { resolveChatContextTokens: options.resolveChatContextTokens }),
+    ...(options.toolDefinitionBytes && { toolDefinitionBytes: options.toolDefinitionBytes }),
+    ...(options.chatWindowCanGrow && { chatWindowCanGrow: options.chatWindowCanGrow }),
   };
   const fileService = {
     getFileContent: options.getFileContent ?? jest.fn(async () => new Uint8Array([1, 2, 3])),
@@ -362,6 +366,80 @@ describe('ChatTurnService context budget without a Hub-exported window', () => {
 
     await service.execute(payload);
 
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.objectContaining({ numCtx: 8192 }),
+    );
+  });
+
+  // The tools' definitions ride in every round that offers tools. Left out of the plan, they filled the 8k default
+  // and the model had no room left to answer in.
+  it('asks for a window with room for the tool definitions on a turn with tools', async () => {
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const toolDefinitionBytes = jest.fn(() => 31_386);
+    const { service, ollamaService, logger } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens: jest.fn(async () => null),
+      toolDefinitionBytes,
+    });
+
+    await service.execute({ ...payload, enableTools: true });
+
+    expect(toolDefinitionBytes).toHaveBeenCalledWith(expect.objectContaining({ userId: payload.ownerId }));
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.objectContaining({ numCtx: 16_384 }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      'Chat context budget applied',
+      expect.objectContaining({
+        plannedContextTokens: 8192,
+        maxContextTokens: 16_384,
+        reservedToolTokens: 7847,
+      }),
+    );
+  });
+
+  it("keeps an OpenAI-compatible server's own window on a turn with tools", async () => {
+    // Such a server ignores `num_ctx`: a plan for a bigger window would admit more history than it can hold.
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const { service, ollamaService, logger } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens: jest.fn(async () => 8192),
+      toolDefinitionBytes: jest.fn(() => 31_386),
+      chatWindowCanGrow: jest.fn(() => false),
+    });
+
+    await service.execute({ ...payload, enableTools: true });
+
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.objectContaining({ numCtx: 8192 }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      'Chat context budget applied',
+      expect.objectContaining({ maxContextTokens: 8192, reservedToolTokens: 7847, promptBudgetBytes: 2048 }),
+    );
+  });
+
+  it('does not size tools for a turn that asked for none', async () => {
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const toolDefinitionBytes = jest.fn(() => 31_386);
+    const { service, ollamaService } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens: jest.fn(async () => null),
+      toolDefinitionBytes,
+    });
+
+    await service.execute(payload);
+
+    expect(toolDefinitionBytes).not.toHaveBeenCalled();
     expect(ollamaService.chatStream).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(Array),

@@ -25,6 +25,11 @@ export function isChatableHarness(harness: AgentHarnessStatus): boolean {
   return harness.id === 'openclaw' ? harness.connectedToMemory : true;
 }
 
+/** Hub has the app: Portal lists it, or Hub already minted it a connect key. */
+function isInstalledHarness(harness: AgentHarnessStatus): boolean {
+  return harness.installed || harness.connectedToMemory;
+}
+
 export function useChatAboutActions(context: AgentChatContext) {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -33,14 +38,17 @@ export function useChatAboutActions(context: AgentChatContext) {
   const [{ authToken, authenticated }] = useAuth();
   const { harnesses, loading } = useAgentHarnesses();
 
-  const installedHarnesses = useMemo(
-    () => harnesses.filter((harness) => harness.installed || harness.connectedToMemory),
-    [harnesses],
-  );
+  const installedHarnesses = useMemo(() => harnesses.filter(isInstalledHarness), [harnesses]);
   const chatableHarnesses = useMemo(() => installedHarnesses.filter(isChatableHarness), [installedHarnesses]);
-  // Always take OpenClaw from the full list — the API returns it even when
-  // not installed, so Dispatch can toast a real reason instead of vanishing.
-  const openclaw = useMemo(() => harnesses.find((harness) => harness.id === 'openclaw') ?? null, [harnesses]);
+  // Take OpenClaw from the full list. The API returns it even when it is not
+  // installed, so on a Hub the menu can offer Connect. Dispatch then toasts why
+  // it is not ready instead of vanishing. With no Hub to install it from (no
+  // `connectUrl`, as on Memory Desktop) neither row can ever work, so leave it out.
+  const openclaw = useMemo(() => {
+    const found = harnesses.find((harness) => harness.id === 'openclaw');
+
+    return found && (isInstalledHarness(found) || found.connectUrl) ? found : null;
+  }, [harnesses]);
 
   const chatHere = useCallback(() => {
     openInAppChat(navigate, context);
@@ -69,7 +77,8 @@ export function useChatAboutActions(context: AgentChatContext) {
     }
 
     if (!openclaw) {
-      toast.error('OpenClaw is not available on this Hub.');
+      // Null when there is no Hub to install it from, or the list has not loaded, so name no Hub.
+      toast.error('OpenClaw is not available on this Memory.');
 
       return;
     }

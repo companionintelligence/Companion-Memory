@@ -28,11 +28,16 @@ export type { CalibrationReport, CalibrationScore } from './services/Calibration
 export type { PlaceForecastItem } from './services/PlaceForecastService';
 export type { ForecastHistoryBucket, ForecastHistoryDay } from './services/ForecastHistoryService';
 export type {
+  DecisionPassageInput,
+  DecisionRerankItem,
+  DecisionRerankResponse,
   DueItem,
   DueResponse,
   ForecastBucket,
   ForecastResponse,
   ForageTrialResponse,
+  L0ClassificationResponse,
+  MemoryIngressDecisionResponse,
   WeekForecastCluster,
   WeekForecastDay,
   WeekForecastResponse,

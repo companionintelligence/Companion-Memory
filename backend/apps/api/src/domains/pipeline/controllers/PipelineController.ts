@@ -41,7 +41,8 @@ const runsQuerySchema = z.object({
 
 type RunsQuery = z.infer<typeof runsQuerySchema>;
 
-const deadLettersQuerySchema = z.object({
+// Exported for `__tests__/cliWireContract.test.ts`, which checks the `ci` CLI's query against it.
+export const deadLettersQuerySchema = z.object({
   /**
    * Filter by originating queue. Bound as a parameter, never interpolated, so an
    * arbitrary string is safe; bounded in length only to keep a pathological

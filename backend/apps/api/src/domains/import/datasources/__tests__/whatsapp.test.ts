@@ -656,4 +656,269 @@ describe('the system-line filter must not eat human messages', () => {
 
     expect(pipeline).toHaveLength(1);
   });
+
+  describe('times without a zone', () => {
+    const chatIn = async (lines: string[], timeZone?: string): Promise<string[]> => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-'));
+
+      try {
+        fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+        const pipeline: EmittedGraph[] = [];
+        await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+          pipeline,
+          timeframe: {},
+          timeZone,
+          log: () => {},
+        } as unknown as ImportParams);
+
+        return pipeline.map((entry) => entry.item.timestamp?.toISOString() ?? 'undated');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    it("reads an iOS export's wall-clock times in the account's zone", async () => {
+      // Midnight on New Year's Day for a Pacific account is 08:00 UTC. Read in a
+      // UTC container it was stored at 00:00 UTC, which that account sees as
+      // 4 PM on Dec 31, 2020.
+      const times = await chatIn(
+        ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '[1/2/21, 8:15:00 PM] Bob: Good night'],
+        'America/Los_Angeles',
+      );
+
+      expect(times).toEqual(['2021-01-01T08:00:00.000Z', '2021-01-03T04:15:00.000Z']);
+    });
+
+    it('does not depend on the zone the server runs in', async () => {
+      // Setting process.env.TZ here would not move this process's zone, because
+      // jest gives each test file its own copy of process.env. The same line read
+      // in two account zones covers it instead. At least one of them is not the
+      // zone this process runs in.
+      const line = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!'];
+
+      expect(await chatIn(line, 'UTC')).toEqual(['2021-01-01T00:00:00.000Z']);
+      expect(await chatIn(line, 'Asia/Tokyo')).toEqual(['2020-12-31T15:00:00.000Z']);
+    });
+
+    it('reads 12-hour, 24-hour and Android times in that zone too', async () => {
+      const times = await chatIn(
+        [
+          '[1/1/21, 12:30:00 PM] Alice: noon and a half',
+          '[1/1/21, 23:15] Bob: a 24-hour iOS export',
+          '01/07/2021, 09:05 - Alice: an Android export, day first',
+        ],
+        'Europe/Berlin',
+      );
+
+      expect(times).toEqual([
+        '2021-01-01T11:30:00.000Z',
+        '2021-01-01T22:15:00.000Z',
+        '2021-07-01T07:05:00.000Z',
+      ]);
+    });
+
+    it('leaves a header with an impossible time undated rather than inventing one', async () => {
+      expect(await chatIn(['[13/1/21, 1:00:00 AM] Alice: month 13'], 'UTC')).toEqual(['undated']);
+    });
+
+    it('keeps the message ids it made before, whatever zone the account is in', async () => {
+      // The id carries a time. Built from the account-zone instant, a chat
+      // imported before this change would get new ids. Importing a newer export
+      // of it would then save every old message again. It stays the server's
+      // reading, which is what `new Date` gave the old code in this process.
+      const lines = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '01/07/2021, 09:05 - Bob: Android'];
+      const imported = async (timeZone?: string): Promise<EmittedGraph[]> => {
+        const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-id-'));
+        const root = path.join(parent, 'chat');
+
+        try {
+          fs.mkdirSync(root);
+          fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+          const pipeline: EmittedGraph[] = [];
+          await new WhatsAppFileImporter().fileImport({}, { filename: 'chat', fullPath: root }, {
+            pipeline,
+            timeframe: {},
+            timeZone,
+            log: () => {},
+          } as unknown as ImportParams);
+
+          return pipeline;
+        } finally {
+          fs.rmSync(parent, { recursive: true, force: true });
+        }
+      };
+
+      const legacy = [
+        `whatsapp:chat:${new Date('1/1/21 12:00:00 AM').toISOString()}:0`,
+        `whatsapp:chat:${new Date('2021-07-01T09:05:00').toISOString()}:1`,
+      ];
+
+      // Two zones at least one of which is not this process's, so the stored
+      // instants move while the ids must not.
+      for (const timeZone of ['America/Los_Angeles', 'Pacific/Kiritimati', undefined]) {
+        const items = await imported(timeZone);
+
+        expect(items.map((entry) => entry.item.id)).toEqual(legacy);
+      }
+
+      expect((await imported('Pacific/Kiritimati'))[0].item.timestamp?.toISOString()).toBe(
+        '2020-12-31T10:00:00.000Z',
+      );
+
+      // With no account zone the stored time is the old reading too.
+      expect((await imported(undefined)).map((entry) => entry.item.timestamp?.toISOString())).toEqual([
+        new Date('1/1/21 12:00:00 AM').toISOString(),
+        new Date('2021-07-01T09:05:00').toISOString(),
+      ]);
+    });
+  });
+});
+
+describe('a _chat.txt in a folder the system named', () => {
+  const LRM = '\u200e';
+  const noticeFrom = (chat: string): string =>
+    `[1/3/21, 9:00:00 AM] ${chat}: ${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`;
+  const NOTICE_EXPORT = [
+    noticeFrom('Alice'),
+    '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+    '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+  ].join('\n');
+
+  const tempRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const importFrom = async (folders: string[], transcript: string): Promise<EmittedGraph[]> => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-inbox-'));
+    tempRoots.push(tempRoot);
+    const root = path.join(tempRoot, ...folders);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, '_chat.txt'), transcript);
+
+    const pipeline: EmittedGraph[] = [];
+    await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('takes the chat name from the encryption notice, matching an upload of the same export', async () => {
+    // The folder is the inbox's own `whatsapp/`, which says nothing about the
+    // chat. Named after it, every message got a second identity and the
+    // export was saved twice.
+    const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+    expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
+
+  it('names a transcript without the notice after its people, never after the service', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp'], fixture);
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['Alice, Bob']),
+    );
+  });
+
+  it('names a bare _chat.txt in a run folder from its transcript, not the run id', async () => {
+    // An uploaded `_chat.txt` lands at the top of the run's scratch folder,
+    // `<scratch>/<user>/<run id>/`. Named after the run id, the same chat
+    // uploaded twice was two chats.
+    const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
+    const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
+
+    expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
+  });
+
+  it('keeps the export folder name when the folder sits inside the service folder', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['whatsapp-export']),
+    );
+  });
+
+  it("names loose files the wizard packed from the transcript, not the pack's file count", async () => {
+    // `_chat.txt` and two photos picked with "Choose files" upload as
+    // `WhatsApp (3 files).zip` and unpack into `WhatsApp__3_files_/`.
+    const packed = await importFrom(['WhatsApp__3_files_'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+    expect(packed.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
+
+  it('spells a notice sender with filename-unsafe characters the way its zip is spelled', async () => {
+    const chat = 'LITA | Companion Tech Team';
+    const transcript = [noticeFrom(chat), '[1/3/21, 9:01:00 AM] Alice: hi'].join('\n');
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_LITA___Companion_Tech_Team'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - LITA _ Companion Tech Team'], transcript);
+
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('drops the bidi marks WhatsApp wraps around a phone number', async () => {
+    const transcript = [noticeFrom('\u202a+1 (555) 010-9999\u202c'), '[1/3/21, 9:01:00 AM] Alice: hi'].join(
+      '\n',
+    );
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - +1 (555) 010-9999'], transcript);
+
+    expect(dropped[0].item.metadata.Conversation).toBe('1 (555) 010-9999');
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('names a chat whose uploaded folder kept only the prefix from its transcript, not "Chat"', async () => {
+    // An upload turns every non-ASCII character into `_`, so two chats named in
+    // another script both arrive as `WhatsApp_Chat_-___`.
+    const first = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('王伟'), '[1/3/21, 9:01:00 AM] 王伟: hi'].join('\n'),
+    );
+    const second = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('李娜'), '[1/3/21, 9:01:00 AM] 李娜: hi'].join('\n'),
+    );
+
+    expect(first[0].item.metadata.Conversation).toBe('王伟');
+    expect(second[0].item.metadata.Conversation).toBe('李娜');
+  });
+
+  it('closes the transcript it stops reading at the notice', async () => {
+    const created: fs.ReadStream[] = [];
+    const original = fs.createReadStream;
+    const spy = jest.spyOn(fs, 'createReadStream').mockImplementation(((
+      ...args: Parameters<typeof original>
+    ) => {
+      const stream = original(...args);
+      created.push(stream);
+
+      return stream;
+    }) as typeof fs.createReadStream);
+
+    try {
+      await importFrom(['whatsapp'], NOTICE_EXPORT);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(created).toHaveLength(2);
+    expect(created.every((stream) => stream.destroyed)).toBe(true);
+  });
 });

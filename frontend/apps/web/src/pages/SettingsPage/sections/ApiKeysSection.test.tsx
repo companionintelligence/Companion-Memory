@@ -44,6 +44,11 @@ function submit() {
   fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
 }
 
+/** "All areas" is an explicit pick now; tests about other parts of the dialog make it. */
+function pickAllAreas() {
+  fireEvent.click(screen.getByLabelText('All areas'));
+}
+
 describe('ApiKeysSection scope picker', () => {
   beforeEach(() => {
     h.fetchJson.mockReset();
@@ -54,15 +59,52 @@ describe('ApiKeysSection scope picker', () => {
     );
   });
 
-  it('omits scopes when nothing is selected, preserving the full-access default', async () => {
+  // An empty selection used to mint an every-endpoint key on its own: a name and a click on Create
+  // was enough. Reaching everything is still possible, but only as a choice someone makes.
+  it('does not create a key until the areas are chosen', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+    expect(screen.getByText('Pick the areas this key can reach, or All areas.')).toBeInTheDocument();
+
+    // Enter in the name field calls the same handler, so it must not get around the disabled button.
+    fireEvent.keyDown(screen.getByLabelText(/^name$/i), { key: 'Enter' });
+    expect(createBody()).toBeUndefined();
+  });
+
+  it('omits scopes when All areas is picked, which the API reads as an unscoped key', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+
+    pickAllAreas();
+    expect(
+      screen.getByText('The key can reach every endpoint your account can, at the level you pick below.'),
+    ).toBeInTheDocument();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
     // Absent rather than an empty array — an omitted field keeps the grandfathered meaning.
     expect(createBody()).not.toHaveProperty('scopes');
+  });
+
+  it('treats All areas and a list of areas as two different answers', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+
+    fireEvent.click(screen.getByLabelText('Memory'));
+    pickAllAreas();
+
+    expect(screen.getByLabelText('Memory')).not.toBeChecked();
+    expect(screen.getByLabelText('All areas')).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('MCP'));
+
+    expect(screen.getByLabelText('All areas')).not.toBeChecked();
+    submit();
+
+    await waitFor(() => expect(createBody()).toBeDefined());
+    expect(createBody()?.scopes).toEqual(['mcp']);
   });
 
   it('sends only the selected scopes', async () => {
@@ -162,12 +204,23 @@ describe('ApiKeysSection scope picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
 
     // Reopening must not carry the previous selection: a stale scope would mint a
-    // limited key while the user believed it had full access.
+    // limited key the user never picked this time.
     await openCreateDialogAndName();
-    submit();
 
-    await waitFor(() => expect(createBody()).toBeDefined());
-    expect(createBody()).not.toHaveProperty('scopes');
+    expect(screen.getByLabelText('MCP')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+  });
+
+  it('clears All areas when the dialog is cancelled', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+    pickAllAreas();
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    await openCreateDialogAndName();
+
+    expect(screen.getByLabelText('All areas')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
   });
 });
 
@@ -188,6 +241,7 @@ describe('ApiKeysSection capability picker', () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -199,6 +253,7 @@ describe('ApiKeysSection capability picker', () => {
     await openCreateDialogAndName();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Read-only' }));
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -224,9 +279,10 @@ describe('ApiKeysSection capability picker', () => {
   // Capability is enforced on every operation a key can reach (a route's declared level, else the level
   // its shape implies), so read-only holds for an unscoped key too. The note says so, and says what
   // picking areas adds on top — which is why it only shows for read-only with no areas selected.
-  it('explains what read-only covers when it is picked with no areas selected', async () => {
+  it('explains what read-only covers when it is picked with All areas', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
+    pickAllAreas();
 
     expect(screen.queryByText(/Read-only applies everywhere this key can reach/i)).not.toBeInTheDocument();
 
@@ -257,6 +313,7 @@ describe('ApiKeysSection capability picker', () => {
 
     // A 'full' chosen for one key must not silently carry into the next.
     await openCreateDialogAndName();
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -303,10 +360,10 @@ describe('ApiKeysSection capability changes', () => {
     render(<ApiKeysSection />);
 
     expect(await screen.findByText('Read & write')).toBeInTheDocument();
-    // Distinct from the "Full access" scope badge the same row carries for an empty scope set:
+    // Distinct from the "All areas" scope badge the same row carries for an empty scope set:
     // that one says where the key reaches, this one says what it may do there.
     expect(screen.getByText('Read, write & delete')).toBeInTheDocument();
-    expect(screen.getByText('Full access')).toBeInTheDocument();
+    expect(screen.getByText('All areas')).toBeInTheDocument();
   });
 
   it('narrows a key without a confirmation — tightening only ever removes authority', async () => {
@@ -545,6 +602,7 @@ describe('ApiKeysSection load failure', () => {
 
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
+    pickAllAreas();
     submit();
 
     expect(await screen.findByText('Failed to create API key')).toBeInTheDocument();

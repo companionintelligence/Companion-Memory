@@ -1,5 +1,6 @@
 import type { LoggerService } from '@ci/common/logging';
 import type { OllamaService } from '@ci/domains/llm/services/OllamaService';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import type { PersonalizationService } from '@ci/domains/personalization';
 import type { SearchService } from '@ci/domains/search-next';
 
@@ -421,5 +422,44 @@ describe('TodoScanService LLM budget', () => {
     // safety margin, it was a guarantee this feature would never produce a
     // proposal on the hardware most likely to need a generous budget.
     expect(SCAN_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe('TodoScanService System 1 pre-filter (ContrastiveDecisionService)', () => {
+  it('skips the 60s System 2 LLM entirely when all memory hits are non-actionable OTP/marketing noise', async () => {
+    const ollamaService = makeOllamaService([{ title: 'Should not run', confidence: 0.9 }]);
+    const decisionService = new ContrastiveDecisionService();
+
+    const service = new TodoScanService(
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      makeSearchService(),
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      {
+        query: jest.fn(async () => [
+          {
+            id: HIT_ID,
+            entity_type: 'communication',
+            name: 'Security Code',
+            snippet: 'Your verification code is 918273.',
+          },
+        ]),
+      } as never,
+      makeProposedReconcile(),
+      makeLogger(),
+      decisionService,
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+    expect(result.proposed).toBe(0);
+    expect(result.created).toBe(0);
   });
 });

@@ -131,6 +131,65 @@ describe('MemoryChatAbout', () => {
     expect(opened.searchParams.get('memoryId')).toBe('note-1');
   });
 
+  // Memory Desktop has no Hub: the API still lists OpenClaw, as not installed and with nowhere to install it from.
+  it('offers only Open chat when OpenClaw is not installed and there is no Hub to install it from', async () => {
+    h.harnesses = [
+      {
+        ...openclaw,
+        connectedToMemory: false,
+        installed: false,
+        running: false,
+        openUrl: null,
+        accessible: false,
+        wakeable: false,
+        dispatchReady: false,
+        dispatchBlocker: 'not_installed',
+        connectUrl: null,
+      },
+    ];
+
+    renderWithProviders(
+      <MemoryChatAbout entity={note}>
+        <button type="button">Picnic note</button>
+      </MemoryChatAbout>,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Picnic note' }));
+
+    expect(await screen.findByRole('menuitem', { name: 'Open chat' })).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+  });
+
+  it('still offers Connect and Dispatch on a Hub where OpenClaw is not installed yet', async () => {
+    h.harnesses = [
+      {
+        ...openclaw,
+        connectedToMemory: false,
+        installed: false,
+        running: false,
+        openUrl: null,
+        accessible: false,
+        wakeable: false,
+        dispatchReady: false,
+        dispatchBlocker: 'not_installed',
+      },
+    ];
+
+    renderWithProviders(
+      <MemoryChatAbout entity={note}>
+        <button type="button">Picnic note</button>
+      </MemoryChatAbout>,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Picnic note' }));
+
+    expect(await screen.findByRole('menuitem', { name: 'Connect OpenClaw to Memory' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(screen.getByRole('menuitem', { name: 'Dispatch to OpenClaw' })).toBeInTheDocument();
+  });
+
   it('opens a bottom sheet on mobile long-press', async () => {
     h.isMobile = true;
 

@@ -1,6 +1,7 @@
 import type { LoggerService } from '@ci/common/logging';
 import type { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import type { CommunicationEntity } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import type { PersonalizationService } from '@ci/domains/personalization';
 
 import { SCAN_PAGE_SIZE, scanOperatingPoints } from '../../engine/scanBatchPolicy';
@@ -1218,5 +1219,67 @@ describe('InboxScanService batch policy', () => {
       status: 'archived',
     });
     expect(update).not.toHaveBeenCalledWith(expect.anything(), 'mine', expect.anything());
+  });
+});
+
+describe('InboxScanService System 1 pre-filter (ContrastiveDecisionService)', () => {
+  it('filters out OTP and marketing blasts before calling the 60s System 2 LLM while keeping actionable commitments', async () => {
+    const ollamaService = makeOllamaService([
+      { title: 'Pay the Friday invoice', confidence: 0.9, sourceIndex: 1 },
+    ]);
+    const create = jest.fn(async (_ctx: unknown, dto: Record<string, unknown>) => ({
+      id: 'task-1',
+      ...dto,
+    }));
+    const decisionService = new ContrastiveDecisionService();
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([
+        makeMessage({
+          id: 'comm-otp',
+          subject: 'Your security code',
+          preview: 'Your verification code is 482910. Do not share this code.',
+        }),
+        makeMessage({
+          id: 'comm-marketing',
+          subject: '50% off everything!',
+          preview: 'Unsubscribe from these emails anytime or view in browser.',
+        }),
+        makeMessage({
+          id: 'comm-actionable',
+          subject: 'Invoice due Friday',
+          preview: 'Please pay the attached invoice by Friday deadline.',
+        }),
+      ]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn(async () => 'review') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+      decisionService,
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(result.proposed).toBe(1);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      expect.objectContaining({
+        title: 'Pay the Friday invoice',
+        metadata: expect.objectContaining({ sourceCommunicationId: 'comm-actionable' }),
+      }),
+    );
+
+    // Ensure the prompt sent to Ollama only contained the 1 actionable message, not the OTP or marketing blast
+    const classifyPromptSent = (ollamaService.chat as jest.Mock).mock.calls[0]?.[1]?.[0]?.content as string;
+    expect(classifyPromptSent).toContain('Invoice due Friday');
+    expect(classifyPromptSent).not.toContain('482910');
+    expect(classifyPromptSent).not.toContain('Unsubscribe from these emails');
   });
 });

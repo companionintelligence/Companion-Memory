@@ -1,0 +1,192 @@
+{
+  "tiers": {
+    "response": {
+      "tiers": [
+        {
+          "tier": "on_device",
+          "title": "On-device (local Ollama)",
+          "maxContextTokens": 8192,
+          "offline": true,
+          "external": false,
+          "description": "Local model on the appliance. Private, offline, unlimited; smaller context."
+        },
+        {
+          "tier": "private_cloud",
+          "title": "Private cloud (escalated)",
+          "maxContextTokens": 32768,
+          "offline": false,
+          "external": true,
+          "description": "Escalated model for hard/large-context tasks. Larger context, deeper reasoning."
+        }
+      ]
+    }
+  },
+  "arena": {
+    "response": {
+      "size": 11
+    }
+  },
+  "plan": {
+    "request": {
+      "estimatedInputTokens": 12000,
+      "reasoningLevel": "deep",
+      "toolDepth": 3,
+      "requiresLargeContext": true,
+      "localOnly": true,
+      "forceTier": "private_cloud"
+    },
+    "response": {
+      "tier": "on_device",
+      "reasoningLevel": "deep",
+      "profile": {
+        "tier": "on_device",
+        "title": "On-device (local Ollama)",
+        "maxContextTokens": 8192,
+        "offline": true,
+        "external": false,
+        "description": "Local model on the appliance. Private, offline, unlimited; smaller context."
+      },
+      "reasons": [
+        "caller requires large context",
+        "estimated 12000 tokens exceeds on-device 8192",
+        "deep reasoning requested",
+        "localOnly: privacy pins this task on-device"
+      ],
+      "downgraded": true
+    }
+  },
+  "decideNoul": {
+    "request": {
+      "primitive": "noul",
+      "state": "Finished a morning run and it is warm out",
+      "action": "Log a hydration reminder",
+      "engine": "auto"
+    },
+    "response": {
+      "primitive": "noul",
+      "engineUsed": "hybrid",
+      "probability": 0.517204228941823,
+      "decision": true,
+      "margin": 0.034408457883646104,
+      "positiveSimilarity": 0.1535766089922418,
+      "negativeSimilarity": 0.13703440279855778,
+      "latencyMs": 1
+    }
+  },
+  "decideChoice": {
+    "request": {
+      "primitive": "choice",
+      "state": "A free evening, tired after work",
+      "candidates": [
+        "Go for a walk",
+        "Watch a film",
+        "Call Sam"
+      ],
+      "engine": "auto"
+    },
+    "response": {
+      "primitive": "choice",
+      "engineUsed": "contrastive",
+      "selectedId": "1",
+      "selectedLabel": "Watch a film",
+      "confidence": 0.5861385556911579,
+      "margin": 0.2839546236394439,
+      "escalatedToGenerative": false,
+      "candidates": [
+        {
+          "id": "1",
+          "label": "Watch a film",
+          "probability": 0.5861385556911579,
+          "similarity": 0.3329748276855713
+        },
+        {
+          "id": "0",
+          "label": "Go for a walk",
+          "probability": 0.302183932051714,
+          "similarity": 0.2534723885322655
+        },
+        {
+          "id": "2",
+          "label": "Call Sam",
+          "probability": 0.11167751225712816,
+          "similarity": 0.13402192668680962
+        }
+      ],
+      "latencyMs": 0
+    }
+  },
+  "decideScore": {
+    "request": {
+      "primitive": "score",
+      "state": "Pay the electricity bill before Friday",
+      "criteria": [
+        {
+          "name": "urgent",
+          "positive": "needs doing today"
+        },
+        {
+          "name": "money",
+          "positive": "money"
+        }
+      ],
+      "engine": "auto"
+    },
+    "response": {
+      "primitive": "score",
+      "engineUsed": "hybrid",
+      "compositeScore": 0.5239043235741833,
+      "criteria": [
+        {
+          "name": "urgent",
+          "probability": 0.5329694835911943,
+          "weight": 1
+        },
+        {
+          "name": "money",
+          "probability": 0.5148391635571722,
+          "weight": 1
+        }
+      ],
+      "latencyMs": 1
+    }
+  },
+  "rank": {
+    "request": {
+      "query": "Morning routine",
+      "candidates": [
+        {
+          "id": "a1",
+          "text": "Drink water"
+        },
+        {
+          "id": "a2",
+          "text": "Check calendar"
+        }
+      ],
+      "topK": 2,
+      "engine": "auto"
+    },
+    "response": {
+      "engineUsed": "hybrid",
+      "items": [
+        {
+          "id": "a1",
+          "text": "Drink water",
+          "score": 0.2959854504613724,
+          "probability": 0.591373431858847,
+          "rank": 1
+        },
+        {
+          "id": "a2",
+          "text": "Check calendar",
+          "score": 0.25,
+          "probability": 0.40862656814115306,
+          "rank": 2
+        }
+      ],
+      "arenaHitCount": 0,
+      "arenaMissCount": 2,
+      "latencyMs": 0
+    }
+  }
+}

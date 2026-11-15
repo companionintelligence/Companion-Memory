@@ -30,6 +30,7 @@ export interface Stamp {
 
 export class StampClock {
   private lastMs = 0;
+
   private counter = 0;
 
   constructor(readonly originId: string = randomBytes(6).toString('base64url')) {
@@ -48,6 +49,7 @@ export class StampClock {
       // The millisecond did not advance (or the wall clock stepped back): keep the later time and tick.
       this.counter += 1;
     }
+
     return {
       updatedAt: new Date(this.lastMs).toISOString(),
       updatedAtCounter: this.counter,
@@ -71,9 +73,11 @@ export function compareStamps(a: Stamp, b: Stamp): number {
   if (byTime !== 0) {
     return byTime;
   }
+
   const byCounter = a.updatedAtCounter - b.updatedAtCounter;
   if (byCounter !== 0) {
     return byCounter;
   }
+
   return a.originId === b.originId ? 0 : a.originId < b.originId ? -1 : 1;
 }

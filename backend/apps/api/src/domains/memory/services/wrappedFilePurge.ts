@@ -4,9 +4,11 @@ import {
   deleteFileRows,
   deleteStoredObjects,
   lockFiles,
+  queueStoredObjectDeletes,
   readFileTrail,
   type LockedFile,
   type PurgeFileOptions,
+  type QueuedObjectDeletes,
   type StoredObjects,
 } from './filePurge';
 
@@ -174,10 +176,15 @@ export interface WrappedFilePlan {
   kept: KeptFile[];
   /** The ids the caller named whose wrapped file is in `doomed`. */
   named: string[];
+  /**
+   * The ids the caller named that reach one of the caller's own stored files, whether it goes or is
+   * kept: for a purge of content, the content rows that are file-backed.
+   */
+  wrapping: string[];
 }
 
 /** A plan that deletes nothing and keeps nothing. A fresh one each time: its arrays are the caller's to read. */
-const noPlan = (): WrappedFilePlan => ({ doomed: [], wrappedFileIds: [], kept: [], named: [] });
+const noPlan = (): WrappedFilePlan => ({ doomed: [], wrappedFileIds: [], kept: [], named: [], wrapping: [] });
 
 const emptyUsers = (): FileUsers => ({ contentIds: [], messageIds: [], chatMessageIds: [], eventId: null });
 
@@ -295,11 +302,14 @@ async function findFileUsers(
     }
   }
 
-  // Other content rows. `external_id` is text, and a file's id as text is lower case.
+  // Other content rows. `external_id` is text, and may hold a file's id in capitals, which discovery
+  // ({@link findCandidates}) accepts by casting it to a uuid. A file's id as text is lower case, so the
+  // column is compared, and answered, in lower case too: compared as written, a row that wraps the file
+  // in capitals would not count as using it, and the file would be deleted out from under it.
   const wrappers: Array<{ fileId: string; contentId: string }> = await manager.query(
-    `SELECT external_id AS "fileId", id AS "contentId"
+    `SELECT lower(external_id) AS "fileId", id AS "contentId"
        FROM ci.content
-      WHERE external_id = ANY($1::text[])
+      WHERE lower(external_id) = ANY($1::text[])
         AND (external_id_kind = 'file' OR external_id_kind IS NULL)
         AND id <> ALL($2::uuid[])
       ORDER BY id`,
@@ -447,6 +457,7 @@ export async function planWrappedFiles(
     wrappedFileIds: roots.filter((id) => doomedIds.has(id)),
     kept: keptRoots.map((root) => ({ ...root, nodeId: nodeOf.get(root.fileId) ?? null })),
     named: sorted(candidates.filter((candidate) => doomedIds.has(candidate.fileId)).map((c) => c.named)),
+    wrapping: sorted(candidates.filter((candidate) => byId.has(candidate.fileId)).map((c) => c.named)),
   };
 }
 
@@ -472,6 +483,25 @@ export async function deleteWrappedFileObjects(
   }
 
   return stored;
+}
+
+/**
+ * Queues the stored objects of the files the plan deletes, in the caller's transaction, for deletion once
+ * it has committed ({@link queueStoredObjectDeletes}). The order the purges of content use: unlike
+ * {@link deleteWrappedFileObjects}, nothing the transaction does after this, and no failure of the commit,
+ * can leave rows restored and bytes gone. The caller drains the queue after the commit
+ * (`drainStoredObjectDeletes`); what it cannot delete stays queued for the sweep.
+ */
+export async function queueWrappedFileObjects(
+  manager: EntityManager,
+  plan: WrappedFilePlan,
+  storage: WrappedFileStorage = {},
+): Promise<QueuedObjectDeletes> {
+  if (plan.doomed.length === 0) {
+    return { ids: [], deleted: 0, kept: 0 };
+  }
+
+  return queueStoredObjectDeletes(manager, plan.doomed, storage.objects);
 }
 
 /**

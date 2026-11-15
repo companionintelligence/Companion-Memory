@@ -3,6 +3,11 @@
     "type": "cycle",
     "from": "src/domains/search-next/entities/EntityTagEntity.ts",
     "to": "src/domains/search-next/entities/TagEntity.ts",
+    "unresolvedTo": "./TagEntity",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-circular"
@@ -28,6 +33,11 @@
     "type": "dependency",
     "from": "src/domains/llm/listeners/__tests__/llmQueuePolicy.test.ts",
     "to": "src/domains/smart-rotation/listeners/AnswerInferenceListener.ts",
+    "unresolvedTo": "../../../smart-rotation/listeners/AnswerInferenceListener",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -37,6 +47,14 @@
     "type": "dependency",
     "from": "src/domains/llm/services/ChatTurnService.ts",
     "to": "src/domains/agent/services/RecallService.ts",
+    "unresolvedTo": "@ci/domains/agent/services/RecallService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -46,6 +64,14 @@
     "type": "dependency",
     "from": "src/domains/memory/index.ts",
     "to": "src/domains/graph/entities/ObjectIdentifierEntity.ts",
+    "unresolvedTo": "@ci/domains/graph/entities/ObjectIdentifierEntity",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -55,6 +81,14 @@
     "type": "dependency",
     "from": "src/domains/memory/index.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "unresolvedTo": "@ci/domains/graph/services/ObjectIdentifierService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -64,6 +98,14 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ObjectMergeService.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "unresolvedTo": "@ci/domains/graph/services/ObjectIdentifierService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -73,6 +115,14 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ObjectResolutionService.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "unresolvedTo": "@ci/domains/graph/services/ObjectIdentifierService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -82,6 +132,15 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ObjectResolutionService.ts",
     "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "unresolvedTo": "@ci/domains/graph/utils/normalizeObjectIdentifier",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -91,6 +150,14 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ProductModelService.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "unresolvedTo": "@ci/domains/graph/services/ObjectIdentifierService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -100,6 +167,15 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ProductModelService.ts",
     "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "unresolvedTo": "@ci/domains/graph/utils/normalizeObjectIdentifier",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -109,6 +185,14 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ReceiptService.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "unresolvedTo": "@ci/domains/graph/services/ObjectIdentifierService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -118,6 +202,15 @@
     "type": "dependency",
     "from": "src/domains/memory/services/ReceiptService.ts",
     "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "unresolvedTo": "@ci/domains/graph/utils/normalizeObjectIdentifier",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -127,6 +220,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/controllers/PersonalizationController.ts",
     "to": "src/domains/llm/browser-activity-insight-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/browser-activity-insight-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -136,6 +237,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/controllers/PersonalizationController.ts",
     "to": "src/domains/llm/chat-model-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/chat-model-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -145,6 +254,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/controllers/PersonalizationController.ts",
     "to": "src/domains/llm/image-description-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/image-description-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -154,6 +271,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/browser-activity-insight-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/browser-activity-insight-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -163,6 +288,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/chat-model-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/chat-model-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -172,6 +305,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/core.module.ts",
+    "unresolvedTo": "@ci/domains/llm/core.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -181,6 +322,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/image-description-preference.module.ts",
+    "unresolvedTo": "@ci/domains/llm/image-description-preference.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -190,6 +339,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/services/ConceptExtractionService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -199,6 +356,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/services/ContextPromptGenerateService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -208,6 +373,14 @@
     "type": "dependency",
     "from": "src/domains/personalization/services/ContextPromptPersistService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -217,6 +390,14 @@
     "type": "dependency",
     "from": "src/domains/planning/index.ts",
     "to": "src/domains/llm/core.module.ts",
+    "unresolvedTo": "@ci/domains/llm/core.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -226,6 +407,15 @@
     "type": "dependency",
     "from": "src/domains/planning/services/__tests__/InboxScanService.test.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -235,6 +425,15 @@
     "type": "dependency",
     "from": "src/domains/planning/services/__tests__/TodoProcessService.test.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -244,6 +443,15 @@
     "type": "dependency",
     "from": "src/domains/planning/services/__tests__/TodoScanService.test.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -253,6 +461,14 @@
     "type": "dependency",
     "from": "src/domains/planning/services/InboxScanService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -262,6 +478,14 @@
     "type": "dependency",
     "from": "src/domains/planning/services/PlannedBlockService.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "unresolvedTo": "@ci/domains/personalization/services/PersonalizationService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -271,6 +495,14 @@
     "type": "dependency",
     "from": "src/domains/planning/services/TodoProcessService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -280,6 +512,14 @@
     "type": "dependency",
     "from": "src/domains/planning/services/TodoScanService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
+    "unresolvedTo": "@ci/domains/llm/services/OllamaService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -289,6 +529,14 @@
     "type": "dependency",
     "from": "src/domains/planning/task.module.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "unresolvedTo": "@ci/domains/personalization/services/PersonalizationService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -298,6 +546,14 @@
     "type": "dependency",
     "from": "src/domains/tools/index.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "unresolvedTo": "@ci/domains/personalization/services/PersonalizationService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -307,6 +563,14 @@
     "type": "dependency",
     "from": "src/domains/tools/index.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -316,6 +580,15 @@
     "type": "dependency",
     "from": "src/domains/tools/policy/toolGate.ts",
     "to": "src/domains/personalization/types.ts",
+    "unresolvedTo": "@ci/domains/personalization/types",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -325,6 +598,14 @@
     "type": "dependency",
     "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "unresolvedTo": "@ci/domains/personalization/services/PersonalizationService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -334,6 +615,15 @@
     "type": "dependency",
     "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
     "to": "src/domains/personalization/types.ts",
+    "unresolvedTo": "@ci/domains/personalization/types",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -343,6 +633,14 @@
     "type": "dependency",
     "from": "src/domains/tools/services/PendingActionService.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "unresolvedTo": "@ci/domains/personalization/services/PersonalizationService",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -352,6 +650,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/DatabaseSearchTool.taskHydration.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -361,6 +668,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningCompleteTaskTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -370,6 +686,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningCreateTaskTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -379,6 +704,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningFindTasksTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -388,6 +722,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningPlannedBlocksTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -397,6 +740,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningScheduleTaskTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -406,6 +758,15 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/__tests__/PlanningUpdateTaskTool.test.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "type-only",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -415,6 +776,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/DatabaseSearchTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -424,6 +793,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningCompleteTaskTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -433,6 +810,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningCreateTaskTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -442,6 +827,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningFindTasksTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -451,6 +844,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningPlannedBlocksTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -460,6 +861,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningScheduleTaskTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -469,6 +878,14 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningUpdateTaskTool.ts",
     "to": "src/domains/planning/task.module.ts",
+    "unresolvedTo": "@ci/domains/planning/task.module",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-tsconfig",
+      "aliased-tsconfig-paths",
+      "local",
+      "import"
+    ],
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"

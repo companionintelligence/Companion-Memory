@@ -14,8 +14,8 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { listFiles } from './fsWalk';
 import { parseMetaJson } from './_meta_json';
+import { listFiles } from './fsWalk';
 import { decodeEntities, htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';

@@ -1,3 +1,5 @@
+import { RUST_PLAINTEXT } from './__tests__/rustVectors';
+import { PLAINTEXT } from './__tests__/vectors';
 import { DidcommError } from './errors';
 import {
   type Attachment,
@@ -10,8 +12,6 @@ import {
   parseMessageJson,
   threadIdOf,
 } from './message';
-import { RUST_PLAINTEXT } from './__tests__/rustVectors';
-import { PLAINTEXT } from './__tests__/vectors';
 
 describe('parseMessage', () => {
   it('accepts the specification plaintext message untouched', () => {

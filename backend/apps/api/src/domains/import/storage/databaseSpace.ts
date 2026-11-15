@@ -82,7 +82,7 @@ function statfsWorks(dir: string): boolean {
  * "no space".
  */
 export async function readDatabaseSpace(manager: DataSource | EntityManager): Promise<DatabaseSpace> {
-  let databaseBytes = 0;
+  let databaseBytes: number;
 
   try {
     const rows = (await manager.query(

@@ -52,6 +52,12 @@ describe('ci program', () => {
       'stats',
       'doctor',
       'backfill',
+      'login',
+      'logout',
+      'whoami',
+      'train',
+      'inference',
+      'audit',
       'memory',
       'peers',
       'grants',
@@ -64,6 +70,9 @@ describe('ci program', () => {
   it('lists every grouped subcommand in its own --help', async () => {
     for (const [group, subcommands] of [
       ['memory', ['status', 'check', 'configure']],
+      ['train', ['run', 'calibration', 'rebuild-places']],
+      ['inference', ['tiers', 'decide', 'rank', 'forecast']],
+      ['audit', ['deltas', 'pipeline', 'dead-letters', 'jobs']],
       ['peers', ['list', 'add', 'update', 'revoke']],
       ['grants', ['list', 'show', 'create', 'update', 'revoke', 'history']],
       ['asks', ['inbox', 'outbox', 'show', 'send', 'send-peer', 'approve', 'decline', 'answer', 'history']],

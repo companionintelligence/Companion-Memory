@@ -1,11 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
+import {
+  PLANNING_COMMITMENT_THRESHOLD,
+  planningCommitmentSignal,
+} from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -85,6 +90,7 @@ export class InboxScanService {
     private readonly plannedBlockService: PlannedBlockService,
     private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
+    @Optional() private readonly decisionService?: ContrastiveDecisionService,
   ) {
     this.logger.setContext(InboxScanService.name);
   }
@@ -167,6 +173,11 @@ export class InboxScanService {
 
         for (const message of page) {
           if (claimedComms.has(message.id) || reviewed.has(message.id) || inboxMessageIsEmpty(message)) {
+            continue;
+          }
+
+          if (await this.isSystem1NonActionable(context, message)) {
+            this.remember(userId, [message.id]);
             continue;
           }
 
@@ -517,6 +528,43 @@ export class InboxScanService {
     }
 
     this.reviewedIds.set(userId, reviewed);
+  }
+
+  /**
+   * System 1 `<10 ms` pre-filter (`ContrastiveDecisionService.scoreIngressCommitment`).
+   * Drops unmistakable non-commitments (automated OTP codes, marketing blasts, or
+   * low-probability chatter) before spending a 60-second System 2 LLM call.
+   */
+  private async isSystem1NonActionable(
+    context: UserServiceContext,
+    message: CommunicationEntity,
+  ): Promise<boolean> {
+    let text: string;
+
+    try {
+      text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
+    } catch {
+      // Text that cannot be built has no verdict, and the scan keeps the message.
+      return false;
+    }
+
+    if (this.decisionService) {
+      try {
+        const score = await this.decisionService.scoreIngressCommitment(text, {
+          userId: context.userId,
+          threshold: PLANNING_COMMITMENT_THRESHOLD,
+        });
+
+        return !score.isCommitment;
+      } catch {
+        // The pre-filter threw, so it has no verdict. Undecided, as below.
+      }
+    }
+
+    // Undecided (no pre-filter, or it failed), and the scan keeps the message.
+    // With PLANNING_COMMITMENT_DECISION on, HBPE's verdict, by the pre-filter's
+    // rule, can drop it.
+    return (await planningCommitmentSignal(context.userId, text)) === false;
   }
 }
 

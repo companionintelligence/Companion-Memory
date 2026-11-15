@@ -65,8 +65,8 @@ this file.
 
 | Setting | Flag | Environment | Default |
 |---|---|---|---|
-| Appliance URL | `--server` | `CI_SERVER_URL` | `http://localhost:3030` |
-| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | none |
+| Appliance URL | `--server` | `CI_SERVER_URL` | `~/.config/ci/credentials.json` or `http://localhost:3030` |
+| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | `~/.config/ci/credentials.json` (via `ci login`) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, unknown stage), **1** a failure the appliance owns (5xx, an
@@ -193,6 +193,23 @@ Preserves the `Mcp-Session-Id` header across requests, unpacks both
 `application/json` and `text/event-stream` responses onto stdout, and sends a
 `DELETE` to close the remote MCP session when stdin closes. See
 [`docs/mcp/clients.md`](../mcp/clients.md).
+
+The fallback also fires on a **405**: the gateway serves the web app at `/mcp`,
+and nginx answers a POST to a static file with 405 rather than 404.
+
+### `mcp init-hooks [--host <all|claude-code|cursor|gemini>] [--json]`
+
+Prints ready-to-paste MCP server and lifecycle-hook configs: a `SessionStart`
+hook that fetches `/memory/context` and a `Stop` hook that posts the changed
+files to `/memory/drift` (detection only; it does not mark anything).
+
+The hooks run later, from wherever they are pasted, so their URLs must reach the
+API's own routes. Before printing, the command asks `GET <server>/health` and
+then `GET <server>/api/health`, and uses whichever answers as the API: the API's
+own port keeps `/memory/...`, a gateway URL gets `/api/memory/...`. Without that
+the gateway's web app answers `/memory/context` with its `index.html` and a 200,
+which a `curl -f` hook would hand to the agent as context. When neither probe
+answers, the URLs use `--server` as given and a warning goes to stderr.
 
 ### `datasources [--catalog] [--json]`
 
@@ -392,7 +409,7 @@ drop without saying so.
 
 ### `backfill [stages...] [--list] [--abort-on-error] [--json]`
 
-The post-import enrichment chain, via `POST /api/maintenance/orchestrate`.
+The post-import enrichment chain, via `POST /maintenance/orchestrate` (`/api/maintenance/orchestrate` through the gateway).
 Fail-soft by default — a geocoder that cannot reach its provider should not cost
 you the embeddings.
 
@@ -406,6 +423,48 @@ Two implementation notes worth knowing:
   `search_index` backfill runs for hours, and a plain fetch waiting on the first
   byte would die on undici's 300-second headers timeout. The stream writes
   headers immediately and heartbeats every ten seconds.
+
+---
+
+## Authentication, Training, Dual-Engine Inference, and Audit
+
+### `login`, `logout`, `whoami`
+
+Headless authentication and credential persistence in `~/.config/ci/credentials.json` (mode `0600`, respecting `CI_CONFIG_DIR` and `XDG_CONFIG_HOME`):
+
+- `ci login --key <apiKey>`: verifies an existing API key against `GET /keys/check` (and resolves `{ me }` via GraphQL) before saving `{ serverUrl, apiKey }` to disk.
+- `ci login --username <email> --password <password> [--key-name <label>] [--capability <read|write|full>]`: fetches a cookie-less native CSRF token (`GET /authenticate/csrf`), authenticates (`POST /authenticate`), mints a scoped API key (`POST /keys`), and persists it locally.
+- `ci logout [--revoke]`: deletes `~/.config/ci/credentials.json` and, when `--revoke` is passed, revokes the active key on the appliance (`DELETE /keys/current`).
+- `ci whoami [--json]`: queries `{ me { id name email } }` and prints the authenticated user and target appliance URL.
+
+### `train run` / `train calibration` / `train rebuild-places`
+
+Operates the HBPE behavioral model and LoRA training pipeline over GraphQL (`ForecastResolver`):
+
+- `ci train run`: triggers `triggerHbpe`, enqueuing `hbpe-scheduled` (`fn:nightly:<userId>:manual`) on `hbpe-service` (which automatically executes cold-start `bootstrap` training when no checkpoint exists or the 6-step nightly pipeline + `hbpe-lora-train`).
+- `ci train calibration [--limit <n>]`: queries `predictionCalibration(limit)` and renders walk-forward Brier score, Expected Calibration Error (ECE), L0 Top-1 / L1 Top-3 accuracy, coverage, and drift flags.
+- `ci train rebuild-places`: triggers `rebuildPlaces` to re-cluster stay points and recompute recency-decayed Markov transition probabilities.
+
+### `inference tiers` / `inference decide` / `inference rank` / `inference forecast`
+
+Exercises both the Dual-Engine (System 1 / System 2) routing & decision endpoints (`ModelRoutingController`) and the HBPE behavioral forecasting resolvers (`ForecastResolver`):
+
+- `ci inference tiers`: lists the `on_device` and `private_cloud` tier profiles (title, context window, offline, whether the tier leaves the appliance) from `GET /model-routing/tiers`, and how many candidate vectors the `ActionVectorArena` holds (`GET /model-routing/arena`, which reports only that count).
+- `ci inference tiers [--plan] [--input-tokens <n>] [--reasoning <light|moderate|deep>] [--tool-depth <n>] [--large-context] [--sensitive] [--force-tier <on_device|private_cloud>]`: plans which tier one task runs on (`POST /model-routing/plan`) and prints the tier, the reasons, and whether the task was `downgraded`. `--sensitive` is the privacy pin (`localOnly`): it keeps the task on the appliance whatever else is asked, including `--force-tier private_cloud`. Any of these options implies `--plan`. The planner strips fields it does not know, so the CLI sends only the ones it reads.
+- `ci inference decide --state <text> [--type <noul|choice|score>] [--action <text>] [--candidates <c1,c2,...>] [--criteria <pole,name:pole,...>] [--engine <auto|contrastive|generative|hybrid>]`: runs one decision primitive via `POST /model-routing/decide`. `noul` needs `--action` and answers whether it applies, with its probability; `choice` needs at least two `--candidates` and prints each one's probability; `score` needs `--criteria`, a comma-separated rubric of poles (each optionally `name:pole`), and prints the weighted score and each criterion's probability. `engine disabled` means both engines are switched off in Settings and the answer is a neutral default.
+- `ci inference rank --query <text> --candidate <id:text> [--top-k <n>] [--engine <auto|contrastive|generative|hybrid>]`: ranks candidate actions/items via `POST /model-routing/rank`, with each one's score and probability and how many candidate embeddings the arena already held.
+- `ci inference forecast [--horizon 24h] [--week] [--due] [--places]`: queries live HBPE day-ahead 15-minute histograms (`24h` is the only horizon HBPE serves), 7-day cluster occurrence forecasts, periodic renewal due lists, or stay-point next-place predictions.
+
+The requests these commands send and the responses their tests render are the files under `backend/apps/cli/src/__tests__/fixtures/wire/`. The API's `cliWireContract.test.ts` suites check those files against the real route schemas and controllers, so the CLI's tests cannot drift from the server unnoticed again.
+
+### `audit deltas` / `audit pipeline` / `audit dead-letters` / `audit jobs`
+
+Provides end-to-end auditability over entity evolution, the enrichment ledger, dead-letter queues, and pg-boss jobs:
+
+- `ci audit deltas <entityId> [--change-type <created|updated|archived|deleted|merged>] [--from <iso>] [--to <iso>] [--limit <n>]`: lists the entity's field-level changes, newest first (`GET /audit/deltas`, at most 250 per call). `--from` / `--to` go out as the route's `since` / `until`.
+- `ci audit pipeline`: renders each stage's `ci.pipeline_state` coverage, with done, skipped, pending, running, failed, quarantined, and stale counts (`GET /pipeline/state`). The counts are ledger rows, not source rows: a stage that has never run shows 0.
+- `ci audit dead-letters [--queue <name>] [--stage <name>] [--limit <n>]`: lists one page of dead-lettered pipeline jobs, newest first, with the first line of each error (`GET /pipeline/dead-letters`, at most 200 per page; `--json` carries the payloads and full errors).
+- `ci audit jobs`: displays pg-boss job counts (pending, active, retry, failed, dead-lettered, completed, cancelled), each queue with its live jobs and retry policy, and every cron schedule with its last run, last success, and state (`GET /jobs/dashboard`).
 
 ---
 

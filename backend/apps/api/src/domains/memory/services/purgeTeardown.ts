@@ -190,6 +190,51 @@ export const FILE_REFERENCES: BareReferenceKind = {};
 export const PRODUCT_REFERENCES: BareReferenceKind = { ledgerTable: 'product_models' };
 
 /**
+ * Deletes the graph edges that name these nodes, in both directions, and the
+ * deltas that recorded those edges, in the caller's transaction. Part of
+ * {@link deleteBareReferences}, and shared with the app's delete of content
+ * (`ContentService.remove`), which takes the edges and leaves the node's own
+ * deltas.
+ */
+export async function deleteEdges(manager: EntityManager, ids: string[]): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+
+  await manager.query(
+    `WITH gone AS (
+       DELETE FROM ci.relationships
+        WHERE from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[])
+       RETURNING relationship_id
+     )
+     DELETE FROM ci.graph_deltas
+      WHERE relationship_id IN (SELECT relationship_id FROM gone)`,
+    [ids],
+  );
+}
+
+/**
+ * Deletes the provenance ledger rows that record these ids under one record
+ * table, in the caller's transaction. Part of {@link deleteBareReferences}, and
+ * shared with the app's delete of content (`ContentService.remove`).
+ */
+export async function deleteLedgerRows(
+  manager: EntityManager,
+  ids: string[],
+  ledgerTable: NonNullable<BareReferenceKind['ledgerTable']>,
+): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+
+  await manager.query(
+    `DELETE FROM ci.record_sources
+      WHERE record_table = $2 AND record_id = ANY($1::uuid[])`,
+    [ids, ledgerTable],
+  );
+}
+
+/**
  * Deletes every row that names one of these event, content, communication, item,
  * file, product, person, place or concept ids and has no foreign key to say so, in
  * the caller's transaction.
@@ -236,21 +281,9 @@ export async function deleteBareReferences(
 
   const exec = (sql: string) => manager.query(sql, [ids]);
 
-  await exec(
-    `WITH gone AS (
-       DELETE FROM ci.relationships
-        WHERE from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[])
-       RETURNING relationship_id
-     )
-     DELETE FROM ci.graph_deltas
-      WHERE relationship_id IN (SELECT relationship_id FROM gone)`,
-  );
+  await deleteEdges(manager, ids);
   if (kind.ledgerTable !== undefined) {
-    await manager.query(
-      `DELETE FROM ci.record_sources
-        WHERE record_table = $2 AND record_id = ANY($1::uuid[])`,
-      [ids, kind.ledgerTable],
-    );
+    await deleteLedgerRows(manager, ids, kind.ledgerTable);
   }
 
   if (kind.claimSubjectType !== undefined) {

@@ -40,6 +40,7 @@ function assertWellFormed(text: string, what: string): void {
       if (!(next >= 0xdc00 && next <= 0xdfff)) {
         throw new JcsError(`${what} holds an unpaired surrogate`);
       }
+
       i++;
     } else if (unit >= 0xdc00 && unit <= 0xdfff) {
       throw new JcsError(`${what} holds an unpaired surrogate`);
@@ -87,6 +88,7 @@ function writeArray(items: readonly unknown[], depth: number): string {
     if (!(i in items)) {
       throw new JcsError(`array element ${i} is a hole`);
     }
+
     parts.push(write(items[i], depth + 1));
   }
 
@@ -107,6 +109,7 @@ function writeObject(object: object, depth: number): string {
     if (member === undefined) {
       throw new JcsError(`member "${name}" is undefined`);
     }
+
     parts.push(`${quote(name, 'a member name')}:${write(member, depth + 1)}`);
   }
 

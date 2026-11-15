@@ -42,6 +42,7 @@ import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 import { booleanish } from './booleanish';
+import { boundSearchPage, type CompactSearchHit } from './compactSearchHit';
 
 /**
  * `query` is optional ONLY for a count: "how many photos do I have" has no
@@ -74,6 +75,7 @@ const DatabaseSearchInputSchema = z
     since: unwrapped(isoDate()).optional(),
     until: unwrapped(isoDate()).optional(),
     sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
+    includeAgentConversations: booleanish().optional(),
   })
   .superRefine(requireQueryUnlessCounting);
 
@@ -134,10 +136,25 @@ export type SearchResult =
  * host the appliance is served from. The prompt tells the model to copy it
  * verbatim and never to build one from an id.
  */
-export type SearchResultItem = WithoutOwner<SearchResult> & {
+export type SearchResultItem = CompactSearchHit<IndexableEntity>;
+
+/**
+ * A hit before {@link boundSearchPage} trims it. `takenAt`: when a photo or video was taken (its
+ * media event's start, ISO 8601), on a content hit or a file hit through its content row. Absent
+ * for anything else and for an undated photo. The only date on a photo hit that means anything:
+ * `createdAt` is when it was imported.
+ */
+type HydratedSearchHit = WithoutOwner<SearchResult> & {
   type: IndexableEntity;
   link?: string;
+  takenAt?: string;
 };
+
+/** What a domain-scoped intent can ask of {@link DatabaseSearchTool.run} beyond the model's own input. */
+export interface DatabaseSearchScope {
+  /** Content hits must be photos or videos (`ci.content.type = 'media'`). See SearchService. */
+  mediaContentOnly?: boolean;
+}
 
 /** `T` minus its `user` relation, member by member when `T` is a union (plain `Omit` keeps only the shared keys). */
 type WithoutOwner<T> = T extends unknown ? Omit<T, 'user'> : never;
@@ -396,6 +413,12 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
             'recent = newest first by each entry\'s own time, for "most recent" / "latest" / "last" questions. ' +
             'Forces keyword matching. Default: relevance.',
         },
+        includeAgentConversations: {
+          type: 'boolean',
+          description:
+            "Also search the user's earlier chats with AI agents (this one included). Off by default, " +
+            "so a search finds the user's own mail, messages and records, not past agent replies.",
+        },
       },
       required: [],
       additionalProperties: false,
@@ -442,9 +465,18 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
    * calendar.findEvents, media.findPhotos) can reuse it with a fixed entity-type scope instead of
    * re-implementing search. Input is assumed already validated by the caller.
    */
-  async run(context: ToolExecutionContext, input: DatabaseSearchInput): Promise<SearchToolResult> {
+  async run(
+    context: ToolExecutionContext,
+    input: DatabaseSearchInput,
+    scope: DatabaseSearchScope = {},
+  ): Promise<SearchToolResult> {
     const serviceContext = toServiceContext(context);
     const includeTypes = input.entityTypes as IndexableEntity[];
+    const mediaContentOnly = scope.mediaContentOnly === true;
+    // Agents store every turn they hold with the user (POST /memory/turn). Searched by default,
+    // those turns answered for the mail: on 2026-11-13 OpenClaw's newest-first "email" search
+    // returned its own earlier replies. They stay out unless the agent asks for them.
+    const agentTurns = input.includeAgentConversations === true ? {} : { showAgentTurnsFrom: [] };
 
     if (input.countOnly) {
       // A count is a `count(*)` against the full-text index: no cap, no rows,
@@ -460,14 +492,18 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         this.searchService.count(serviceContext, {
           query,
           includeTypes,
+          ...agentTurns,
+          ...(mediaContentOnly ? { mediaContentOnly } : {}),
           ...(input.since != null ? { since: new Date(input.since) } : {}),
           ...(input.until != null ? { until: new Date(input.until) } : {}),
         }),
-        includeTypes?.includes('file') ? this.fileService.describedImageCoverage(serviceContext) : undefined,
+        includeTypes?.includes('file') || mediaContentOnly
+          ? this.fileService.describedImageCoverage(serviceContext)
+          : undefined,
       ]);
 
       return {
-        summary: describeCount(totalMatches, query, includeTypes, coverage),
+        summary: describeCount(totalMatches, query, includeTypes, coverage, mediaContentOnly),
         totalMatches,
         truncated: false,
         limit: 0,
@@ -486,21 +522,96 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       query: input.query ?? '',
       mode: timed ? 'keyword' : input.searchMode,
       includeTypes,
+      ...agentTurns,
       maxResults: input.maxResults,
+      ...(mediaContentOnly ? { mediaContentOnly } : {}),
       ...(input.since != null ? { since: new Date(input.since) } : {}),
       ...(input.until != null ? { until: new Date(input.until) } : {}),
       ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
     });
 
-    const items = await this.resolveEntities(serviceContext, page.items);
+    const { items, omitted } = await this.resolveEntities(serviceContext, page.items);
+    // Hits left out for size make the page a cut of the match set even when the search was not.
+    const truncated = page.truncated || omitted > 0;
+    const sizeNote =
+      omitted > 0
+        ? ` ${omitted} more on this page were left out to keep the result small: narrow the query, ` +
+          'or use since/until, to see them.'
+        : '';
 
     return {
-      summary: describePage(page, items.length, input.sort === 'recent'),
+      summary: describePage({ ...page, truncated }, items.length, input.sort === 'recent') + sizeNote,
       totalMatches: page.totalMatches,
-      truncated: page.truncated,
+      truncated,
       limit: page.limit,
       mode: page.modeTaken,
       items,
+    };
+  }
+
+  /**
+   * When each photo or video hit was taken: the start of the media event its content row links,
+   * for a content hit, or for a file hit through the content row its link opens (the first, as
+   * `itemLink` takes). Not media, undated, or its event deleted: no date. Two lookups per page,
+   * and none when it holds no photo.
+   */
+  private async photoTakenAt(
+    context: UserServiceContext,
+    results: EntityIdentifier<IndexableEntity>[],
+    resultMap: ReadonlyMap<string, SearchResult>,
+    contentIdsByFile: ReadonlyMap<string, readonly string[]>,
+  ): Promise<(result: EntityIdentifier<IndexableEntity>) => string | undefined> {
+    const contentIdOf = (result: EntityIdentifier<IndexableEntity>): string | undefined =>
+      result.type === 'content'
+        ? result.id
+        : result.type === 'file'
+          ? contentIdsByFile.get(result.id)?.[0]
+          : undefined;
+
+    // A content hit is already hydrated; a file's content row is not.
+    const contentById = new Map<string, Content>();
+    const missing: string[] = [];
+
+    for (const result of results) {
+      const contentId = contentIdOf(result);
+
+      if (contentId == null || contentById.has(contentId) || missing.includes(contentId)) {
+        continue;
+      }
+
+      const hydrated = resultMap.get(makeCompositeKey('content', contentId)) as Content | undefined;
+
+      if (hydrated) {
+        contentById.set(contentId, hydrated);
+      } else if (result.type === 'file') {
+        missing.push(contentId);
+      }
+    }
+
+    const fetched = missing.length > 0 ? await this.contentService.findByIds(context, missing) : [];
+
+    for (const row of fetched) {
+      if (row) {
+        contentById.set(row.id, row);
+      }
+    }
+
+    const eventIdByContent = new Map(
+      [...contentById.values()].flatMap((row) =>
+        row.type === 'media' && row.eventId ? [[row.id, row.eventId] as const] : [],
+      ),
+    );
+    const events = await this.eventService.findByIds(context, [...new Set(eventIdByContent.values())]);
+    const startById = new Map(
+      events.flatMap((event) => (event ? [[event.id, event.startTime] as const] : [])),
+    );
+
+    return (result) => {
+      const contentId = contentIdOf(result);
+      const eventId = contentId != null ? eventIdByContent.get(contentId) : undefined;
+      const start = eventId != null ? startById.get(eventId) : undefined;
+
+      return start != null ? new Date(start).toISOString() : undefined;
     };
   }
 
@@ -510,16 +621,22 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
    * media.findPhotos' photos taken at a named place.
    */
   async resolveFileHits(context: ToolExecutionContext, fileIds: string[]): Promise<SearchResultItem[]> {
-    return this.resolveEntities(
+    const { items } = await this.resolveEntities(
       toServiceContext(context),
       fileIds.map((id) => ({ type: 'file' as const, id })),
     );
+
+    return items;
   }
 
+  /**
+   * The hits, hydrated and trimmed to one page's budget (see boundSearchPage). `omitted` counts
+   * the hits that resolved but were left out to keep the page inside it.
+   */
   private async resolveEntities(
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity>[],
-  ): Promise<SearchResultItem[]> {
+  ): Promise<{ items: SearchResultItem[]; omitted: number }> {
     const groupedByType: Map<IndexableEntity, string[]> = results.reduce((acc, result) => {
       if (!acc.has(result.type)) {
         acc.set(result.type, []);
@@ -630,7 +747,9 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         ? await this.contentService.findIdsByFileIds(context, hydratedFileIds)
         : new Map<string, string[]>();
 
-    const orderedResults = results.flatMap((result): SearchResultItem[] => {
+    const takenAtOf = await this.photoTakenAt(context, results, resultMap, contentIdsByFile);
+
+    const hydrated = results.flatMap((result): HydratedSearchHit[] => {
       const entity = resultMap.get(makeCompositeKey(result.type, result.id));
 
       if (entity == null) {
@@ -638,9 +757,21 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       }
 
       const link = itemLink(result.type, result.id, contentIdsByFile);
+      const takenAt = takenAtOf(result);
 
-      return [{ ...stripOwnerRecord(entity), type: result.type, ...(link && { link }) }];
+      return [
+        {
+          ...stripOwnerRecord(entity),
+          type: result.type,
+          ...(link && { link }),
+          ...(takenAt && { takenAt }),
+        },
+      ];
     });
+
+    // Every caller of a search intent (MCP, REST, the in-app chat, the phone) reads this, and
+    // only the in-app chat and the phone bound it on the way in. See compactSearchHit.
+    const { items: orderedResults, omitted } = boundSearchPage(hydrated);
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
     // the caller cannot tell "nothing matched" from "everything matched was
@@ -660,7 +791,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       });
     }
 
-    return orderedResults;
+    return { items: orderedResults, omitted };
   }
 }
 
@@ -668,7 +799,11 @@ function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
 }
 
-function scopeLabel(includeTypes: IndexableEntity[] | undefined): string {
+function scopeLabel(includeTypes: IndexableEntity[] | undefined, mediaContentOnly = false): string {
+  if (mediaContentOnly) {
+    return 'photos and videos';
+  }
+
   return includeTypes && includeTypes.length > 0 ? `${includeTypes.join('/')} entries` : 'entries';
 }
 
@@ -682,10 +817,11 @@ export function describeCount(
   query: string | undefined,
   includeTypes?: IndexableEntity[],
   coverage?: { images: number; described: number },
+  mediaContentOnly = false,
 ): string {
   const what = query
-    ? `${totalMatches} ${scopeLabel(includeTypes)} match "${query}"`
-    : `${totalMatches} ${scopeLabel(includeTypes)} in Memory`;
+    ? `${totalMatches} ${scopeLabel(includeTypes, mediaContentOnly)} match "${query}"`
+    : `${totalMatches} ${scopeLabel(includeTypes, mediaContentOnly)} in Memory`;
   const base = `${what} (exact count from the search index; no items returned).`;
 
   if (!coverage) {

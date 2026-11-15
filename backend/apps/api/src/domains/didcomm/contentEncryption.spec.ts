@@ -104,6 +104,7 @@ describe.each(ENCS)('%s', (enc) => {
     const flip = (buffer: Buffer): Buffer => {
       const copy = Buffer.from(buffer);
       copy[0] ^= 0x01;
+
       return copy;
     };
 

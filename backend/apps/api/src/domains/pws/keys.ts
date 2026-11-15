@@ -52,6 +52,7 @@ export function isDid(value: unknown): value is string {
 /** The DID part of a DID URL (everything before `#`). */
 export function didOf(didUrl: string): string {
   const hash = didUrl.indexOf('#');
+
   return hash === -1 ? didUrl : didUrl.slice(0, hash);
 }
 
@@ -96,12 +97,14 @@ export class DidRegistry {
 
   supports(did: string): boolean {
     const method = didMethodOf(did);
+
     return method !== undefined && this.methods.has(method);
   }
 
   async resolveDocument(did: string): Promise<DidDocument | undefined> {
     const method = didMethodOf(did);
     const support = method === undefined ? undefined : this.methods.get(method);
+
     return support ? support.resolve(did) : undefined;
   }
 
@@ -118,20 +121,25 @@ export class DidRegistry {
     if (!verificationMethod.includes('#') || verificationMethod.length > 2048) {
       return undefined;
     }
+
     const did = didOf(verificationMethod);
     const document = await this.resolveDocument(did);
     if (!document || document.id !== did) {
       return undefined;
     }
+
     const listed = document[relationship].some((entry) => entry === verificationMethod);
     if (!listed) {
       return undefined;
     }
+
     const method = document.verificationMethod.find((candidate) => candidate.id === verificationMethod);
     if (!method || method.controller !== did) {
       return undefined;
     }
+
     const publicKey = publicKeyFromEd25519Multikey(method.publicKeyMultibase);
+
     return publicKey ? { did, publicKey } : undefined;
   }
 }

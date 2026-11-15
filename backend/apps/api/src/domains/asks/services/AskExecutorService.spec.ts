@@ -17,6 +17,8 @@ function fakeAsk(overrides: Partial<Ask> = {}): Ask {
   } as Ask;
 }
 
+const NO_PLACE = { places: [], fileIds: [], total: 0 };
+
 function makeService(
   result: Partial<{
     items: { id: string; type: string }[];
@@ -24,6 +26,7 @@ function makeService(
     truncated: boolean;
     limit: number;
   }> = {},
+  atPlace: { places: { id: string; name: string }[]; fileIds: string[]; total: number } = NO_PLACE,
 ) {
   const searchService = {
     searchPrompt: jest.fn().mockResolvedValue({
@@ -38,9 +41,10 @@ function makeService(
     search: jest.fn().mockResolvedValue([]),
   };
   const logger = { setContext: jest.fn(), warn: jest.fn() };
-  const service = new AskExecutorService(searchService as never, logger as never);
+  const places = { photosAtNamedPlace: jest.fn().mockResolvedValue(atPlace) };
+  const service = new AskExecutorService(searchService as never, logger as never, places as never);
 
-  return { service, searchService, logger };
+  return { service, searchService, logger, places };
 }
 
 describe('AskExecutorService.execute', () => {
@@ -310,5 +314,221 @@ describe('AskExecutorService.executeWithMeta', () => {
       expect.anything(),
       expect.objectContaining({ maxResults: 5 }),
     );
+  });
+});
+
+/**
+ * A photo's place is matched in the text search only through its event's `location_name`, which a geocoder writes.
+ * Memory Desktop has none, so "Do you have photos of Blue Bottle Coffee?" answered "They have none." while chat found
+ * the photos by where they were taken. A photo ask that names only a place now answers the way chat does.
+ */
+describe('AskExecutorService photos at a named place', () => {
+  const BLUE_BOTTLE = {
+    places: [{ id: 'place-1', name: 'Blue Bottle Coffee' }],
+    fileIds: ['f1', 'f2', 'f3'],
+    total: 8,
+  };
+  const photoAsk = (prompt: string) =>
+    fakeAsk({ query: { queryType: 'content', dataClass: 'photos', prompt } });
+  const noTextMatch = { items: [], totalMatches: 0, truncated: false, limit: 50 };
+
+  it('answers with the photos taken at the place, for a tier that may learn places', async () => {
+    const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Blue Bottle Coffee?'), {
+      tier: 'household',
+    });
+
+    expect(places.photosAtNamedPlace).toHaveBeenCalledWith(
+      { userId: 'responder-1' },
+      'Do you have photos of Blue Bottle Coffee?',
+      50,
+      { kind: 'photos' },
+    );
+    expect(result).toEqual({
+      items: [
+        { id: 'f1', type: 'file' },
+        { id: 'f2', type: 'file' },
+        { id: 'f3', type: 'file' },
+      ],
+      totalMatches: 8,
+      truncated: true,
+      limit: 50,
+    });
+  });
+
+  it('reads a lowercase place name and "taken at" the same way', async () => {
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk('any photos taken at blue bottle coffee?'), {
+      tier: 'household',
+    });
+
+    expect(result.totalMatches).toBe(8);
+  });
+
+  it('keeps the text search when the prompt also names something the place cannot say', async () => {
+    // Every photo taken at the coffee shop is not a photo of the dog.
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(
+      photoAsk('Do you have photos of my dog at Blue Bottle Coffee?'),
+      {
+        tier: 'household',
+      },
+    );
+
+    expect(result).toEqual(noTextMatch);
+  });
+
+  it('never looks a place up for a tier that may not learn places', async () => {
+    const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
+    const ask = photoAsk('Do you have photos of Blue Bottle Coffee?');
+
+    await expect(service.executeWithMeta(ask, { tier: 'family' })).resolves.toEqual(noTextMatch);
+    await expect(service.executeWithMeta(ask)).resolves.toEqual(noTextMatch);
+    expect(places.photosAtNamedPlace).not.toHaveBeenCalled();
+  });
+
+  it('never looks a place up for an ask that is not about photos', async () => {
+    const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    await service.executeWithMeta(
+      fakeAsk({ query: { queryType: 'content', prompt: 'Do you have notes about Blue Bottle Coffee?' } }),
+      { tier: 'household' },
+    );
+
+    expect(places.photosAtNamedPlace).not.toHaveBeenCalled();
+  });
+
+  it('keeps the text search when no photo was taken at the place', async () => {
+    const textMatch = { items: [{ id: 'e1', type: 'event' }], totalMatches: 1, truncated: false, limit: 50 };
+    const { service } = makeService(textMatch, { ...BLUE_BOTTLE, fileIds: [], total: 0 });
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Blue Bottle Coffee?'), {
+      tier: 'household',
+    });
+
+    expect(result).toEqual(textMatch);
+  });
+
+  it('falls back to the text search and says so when the place lookup fails', async () => {
+    const { service, places, logger } = makeService(noTextMatch, BLUE_BOTTLE);
+    places.photosAtNamedPlace.mockRejectedValue(new Error('connection reset'));
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Blue Bottle Coffee?'), {
+      tier: 'household',
+    });
+
+    expect(result).toEqual(noTextMatch);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection reset'));
+  });
+
+  it('keeps the text search when it already found more, as on a box with a geocoder', async () => {
+    // A photo whose caption names the coffee shop matches the text search wherever it was taken.
+    const textMatch = { items: [{ id: 'e1', type: 'event' }], totalMatches: 12, truncated: false, limit: 50 };
+    const { service } = makeService(textMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Blue Bottle Coffee?'), {
+      tier: 'household',
+    });
+
+    expect(result).toEqual(textMatch);
+  });
+
+  it('counts videos at the place too for a media ask', async () => {
+    const { service, places } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(
+      fakeAsk({
+        query: { queryType: 'content', dataClass: 'media', prompt: 'Any media from Blue Bottle Coffee?' },
+      }),
+      { tier: 'household' },
+    );
+
+    expect(places.photosAtNamedPlace).toHaveBeenCalledWith(
+      { userId: 'responder-1' },
+      'Any media from Blue Bottle Coffee?',
+      50,
+      { kind: 'media' },
+    );
+    expect(result.totalMatches).toBe(8);
+  });
+
+  it.each([
+    'Show me photos from Blue Bottle Coffee',
+    'All photos at Blue Bottle Coffee?',
+    'Any photos you took at Blue Bottle Coffee?',
+    'Any shots of Blue Bottle Coffee?',
+  ])('reads the request words of "%s" past the place', async (prompt) => {
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk(prompt), { tier: 'household' });
+
+    expect(result.totalMatches).toBe(8);
+  });
+
+  it("keeps a place name's short words", async () => {
+    const { service } = makeService(noTextMatch, {
+      places: [{ id: 'place-2', name: 'Pier 39' }],
+      fileIds: ['f1'],
+      total: 4,
+    });
+
+    const result = await service.executeWithMeta(photoAsk('Do you have photos of Pier 39?'), {
+      tier: 'household',
+    });
+
+    expect(result.totalMatches).toBe(4);
+  });
+
+  it.each([
+    // Every word of the name is used once: the first "coffee" is what the photo shows.
+    'Do you have photos of coffee at Blue Bottle Coffee?',
+    // A pronoun is ask frame to the text search, but here it is who the photo shows.
+    'Do you have photos of me at Blue Bottle Coffee?',
+    'Any photos with her at Blue Bottle Coffee?',
+  ])('keeps the text search for "%s"', async (prompt) => {
+    const { service } = makeService(noTextMatch, BLUE_BOTTLE);
+
+    const result = await service.executeWithMeta(photoAsk(prompt), { tier: 'household' });
+
+    expect(result).toEqual(noTextMatch);
+  });
+
+  it('keeps the text search when the prompt names two places', async () => {
+    // The photos at either place do not answer an ask about both.
+    const { service } = makeService(noTextMatch, {
+      places: [
+        { id: 'place-1', name: 'Blue Bottle Coffee' },
+        { id: 'place-3', name: 'Philz Coffee' },
+      ],
+      fileIds: ['f1', 'f2', 'f3'],
+      total: 8,
+    });
+
+    const result = await service.executeWithMeta(
+      photoAsk('Do you have photos of Blue Bottle Coffee and Philz Coffee?'),
+      { tier: 'household' },
+    );
+
+    expect(result).toEqual(noTextMatch);
+  });
+
+  it('counts the photos at every place sharing the one name', async () => {
+    const { service } = makeService(noTextMatch, {
+      places: [
+        { id: 'place-4', name: 'Starbucks' },
+        { id: 'place-5', name: 'Starbucks' },
+      ],
+      fileIds: ['f1', 'f2'],
+      total: 2,
+    });
+
+    const result = await service.executeWithMeta(photoAsk('Any photos from Starbucks?'), {
+      tier: 'household',
+    });
+
+    expect(result.totalMatches).toBe(2);
   });
 });

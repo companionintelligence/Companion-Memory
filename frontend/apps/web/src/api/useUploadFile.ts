@@ -30,7 +30,7 @@ export function useUploadFile(): ReturnType {
       setError(null);
       setLoading(true);
 
-      let success = false;
+      let success: boolean;
 
       try {
         const data = await uploadFilesToMemory(files, {

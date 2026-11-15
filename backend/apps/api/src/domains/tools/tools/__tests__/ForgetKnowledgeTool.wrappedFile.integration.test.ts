@@ -518,40 +518,43 @@ describeWithDb(
       expect(publishedOf(FileRemovedEvent)).toEqual([]);
     });
 
-    it('says that nothing was deleted, and that trying again is safe, when the object store fails', async () => {
+    it('forgets the content and its photo when the object store fails afterwards, and keeps the bytes queued', async () => {
       const photo = await seedPhoto('Trip photo');
       const content = await seedWrapper(photo.fileId);
+      const keys = [photo.originalKey, photo.variantKey].sort();
 
       deleteObjectsImpl = async () => {
         throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
       };
 
-      const result = await forget([content]);
+      try {
+        // The bytes of a purge of content are deleted after its transaction commits, so a store that fails then
+        // fails nothing the user asked for: the rows are gone, and the objects wait on the queue for the sweep.
+        const result = await forget([content]);
 
-      expect(result.success).toBe(false);
-      expect(result.error).toMatchObject({ code: 'EXECUTION_ERROR', retryable: true });
-      expect(result.error?.message).toContain('nothing was deleted from the database');
-      expect(result.error?.message).toContain('ECONNREFUSED');
-      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
-      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
-      // The content is still there, and so is every row of the photo.
-      expect(await nodeExists(content)).toBe(true);
-      expect(await remains(photo)).toEqual(WHOLE);
-      expect(publishedOf(FileRemovedEvent)).toEqual([]);
-
-      // The store comes back, and forgetting the content again goes through.
-      deleteObjectsImpl = async () => undefined;
-
-      expect((await forget([content])).success).toBe(true);
-      expect(await remains(photo)).toEqual(GONE);
+        expect(result.success).toBe(true);
+        expect(await nodeExists(content)).toBe(false);
+        expect(await remains(photo)).toEqual(GONE);
+        expect(
+          await dataSource.query(
+            `SELECT object_key, attempts FROM ci.stored_object_deletions
+              WHERE object_key = ANY($1::text[]) ORDER BY object_key`,
+            [keys],
+          ),
+        ).toEqual(keys.map((key) => ({ object_key: key, attempts: 1 })));
+      } finally {
+        await dataSource.query('DELETE FROM ci.stored_object_deletions WHERE object_key = ANY($1::text[])', [
+          keys,
+        ]);
+      }
     });
 
-    it('names the content whose photo is gone when the database then refuses, and finishes it on a second try', async () => {
+    it('touches no bytes when the database then refuses, and finishes it on a second try', async () => {
       const photo = await seedPhoto('Trip photo');
       const content = await seedWrapper(photo.fileId);
 
       // `ci.users.entity_id` references ci.entities with no ON DELETE action: a stand-in for a table the purge has
-      // never heard of, which refuses the delete of the content node after the objects have gone.
+      // never heard of, which refuses the delete of the content node.
       await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [content, strangerId]);
 
       const result = await forget([content]);
@@ -560,25 +563,16 @@ describeWithDb(
       expect(result.error).toMatchObject({
         code: 'CONSTRAINT_VIOLATION',
         retryable: false,
-        details: { constraint: 'users_entity_id_fkey', table: 'users', storedObjectsDeletedFor: [content] },
+        details: { constraint: 'users_entity_id_fkey', table: 'users' },
       });
-      // The message says the one thing the caller must not miss: the content is still listed, and its photo will not
-      // open. And it does not promise that trying again helps, because what refused is a foreign key.
-      expect(result.error?.message).toContain(
-        'The stored contents of these were deleted but the entities were not',
-      );
-      expect(result.error?.message).toContain(
-        `Retrying cannot finish the job until what references them is removed: ${content}.`,
-      );
+      // Nothing outside the database was destroyed, so there is no photo that no longer opens to name.
+      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
       expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
-
-      // The bytes went and the rows did not, so the rows still say where the bytes were.
-      expect(deletedKeys()).toEqual([photo.originalKey, photo.variantKey].sort());
+      expect(storage.deleteObjects).not.toHaveBeenCalled();
       expect(await nodeExists(content)).toBe(true);
       expect(await remains(photo)).toEqual(WHOLE);
       expect(publishedOf(FileRemovedEvent)).toEqual([]);
 
-      // Whatever refused is removed, and forgetting the content again finishes the job.
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [strangerId]);
       objectCalls.length = 0;
 

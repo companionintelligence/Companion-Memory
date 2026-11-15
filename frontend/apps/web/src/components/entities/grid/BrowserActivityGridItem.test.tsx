@@ -27,10 +27,33 @@ describe('BrowserActivityGridItem', () => {
     expect(link).toHaveAttribute('href', 'https://vitest.dev/guide/');
   });
 
-  it('falls back to the raw string for an unparseable URL', () => {
+  it('links the parsed address, not the string as stored', () => {
+    renderWithProviders(
+      <BrowserActivityGridItem browserActivity={makeActivity({ url: 'http:vitest.dev/guide/' })} />,
+    );
+
+    expect(screen.getByRole('link', { name: 'vitest.dev' })).toHaveAttribute(
+      'href',
+      'http://vitest.dev/guide/',
+    );
+  });
+
+  it('shows a stored string that is not a web address as text, not as a link', () => {
     renderWithProviders(<BrowserActivityGridItem browserActivity={makeActivity({ url: 'not a url' })} />);
 
     expect(screen.getByText('not a url')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('does not repeat the title when an import stored it as the address', () => {
+    renderWithProviders(
+      <BrowserActivityGridItem
+        browserActivity={makeActivity({ title: 'Explored on Google Maps', url: 'Explored on Google Maps' })}
+      />,
+    );
+
+    expect(screen.getAllByText('Explored on Google Maps')).toHaveLength(1);
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('fires onClick', () => {

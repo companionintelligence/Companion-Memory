@@ -156,7 +156,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
       } catch (err) {
         setState((prev) => ({ ...prev, savingId: null }));
 
-        throw new Error(message(err, fallback));
+        throw new Error(message(err, fallback), { cause: err });
       }
 
       setState((prev) => ({ ...prev, savingId: null }));

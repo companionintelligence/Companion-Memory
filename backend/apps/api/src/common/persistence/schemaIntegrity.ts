@@ -311,6 +311,7 @@ export async function verifyDatabaseSchema(connection: DatabaseConnection): Prom
     throw new Error(
       `Could not reach ${connection.host}:${connection.port}/${connection.database} to verify the schema: ` +
         (err instanceof Error ? err.message : String(err)),
+      { cause: err },
     );
   }
 

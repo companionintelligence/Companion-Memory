@@ -5,7 +5,7 @@ import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER } from '@ci/common/context';
 import { signForwardAuthUser, signForwardAuthUserId } from '@ci/common/crypto';
 import config from '@ci/configuration';
-import { UserEntity, UserService } from '@ci/domains/user';
+import { type AccountGrantRevoker, UserEntity, UserService } from '@ci/domains/user';
 
 import { ScratchDatabase, scratchDatabaseAvailability } from '../../__tests__/support/scratchDatabase';
 import { FederatedIdentityEntity } from '../entities/FederatedIdentityEntity';
@@ -91,6 +91,18 @@ function response(): Response {
   return { cookie: jest.fn(), clearCookie: jest.fn() } as unknown as Response;
 }
 
+/**
+ * Deleting an account needs a grant revoker (`ACCOUNT_GRANT_REVOKER`, bound by PrivacyModule). These
+ * accounts hold no provider grants, so this one records nothing and finds nothing to revoke; the
+ * revocations themselves are covered by the privacy domain's suites.
+ */
+const noGrantsToRevoke = {
+  get: (): AccountGrantRevoker => ({
+    recordAccountEnd: async () => 'no-audit-row',
+    revokePendingGrants: async () => [],
+    recordAccountEndFailed: async () => undefined,
+  }),
+} as never;
 describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${availability.target})`, () => {
   let scratch: ScratchDatabase;
   let dataSource: DataSource;
@@ -106,10 +118,11 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
   beforeAll(async () => {
     config.auth.hubForwardAuth.enabled = true;
     config.auth.hubForwardAuth.secret = SECRET;
-    // The headers below are the unbound format; a .env that gives this app its own key would refuse them.
+    // The headers below are the unbound format, accepted only under the explicit legacy opt-in and
+    // with no key of this app's own (a .env that gives it one would refuse them).
     config.auth.hubForwardAuth.identitySecret = '';
     config.auth.hubForwardAuth.audience = '';
-    config.auth.hubForwardAuth.requireAudience = 'auto';
+    config.auth.hubForwardAuth.requireAudience = 'false';
     config.auth.hubForwardAuth.maxSkewMs = 300_000;
 
     scratch = await ScratchDatabase.create({ createdBy: 'auth/HubAccountLink.integration.spec' });
@@ -122,7 +135,11 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
     await dataSource.initialize();
 
     // Nothing observing UserCreated is under test, and no listener may run against this database.
-    userService = new UserService(dataSource.getRepository(UserEntity), { send: async () => [] } as never);
+    userService = new UserService(
+      dataSource.getRepository(UserEntity),
+      { send: async () => [] } as never,
+      noGrantsToRevoke,
+    );
     federatedIdentityService = new FederatedIdentityService(
       dataSource.getRepository(FederatedIdentityEntity),
       quietLogger() as never,

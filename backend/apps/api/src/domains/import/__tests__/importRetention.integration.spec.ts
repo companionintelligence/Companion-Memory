@@ -1178,6 +1178,144 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
       expect(await counts(runId)).toEqual(GONE);
     });
 
+    it('takes a parse-only run of uploaded files together with the tree its files are in', async () => {
+      // `ci import notes.zip --stages unpack,parse`: plain files staged as
+      // media rows whose bytes sit in the run's scratch tree. Stages are fixed
+      // when a run starts, so nothing can ever run media on it. Refusing here
+      // left it on the Sync card until every row was pushed.
+      const runId = await seedRun({ stages: PARSED_STAGES, classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      expect(await harness.service.hasUnstoredMedia(runId)).toBe(true);
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        runId,
+        scratchTreeReclaimed: true,
+      });
+      expect(await counts(runId)).toEqual(GONE);
+      expect(await scratch.exists(userId, runId)).toBe(false);
+    });
+
+    it('still refuses that run when an inbox unit fed it, since its tree may be the only copy', async () => {
+      const runId = await seedRun({ stages: PARSED_STAGES, classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources
+            SET origin = 'inbox', drop_id = NULL, expires_at = NULL, source_path = $2, status = 'moved'
+          WHERE run_id = $1::uuid`,
+        [runId, path.join(userInboxDir(userId), 'notes')],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      // Not told to run a media stage it does not have.
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/started without a media stage/);
+      expect(await counts(runId)).toEqual(PARSED_FULL);
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('finishes that discard on a retry when it stopped before the tree went', async () => {
+      // The payload goes before the tree. Stopped the other way round, the
+      // rows would still say "unstored" with no tree behind them, and every
+      // later discard and every sweep refuses exactly that run.
+      const runId = await seedRun({ stages: PARSED_STAGES, classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      const failure = new Error('the appliance lost power mid-delete');
+      const crash = jest
+        .spyOn(retention as unknown as { deletePayload(runId: string): Promise<number> }, 'deletePayload')
+        .mockRejectedValueOnce(failure);
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toBe(failure);
+
+      crash.mockRestore();
+
+      expect(await runStatus(runId)).toBe('cancelled');
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      expect(await retention.discardRun({ userId }, runId)).toMatchObject({
+        runId,
+        scratchTreeReclaimed: true,
+      });
+      expect(await counts(runId)).toEqual(GONE);
+      expect(await scratch.exists(userId, runId)).toBe(false);
+    });
+
+    it('still refuses that run once it was pushed, since its history is no longer a backlog', async () => {
+      const runId = await seedRun({ stages: ['unpack', 'parse', 'push'], classification: 'file' });
+
+      await finish(runId, 0);
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'notes'), { recursive: true });
+      await writeFile(path.join(dir, 'notes', 'note1.txt'), 'plain note');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/started without a media stage/);
+      expect(await counts(runId)).toEqual(FULL);
+      expect(await runStatus(runId)).toBe('completed');
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('still refuses an upload run whose media stage failed, since retrying that stage stores the files', async () => {
+      const runId = await seedRun({ stages: ['unpack', 'parse', 'media'], classification: 'file' });
+
+      await finish(runId, 0, 'failed');
+      await dataSource.query(
+        `UPDATE ci_import.import_stages SET status = 'failed', error = 'object store unreachable'
+          WHERE run_id = $1::uuid AND kind = 'media'`,
+        [runId],
+      );
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET status = 'moved' WHERE run_id = $1::uuid AND origin = 'upload'`,
+        [runId],
+      );
+
+      const dir = scratch.dirFor(userId, runId);
+
+      await mkdir(path.join(dir, 'photos'), { recursive: true });
+      await writeFile(path.join(dir, 'photos', 'one.jpg'), 'not stored yet');
+
+      await expect(retention.discardRun({ userId }, runId)).rejects.toThrow(/Run the media stage/);
+      expect(await counts(runId)).toEqual(FULL);
+      expect(await runStatus(runId)).toBe('failed');
+      expect(await scratch.exists(userId, runId)).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
     /**
      * The half a discard cannot take back, and therefore has to declare.
      *
@@ -1373,6 +1511,65 @@ describeWithDatabase(`import retention (${importDatabase.target})`, () => {
         expect(await runStatus(heldId)).toBe('failed');
         await rm(scratch.dirFor(userId, heldId), { recursive: true, force: true });
       }
+    });
+  });
+
+  // ── the cascade's cost ────────────────────────────────────────────────────
+
+  describe('the cascade from each deleted staged item', () => {
+    /**
+     * `EXPLAIN` the statement Postgres's foreign-key trigger runs on
+     * `staged_relationships` for every staged item a discard deletes.
+     * `GENERIC_PLAN` because the trigger runs a prepared statement with `$1`
+     * bound per item.
+     *
+     * Sequential scans are switched off for the one transaction, so the plan
+     * answers "which index can serve this lookup", whatever the table holds. A
+     * cost-based answer would need the table seeded and analyzed, and ANALYZE
+     * writes `reltuples` in place even inside a rolled-back transaction, which
+     * leaks into every suite sharing this database (see
+     * RecallProbeService.integration.spec.ts). With no usable index the plan is
+     * still a (disabled) sequential scan, which is what the cascade did before.
+     */
+    async function cascadePlan(column: 'item_id' | 'related_item_id'): Promise<string> {
+      const runner = dataSource.createQueryRunner();
+
+      try {
+        await runner.connect();
+        await runner.startTransaction();
+        await runner.query(`SET LOCAL enable_seqscan = off`);
+
+        const plan = (await runner.query(
+          `EXPLAIN (GENERIC_PLAN)
+           DELETE FROM ONLY ci_import.staged_relationships WHERE $1::uuid OPERATOR(pg_catalog.=) ${column}`,
+        )) as Array<{ 'QUERY PLAN': string }>;
+
+        return plan.map((line) => line['QUERY PLAN']).join('\n');
+      } finally {
+        try {
+          if (runner.isTransactionActive) {
+            await runner.rollbackTransaction();
+          }
+        } finally {
+          await runner.release();
+        }
+      }
+    }
+
+    it('finds the edges an item starts by item_id through an index, not a scan of every edge', async () => {
+      const plan = await cascadePlan('item_id');
+
+      expect(plan).toContain('staged_relationships_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
+    });
+
+    it('finds the edges pointing at an item by related_item_id through its own index', async () => {
+      // Not the unique (item_id, related_item_id, relation) index: related_item_id
+      // is its second column, so serving this lookup walks the whole index.
+      const plan = await cascadePlan('related_item_id');
+
+      expect(plan).toContain('staged_relationships_related_item_idx');
+      expect(plan).not.toMatch(/Seq Scan on staged_relationships/);
     });
   });
 });

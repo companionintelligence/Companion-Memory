@@ -218,15 +218,131 @@ describe('ci mcp serve --stdio', () => {
     expect(initHooksCmd).toBeDefined();
   });
 
+  it('falls back to /api/mcp when the gateway answers POST /mcp with 405', async () => {
+    // nginx serves the SPA at `location /`, and a POST to a static file is a
+    // 405, not a 404. That is what `--server https://<gateway>` gets for /mcp.
+    const { ctx, outLines, errLines } = makeContext('https://gateway.example', 'ci_key');
+    const fetchImpl = vi.fn(async (input: Parameters<typeof fetch>[0]) =>
+      String(input) === 'https://gateway.example/mcp'
+        ? new Response('<html>405 Not Allowed</html>', { status: 405 })
+        : new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+    ) as unknown as typeof fetch;
+
+    await mcpServeCommand(
+      ctx,
+      { stdio: true },
+      {
+        input: linesFrom([
+          JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+          JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
+        ]),
+        fetchImpl,
+      },
+    );
+
+    expect(errLines).toEqual([]);
+    expect(outLines.map((line) => JSON.parse(line).result)).toEqual([{ ok: true }, { ok: true }]);
+    // Found once, then used: the second message goes straight to /api/mcp.
+    expect(vi.mocked(fetchImpl).mock.calls.map(([url]) => String(url))).toEqual([
+      'https://gateway.example/mcp',
+      'https://gateway.example/api/mcp',
+      'https://gateway.example/api/mcp',
+    ]);
+  });
+
   it('`ci mcp init-hooks` emits host MCP and lifecycle hook configs in JSON mode', async () => {
     const { ctx, outLines } = makeContext('http://localhost:3030', 'ci_key');
-    await mcpInitHooksCommand(ctx, { host: 'claude-code', json: true });
+    await mcpInitHooksCommand(ctx, { host: 'claude-code', json: true }, { fetchImpl: apiDirect });
     expect(outLines).toHaveLength(1);
     const parsed = JSON.parse(outLines[0]);
     expect(parsed.host).toBe('claude-code');
     expect(parsed.mcpConfig.mcpServers['companion-memory'].args).toEqual(['mcp', 'serve', '--stdio']);
     expect(parsed.lifecycleHooks.hooks.SessionStart).toBeDefined();
     expect(parsed.lifecycleHooks.hooks.Stop).toBeDefined();
+  });
+});
+
+/** The API on its own port: it answers /health, and has no /api prefix. */
+const apiDirect = (async (input: Parameters<typeof fetch>[0]) =>
+  String(input).endsWith(':3030/health')
+    ? jsonResponse({ status: 'ok', apiVersion: 3 })
+    : new Response('{"statusCode":404}', { status: 404 })) as unknown as typeof fetch;
+
+/**
+ * The gateway: `/api/*` reaches the API, and every other path is the SPA,
+ * which answers a GET with index.html and a 200.
+ */
+const behindGateway = (async (input: Parameters<typeof fetch>[0]) =>
+  String(input).endsWith('/api/health')
+    ? jsonResponse({ status: 'ok', apiVersion: 3 })
+    : new Response('<!doctype html><title>Companion Memory</title>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      })) as unknown as typeof fetch;
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+/** Every URL a bundle set points an agent host at, wherever in the config it sits. */
+function hookUrls(bundles: unknown): string[] {
+  return [...JSON.stringify(bundles).matchAll(/https?:\/\/[^"\\\s]+/g)].map(([url]) => url);
+}
+
+describe('ci mcp init-hooks — where the hooks point', () => {
+  it('keeps the API’s own paths when --server is the API', async () => {
+    const { ctx, outLines, errLines } = makeContext('http://localhost:3030', 'ci_key');
+
+    await mcpInitHooksCommand(ctx, { json: true }, { fetchImpl: apiDirect });
+
+    const urls = hookUrls(JSON.parse(outLines[0]));
+
+    expect(urls).toEqual(
+      expect.arrayContaining([
+        'http://localhost:3030/memory/context',
+        'http://localhost:3030/memory/drift',
+        'http://localhost:3030/memory/recall',
+        'http://localhost:3030/memory/turn',
+      ]),
+    );
+    expect(urls.filter((url) => url.includes('/api/'))).toEqual([]);
+    expect(errLines).toEqual([]);
+  });
+
+  it('adds /api when --server is the gateway, where the bare path is the web app', async () => {
+    const { ctx, outLines, errLines } = makeContext('https://ci-memory.example.com/', 'ci_key');
+
+    await mcpInitHooksCommand(ctx, { json: true }, { fetchImpl: behindGateway });
+
+    const bundles = JSON.parse(outLines[0]) as { hosts: Array<{ host: string; lifecycleHooks: object }> };
+    const urls = hookUrls(bundles.hosts.map((bundle) => bundle.lifecycleHooks));
+
+    expect(urls).toEqual([
+      'https://ci-memory.example.com/api/memory/context',
+      'https://ci-memory.example.com/api/memory/drift',
+      'https://ci-memory.example.com/api/memory/context',
+      'https://ci-memory.example.com/api/memory/recall',
+      'https://ci-memory.example.com/api/memory/turn',
+      'https://ci-memory.example.com/api/memory/drift',
+    ]);
+    expect(errLines).toEqual([]);
+  });
+
+  it('says so on stderr when it cannot tell, and leaves stdout parseable', async () => {
+    const { ctx, outLines, errLines } = makeContext('http://appliance.local:8642', 'ci_key');
+    const unreachable = (async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+
+    await mcpInitHooksCommand(ctx, { host: 'gemini', json: true }, { fetchImpl: unreachable });
+
+    expect(JSON.parse(outLines[0]).lifecycleHooks.sessionStart).toBe(
+      'http://appliance.local:8642/memory/context',
+    );
+    expect(errLines.join('\n')).toMatch(/answered like the API/);
   });
 });
 

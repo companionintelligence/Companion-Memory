@@ -48,13 +48,16 @@ export function normalizeHeaders(headers: PwsRequest['headers']): Record<string,
     if (value === undefined) {
       continue;
     }
+
     normalized[name.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value;
   }
+
   return normalized;
 }
 
 /** `application/json`, or any `+json` structured-syntax type (RFC 6839), with parameters ignored. */
 export function isJsonMediaType(contentType: string): boolean {
   const mediaType = (contentType.split(';')[0] ?? '').trim().toLowerCase();
+
   return mediaType === 'application/json' || /^[a-z0-9.+-]+\/[a-z0-9.+-]+\+json$/.test(mediaType);
 }

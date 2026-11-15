@@ -237,6 +237,21 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
     expect(clauseWith('event.event_type IS NULL')).toBeDefined();
   });
 
+  it('keeps calendar files from Import, which arrive as `event`, without allowlisting every `event`', async () => {
+    await setup();
+
+    await service.findInRange(ctx, from, to);
+
+    // The .ics importer writes `event`, and so do Facebook events and Google
+    // reservations; only the first is a calendar.
+    const typeClause = clauseWith('event.event_type IN (:...scheduleEventTypes)');
+    expect(typeClause).toContain(`(event.event_type = 'event' AND event.source_system = 'calendar')`);
+    expect(recurringClauseWith('event.event_type IN (:...scheduleEventTypes)')).toBe(typeClause);
+
+    const params = (qb.calls.andWhere ?? []).map(([, bind]) => bind) as { scheduleEventTypes?: string[] }[];
+    expect(params.find((bind) => bind?.scheduleEventTypes)?.scheduleEventTypes).not.toContain('event');
+  });
+
   it('scopes to the viewer', async () => {
     await setup();
 
@@ -303,6 +318,19 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
       // occurrences are missing, and a quarter-deep floor would skip it.
       expect(recurringClauseWith(':lowerBound')).toBeUndefined();
       expect(recurringClauseWith('event.start_time < :to')).toBeDefined();
+    });
+
+    it('loads only rows that hold a rule, so rule-less ones cannot use up the cap', async () => {
+      await setup();
+
+      await service.findInRange(ctx, from, to);
+
+      // An imported .ics series and an Outlook instance are both is_recurring
+      // with no rule; neither can expand.
+      const ruleClause = recurringClauseWith("'recurrenceRule'");
+      expect(ruleClause).toContain("(event.metadata -> 'recurrenceRule') IS NOT NULL");
+      expect(ruleClause).toContain("(event.recurrence_pattern -> 'rrule') IS NOT NULL");
+      expect(clauseWith("'recurrenceRule'")).toBeUndefined();
     });
 
     it('repeats the window query liveness and event-type predicates', async () => {

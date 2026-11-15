@@ -33,9 +33,12 @@ import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import { RequireOnboarded } from '@/components/RequireOnboarded';
 import { ThemeProvider, BackgroundProvider } from '@/components/ThemePicker';
 import { UnsentCapturesSignOutDialog } from '@/components/UnsentCapturesSignOutDialog';
+import { WidgetDeepLinkRouter } from '@/components/WidgetDeepLinkRouter';
+import { WidgetSnapshotSync } from '@/components/WidgetSnapshotSync';
 import {
   AuthProvider,
   CaptureModalProvider,
+  DesktopAppProvider,
   ModelProvider,
   useAuth,
   useLocationTracking,
@@ -96,6 +99,7 @@ const TagsPage = lazy(() => import('@/pages/TagsPage'));
 // Pulls SchedulePage in with it — SchedulePage is not routed on its own.
 const TodayPage = lazy(() => import('@/pages/TodayPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
+const WidgetDashboardPage = lazy(() => import('@/pages/WidgetDashboardPage'));
 
 function RedirectInsightsSummary() {
   const { id } = useParams<{ id: string }>();
@@ -202,21 +206,26 @@ function Providers({ children }: { children: ReactNode }) {
                   <UnsentCapturesSignOutDialog />
                   <FeaturesProvider args={[]}>
                     <ModelProvider args={[]}>
-                      <CaptureModalProvider args={[]}>
-                        <ApolloProvider>
-                          {/* Re-signs photo and video links that expired while cached. */}
-                          <MediaLinkRefresh />
-                          {/* Inside Apollo: it reads the signed-in person's time format and
+                      {/* Beside the model list: whether Memory Desktop is closed, which is why the model is gone
+                          when it is. Read by the banner in the main layout and by Chat. */}
+                      <DesktopAppProvider args={[]}>
+                        <CaptureModalProvider args={[]}>
+                          <ApolloProvider>
+                            <WidgetSnapshotSync />
+                            {/* Re-signs photo and video links that expired while cached. */}
+                            <MediaLinkRefresh />
+                            {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
-                          <DateTimeFormatProvider>
-                            {/* Inside PowerSync and the outbox: the lock covers the page, never the
+                            <DateTimeFormatProvider>
+                              {/* Inside PowerSync and the outbox: the lock covers the page, never the
                                 sync behind it (SECURITY_ARCHITECTURE § 4.4). */}
-                            <PowerSyncBoundary>
-                              <AppLockGate>{children}</AppLockGate>
-                            </PowerSyncBoundary>
-                          </DateTimeFormatProvider>
-                        </ApolloProvider>
-                      </CaptureModalProvider>
+                              <PowerSyncBoundary>
+                                <AppLockGate>{children}</AppLockGate>
+                              </PowerSyncBoundary>
+                            </DateTimeFormatProvider>
+                          </ApolloProvider>
+                        </CaptureModalProvider>
+                      </DesktopAppProvider>
                     </ModelProvider>
                   </FeaturesProvider>
                 </AuthProvider>
@@ -265,6 +274,7 @@ function AppRoutes() {
 
   return (
     <>
+      <WidgetDeepLinkRouter />
       <Routes location={backgroundLocation ?? location}>
         <Route
           path="/"
@@ -354,6 +364,15 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         >
+          <Route
+            path="/widgets"
+            element={
+              <ProtectedRoute>
+                <WidgetDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Intelligence */}
           <Route
             path="/brief/summaries/:id"

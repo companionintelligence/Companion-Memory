@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
+import { chipFill } from '@/lib/activityPalette';
 import { EVENT_DRAG_TYPE } from '@/lib/scheduleDrag';
 
 import { addDays, startOfLocalDay } from './nowNext';
@@ -739,6 +740,39 @@ describe('VerticalCalendar — moving an event without a drag', () => {
     expect(id).toBe('all');
     expect(at.getDate()).toBe(7);
     expect(at.getHours()).toBe(0);
+  });
+
+  /**
+   * The count is all an overlap chip shows. It used to sit on the solid hue as
+   * `text-background mix-blend-difference`, which on the light theme's slate
+   * came out at 1.3:1.
+   */
+  it('draws the overlap count as plain text on the same tint as every other chip', () => {
+    const tick = (id: string, minute: number) =>
+      event({
+        id,
+        title: `Tab ${id}`,
+        sourceSystem: 'ci-browser-extension',
+        startTime: new Date(2026, 7, 3, 9, minute).toISOString(),
+        endTime: new Date(2026, 7, 3, 9, minute + 5).toISOString(),
+      });
+
+    render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[tick('a', 0), tick('b', 2), tick('c', 4)]}
+        rhythm={[]}
+      />,
+    );
+
+    const chip = screen.getByRole('listitem', { name: '3 overlapping activities' });
+    const count = within(chip).getByText('3');
+
+    // The border is a color-mix too, so check the fill itself: the chip's own
+    // hue (its accent bar) mixed down with chipFill, as on every other chip.
+    expect(chip.style.backgroundColor).toBe(chipFill(chip.style.borderLeftColor));
+    expect(count.className).not.toMatch(/mix-blend|text-background/);
   });
 
   /**

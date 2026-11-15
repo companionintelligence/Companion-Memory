@@ -33,6 +33,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ci.hbpe.model.train_io import (
+    AdapterMismatch,
+    atomic_torch_save,
+    check_adapter_meta,
+)
 from ci.hbpe.model.transformer import HMTModel
 
 log = logging.getLogger(__name__)
@@ -158,42 +163,92 @@ def apply_lora(
     return model
 
 
-def save_adapter(model: HMTModel, path: Path) -> None:
-    """Save only the trainable (LoRA) parameters to *path*."""
+def _applied_rank_alpha(model: HMTModel) -> tuple[int, float]:
+    """Rank and alpha actually applied to *model*, not the module defaults."""
+    for layer in model.encoder.layers:
+        attn = layer.self_attn
+        if isinstance(attn, LoRAMHA):
+            rank = int(attn.qkv_A.shape[0])
+            return rank, float(attn.scale) * rank
+    return LORA_RANK, LORA_ALPHA
+
+
+def save_adapter(
+    model: HMTModel,
+    path: Path,
+    *,
+    meta: dict[str, str] | None = None,
+) -> None:
+    """Save only the trainable (LoRA) parameters to *path*, atomically.
+
+    *meta* names the base model this adapter was trained against (see
+    train_io.adapter_meta). It is checked on load so an adapter trained on one
+    base is not silently applied to a retrained one.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    rank, alpha = _applied_rank_alpha(model)
     adapter = {
         name: param.detach().clone()
         for name, param in model.named_parameters()
         if param.requires_grad
     }
-    torch.save(
-        {"lora_rank": LORA_RANK, "lora_alpha": LORA_ALPHA, "adapter": adapter},
+    atomic_torch_save(
+        {
+            "lora_rank": rank,
+            "lora_alpha": alpha,
+            "adapter": adapter,
+            "meta": dict(meta or {}),
+        },
         path,
     )
     n_params = sum(v.numel() for v in adapter.values())
-    log.info("Saved LoRA adapter → %s  (%d params)", path, n_params)
+    log.info("Saved LoRA adapter -> %s  (%d params, rank %d)", path, n_params, rank)
 
 
-def load_adapter(model: HMTModel, path: Path) -> HMTModel:
+def load_adapter(
+    model: HMTModel,
+    path: Path,
+    *,
+    strict: bool = False,
+    expect: dict[str, str | None] | None = None,
+) -> HMTModel:
     """
     Load LoRA parameters from *path* and apply them to *model*.
 
     If LoRA has not yet been applied to the model, apply_lora() is called
     first using the rank/alpha stored in the checkpoint.
+
+    With ``strict=True`` an adapter that is missing any trainable key, carries
+    keys the model does not have, or names a different base than *expect*
+    raises AdapterMismatch instead of loading partially. Serving paths keep the
+    lenient default so an old adapter still loads.
     """
     path = Path(path)
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     rank = ckpt.get("lora_rank", LORA_RANK)
     alpha = ckpt.get("lora_alpha", LORA_ALPHA)
 
+    if expect:
+        check_adapter_meta(ckpt.get("meta"), **expect)
+
     if not isinstance(model.encoder.layers[0].self_attn, LoRAMHA):
         apply_lora(model, rank=rank, alpha=alpha)
+
+    wanted = {n for n, p in model.named_parameters() if p.requires_grad}
+    have = set(ckpt["adapter"])
+    absent = sorted(wanted - have)
+    extra = sorted(have - wanted)
+    if strict and (absent or extra):
+        raise AdapterMismatch(
+            f"adapter keys differ from model: {len(absent)} missing, {len(extra)} unexpected"
+        )
 
     _missing, unexpected = model.load_state_dict(ckpt["adapter"], strict=False)
     if unexpected:
         log.warning("Unexpected adapter keys: %s", unexpected)
-    log.info("Loaded LoRA adapter ← %s", path)
+    if absent:
+        log.warning("Adapter is missing %d trainable keys: %s", len(absent), absent[:4])
+    log.info("Loaded LoRA adapter <- %s", path)
     return model
 
 

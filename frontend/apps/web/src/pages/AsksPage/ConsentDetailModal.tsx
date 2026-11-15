@@ -1,13 +1,14 @@
-import type { ComponentType, ReactNode } from 'react';
+import { type ComponentType, type ReactNode, useState } from 'react';
 
-import { Badge, Dialog } from '@ci/shadcn';
-import { KeyRound, Radio, ShieldAlert } from '@ci/shadcn/icons';
+import { Badge, Button, Dialog } from '@ci/shadcn';
+import { ClipboardCopy, Download, KeyRound, Radio, ShieldAlert, ShieldCheck } from '@ci/shadcn/icons';
 
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { rungLabel, type DisclosureRung, type GrantMode } from './askPresentation';
 import { ConsentLock } from './ConsentLock';
 import {
+  type AskAuditReceiptData,
   channelSentence,
   consentLockState,
   consentSentence,
@@ -20,6 +21,8 @@ import {
 
 /** Everything the modal can say about one disclosure. */
 export interface ConsentRecord {
+  /** Audit row GlobalUID when opened from DisclosureHistory, for loading ISO 27560 receipts. */
+  auditId?: string;
   /** Who asked. Opaque when that is all the wire supports — never invented. */
   askerName: string;
   consent: ConsentSource;
@@ -49,6 +52,7 @@ export interface ConsentRecord {
 interface Props {
   record: ConsentRecord;
   onClose: () => void;
+  onLoadReceipt?: (auditId: string) => Promise<AskAuditReceiptData | null>;
 }
 
 /**
@@ -76,8 +80,57 @@ interface Props {
  * in a sentence and explains what that means. An owner who cannot tell "arrived
  * unsigned" from "we did not record how it arrived" cannot act on either.
  */
-export function ConsentDetailModal({ record, onClose }: Props) {
+export function ConsentDetailModal({ record, onClose, onLoadReceipt }: Props) {
   const fmt = useDateTimeFormat();
+  const [receipt, setReceipt] = useState<AskAuditReceiptData | null>(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleLoadReceipt = async () => {
+    if (!record.auditId || !onLoadReceipt) {
+      return;
+    }
+
+    setReceiptLoading(true);
+    setReceiptError(null);
+    try {
+      const loaded = await onLoadReceipt(record.auditId);
+      if (!loaded) {
+        setReceiptError('Consent receipt is unavailable for this record.');
+      } else {
+        setReceipt(loaded);
+      }
+    } catch (err) {
+      setReceiptError(err instanceof Error ? err.message : 'Failed to load consent receipt.');
+    } finally {
+      setReceiptLoading(false);
+    }
+  };
+
+  const handleCopyJson = async () => {
+    if (!receipt || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(JSON.stringify(receipt, null, 2));
+    setCopied(true);
+  };
+
+  const handleDownloadJson = () => {
+    if (!receipt) {
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `iso27560-consent-receipt-${receipt.receipt.d.slice(0, 12)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const channelRecorded = record.channelRecorded ?? true;
   const state = consentLockState({
     consent: record.consent,
@@ -188,6 +241,65 @@ export function ConsentDetailModal({ record, onClose }: Props) {
               <Row term="Asked by" value={record.askerName} />
             </dl>
           </section>
+
+          {/* ── Cryptographic Audit Receipt (CESR SAID + ISO 27560) ── */}
+          {record.auditId && onLoadReceipt ? (
+            <section className="flex flex-col gap-2 border-t pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SectionHeading>Cryptographic provenance (ISO/IEC TS 27560 + DPV v2)</SectionHeading>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={receiptLoading}
+                  onClick={() => void handleLoadReceipt()}
+                >
+                  <ShieldCheck className="mr-1.5 size-3.5" aria-hidden />
+                  {receipt ? 'Refresh receipt' : receiptLoading ? 'Loading…' : 'Load consent receipt & SAID'}
+                </Button>
+              </div>
+
+              {receiptError ? (
+                <p className="text-destructive text-xs" role="alert">
+                  {receiptError}
+                </p>
+              ) : null}
+
+              {receipt ? (
+                <div className="bg-muted flex flex-col gap-2 rounded-md p-3">
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                    <Row
+                      term="Audit SAID (CESR)"
+                      value={<span className="font-mono break-all select-all">{receipt.auditSaid}</span>}
+                    />
+                    <Row
+                      term="Receipt SAID (d)"
+                      value={<span className="font-mono break-all select-all">{receipt.receipt.d}</span>}
+                    />
+                    <Row term="Schema" value={receipt.receipt.schemaVersion} />
+                    <Row term="Legal basis" value={receipt.receipt.legalBasis} />
+                    <Row term="Purposes" value={receipt.receipt.purposes.join(', ')} />
+                    <Row term="Processing" value={receipt.receipt.processing.join(', ')} />
+                  </dl>
+
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button size="sm" variant="secondary" onClick={() => void handleCopyJson()}>
+                      <ClipboardCopy className="mr-1.5 size-3.5" aria-hidden />
+                      {copied ? 'Copied JSON' : 'Copy receipt JSON'}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={handleDownloadJson}>
+                      <Download className="mr-1.5 size-3.5" aria-hidden />
+                      Download JSON
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-xs">
+                  Verifies the deterministic CESR I-SAID and exports a portable ISO/IEC TS 27560 + W3C DPV v2
+                  consent receipt for this disclosure.
+                </p>
+              )}
+            </section>
+          ) : null}
         </div>
       </Dialog.Content>
     </Dialog>

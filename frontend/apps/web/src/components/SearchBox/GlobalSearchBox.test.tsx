@@ -421,6 +421,78 @@ describe('GlobalSearchBox suggestions', () => {
     expect(params().has('search')).toBe(false);
   });
 
+  it('says "No results found." under the Clear and Search-for rows when nothing matched', async () => {
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    expect(await screen.findByText('No results found.')).toBeInTheDocument();
+    expect(screen.getByText('Clear search query')).toBeInTheDocument();
+    expect(screen.getByText('Search all of Memory for')).toBeInTheDocument();
+  });
+
+  it('drops the notice and the last query rows once the input is emptied, back to the recent searches', async () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+    await screen.findByText('No results found.');
+
+    fireEvent.change(input, { target: { value: '' } });
+
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+    expect(await screen.findByText('latte')).toBeInTheDocument();
+    expect(screen.queryByText('Search all of Memory for')).not.toBeInTheDocument();
+  });
+
+  it('says where an empty answer came from when this phone answered it', async () => {
+    h.search = { data: [], tags: [], loading: false, error: undefined, source: 'device' };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    const notice = await screen.findByText('No results found.');
+
+    expect(
+      screen.getByText('From this phone').compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('after an Enter inside the debounce, the rows follow the committed text, not the last prefix', async () => {
+    renderAt('/memory/events');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzq' } });
+    await screen.findByText('“zzq”');
+
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(params().get('search')).toBe('zzqqxx'));
+
+    fireEvent.focus(input);
+
+    expect(await screen.findByText('“zzqqxx”')).toBeInTheDocument();
+  });
+
+  it('does not say "No results found." once something matched', async () => {
+    h.search = { data: [], tags: [{ id: 't1', label: 'vacation' }], loading: false, error: undefined };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'vac' } });
+
+    await screen.findByText('#vacation');
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+  });
+
   it('selecting a person suggestion decodes its GlobalUID and opens the detail route', async () => {
     h.search = {
       data: [

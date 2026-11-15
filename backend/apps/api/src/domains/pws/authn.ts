@@ -83,9 +83,11 @@ export async function authenticate(req: NormalizedRequest, env: AuthnEnv): Promi
   if (authorization === undefined && invocation === undefined) {
     return { kind: 'anonymous' };
   }
+
   if (authorization === undefined) {
     throw bad('A Capability-Invocation header requires an Authorization header.');
   }
+
   if (invocation === undefined) {
     throw bad('An Authorization header requires a Capability-Invocation header.');
   }
@@ -104,15 +106,19 @@ export async function authenticate(req: NormalizedRequest, env: AuthnEnv): Promi
       throw bad(`The signature must cover the "${header}" header.`);
     }
   }
+
   if (parsed.created === undefined || parsed.expires === undefined) {
     throw bad('The signature must carry "created" and "expires".');
   }
+
   if (parsed.expires - parsed.created > env.maxSignatureLifetimeSeconds || parsed.expires < parsed.created) {
     throw bad('The signature lifetime is not acceptable.');
   }
+
   if (req.headers.host !== env.urls.host) {
     throw bad('The Host header does not name this server.');
   }
+
   try {
     checkSignatureWindow(parsed, Math.floor(env.now.getTime() / 1000), env.skewSeconds);
   } catch (error) {
@@ -145,6 +151,7 @@ export async function authenticate(req: NormalizedRequest, env: AuthnEnv): Promi
   } catch (error) {
     throw bad(error instanceof HttpSignatureError ? error.message : 'The signing string cannot be built.');
   }
+
   if (!verifyEd25519(key.publicKey, new TextEncoder().encode(signingString), parsed.signature)) {
     throw bad('The HTTP signature does not verify.');
   }
@@ -155,6 +162,7 @@ export async function authenticate(req: NormalizedRequest, env: AuthnEnv): Promi
   } catch (error) {
     throw bad(error instanceof ZcapError ? error.message : 'The Capability-Invocation header is malformed.');
   }
+
   // The signature covers the header, so the action is as the invoker meant it. It must be the
   // method; a HEAD may also be invoked as the GET it is authorized as.
   const acceptable = req.method === 'HEAD' ? ['HEAD', 'GET'] : [req.method];

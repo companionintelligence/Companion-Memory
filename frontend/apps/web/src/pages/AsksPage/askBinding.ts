@@ -193,8 +193,12 @@ export function searchBreadthNote(query: { dataClass?: string | null }): string 
     return 'This ask names no data class, so it searches every kind of thing in your memory.';
   }
 
+  // The class itself is NOT named in this sentence. It is peer text, and
+  // splicing it in as `“{dataClass}”` let a class containing `”` finish the
+  // sentence in the app's voice. The card shows the class beside this note as
+  // attributed text (see `PeerText`), so the note only has to refer to it.
   return (
-    `“${query.dataClass}” is a label on the request, not a guaranteed filter — ` +
+    'The data class they named is a label on the request, not a guaranteed filter — ' +
     'unless your Companion recognises it, this searches every kind of thing in your memory.'
   );
 }

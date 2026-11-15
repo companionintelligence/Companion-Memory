@@ -26,7 +26,12 @@ function accountIdOf(userId: string): string {
 
 /** Why the session bridge would not sign the Hub person in (the server's `HubBridgeRefusal`). */
 export type HubRefusal =
-  'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous' | 'account_unproven';
+  | 'account_unavailable'
+  | 'account_linked_elsewhere'
+  | 'account_ambiguous'
+  | 'account_unproven'
+  /** The request names a Hub person whose headers do not verify; no username comes with it. */
+  | 'identity_unverified';
 
 /** What `GET /api/authenticate/hub-identity` says about the Hub person behind this request. */
 export interface HubIdentity {
@@ -46,14 +51,17 @@ export interface HubIdentity {
  * refuses is not signed in to any account here, so any session this browser holds is someone
  * else's, even one at their address. (For `account_unproven` the account at the address may be
  * theirs; signing in to it with its password, then reloading, links them.)
+ *
+ * A refusal counts even with no username: `identity_unverified` comes without one, because the Hub
+ * person could not be verified, and the session this browser holds is not proven to be theirs.
  */
 export function hubNamesSomeoneElse(user: { id: string; email: string }, hub: HubIdentity): boolean {
-  if (!hub.username) {
-    return false;
-  }
-
   if (hub.refused) {
     return true;
+  }
+
+  if (!hub.username) {
+    return false;
   }
 
   if (hub.accountId) {

@@ -47,6 +47,7 @@ describe('StampClock.tick', () => {
       if (last) {
         expect(compareStamps(next, last)).toBeGreaterThan(0);
       }
+
       last = next;
     }
   });

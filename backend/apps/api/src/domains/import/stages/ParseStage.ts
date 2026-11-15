@@ -5,6 +5,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { isValidTimezone } from '@ci/common/time/zoned';
 
 import {
   dataSourcesRecognize,
@@ -92,6 +93,7 @@ export class ParseStage implements ImportStageRunner {
       };
     }
 
+    const timeZone = await this.accountTimeZone(context.userId);
     const perSource: Array<Record<string, unknown>> = [];
     const failures: Array<{ dataSource: string; error: string }> = [];
     const units: StageUnitInput[] = [];
@@ -123,12 +125,17 @@ export class ParseStage implements ImportStageRunner {
         // keeps `processed` moving during the hour a 73k-file source parses.
         // The writer stays hoisted (see above) so its counts survive a throw.
         await withStageContext({ stage: 'parse', phase, dataSource: name, file: where }, () =>
-          this.parseOne(context, match, writer, (live) =>
-            context.progress({
-              processed: staged + live,
-              total: null,
-              phase,
-            }),
+          this.parseOne(
+            context,
+            match,
+            writer,
+            (live) =>
+              context.progress({
+                processed: staged + live,
+                total: null,
+                phase,
+              }),
+            timeZone,
           ),
         );
       } catch (err) {
@@ -264,12 +271,42 @@ export class ParseStage implements ImportStageRunner {
     return dropGenericMailWhenSpecialised(dropGenericWhenSpecialised(matches));
   }
 
+  /**
+   * The account's time zone from its profile, for sources whose times carry no
+   * zone (see `ImportParams.timeZone`). Undefined when the profile holds nothing
+   * this platform recognises, which leaves those sources on the server's zone.
+   */
+  private async accountTimeZone(userId: string): Promise<string | undefined> {
+    const [row] = await this.dataSource.query<Array<{ timezone: string | null }>>(
+      `SELECT timezone FROM ci.users WHERE id = $1::uuid`,
+      [userId],
+    );
+    const zone = row?.timezone?.trim();
+
+    if (!zone) {
+      return undefined;
+    }
+
+    if (!isValidTimezone(zone)) {
+      // Worth one line, since zone-less export times then land in the server's zone.
+      this.logger.warn('Unrecognised profile time zone; zone-less times stay in the server zone', {
+        userId,
+        timezone: zone.slice(0, 64),
+      });
+
+      return undefined;
+    }
+
+    return zone;
+  }
+
   /** Run one importer, staging everything it emits. */
   private async parseOne(
     context: StageRunContext,
     match: DataSourceRecognition,
     writer: StagedWriter,
     report: (staged: number) => Promise<void>,
+    timeZone: string | undefined,
   ): Promise<StagedCounts> {
     const name = match.data_source.name;
     const importer = match.data_source.newFileImporter?.();
@@ -326,6 +363,7 @@ export class ParseStage implements ImportStageRunner {
         // — every other match's `excludePaths` is undefined, and every importer
         // but `generic` ignores the field regardless.
         excludePaths: match.excludePaths,
+        timeZone,
         log: (level, message, meta) => {
           if (level === 'error' || level === 'warn') {
             this.logger.warn(message, { runId: context.runId, dataSource: name, ...meta });

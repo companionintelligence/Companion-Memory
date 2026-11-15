@@ -659,7 +659,8 @@ export function DeviceConnectPage() {
   }
 
   return (
-    <div className="safe-area-inset flex min-h-dvh w-full flex-col overflow-y-auto px-6 pb-6">
+    // Sized like layouts/Centered (see the note there), so a picker taller than the window scrolls.
+    <div className="safe-area-inset flex h-[var(--vv-height,100dvh)] w-full flex-col overflow-y-auto px-6 pb-6">
       <div className="flex justify-end">
         <ThemeToggle />
       </div>

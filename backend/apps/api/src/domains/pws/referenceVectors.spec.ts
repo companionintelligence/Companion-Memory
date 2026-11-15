@@ -14,8 +14,8 @@ import {
   type JsonValue,
   type ProofOptions,
 } from './dataIntegrity';
-import { digestHeaderValue } from './digest';
 import { didKeyFromPublicKey, keyIdFromDidKey, publicKeyFromDidKey } from './didKey';
+import { digestHeaderValue } from './digest';
 import { LocalEd25519Signer, verifyEd25519 } from './ed25519';
 import { buildSigningString, parseAuthorizationSignature, signRequest } from './httpSignature';
 import { base64urlDecode, base64urlEncode } from './multibase';
@@ -52,6 +52,7 @@ async function labelled(label: string, run: () => void | Promise<void>): Promise
     if (error instanceof Error) {
       error.message = `[${label}] ${error.message}`;
     }
+
     throw error;
   }
 }
@@ -75,6 +76,7 @@ function describeVectors(label: string, load: () => Promise<ReferenceStackVector
 
       return { document: document as JsonObject, proof: proof as DataIntegrityProof };
     };
+
     const delegatorOf = (name: 'L1' | 'L2'): ReferenceIdentity =>
       vectors.identities[name === 'L1' ? 'alice' : 'appDid'];
 
@@ -240,6 +242,7 @@ async function buildSelfConsistentVectors(): Promise<ReferenceStackVectors> {
       signer: new LocalEd25519Signer(keyId, seed),
     };
   };
+
   const alice = party(1);
   const appDid = party(2);
   const bob = party(3);

@@ -24,12 +24,15 @@ Implements T4.4 (CI-Server-k64) and integrates T4.3 ingester.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from ci.hbpe.pipeline.histogram_api import build_histogram
 from ci.telemetry import init_telemetry
@@ -352,3 +355,90 @@ async def trigger_pipeline(
     except Exception as e:
         log.exception("Failed to manually trigger HBPE pipeline")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── System 1 Fast Decision Model Endpoints ───────────────────────────────────
+
+
+class DecisionIngressRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=8000)
+
+
+class DecisionPassageItem(BaseModel):
+    id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=8000)
+
+
+class DecisionRerankRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000)
+    passages: list[DecisionPassageItem] = Field(default_factory=list, max_length=100)
+
+
+class DecisionL0Request(BaseModel):
+    title: str = Field(..., min_length=1, max_length=1000)
+    description: str | None = Field(default=None, max_length=4000)
+
+
+@app.post("/decision/ingress")
+async def decision_ingress(
+    body: DecisionIngressRequest,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Evaluate an incoming message or note using the System 1 Fast Decision Model
+    (or calibrated local fallback) for intent, actionable commitment, and
+    privacy sensitivity.
+    """
+    user_id = require_user_id(user_id)
+    from ci.hbpe.inference.decision_model import score_memory_ingress
+
+    scores = score_memory_ingress(body.text)
+    return {"user_id": user_id, **scores}
+
+
+# One rerank pass at a time, as when the pass ran on the event loop. The pass runs
+# in a worker thread (see decision_rerank), so the loop serves other requests while
+# it scores.
+_RERANK_PASS_LOCK = threading.Lock()
+
+
+def _score_rerank_pass(query: str, passages: list[dict[str, str]]) -> list[dict]:
+    from ci.hbpe.inference.decision_model import rerank_passages
+
+    with _RERANK_PASS_LOCK:
+        return rerank_passages(query, passages)
+
+
+@app.post("/decision/rerank")
+async def decision_rerank(
+    body: DecisionRerankRequest,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Rerank retrieval candidate passages using the System 1 Fast Decision Model's
+    relevance (`is_relevant`) and temporal freshness (`temporal_freshness`) heads.
+    """
+    user_id = require_user_id(user_id)
+    passages = [{"id": p.id, "text": p.text} for p in body.passages]
+
+    # The pass is one model call per passage. Run on the loop, it stalls every
+    # other request for its whole length, so it goes to a worker thread.
+    results = await asyncio.to_thread(_score_rerank_pass, body.query, passages)
+
+    return {"user_id": user_id, "results": results}
+
+
+@app.post("/decision/l0")
+async def decision_l0(
+    body: DecisionL0Request,
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """
+    Classify an event or task into one of the 8 canonical L0_CLASSES using the
+    System 1 Fast Decision Model.
+    """
+    user_id = require_user_id(user_id)
+    from ci.hbpe.inference.decision_model import classify_l0_event
+
+    result = classify_l0_event(body.title, body.description)
+    return {"user_id": user_id, **result}

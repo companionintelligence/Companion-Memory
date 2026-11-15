@@ -31,11 +31,11 @@ export const HouseholdPhotos: Story = {
     tier: 'family',
     decision: 'covered-review',
     prompt: 'Do you have photos of us from the lake trip?',
-    scopeSummary: 'Photos · 12–15 June · people: Maya, Sam, Leo, Mia',
+    scope: { queryType: 'content', dataClass: 'photos' },
     // The real string `searchBreadthNote` produces. A story that invents a
     // narrower one would document a card this page cannot render.
     searchBreadth:
-      '“photos” is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
+      'The data class they named is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
     items: [
       { id: '1', type: 'photo', label: 'Lake, morning swim' },
       { id: '2', type: 'photo', label: 'Dock at sunset' },
@@ -53,9 +53,9 @@ export const UnknownAsker: Story = {
     tier: 'no standing grant',
     decision: 'unreviewed',
     prompt: 'Where do you live?',
-    scopeSummary: 'location · location',
+    scope: { queryType: 'location', dataClass: 'location' },
     searchBreadth:
-      '“location” is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
+      'The data class they named is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
     downgrades: ['attribute', 'existence', 'boolean'],
   },
 };
@@ -70,7 +70,7 @@ export const PreAuthorized: Story = {
     tier: 'known contact',
     decision: 'pre-authorized',
     prompt: 'Are you free Thursday evening?',
-    scopeSummary: 'availability',
+    scope: { queryType: 'availability' },
     searchBreadth: 'This ask names no data class, so it searches every kind of thing in your memory.',
     downgrades: ['existence', 'boolean'],
   },
@@ -83,7 +83,7 @@ export const BooleanOnly: Story = {
     tier: 'known contact',
     decision: 'covered-review',
     prompt: 'Do you know Carol Chen?',
-    scopeSummary: 'relationship',
+    scope: { queryType: 'relationship' },
     searchBreadth: 'This ask names no data class, so it searches every kind of thing in your memory.',
     downgrades: ['boolean'],
   },
@@ -103,8 +103,9 @@ export const SignedPeerAsk: Story = {
     tier: 'trusted',
     decision: 'unreviewed',
     prompt: 'Were you at the Tuesday standup? I’m reconstructing who was there.',
-    scopeSummary: 'Calendar · 19 August',
-    searchBreadth: 'Your Companion recognises “calendar”, so this is confined to calendar entries.',
+    scope: { queryType: 'availability', dataClass: 'calendar' },
+    searchBreadth:
+      'The data class they named is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
     items: [],
     downgrades: ['boolean'],
     consent: {
@@ -138,8 +139,9 @@ export const DelegatedAgentAsk: Story = {
     tier: 'trusted',
     decision: 'unreviewed',
     prompt: 'What’s on Sam’s wishlist? I’m putting together birthday options.',
-    scopeSummary: 'Content · wishlist',
-    searchBreadth: 'Your Companion recognises “wishlist”, so this is confined to those notes.',
+    scope: { queryType: 'content', dataClass: 'wishlist' },
+    searchBreadth:
+      'The data class they named is a label on the request, not a guaranteed filter — unless your Companion recognises it, this searches every kind of thing in your memory.',
     items: [],
     downgrades: ['boolean'],
     actor: { kind: 'third-party-agent', label: 'GiftFinder' },

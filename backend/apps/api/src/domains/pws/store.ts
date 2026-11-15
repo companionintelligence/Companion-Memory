@@ -63,6 +63,7 @@ function page<T extends { id: string }>(items: T[], options: ListOptions): Page<
   const sorted = items
     .filter((item) => options.after === undefined || item.id > options.after)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
   return { items: sorted.slice(0, options.limit), hasMore: sorted.length > options.limit };
 }
 
@@ -81,20 +82,26 @@ function copy<T>(value: T): T {
  */
 function copyResource(resource: ResourceRecord): ResourceRecord {
   const { bytes, ...rest } = resource;
+
   return { ...copy(rest), bytes: new Uint8Array(bytes) };
 }
 
 export class MemoryPwsStore implements PwsStore {
   private readonly spaces = new Map<string, SpaceRecord>();
+
   private readonly collections = new Map<string, CollectionRecord>();
+
   private readonly resources = new Map<string, ResourceRecord>();
+
   private readonly policies = new Map<string, PolicyDocument>();
+
   private queue: Promise<unknown> = Promise.resolve();
 
   async transaction<T>(work: (tx: PwsTx) => Promise<T>): Promise<T> {
     const run = this.queue.then(() => work(this.tx()));
     // The queue must survive a failed transaction.
     this.queue = run.catch(() => undefined);
+
     return run;
   }
 
@@ -115,6 +122,7 @@ export class MemoryPwsStore implements PwsStore {
         resources.delete(rkey(spaceId, id, r.id));
         policies.delete(policyKey({ spaceId, collectionId: id, resourceId: r.id }));
       }
+
       policies.delete(policyKey({ spaceId, collectionId: id }));
     };
 
@@ -127,6 +135,7 @@ export class MemoryPwsStore implements PwsStore {
         for (const c of [...collections.values()].filter((c) => c.spaceId === id)) {
           dropCollection(id, c.id);
         }
+
         policies.delete(policyKey({ spaceId: id }));
         spaces.delete(id);
       },
@@ -157,6 +166,7 @@ export class MemoryPwsStore implements PwsStore {
 
       getResource: async (spaceId, collectionId, id) => {
         const stored = resources.get(rkey(spaceId, collectionId, id));
+
         return stored === undefined ? undefined : copyResource(stored);
       },
       putResource: async (resource) => {
@@ -164,10 +174,12 @@ export class MemoryPwsStore implements PwsStore {
       },
       deleteResource: async (spaceId, collectionId, id) => {
         policies.delete(policyKey({ spaceId, collectionId, resourceId: id }));
+
         return resources.delete(rkey(spaceId, collectionId, id));
       },
       listResources: async (spaceId, collectionId, options) => {
         const { items, hasMore } = page(inCollection(spaceId, collectionId), options);
+
         return { items: items.map(copyResource), hasMore };
       },
       countResources: async (spaceId, collectionId) => inCollection(spaceId, collectionId).length,

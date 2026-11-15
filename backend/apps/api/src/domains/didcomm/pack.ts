@@ -13,7 +13,7 @@ import {
   type SignatureAlgorithm,
   verifyJwsSignature,
 } from './jws';
-import { type DidcommMessage, isExpired, MEDIA_TYPE, nowSeconds, parseMessage } from './message';
+import { type DidcommMessage, isExpired, nowSeconds, parseMessage } from './message';
 import { type SecretsResolver } from './secrets';
 
 /**

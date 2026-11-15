@@ -88,6 +88,7 @@ export function resolveEdgeProjectionReopener(moduleRef: ModuleRef | undefined):
       `No provider is bound to ${EDGE_PROJECTION_REOPENER}. A linkage write cannot re-open the edge ` +
         `projection's decision without it (PipelineModule binds it). Cause: ` +
         `${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

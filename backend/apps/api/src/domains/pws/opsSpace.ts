@@ -12,17 +12,17 @@ import { collectionMetaException, decide, deleteSpaceException } from './access'
 import type { Authn } from './authn';
 import { policyChain } from './context';
 import type { OpContext } from './context';
+import { requireControllerAcceptable } from './controller';
+import type { JsonObject } from './dataIntegrity';
 import { emptyResponse } from './http';
 import type { PwsResponse } from './http';
-import { requireControllerAcceptable } from './controller';
 import { etagOf, newValidator, bump } from './models';
 import type { SpaceRecord } from './models';
 import { nextLink, readPageRequest } from './pagination';
 import { PwsError, invalidBody, notFound } from './problems';
-import type { DenialReason } from './zcap';
-import { collectionListItem, spaceListItem, spaceView } from './views';
 import { readSpaceBody, requireUrlSafeId } from './validate';
-import type { JsonObject } from './dataIntegrity';
+import { collectionListItem, spaceListItem, spaceView } from './views';
+import type { DenialReason } from './zcap';
 
 /** `controller-mismatch` details that tell the three delegated-create failures apart. */
 const MISMATCH_DETAIL: Partial<Record<DenialReason, string>> = {
@@ -39,6 +39,7 @@ export function requireSpace(ctx: OpContext, spaceId: string): Promise<SpaceReco
     if (!space) {
       throw notFound();
     }
+
     return space;
   });
 }
@@ -60,6 +61,7 @@ async function authorizedByProposedController(
   if (authn.kind !== 'signed') {
     throw new PwsError('missing-authorization', 'Creating a Space requires a capability invocation.');
   }
+
   const decision = await decide({
     authn,
     env: ctx.accessEnv(scopeUrl, controller),
@@ -72,6 +74,7 @@ async function authorizedByProposedController(
       'The request is not authorized by the controller in the body.';
     throw new PwsError('controller-mismatch', detail);
   }
+
   return { invoker: decision.invoker };
 }
 
@@ -86,6 +89,7 @@ export async function listSpaces(ctx: OpContext): Promise<PwsResponse> {
   if (ctx.authn.kind !== 'signed') {
     return empty();
   }
+
   // The root of `/spaces/` has no controller of its own: the invoker is, by the act of invoking it.
   const decision = await decide({
     authn: ctx.authn,
@@ -104,6 +108,7 @@ export async function listSpaces(ctx: OpContext): Promise<PwsResponse> {
     ...(page.after !== undefined ? { after: page.after } : {}),
   });
   const last = listed.items[listed.items.length - 1];
+
   return ctx.json(200, {
     url: scope,
     totalItems: await ctx.tx.countSpaces(decision.invoker),
@@ -118,10 +123,12 @@ export async function createSpace(ctx: OpContext): Promise<PwsResponse> {
   if (ctx.authn.kind !== 'signed') {
     throw new PwsError('missing-authorization', 'Creating a Space requires a capability invocation.');
   }
+
   const input = readSpaceBody(ctx.jsonBody());
   if (input.controller === undefined) {
     throw invalidBody('A "controller" DID is required.', '/controller');
   }
+
   const controller = input.controller;
   await requireControllerAcceptable(ctx.env.keys, controller);
 
@@ -136,7 +143,9 @@ export async function createSpace(ctx: OpContext): Promise<PwsResponse> {
   if (await ctx.tx.getSpace(id)) {
     throw new PwsError('id-conflict', 'A Space with this id already exists.');
   }
+
   const space = await insertSpace(ctx, { id, input, controller, createdBy: invoker });
+
   return ctx.json(201, spaceView(urls, space), {
     location: urls.spaceUrl(space.id),
     ...etagHeader(space.validator),
@@ -159,6 +168,7 @@ async function insertSpace(
     validator: newValidator(),
   };
   await ctx.tx.putSpace(space);
+
   return space;
 }
 
@@ -176,6 +186,7 @@ export async function readSpace(ctx: OpContext, spaceId: string): Promise<PwsRes
   if (ctx.precondition(etag) === 'not-modified') {
     return emptyResponse(304, { etag });
   }
+
   return ctx.json(200, spaceView(ctx.env.urls, space), { etag });
 }
 
@@ -190,13 +201,16 @@ export async function putSpace(ctx: OpContext, spaceId: string): Promise<PwsResp
     if (ctx.authn.kind !== 'signed') {
       throw notFound();
     }
+
     const input = readSpaceBody(ctx.jsonObjectBody());
     if (input.id !== undefined && input.id !== spaceId) {
       throw invalidBody('"id" must match the Space in the URL.', '/id');
     }
+
     if (input.controller === undefined) {
       throw invalidBody('A "controller" DID is required to create a Space.', '/controller');
     }
+
     await requireControllerAcceptable(ctx.env.keys, input.controller);
     const { invoker } = await authorizedByProposedController(ctx, spaceUrl, input.controller);
     ctx.precondition(undefined);
@@ -206,6 +220,7 @@ export async function putSpace(ctx: OpContext, spaceId: string): Promise<PwsResp
       controller: input.controller,
       createdBy: invoker,
     });
+
     return ctx.json(201, spaceView(ctx.env.urls, space), {
       location: spaceUrl,
       ...etagHeader(space.validator),
@@ -223,11 +238,13 @@ export async function putSpace(ctx: OpContext, spaceId: string): Promise<PwsResp
   if (input.id !== undefined && input.id !== spaceId) {
     throw invalidBody('"id" must match the Space in the URL.', '/id');
   }
+
   let controller = existing.controller;
   if (input.controller !== undefined && input.controller !== existing.controller) {
     await requireControllerAcceptable(ctx.env.keys, input.controller);
     controller = input.controller;
   }
+
   ctx.precondition(etagOf(existing.validator));
 
   const updated: SpaceRecord = {
@@ -241,7 +258,9 @@ export async function putSpace(ctx: OpContext, spaceId: string): Promise<PwsResp
   if (input.name === undefined) {
     delete updated.name;
   }
+
   await ctx.tx.putSpace(updated);
+
   return emptyResponse(204, etagHeader(updated.validator));
 }
 
@@ -259,6 +278,7 @@ export async function deleteSpace(ctx: OpContext, spaceId: string): Promise<PwsR
   });
   ctx.precondition(etagOf(space.validator));
   await ctx.tx.deleteSpace(spaceId);
+
   return emptyResponse(204);
 }
 
@@ -283,7 +303,9 @@ export async function listCollections(ctx: OpContext, spaceId: string): Promise<
     const policy = await ctx.tx.getPolicy({ spaceId, collectionId: collection.id });
     items.push(collectionListItem(urls, collection, policy?.type === 'PublicCanRead'));
   }
+
   const last = listed.items[listed.items.length - 1];
+
   return ctx.json(200, {
     url: scope,
     totalItems: await ctx.tx.countCollections(spaceId),

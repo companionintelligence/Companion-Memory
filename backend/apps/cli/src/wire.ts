@@ -386,7 +386,7 @@ export interface DoctorReport {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/maintenance/orchestrate
+// POST /maintenance/orchestrate (`/api/maintenance/orchestrate` through the gateway)
 // Mirrors ORCHESTRATE_STAGES / OrchestrateStage / OrchestrateLegSummary /
 // OrchestrateSummary in
 // domains/maintenance/services/MaintenanceOrchestratorService.ts
@@ -481,4 +481,433 @@ export interface IngestStatus {
     queue: { created: number; active: number; failed: number };
   };
   at: string;
+}
+
+// ---------------------------------------------------------------------------
+// GET /authenticate/csrf, POST /authenticate, POST /keys, GET /keys/check,
+// DELETE /keys/current
+// Mirrors SessionController and ApiKeyController in domains/auth/controllers/
+// ---------------------------------------------------------------------------
+
+export interface AuthCsrfResponse {
+  csrfToken: string;
+}
+
+export interface AuthTokenResponse {
+  accessToken: string;
+}
+
+export interface ApiKeyCreatedResponse {
+  id: string;
+  name: string;
+  key: string;
+  keyPrefix: string;
+  capability: string;
+  scope: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export interface ApiKeyCheckResponse {
+  valid: boolean;
+  userId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// GET /model-routing/tiers, POST /model-routing/plan, GET /model-routing/arena
+// Mirrors ModelTier / ReasoningLevel / TierProfile / RoutingRequest /
+// RoutingDecision in domains/model-routing/types.ts, and
+// ModelRoutingController.getArena in
+// domains/model-routing/controllers/ModelRoutingController.ts
+//
+// The planner STRIPS keys it does not know (`routingRequestSchema.strip()`), so
+// a misspelt field here is not a 400: it is a flag that silently does nothing.
+// `--sensitive` reached the server as `requiresSensitiveData` for exactly that
+// reason and never pinned anything. The examples in
+// `__tests__/fixtures/wire/model-routing.json` are run through the real
+// controller by the API's `cliWireContract.test.ts`.
+// ---------------------------------------------------------------------------
+
+export type ModelTier = 'on_device' | 'private_cloud';
+
+export type ReasoningLevel = 'light' | 'moderate' | 'deep';
+
+export interface TierProfile {
+  tier: ModelTier;
+  title: string;
+  /** Usable context window in tokens. */
+  maxContextTokens: number;
+  /** Works without network connectivity. */
+  offline: boolean;
+  /** Leaves the appliance. */
+  external: boolean;
+  description: string;
+}
+
+export interface ModelRoutingTiersResponse {
+  tiers: TierProfile[];
+}
+
+/** The ActionVectorArena: how many candidate embeddings are cached. That is all the route reports. */
+export interface ArenaStats {
+  size: number;
+}
+
+export interface RoutingRequest {
+  estimatedInputTokens?: number;
+  reasoningLevel?: ReasoningLevel;
+  toolDepth?: number;
+  requiresLargeContext?: boolean;
+  onDeviceContextTokens?: number;
+  /** The privacy pin: the task must not leave the appliance. Wins over everything else. */
+  localOnly?: boolean;
+  cloudAvailable?: boolean;
+  /** A hard override of the tier, still subject to `localOnly`. */
+  forceTier?: ModelTier;
+}
+
+export interface RoutingDecision {
+  tier: ModelTier;
+  reasoningLevel: ReasoningLevel;
+  profile: TierProfile;
+  reasons: string[];
+  /** The task wanted the escalated tier and was kept on the appliance (privacy, or the cloud was down). */
+  downgraded: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// POST /model-routing/decide, POST /model-routing/rank
+// Mirrors decideRequestSchema / rankRequestSchema in
+// domains/model-routing/controllers/ModelRoutingController.ts and the
+// *DecisionResult / RankedCandidate types in
+// domains/model-routing/services/ContrastiveDecisionService.ts
+// ---------------------------------------------------------------------------
+
+export type DecisionPrimitive = 'noul' | 'choice' | 'score';
+
+export type DecisionEngineMode = 'auto' | 'contrastive' | 'generative' | 'hybrid';
+
+/** `disabled` when the user has switched both engines off in Settings: the answer is a neutral default. */
+export type DecisionEngineUsed = 'contrastive' | 'generative' | 'hybrid' | 'disabled';
+
+export interface ScoreCriterion {
+  name: string;
+  /** The pole a high score means. */
+  positive: string;
+  /** The opposite pole. The server uses `not <positive>` when it is absent. */
+  negative?: string;
+  weight?: number;
+}
+
+/** Discriminated on `primitive`. The server answers a body without one with a 400. */
+export type DecisionRequest =
+  | {
+      primitive: 'noul';
+      state: string;
+      action: string;
+      negatedAction?: string;
+      engine?: DecisionEngineMode;
+      temperature?: number;
+      threshold?: number;
+      escalationMarginThreshold?: number;
+    }
+  | {
+      primitive: 'choice';
+      state: string;
+      /** A plain string's id is its index, as a string. */
+      candidates: Array<string | { id: string; label: string }>;
+      engine?: DecisionEngineMode;
+      temperature?: number;
+      escalationMarginThreshold?: number;
+    }
+  | {
+      primitive: 'score';
+      state: string;
+      criteria: ScoreCriterion[];
+      engine?: DecisionEngineMode;
+      temperature?: number;
+    };
+
+export interface NoulDecisionResult {
+  primitive: 'noul';
+  engineUsed: DecisionEngineUsed;
+  /** P(yes | state, action). */
+  probability: number;
+  /** `probability >= threshold`: the action applies. */
+  decision: boolean;
+  margin: number;
+  positiveSimilarity: number;
+  negativeSimilarity: number;
+  latencyMs: number;
+}
+
+export interface ChoiceCandidateScore {
+  id: string;
+  label: string;
+  probability: number;
+  similarity: number;
+}
+
+export interface ChoiceDecisionResult {
+  primitive: 'choice';
+  engineUsed: DecisionEngineUsed;
+  selectedId: string | null;
+  selectedLabel: string | null;
+  confidence: number;
+  margin: number;
+  escalatedToGenerative: boolean;
+  /** Most probable first. */
+  candidates: ChoiceCandidateScore[];
+  latencyMs: number;
+}
+
+export interface ScoreCriterionResult {
+  name: string;
+  probability: number;
+  weight: number;
+}
+
+export interface ScoreDecisionResult {
+  primitive: 'score';
+  engineUsed: DecisionEngineUsed;
+  /** Weighted mean of the criteria's probabilities. */
+  compositeScore: number;
+  criteria: ScoreCriterionResult[];
+  latencyMs: number;
+}
+
+export type DecisionResponse = NoulDecisionResult | ChoiceDecisionResult | ScoreDecisionResult;
+
+export interface RankCandidateInput {
+  id: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RankRequest {
+  query: string;
+  candidates: RankCandidateInput[];
+  topK?: number;
+  engine?: DecisionEngineMode;
+  temperature?: number;
+}
+
+export interface RankedCandidate extends RankCandidateInput {
+  score: number;
+  probability: number;
+  /** 1-based, best first. */
+  rank: number;
+}
+
+export interface RankResponse {
+  engineUsed: DecisionEngineUsed;
+  items: RankedCandidate[];
+  /** Candidates whose embedding the ActionVectorArena already held. */
+  arenaHitCount: number;
+  arenaMissCount: number;
+  latencyMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// GET /audit/deltas
+// Mirrors getDeltasSchema and the body of AuditController.getDeltas in
+// domains/audit/controllers/AuditController.ts. Delta fields come from `Delta`
+// in domains/audit/entities/DeltaEntity.ts.
+//
+// The only route in this file that answers in the `{ success, data }`
+// envelope. Its time window is `since` / `until`; the query schema strips
+// unknown keys, so a window sent under any other name is ignored, not refused.
+// ---------------------------------------------------------------------------
+
+export type DeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
+
+/** The server's own ceiling on `limit`; more is a 400. */
+export const MAX_AUDIT_DELTAS = 250;
+
+export interface AuditDeltasQuery {
+  entityId: string;
+  changeType?: DeltaChangeType;
+  /** ISO 8601. */
+  since?: string;
+  /** ISO 8601. */
+  until?: string;
+  limit?: number;
+}
+
+export interface DeltaNodeRef {
+  entityId: string;
+  entityType: string | null;
+  name: string | null;
+}
+
+export interface DeltaFieldChange {
+  field: string;
+  oldValue: unknown;
+  newValue: unknown;
+}
+
+export interface EntityDeltaSummary {
+  deltaId: string;
+  nodeType: 'entity' | 'relationship';
+  entityId: string | null;
+  relationshipId: string | null;
+  entityType: string | null;
+  relationshipType: string | null;
+  changeType: DeltaChangeType;
+  changedFields: Record<string, { old?: unknown; new?: unknown }>;
+  /** `changedFields` as a list, in the order the server read it. */
+  fieldChanges: DeltaFieldChange[];
+  changeSource: string | null;
+  changeReason: string | null;
+  summaryId: string | null;
+  /** ISO 8601. */
+  changedAt: string;
+  entity: DeltaNodeRef | null;
+  fromEntity: DeltaNodeRef | null;
+  toEntity: DeltaNodeRef | null;
+}
+
+export interface EntityDeltaStats {
+  total: number;
+  firstChangedAt: string | null;
+  lastChangedAt: string | null;
+  created: number;
+  updated: number;
+  archived: number;
+  deleted: number;
+  merged: number;
+  entity: number;
+  relationship: number;
+}
+
+export interface EntityDeltasResponse {
+  success: boolean;
+  data: {
+    entityId: string;
+    /** Newest first. */
+    deltas: EntityDeltaSummary[];
+    stats: EntityDeltaStats;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /pipeline/state, GET /pipeline/dead-letters
+// Mirrors PipelineStateResponse / PipelineDeadLettersResponse in
+// domains/pipeline/controllers/PipelineController.ts, StageCoverage in
+// domains/pipeline/types.ts, and PipelineDeadLetterView / MAX_DEAD_LETTER_PAGE
+// in domains/pipeline/services/PipelineRunService.ts
+// ---------------------------------------------------------------------------
+
+export interface StageCoverage {
+  stage: string;
+  /** The version `stale` is measured against. */
+  stageVersion: number;
+  /** Ledger rows for this stage, NOT eligible source rows: a stage that never ran reports 0. */
+  total: number;
+  done: number;
+  skipped: number;
+  failed: number;
+  pending: number;
+  running: number;
+  /** Terminal failures that also ran out of retries. */
+  quarantined: number;
+  /** Rows recorded below the current version: what a bump would re-process. */
+  stale: number;
+  /** `(done + skipped) / total`, or 0 when the ledger has no rows for the stage. */
+  coverage: number;
+}
+
+export interface PipelineStateResponse {
+  stages: StageCoverage[];
+}
+
+/** The server's page ceiling for dead letters; more is a 400. */
+export const MAX_DEAD_LETTER_PAGE = 200;
+
+export interface PipelineDeadLetter {
+  id: string;
+  queue: string;
+  /** The name a replay re-emits under. */
+  eventName: string;
+  stage: string | null;
+  entityType: string | null;
+  entityId: string | null;
+  userId: string | null;
+  /** Verbatim; replay sends it back byte for byte. */
+  payload: Record<string, unknown>;
+  error: string;
+  /** ISO 8601. */
+  failedAt: string;
+  /** ISO 8601, or null if the letter was never replayed. */
+  replayedAt: string | null;
+}
+
+/** One page, newest first. There is no total. */
+export interface PipelineDeadLettersResponse {
+  deadLetters: PipelineDeadLetter[];
+}
+
+// ---------------------------------------------------------------------------
+// GET /jobs/dashboard
+// Mirrors JobDashboardDto, JobQueueDto, JobQueueDistributionDto and
+// CronScheduleDto in domains/events/services/JobMonitorService.ts. Only the
+// fields this CLI prints are typed; `--json` passes the whole body through,
+// including the recent `jobs`/`archive` lists and the distributions.
+// ---------------------------------------------------------------------------
+
+export interface JobDashboardSummary {
+  /** Queued work waiting to run, dead letters excluded. */
+  pending: number;
+  active: number;
+  /** Failed once and waiting on a retry delay. */
+  retry: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  /** Jobs that exhausted their retries. Also counted under `failed` on their own queue. */
+  deadLettered: number;
+  scheduled: number;
+}
+
+export interface JobQueueSummary {
+  name: string;
+  policy?: string | null;
+  /** Null means "inherits the client default", not "no retries". */
+  retryLimit: number | null;
+  retryDelay: number | null;
+  retryBackoff: boolean | null;
+  expireInSeconds?: number | null;
+  retentionMinutes?: number | null;
+  deadLetter?: string | null;
+  createdOn: string;
+  updatedOn?: string;
+}
+
+/** Live (`created`/`active`/`retry`) jobs on one queue. The top ten queues only. */
+export interface JobQueueDistribution {
+  queue: string;
+  count: number;
+}
+
+export interface CronScheduleSummary {
+  name: string;
+  cron: string;
+  timezone?: string | null;
+  /** Null when the scheduler holding it is in the other process (`servedHere: false`). */
+  running: boolean | null;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  overdue: boolean;
+  /** Switched off by the operator. Still registered and still ticking, so `running` stays true. */
+  disabled: boolean;
+  role: 'web' | 'worker';
+  servedHere: boolean;
+}
+
+export interface JobsDashboardResponse {
+  summary: JobDashboardSummary;
+  queueDistribution: JobQueueDistribution[];
+  queues: JobQueueSummary[];
+  crons: CronScheduleSummary[];
 }

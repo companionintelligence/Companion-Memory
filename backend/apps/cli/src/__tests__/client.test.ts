@@ -160,6 +160,24 @@ describe('ImportApiClient', () => {
       expect(JSON.parse(calls[0].body as string)).toEqual({ abortOnError: false });
     });
 
+    /**
+     * `MaintenanceController` was mounted `api/maintenance` until #2645 moved it
+     * to `maintenance` (the gateway strips `/api/`, so the baked-in prefix was
+     * unreachable through it). The CLI kept the old path, which the API answers
+     * with a 404: `ci backfill` stopped working on `--server localhost:3030`.
+     */
+    it('posts to the route the API mounts, with no /api prefix like every other call', async () => {
+      const { fetchImpl, calls } = stubFetch(() =>
+        ndjson([{ type: 'result', ok: true, legs: [], totalDurationMs: 1 }]),
+      );
+      const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: 'k', fetchImpl });
+
+      await client.orchestrate(['geocode']);
+
+      expect(calls[0].url).toBe('http://box:3030/maintenance/orchestrate');
+      expect(calls[0].method).toBe('POST');
+    });
+
     it('forwards progress lines and resolves with the result frame', async () => {
       const seen: string[] = [];
       const { fetchImpl } = stubFetch(() =>

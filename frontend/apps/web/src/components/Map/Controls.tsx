@@ -14,9 +14,11 @@ const mapControlButtonClassName =
 interface Props {
   className?: string;
   position?: Position;
+  /** Px of the map's left edge a panel covers: "Center visible pins" frames them right of it. */
+  panelInset?: number;
 }
 
-export function Controls({ className, position = 'top-left' }: Props) {
+export function Controls({ className, position = 'top-left', panelInset = 0 }: Props) {
   const [{ displayRoutes }, { toggleRoutes, zoomIn, zoomOut, centerVisibleMarkers }] = useMap();
   const tooltipSide = position.includes('right') ? 'left' : 'right';
 
@@ -63,7 +65,7 @@ export function Controls({ className, position = 'top-left' }: Props) {
                 variant="outline"
                 size="icon"
                 aria-label="Center visible pins"
-                onClick={centerVisibleMarkers}
+                onClick={() => centerVisibleMarkers(panelInset)}
                 className={mapControlButtonClassName}
               >
                 <Crosshair />

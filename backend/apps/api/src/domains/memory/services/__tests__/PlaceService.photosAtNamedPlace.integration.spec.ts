@@ -153,12 +153,13 @@ describeWithDb(`PlaceService.photosAtNamedPlace, in Postgres (${availability.tar
     at: { lat: number; lng: number },
     takenAt: string,
     metadata: Record<string, unknown> = {},
+    contentType = 'image/jpeg',
   ): Promise<string> => {
     const fileId = uuidv7();
 
     await dataSource.query(
-      `INSERT INTO ci.files (id, filename, content_type, user_id) VALUES ($1, $2, 'image/jpeg', $3)`,
-      [fileId, `${takenAt}.jpg`, owner.userId],
+      `INSERT INTO ci.files (id, filename, content_type, user_id) VALUES ($1, $2, $3, $4)`,
+      [fileId, `${takenAt}.${contentType.split('/')[1]}`, contentType, owner.userId],
     );
     await insertEvent(owner, at, takenAt, { FileId: fileId, ...metadata });
 
@@ -239,5 +240,20 @@ describeWithDb(`PlaceService.photosAtNamedPlace, in Postgres (${availability.tar
 
     expect(found.places.map((p) => p.name)).toEqual(['Blue Bottle Coffee']);
     expect(found.fileIds).toEqual([atCafe]);
+  });
+
+  it('counts the videos taken there too, unless only photos are asked for', async () => {
+    const owner = await newOwner();
+    await place(owner, 'Blue Bottle Coffee');
+    const still = await photo(owner, NEAR, '2026-10-20T10:00:00Z');
+    const clip = await photo(owner, NEAR, '2026-10-20T11:00:00Z', {}, 'video/mp4');
+
+    await expect(service.photosAtNamedPlace(owner, 'Blue Bottle Coffee', 25)).resolves.toMatchObject({
+      fileIds: [clip, still],
+      total: 2,
+    });
+    await expect(
+      service.photosAtNamedPlace(owner, 'Blue Bottle Coffee', 25, { kind: 'photos' }),
+    ).resolves.toMatchObject({ fileIds: [still], total: 1 });
   });
 });

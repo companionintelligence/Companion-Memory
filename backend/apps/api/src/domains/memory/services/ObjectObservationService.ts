@@ -42,6 +42,36 @@ import type {
  */
 const SENT_BACK_TO_REVIEW = 'sentBackToReview';
 
+/**
+ * Denormalize a sighting onto the thing it is linked to.
+ *
+ * `last_seen_at` / `last_seen_place_entity_id` exist so the things list can
+ * sort and filter without a per-row subquery over observations. Guarded on
+ * the timestamp so an out-of-order backfill of old photos cannot walk a
+ * thing's "last seen" backwards. The automatic resolution ladder
+ * (`ObjectResolutionService`) and a person's answer
+ * ({@link ObjectObservationService.confirm}) write it here. A thing minted from
+ * a capture photo starts with it instead (`ThingVisionListener`).
+ */
+export async function touchObjectLastSeen(
+  dataSource: DataSource,
+  userId: string,
+  objectId: string,
+  observation: Pick<ObjectObservation, 'observedAt' | 'placeEntityId'>,
+): Promise<void> {
+  await dataSource.query(
+    `UPDATE ci.objects
+        SET last_seen_at = $3,
+            last_seen_place_entity_id = COALESCE($4::uuid, last_seen_place_entity_id),
+            updated_at = now()
+      WHERE object_id = $2::uuid
+        AND user_id = $1::uuid
+        AND merged_into_object_id IS NULL
+        AND (last_seen_at IS NULL OR last_seen_at < $3)`,
+    [userId, objectId, observation.observedAt, observation.placeEntityId],
+  );
+}
+
 /** Whether a person sent this sighting back to the review queue to say which thing it is. */
 export function isSentBackToReview(observation: Pick<ObjectObservation, 'metadata'>): boolean {
   return observation.metadata?.[SENT_BACK_TO_REVIEW] === true;
@@ -563,6 +593,10 @@ export class ObjectObservationService {
    * {@link sendBackToReview}), and picking a thing of another product in
    * review must replace it rather than leave the two links disagreeing. A thing
    * whose product is not known leaves the sighting's product link as it is.
+   *
+   * A confirmed link is a sighting of that thing, so it moves the thing's "last
+   * seen" ({@link touchObjectLastSeen}) the way an automatic match does. A
+   * retraction or "not a thing" leaves it alone.
    */
   async confirm(
     context: ServiceContext,
@@ -616,7 +650,15 @@ export class ObjectObservationService {
       },
     );
 
-    return this.findById(context, id);
+    const updated = await this.findById(context, id);
+
+    // What the row says now, not what was asked: an answer the guarded write
+    // above did not apply must not move a thing's "last seen".
+    if (updated?.confirmedByUser === true && updated.resolvedObjectId != null) {
+      await touchObjectLastSeen(this.dataSource, updated.userId, updated.resolvedObjectId, updated);
+    }
+
+    return updated;
   }
 
   /** The catalog product of one of this user's things, or `null` when it has none or is not theirs. */

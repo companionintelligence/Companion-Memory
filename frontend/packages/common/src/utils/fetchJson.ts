@@ -352,7 +352,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
     const message = err instanceof Error ? err.message : String(err);
 
     if (/unsupported url/i.test(message)) {
-      throw new Error(`Could not request ${input} (${message})`);
+      throw new Error(`Could not request ${input} (${message})`, { cause: err });
     }
 
     throw err;

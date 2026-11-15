@@ -12,7 +12,16 @@ import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import { SidecarCircuitBreaker, type SidecarCircuitSnapshot } from '@ci/common/sidecar/SidecarCircuitBreaker';
 import config from '@ci/configuration';
 
-import type { DueResponse, ForecastResponse, ForageTrialResponse, WeekForecastResponse } from '../types';
+import type {
+  DecisionPassageInput,
+  DecisionRerankResponse,
+  DueResponse,
+  ForecastResponse,
+  ForageTrialResponse,
+  L0ClassificationResponse,
+  MemoryIngressDecisionResponse,
+  WeekForecastResponse,
+} from '../types';
 
 type ForageLakeSpec = Record<string, unknown>;
 
@@ -166,6 +175,65 @@ export class HbpeService {
 
   async forageReset(context: UserServiceContext): Promise<ForageTrialResponse> {
     return this.request<ForageTrialResponse>(sidecarPath('/forage/ask', context), { method: 'POST' });
+  }
+
+  /**
+   * System 1 Fast Decision Model evaluation of an incoming message or note
+   * (intent, actionable commitment, and privacy sensitivity).
+   */
+  async scoreMemoryIngress(
+    context: UserServiceContext,
+    text: string,
+  ): Promise<MemoryIngressDecisionResponse> {
+    return this.request<MemoryIngressDecisionResponse>(
+      sidecarPath('/decision/ingress', context),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      },
+      { timeoutMs: 3_000 },
+    );
+  }
+
+  /**
+   * System 1 Fast Decision Model reranking of candidate retrieval passages by
+   * calibrated relevance probability and temporal freshness.
+   */
+  async rerankPassages(
+    context: UserServiceContext,
+    query: string,
+    passages: DecisionPassageInput[],
+  ): Promise<DecisionRerankResponse> {
+    return this.request<DecisionRerankResponse>(
+      sidecarPath('/decision/rerank', context),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query, passages }),
+      },
+      { timeoutMs: 3_000 },
+    );
+  }
+
+  /**
+   * System 1 Fast Decision Model classification of an event or task into one
+   * of the 8 canonical L0_CLASSES.
+   */
+  async classifyL0Event(
+    context: UserServiceContext,
+    title: string,
+    description?: string | null,
+  ): Promise<L0ClassificationResponse> {
+    return this.request<L0ClassificationResponse>(
+      sidecarPath('/decision/l0', context),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title, ...(description != null ? { description } : {}) }),
+      },
+      { timeoutMs: 3_000 },
+    );
   }
 
   private async get<T>(path: string): Promise<T> {

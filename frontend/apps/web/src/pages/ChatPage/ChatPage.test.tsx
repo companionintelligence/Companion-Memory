@@ -24,6 +24,9 @@ const h = vi.hoisted(() => ({
   /** null = every flag on (the historical default of this suite); otherwise the flags that are. */
   flags: null as Record<string, boolean> | null,
   refetchModels: vi.fn(),
+  /** What `useDesktopApp` says: Memory Desktop closed, and the model it ran with it. */
+  desktopAppClosed: false,
+  refetchDesktopApp: vi.fn(),
   modelsLoading: false,
   modelsError: null as Error | null,
   stop: vi.fn(),
@@ -95,6 +98,7 @@ vi.mock('@/hooks', async (importOriginal) => {
 
   return {
     ...actual,
+    useDesktopApp: () => ({ closed: h.desktopAppClosed, refetch: h.refetchDesktopApp }),
     useChatRequester: (opts: { threadId: string | null; onNewThread?: (id: string) => void }) => {
       h.requesterOpts = opts;
 
@@ -189,6 +193,7 @@ vi.mock('@/components/Chat', () => ({
     localImages,
     blockUploads,
     initialDraft,
+    placeholder,
   }: {
     onStop?: () => void;
     emptyState?: ReactNode;
@@ -197,9 +202,11 @@ vi.mock('@/components/Chat', () => ({
     localImages?: boolean;
     blockUploads?: boolean;
     initialDraft?: string;
+    placeholder?: string;
   }) => (
     <>
       <span data-testid="chat-draft">{initialDraft}</span>
+      <span data-testid="chat-placeholder">{placeholder}</span>
       <span data-testid="chat-disabled">{String(Boolean(disabled))}</span>
       <span data-testid="chat-local-images">{String(Boolean(localImages))}</span>
       <span data-testid="chat-block-uploads">{String(Boolean(blockUploads))}</span>
@@ -226,6 +233,8 @@ describe('ChatPage', () => {
     h.cancel.mockClear();
     h.deleteThread.mockClear();
     h.refetchModels.mockClear();
+    h.desktopAppClosed = false;
+    h.refetchDesktopApp.mockClear();
     h.flags = null;
     h.modelsLoading = false;
     h.modelsError = null;
@@ -906,6 +915,26 @@ describe('ChatPage', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
         expect(h.refetchModels).toHaveBeenCalledTimes(1);
+      });
+
+      // Memory Desktop was quit and its model went with it. Settings is not the fix; opening the app is.
+      it('says Memory Desktop is closed when that is why the model cannot be reached', () => {
+        h.selectedModel = null;
+        h.modelsError = new Error('down');
+        h.desktopAppClosed = true;
+        renderEmpty();
+
+        const state = screen.getByTestId('chat-no-model');
+        expect(state).toHaveTextContent('Memory Desktop is closed');
+        expect(state).toHaveTextContent('Open Memory Desktop to bring chat back.');
+        expect(screen.queryByRole('link', { name: /Open Settings → Model/ })).toBeNull();
+        expect(screen.getByTestId('chat-placeholder')).toHaveTextContent(
+          'Chat is off until Memory Desktop is open again',
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
+        expect(h.refetchModels).toHaveBeenCalledTimes(1);
+        expect(h.refetchDesktopApp).toHaveBeenCalledTimes(1);
       });
 
       it('does not flash the setup prompt while the model list is still loading', () => {

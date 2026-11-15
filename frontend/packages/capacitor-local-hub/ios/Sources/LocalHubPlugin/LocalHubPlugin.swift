@@ -3,6 +3,7 @@ import Capacitor
 import CoreLocation
 import Foundation
 import UIKit
+import WidgetKit
 
 /// iOS native half of the Local Hub sidecar. See `src/definitions.ts` for the
 /// JS-facing contract this implements and this package's root `README.md` for the
@@ -44,7 +45,11 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "claimReplica", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "releaseReplica", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearBackgroundSync", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "discoverLanAppliances", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "discoverLanAppliances", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "publishWidgetSnapshot", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readWidgetActions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "acknowledgeWidgetActions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearWidgetSnapshot", returnType: CAPPluginReturnPromise)
     ]
 
     private let server = LocalHubServer()
@@ -52,6 +57,10 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Credential namespace only. The outbox database key lives in its own namespace and is
     /// never reachable from JS -- nothing in the WebView has any business holding it.
     private let secureStore = CompanionSecureStore.credentials()
+
+    private static let widgetGroupIdentifier = "group.com.companionintelligence.memory.widgets"
+    private static let widgetSnapshotFilename = "snapshot.json"
+    private static let widgetActionsDefaultsKey = "pendingActions"
 
     /// The credentials the app itself stores: the device API key, its id and capability, and
     /// the paired Memory origin mirrored for App Intents. Kept equal to `SECURE_STORE_KEYS` in
@@ -401,6 +410,90 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             "appliances": [],
             "supported": true
         ])
+    }
+
+    /// Persists only the sanitized aggregate snapshot supplied by the web client.
+    /// The app group is shared with WidgetKit; credentials never enter this file.
+    @objc func publishWidgetSnapshot(_ call: CAPPluginCall) {
+        guard let snapshot = call.options["snapshot"] as? [String: Any],
+              let version = snapshot["version"] as? NSNumber,
+              version.intValue == 1,
+              JSONSerialization.isValidJSONObject(snapshot) else {
+            call.reject("publishWidgetSnapshot requires a version 1 JSON snapshot")
+            return
+        }
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: snapshot, options: [])
+            guard data.count <= 32_768 else {
+                call.reject("Widget snapshot exceeds the 32 KiB limit")
+                return
+            }
+
+            guard let directory = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: Self.widgetGroupIdentifier
+            ) else {
+                call.reject("Widget App Group is unavailable")
+                return
+            }
+
+            try data.write(
+                to: directory.appendingPathComponent(Self.widgetSnapshotFilename),
+                options: [.atomic, .completeFileProtectionUnlessOpen]
+            )
+            WidgetCenter.shared.reloadAllTimelines()
+            call.resolve()
+        } catch {
+            call.reject("Could not write widget snapshot: \(error.localizedDescription)")
+        }
+    }
+
+    /// Reads queued widget actions without deleting them. The web client acknowledges
+    /// only actions whose authenticated GraphQL mutation completed successfully.
+    @objc func readWidgetActions(_ call: CAPPluginCall) {
+        let values = UserDefaults(suiteName: Self.widgetGroupIdentifier)?
+            .stringArray(forKey: Self.widgetActionsDefaultsKey) ?? []
+        let actions = values.compactMap { encoded -> [String: String]? in
+            guard let data = encoded.data(using: .utf8),
+                  let action = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                  action["id"]?.isEmpty == false,
+                  action["type"] == "completeTask",
+                  action["taskId"]?.isEmpty == false,
+                  action["createdAt"]?.isEmpty == false else {
+                return nil
+            }
+            return action
+        }
+        call.resolve(["actions": actions])
+    }
+
+    @objc func acknowledgeWidgetActions(_ call: CAPPluginCall) {
+        let ids = Set((call.options["ids"] as? [String] ?? []).filter { !$0.isEmpty })
+        guard !ids.isEmpty else {
+            call.resolve()
+            return
+        }
+        let defaults = UserDefaults(suiteName: Self.widgetGroupIdentifier)
+        let remaining = (defaults?.stringArray(forKey: Self.widgetActionsDefaultsKey) ?? []).filter { encoded in
+            guard let data = encoded.data(using: .utf8),
+                  let action = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+                return false
+            }
+            return !ids.contains(action["id"] ?? "")
+        }
+        defaults?.set(remaining, forKey: Self.widgetActionsDefaultsKey)
+        call.resolve()
+    }
+
+    @objc func clearWidgetSnapshot(_ call: CAPPluginCall) {
+        if let directory = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Self.widgetGroupIdentifier
+        ) {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(Self.widgetSnapshotFilename))
+        }
+        UserDefaults(suiteName: Self.widgetGroupIdentifier)?.removeObject(forKey: Self.widgetActionsDefaultsKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve()
     }
 
     /// The tracker outlives this plugin instance (it is what records while the WebView is

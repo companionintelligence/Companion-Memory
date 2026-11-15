@@ -81,6 +81,16 @@ describe('useSearchService', () => {
     expect(variables.excludeTypes).toBeUndefined();
   });
 
+  it('sends the server names for the What picker types whose names differ (Thing, Browser)', () => {
+    renderHook(() => useSearchService({ searchQuery: 'lamp', includeTypes: ['Thing', 'Browser'] }));
+
+    expect(lastOptions().variables.includeTypes).toEqual(['item', 'browser-activity']);
+
+    renderHook(() => useSearchService({ searchQuery: 'lamp', excludeTypes: ['Thing', 'answer'] }));
+
+    expect(lastOptions().variables.excludeTypes).toEqual(['item', 'answer']);
+  });
+
   it('honours an explicit excludeTypes override', () => {
     renderHook(() => useSearchService({ searchQuery: 'coffee', excludeTypes: ['Note'] }));
 

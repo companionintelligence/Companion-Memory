@@ -26,6 +26,7 @@ interface CursorPayload {
 
 export function encodeCursor(scope: string, after: string): string {
   const payload: CursorPayload = { v: 1, s: scope, a: after };
+
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
@@ -35,10 +36,12 @@ function decodeCursor(cursor: string, scope: string): string {
     if (!/^[A-Za-z0-9_-]+$/.test(cursor)) {
       throw new Error('not base64url');
     }
+
     payload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
   } catch {
     throw new PwsError('invalid-cursor', 'The pagination cursor is malformed.');
   }
+
   if (
     typeof payload !== 'object' ||
     payload === null ||
@@ -48,9 +51,11 @@ function decodeCursor(cursor: string, scope: string): string {
   ) {
     throw new PwsError('invalid-cursor', 'The pagination cursor is malformed.');
   }
+
   if ((payload as CursorPayload).s !== scope) {
     throw new PwsError('invalid-cursor', 'The pagination cursor was issued for a different list.');
   }
+
   return (payload as CursorPayload).a;
 }
 
@@ -79,6 +84,7 @@ export function readPageRequest(search: URLSearchParams, scope: string, limits: 
         errors: [{ detail: 'The "limit" parameter must be a positive integer.', pointer: 'limit' }],
       });
     }
+
     // An oversized limit is clamped rather than rejected.
     // More than nine significant digits is past any maximum: clamp it, whatever its length.
     const significant = rawLimit.replace(/^0+/, '');

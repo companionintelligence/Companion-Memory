@@ -123,7 +123,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
 | **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. CGNAT specifically is opt-in-permittable ([below](#peering-over-a-private-network-tailscale--cgnat)); everything else in that list is unconditional. |
 | **Token can't be replayed at another box** | The peer surface verifies a Portal token against **this box's own `peers.audience`**, not the broad first-party list. It refuses a Portal-token ask until that is configured. A signed `did:key` / `did:keri:D<x>` ask carries no token and needs `peers.memoryEndpoint` instead (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). |
-| **A leaked token is not, by itself, enough** | Requests carry an **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window. See [Message signatures](#message-signatures) — this is what a bearer token structurally cannot give: binding to *this* request, and detectable replay. |
+| **A leaked token is enough by default** | With the shipped default (`peers.requireHttpSignature` off), a **Portal token alone authenticates a peer ask**: a request with no signature headers is not checked for a signature, so whoever holds a leaked token can ask as that peer for the token's lifetime, and a replayed request is not detected (only the `askId` idempotency key limits it). A signature that *is* offered is always verified. Turning `peers.requireHttpSignature` on refuses every peer ask without a valid **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window, from a key on the sender's link. The signature is the property that binds a request to *one* request and makes replay detectable; a bearer token structurally cannot. The box logs a warning at startup while `peers.audience` is set and the requirement is off. See [Message signatures](#message-signatures). |
 | **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` of a Portal token **before** the peer-link lookup, so an unknown Portal caller is limited too. A signed `did:key` / `did:keri:D<x>` ask is the exception: its identity comes from the signature header, so the link is read first (one indexed read) and a signer nobody linked is refused with a `401` **before** the limiter is consulted. The limiter therefore bounds only linked signers: anyone who can reach the route can send unlimited well-formed signed requests from fresh keys, at the cost of one parse and one read each. |
 | **Timezone-independent availability** | All-day events expand on **UTC** day boundaries, so two boxes in different zones compute identical busy spans. |
 
@@ -146,16 +146,20 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
   "memoryEndpoint": "",    // this box's own /agent/v1 base (https://<host>/api/agent/v1 behind the packaged gateway): peers store it on their link, and signed asks are checked against it. Memory publishes it nowhere: give it to your peers
   "handle": "",            // this box's Portal handle
   "audience": "",          // REQUIRED for Portal-token inbound asks: the audience Portal mints for THIS box
-  "timeoutMs": 10000       // bound on every outbound peer/directory call
+  "timeoutMs": 10000,      // bound on every outbound peer/directory call
+  "requireHttpSignature": false // off: a Portal token alone authenticates an inbound ask (see below)
 }
 ```
 
 Env: `CI_PEER_DIRECTORY_URL`, `CI_PEER_MEMORY_ENDPOINT`, `CI_PEER_HANDLE`, `CI_PEER_AUDIENCE`, `CI_PEER_TIMEOUT_MS`.
+`peers.requireHttpSignature` has no environment variable; set it in a config file such as `config/local.json`.
 The inbound surface is additionally gated by the **`ask`** feature flag (`ENABLE_ASK`), which
 now ships **`true`**. Turning it off makes `POST /agent/v1/ask` return 503 — indistinguishable
 from a box with no peer surface at all.
 
 > **`peers.audience` is not optional for Portal-token asks.** Without it, a token issued for *any* first-party client would verify here — including one minted for a different Companion. The peer route refuses every Portal-token request until it is set, rather than falling back to the broad list. A signed `did:key` / `did:keri:D<x>` ask carries no token and does not consult it: it needs `ask` on, `peers.memoryEndpoint` set and a link the owner made (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)).
+
+> **Setting `peers.audience` opens the surface to unsigned Portal-token asks.** `peers.requireHttpSignature` ships `false`, so once an audience is bound a valid Portal token for this box is all an inbound ask needs: a leaked token is a complete impersonation of that peer until it expires, and a replay is not detected. The box logs one warning at startup in that state. Turn `peers.requireHttpSignature` on once every linked peer signs; from then on an ask without a valid signature is refused with a `401` (see [Message signatures](#message-signatures)).
 
 ### Peering over a private network (Tailscale / CGNAT)
 
@@ -215,7 +219,7 @@ A peer dials the `memoryEndpoint` on its link to this box over `https` on port 4
 
 **A packaged install serves the API under `/api/`.** The production compose and Companion Hub publish only the gateway (port 8642), which serves the API under `/api/`. The endpoint to give peers is therefore `https://<host>/api/agent/v1`. A bare `/agent/v1` reaches the web app, not the API, and the web app answers a POST with `405`.
 
-**Behind the gateway, set `peers.memoryEndpoint` to that same address.** The gateway removes `/api` from the path before the API sees it, so the API rebuilds the signed `@target-uri` from `peers.memoryEndpoint` (its authority and its path up to `/agent/v1`) and the rest of the path it received, never from `Host`. With `CI_PEER_MEMORY_ENDPOINT=https://<host>/api/agent/v1`, and peers linking exactly that address, a signed ask is checked against the URL the peer signed. That holds since Companion-Memory#PR_MEMORY. Companion Memory v2026.11.4 and earlier rebuild the target from the endpoint's origin alone, so behind the gateway they refuse every signed ask with `401`: a `did:keri:D<x>` ask, and a Portal-token ask from a box that has a signing key. An unsigned Portal-token ask carries no signed URL, so the rebuild does not affect it. A Trust Task document does not depend on the URL at all: its proof covers the document, not the address it is posted to (`<memoryEndpoint>/trust-tasks`).
+**Behind the gateway, set `peers.memoryEndpoint` to that same address.** The gateway removes `/api` from the path before the API sees it, so the API rebuilds the signed `@target-uri` from `peers.memoryEndpoint` (its authority and its path up to `/agent/v1`) and the rest of the path it received, never from `Host`. With `CI_PEER_MEMORY_ENDPOINT=https://<host>/api/agent/v1`, and peers linking exactly that address, a signed ask is checked against the URL the peer signed. That holds since Companion-Memory#PR_MEMORY. Companion Memory v2026.11.11 and earlier rebuild the target from the endpoint's origin alone, so behind the gateway they refuse every signed ask with `401`: a `did:keri:D<x>` or `did:key` ask, and a Portal-token ask from a box that has a signing key. An unsigned Portal-token ask carries no signed URL, so the rebuild does not affect it. A Trust Task document does not depend on the URL at all: its proof covers the document, not the address it is posted to (`<memoryEndpoint>/trust-tasks`).
 
 **A Companion Memory installed from Companion Hub cannot take peer asks yet.**
 
@@ -251,6 +255,7 @@ On the **receiver**:
 | | |
 |---|---|
 | `CI_PEER_AUDIENCE` | REQUIRED for Portal-token asks — without it every Portal-token ask is `503`, indistinguishable from no peer surface. A signed `did:key` / `did:keri:D<x>` ask does not consult it |
+| `peers.requireHttpSignature` (config file, no env var) | ships `false`, which accepts a Portal-token ask with no signature. Set `true` once the peer signs, so a leaked or replayed token is refused |
 | `CI_PEER_MEMORY_ENDPOINT` | the `/agent/v1` base peers store on their link to this box: `https://<host>/api/agent/v1` behind the packaged gateway (as in `docker-compose.production.yml`), which strips `/api`; a bare `https://<host>/agent/v1` there is served by the web app, which answers a POST with `405` (see [Where peers can reach this box](#where-peers-can-reach-this-box)). Signed requests are checked against `<this value>/ask`, so peers must link exactly this address. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
@@ -625,6 +630,8 @@ The bearer token answers "who is asking". It cannot answer "is this the request 
 - **Nothing binds it to the body.** Anything on the path can rewrite the question and the token still verifies.
 - **Replay is undetectable.** Only the `askId` idempotency key limits the damage, and it limits it per-key, not per-request.
 
+**All three apply to this box by default.** `peers.requireHttpSignature` ships `false`, and with it off a request that carries no signature headers is served on the token alone. The signature below closes these gaps only for requests that carry one, or for every request once the requirement is on.
+
 UMA-for-agents makes retiring bearer RPTs its recommendation #4 for exactly this. Both peer routes now accept an RFC 9421 signature:
 
 ```
@@ -644,7 +651,7 @@ Details that are load-bearing rather than incidental:
 - **The key and the token must agree.** A signature is accepted only when a live link holds that key *and* names the same `(issuer, subject)` the token asserts. Accepting any link that merely holds the key would let peer A's signature authorize a request carrying peer B's token. The key may be named by its thumbprint or, since Companion-Memory#PR_MEMORY, by the `did:key` or `did:keri:D<x>` that spells it.
 - **One refusal for every failure.** Missing, malformed, unknown key, bad digest, replayed, wrong peer — all raise the identical 401. Which check failed is a fact about this box's configuration and the owner's links; the reason is logged where the operator sees it and the caller does not.
 
-**Rollout is two switches, deliberately.** Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. Generate a key with:
+**Rollout is two switches, deliberately.** Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. **The second switch ships off**, so until an operator turns it on a Portal-token ask with no signature is accepted, and none of the properties above holds for it; the box logs a warning at startup while `peers.audience` is set and the switch is off. Turning it on refuses (with the same `401`) every ask that has no valid signature from a key on the sender's link, including asks from peers that do not sign yet. Generate a key with:
 
 ```bash
 node -e "const {generateKeyPairSync}=require('node:crypto');console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
@@ -672,7 +679,7 @@ The thumbprint is the RFC 7638 base64url SHA-256 of `{"crv":"Ed25519","kty":"OKP
 node -e "const j=JSON.parse(process.argv[1]);console.log(require('node:crypto').createHash('sha256').update(JSON.stringify({crv:j.crv,kty:j.kty,x:j.x})).digest('base64url'))" '<public JWK>'
 ```
 
-Both columns are set together, and an owner can hold only one live link per key. Until the receiver has done this, every signed ask the sender makes to it is refused: `401`, or `503` if the receiver has no `peers.memoryEndpoint`. So do not set `peers.signingKeyJwk` on a box that asks Portal-linked peers until each of them has recorded the key. Leave `kid` unset too while any of them runs v2026.11.4 or earlier: such a peer refuses a `did:key` or `did:keri:D<x>` keyid even with the key recorded (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). On a Companion Memory installed from Companion Hub, do not set the key at all yet ([Where peers can reach this box](#where-peers-can-reach-this-box)).
+Both columns are set together, and an owner can hold only one live link per key. Until the receiver has done this, every signed ask the sender makes to it is refused: `401`, or `503` if the receiver has no `peers.memoryEndpoint`. So do not set `peers.signingKeyJwk` on a box that asks Portal-linked peers until each of them has recorded the key. Leave `kid` unset too while any of them runs v2026.11.11 or earlier: such a peer refuses a `did:key` or `did:keri:D<x>` keyid even with the key recorded (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). On a Companion Memory installed from Companion Hub, do not set the key at all yet ([Where peers can reach this box](#where-peers-can-reach-this-box)).
 
 ### Keyids that name themselves: `did:key` and `did:keri:D<x>`
 
@@ -771,7 +778,7 @@ Two rules the components are built around, both in `consentProvenance.ts`:
 
 Full protocol reference, with the verification-order chart and the threat table: [`CI-Engineering/projects/decentralized-trust-graphs/SIGNATURES.md`](https://github.com/companionintelligence/CI-Engineering/blob/main/projects/decentralized-trust-graphs/SIGNATURES.md). User-facing guide: [Asking Other Companions](https://docs.ci.computer/docs/companion-memory/asking-other-companions).
 
-**Not yet:** the key is a *second factor*, not the identity. Downstream routing still resolves a link by `(issuer, subject)`. Making the thumbprint primary and the Portal token an optional attestation — UMA's `FLOW.md` result, that the owner's policy is identical under every identity regime — needs the thumbprint threaded through `PeerAskService`, and is the follow-up. Our consent code already agrees with that direction: nothing in `grantMatch.ts` or `policy.ts` mentions an issuer.
+**Not yet:** the key is a *second factor*, not the identity, and only when a signature is offered or `peers.requireHttpSignature` is on; by default it is optional. Downstream routing still resolves a link by `(issuer, subject)`. Making the thumbprint primary and the Portal token an optional attestation — UMA's `FLOW.md` result, that the owner's policy is identical under every identity regime — needs the thumbprint threaded through `PeerAskService`, and is the follow-up. Our consent code already agrees with that direction: nothing in `grantMatch.ts` or `policy.ts` mentions an issuer.
 
 ### The token
 

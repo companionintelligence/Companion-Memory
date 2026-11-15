@@ -63,6 +63,14 @@ export const DEFAULT_CHAT_MODEL = 'gemma4:e4b';
  */
 export const DEFAULT_UTILITY_MODEL = DEFAULT_CHAT_MODEL;
 
+/**
+ * What `llm.apiKey` holds when LLM_API_KEY is empty or unset. `.env.default` and the local and
+ * staging compose files set the same word. It still goes out as the bearer, since some
+ * OpenAI-compatible servers want a token of any value. Nobody chose it though, so
+ * `LlmEndpointService.getView` does not count it as a configured credential.
+ */
+export const LLM_API_KEY_PLACEHOLDER = 'ollama';
+
 const booleanStringSchema = z.preprocess((val) => {
   if (val === 'true') {
     return true;
@@ -196,10 +204,11 @@ export const ConfigSchema = z.object({
       // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
       identitySecret: z.string().default(''),
       audience: z.string().default(''),
-      // `auto` (default) requires the bound assertion once the Hub has provided
-      // both values above, and accepts the unbound format until then. `true`
-      // always requires it; `false` always accepts the unbound format too.
-      requireAudience: z.enum(['auto', 'true', 'false']).default('auto'),
+      // `true` (default) requires the bound assertion, so Hub sign-in is off
+      // until the Hub has provided both values above. `auto` is kept so older
+      // env values parse, and means `true`. `false` is the legacy opt-in that
+      // also accepts the unbound format (unless only one value above is set).
+      requireAudience: z.enum(['auto', 'true', 'false']).default('true'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single
@@ -371,7 +380,7 @@ export const ConfigSchema = z.object({
   llm: z
     .object({
       apiBase: z.string().optional(),
-      apiKey: z.string().default('ollama'),
+      apiKey: z.string().default(LLM_API_KEY_PLACEHOLDER),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
@@ -1309,6 +1318,32 @@ export const ConfigSchema = z.object({
      */
     'solid.protocol': booleanStringSchema,
     /**
+     * Master gate for RFC 9728 OAuth 2.0 Protected Resource Metadata (MCP 2026-07-28 discovery).
+     * Off by default — endpoints return 404 until explicitly enabled.
+     */
+    'mcp.prm': booleanStringSchema,
+    /**
+     * Master gate for Portable Web Spaces (PWS) storage facade (`/pws/*`):
+     * W3C CCG v0.5 permissioned storage hierarchy (Space > Collection > Resource)
+     * with zCap object capabilities. Off by default (routes 404).
+     */
+    'pws.storage': booleanStringSchema,
+    /**
+     * Master gate for IdentiKey challenge/response auth protocol (identikey-auth Phase 1):
+     * Verifier endpoints for Ed25519/P-256 single-use challenge verification. Off by default (routes 404).
+     */
+    'auth.identikey': booleanStringSchema,
+    /**
+     * Master gate for Verifiable Trust Community (OpenVTC) credentials & status lists:
+     * W3C VC 2.0 / DTG Credentials verification. Off by default (routes 404).
+     */
+    'vtc.credentials': booleanStringSchema,
+    /**
+     * Master gate for DIDComm Messaging v2.1:
+     * Pack/unpack envelopes and mediator routing. Off by default (routes 404).
+     */
+    'didcomm.messaging': booleanStringSchema,
+    /**
      * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
      * authenticates per request with a pasted API key (see docs/graphql-api.md),
      * so it cannot sit behind the auth guard — which is why it was served
@@ -1353,6 +1388,14 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Memory Desktop only: the file the desktop app keeps up to date while it runs
+  // (frontend/apps/desktop/src-tauri/src/presence.rs), mounted read-only by its
+  // compose overlay. Empty everywhere else, which turns DesktopAppService off.
+  desktopApp: z
+    .object({
+      presenceFile: z.string().default(''),
+    })
+    .default({}),
   // Peer federation (CI-Server #1711 Phase 3). `directoryUrl` is CI-Portal's
   // peer-discovery API base (handle → Companion endpoint + issuer). Empty
   // disables directory lookups (PeerDirectoryService), which nothing calls yet;
@@ -1662,7 +1705,7 @@ if (!parsed.llm.apiBase) {
 }
 
 if (!parsed.llm.apiKey) {
-  parsed.llm.apiKey = 'ollama';
+  parsed.llm.apiKey = LLM_API_KEY_PLACEHOLDER;
 }
 
 if (!parsed.llm.chatModel) {
@@ -1871,6 +1914,32 @@ if (parsed.peers.allowCgnatEndpoints) {
       '100.64.0.0/10 (CGNAT space, including Tailscale). This box will treat that range as reachable ' +
       'peer infrastructure. Only enable this if you have deliberately linked your appliances over a ' +
       'private network you trust; RFC1918, loopback and link-local space remain blocked regardless.',
+  );
+}
+
+/**
+ * True when the inbound peer surface accepts a Portal-token ask that carries no
+ * message signature: `peers.audience` is bound (so Portal-token asks are served
+ * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
+ *
+ * That is the shipped default once an operator binds an audience. The bearer
+ * token alone then authenticates the ask, so a leaked token works for its whole
+ * lifetime and replay is not detected; only a signature binds the token to one
+ * request. The default stays off for interoperability with peers that do not
+ * sign yet, so this is surfaced rather than refused.
+ */
+export function acceptsUnsignedPeerAsks(
+  peers: { audience?: string; requireHttpSignature?: boolean } = parsed.peers,
+): boolean {
+  return Boolean(peers.audience?.trim()) && peers.requireHttpSignature !== true;
+}
+
+if (acceptsUnsignedPeerAsks()) {
+  console.warn(
+    '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
+      'that carry only a Portal token are accepted without an HTTP message signature, so a leaked ' +
+      'token is enough to ask as that peer and a replayed request is not detected. Turn on ' +
+      'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
   );
 }
 

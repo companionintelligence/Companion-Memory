@@ -1,6 +1,6 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client/react';
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 
@@ -15,7 +15,6 @@ import {
   partyAvatar,
   partyLabel,
   peerLinksByHandle,
-  scopeSummary,
   searchBreadthNote,
 } from './askBinding';
 import { AskComposer } from './AskComposer';
@@ -32,6 +31,7 @@ import {
 import { AskReviewCard } from './AskReviewCard';
 import {
   APPROVE_ASK,
+  ASK_AUDIT_RECEIPT,
   ASK_DISCLOSURE_HISTORY,
   ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
@@ -124,6 +124,20 @@ const historyHiddenRows = (data: { askDisclosureHistory: { rows: readonly Hidden
  */
 export function AsksPage() {
   usePageTitle('Asks');
+
+  const apolloClient = useApolloClient();
+  const loadAuditReceipt = useCallback(
+    async (auditId: string) => {
+      const { data } = await apolloClient.query({
+        query: ASK_AUDIT_RECEIPT,
+        variables: { id: auditId },
+        fetchPolicy: 'cache-first',
+      });
+
+      return data?.askAuditReceipt ?? null;
+    },
+    [apolloClient],
+  );
 
   const [tab, setTab] = useState<Tab>('inbox');
   /** Whether the Grants tab is showing the write form rather than the matrix. */
@@ -337,7 +351,7 @@ export function AsksPage() {
                 prompt={ask.query.prompt}
                 promptHiddenCharactersRemoved={inboxHiddenCharacters.removed.has(ask.id)}
                 hiddenCharacterCheck={inboxHiddenCharacters.checkOf(ask.id)}
-                scopeSummary={scopeSummary(ask.query)}
+                scope={ask.query}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
                 actor={ask.query.actor}
@@ -547,6 +561,7 @@ export function AsksPage() {
           </Button>
 
           <DisclosureHistory
+            onLoadReceipt={loadAuditReceipt}
             rows={rows.map((row) => {
               const asker = partyAvatar(row.peerHandle, row.askerId, peerLinks);
 

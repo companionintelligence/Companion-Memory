@@ -427,6 +427,16 @@ export interface ImportParams {
    * always unset for every non-generic importer's call.
    */
   excludePaths?: readonly string[];
+  /**
+   * The account's IANA time zone (its profile's `ci.users.timezone`), for
+   * sources that write local wall-clock times with no zone or offset, such as
+   * a WhatsApp `_chat.txt` (`[1/1/21, 12:00:00 AM]`). Read in the server's zone
+   * instead, midnight on New Year's Day in a Pacific account landed at 4 PM on
+   * Dec 31 inside a UTC container. Unset where there is no account (unit
+   * tests, ad-hoc CLI runs); such a source then falls back to the server's
+   * zone, as it always did.
+   */
+  timeZone?: string;
 }
 
 export interface Timeframe {

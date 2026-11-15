@@ -8,6 +8,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 import {
   APPROVE_ASK,
   ASK_ANSWER,
+  ASK_AUDIT_RECEIPT,
   ASK_DISCLOSURE_HISTORY,
   ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
@@ -286,9 +287,10 @@ describe('AsksPage', () => {
 
     await screen.findByText('For you (2)');
 
-    // The peer-handled ask joins against myPeerLinks and gets a real photo.
+    // The peer-handled ask joins against myPeerLinks and gets a real photo. That is its own query
+    // and can land after the inbox, so Ada shows initials until it does.
+    await waitFor(() => expect(screen.getByRole('img', { name: 'ada' }).tagName).toBe('IMG'));
     const photo = screen.getByRole('img', { name: 'ada' });
-    expect(photo.tagName).toBe('IMG');
     expect(photo).toHaveAttribute('src', '/static/avatars/ada.png');
 
     // The local, opaque-id ask has nothing to resolve a photo from — it still
@@ -302,7 +304,13 @@ describe('AsksPage', () => {
   it('shows the structured scope, which is all that is on the wire', async () => {
     renderPage(defaultMocks);
 
-    await waitFor(() => expect(screen.getByText(/photos · photos/)).toBeInTheDocument());
+    // Each part is the asker's own text, so each is shown attributed and
+    // isolated rather than joined into one line of app copy.
+    const kind = await screen.findByText('Would search:');
+    const dataClass = screen.getByText('Data class they named:');
+
+    expect(kind.parentElement).toHaveTextContent('Would search: photos');
+    expect(dataClass.parentElement).toHaveTextContent('Data class they named: photos');
   });
 
   it('never lets the declared data class read as a narrower search than runs', async () => {
@@ -1827,5 +1835,58 @@ describe('AsksPage', () => {
 
     expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
     expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+  });
+
+  it('loads an ISO 27560 + SAID receipt lazily from ConsentDetailModal inside disclosure history', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+      ...repeated(historyOk([auditRow({ id: 'audit-receipt-1', outcome: 'answered' })])),
+      ...repeated(historyHiddenOk({ 'audit-receipt-1': false })),
+      {
+        request: { query: ASK_AUDIT_RECEIPT, variables: { id: 'audit-receipt-1' } },
+        result: {
+          data: {
+            askAuditReceipt: {
+              __typename: 'AskAuditReceiptPayload',
+              auditId: 'audit-receipt-1',
+              askId: 'ask-1',
+              auditSaid: 'I-audit-said-integration-123',
+              receipt: {
+                __typename: 'AskConsentReceiptType',
+                d: 'I-receipt-said-integration-456',
+                schemaVersion: 'iso-27560:2023+dpv:v2',
+                recordId: 'audit-receipt-1',
+                piiPrincipalId: 'globaluid-owner-1',
+                recipient: 'globaluid-abc123',
+                legalBasis: 'dpv:Consent',
+                purposes: ['dpv:ServiceProvision'],
+                processing: ['dpv:Disclose'],
+                consentBasis: 'explicit-approval',
+                outcome: 'answered',
+                disclosedCount: 1,
+                issuedAt: '2026-08-20T00:00:00.000Z',
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
+
+    const detailsButton = await screen.findByRole('button', { name: /Open consent details/i });
+    fireEvent.click(detailsButton);
+
+    const loadReceiptButton = await screen.findByRole('button', { name: /Load consent receipt & SAID/i });
+    fireEvent.click(loadReceiptButton);
+
+    expect(await screen.findByText('I-audit-said-integration-123')).toBeInTheDocument();
+    expect(screen.getByText('I-receipt-said-integration-456')).toBeInTheDocument();
+    expect(screen.getByText('dpv:Consent')).toBeInTheDocument();
   });
 });

@@ -11,6 +11,7 @@ import {
 } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { type User, UserEntity } from '../../entities/UserEntity';
+import type { AccountGrantRevoker } from '../accountGrantRevoker';
 import { LastAdminDeletionRefused, UserService } from '../UserService';
 
 /**
@@ -69,6 +70,18 @@ if (!availability.available) {
 
 jest.setTimeout(60_000);
 
+/**
+ * Deleting an account needs a grant revoker (`ACCOUNT_GRANT_REVOKER`, bound by PrivacyModule). These
+ * accounts hold no provider grants, so this one records nothing and finds nothing to revoke; the
+ * revocations themselves are covered by the privacy domain's suites.
+ */
+const noGrantsToRevoke = {
+  get: (): AccountGrantRevoker => ({
+    recordAccountEnd: async () => 'no-audit-row',
+    revokePendingGrants: async () => [],
+    recordAccountEndFailed: async () => undefined,
+  }),
+} as never;
 describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${availability.target})`, () => {
   let dataSource: DataSource;
   let schemaLock: SchemaLock | null = null;
@@ -106,7 +119,7 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
     // Nothing observing UserCreated is under test, and no listener should run against this database.
     const eventService = { send: async () => [] };
 
-    service = new UserService(dataSource.getRepository(UserEntity), eventService as never);
+    service = new UserService(dataSource.getRepository(UserEntity), eventService as never, noGrantsToRevoke);
   });
 
   beforeEach(async () => {

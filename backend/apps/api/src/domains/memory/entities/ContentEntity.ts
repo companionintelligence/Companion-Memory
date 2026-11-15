@@ -95,6 +95,16 @@ export class ContentEntity {
   @JoinColumn({ name: 'event_id' })
   event?: EventEntity;
 
+  /**
+   * The same `event_id` as a plain column, as `userId` is beside `user`: the relation is only
+   * populated when a query joins it, and none of the reads do, so `eventId` (read off the
+   * relation) was null on every content row fetched, including through GraphQL, whose
+   * `ContentType.event` therefore never resolved. Writes still name the relation
+   * (`toDetailFields` sets both from one value).
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'event_id' })
+  eventId!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -121,7 +131,7 @@ export class ContentEntity {
       sourceId: entity.sourceId || null,
       connectionId: entity.connectionId || null,
       userId: entity.userId ?? entity.user?.id ?? null,
-      eventId: entity.event?.id || null,
+      eventId: entity.eventId ?? entity.event?.id ?? null,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
       event: entity.event ? EventEntity.toEgressType(entity.event) : undefined,
       createdAt: entity.createdAt,

@@ -27,6 +27,7 @@ the one this exists to catch. Only connection-level failures count as down.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -38,7 +39,14 @@ from ci.sidecar.llm_host import (
     running_in_container,
 )
 
-from .config import NoChatModelError, resolve_llm_model, settings
+from .config import (
+    NoChatModelError,
+    forget_output_mode,
+    model_rows,
+    resolve_llm_model,
+    settings,
+    why_not_still,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +66,8 @@ class EndpointStatus:
     url: str
     reachable: bool
     detail: str
+    # The model ids GET /models listed, when it answered 2xx with a model list.
+    served: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {"url": self.url, "reachable": self.reachable, "detail": self.detail}
@@ -135,22 +145,85 @@ def probe_endpoint(
             detail=f"Endpoint answered {response.status_code} on GET /models.",
         )
 
+    try:
+        served = tuple(str(row["id"]) for row in model_rows(response.json()))
+    except Exception:
+        # Answered, but not with a model list. The model is checked by asking again.
+        served = None
+
     return EndpointStatus(
-        url=base, reachable=True, detail="Endpoint answered on GET /models."
+        url=base,
+        reachable=True,
+        detail="Endpoint answered on GET /models.",
+        served=served,
     )
 
 
+# Held while the remembered model is looked at and forgotten, so one /health
+# can't clear it between another's look and its use.
+_checking_the_model = threading.Lock()
+
+
 def available_chat_model(status: EndpointStatus) -> str | None:
-    """The model work would run on right now, or None while there isn't one."""
-    if not status.reachable and not settings.llm_model:
-        # resolve_llm_model would only repeat the request that just failed, and
-        # against an address that drops packets that takes ten more seconds.
-        return None
+    """
+    The model work would run on right now, or None while there isn't one.
+
+    resolve_llm_model remembers its answer, and this used to repeat it: with
+    the endpoint down, and after the endpoint stopped serving the model. So the
+    API's gate stayed open and every summary job failed against a model that
+    wasn't there, then retried until its retries ran out. Now the answer is
+    checked against the endpoint's listing first and forgotten when it no
+    longer holds, so this says None and a run that starts anyway asks again.
+    """
+    with _checking_the_model:
+        if not status.reachable:
+            # Asking again would only repeat the request that just failed, and
+            # against an address that drops packets that takes ten more seconds.
+            _forget_the_model("its endpoint does not answer")
+            return None
+
+        remembered = _remembered_model()
+        if remembered is not None:
+            reason = why_not_still(remembered, status.served)
+            if reason is not None:
+                _forget_the_model(reason)
 
     try:
         return resolve_llm_model()
     except NoChatModelError:
         return None
+
+
+def _remembered_model() -> str | None:
+    """What resolve_llm_model last answered, without asking the endpoint."""
+    if not resolve_llm_model.cache_info().currsize:
+        return None
+
+    return resolve_llm_model()
+
+
+def _forget_the_model(reason: str) -> None:
+    """Drop the remembered model and everything built on it, so the next use asks again."""
+    # Imported here because they build the agents, which nothing else in this
+    # module needs.
+    from .llm_config import get_llm_config
+    from .summarizer import summarizer
+
+    remembered = _remembered_model()
+    if remembered is not None:
+        logger.warning(
+            "Forgetting chat model %r: %s. Summaries, insights and actions ask "
+            "for a model again before they run.",
+            remembered,
+            reason,
+        )
+
+    # All of it, whether or not a model was remembered: a run that was building
+    # its agents when the model was last forgotten can store them afterwards.
+    resolve_llm_model.cache_clear()
+    get_llm_config.cache_clear()
+    summarizer.dossier_agent = None
+    forget_output_mode()
 
 
 def llm_report() -> dict[str, object]:
@@ -172,7 +245,21 @@ def check_endpoint_at_startup() -> EndpointStatus:
             url=settings.llm_api_base, reachable=False, detail=str(exc)
         )
 
-    if available_chat_model(status) is None:
+    model = available_chat_model(status)
+
+    if not status.reachable and settings.llm_model:
+        # ERROR, not WARNING: a model is configured, so an endpoint was meant to
+        # be here. No summary, insight or action runs until this is fixed, and
+        # nothing else says why.
+        logger.error(
+            "LLM endpoint %s is UNREACHABLE. Summaries, insights and actions wait "
+            "until it answers. %s",
+            status.url,
+            status.detail,
+        )
+        return status
+
+    if model is None:
         # WARNING, not ERROR: this is a Hub nobody has added an AI engine to yet,
         # and nothing has failed. Memory runs without it and the work waits.
         logger.warning(
@@ -180,19 +267,7 @@ def check_endpoint_at_startup() -> EndpointStatus:
         )
         return status
 
-    if status.reachable:
-        logger.info("LLM endpoint %s is reachable. %s", status.url, status.detail)
-        return status
-
-    # ERROR, not WARNING: every summary, insight and action this service is asked
-    # to produce will fail until this is fixed, and the failures surface far from
-    # the cause.
-    logger.error(
-        "LLM endpoint %s is UNREACHABLE — summaries, insights and actions will "
-        "all fail. %s",
-        status.url,
-        status.detail,
-    )
+    logger.info("LLM endpoint %s is reachable. %s", status.url, status.detail)
 
     return status
 

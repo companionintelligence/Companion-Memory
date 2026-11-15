@@ -34,6 +34,11 @@ import { selfCertifyingIssuerOf } from './selfCertifyingKeyId';
  * is the peer's identity, over a base that covers the method, the target and a
  * digest of the body, with a nonce and a validity window.
  *
+ * That answer applies only to a request that carries a signature, or to every
+ * request once `peers.requireHttpSignature` is on. The flag ships off, so on
+ * the defaults an unsigned Portal-token ask is still accepted and all three
+ * problems above hold for it (see `PeerAskController.assertSignature`).
+ *
  * ═══ WHAT IS DELIBERATELY NOT HERE ═══
  *
  * A general structured-fields (RFC 8941) parser. This module accepts exactly

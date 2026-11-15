@@ -8,6 +8,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import {
   ContrastiveDecisionService,
   type ChoiceDecisionResult,
+  type IngressCommitmentScore,
   type NoulDecisionResult,
   type RankDecisionResult,
   type ScoreDecisionResult,
@@ -15,7 +16,11 @@ import {
 import { ModelTierRouter } from '../services/ModelTierRouter';
 import type { RoutingDecision, TierProfile } from '../types';
 
-const routingRequestSchema = z
+// The three request schemas are exported for `__tests__/cliWireContract.test.ts`,
+// which checks that the requests the `ci` CLI sends parse with nothing stripped.
+// `.strip()` means a misnamed field is dropped, not refused, so only that check
+// can tell a working flag from a silent one.
+export const routingRequestSchema = z
   .object({
     estimatedInputTokens: z.number().int().nonnegative().optional(),
     reasoningLevel: z.enum(['light', 'moderate', 'deep']).optional(),
@@ -69,13 +74,13 @@ const scoreDecisionSchema = z.object({
   temperature: z.number().positive().optional(),
 });
 
-const decideRequestSchema = z.discriminatedUnion('primitive', [
+export const decideRequestSchema = z.discriminatedUnion('primitive', [
   noulDecisionSchema,
   choiceDecisionSchema,
   scoreDecisionSchema,
 ]);
 
-const rankRequestSchema = z
+export const rankRequestSchema = z
   .object({
     query: z.string().min(1),
     candidates: z
@@ -90,6 +95,13 @@ const rankRequestSchema = z
     topK: z.number().int().positive().optional(),
     engine: engineEnum,
     temperature: z.number().positive().optional(),
+  })
+  .strip();
+
+const ingressRequestSchema = z
+  .object({
+    text: z.string().min(1),
+    threshold: z.number().min(0).max(1).optional(),
   })
   .strip();
 
@@ -209,5 +221,27 @@ export class ModelRoutingController {
   @Get('arena')
   getArena(): { size: number } {
     return this.decisionService.getArenaStats();
+  }
+
+  /**
+   * Evaluate an inbound message or memory fragment with the unified System 1
+   * ingress commitment pre-filter (HBPE `/decision/ingress` + Contrastive `noul`).
+   */
+  @Post('ingress')
+  @RequireCapability(READ_CAPABILITY)
+  async scoreIngress(
+    @Context() context: RequestContext,
+    @Body() body: unknown,
+  ): Promise<IngressCommitmentScore> {
+    const parsed = ingressRequestSchema.safeParse(body ?? {});
+
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+
+    return this.decisionService.scoreIngressCommitment(parsed.data.text, {
+      userId: context?.userId,
+      threshold: parsed.data.threshold,
+    });
   }
 }

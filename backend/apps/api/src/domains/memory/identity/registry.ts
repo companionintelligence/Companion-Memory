@@ -124,6 +124,11 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'withings',
   // Browser extension only (external ingest; no importer reads Safari history)
   'safari',
+  // Agent conversation turns (POST /memory/turn, agentTurnSourceSystem): the agent that held
+  // the conversation. `agent` is the fallback for a caller that names no platform.
+  'agent',
+  'hermes',
+  'openclaw',
   // Internal producers (not user-facing platforms, but they mint rows too)
   'attachment_extract',
   'capture',
@@ -241,6 +246,23 @@ export function adoptIngestIdentity(
     system: system != null ? canonicalSystem(system) : undefined,
     id: id != null ? asSourceId(id) : undefined,
   };
+}
+
+/**
+ * The `source_system` of a conversation turn an agent stored through `POST /memory/turn`: the
+ * caller's `platform`, lowercased, with anything outside `[a-z0-9_]` turned into `_`
+ * (`OpenClaw` → `openclaw`, `ha-voice-pe` → `ha_voice_pe`), or `agent` when it names none.
+ * The explorer's How filter offers each agent by this value, and hides every agent turn until
+ * one is chosen (`AGENT_TURN_MESSAGE_CATEGORY`).
+ */
+export function agentTurnSourceSystem(platform: string | null | undefined): SourceSystem {
+  const slug = (platform ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return canonicalSystem(slug || 'agent');
 }
 
 /**

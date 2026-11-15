@@ -43,6 +43,7 @@ const SMALL_ORDER_Y: ReadonlySet<bigint> = new Set([0n, 1n, P - 1n, ORDER_8_Y, P
 
 function mod(value: bigint): bigint {
   const result = value % P;
+
   return result >= 0n ? result : result + P;
 }
 

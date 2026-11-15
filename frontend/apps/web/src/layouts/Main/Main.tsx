@@ -6,6 +6,7 @@ import { Outlet } from 'react-router-dom';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { AppToaster } from '@/components/AppToaster';
+import { DesktopAppClosedBanner } from '@/components/DesktopAppClosed/DesktopAppClosedBanner';
 import { GettingStartedBanner } from '@/components/GettingStarted/GettingStartedBanner';
 import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
 import { useBackground } from '@/components/ThemePicker';
@@ -48,6 +49,7 @@ export function Main() {
               page content, inert behind the scrim like the rest. Every authenticated
               page passes through this layout, which makes it the one place the
               page-load check reaches "across all pages". */}
+          <DesktopAppClosedBanner />
           <GettingStartedBanner />
           <UnsyncedImportsBanner suppressed={gettingStartedActive} />
           <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
@@ -117,7 +119,8 @@ export function Main() {
 
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
           <MemoryContractStrip />
-          {/* Same notice as the phone's, in the same slot: above the page, in flow. */}
+          {/* Same notices as the phone's, in the same slot: above the page, in flow. */}
+          <DesktopAppClosedBanner />
           <GettingStartedBanner />
           <UnsyncedImportsBanner suppressed={gettingStartedActive} />
           <Suspense fallback={<LoadingPage />}>

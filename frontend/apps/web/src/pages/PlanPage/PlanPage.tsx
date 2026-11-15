@@ -431,7 +431,9 @@ export function PlanPage() {
       <PageContent>
         <div className={cn('flex h-full min-h-0 w-full flex-col', isMobile ? 'gap-2' : 'gap-6')}>
           <div className="mx-auto w-full max-w-3xl shrink-0">
-            <NewTaskForm onCreated={() => void refetch()} />
+            {/* `refresh` re-reads the rail badge too. The live stream also moves
+                it, but not on the phone, which has no token to open the stream. */}
+            <NewTaskForm onCreated={refresh} />
           </div>
 
           {selectedIds.length > 0 ? (

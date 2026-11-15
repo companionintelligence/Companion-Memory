@@ -128,7 +128,7 @@ export class FilePreviewService {
 
     const fileWithKey = file as RequiredFields<typeof file, 'key', true>;
 
-    let result: PreviewResult | null = null;
+    let result: PreviewResult | null;
 
     if (file.contentType.startsWith(IMAGE_MIME_PREFIX)) {
       result = await this.generateImagePreview(context, fileWithKey);

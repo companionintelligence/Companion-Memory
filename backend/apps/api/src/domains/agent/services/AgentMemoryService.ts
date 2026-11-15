@@ -4,6 +4,8 @@ import { In, IsNull, LessThan, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import { defaultDecisionClient } from '@ci/common/hbpe/decisionClient';
+import { DECISION_FLAGS, isDecisionFlagOn } from '@ci/common/hbpe/decisionFlags';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 import { PersonService, UserContextService } from '@ci/domains/memory';
@@ -334,7 +336,43 @@ export class AgentMemoryService {
       { queue: 'search-index' },
     );
 
+    // `MEMORY_INGRESS_DECISION` (default off). Scored after the write and not
+    // awaited, so the caller never waits on the sidecar and the write's outcome
+    // cannot change.
+    if (isDecisionFlagOn(DECISION_FLAGS.memoryIngress)) {
+      this.recordMemoryIngress(context.userId, saved.id, saved.content);
+    }
+
     return AgentMemoryEntity.toEgressType(saved);
+  }
+
+  /**
+   * Score a fragment with HBPE `/decision/ingress` and log the scores beside the
+   * write. Nothing on the write path persists a per-write score: `ci.agent_memories`
+   * has no metadata column, and no audit store takes one. The log line is the only
+   * record, so the scores are not stored with the memory.
+   */
+  private recordMemoryIngress(userId: string, memoryId: string, content: string): void {
+    try {
+      defaultDecisionClient()
+        .ingress(userId, content)
+        .then((decision) => {
+          if (decision) {
+            this.logger.log('Memory ingress decision', {
+              memoryId,
+              userId,
+              intent: decision.intent,
+              intentConfidence: decision.intent_confidence,
+              isCommitment: decision.is_commitment,
+              commitmentProbability: decision.commitment_probability,
+              sensitivity: decision.sensitivity,
+            });
+          }
+        })
+        .catch(() => undefined);
+    } catch {
+      // Recording is best effort: a failure here must not touch the write.
+    }
   }
 
   /**

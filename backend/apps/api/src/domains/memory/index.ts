@@ -37,6 +37,7 @@ import { UserModule, UserEntity } from '@ci/domains/user';
 
 import { GraphController } from './controllers/GraphController';
 import { DeterministicPersonMergeCron } from './cron/DeterministicPersonMergeCron';
+import { StoredObjectDeletionSweepCron } from './cron/StoredObjectDeletionSweepCron';
 import { BaseEntity } from './entities/BaseEntity';
 import { CommunicationBaseEntity } from './entities/CommunicationBaseEntity';
 import { type Communication, CommunicationEntity } from './entities/CommunicationEntity';
@@ -175,6 +176,7 @@ import { UserContextService } from './services/UserContextService';
     // Hourly, worker-role: drains the deterministic merge-candidate backlog
     // (email / E.164 phone / exact profile URL) with a live re-check per pair.
     DeterministicPersonMergeCron,
+    StoredObjectDeletionSweepCron,
     PersonMergeService,
     PlaceMergeService,
     PlaceDuplicateService,
@@ -334,7 +336,7 @@ export {
 } from './services/eventLocationReopener';
 // The pipeline's `metadata.location_source` / `promote.stage` vocabulary as the location refresh reads it;
 // pipeline/__tests__/sourceLocationVocabulary.spec.ts holds the stages to it.
-export { SOURCE_LOCATION_VOCABULARY } from './services/sourceLocationMerge';
+export { SOURCE_LOCATION_VOCABULARY, coordinatesOf } from './services/sourceLocationMerge';
 export { changedFieldsBetween } from './services/GraphDeltaWriter';
 export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
@@ -356,7 +358,7 @@ export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/Cale
 export * from './recurrence';
 export type { PlaceKind } from './entities/PlaceEntity';
 export type { PhotosAtNamedPlace, PlaceVisitStats } from './services/PlaceService';
-export { PHOTO_AT_PLACE_METERS, queryNamesPlace } from './services/PlaceService';
+export { PHOTO_AT_PLACE_METERS, placeNameWords, queryNamesPlace } from './services/PlaceService';
 export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';
 export { previewFromContent } from './entities/CommunicationEntity';
 export type { BlockReason } from './services/EntityMergeBlockService';

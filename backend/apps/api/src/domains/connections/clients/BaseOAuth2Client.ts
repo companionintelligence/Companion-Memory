@@ -54,6 +54,16 @@ export abstract class BaseOAuth2Client extends BaseClient {
    */
   readonly revokesWithAccessToken: boolean = false;
 
+  /**
+   * Whether {@link revoke} can end a grant with this provider at all: false for
+   * a provider with no revocation endpoint, whose `revoke()` always answers
+   * `{ revoked: false }` without asking it. Lets a caller tell "nothing to
+   * revoke here" from "the provider did not accept the revocation".
+   */
+  get canRevoke(): boolean {
+    return this.revocationEndpoint != null || this.revokesWithAccessToken;
+  }
+
   protected abstract scopes: string[];
 
   protected abstract extraAuthParams: Record<string, string>;

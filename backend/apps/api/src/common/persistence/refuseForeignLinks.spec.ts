@@ -70,4 +70,62 @@ describe('refuseForeignLinks', () => {
       `document_content_id ${SCAN} is a row of ci.content that belongs to another account or to none, so the receipt was refused.`,
     );
   });
+
+  it.each([
+    ['a GraphQL global id', 'cGVyc29uOjAxYTFkNDg4LTEzZDYtNzA5Mi04ZTllLWI5NTEyNjYyNzg1Mg=='],
+    ['a word', 'not-an-id'],
+    ['an empty id', ''],
+  ])("refuses %s as the caller's mistake before asking anything", async (_label, id) => {
+    const { manager, query } = managerReturning([]);
+
+    const refused = refuseForeignLinks(
+      manager,
+      OWNER,
+      [
+        { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: [PLACE] },
+        { field: 'participant_entity_ids', ...OWNED_TABLES.entities, ids: [PLACE, id] },
+      ],
+      'event',
+    );
+
+    await expect(refused).rejects.toBeInstanceOf(BadRequestException);
+    await expect(refused).rejects.toThrow(
+      `participant_entity_ids ${JSON.stringify(id)} is not a uuid, so the event was refused.`,
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('quotes a long id only in part', async () => {
+    const { manager } = managerReturning([]);
+    const id = 'x'.repeat(500);
+
+    await expect(
+      refuseForeignLinks(
+        manager,
+        OWNER,
+        [{ field: 'event_id', ...OWNED_TABLES.events, ids: [id] }],
+        'sighting',
+      ),
+    ).rejects.toThrow(`event_id "${'x'.repeat(64)}..." is not a uuid, so the sighting was refused.`);
+  });
+
+  it('passes every spelling Postgres reads as a uuid on to the lookup', async () => {
+    const { manager, query } = managerReturning([]);
+    const spellings = [
+      PLACE.toUpperCase(),
+      `{${PLACE}}`,
+      PLACE.replaceAll('-', ''),
+      '0000-0000-0000-0000-0000-0000-0000-00b1',
+    ];
+
+    await refuseForeignLinks(
+      manager,
+      OWNER,
+      [{ field: 'place_entity_id', ...OWNED_TABLES.entities, ids: spellings }],
+      'receipt',
+    );
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]).toEqual([OWNER, spellings]);
+  });
 });

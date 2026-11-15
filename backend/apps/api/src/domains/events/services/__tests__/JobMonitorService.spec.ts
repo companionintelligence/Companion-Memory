@@ -5,7 +5,6 @@ import type { DataSource, Repository } from 'typeorm';
 import { JobControlStore } from '@ci/common/job-controls';
 import { CronRegistry, CronRunStore } from '@ci/common/schedule';
 
-import type { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
 import type { PgBossJobEntity } from '../../entities/PgBossJobEntity';
 import type { PgBossQueueEntity } from '../../entities/PgBossQueueEntity';
 import type { PgBossScheduleEntity } from '../../entities/PgBossScheduleEntity';
@@ -141,7 +140,6 @@ function stubFilteringJobRepository(jobs: Array<{ name: string; state: string; d
 
 function makeService(options: {
   jobStateRows?: RawRow[];
-  archiveStateRows?: RawRow[];
   cronJobs?: Map<string, unknown>;
   jobEntities?: unknown[];
 }) {
@@ -152,7 +150,6 @@ function makeService(options: {
     rows: options.jobStateRows ?? [],
     entities: options.jobEntities ?? [],
   });
-  const archiveRepository = stubRepository({ rows: options.archiveStateRows ?? [] });
   const scheduleRepository = stubRepository({ count: 0 });
   const queueRepository = stubRepository();
 
@@ -162,13 +159,12 @@ function makeService(options: {
 
   const service = new JobMonitorService(
     jobRepository as unknown as Repository<PgBossJobEntity>,
-    archiveRepository as unknown as Repository<PgBossArchiveEntity>,
     scheduleRepository as unknown as Repository<PgBossScheduleEntity>,
     queueRepository as unknown as Repository<PgBossQueueEntity>,
     schedulerRegistry,
   );
 
-  return { service, jobRepository, archiveRepository };
+  return { service, jobRepository };
 }
 
 const context = { userId: 'user-1' };
@@ -229,10 +225,6 @@ describe('JobMonitorService.getDashboard', () => {
         { state: 'failed', count: 821, deadLettered: 0 },
         { state: 'completed', count: 26837, deadLettered: 0 },
       ],
-      archiveStateRows: [
-        { state: 'completed', count: 88298 },
-        { state: 'failed', count: 370 },
-      ],
     });
 
     const { summary } = await service.getDashboard(context);
@@ -242,8 +234,8 @@ describe('JobMonitorService.getDashboard', () => {
     expect(summary.deadLettered).toBe(1191);
     expect(summary.active).toBe(12);
     expect(summary.retry).toBe(3);
-    expect(summary.completed).toBe(26837 + 88298);
-    expect(summary.failed).toBe(821 + 370);
+    expect(summary.completed).toBe(26837);
+    expect(summary.failed).toBe(821);
   });
 
   it('reports zero rather than a negative when every created job is dead-lettered', async () => {
@@ -315,14 +307,12 @@ describe('JobMonitorService.getDashboard', () => {
         data: { name: 'smart.rotation.work', workType: 'geo-refresh' },
       },
     ]);
-    const archiveRepository = stubRepository();
     const scheduleRepository = stubRepository({ count: 0 });
     const queueRepository = stubRepository();
     const schedulerRegistry = { getCronJobs: () => new Map() } as unknown as SchedulerRegistry;
 
     const service = new JobMonitorService(
       jobRepository as unknown as Repository<PgBossJobEntity>,
-      archiveRepository as unknown as Repository<PgBossArchiveEntity>,
       scheduleRepository as unknown as Repository<PgBossScheduleEntity>,
       queueRepository as unknown as Repository<PgBossQueueEntity>,
       schedulerRegistry,
@@ -332,6 +322,28 @@ describe('JobMonitorService.getDashboard', () => {
 
     // The dead-lettered row must not inflate the count.
     expect(smartRotationDistribution).toEqual([{ workType: 'geo-refresh', count: 2 }]);
+  });
+
+  it('dates a finished job by when it finished, or when it was created if pg-boss recorded neither', async () => {
+    const createdOn = new Date('2026-08-17T00:00:00.000Z');
+    const completedOn = new Date('2026-08-17T00:05:00.000Z');
+    const job = { id: 'job-1', name: 'default', state: 'completed', createdOn, startAfter: createdOn };
+
+    const { service, jobRepository } = makeService({
+      jobEntities: [
+        { ...job, completedOn },
+        { ...job, id: 'job-2', completedOn: null },
+      ],
+    });
+
+    const { archive } = await service.getDashboard(context);
+
+    expect(archive.map((record) => record.archivedOn)).toEqual([
+      completedOn.toISOString(),
+      createdOn.toISOString(),
+    ]);
+    // The first find is the recent list, the second is the finished list.
+    expect(jobRepository.find).toHaveBeenCalledTimes(2);
   });
 
   /**

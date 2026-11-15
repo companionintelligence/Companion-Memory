@@ -97,17 +97,30 @@ describeWithDatabase(`immediate account delete, against the real schema (${avail
   };
 
   const makeService = (source: DataSource) => {
-    const users = new UserService(source.getRepository(UserEntity), { send: async () => undefined } as never);
-    const purge = new AccountPurgeService(source, new LoggerService(), {
-      deleteObjects: async (bucket: string, keys: string[]) => {
-        deletedObjects.push({ bucket, keys });
+    // As PrivacyModule binds it: the deletion service below is the grant revoker both of these
+    // resolve at call time (`ACCOUNT_GRANT_REVOKER`).
+    let deletion: DataDeletionService | undefined;
+    const moduleRef = { get: () => deletion } as never;
+    const users = new UserService(
+      source.getRepository(UserEntity),
+      { send: async () => undefined } as never,
+      moduleRef,
+    );
+    const purge = new AccountPurgeService(
+      source,
+      new LoggerService(),
+      {
+        deleteObjects: async (bucket: string, keys: string[]) => {
+          deletedObjects.push({ bucket, keys });
+        },
       },
-    });
+      moduleRef,
+    );
 
     return {
       users,
       purge,
-      deletion: new DataDeletionService(
+      deletion: (deletion = new DataDeletionService(
         source,
         // No connections to revoke: the revocations are not what this suite is about.
         { find: async () => [] } as never,
@@ -119,7 +132,7 @@ describeWithDatabase(`immediate account delete, against the real schema (${avail
         new LoggerService(),
         users,
         purge,
-      ),
+      )),
     };
   };
 

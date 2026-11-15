@@ -240,7 +240,7 @@ async function recognizeLevel(
       }
     } catch (err) {
       // Propagate error with data source context
-      throw new Error(`${ds.name}: ${(err as Error).message}`);
+      throw new Error(`${ds.name}: ${(err as Error).message}`, { cause: err });
     }
   }
 
@@ -549,7 +549,7 @@ export function unmarshalOptions(ds: DataSource, raw: string | undefined): unkno
 
     return parsed;
   } catch (e) {
-    throw new Error(`decoding data source options: ${(e as Error).message}`);
+    throw new Error(`decoding data source options: ${(e as Error).message}`, { cause: e });
   }
 }
 

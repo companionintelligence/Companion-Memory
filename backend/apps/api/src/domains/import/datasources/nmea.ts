@@ -157,13 +157,26 @@ function parseDateTimeUTC(dateDDMMYY: string | undefined, timeHHMMSS: string): D
 
   const day = parseInt(dateDDMMYY.slice(0, 2), 10);
   const month = parseInt(dateDDMMYY.slice(2, 4), 10) - 1;
-  const year = 2000 + parseInt(dateDDMMYY.slice(4, 6), 10);
+  const year = nmeaYear(parseInt(dateDDMMYY.slice(4, 6), 10));
 
   const hh = parseInt(timeHHMMSS.slice(0, 2), 10) || 0;
   const mm = parseInt(timeHHMMSS.slice(2, 4), 10) || 0;
   const ss = parseInt(timeHHMMSS.slice(4, 6), 10) || 0;
 
   return new Date(Date.UTC(year, month, day, hh, mm, ss));
+}
+
+/**
+ * The full year for RMC's two-digit `yy`.
+ *
+ * RMC never carries the century, so it needs a pivot. GPS time starts in
+ * 1980, so no receiver can have logged a fix dated 1900 to 1979: `80`-`99` are
+ * 1980-1999 and `00`-`79` are 2000-2079. Reading every `yy` as 20yy put a 1994
+ * log (`230394`) at 2094-03-23. A fix 70 years in the future then sat at the
+ * top of location history as the "last fix".
+ */
+function nmeaYear(yy: number): number {
+  return yy >= 80 ? 1900 + yy : 2000 + yy;
 }
 
 function parseLat(raw: string, hemi: string): number | undefined {

@@ -6,6 +6,12 @@ import { SYSTEM_USER } from '@ci/common/context';
 
 import { UserEntity } from '../../entities/UserEntity';
 import { UserRemovedEvent, UserUpdatedEvent } from '../../events';
+import {
+  ACCOUNT_GRANT_REVOKER,
+  AccountGrantRevokerUnavailable,
+  type AccountGrantRevoker,
+  type GrantRevocation,
+} from '../accountGrantRevoker';
 import { LastAdminDeletionRefused, UserService } from '../UserService';
 
 jest.mock('bcrypt', () => ({ hash: jest.fn(), compare: jest.fn() }));
@@ -27,7 +33,14 @@ interface Appliance {
   successors: Array<{ id: string }>;
 }
 
-function makeService(appliance: Partial<Appliance> = {}) {
+function makeService(
+  appliance: Partial<Appliance> = {},
+  /**
+   * Builds the `ACCOUNT_GRANT_REVOKER` binding, journalling into the same journal. Left out, a
+   * silent one that revokes nothing is bound; `null` binds none.
+   */
+  makeRevoker?: ((journal: string[]) => AccountGrantRevoker) | null,
+) {
   const {
     target = { id: 'user-1', role: 'user' },
     otherAdmins = false,
@@ -103,6 +116,12 @@ function makeService(appliance: Partial<Appliance> = {}) {
         return Promise.resolve([[], 0]);
       }
 
+      if (sql.includes('INSERT INTO ci.data_deletion_audit')) {
+        journal.push('audit-refused');
+
+        return Promise.resolve([]);
+      }
+
       return Promise.reject(new Error(`unexpected statement in the deletion transaction: ${sql}`));
     }),
     update: jest.fn((_entity: unknown, _id: string, _patch: Record<string, unknown>) => {
@@ -120,7 +139,7 @@ function makeService(appliance: Partial<Appliance> = {}) {
     create: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     manager: {
-      // Outside any transaction: the unlocked forecast (`assertMayEndAccount`).
+      // Outside any transaction: the refusal's audit row.
       query: transactionManager.query,
       transaction: jest.fn(async (run: (m: unknown) => Promise<unknown>) => {
         const result = await run(transactionManager);
@@ -133,9 +152,30 @@ function makeService(appliance: Partial<Appliance> = {}) {
   };
   const eventService = { send: jest.fn() };
 
-  const service = new UserService(userRepository as never, eventService as never);
+  // What Nest hands the service: the binding PrivacyModule makes, found by its token.
+  const revoker =
+    makeRevoker === null
+      ? undefined
+      : (makeRevoker?.(journal) ?? {
+          recordAccountEnd: jest.fn(async () => 'audit-1'),
+          revokePendingGrants: jest.fn(async () => []),
+          recordAccountEndFailed: jest.fn(async () => undefined),
+        });
+  const moduleRef = revoker
+    ? {
+        get: jest.fn((token: string) => {
+          if (token !== ACCOUNT_GRANT_REVOKER) {
+            throw new Error(`no provider for ${token}`);
+          }
 
-  return { service, userRepository, transactionManager, eventService, journal, queries };
+          return revoker;
+        }),
+      }
+    : undefined;
+
+  const service = new UserService(userRepository as never, eventService as never, moduleRef as never);
+
+  return { service, userRepository, transactionManager, eventService, journal, queries, moduleRef };
 }
 
 // `makeService()` hands out fresh repository mocks per test, but the bcrypt module mock
@@ -393,6 +433,188 @@ describe('UserService — account deletion', () => {
   });
 
   /**
+   * `DELETE /account` (the Profile page's "Delete account") revokes every connection's provider
+   * grant, as the immediate delete does. The order is the point: the last-administrator rule and the
+   * account's end are decided under the lock first, and no provider is asked until they have
+   * committed, so a refused request revokes nothing; and no lock is held while one is asked.
+   */
+  describe('requestDeletion — provider grants', () => {
+    const OUTCOMES: GrantRevocation[] = [
+      { connectionId: 'conn-1', providerId: 'google', outcome: 'revoked', tokenRevoked: true },
+      { connectionId: 'conn-2', providerId: 'dropbox', outcome: 'failed', tokenRevoked: false },
+    ];
+
+    function makeRevoker(journal: string[]) {
+      return {
+        recordAccountEnd: jest.fn(async () => {
+          journal.push('mark-pending-and-audit');
+
+          return 'audit-1';
+        }),
+        revokePendingGrants: jest.fn(async () => {
+          journal.push('ask-providers');
+
+          return OUTCOMES;
+        }),
+        recordAccountEndFailed: jest.fn(async () => {
+          journal.push('audit-failed');
+        }),
+      };
+    }
+
+    function setUp(appliance: Partial<Appliance> = {}) {
+      let revoker!: ReturnType<typeof makeRevoker>;
+      const made = makeService(appliance, (journal) => {
+        revoker = makeRevoker(journal);
+
+        return revoker;
+      });
+
+      return { ...made, revoker };
+    }
+
+    it('decides and ends the account under the lock first, and asks the providers only after the commit', async () => {
+      const { service, journal, revoker, transactionManager, eventService } = setUp();
+
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(true);
+
+      expect(journal).toEqual([
+        'lock',
+        'read-target',
+        'soft-delete',
+        'drop-invitations',
+        'unshare-searches',
+        'revoke-peer-links',
+        'revoke-grants',
+        'mark-pending-and-audit',
+        'commit',
+        'ask-providers',
+      ]);
+      // Through the transaction's own manager, so the pending marks and the audit row commit with
+      // the account's end and only with it.
+      expect(revoker.recordAccountEnd).toHaveBeenCalledWith(transactionManager, 'user-1');
+      expect(revoker.revokePendingGrants).toHaveBeenCalledTimes(1);
+      expect(revoker.revokePendingGrants).toHaveBeenCalledWith('user-1');
+      expect(revoker.recordAccountEndFailed).not.toHaveBeenCalled();
+      expect(eventService.send).toHaveBeenCalledWith(UserRemovedEvent, { userId: 'user-1' });
+    });
+
+    it('asks no provider for a last administrator the locked rule refuses', async () => {
+      const { service, journal, revoker, transactionManager } = setUp({
+        target: { id: 'user-1', role: 'admin' },
+        otherAccounts: true,
+      });
+
+      await expect(service.requestDeletion(OWN, 'user-1')).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+
+      expect(journal).toEqual(['lock', 'read-target', 'count-others']);
+      expect(revoker.revokePendingGrants).not.toHaveBeenCalled();
+      expect(revoker.recordAccountEnd).not.toHaveBeenCalled();
+      expect(revoker.recordAccountEndFailed).not.toHaveBeenCalled();
+      expect(transactionManager.update).not.toHaveBeenCalled();
+    });
+
+    it('records the failure, ends nothing and asks no provider when the writes in the transaction fail', async () => {
+      const { service, journal, revoker, eventService } = setUp();
+      const failure = new Error('audit insert refused');
+      revoker.recordAccountEnd.mockRejectedValue(failure);
+
+      await expect(service.requestDeletion(OWN, 'user-1')).rejects.toBe(failure);
+
+      expect(journal).not.toContain('commit');
+      expect(journal.at(-1)).toBe('audit-failed');
+      expect(revoker.recordAccountEndFailed).toHaveBeenCalledWith('user-1', failure);
+      expect(revoker.revokePendingGrants).not.toHaveBeenCalled();
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('still reports the account ended when the revocations could not reach the database', async () => {
+      // The connections stay pending, which is what the purge retries.
+      const { service, journal, revoker } = setUp();
+      revoker.revokePendingGrants.mockRejectedValue(new Error('pool exhausted'));
+
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(true);
+      expect(journal).toContain('commit');
+    });
+
+    it('is idempotent: a request for an account already ended asks no provider and records nothing', async () => {
+      const { service, revoker, transactionManager, eventService } = setUp({ target: null });
+
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(false);
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(false);
+
+      expect(revoker.revokePendingGrants).not.toHaveBeenCalled();
+      expect(revoker.recordAccountEnd).not.toHaveBeenCalled();
+      expect(transactionManager.update).not.toHaveBeenCalled();
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('asks the providers once across a repeated request', async () => {
+      const { service, revoker, transactionManager } = setUp();
+      let ended = false;
+      const query = transactionManager.query.getMockImplementation()!;
+      transactionManager.query.mockImplementation((sql: string, params: unknown[]) => {
+        if (ended && /FROM ci\.users WHERE id = \$1 AND deleted_at IS NULL/.test(sql)) {
+          return Promise.resolve([]);
+        }
+
+        return query(sql, params);
+      });
+      transactionManager.update.mockImplementation(() => {
+        ended = true;
+
+        return Promise.resolve({ affected: 1 });
+      });
+
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(true);
+      await expect(service.requestDeletion(OWN, 'user-1')).resolves.toBe(false);
+
+      expect(revoker.revokePendingGrants).toHaveBeenCalledTimes(1);
+      expect(revoker.recordAccountEnd).toHaveBeenCalledTimes(1);
+    });
+
+    describe('with no revoker bound', () => {
+      it('refuses the request before writing anything, and records the refusal', async () => {
+        const { service, journal, transactionManager, eventService, queries } = makeService({}, null);
+
+        await expect(service.requestDeletion(OWN, 'user-1')).rejects.toBeInstanceOf(
+          AccountGrantRevokerUnavailable,
+        );
+
+        expect(journal).toEqual(['audit-refused']);
+        const refusal = queries.find((q) => q.sql.includes('INSERT INTO ci.data_deletion_audit'));
+        expect(refusal?.sql).toMatch(/'account', '\{\}'::jsonb, 0, 'failed'/);
+        expect(refusal?.params).toEqual([
+          expect.any(String),
+          'user-1',
+          expect.stringContaining('ACCOUNT_GRANT_REVOKER'),
+        ]);
+        expect(transactionManager.update).not.toHaveBeenCalled();
+        expect(eventService.send).not.toHaveBeenCalled();
+      });
+
+      it('refuses when the lookup itself throws', async () => {
+        const { service, transactionManager, moduleRef } = makeService();
+        moduleRef!.get.mockImplementation(() => {
+          throw new Error('Nest could not find ACCOUNT_GRANT_REVOKER');
+        });
+
+        await expect(service.requestDeletion(OWN, 'user-1')).rejects.toBeInstanceOf(
+          AccountGrantRevokerUnavailable,
+        );
+        expect(transactionManager.update).not.toHaveBeenCalled();
+      });
+
+      it('still refuses someone else’s account before anything else', async () => {
+        const { service, journal } = makeService({}, null);
+
+        await expect(service.requestDeletion(OTHER, 'user-1')).rejects.toThrow(UnauthorizedException);
+        expect(journal).toEqual([]);
+      });
+    });
+  });
+
+  /**
    * The privacy route's immediate delete (`POST /users/me/delete`): the same transaction as
    * `requestDeletion`, with the purge due now and the caller's own writes inside it. It deletes no
    * data itself; the purge does, outside the lock.
@@ -494,50 +716,6 @@ describe('UserService — account deletion', () => {
         UnauthorizedException,
       );
       expect(userRepository.manager.transaction).not.toHaveBeenCalled();
-    });
-  });
-
-  /** The unlocked forecast of the last-administrator rule, asked before anything irreversible. */
-  describe('assertMayEndAccount', () => {
-    const ADMIN = { id: 'user-1', role: 'admin' };
-
-    it('refuses as the locked rule would, without a lock or a transaction', async () => {
-      const { service, journal, userRepository } = makeService({ target: ADMIN, otherAccounts: true });
-
-      const failure = await service.assertMayEndAccount(OWN, 'user-1').catch((error: unknown) => error);
-
-      expect((failure as LastAdminDeletionRefused).reason).toBe('successor_required');
-      expect(journal).toEqual(['peek-target', 'count-others']);
-      expect(userRepository.manager.transaction).not.toHaveBeenCalled();
-    });
-
-    it('accepts a named successor, and writes nothing', async () => {
-      const { service, journal } = makeService({
-        target: ADMIN,
-        otherAccounts: true,
-        successors: [{ id: 'user-2' }],
-      });
-
-      await expect(
-        service.assertMayEndAccount(OWN, 'user-1', { successorEmail: 'member@example.com' }),
-      ).resolves.toBeUndefined();
-      expect(journal).toEqual(['peek-target', 'count-others', 'find-successor']);
-    });
-
-    it('lets a member through without asking', async () => {
-      const { service, journal } = makeService({
-        target: { id: 'user-1', role: 'user' },
-        otherAccounts: true,
-      });
-
-      await expect(service.assertMayEndAccount(OWN, 'user-1')).resolves.toBeUndefined();
-      expect(journal).toEqual(['peek-target']);
-    });
-
-    it('refuses to act for someone else', async () => {
-      const { service } = makeService({ target: ADMIN });
-
-      await expect(service.assertMayEndAccount(OWN, 'user-2')).rejects.toBeInstanceOf(UnauthorizedException);
     });
   });
 

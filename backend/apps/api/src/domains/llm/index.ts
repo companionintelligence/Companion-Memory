@@ -90,6 +90,11 @@ export {
   type MemoryGovernancePreferences,
 } from './chat-model-preference.module';
 export { OllamaService } from './services/OllamaService';
+export {
+  DESKTOP_APP_CLOSED_CODE,
+  DESKTOP_APP_CLOSED_MESSAGE,
+  DesktopAppService,
+} from './services/DesktopAppService';
 export { OpenAiCompatChatDriver } from './services/OpenAiCompatChatDriver';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
 export {

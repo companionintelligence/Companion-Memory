@@ -87,6 +87,7 @@ describe('pagination', () => {
     for (const huge of ['1000000000', '99999999999999999999999', '0000000000000000000009']) {
       expect(read(`limit=${huge}`).limit).toBe(huge.startsWith('0') ? 9 : 50);
     }
+
     for (const bad of ['limit=0', 'limit=000', 'limit=-3', 'limit=abc', 'limit=1.5', 'limit=', 'limit=1e3']) {
       expect(() => read(bad)).toThrow(PwsError);
     }

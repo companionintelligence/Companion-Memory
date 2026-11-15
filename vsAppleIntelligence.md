@@ -37,19 +37,24 @@
 > unasked. The attested compute target behind the escalated tier is still not built — that half of
 > G7 is genuinely 🔴.
 
+> **Δ 2026-11-12** — three major gaps listed below have since shipped on `main`:
+> 1. **Catalog expanded to 38 curated intents across 14 schema domains**: added `planning.*` (12 tools: `listTasks`, `createTask`, `updateTask`, `acceptProposedTask`, `declineProposedTask`, `completeTask`, `scheduleTask`, `plannedBlocks`, `listGoals`, `createGoal`, `updateGoal`, `listReminders`, `createReminder`) and `messaging.*` alongside the original 12 domains.
+> 2. **Human-in-the-loop enforcing dispatcher & prompt-injection taint tracking shipped**: `ToolRegistry.executeTool` now gates both capability (`capabilityPolicy.ts`) and interactive approval (`PendingActionService.ts` + `trustForToolCall`). Destructive tools, third-party external calls (`reachesThirdParty(privacy)`), and tainted tool calls (`followsLookup: true` after reading untrusted data in the same agent turn) are intercepted and queued as `PendingActionEntity` rows (`status = 'pending'`), rendered as deterministic approval cards on `/approvals` (`ApprovalsPage.tsx`) alongside the `ToolInvocationLedger` activity log. Installed apps (`principal: 'managed-app'`) are blocked from approving their own queued actions (`refuseManagedApp`).
+> 3. **Dual-Engine System 1 (`<10 ms`) + System 2 (`Ollama`) routing in `domains/model-routing`**: `ContrastiveDecisionService` and `ActionVectorArena` unify with the `ci-hbpe` Python microservice (`/decision/ingress`, `/decision/rerank`, `/decision/l0` backed by Convai Laya 320M, Clef 421M, and Unsloth `Qwen3.5-0.8B` 4-bit QLoRA) to handle fast memory ingress filtering (`scoreIngressCommitment`), candidate passage reranking (`rerankPassages`), and tool routing before escalating to System 2 (`OllamaService`).
+
 **What's still missing:**
 
-1. **The enforcing dispatcher** — the labels exist and the agent is steered toward curated intents, but no gate intercepts a `destructive` or `external` intent at execution to require confirmation or check permission. The single biggest remaining adoption.
+1. ~~**The enforcing dispatcher**~~ — **SHIPPED (Δ 2026-11-12):** `ToolRegistry.executeTool` enforces both capability (`read`/`write`/`full`) and human-in-the-loop approval (`PendingActionService` + `followsLookup` taint tracking + `/approvals` UI).
 2. **The uniform `EntityQuery` resolver** — the entity registry shipped; the per-type resolve/disambiguate contract did not.
-3. **A verifiable-transparency cloud tier** (PCC analogue) — the *decision* half now exists and is wired (`ModelTierRouter`, consulted by `OllamaService.resolveModel` behind `llm.tierRouting.enabled`); the **trustworthy compute target** it would escalate to was never built.
+3. **A verifiable-transparency cloud tier** (PCC analogue) — the *decision* half now exists and is wired (`ModelTierRouter`, consulted by `OllamaService.resolveModel` behind `llm.tierRouting.enabled`), and peer-to-peer local appliance pooling shipped via **Hub Pool** ([ADR-0010](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0010-hub-pool-tailnet-peer-trust.md)); the **attested cloud compute target** remains deferred by design.
 
 **Top 5 things Apple did that CI now does too (no longer "things to steal"):**
 
 1. ✅ Canonical **CI Intent + Entity Schema** (our "App Intents") — typed semantic actions + entity contracts, defined once in CI-Server, consumed by both harnesses through the MCP server.
-2. ✅ **CI Schema Domains** — twelve today: `memory.*`, `knowledge.*`, `people.*`, `places.*`, `calendar.*`, `media.*`, `import.*`, `forecast.*`, `brief.*`, `insights.*`, `anomalies.*`, `suggestions.*` (`domains/tools/catalog/domains.ts`).
+2. ✅ **CI Schema Domains** — **fourteen** today (`38` curated intents): `memory.*`, `knowledge.*`, `people.*`, `places.*`, `calendar.*`, `media.*`, `import.*`, `forecast.*`, `brief.*`, `insights.*`, `anomalies.*`, `suggestions.*`, `planning.*`, `messaging.*` (`domains/tools/catalog/domains.ts`).
 3. ✅ **App-declared intents** — CI-Hub's manifest now has `agents.intents[]`, so installing an app *expands the agent's vocabulary*.
-4. 🟡 **On-device ↔ private-cloud model tiering** — the router is live (`domains/model-routing`) and now has its first internal caller: `OllamaService.resolveModel` selects the chat model through it when `llm.tierRouting.enabled` is set (off by default). The **attested cloud tier** it would escalate to is still not built. Alongside it, the **dispatch policy** (`resolveDispatch`: `appliance` vs `local` tier → `execute` / `queue` / `deny`) decides *intent* placement, which the phones read from `GET /api/intents?tier=local` instead of reimplementing.
-5. ✅ **Intent donation → HBPE** — every tool invocation emits `tool.invoked` as a behavioural signal.
+4. 🟡 **On-device ↔ private-cloud model tiering + System 1/System 2 routing** — the router is live (`domains/model-routing`) alongside `ContrastiveDecisionService` (System 1 `<10 ms` Laya/Clef/Unsloth QLoRA via `ci-hbpe`) and `OllamaService.resolveModel` (System 2). Alongside it, the **dispatch policy** (`resolveDispatch`: `appliance` vs `local` tier → `execute` / `queue` / `deny`) decides *intent* placement, which the phones read from `GET /api/intents?tier=local` instead of reimplementing.
+5. ✅ **Intent donation → HBPE** — every tool invocation emits `tool.invoked` as a behavioural signal and records an auditable row in `ToolInvocationLedger`.
 
 ---
 

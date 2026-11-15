@@ -123,6 +123,7 @@ export function aesKeyWrap(kek: Buffer, key: Buffer): Buffer {
   }
 
   const cipher = createCipheriv('id-aes256-wrap', kek, KEY_WRAP_IV);
+
   return Buffer.concat([cipher.update(key), cipher.final()]);
 }
 
@@ -134,6 +135,7 @@ export function aesKeyUnwrap(kek: Buffer, wrapped: Buffer): Buffer {
 
   try {
     const decipher = createDecipheriv('id-aes256-wrap', kek, KEY_WRAP_IV);
+
     return Buffer.concat([decipher.update(wrapped), decipher.final()]);
   } catch {
     throw new DidcommError('decryption-failed', 'the message could not be decrypted');

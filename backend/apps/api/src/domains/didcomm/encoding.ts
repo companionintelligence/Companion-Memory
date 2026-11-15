@@ -91,6 +91,7 @@ export function parseJsonObject(
 export function uint32be(value: number): Buffer {
   const out = Buffer.alloc(4);
   out.writeUInt32BE(value);
+
   return out;
 }
 
@@ -188,6 +189,7 @@ export function varintEncode(value: number): Buffer {
   }
 
   out.push(rest);
+
   return Buffer.from(out);
 }
 

@@ -1,8 +1,9 @@
 import { useDeviceLayout } from '@ci/common';
 import { Button } from '@ci/shadcn';
-import { Cpu, RefreshCw } from '@ci/shadcn/icons';
+import { Cpu, MonitorOff, RefreshCw } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
+import { useDesktopApp } from '@/hooks';
 import { settingsSectionTarget } from '@/layouts/Main/SecondaryNavigation/selfSections';
 
 interface ChatNoModelStateProps {
@@ -27,10 +28,43 @@ interface ChatNoModelStateProps {
 export function ChatNoModelState({ unreachable, onRetry }: ChatNoModelStateProps) {
   const { isMobile } = useDeviceLayout();
   const location = useLocation();
+  const desktopApp = useDesktopApp();
 
   // `null` only while the layout is unknown; the desktop overlay path is a fine
   // answer for that one render.
   const target = settingsSectionTarget('model', isMobile, location) ?? { to: '/settings/model' };
+
+  // A third cause with its own fix: Memory Desktop was closed and took the model
+  // it ran with it. Settings would only send the person looking for a server to
+  // fix; opening the app is the whole answer.
+  if (unreachable && desktopApp.closed) {
+    return (
+      <div
+        role="status"
+        data-testid="chat-no-model"
+        className="flex w-full max-w-md flex-col items-center px-2 text-center"
+      >
+        <div className="mb-4 flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-muted">
+          <MonitorOff className="h-8 w-8 text-muted-foreground" strokeWidth={1.5} />
+        </div>
+        <h2 className="mb-1 text-base font-semibold text-foreground">Memory Desktop is closed</h2>
+        <p className="mb-5 text-sm text-muted-foreground">
+          Chat runs on the model that Memory Desktop starts, and it stopped when the app was closed. Open
+          Memory Desktop to bring chat back.
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            desktopApp.refetch();
+            onRetry?.();
+          }}
+        >
+          <RefreshCw className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
+          Check again
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div

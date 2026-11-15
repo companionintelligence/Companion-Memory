@@ -1,5 +1,15 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
+    <string name="widget_plan_label">Plan</string>
+    <string name="widget_insight_label">Insights</string>
+    <string name="widget_questions_label">Questions</string>
+    <string name="widget_stats_label">Stats</string>
+    <string name="widget_jobs_label">Jobs</string>
+    <string name="widget_plan_description">Your next tasks, due dates, and quick completion actions.</string>
+    <string name="widget_insight_description">A fresh prediction and today’s Memory activity.</string>
+    <string name="widget_questions_description">Open Memory chat to ask about your saved records.</string>
+    <string name="widget_stats_description">See today’s synced messages, places and distance.</string>
+    <string name="widget_jobs_description">Read-only queue health for Companion Memory jobs.</string>
     <string name="app_name">Companion Memory</string>
     <string name="title_activity_main">Companion Memory</string>
     <string name="package_name">com.ci.memory</string>

@@ -25,6 +25,7 @@ const expectSyntax = (value: string): void => {
 
     return;
   }
+
   throw new Error(`expected a syntax error for: ${value}`);
 };
 
@@ -283,6 +284,7 @@ describe('checkSignatureWindow', () => {
 
       return;
     }
+
     throw new Error('expected a constraint error');
   });
 

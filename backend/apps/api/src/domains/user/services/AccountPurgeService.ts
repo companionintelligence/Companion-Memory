@@ -1,4 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 
@@ -20,7 +21,19 @@ import {
 } from '../purge/purgeSql';
 import type { PurgePlan, PurgeStep, TableRef } from '../purge/types';
 
+import { requireAccountGrantRevoker } from './accountGrantRevoker';
+
 const USERS_TABLE: TableRef = { schema: 'ci', table: 'users' };
+
+/**
+ * How long past an account's `purge_after` the purge keeps refusing to delete it while a provider
+ * grant revocation still fails. Every hourly run asks the provider again in the meantime, and the
+ * account is reported as stalled after {@link STALLED_PURGE_AFTER_HOURS}. Past this the purge goes
+ * on: the deletion promise is the other half of the request, and some failures never clear (a
+ * grant the person already revoked at the provider, which some providers answer with an error).
+ * Each connection's last outcome stays `failed` in `ci.data_deletion_audit`.
+ */
+export const REVOCATION_RETRY_DAYS = 7;
 
 /**
  * Advisory-lock namespace. Two API instances against one appliance database must
@@ -122,7 +135,7 @@ export interface AccountPurgeOutcome {
   deletedObjects: number;
   /**
    * The `completed` row this run appended to `ci.data_deletion_audit`, when it
-   * finished an immediate delete (see `completeImmediateDeletionAudit`).
+   * finished an account delete that wrote a `started` row (see `completeImmediateDeletionAudit`).
    */
   auditId?: string | null;
   error?: string;
@@ -173,6 +186,8 @@ export class AccountPurgeService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
     @Optional() @Inject(PURGE_OBJECT_STORE) private readonly objectStore?: PurgeObjectStore,
+    /** For `ACCOUNT_GRANT_REVOKER` (bound by PrivacyModule), resolved lazily by {@link purgeAccount}. */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(AccountPurgeService.name);
   }
@@ -323,6 +338,12 @@ export class AccountPurgeService {
       try {
         await this.markStarted(runner, userId, requestedAt, purgeAfter);
 
+        // Grants first, while the connection rows that hold the tokens are still there: every
+        // connection still revocation-pending (its revocation failed when the account ended) or
+        // still holding a token is asked again. A revocation that still fails fails the run, to be
+        // retried, rather than delete a token whose grant is live (see REVOCATION_RETRY_DAYS).
+        await this.revokePendingGrants(userId, purgeAfter);
+
         const plan = await this.buildPlan(runner);
 
         if (plan.warnings.length > 0) {
@@ -416,6 +437,46 @@ export class AccountPurgeService {
     } finally {
       await runner.release();
     }
+  }
+
+  /**
+   * `AccountGrantRevoker.revokePendingGrants`. Throws, so the run fails and nothing is deleted, when
+   * no revoker is bound or a revocation still fails within {@link REVOCATION_RETRY_DAYS} of the
+   * deadline.
+   */
+  private async revokePendingGrants(userId: string, purgeAfter: Date): Promise<void> {
+    const revoker = requireAccountGrantRevoker(this.moduleRef);
+    const revocations = await revoker.revokePendingGrants(userId);
+    const failed = revocations.filter((revocation) => revocation.outcome === 'failed');
+
+    if (revocations.length > 0) {
+      this.logger.log('Asked the providers to revoke the grants an ended account still held', {
+        userId,
+        connections: revocations.length,
+        revoked: revocations.filter((revocation) => revocation.outcome === 'revoked').length,
+        failed: failed.length,
+      });
+    }
+
+    if (failed.length === 0) {
+      return;
+    }
+
+    const giveUpAt = purgeAfter.getTime() + REVOCATION_RETRY_DAYS * 24 * 60 * 60 * 1000;
+
+    if (Date.now() < giveUpAt) {
+      throw new Error(
+        `${failed.length} provider grant revocation(s) failed (${failed
+          .map((revocation) => revocation.connectionId)
+          .join(', ')}); the purge waits and asks again`,
+      );
+    }
+
+    this.logger.error('Purging an account whose provider grants could not be revoked', {
+      userId,
+      connections: failed.map((revocation) => revocation.connectionId),
+      retryDays: REVOCATION_RETRY_DAYS,
+    });
   }
 
   private async buildPlan(runner: QueryRunner): Promise<PurgePlan> {

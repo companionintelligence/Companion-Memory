@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, memo } from 'react';
 
 import { Sidebar, Tooltip, cn } from '@ci/shadcn';
 import { Plus, RefreshCw, Trash2, MessageSquare, PanelLeftClose, PanelLeftOpen } from '@ci/shadcn/icons';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { LoadingRegion, ThreadRowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
@@ -12,7 +13,7 @@ import { ThreadMark, threadActivity } from './ThreadMark';
 import type { Thread } from './types';
 import { THREAD_TIME, threadInstant, threadLabel } from './useRecentThreads';
 
-type Translate = (key: string, options?: Record<string, unknown>) => string;
+type Translate = TFunction;
 
 /** Below this window width the sidebar starts collapsed (Tailwind's `md`). */
 const COLLAPSE_BELOW_PX = 768;

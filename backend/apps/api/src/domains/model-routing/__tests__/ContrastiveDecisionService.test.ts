@@ -1,6 +1,7 @@
 import { type RequestContext } from '@ci/common/context';
 import { type EmbeddingGenerationService } from '@ci/common/embeddings';
 import { type PersonService, type UserContextService } from '@ci/domains/memory';
+import { type HbpeService } from '@ci/domains/predictions';
 
 import { ModelRoutingController } from '../controllers/ModelRoutingController';
 import {
@@ -230,6 +231,100 @@ describe('ContrastiveDecisionService (CLM System 1 + Generative System 2)', () =
     expect(rankRes.items).toHaveLength(1);
     expect(rankRes.items[0].id).toBe('import.run');
     expect(controller.getArena().size).toBeGreaterThanOrEqual(2);
+
+    const ingressRes = await controller.scoreIngress(ctx, {
+      text: 'Your 2FA verification code is 492817',
+    });
+    expect(ingressRes.isCommitment).toBe(false);
+    expect(ingressRes.nonActionableReason).toBe('automated_otp');
+  });
+
+  it('scoreIngressCommitment fast-rejects OTP and marketing blasts and delegates to HbpeService when available', async () => {
+    const hbpeService = {
+      scoreMemoryIngress: jest.fn(async () => ({
+        user_id: 'user-1',
+        intent: 'store_task',
+        intent_confidence: 0.91,
+        intent_distribution: { store_task: 0.91, conversational: 0.09 },
+        commitment_probability: 0.88,
+        is_commitment: true,
+        sensitivity: 0,
+        sensitivity_distribution: { '0': 0.95 },
+        calibrated: true,
+      })),
+      rerankPassages: jest.fn(async () => ({
+        user_id: 'user-1',
+        results: [
+          {
+            id: 'c2',
+            score: 0.94,
+            is_relevant: true,
+            relevance_probability: 0.95,
+            temporal_freshness: 0.9,
+            calibrated: true,
+          },
+          {
+            id: 'c1',
+            score: 0.2,
+            is_relevant: false,
+            relevance_probability: 0.2,
+            temporal_freshness: 0.5,
+            calibrated: true,
+          },
+        ],
+      })),
+    } as unknown as HbpeService;
+
+    const service = new ContrastiveDecisionService(undefined, undefined, undefined, hbpeService);
+
+    // 1. Deterministic OTP rejection bypasses HBPE HTTP call
+    const otp = await service.scoreIngressCommitment('Your verification code is 839201');
+    expect(otp.isCommitment).toBe(false);
+    expect(otp.nonActionableReason).toBe('automated_otp');
+    expect(hbpeService.scoreMemoryIngress).not.toHaveBeenCalled();
+
+    // 2. Deterministic marketing blast rejection bypasses HBPE HTTP call
+    const marketing = await service.scoreIngressCommitment(
+      'Flash sale! Unsubscribe from these emails anytime. View in browser.',
+    );
+    expect(marketing.isCommitment).toBe(false);
+    expect(marketing.nonActionableReason).toBe('marketing_blast');
+    expect(hbpeService.scoreMemoryIngress).not.toHaveBeenCalled();
+
+    // 3. Normal text delegates to HBPE System 1 sidecar (/decision/ingress)
+    const commitment = await service.scoreIngressCommitment('Please pay the invoice by Friday at 5pm', {
+      userId: 'user-1',
+    });
+    expect(hbpeService.scoreMemoryIngress).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'Please pay the invoice by Friday at 5pm',
+    );
+    expect(commitment.engineUsed).toBe('hbpe_system1');
+    expect(commitment.isCommitment).toBe(true);
+    expect(commitment.probability).toBeGreaterThan(0.8);
+
+    // 4. Hybrid rank blends HBPE System 1 reranker with ActionVectorArena
+    const ranked = await service.rank(
+      'send federated ask',
+      [
+        { id: 'c1', text: 'import google takeout archive zip' },
+        { id: 'c2', text: 'send federated ask to linked peer' },
+      ],
+      { engine: 'hybrid', userId: 'user-1' },
+    );
+    expect(hbpeService.rerankPassages).toHaveBeenCalledTimes(1);
+    expect(ranked.engineUsed).toBe('hbpe_system1');
+    expect(ranked.items[0]?.id).toBe('c2');
+  });
+
+  it('scoreIngressCommitment falls back to contrastive System 1 when HbpeService is unavailable', async () => {
+    const service = new ContrastiveDecisionService();
+    const actionable = await service.scoreIngressCommitment(
+      'Reminder: please pay the attached invoice by Friday deadline',
+    );
+    expect(actionable.engineUsed).toBe('contrastive');
+    expect(actionable.isCommitment).toBe(true);
+    expect(actionable.probability).toBeGreaterThanOrEqual(0.35);
   });
 
   it('normalizeVector and cosineSimilarity handle zero vectors safely', () => {

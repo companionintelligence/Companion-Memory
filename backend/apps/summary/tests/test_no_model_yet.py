@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ci.summary import activities, config, llm_config, llm_health
+from ci.summary import summarizer as summarizer_module
 from ci.summary.runner import FunctionRunner, RunRequest
 from ci.summary.summarizer import Summarizer
 
@@ -38,12 +39,23 @@ class _Endpoint:
     """What GET /models answers. `None` refuses the connection."""
 
     rows: list[dict[str, str]] | None = None
+    status_code = 200
+    listings = 0
+    null_data = False
 
     def get(self, url: str, **_: Any) -> httpx.Response:
+        self.listings += 1
+        if self.null_data:
+            # What Ollama answers with no models pulled.
+            return httpx.Response(
+                200,
+                json={"object": "list", "data": None},
+                request=httpx.Request("GET", url),
+            )
         if self.rows is None:
             raise httpx.ConnectError("[Errno 111] Connection refused")
         return httpx.Response(
-            200,
+            self.status_code,
             json={"data": self.rows},
             request=httpx.Request("GET", url),
         )
@@ -52,6 +64,7 @@ class _Endpoint:
 def _forget_the_model() -> None:
     config.resolve_llm_model.cache_clear()
     llm_config.get_llm_config.cache_clear()
+    summarizer_module.summarizer.dossier_agent = None
 
 
 @pytest.fixture
@@ -245,17 +258,172 @@ def test_health_waits_again_when_the_engine_behind_a_discovered_model_stops(
     assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
 
 
-def test_health_reports_a_configured_model_with_the_endpoint_down(
+def test_a_configured_model_waits_while_the_endpoint_is_down(
     endpoint, client, monkeypatch
 ):
-    """Configured means trusted until a request says otherwise, as it always has."""
+    """
+    A configured model used to be named here whatever the endpoint said, so the
+    API's gate stayed open and every summary job timed out against an endpoint
+    that was not there, spending its retries.
+    """
     monkeypatch.setattr(config.settings, "llm_model", "configured:model")
 
     body = client.get("/health").json()
 
     assert body["status"] == "degraded"
     assert body["llm"]["reachable"] is False
+    assert body["llm"]["model"] is None
+    assert "waiting" in body["llm"]["detail"]
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+
+def test_a_configured_model_that_goes_away_is_waited_for_and_found_again(
+    endpoint, client, monkeypatch
+):
+    """
+    The failure seen on Memory Desktop: the model was served, remembered, then
+    removed while the server kept answering. /health went on naming it and the
+    hourly job failed with "model not found" and retried.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    with_model = [{"id": "nomic-embed-text"}, {"id": "gemma4:e4b"}]
+    endpoint.rows = with_model
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+    endpoint.rows = EMBEDDER_ONLY
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    assert "waiting" in body["llm"]["detail"]
+    with pytest.raises(config.NoChatModelError):
+        llm_config.get_llm_config()
+
+    endpoint.rows = with_model
+
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+
+def test_a_remembered_model_is_waited_for_while_its_endpoint_is_down(
+    endpoint, client, monkeypatch
+):
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert config.resolve_llm_model() == "gemma4:e4b"
+
+    endpoint.rows = None
+    assert client.get("/health").json()["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+
+def test_a_server_that_refuses_the_model_list_does_not_stop_a_configured_model(
+    endpoint, client, monkeypatch
+):
+    """
+    A 401 or 404 on /models is a server answering: the probe counts it reachable,
+    and nothing in it says the configured model is gone.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "configured:model")
+
+    def guarded(url: str, **_: Any) -> httpx.Response:
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", guarded)
+
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
     assert body["llm"]["model"] == "configured:model"
+
+
+def test_a_configured_model_waits_while_the_hub_pool_has_no_engine_behind_it(
+    endpoint, client, monkeypatch
+):
+    """
+    CI-Hub's pool answers 502 on /models when the engine behind it is down, and
+    502 again on every chat request. That is no model to run on, not a server
+    guarding its list.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+    endpoint.status_code = 502
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+    endpoint.status_code = 200
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+
+def test_the_configured_model_takes_over_from_its_stand_in_when_it_is_back(
+    endpoint, client, monkeypatch
+):
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    endpoint.rows = [*A_CHAT_MODEL, {"id": "gemma4:e4b"}]
+
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+    assert llm_config.get_llm_config().model.model_name == "gemma4:e4b"
+
+
+def test_the_dossier_agent_moves_to_the_model_that_replaced_a_gone_one(
+    endpoint, client, monkeypatch
+):
+    """It is built once per process, so it kept asking for the model that went."""
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    summarizer = summarizer_module.summarizer
+    assert summarizer._get_dossier_agent().model.model_name == "gemma4:e4b"
+
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    assert summarizer._get_dossier_agent().model.model_name == "small-chat:latest"
+
+
+def test_a_configured_model_waits_while_ollama_has_no_models_at_all(
+    endpoint, client, monkeypatch
+):
+    """
+    Ollama with nothing pulled lists `"data": null`, not an empty list. Read as
+    a malformed answer, that kept the configured model and every run then got
+    a 404 for it.
+    """
+    monkeypatch.setattr(config.settings, "llm_model", "gemma4:e4b")
+    endpoint.rows = [{"id": "gemma4:e4b"}]
+    assert client.get("/health").json()["llm"]["model"] == "gemma4:e4b"
+
+    endpoint.null_data = True
+    body = client.get("/health").json()
+
+    assert body["llm"]["reachable"] is True
+    assert body["llm"]["model"] is None
+    with pytest.raises(config.NoChatModelError):
+        config.resolve_llm_model()
+
+
+def test_health_lists_the_models_once_while_the_model_holds(endpoint, client):
+    """The probe's listing is the one the remembered model is checked against."""
+    endpoint.rows = A_CHAT_MODEL
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    endpoint.listings = 0
+    assert client.get("/health").json()["llm"]["model"] == "small-chat:latest"
+
+    assert endpoint.listings == 1
 
 
 # ── A run that gets here anyway ─────────────────────────────────────────────

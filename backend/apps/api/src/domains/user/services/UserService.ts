@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
 import { EntityManager, IsNull, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
@@ -13,7 +14,10 @@ import { EventService } from '@ci/domains/events';
 import { normalizeEmail } from '../email';
 import { type User, UserEntity } from '../entities/UserEntity';
 import { UserCreatedEvent, UserUpdatedEvent, UserRemovedEvent } from '../events';
+import { recordRefusedAccountDeletion } from '../purge/deletionAudit';
 import { CreateUserDto, UpdateUserDto } from '../types';
+
+import { type AccountGrantRevoker, requireAccountGrantRevoker } from './accountGrantRevoker';
 
 /**
  * Grace period between "delete my account" and the irreversible purge of the data.
@@ -106,6 +110,11 @@ export class UserService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly eventService: EventService,
+    /**
+     * For `ACCOUNT_GRANT_REVOKER` (bound by PrivacyModule), resolved lazily by
+     * {@link requestDeletion}. Optional so a service built by hand still constructs.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   /**
@@ -480,8 +489,25 @@ export class UserService {
    * Raw SQL against `ci.signup_code` because that table belongs to the auth domain, which depends
    * on this one and not the other way round.
    *
-   * Idempotent: a second request finds nothing (the first one hid the row) and
-   * returns false rather than throwing.
+   * ── Provider grants ────────────────────────────────────────────────────────
+   *
+   * Hiding the row stops the account's own sign-ins, but not the OAuth grants its connections hold
+   * with each provider. Those are revoked through `ACCOUNT_GRANT_REVOKER` (see that contract for the
+   * whole order), and only once the request can no longer be refused:
+   *
+   * 1. The revoker is resolved first. When it cannot be, the request is refused (thrown) and a
+   *    `failed` audit row written: ending the account without revoking its grants would leave them
+   *    live with the providers.
+   * 2. In the locked transaction: the last-administrator rule, the account ended, and (last, so it
+   *    commits only with all of that) every connection marked inactive and revocation-pending, its
+   *    tokens kept, with the `started` audit row. A failure there rolls the whole end back and is
+   *    recorded as `failed`; a refusal by the rule writes nothing and revokes nothing.
+   * 3. After the commit, with no lock held, each provider is asked. A grant revoked (or with nothing
+   *    to revoke) has its connection's tokens cleared; one that failed keeps them and its pending
+   *    mark, and the purge tries again before it deletes the row (`AccountPurgeService`).
+   *
+   * Idempotent: a second request finds nothing (the first one hid the row), revokes nothing and
+   * returns false rather than throwing. What the first one could not revoke is the purge's to retry.
    */
   async requestDeletion(
     context: ServiceContext,
@@ -492,39 +518,41 @@ export class UserService {
       throw new UnauthorizedException();
     }
 
+    let revoker: AccountGrantRevoker;
+
+    try {
+      revoker = requireAccountGrantRevoker(this.moduleRef);
+    } catch (error) {
+      await recordRefusedAccountDeletion(this.userRepository.manager, id, error);
+
+      throw error;
+    }
+
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
-    return (await this.endAccount(id, options, purgeAfter)) != null;
-  }
+    try {
+      const ended = await this.endAccount(id, options, purgeAfter, (manager) =>
+        revoker.recordAccountEnd(manager, id),
+      );
 
-  /**
-   * The last-administrator rule of {@link requestDeletion}, asked without the lock and without
-   * writing anything: throws {@link LastAdminDeletionRefused} when ending account `id` now would be
-   * refused. For a caller that does something irreversible before it ends the account (the immediate
-   * delete revokes the OAuth grants first, so the provider side stops even if what follows fails)
-   * and should not do it for a request that will be refused anyway.
-   *
-   * Only a forecast: {@link endAccountNow} asks again under the lock, and that answer is the one that
-   * counts. An account that disappears in between makes this answer nothing.
-   */
-  async assertMayEndAccount(
-    context: ServiceContext,
-    id: string,
-    options: DeletionOptions = {},
-  ): Promise<void> {
-    if (context.userId !== SYSTEM_USER && context.userId !== id) {
-      throw new UnauthorizedException();
+      if (ended == null) {
+        return false;
+      }
+    } catch (error) {
+      if (!(error instanceof LastAdminDeletionRefused)) {
+        // The transaction has rolled back by now and released what it held.
+        await revoker.recordAccountEndFailed(id, error);
+      }
+
+      throw error;
     }
 
-    const manager = this.userRepository.manager;
-    const [target] = await manager.query<Array<{ role: string }>>(
-      `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
-      [id],
-    );
+    // The account is ended whatever happens here. A failure to reach the database (the revoker
+    // logs it) leaves the connections pending, which is what the purge retries; it is not reported
+    // to the person as a failed delete, because the delete did not fail.
+    await revoker.revokePendingGrants(id).catch(() => undefined);
 
-    if (target?.role === 'admin') {
-      await this.successorFor(manager, id, options);
-    }
+    return true;
   }
 
   /**

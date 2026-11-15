@@ -5,6 +5,7 @@ const S = 'space-1';
 async function world(): Promise<World> {
   const w = new World();
   await w.createSpace(alice, S, { name: 'Alice' });
+
   return w;
 }
 
@@ -311,6 +312,7 @@ describe('Collection Metadata: GET and PUT /space/{s}/{c}/meta', () => {
     ]) {
       expect((await post(bad)).type).toBe('invalid-request-body');
     }
+
     expect((await post({}, { encryption: { scheme: 'edv' } })).type).toBe('invalid-request-body');
   });
 
@@ -435,6 +437,7 @@ describe('Collection Metadata: GET and PUT /space/{s}/{c}/meta', () => {
         const res = await w.send({ method: 'DELETE', path: `space/${S}/docs/`, as: app, via: grant });
         expect(res.status).toBe(404);
       }
+
       expect((await w.send({ method: 'GET', path: meta, as: alice, root: w.spaceUrl(S) })).status).toBe(200);
     });
   });
@@ -527,6 +530,7 @@ describe('List Resources: GET /space/{s}/{c}/', () => {
     for (const id of ['a', 'b', 'c']) {
       await w.putResource(alice, S, 'docs', id, { id });
     }
+
     return w;
   }
 
@@ -670,6 +674,7 @@ describe('hardening found by review', () => {
         400,
       ]);
     }
+
     const ok = await w.send({
       method: 'POST',
       path: `space/${S}/`,

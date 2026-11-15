@@ -112,6 +112,7 @@ async function acquire(
       `${label}: waited ${LOCK_TIMEOUT_MS} ms for the ${mode} ci.* schema test lock and did not get it. ` +
         'Another suite is holding it — most likely one that applies a migration and did not release. ' +
         `Cause: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

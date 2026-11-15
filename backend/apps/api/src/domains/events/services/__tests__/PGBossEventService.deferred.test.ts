@@ -79,6 +79,20 @@ describe('PGBossEventService deferred completion', () => {
     });
   });
 
+  it('hasLiveJob counts a waiting, retrying or running job with the key, not a finished one', async () => {
+    const findJobs = jest.fn();
+    (service as unknown as { boss: { findJobs: jest.Mock } }).boss = { findJobs };
+
+    findJobs.mockResolvedValue([{ state: 'completed' }, { state: 'failed' }, { state: 'cancelled' }]);
+    await expect(service.hasLiveJob('py-fn-hbpe', 'fn:nightly:u:manual')).resolves.toBe(false);
+    expect(findJobs).toHaveBeenCalledWith('py-fn-hbpe', { key: 'fn:nightly:u:manual' });
+
+    for (const state of ['created', 'retry', 'active']) {
+      findJobs.mockResolvedValue([{ state: 'completed' }, { state }]);
+      await expect(service.hasLiveJob('py-fn-hbpe', 'fn:nightly:u:manual')).resolves.toBe(true);
+    }
+  });
+
   it('failJob always names its own queue in the output, which is how a dead letter knows where it died', async () => {
     const boss = { fail: jest.fn().mockResolvedValue(undefined) };
 

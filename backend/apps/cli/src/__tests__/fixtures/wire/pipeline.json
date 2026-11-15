@@ -1,0 +1,47 @@
+{
+  "state": {
+    "response": {
+      "stages": [
+        {
+          "stage": "embed",
+          "stageVersion": 3,
+          "total": 1000,
+          "done": 960,
+          "skipped": 28,
+          "failed": 7,
+          "pending": 3,
+          "running": 1,
+          "quarantined": 1,
+          "stale": 40,
+          "coverage": 0.988
+        }
+      ]
+    }
+  },
+  "deadLetters": {
+    "query": {
+      "queue": "enrichment-pipeline",
+      "stage": "summarize",
+      "limit": 20
+    },
+    "response": {
+      "deadLetters": [
+        {
+          "id": "0193a3c4-0000-7000-8000-0000000000d1",
+          "queue": "enrichment-pipeline",
+          "eventName": "pipeline.stage.summarize",
+          "stage": "summarize",
+          "entityType": "content",
+          "entityId": "0193a3c4-0000-7000-8000-0000000000e1",
+          "userId": "00000000-0000-4000-8000-000000000001",
+          "payload": {
+            "contentId": "0193a3c4-0000-7000-8000-0000000000e1"
+          },
+          "error": "LLM endpoint timed out after 30000ms\n    at SummaryClient.request",
+          "failedAt": "2026-11-12T07:00:00.000Z",
+          "replayedAt": null
+        }
+      ]
+    }
+  }
+}

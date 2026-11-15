@@ -10,7 +10,9 @@ import { NodeService } from '@ci/domains/graph';
 
 import { DeltaService } from '../services/DeltaService';
 
-const getDeltasSchema = z.object({
+// Exported for `__tests__/cliWireContract.test.ts`: zod drops unknown keys, so a
+// window sent as `from`/`to` instead of `since`/`until` is ignored rather than refused.
+export const getDeltasSchema = z.object({
   entityId: z.string().uuid(),
   limit: z.coerce.number().int().min(1).max(250).optional(),
   changeType: z.enum(['created', 'updated', 'archived', 'deleted', 'merged']).optional(),

@@ -1,11 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
+import {
+  PLANNING_COMMITMENT_THRESHOLD,
+  planningCommitmentSignal,
+} from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -82,6 +87,7 @@ export class TodoScanService {
     private readonly dataSource: DataSource,
     private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
+    @Optional() private readonly decisionService?: ContrastiveDecisionService,
   ) {
     this.logger.setContext(TodoScanService.name);
   }
@@ -119,7 +125,8 @@ export class TodoScanService {
       }),
     );
     const claimedEntities = claimedSourceIds(tracked, 'sourceEntityId');
-    const fresh = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const unclaimed = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const fresh = await this.filterSystem1ActionableHits(context, unclaimed);
 
     if (fresh.length === 0) {
       this.logger.debug('Todo scan found no unprocessed memory hits', { userId, seen: hits.length });
@@ -402,6 +409,43 @@ export class TodoScanService {
     const outcome = interpretClassify(content, batch.length, () => undefined);
 
     return outcome.ok ? { candidates: outcome.candidates } : null;
+  }
+
+  private async filterSystem1ActionableHits(
+    context: UserServiceContext,
+    hits: readonly MemoryHit[],
+  ): Promise<MemoryHit[]> {
+    const actionable: MemoryHit[] = [];
+
+    for (const hit of hits) {
+      if (await this.isSystem1Actionable(context, hit.text)) {
+        actionable.push(hit);
+      }
+    }
+
+    return actionable;
+  }
+
+  /**
+   * The System 1 pre-filter's verdict on one memory hit. Undecided (no
+   * pre-filter, or it failed) keeps the hit, unless PLANNING_COMMITMENT_DECISION
+   * is on and HBPE, by the pre-filter's rule, says there is no commitment.
+   */
+  private async isSystem1Actionable(context: UserServiceContext, text: string): Promise<boolean> {
+    if (this.decisionService) {
+      try {
+        const score = await this.decisionService.scoreIngressCommitment(text, {
+          userId: context.userId,
+          threshold: PLANNING_COMMITMENT_THRESHOLD,
+        });
+
+        return score.isCommitment;
+      } catch {
+        // The pre-filter threw, so it has no verdict. Undecided, as below.
+      }
+    }
+
+    return (await planningCommitmentSignal(context.userId, text)) !== false;
   }
 }
 

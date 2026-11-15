@@ -151,6 +151,7 @@ describe('verifyEddsaJcs2022Proof refuses anything that was not signed', () => {
     ]) {
       expect(verify(W3C_DOCUMENT, { ...published(), proofValue })).toBe(false);
     }
+
     expect(
       verify(W3C_DOCUMENT, {
         ...published(),

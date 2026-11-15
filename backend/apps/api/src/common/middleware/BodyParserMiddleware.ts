@@ -1,4 +1,4 @@
-import { Injectable, NestMiddleware } from '@nestjs/common';
+import { Injectable, NestMiddleware, UnsupportedMediaTypeException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -66,11 +66,71 @@ const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
  * Scoped to this ONE prefix on purpose. `verify` retains the whole buffer, and
  * doing that for every request would hold a second copy of every 10mb GraphQL
  * and bulk-ingest body for the life of the request.
- *
- * The prefix is matched case-insensitively and by parsed path, the way express
- * routes ({@link isSignedPeerRequest}), and `urlencoded()` never runs on it.
  */
 const SIGNED_PEER_PREFIX = '/agent/v1';
+
+/** The one body type the signed peer surface accepts, and the one `json()` captures the bytes of. */
+const SIGNED_PEER_CONTENT_TYPE = 'application/json';
+
+/** The only parameter the signed peer surface accepts: `charset=utf-8`, the value optionally quoted. */
+const SIGNED_PEER_CHARSET_PARAM = /^[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*$/i;
+
+/**
+ * Whether `header` is exactly `application/json`, alone or with the single
+ * parameter `charset=utf-8` (names and values case-insensitive, the value
+ * optionally quoted). Anything else -- another type, another charset, any
+ * other parameter, an empty or repeated parameter -- is refused.
+ *
+ * WHY THE CHARSET MATTERS: `json()` decodes the body with the DECLARED
+ * charset, while the digest is computed over the UTF-8 reading of the same
+ * bytes, and `Content-Type` is not a covered component. A signed ask re-sent
+ * as `charset=utf-7` (or utf-16) would be digested as what was signed and
+ * parsed as something else. Pinning UTF-8 makes the two readings one.
+ */
+export function isSignedPeerContentType(header: string | undefined): boolean {
+  if (header == null) {
+    return false;
+  }
+
+  const [mediaType, ...params] = header.split(';');
+  if (mediaType.trim().toLowerCase() !== SIGNED_PEER_CONTENT_TYPE) {
+    return false;
+  }
+
+  if (params.length === 0) {
+    return true;
+  }
+
+  if (params.length > 1) {
+    return false;
+  }
+
+  return SIGNED_PEER_CHARSET_PARAM.test(params[0]);
+}
+
+/**
+ * Whether the TRANSPORT says this request carries a body: a positive
+ * `Content-Length`, or any `Transfer-Encoding`.
+ *
+ * This, and never "were raw bytes captured", is what decides whether a signed
+ * request must bind its body. Capture depends on which parser happened to run;
+ * a body no parser kept is still a body, and treating it as absent is how a
+ * signature over one body would verify a different one.
+ */
+export function transportHasBody(headers: Request['headers']): boolean {
+  if (headers['transfer-encoding'] != null) {
+    return true;
+  }
+
+  const length = headers['content-length'];
+  if (length == null) {
+    return false;
+  }
+
+  // Anything that is not a plain non-negative integer is treated as a body:
+  // the safe direction is to demand the binding, never to waive it.
+  return !/^\d+$/.test(String(length).trim()) || Number(length) > 0;
+}
 
 /**
  * Whether `req` is for the single Apollo-mounted POST /graphql endpoint. The
@@ -92,23 +152,6 @@ export function isGraphqlRequest(req: Request): boolean {
   return (
     (req.baseUrl ?? '').toLowerCase() === GRAPHQL_PATH ||
     [routePath, parsedPath].some((path) => path === GRAPHQL_PATH || path.startsWith(`${GRAPHQL_PATH}/`))
-  );
-}
-
-/**
- * Whether `req` is for the signed peer surface ({@link SIGNED_PEER_PREFIX}).
- * Built like {@link isGraphqlRequest}, for the same two reasons: express routes
- * case-insensitively, so `/AGENT/V1/ask` reaches the peer controllers too, and
- * it routes an absolute-form request by its parsed pathname while its
- * `originalUrl` starts `http:`. Both forms must match, or the bytes a peer
- * signed would not be kept for the controller that checks them.
- */
-export function isSignedPeerRequest(req: Request): boolean {
-  const routePath = (req.originalUrl || req.url || req.path).split('?')[0].toLowerCase();
-  const parsedPath = `${req.baseUrl ?? ''}${req.path ?? ''}`.toLowerCase();
-
-  return [routePath, parsedPath].some(
-    (path) => path === SIGNED_PEER_PREFIX || path.startsWith(`${SIGNED_PEER_PREFIX}/`),
   );
 }
 
@@ -144,6 +187,16 @@ export class BodyParserMiddleware implements NestMiddleware {
       return next();
     }
 
+    const requestPaths = [routePath, `${req.baseUrl ?? ''}${req.path ?? ''}`].map((path) =>
+      path.toLowerCase(),
+    );
+
+    // Portable Web Spaces verifies Digest: mh=... over raw request bytes and handles
+    // arbitrary binary/text/JSON payloads up to 25MB directly inside createNodeRequestHandler.
+    if (requestPaths.some((path) => path === '/pws' || path.startsWith('/pws/'))) {
+      return next();
+    }
+
     // Use the route's own limit, then the GraphQL / v1 bulk-ingest limits,
     // else default to 100kb.
     const bodyLimit =
@@ -152,12 +205,38 @@ export class BodyParserMiddleware implements NestMiddleware {
     // Retain the exact bytes for the signed peer surface only. `verify` runs
     // before parsing and receives the raw buffer, which is the only hook that
     // sees the body as sent.
-    const isSignedPeerRoute = isSignedPeerRequest(req);
+    // Case-insensitive and on the parsed path too, for the same reasons as
+    // `isGraphqlRequest`: express routes `/Agent/v1/ask` and an absolute-form
+    // request line to the same handler.
+    const isSignedPeerRoute = requestPaths.some(
+      (path) => path === SIGNED_PEER_PREFIX || path.startsWith(`${SIGNED_PEER_PREFIX}/`),
+    );
+    const isDidcommRoute = requestPaths.some((path) => path === '/didcomm' || path.startsWith('/didcomm/'));
+
+    // Only `json()` keeps the bytes, so a body of any other type on the signed
+    // surface would reach the signature check with nothing to digest. Every
+    // route under the prefix takes JSON, so refuse the rest before parsing --
+    // including JSON in any charset but UTF-8 (see `isSignedPeerContentType`).
+    if (
+      isSignedPeerRoute &&
+      transportHasBody(req.headers) &&
+      !isSignedPeerContentType(req.headers['content-type'])
+    ) {
+      throw new UnsupportedMediaTypeException();
+    }
 
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.
     json({
       limit: bodyLimit,
+      type: isDidcommRoute
+        ? [
+            'application/json',
+            'application/didcomm-encrypted+json',
+            'application/didcomm-signed+json',
+            'application/didcomm-plain+json',
+          ]
+        : 'application/json',
       ...(isSignedPeerRoute
         ? {
             verify: (request: Request, _response: Response, buffer: Buffer) => {
@@ -168,13 +247,6 @@ export class BodyParserMiddleware implements NestMiddleware {
     })(req, res, (err?: unknown) => {
       if (err) {
         return next(err as Error);
-      }
-
-      // The peer surface accepts JSON only. Its signatures cover a digest of the
-      // exact bytes json() kept above, so a body in any other encoding is left
-      // unparsed and the peer controllers refuse it.
-      if (isSignedPeerRoute) {
-        return next();
       }
 
       urlencoded({ extended: true, limit: bodyLimit })(req, res, next);

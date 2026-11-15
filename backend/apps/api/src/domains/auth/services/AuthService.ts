@@ -104,8 +104,9 @@ export class AuthService {
     const expiresAt = new Date(now + SESSION_EXPIRES_IN);
 
     const hashedToken = this.digest(token);
-    const hashedIp = this.digest(meta.ip);
-    const hashedUserAgent = this.digest(meta.userAgent);
+    // NULL when the request had none; findSession matches a missing value with IsNull().
+    const hashedIp = this.digest(meta.ip) ?? null;
+    const hashedUserAgent = this.digest(meta.userAgent) ?? null;
 
     const session = this.sessionRepository.create({
       id: sessionId,
@@ -335,18 +336,20 @@ export class AuthService {
     data: SessionMetadata,
   ): Promise<{ session: SessionEntity; graceMatch: boolean }> {
     const now = new Date();
-    const hashedIp = this.digest(data.ip);
-    const hashedUserAgent = this.digest(data.userAgent);
+    // A request with no User-Agent header (or no address) has nothing to digest.
+    // issueSessionToken stores NULL for it, so that is what to match: a session bound
+    // to a User-Agent still needs that one; one bound to none needs none. TypeORM
+    // refuses an `undefined` where value outright ("Undefined value encountered in
+    // property 'SessionEntity.user_agent'"), which answered 500.
+    const hashedIp = this.digest(data.ip) ?? IsNull();
+    const hashedUserAgent = this.digest(data.userAgent) ?? IsNull();
     const hashedToken = this.digest(token);
 
-    // A request without the value matches only a session issued without one.
-    // A bare undefined would drop the predicate (TypeORM 0.3) or throw (TypeORM
-    // 1.x, which this repo now runs).
     const match = await this.sessionRepository.findOne({
       where: {
         token: hashedToken,
-        ip: hashedIp ?? IsNull(),
-        user_agent: hashedUserAgent ?? IsNull(),
+        ip: hashedIp,
+        user_agent: hashedUserAgent,
         expires_at: MoreThan(now),
         user: {
           id: userId,
@@ -370,8 +373,8 @@ export class AuthService {
         where: {
           previous_token: hashedToken,
           rotated_at: MoreThan(graceDeadline),
-          ip: hashedIp ?? IsNull(),
-          user_agent: hashedUserAgent ?? IsNull(),
+          ip: hashedIp,
+          user_agent: hashedUserAgent,
           expires_at: MoreThan(now),
           user: {
             id: userId,

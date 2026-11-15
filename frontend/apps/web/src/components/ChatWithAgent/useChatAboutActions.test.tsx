@@ -104,6 +104,53 @@ describe('useChatAboutActions — dispatch id form', () => {
   });
 });
 
+describe('useChatAboutActions: OpenClaw that is not installed', () => {
+  const notInstalled: AgentHarnessStatus = {
+    ...openclaw,
+    connectedToMemory: false,
+    installed: false,
+    running: false,
+    openUrl: null,
+    accessible: false,
+    wakeable: false,
+    dispatchReady: false,
+    dispatchBlocker: 'not_installed',
+  };
+
+  function render() {
+    const context = namedChatContext({
+      title: 'Book the dentist',
+      body: 'Any Friday morning',
+      sourceKind: 'NoteType',
+      sourceId: 'note-1',
+    });
+
+    return renderHook(() => useChatAboutActions(context), { wrapper: MemoryRouter });
+  }
+
+  it('leaves OpenClaw out when there is no Hub to install it from', () => {
+    h.harnesses = [{ ...notInstalled, connectUrl: null }];
+
+    expect(render().result.current.openclaw).toBeNull();
+  });
+
+  it('keeps OpenClaw on a Hub, and Dispatch names the blocker with a Connect action', async () => {
+    const connectUrl = 'https://hub.example.com/api/memory-connect/start?app=ci-openclaw%3Aci-marketplace';
+    h.harnesses = [{ ...notInstalled, connectUrl }];
+
+    const { result } = render();
+    expect(result.current.openclaw?.connectUrl).toBe(connectUrl);
+
+    await result.current.dispatchToOpenClaw();
+
+    expect(h.toast.error).toHaveBeenCalledWith(
+      'OpenClaw is not installed on this Hub. Install it, then try Dispatch again.',
+      { action: expect.objectContaining({ label: 'Connect in Hub' }) },
+    );
+    expect(h.createDispatchJob).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * ═══ "SIGN IN TO DISPATCH" ON A SIGNED-IN PHONE ═══
  *

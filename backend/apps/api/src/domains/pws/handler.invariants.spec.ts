@@ -17,6 +17,7 @@ async function world(config: ConstructorParameters<typeof World>[0] = {}): Promi
   await w.createSpace(alice, S);
   await w.createCollection(alice, S, C);
   await w.putResource(alice, S, C, 'a', { n: 'a' });
+
   return w;
 }
 
@@ -30,6 +31,7 @@ function editableKeyMethod() {
       if (!doc) {
         return doc;
       }
+
       return {
         ...doc,
         capabilityInvocation: hidden.has(`${did}|capabilityInvocation`) ? [] : doc.capabilityInvocation,
@@ -37,6 +39,7 @@ function editableKeyMethod() {
       };
     },
   };
+
   return {
     method,
     hide: (did: string, relationship: string) => void hidden.add(`${did}|${relationship}`),

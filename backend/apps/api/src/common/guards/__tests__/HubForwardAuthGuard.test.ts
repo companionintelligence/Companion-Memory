@@ -3,7 +3,7 @@ const hubForwardAuth = {
   secret: 'shared-secret',
   identitySecret: '',
   audience: '',
-  requireAudience: 'auto' as const,
+  requireAudience: 'true' as 'auto' | 'true' | 'false',
   maxSkewMs: 300000,
 };
 
@@ -59,8 +59,20 @@ describe('HubForwardAuthGuard', () => {
     hubForwardAuth.secret = 'shared-secret';
     hubForwardAuth.identitySecret = '';
     hubForwardAuth.audience = '';
+    // The cases below are an older Hub's unbound triple, which only the explicit legacy opt-in accepts.
+    hubForwardAuth.requireAudience = 'false';
     hubForwardAuth.maxSkewMs = 300000;
   });
+
+  it.each(['true', 'auto'] as const)(
+    'rejects a validly signed unbound header under requireAudience %s (the default is true)',
+    (requireAudience) => {
+      hubForwardAuth.requireAudience = requireAudience;
+      const { ctx, req } = contextWithHeaders(signedHeaders('alice'));
+      expect(() => guard.canActivate(ctx)).toThrow(/unbound/);
+      expect(req.hubForwardAuthUser).toBeUndefined();
+    },
+  );
 
   it('allows a request carrying a validly signed header and attaches the username', () => {
     const { ctx, req } = contextWithHeaders(signedHeaders('alice'));
@@ -108,6 +120,7 @@ describe('HubForwardAuthGuard', () => {
     beforeEach(() => {
       hubForwardAuth.identitySecret = 'memory-own-secret';
       hubForwardAuth.audience = audience;
+      hubForwardAuth.requireAudience = 'true';
     });
 
     it('accepts the bound assertion', () => {

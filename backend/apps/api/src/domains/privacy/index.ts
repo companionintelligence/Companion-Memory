@@ -19,7 +19,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ApplianceAdminGuard } from '@ci/common/guards';
 import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
-import { UserModule } from '@ci/domains/user';
+import { ACCOUNT_GRANT_REVOKER, UserModule } from '@ci/domains/user';
 
 import { ConnectionPrivacyController } from './controllers/ConnectionPrivacyController';
 import { OutboundPolicyController } from './controllers/OutboundPolicyController';
@@ -46,7 +46,15 @@ import { OutboundPolicyService } from './services/OutboundPolicyService';
     UserModule,
   ],
   // ApplianceAdminGuard is registered so Nest resolves its DataSource here.
-  providers: [DataDeletionService, OutboundPolicyService, ApplianceAdminGuard],
+  providers: [
+    DataDeletionService,
+    OutboundPolicyService,
+    ApplianceAdminGuard,
+    // The user domain's account deletes revoke provider grants through this, resolved lazily
+    // (`DELETE /account`, and the purge for any grant still holding a token): that domain cannot
+    // import this one, which depends on it.
+    { provide: ACCOUNT_GRANT_REVOKER, useExisting: DataDeletionService },
+  ],
   controllers: [PrivacyController, ConnectionPrivacyController, OutboundPolicyController],
   exports: [DataDeletionService],
 })

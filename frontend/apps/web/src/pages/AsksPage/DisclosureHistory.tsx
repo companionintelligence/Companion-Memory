@@ -6,7 +6,6 @@ import { PersonAvatar } from '@/components/PersonAvatar';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
-import { scopeSummary } from './askBinding';
 import { AskerQuote } from './AskerQuote';
 import {
   type AskAuditOutcome,
@@ -16,7 +15,8 @@ import {
 } from './askPresentation';
 import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
 import { ConsentLock } from './ConsentLock';
-import { consentLockState } from './consentProvenance';
+import { type AskAuditReceiptData, consentLockState } from './consentProvenance';
+import { PeerText } from './PeerText';
 
 export interface DisclosureRow {
   id: string;
@@ -38,6 +38,7 @@ export interface DisclosureRow {
 
 interface Props {
   rows: readonly DisclosureRow[];
+  onLoadReceipt?: (auditId: string) => Promise<AskAuditReceiptData | null>;
 }
 
 /**
@@ -72,7 +73,7 @@ interface Props {
  * history, and a history entry that reads as the app narrating is worse than a
  * request that does — it is a claim about something that already happened.
  */
-export function DisclosureHistory({ rows }: Props) {
+export function DisclosureHistory({ rows, onLoadReceipt }: Props) {
   // One modal for the whole list rather than one per row: the detail is a
   // focused read of a single disclosure, and mounting a dialog per row would
   // put N of them in the tree for a list that is meant to be scanned.
@@ -117,9 +118,20 @@ export function DisclosureHistory({ rows }: Props) {
 
               <div className="text-muted-foreground flex flex-col gap-0.5 text-xs">
                 <p>{outcomeSentence(row.outcome, who)}</p>
+                {/* The kind of ask and the data class are the asker's text, so each
+                    is its own attributed, isolated element after fixed copy —
+                    never joined into a sentence of the app's, where a quote
+                    mark or a bidi override in the class could finish or
+                    reorder it. The magnitude stays its own line of app copy. */}
                 <p>
-                  {scopeSummary(row.query)} · {disclosureMagnitudeNote(row.outcome, row.disclosedCount)}
+                  <PeerText attribution="Asked about:" text={row.query.queryType} />
                 </p>
+                {row.query.dataClass ? (
+                  <p>
+                    <PeerText attribution="Data class they named:" text={row.query.dataClass} />
+                  </p>
+                ) : null}
+                <p>Result: {disclosureMagnitudeNote(row.outcome, row.disclosedCount)}.</p>
                 {row.consentBasis ? (
                   // The basis is an opaque grant id, and it is still worth
                   // showing: it is the thread an owner pulls to find WHICH rule
@@ -134,7 +146,14 @@ export function DisclosureHistory({ rows }: Props) {
         );
       })}
 
-      {open ? <ConsentDetailModal record={open} onClose={() => setOpen(null)} /> : null}
+      {open ? (
+        <ConsentDetailModal
+          key={open.auditId ?? open.arrivedAt}
+          record={open}
+          onClose={() => setOpen(null)}
+          onLoadReceipt={onLoadReceipt}
+        />
+      ) : null}
     </ul>
   );
 }
@@ -165,6 +184,7 @@ function consentOf(row: DisclosureRow): ConsentRecord['consent'] {
 
 function recordFor(row: DisclosureRow): ConsentRecord {
   return {
+    auditId: row.id,
     askerName: row.askerName,
     consent: consentOf(row),
     channel: UNRECORDED_CHANNEL,

@@ -4,13 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
-import {
-  RECENT_THREAD_LIMIT,
-  threadIdOf,
-  threadLabel,
-  useRecentThreads,
-  uuidV7Time,
-} from './useRecentThreads';
+import { threadIdOf, threadLabel, useRecentThreads, uuidV7Time } from './useRecentThreads';
 
 const h = vi.hoisted(() => ({
   auth: {
@@ -142,23 +136,17 @@ describe('useRecentThreads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('caps the list at the newest few, in the order the API returned them', async () => {
-    const many = Array.from({ length: RECENT_THREAD_LIMIT + 5 }, (_, i) => thread(`t${i}`, `Thread ${i}`));
+  // The rail's "All chats" opens this whole list, and on a phone it is the way to an older chat from outside
+  // the Chat page's own sheet.
+  it('lists every thread, in the order the API returned them', async () => {
+    const many = Array.from({ length: 35 }, (_, i) => thread(`t${i}`, `Thread ${i}`));
     setFetch(() => ok(many));
 
     const { result } = renderHook(() => useRecentThreads({ enabled: true }));
 
-    await waitFor(() => expect(result.current.threads).toHaveLength(RECENT_THREAD_LIMIT));
+    await waitFor(() => expect(result.current.threads).toHaveLength(35));
     expect(result.current.threads[0].id).toBe('t0');
-    expect(result.current.threads.at(-1)?.id).toBe(`t${RECENT_THREAD_LIMIT - 1}`);
-  });
-
-  it('honours an explicit limit', async () => {
-    setFetch(() => ok([thread('t1'), thread('t2'), thread('t3')]));
-
-    const { result } = renderHook(() => useRecentThreads({ enabled: true, limit: 2 }));
-
-    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    expect(result.current.threads.at(-1)?.id).toBe('t34');
   });
 
   // Hovering the desktop rail flickers `enabled`; that must not be a request
@@ -177,6 +165,38 @@ describe('useRecentThreads', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.current.threads).toHaveLength(1);
+  });
+
+  // The pointer can leave the rail before the first answer lands. That answer is dropped, so the next open has
+  // to ask again instead of sitting on "Loading threads…" until the stale window runs out.
+  it('fetches again on re-enable when the first request was dropped in flight', async () => {
+    let answer: (response: Response) => void = () => {};
+
+    let calls = 0;
+
+    const fetchMock = setFetch(() => {
+      calls += 1;
+
+      return calls === 1
+        ? new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+        : ok([thread('t1'), thread('t2')]);
+    });
+
+    const { rerender, result } = renderHook(({ enabled }) => useRecentThreads({ enabled }), {
+      initialProps: { enabled: true },
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    rerender({ enabled: false });
+    answer(ok([thread('stale')]));
+    rerender({ enabled: true });
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(false);
   });
 
   it('surfaces an error and lets the next open try again', async () => {

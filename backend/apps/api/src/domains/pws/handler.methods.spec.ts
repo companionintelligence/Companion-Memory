@@ -8,6 +8,7 @@ async function world(): Promise<World> {
   await w.createSpace(alice, S);
   await w.createCollection(alice, S, C);
   await w.putResource(alice, S, C, 'a', { n: 'a' });
+
   return w;
 }
 
@@ -55,6 +56,7 @@ describe('methods an endpoint does not define: 405 before anything that depends 
         bodies.add(res.text);
       }
     }
+
     // an anonymous caller, a stranger, the controller, and a Space that is not there: one answer
     expect(bodies.size).toBe(1);
   });
@@ -161,6 +163,7 @@ describe('the retired v0.4 /space/{s}/collections endpoint', () => {
         expect(res.header('allow')).toBe('GET, HEAD, POST');
       }
     }
+
     expect(await w.store.transaction((tx) => tx.countSpaces())).toBe(1);
   });
 });
@@ -202,11 +205,13 @@ describe('optional groups this server does not build', () => {
       ]);
       expect((await w.send({ method: 'POST', path, as: bob, json: body })).status).toBe(404);
     }
+
     for (const profile of ['changes', 'blinded-index', 'a-profile-nobody-has-registered']) {
       const mine = await w.send({ method: 'POST', path, ...owner(w), json: { profile, limit: 10 } });
       expect([profile, mine.status, mine.type]).toEqual([profile, 501, 'unsupported-operation']);
       expect((await w.send({ method: 'POST', path, as: bob, json: { profile } })).status).toBe(404);
     }
+
     // a body that is not JSON, or no Content-Type, is the same request error
     const text = await w.send({
       method: 'POST',

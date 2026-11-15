@@ -15,6 +15,12 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { computeAuditSaid, verifyAuditSaid, AUDIT_SAID_PLACEHOLDER } from '../auditSaid';
+import {
+  buildIso27560ConsentReceipt,
+  verifyIso27560ConsentReceipt,
+  type BuildConsentReceiptOptions,
+  type Iso27560ConsentReceipt,
+} from '../consentReceipt';
 import { type DisclosureSummary, summarizeDisclosures } from '../disclosureSummary';
 import { type AskAudit, AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskAuditOutcome, RecordAskAuditDto } from '../types';
@@ -128,6 +134,19 @@ export class AskAuditService {
     return verifyAuditSaid(data, expectedSaid);
   }
 
+  /** Builds a self-addressed ISO/IEC TS 27560 + W3C DPV consent receipt for an ask disclosure. */
+  buildConsentReceipt(
+    data: RecordAskAuditDto | AskAudit | AskAuditEntity,
+    options?: BuildConsentReceiptOptions,
+  ): Iso27560ConsentReceipt {
+    return buildIso27560ConsentReceipt(data, options);
+  }
+
+  /** Verifies the CESR `I` SAID of an ISO/IEC TS 27560 + W3C DPV consent receipt. */
+  verifyConsentReceipt(receipt: Iso27560ConsentReceipt): boolean {
+    return verifyIso27560ConsentReceipt(receipt);
+  }
+
   /**
    * The caller's disclosure history (asks they responded to), newest first.
    *
@@ -181,6 +200,15 @@ export class AskAuditService {
     const truncated = rows.length > limit;
 
     return { rows: rows.slice(0, limit).map(AskAuditEntity.toEgressType), truncated };
+  }
+
+  /** Loads a single disclosure audit row when owned by the responder; null otherwise. */
+  async findByIdForResponder(context: UserServiceContext, auditId: string): Promise<AskAudit | null> {
+    const entity = await this.auditRepository.findOne({
+      where: { id: auditId, responderUserId: context.userId },
+    });
+
+    return entity ? AskAuditEntity.toEgressType(entity) : null;
   }
 
   /**

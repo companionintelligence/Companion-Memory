@@ -27,6 +27,8 @@ import { isSeq, parseDocument } from 'yaml';
 
 const ROOT = process.cwd();
 const DESKTOP_OVERLAY = 'frontend/apps/desktop/src-tauri/resources/docker-compose.desktop.yml';
+/** The three files, in order, that stack_manager.rs's compose_command passes (with the `production` profile). */
+const DESKTOP_STACK = ['docker-compose.yml', 'docker-compose.production.yml', DESKTOP_OVERLAY];
 
 interface RenderedPort {
   host_ip?: string;
@@ -34,8 +36,18 @@ interface RenderedPort {
   published?: string;
 }
 
+interface RenderedVolume {
+  type: string;
+  source?: string;
+  target: string;
+  read_only?: boolean;
+}
+
 interface Rendered {
-  services: Record<string, { ports?: RenderedPort[] }>;
+  services: Record<
+    string,
+    { ports?: RenderedPort[]; environment?: Record<string, string | null>; volumes?: RenderedVolume[] }
+  >;
 }
 
 const composeAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
@@ -95,18 +107,65 @@ test('rendered as the desktop app runs it, the gateway listens on 127.0.0.1:8642
     return;
   }
 
-  // The three files and the profile stack_manager.rs's compose_command passes.
-  const config = render(
-    t,
-    ['docker-compose.yml', 'docker-compose.production.yml', DESKTOP_OVERLAY],
-    ['production'],
-    { CI_SERVER_IMAGE_TAG: '2026.10.2' },
-  );
+  const config = render(t, DESKTOP_STACK, ['production'], { CI_SERVER_IMAGE_TAG: '2026.10.2' });
 
   assert.deepEqual(
     config.services.gateway.ports?.map(({ host_ip, target, published }) => ({ host_ip, target, published })),
     [{ host_ip: '127.0.0.1', target: 8642, published: '8642' }],
   );
+});
+
+test('rendered as the desktop app runs it, the api sends OAuth services back to the gateway', (t) => {
+  if (!composeAvailable) {
+    t.skip('docker compose is not installed');
+
+    return;
+  }
+
+  // APP_BASE_URL as stack_manager.rs writes it into the desktop `.env`. Unset, the
+  // api built "undefined/oauth/callback" and no service could be connected.
+  const config = render(t, DESKTOP_STACK, ['production'], {
+    CI_SERVER_IMAGE_TAG: '2026.10.2',
+    APP_BASE_URL: 'http://127.0.0.1:8642',
+  });
+
+  assert.equal(config.services.api.environment?.OAUTH_CALLBACK_URL, 'http://127.0.0.1:8642/oauth/callback');
+  assert.equal(config.services.api.environment?.OPENID_CALLBACK_URL, 'http://127.0.0.1:8642/openid/callback');
+
+  // With APP_BASE_URL empty, `:+` leaves both empty and the api keeps its own fallbacks. A `:-`
+  // or a bare `${APP_BASE_URL}/oauth/callback` would hand it a host-less "/oauth/callback".
+  const unset = render(t, DESKTOP_STACK, ['production'], {
+    CI_SERVER_IMAGE_TAG: '2026.10.2',
+    APP_BASE_URL: '',
+  });
+
+  assert.equal(unset.services.api.environment?.OAUTH_CALLBACK_URL, '');
+  assert.equal(unset.services.api.environment?.OPENID_CALLBACK_URL, '');
+});
+
+test('rendered as the desktop app runs it, the api reads the app’s presence file from the compose directory', (t) => {
+  if (!composeAvailable) {
+    t.skip('docker compose is not installed');
+
+    return;
+  }
+
+  // The app keeps compose/desktop-app/presence.json up to date while it runs (presence.rs). Without the
+  // mount the api cannot tell that Memory Desktop is closed. Read-only, and the folder rather than the
+  // file: the app renames a new file over the old one, which a single-file bind would not follow.
+  const config = render(t, DESKTOP_STACK, ['production'], { CI_SERVER_IMAGE_TAG: '2026.10.2' });
+  const presence = config.services.api.volumes?.find((volume) => volume.target === '/run/ci-desktop-app');
+
+  assert.ok(presence, 'the api mounts the presence folder');
+  assert.equal(presence.type, 'bind');
+  assert.equal(path.basename(presence.source ?? ''), 'desktop-app');
+  assert.equal(presence.read_only, true);
+  assert.equal(
+    config.services.api.environment?.DESKTOP_APP_PRESENCE_FILE,
+    '/run/ci-desktop-app/presence.json',
+  );
+  // The production mounts are still there: list-valued `volumes` merge by target across -f files.
+  assert.ok(config.services.api.volumes?.some((volume) => volume.target === '/var/lib/ci-import'));
 });
 
 /** Every `ports:` entry of the data services, in every compose file in the repo root. */

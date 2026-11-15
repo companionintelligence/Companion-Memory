@@ -21,6 +21,8 @@
  * through its own egress policy. See `docs/didcomm.md` for what exists, what does not, and how it is
  * meant to be wired.
  */
+export { DidcommController } from './DidcommController';
+export { DidcommModule } from './DidcommModule';
 export { DidcommAgent } from './agent';
 export type {
   DidcommAgentOptions,

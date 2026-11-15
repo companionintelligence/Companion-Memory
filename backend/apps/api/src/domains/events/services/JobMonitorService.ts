@@ -2,7 +2,7 @@ import { Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/com
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { CronTime } from 'cron';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { RequestContext } from '@ci/common/context';
 import { JobControlStore } from '@ci/common/job-controls';
@@ -10,16 +10,54 @@ import { processRole, serves, type ServedRole } from '@ci/common/roles';
 import { type CronDeclaration, CronRegistry, CronRunStore, cronSkipReason } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
-import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import { PgBossQueueEntity } from '../entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from '../entities/PgBossScheduleEntity';
 
-/** Why a job failed, lifted out of `pgboss.job.output`. */
+/** Why a job failed, lifted out of `pgboss.job.output` (or `source_output` on a dead-letter copy). */
 export interface JobFailureDto {
   readonly message: string;
   readonly stack?: string;
   readonly failedAt?: string;
+}
+
+/**
+ * Why a job failed, as the Jobs table and the dashboard show it.
+ *
+ * A dead-letter copy's own output is empty until something runs it. Since
+ * pg-boss 12 the failure it was copied for is in `source_output`, so that is
+ * read when the row's own output names no failure.
+ */
+export function jobFailure(job: Pick<PgBossJobEntity, 'output' | 'sourceOutput'>): JobFailureDto | null {
+  return failureIn(job.output) ?? failureIn(job.sourceOutput);
+}
+
+/**
+ * Lift a failure out of one jsonb output.
+ *
+ * `output` is an untyped jsonb column: the worker writes
+ * `{ message, stack, failedAt }` on failure, but deferred completions write
+ * deliberate SUCCESS payloads there too. Those can carry user data. Only the
+ * three known failure fields are copied out and only when a message is
+ * present. A success payload therefore projects to `null` rather than
+ * leaking through this path.
+ */
+function failureIn(output: Record<string, unknown> | null | undefined): JobFailureDto | null {
+  if (!output || typeof output !== 'object') {
+    return null;
+  }
+
+  const message = typeof output['message'] === 'string' ? output['message'].trim() : '';
+
+  if (!message) {
+    return null;
+  }
+
+  return {
+    message,
+    stack: typeof output['stack'] === 'string' ? output['stack'] : undefined,
+    failedAt: typeof output['failedAt'] === 'string' ? output['failedAt'] : undefined,
+  };
 }
 
 /**
@@ -65,6 +103,7 @@ export interface JobRecordDto {
 }
 
 export interface ArchivedJobRecordDto extends JobRecordDto {
+  /** When the job finished. pg-boss 12 keeps finished jobs in `pgboss.job`, so nothing moves them. */
   readonly archivedOn: string;
 }
 
@@ -221,7 +260,7 @@ export interface JobDashboardDto {
     readonly deadLettered: number;
     readonly scheduled: number;
   };
-  /** Lifetime completed/failed jobs grouped by handler (from archive). */
+  /** Finished jobs pg-boss still holds, grouped by handler. */
   readonly archiveDistribution: readonly JobDistributionDto[];
   /** Currently pending/in-flight jobs grouped by handler. */
   readonly activeDistribution: readonly JobDistributionDto[];
@@ -238,6 +277,9 @@ export interface JobDashboardDto {
   readonly queues: readonly JobQueueDto[];
 }
 
+/** The states a job can no longer leave. pg-boss keeps these in `pgboss.job` until it deletes them. */
+const FINISHED_STATES = ['completed', 'failed', 'cancelled'] as const;
+
 @Injectable()
 export class JobMonitorService {
   private readonly recentLimit = 25;
@@ -245,8 +287,6 @@ export class JobMonitorService {
   constructor(
     @InjectRepository(PgBossJobEntity)
     private readonly jobRepository: Repository<PgBossJobEntity>,
-    @InjectRepository(PgBossArchiveEntity)
-    private readonly archiveRepository: Repository<PgBossArchiveEntity>,
     @InjectRepository(PgBossScheduleEntity)
     private readonly scheduleRepository: Repository<PgBossScheduleEntity>,
     @InjectRepository(PgBossQueueEntity)
@@ -286,8 +326,9 @@ export class JobMonitorService {
         order: { createdOn: 'DESC' },
         take: this.recentLimit,
       }),
-      this.archiveRepository.find({
-        order: { archivedOn: 'DESC' },
+      this.jobRepository.find({
+        where: { state: In([...FINISHED_STATES]) },
+        order: { completedOn: { direction: 'DESC', nulls: 'LAST' } },
         take: this.recentLimit,
       }),
       this.scheduleRepository.find({ order: { name: 'ASC' } }),
@@ -552,15 +593,11 @@ export class JobMonitorService {
   /**
    * The headline counters.
    *
-   * Two grouped scans, not seven `COUNT(*)`s. `pgboss.job` is partitioned by
+   * One grouped scan, not seven `COUNT(*)`s. `pgboss.job` is partitioned by
    * queue name, so every count over it is an Append of a sequential scan across
-   * every partition; the previous implementation paid that five times over
-   * (created/active/completed/failed) plus two full scans of `pgboss.archive`,
-   * on a 15-second poll, per open dashboard tab. `pgboss.archive` is created as
-   * `CREATE TABLE archive (LIKE job)` and carries only an index on
-   * `archived_on`, so a `WHERE state = …` count there is always a full scan —
-   * measured at 16 ms over 88k rows and growing linearly. Grouping collapses
-   * each table to a single pass.
+   * every partition, on a 15-second poll, per open dashboard tab. Grouping
+   * collapses the counters to a single pass, and finished jobs are in the same
+   * table until pg-boss deletes them, so that pass answers all of them.
    *
    * The dead-letter queue is excluded from `pending` on purpose: pg-boss inserts
    * a dead-lettered job in state `created`, which is indistinguishable by state
@@ -570,25 +607,16 @@ export class JobMonitorService {
    * counter instead.
    */
   private async getSummary(): Promise<JobDashboardDto['summary']> {
-    const [jobRows, archiveRows] = await Promise.all([
-      this.jobRepository
-        .createQueryBuilder('job')
-        .select('job.state', 'state')
-        .addSelect(`COUNT(*) FILTER (WHERE job.name = :deadLetter)::int`, 'deadLettered')
-        .addSelect('COUNT(*)::int', 'count')
-        .setParameter('deadLetter', DEAD_LETTER_QUEUE)
-        .groupBy('job.state')
-        .getRawMany<{ state: string; count: number; deadLettered: number }>(),
-      this.archiveRepository
-        .createQueryBuilder('archive')
-        .select('archive.state', 'state')
-        .addSelect('COUNT(*)::int', 'count')
-        .groupBy('archive.state')
-        .getRawMany<{ state: string; count: number }>(),
-    ]);
+    const jobRows = await this.jobRepository
+      .createQueryBuilder('job')
+      .select('job.state', 'state')
+      .addSelect(`COUNT(*) FILTER (WHERE job.name = :deadLetter)::int`, 'deadLettered')
+      .addSelect('COUNT(*)::int', 'count')
+      .setParameter('deadLetter', DEAD_LETTER_QUEUE)
+      .groupBy('job.state')
+      .getRawMany<{ state: string; count: number; deadLettered: number }>();
 
     const job = (state: string) => Number(jobRows.find((row) => row.state === state)?.count ?? 0);
-    const archived = (state: string) => Number(archiveRows.find((row) => row.state === state)?.count ?? 0);
 
     // Dead letters live in state `created`, so subtract them from pending
     // rather than filtering the whole query — one pass still answers both.
@@ -598,27 +626,25 @@ export class JobMonitorService {
       pending: Math.max(job('created') - deadLettered, 0),
       active: job('active'),
       retry: job('retry'),
-      completed: job('completed') + archived('completed'),
-      failed: job('failed') + archived('failed'),
-      cancelled: job('cancelled') + archived('cancelled'),
+      completed: job('completed'),
+      failed: job('failed'),
+      cancelled: job('cancelled'),
       deadLettered,
       scheduled: await this.scheduleRepository.count(),
     };
   }
 
-  private jobHandlerGroupExpression(entityAlias: 'job' | 'archive'): string {
-    const dataRef = `${entityAlias}.data`;
-    const nameRef = `${entityAlias}.name`;
-
-    return `CASE WHEN ${dataRef}->>'name' = 'smart.rotation.work' THEN CONCAT('smart.rotation.work · ', COALESCE(${dataRef}->>'workType', 'unknown')) ELSE COALESCE(${dataRef}->>'name', ${nameRef}) END`;
+  private jobHandlerGroupExpression(): string {
+    return `CASE WHEN job.data->>'name' = 'smart.rotation.work' THEN CONCAT('smart.rotation.work · ', COALESCE(job.data->>'workType', 'unknown')) ELSE COALESCE(job.data->>'name', job.name) END`;
   }
 
   private async getArchiveDistribution(): Promise<JobDistributionDto[]> {
-    const groupExpr = this.jobHandlerGroupExpression('archive');
-    const rows = await this.archiveRepository
-      .createQueryBuilder('archive')
+    const groupExpr = this.jobHandlerGroupExpression();
+    const rows = await this.jobRepository
+      .createQueryBuilder('job')
       .select(groupExpr, 'jobName')
       .addSelect('COUNT(*)::int', 'count')
+      .where('job.state IN (:...states)', { states: [...FINISHED_STATES] })
       .groupBy(groupExpr)
       .orderBy('count', 'DESC')
       .limit(15)
@@ -633,7 +659,7 @@ export class JobMonitorService {
    * on" is topped by jobs that already gave up.
    */
   private async getActiveDistribution(): Promise<JobDistributionDto[]> {
-    const groupExpr = this.jobHandlerGroupExpression('job');
+    const groupExpr = this.jobHandlerGroupExpression();
     const rows = await this.jobRepository
       .createQueryBuilder('job')
       .select(groupExpr, 'jobName')
@@ -699,7 +725,7 @@ export class JobMonitorService {
       .filter((item) => item.count > 0);
   }
 
-  private toJobRecord(job: PgBossJobEntity | PgBossArchiveEntity): JobRecordDto {
+  private toJobRecord(job: PgBossJobEntity): JobRecordDto {
     return {
       id: job.id,
       queue: job.name,
@@ -716,7 +742,7 @@ export class JobMonitorService {
       deadLetter: job.deadLetter,
       policy: job.policy,
       ...this.projectPayload(job.data),
-      failure: this.toFailure(job.output),
+      failure: jobFailure(job),
     };
   }
 
@@ -738,34 +764,6 @@ export class JobMonitorService {
     };
   }
 
-  /**
-   * Lift a failure out of `output`.
-   *
-   * `output` is an untyped jsonb column: the worker writes
-   * `{ message, stack, failedAt }` on failure, but deferred completions write
-   * deliberate SUCCESS payloads there too, and those can carry user data. Only
-   * the three known failure fields are copied out, and only when a message is
-   * actually present — so a success payload projects to `null` rather than
-   * leaking through this path.
-   */
-  private toFailure(output: Record<string, unknown> | null | undefined): JobFailureDto | null {
-    if (!output || typeof output !== 'object') {
-      return null;
-    }
-
-    const message = typeof output['message'] === 'string' ? output['message'].trim() : '';
-
-    if (!message) {
-      return null;
-    }
-
-    return {
-      message,
-      stack: typeof output['stack'] === 'string' ? output['stack'] : undefined,
-      failedAt: typeof output['failedAt'] === 'string' ? output['failedAt'] : undefined,
-    };
-  }
-
   private byteLength(data: Record<string, unknown>): number {
     try {
       return Buffer.byteLength(JSON.stringify(data) ?? '', 'utf8');
@@ -776,10 +774,10 @@ export class JobMonitorService {
     }
   }
 
-  private toArchivedJobRecord(job: PgBossArchiveEntity): ArchivedJobRecordDto {
+  private toArchivedJobRecord(job: PgBossJobEntity): ArchivedJobRecordDto {
     return {
       ...this.toJobRecord(job),
-      archivedOn: job.archivedOn.toISOString(),
+      archivedOn: (job.completedOn ?? job.createdOn).toISOString(),
     };
   }
 
@@ -803,7 +801,7 @@ export class JobMonitorService {
       retryDelay: queue.retryDelay,
       retryBackoff: queue.retryBackoff,
       expireInSeconds: queue.expireInSeconds,
-      retentionMinutes: queue.retentionMinutes,
+      retentionMinutes: queue.retentionSeconds === null ? null : Math.round(queue.retentionSeconds / 60),
       deadLetter: queue.deadLetter,
       createdOn: queue.createdOn.toISOString(),
       updatedOn: queue.updatedOn ? queue.updatedOn.toISOString() : undefined,

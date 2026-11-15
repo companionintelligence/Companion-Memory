@@ -68,9 +68,20 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
       onKeyDown={
         onPlace
           ? (event) => {
+              // Only a key pressed on the card itself. Enter or Space on the
+              // Dismiss button inside bubbles up here. Handling it placed the
+              // task while preventDefault() cancelled the button's click.
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onPlace(task.id);
+
+                // A held key repeats. One press places the task once.
+                if (!event.repeat) {
+                  onPlace(task.id);
+                }
               }
             }
           : undefined
@@ -87,7 +98,12 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
       <p className="text-[13px] leading-snug text-foreground">{task.title}</p>
 
       {onDismiss && proposed ? (
+        // Clicks in here stay here. That covers the toolbar's own padding and
+        // the "Dismiss" tooltip, which is portalled out of the card in the DOM
+        // but still bubbles through it in React. Either one reaching the card
+        // placed the task.
         <div
+          onClick={(event) => event.stopPropagation()}
           className={cn(
             'absolute bottom-1.5 right-2.5 z-10 flex items-center rounded-md',
             'border border-border/60 bg-background/95 px-0.5 shadow-sm backdrop-blur-sm',
@@ -104,10 +120,7 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
                 size="icon"
                 className="h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8"
                 aria-label={`Dismiss ${task.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDismiss(task.id);
-                }}
+                onClick={() => onDismiss(task.id)}
               >
                 <X className="h-3.5 w-3.5" strokeWidth={1.5} />
               </Button>

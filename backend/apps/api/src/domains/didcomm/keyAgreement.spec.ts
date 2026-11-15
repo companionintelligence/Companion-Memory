@@ -1,8 +1,8 @@
 import { createPrivateKey, createPublicKey } from 'node:crypto';
 
 import { DidcommError } from './errors';
-import { aesKeyUnwrap, aesKeyWrap, concatKdfSha256, deriveKeyEncryptionKey, ecdh } from './keyAgreement';
 import { generateKeyPair, privateKeyObject, publicKeyObject } from './jwk';
+import { aesKeyUnwrap, aesKeyWrap, concatKdfSha256, deriveKeyEncryptionKey, ecdh } from './keyAgreement';
 
 const hex = (text: string): Buffer => Buffer.from(text.replace(/\s+/g, ''), 'hex');
 

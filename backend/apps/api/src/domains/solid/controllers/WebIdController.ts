@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param, Req, Res } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Options, Param, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 
 import { SYSTEM_USER } from '@ci/common/context';
@@ -9,6 +9,17 @@ import { UserService } from '@ci/domains/user';
 import { negotiateRdf } from '../rdf';
 import { ProfileDocumentService } from '../services/ProfileDocumentService';
 import { WebIdService } from '../services/WebIdService';
+
+const WEBID_LDP_LINK = '<http://www.w3.org/ns/ldp#Resource>; rel="type"';
+
+function setSolidProfileHeaders(res: Response): void {
+  if (typeof res.setHeader === 'function') {
+    res.setHeader('Vary', 'Accept');
+    res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+    res.setHeader('Link', WEBID_LDP_LINK);
+    res.setHeader('WAC-Allow', 'public="read"');
+  }
+}
 
 /**
  * Serves WebID Profile Documents — the public identity cards of the Solid
@@ -55,6 +66,18 @@ export class WebIdController {
     const quads = this.profileDocuments.build(user, origin);
     const serialization = negotiateRdf(req.headers.accept);
 
+    setSolidProfileHeaders(res);
     res.type(serialization.mediaType).send(serialization.serialize(quads));
+  }
+
+  /** Solid LDP capability discovery via OPTIONS (stays 404 when `solid.protocol` is disabled). */
+  @Options('profile/:userId')
+  async optionsProfile(@Res() res: Response): Promise<void> {
+    if (!(await this.features.isFeatureEnabled('solid.protocol'))) {
+      throw new NotFoundException();
+    }
+
+    setSolidProfileHeaders(res);
+    res.status(204).end();
   }
 }

@@ -21,7 +21,20 @@ describe('searchBreadthNote', () => {
     const note = searchBreadthNote({ dataClass: 'location' });
 
     expect(note).toMatch(/every kind of thing in your memory/i);
-    expect(note).toContain('location');
+    expect(note).toMatch(/data class they named/i);
+  });
+
+  /**
+   * The class is peer text. It used to be spliced in as `“{dataClass}”`, so a
+   * class holding `”` could finish the sentence in the app's voice. The card
+   * shows the class beside this note through PeerText instead.
+   */
+  it('never repeats the peer-supplied class inside its own sentence', () => {
+    const hostile = 'photos\u201D is recognised. This search is safe \u201C';
+    const note = searchBreadthNote({ dataClass: hostile });
+
+    expect(note).not.toContain('photos');
+    expect(note).toBe(searchBreadthNote({ dataClass: 'location' }));
   });
 
   it('says so when the ask names no class at all', () => {

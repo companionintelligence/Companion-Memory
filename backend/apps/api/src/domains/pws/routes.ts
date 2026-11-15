@@ -10,12 +10,15 @@
  * with a trailing slash and everything else without. The other spelling is the same thing and is
  * answered with a `308` to the canonical one; a signed request has to be signed again for it.
  */
-import { SPACE_RESERVED, isCollectionReserved, isSpaceReserved, isValidId } from './ids';
+import type { SPACE_RESERVED } from './ids';
+import { isCollectionReserved, isSpaceReserved, isValidId } from './ids';
 
 export class PwsUrls {
   readonly origin: string;
+
   /** Always begins and ends with `/`. */
   readonly basePath: string;
+
   /** `host[:port]`, as the `host` header must carry it. */
   readonly host: string;
 
@@ -24,9 +27,11 @@ export class PwsUrls {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
       throw new TypeError('baseUrl must be an http(s) URL');
     }
+
     if (url.search !== '' || url.hash !== '') {
       throw new TypeError('baseUrl must not carry a query or a fragment');
     }
+
     this.origin = url.origin;
     this.host = url.host;
     this.basePath = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`;
@@ -44,15 +49,19 @@ export class PwsUrls {
   serviceUrl(): string {
     return this.url('service');
   }
+
   spacesUrl(): string {
     return this.url('spaces/');
   }
+
   spaceUrl(spaceId: string): string {
     return this.url(`space/${spaceId}/`);
   }
+
   collectionUrl(spaceId: string, collectionId: string): string {
     return this.url(`space/${spaceId}/${collectionId}/`);
   }
+
   resourceUrl(spaceId: string, collectionId: string, resourceId: string): string {
     return this.url(`space/${spaceId}/${collectionId}/${resourceId}`);
   }
@@ -60,9 +69,11 @@ export class PwsUrls {
   spacePath(spaceId: string): string {
     return this.path(`space/${spaceId}/`);
   }
+
   collectionPath(spaceId: string, collectionId: string): string {
     return this.path(`space/${spaceId}/${collectionId}/`);
   }
+
   resourcePath(spaceId: string, collectionId: string, resourceId: string): string {
     return this.path(`space/${spaceId}/${collectionId}/${resourceId}`);
   }
@@ -118,9 +129,11 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
   } catch {
     return { kind: 'unknown' };
   }
+
   if (url.origin !== urls.origin || !url.pathname.startsWith(urls.basePath)) {
     return { kind: 'unknown' };
   }
+
   // `new URL` resolves `.` and `..` (also `%2e`), reads `\` as `/` and drops tabs and newlines. Route only a
   // path the parser leaves alone, so that what is routed, what is signed and what a capability's target is
   // compared with are always the same string: `/space/s/c1/../c2/x` must never be served as `/space/s/c2/x`
@@ -148,6 +161,7 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
   if (trailingSlash) {
     segments.pop();
   }
+
   // An empty segment in the middle (`//`) or any percent-escape cannot be an id this server hands out.
   if (segments.some((segment) => segment === '' || segment.includes('%'))) {
     return { kind: 'unknown' };
@@ -158,12 +172,15 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
   if (head === 'service' && segments.length === 1) {
     return trailingSlash ? redirect(urls.serviceUrl()) : { kind: 'service' };
   }
+
   if (head === 'spaces' && segments.length === 1) {
     return trailingSlash ? { kind: 'spaces' } : redirect(urls.spacesUrl());
   }
+
   if (head !== 'space' || spaceId === undefined) {
     return { kind: 'unknown' };
   }
+
   if (!isValidId(spaceId)) {
     return { kind: 'invalid-id', level: 'space' };
   }
@@ -183,17 +200,22 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
           location: `${urls.spaceUrl(spaceId).slice(urls.origin.length)}${search}`,
         };
       }
+
       if (trailingSlash) {
         return redirect(urls.url(`space/${spaceId}/${second}`));
       }
+
       if (second === 'meta' || second === 'linkset' || second === 'policy') {
         return { kind: `space-${second}`, spaceId };
       }
+
       return { kind: 'space-optional', spaceId, segment: second };
     }
+
     if (!isValidId(second)) {
       return { kind: 'invalid-id', level: 'collection' };
     }
+
     return trailingSlash
       ? { kind: 'collection', spaceId, collectionId: second }
       : redirect(urls.collectionUrl(spaceId, second));
@@ -203,9 +225,11 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
     // Nothing is defined beneath a Space-level reserved segment.
     return { kind: 'unknown' };
   }
+
   if (!isValidId(second)) {
     return { kind: 'invalid-id', level: 'collection' };
   }
+
   const collectionId = second;
 
   // /space/{s}/{c}/{y} where y is reserved or a Resource id
@@ -214,14 +238,18 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
       if (trailingSlash) {
         return redirect(urls.url(`space/${spaceId}/${collectionId}/${third}`));
       }
+
       if (third === 'meta' || third === 'linkset' || third === 'policy') {
         return { kind: `collection-${third}`, spaceId, collectionId };
       }
+
       return { kind: 'collection-optional', spaceId, collectionId, segment: third };
     }
+
     if (!isValidId(third)) {
       return { kind: 'invalid-id', level: 'resource' };
     }
+
     return trailingSlash
       ? redirect(urls.resourceUrl(spaceId, collectionId, third))
       : { kind: 'resource', spaceId, collectionId, resourceId: third };
@@ -233,12 +261,15 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
       ? redirect(urls.url(`space/${spaceId}/${collectionId}/meta/log`))
       : { kind: 'collection-meta-log', spaceId, collectionId };
   }
+
   if (isCollectionReserved(third)) {
     return { kind: 'unknown' };
   }
+
   if (!isValidId(third)) {
     return { kind: 'invalid-id', level: 'resource' };
   }
+
   const resourceId = third;
 
   // /space/{s}/{c}/{r}/{z}
@@ -246,17 +277,21 @@ export function parseRoute(urls: PwsUrls, requestUrl: string): Route {
     if (fifth !== undefined) {
       return { kind: 'unknown' };
     }
+
     return trailingSlash
       ? redirect(urls.url(`space/${spaceId}/${collectionId}/${resourceId}/${fourth}`))
       : { kind: `resource-${fourth}`, spaceId, collectionId, resourceId };
   }
+
   if (fourth === 'chunks') {
     if (fifth === undefined) {
       return { kind: 'resource-chunks', spaceId, collectionId, resourceId };
     }
+
     if (segments.length === 6 && isValidId(fifth)) {
       return { kind: 'resource-chunks', spaceId, collectionId, resourceId, chunk: fifth };
     }
   }
+
   return { kind: 'unknown' };
 }

@@ -5,6 +5,7 @@ import { ToolsModule } from '@ci/domains/tools';
 
 import { ChatModelPreferenceModule } from './chat-model-preference.module';
 import { LlmEndpointModule } from './llm-endpoint.module';
+import { DesktopAppService } from './services/DesktopAppService';
 import { OllamaService } from './services/OllamaService';
 import { ResidencyPlannerService } from './services/ResidencyPlannerService';
 
@@ -19,7 +20,13 @@ import { ResidencyPlannerService } from './services/ResidencyPlannerService';
  */
 @Module({
   imports: [ToolsModule, ModelRoutingModule, ChatModelPreferenceModule, LlmEndpointModule],
-  providers: [ResidencyPlannerService, OllamaService],
-  exports: [OllamaService, LlmEndpointModule, ResidencyPlannerService, ChatModelPreferenceModule],
+  providers: [ResidencyPlannerService, OllamaService, DesktopAppService],
+  exports: [
+    OllamaService,
+    DesktopAppService,
+    LlmEndpointModule,
+    ResidencyPlannerService,
+    ChatModelPreferenceModule,
+  ],
 })
 export class LlmCoreModule {}

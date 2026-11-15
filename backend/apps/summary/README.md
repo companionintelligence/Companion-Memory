@@ -144,7 +144,11 @@ job here:
 While `/health` says `llm.model: null`, the API's `SummaryServiceYieldGate` keeps
 these jobs in the queue, unleased and with no retry spent. They run in order once
 a model appears. That is why the hourly job names its window: it may run long
-after the hour it summarizes.
+after the hour it summarizes. `llm.model` is null whenever there is nothing to run
+on: no model configured or discovered, an endpoint that does not answer or
+answers its model list with a 5xx (CI-Hub's pool says 502 when the engine behind
+it is down), or one that no longer serves the model (configured or remembered)
+and offers no other chat model.
 
 The runner accepts the run into a bounded worker pool
 (`FUNCTION_RUNNER_CONCURRENCY`, default 2), returns immediately, and POSTs the

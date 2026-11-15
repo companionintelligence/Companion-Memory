@@ -21,6 +21,7 @@ import {
   meteredStageIds,
   stageDueness,
   type StageDueness,
+  type WindowBounds,
 } from '../schedule';
 import type { Stage } from '../types';
 
@@ -699,6 +700,14 @@ interface TickConditions {
   /** `WindowStatus.open` — may the appliance spend on enrichment right now? */
   windowOpen: boolean;
 
+  /**
+   * `WindowStatus.opensAt`, `closesAt` and `nextOpensAt`, for `stageDueness`'s
+   * `windowBounds`. `null` when the window is disabled (free-running, so there
+   * is no nightly turn to line up with) or `status()` threw. A window that is
+   * shut still carries its bounds; `windowOpen` is what keeps them inert.
+   */
+  windowBounds: WindowBounds | null;
+
   /** The instant this tick judges every leg against. */
   now: Date;
 }
@@ -1034,6 +1043,7 @@ export class PipelineControlService {
           stageId: leg.stageId,
           lastStartedAt: lastStartedAt.get(this.legKey(leg)) ?? null,
           windowOpen: conditions.windowOpen,
+          windowBounds: conditions.windowBounds,
           now: conditions.now,
           hasOverdueRetry: retryDue.get(this.legKey(leg)) ?? false,
         }),
@@ -1470,7 +1480,14 @@ export class PipelineControlService {
         });
       }
 
-      return { windowOpen: window.open, now };
+      return {
+        windowOpen: window.open,
+        windowBounds:
+          window.state === 'disabled'
+            ? null
+            : { opensAt: window.opensAt, closesAt: window.closesAt, nextOpensAt: window.nextOpensAt },
+        now,
+      };
     } catch (err: unknown) {
       this.logger.error(
         'The enrichment window could not be read; this tick treats it as shut, so only legs past ' +
@@ -1478,7 +1495,7 @@ export class PipelineControlService {
         err instanceof Error ? err : new Error(String(err)),
       );
 
-      return { windowOpen: false, now };
+      return { windowOpen: false, windowBounds: null, now };
     }
   }
 
@@ -1520,6 +1537,7 @@ export class PipelineControlService {
         stageId: leg.stageId,
         lastStartedAt: lastStartedAt.get(this.legKey(leg)) ?? null,
         windowOpen: conditions.windowOpen,
+        windowBounds: conditions.windowBounds,
         now: conditions.now,
       });
 

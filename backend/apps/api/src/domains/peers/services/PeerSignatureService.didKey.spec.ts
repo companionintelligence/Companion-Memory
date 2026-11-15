@@ -57,6 +57,7 @@ function verify(
     method: 'POST',
     targetUri: TARGET,
     rawBody: BODY,
+    transportHasBody: true,
     contentDigestHeader: peer.headers['content-digest'],
     signatureInput: peer.headers['signature-input'],
     signature: peer.headers.signature,

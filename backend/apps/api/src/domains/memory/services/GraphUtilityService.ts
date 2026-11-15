@@ -1428,12 +1428,23 @@ export class GraphUtilityService {
         // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
         .into(this.relationshipRepo.metadata.target)
         .values(relationship)
-        .returning(['relationship_id']),
+        .returning(['relationship_id', 'created_at', 'updated_at']),
       '(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING',
     );
 
     // Postgres hands back the RETURNING rows, and a yielded insert returns none.
-    return insertedRows.length > 0 ? relationship : null;
+    const [inserted] = insertedRows;
+
+    if (inserted == null) {
+      return null;
+    }
+
+    // The timestamps come from column defaults, so the object built above only has them once
+    // Postgres says what they are.
+    relationship.created_at = inserted.created_at as Date;
+    relationship.updated_at = inserted.updated_at as Date;
+
+    return relationship;
   }
 
   async softDeleteRelationship(relationshipId: string, ownerUserId: string): Promise<void> {

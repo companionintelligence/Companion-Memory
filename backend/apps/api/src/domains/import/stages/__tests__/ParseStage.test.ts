@@ -391,3 +391,60 @@ describe('the media store handed to importers', () => {
     expect(seen[0].mediaStoreDir).not.toBe(context.scratchDir);
   });
 });
+
+describe('the time zone handed to importers', () => {
+  function importerSeeing(seen: Array<{ timeZone?: string }>): DataSourceRecognition {
+    return {
+      data_source: {
+        name: 'whatsapp',
+        title: 'whatsapp',
+        icon: '',
+        description: '',
+        newFileImporter: () => ({
+          recognize: async () => ({ confidence: 1 }),
+          fileImport: async (_ctx: unknown, _entry: unknown, params: { timeZone?: string }) => {
+            seen.push(params);
+          },
+        }),
+      },
+      recognition: { confidence: 1 },
+    } as unknown as DataSourceRecognition;
+  }
+
+  it("is the account's profile zone, so zone-less export times are read where the person lives", async () => {
+    const seen: Array<{ timeZone?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([importerSeeing(seen)]);
+
+    const { stage, dataSource } = buildStage();
+
+    dataSource.query.mockImplementation(async (sql: string) =>
+      sql.includes('FROM ci.users') ? ([{ timezone: 'America/Los_Angeles' }] as never[]) : [],
+    );
+
+    await stage.run(contextFor());
+
+    expect(seen[0].timeZone).toBe('America/Los_Angeles');
+    expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining('FROM ci.users'), [USER_ID]);
+  });
+
+  it('is left unset when the profile holds no zone this platform knows', async () => {
+    const seen: Array<{ timeZone?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([importerSeeing(seen)]);
+
+    const { stage, dataSource, logger } = buildStage();
+
+    dataSource.query.mockImplementation(async (sql: string) =>
+      sql.includes('FROM ci.users') ? ([{ timezone: 'Not/AZone' }] as never[]) : [],
+    );
+
+    await stage.run(contextFor());
+
+    expect(seen[0].timeZone).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('time zone'),
+      expect.objectContaining({ timezone: 'Not/AZone' }),
+    );
+  });
+});

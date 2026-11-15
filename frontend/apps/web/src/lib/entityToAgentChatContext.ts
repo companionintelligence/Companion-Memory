@@ -145,8 +145,8 @@ export function entityToAgentChatContext(entity: MemoryEntity, fmt: DateTimeForm
   const sourceKind = entity.__typename;
   const sourceId = typeof entity.id === 'string' ? entity.id : undefined;
 
-  let title: string | null = null;
-  let prose: string | null = null;
+  let title: string | null;
+  let prose: string | null;
 
   switch (entity.__typename) {
     case 'EventType':

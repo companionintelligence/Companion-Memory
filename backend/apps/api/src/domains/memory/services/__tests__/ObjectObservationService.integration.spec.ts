@@ -7,7 +7,7 @@ import { databaseAvailability, resolveConnection } from '../../../__tests__/supp
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
 import { platformIdentity } from '../../identity';
-import { ObjectObservationService } from '../ObjectObservationService';
+import { ObjectObservationService, touchObjectLastSeen } from '../ObjectObservationService';
 
 /**
  * The SQL-shaped guarantees `ObjectObservationService.spec.ts` can only assert
@@ -506,6 +506,141 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
     expect(await rawRow(toUnknown)).toEqual(
       expect.objectContaining({ resolved_object_id: unknownMug, resolved_product_id: mugModel }),
     );
+  });
+
+  describe('a person linking a sighting moves the thing\'s "last seen"', () => {
+    const lastSeen = async (objectId: string): Promise<Date | null> => {
+      const [row] = (await dataSource.query(
+        `SELECT last_seen_at FROM ci.objects WHERE object_id = $1::uuid`,
+        [objectId],
+      )) as Array<{ last_seen_at: Date | null }>;
+
+      return row?.last_seen_at ?? null;
+    };
+
+    const sighting = async (label: string, observedAt: string, placeEntityId?: string): Promise<string> => {
+      const [created] = (
+        await service.createMany(owner, [
+          {
+            observedAt: new Date(observedAt),
+            label,
+            contentId: uuidv7(),
+            detector: 'yolov8',
+            bbox: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 },
+            ...(placeEntityId !== undefined && { placeEntityId }),
+          },
+        ])
+      ).written;
+
+      return created.id;
+    };
+
+    it('"This is…" in review sets it to when the sighting was taken', async () => {
+      const lamp = await insertThing('Desk lamp');
+      const sightingId = await sighting('desk lamp', '2026-05-02T10:00:00.000Z');
+
+      expect(await lastSeen(lamp)).toBeNull();
+
+      await service.confirm(owner, sightingId, true, { resolvedObjectId: lamp });
+
+      expect(await lastSeen(lamp)).toEqual(new Date('2026-05-02T10:00:00.000Z'));
+    });
+
+    it('"Yes" on a sighting already linked to the thing sets it too', async () => {
+      const kettle = await insertThing('Tea kettle');
+      const sightingId = await sighting('tea kettle', '2026-05-03T08:00:00.000Z');
+
+      await service.resolve(owner, sightingId, {
+        resolvedObjectId: kettle,
+        resolutionMethod: 'embedding',
+        resolutionConfidence: 0.6,
+      });
+      await service.confirm(owner, sightingId, true);
+
+      expect(await lastSeen(kettle)).toEqual(new Date('2026-05-03T08:00:00.000Z'));
+    });
+
+    it('takes the place the sighting was taken at along, for Recently seen', async () => {
+      const kitchen = uuidv7();
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id) VALUES ($1::uuid, 'Place', 'Kitchen', $2::uuid)`,
+        [kitchen, owner.userId],
+      );
+      const kettle = await insertThing('Tea kettle');
+      const sightingId = await sighting('tea kettle', '2026-05-05T07:30:00.000Z', kitchen);
+
+      await service.confirm(owner, sightingId, true, { resolvedObjectId: kettle });
+
+      const [row] = (await dataSource.query(
+        `SELECT last_seen_at, last_seen_place_entity_id FROM ci.objects WHERE object_id = $1::uuid`,
+        [kettle],
+      )) as Array<{ last_seen_at: Date | null; last_seen_place_entity_id: string | null }>;
+      expect(row).toEqual({
+        last_seen_at: new Date('2026-05-05T07:30:00.000Z'),
+        last_seen_place_entity_id: kitchen,
+      });
+    });
+
+    it("leaves another account's thing alone", async () => {
+      const someoneElse = { userId: uuidv7() };
+      await dataSource.query(
+        `INSERT INTO ci.users (id, name, email) VALUES ($1::uuid, 'Other spec fixture', $2)`,
+        [someoneElse.userId, `other.${someoneElse.userId}@example.invalid`],
+      );
+      const theirs = uuidv7();
+      try {
+        await dataSource.query(
+          `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id, linked_table, linked_id)
+           VALUES ($1::uuid, 'Item', 'Their lamp', $2::uuid, 'objects', $1::uuid)`,
+          [theirs, someoneElse.userId],
+        );
+        await dataSource.query(
+          `INSERT INTO ci.objects (object_id, user_id, entity_type) VALUES ($1::uuid, $2::uuid, 'Item')`,
+          [theirs, someoneElse.userId],
+        );
+        const sightingId = await sighting('lamp', '2026-05-06T09:00:00.000Z');
+
+        await expect(service.confirm(owner, sightingId, true, { resolvedObjectId: theirs })).rejects.toThrow(
+          /belongs to another account/,
+        );
+        // The write's own account check, reached without the refusal in front of it.
+        await touchObjectLastSeen(dataSource, owner.userId, theirs, {
+          observedAt: new Date('2026-05-06T09:00:00.000Z'),
+          placeEntityId: null,
+        });
+        expect(await lastSeen(theirs)).toBeNull();
+      } finally {
+        await dataSource.query('DELETE FROM ci.objects WHERE user_id = $1', [someoneElse.userId]);
+        await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [someoneElse.userId]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = $1', [someoneElse.userId]);
+      }
+    });
+
+    it('never walks it backwards for an older sighting', async () => {
+      const mug = await insertThing('Blue mug');
+      const newer = await sighting('mug', '2026-05-04T09:00:00.000Z');
+      const older = await sighting('cup', '2026-04-01T09:00:00.000Z');
+
+      await service.confirm(owner, newer, true, { resolvedObjectId: mug });
+      await service.confirm(owner, older, true, { resolvedObjectId: mug });
+
+      expect(await lastSeen(mug)).toEqual(new Date('2026-05-04T09:00:00.000Z'));
+    });
+
+    it('leaves it alone for a retraction, though the sighting stays linked', async () => {
+      const mug = await insertThing('Blue mug');
+      const sightingId = await sighting('mug', '2026-05-07T09:00:00.000Z');
+
+      // Linked by a machine, which does not move it here, so a retraction that did would show.
+      await service.resolve(owner, sightingId, {
+        resolvedObjectId: mug,
+        resolutionMethod: 'embedding',
+        resolutionConfidence: 0.6,
+      });
+      await service.confirm(owner, sightingId, false);
+
+      expect(await lastSeen(mug)).toBeNull();
+    });
   });
 
   it('"No" on a sighting linked only to a product clears that link and sends it back', async () => {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { LLM_API_KEY_PLACEHOLDER } from '@ci/configuration';
 
 import {
   containerSharedConfigPath,
@@ -52,7 +52,10 @@ export interface LlmEndpointView {
   locked: boolean;
   /** The normalized endpoint the API container will contact (never carries credentials). */
   endpoint: string;
-  /** Whether a credential is available, without exposing its value. */
+  /**
+   * Whether someone set a credential, without exposing its value. False for the built-in
+   * placeholder ({@link LLM_API_KEY_PLACEHOLDER}), which is still sent as the bearer.
+   */
   apiKeyConfigured: boolean;
 }
 
@@ -288,7 +291,12 @@ export class LlmEndpointService implements OnModuleInit {
       hostGateway: this.resolved.hostGateway,
       locked: this.resolved.locked,
       endpoint: safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost),
-      apiKeyConfigured: this.resolved.apiKey.length > 0,
+      // A key saved here always counts, even the placeholder's own word (Ollama's docs say to
+      // type it, and Settings saved it back for a while): it overrides LLM_API_KEY, so Settings
+      // must keep offering to remove it.
+      apiKeyConfigured:
+        this.persistedApiKey != null ||
+        (this.resolved.apiKey.length > 0 && this.resolved.apiKey !== LLM_API_KEY_PLACEHOLDER),
     };
   }
 

@@ -197,6 +197,7 @@ export function decryptContent(
       }
 
       const decipher = createDecipheriv('aes-256-cbc', cek.subarray(32), iv);
+
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     }
 
@@ -204,6 +205,7 @@ export function decryptContent(
       const decipher = createDecipheriv('aes-256-gcm', cek, iv, { authTagLength: 16 });
       decipher.setAAD(aad);
       decipher.setAuthTag(tag);
+
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     }
 
@@ -211,6 +213,7 @@ export function decryptContent(
     const decipher = createDecipheriv('chacha20-poly1305', parts.subkey, parts.nonce, { authTagLength: 16 });
     decipher.setAAD(aad, { plaintextLength: ciphertext.length });
     decipher.setAuthTag(tag);
+
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
     throw failed();

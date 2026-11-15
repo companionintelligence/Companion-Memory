@@ -73,7 +73,7 @@ export class UnpackStage implements ImportStageRunner {
     const { localPath, filename } = await this.acquire(context);
 
     const rejected: RejectedArchive[] = [];
-    let extractedFiles = 0;
+    let extractedFiles: number;
     let method: string | null = null;
     let extractionLoss: string | null = null;
 

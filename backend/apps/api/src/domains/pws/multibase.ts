@@ -74,6 +74,7 @@ export function base58btcDecode(text: string): Uint8Array {
     if (digit === undefined) {
       throw new MultibaseError('not a base58btc character');
     }
+
     value = value * 58n + BigInt(digit);
   }
 
@@ -82,6 +83,7 @@ export function base58btcDecode(text: string): Uint8Array {
     significant.push(Number(value & 0xffn));
     value >>= 8n;
   }
+
   significant.reverse();
 
   return Uint8Array.from([...Array.from({ length: leadingZeros }, () => 0), ...significant]);
@@ -97,6 +99,7 @@ export function base64urlDecode(text: string): Uint8Array {
   if (!BASE64URL_PATTERN.test(text) || text.length % 4 === 1) {
     throw new MultibaseError('not unpadded base64url');
   }
+
   const bytes = new Uint8Array(Buffer.from(text, 'base64url'));
   if (base64urlEncode(bytes) !== text) {
     throw new MultibaseError('base64url has non-zero trailing bits');
@@ -115,6 +118,7 @@ export function base64Decode(text: string): Uint8Array {
   if (!BASE64_PATTERN.test(text)) {
     throw new MultibaseError('not padded base64');
   }
+
   const bytes = new Uint8Array(Buffer.from(text, 'base64'));
   if (base64Encode(bytes) !== text) {
     throw new MultibaseError('base64 has non-zero trailing bits');
@@ -135,6 +139,7 @@ export function multibaseDecode(text: string): { prefix: MultibasePrefix; bytes:
   if (prefix === 'z') {
     return { prefix, bytes: base58btcDecode(rest) };
   }
+
   if (prefix === 'u') {
     return { prefix, bytes: base64urlDecode(rest) };
   }

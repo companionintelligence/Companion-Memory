@@ -93,7 +93,8 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
     title: 'Update a task',
     description:
       'Update fields on an existing task in the personal to-do list. Only the fields provided ' +
-      'are changed. Does not accept status — use planning.completeTask to mark a task done. ' +
+      'are changed. Does not accept status — use planning.acceptProposedTask or ' +
+      'planning.declineProposedTask to review a proposed task, and planning.completeTask to mark a task done. ' +
       'dueAt is an instant (ISO 8601); scheduledFor/deferUntil are owner-local calendar dates ' +
       '(YYYY-MM-DD); taskTime is a zoneless wall-clock time (HH:MM).',
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },

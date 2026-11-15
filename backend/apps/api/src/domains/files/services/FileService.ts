@@ -942,6 +942,18 @@ export class FileService implements OnModuleInit {
   }
 
   async getFileStream(context: ServiceContext, key: string): Promise<Readable> {
+    return (await this.getFileStreamWithLength(context, key)).stream;
+  }
+
+  /**
+   * The object as a stream, with the length in bytes the object store gave for
+   * it: for a reader that has to say how much is coming before it has read it
+   * (the account export numbers a file's chunks up front).
+   */
+  async getFileStreamWithLength(
+    context: ServiceContext,
+    key: string,
+  ): Promise<{ stream: Readable; contentLength: number | undefined }> {
     await this.assertOwnsKey(context, key);
 
     const response = await this.s3.send(
@@ -957,7 +969,10 @@ export class FileService implements OnModuleInit {
 
     // AWS SDK v3 SdkStream implements Symbol.asyncIterator, so we can
     // wrap it in a Node Readable without unsafe casts or web-stream mismatches.
-    return Readable.from(response.Body as AsyncIterable<Uint8Array>);
+    return {
+      stream: Readable.from(response.Body as AsyncIterable<Uint8Array>),
+      contentLength: response.ContentLength,
+    };
   }
 
   async update(context: ServiceContext, id: string, data: UpdateFileDto): Promise<SignedFile | null> {

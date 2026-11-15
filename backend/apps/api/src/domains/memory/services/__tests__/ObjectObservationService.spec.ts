@@ -46,6 +46,10 @@ import { ObjectObservationService, detectionKeyFor } from '../ObjectObservationS
 const USER = '00000000-0000-4000-8000-0000000000aa';
 const CONTENT = '00000000-0000-4000-8000-00000000c001';
 const FILE = '00000000-0000-4000-8000-0000000000f1';
+// Ids a resolution links to: refuseForeignLinks refuses one that is not a uuid before it asks anything.
+const THING = '00000000-0000-4000-8000-0000000000b1';
+const PICKED_THING = '00000000-0000-4000-8000-0000000000b7';
+const NAMED_PRODUCT = '00000000-0000-4000-8000-0000000000d2';
 
 function ctx() {
   return { userId: USER };
@@ -484,7 +488,7 @@ describe('ObjectObservationService.resolve — a machine decision is not a human
     findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
 
     await service.resolve(ctx(), 'obs-1', {
-      resolvedObjectId: 'item-1',
+      resolvedObjectId: THING,
       resolutionMethod: 'label',
     });
 
@@ -601,10 +605,10 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
 
     findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
 
-    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: 'item-7' });
+    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: PICKED_THING });
 
     expect(update.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ confirmedByUser: true, resolvedObjectId: 'item-7' }),
+      expect.objectContaining({ confirmedByUser: true, resolvedObjectId: PICKED_THING }),
     );
   });
 
@@ -621,11 +625,11 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
       sql.includes('FROM ci.objects') ? [{ product_id: 'product-9' }] : [],
     );
 
-    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: 'item-7' });
+    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: PICKED_THING });
 
-    expect(query.mock.calls[0][1]).toEqual(['item-7', USER]);
+    expect(query.mock.calls[0][1]).toEqual([PICKED_THING, USER]);
     expect(update.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ resolvedObjectId: 'item-7', resolvedProductId: 'product-9' }),
+      expect.objectContaining({ resolvedObjectId: PICKED_THING, resolvedProductId: 'product-9' }),
     );
   });
 
@@ -635,12 +639,55 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
     findOne.mockResolvedValue({ id: 'obs-1', userId: USER, confirmedByUser: false });
 
     await service.confirm(ctx(), 'obs-1', true, {
-      resolvedObjectId: 'item-7',
-      resolvedProductId: 'product-2',
+      resolvedObjectId: PICKED_THING,
+      resolvedProductId: NAMED_PRODUCT,
     });
 
     expect(query).not.toHaveBeenCalled();
-    expect(update.mock.calls[0][1]).toEqual(expect.objectContaining({ resolvedProductId: 'product-2' }));
+    expect(update.mock.calls[0][1]).toEqual(expect.objectContaining({ resolvedProductId: NAMED_PRODUCT }));
+  });
+
+  it('moves the thing\'s "last seen" when the row comes back confirmed and linked', async () => {
+    const { service, findOne, query } = makeService();
+    const observedAt = new Date('2026-05-02T10:00:00.000Z');
+
+    findOne
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-7',
+      })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: true,
+        resolvedObjectId: 'item-7',
+        observedAt,
+        placeEntityId: null,
+      });
+
+    await service.confirm(ctx(), 'obs-1');
+
+    const touch = query.mock.calls.find(([sql]) => String(sql).includes('SET last_seen_at'));
+    expect(touch?.[1]).toEqual([USER, 'item-7', observedAt, null]);
+  });
+
+  it('leaves "last seen" alone for a retraction that keeps the link', async () => {
+    const { service, findOne, query } = makeService();
+
+    findOne
+      .mockResolvedValueOnce({ id: 'obs-1', userId: USER, confirmedByUser: true, resolvedObjectId: 'item-1' })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-1',
+      });
+
+    await service.confirm(ctx(), 'obs-1', false);
+
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('SET last_seen_at'))).toBe(false);
   });
 });
 

@@ -1394,6 +1394,10 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
     async getJob(): Promise<null> {
       return null;
     }
+
+    async hasLiveJob(): Promise<boolean> {
+      return false;
+    }
   }
 
   interface QueueHarness {
@@ -1552,6 +1556,10 @@ describe('PipelineRunService replay of an event with several listener queues', (
 
     async getJob(): Promise<null> {
       return null;
+    }
+
+    async hasLiveJob(): Promise<boolean> {
+      return false;
     }
   }
 

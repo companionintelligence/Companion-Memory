@@ -32,6 +32,10 @@ export const OBJECT_BY_IDENTIFIER = gql(`
         brand
         model
       }
+      ownedItem {
+        id
+        name
+      }
       product {
         id
         title
@@ -121,17 +125,20 @@ export function ScanBarcodeModal({ open, onClose }: Props) {
       }
 
       const match = data?.objectByIdentifier;
+      // The unit the code claims or, for a model code, the unit of that model
+      // you own (an Amazon import leaves the ASIN on the model, not the unit).
+      const target = match?.item ?? match?.ownedItem;
 
-      if (match?.item) {
+      if (target) {
         close();
-        navigate(`/items/${GlobalUID.parse('item', match.item.id)}`);
+        navigate(`/items/${GlobalUID.parse('item', target.id)}`);
 
         return;
       }
 
       if (match?.product) {
-        // A GTIN identifies the MODEL, not the unit — a match on one says the
-        // catalog knows the product but nothing you own carries the code.
+        // A GTIN identifies the MODEL, not the unit. A match on one with no
+        // owned unit says the catalog knows the product and you own none.
         setMessage(
           `That code identifies "${match.product.title}", a product model. Nothing you own claims it yet.`,
         );

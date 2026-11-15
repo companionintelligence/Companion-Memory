@@ -9,7 +9,11 @@ import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normaliz
 
 import type { ObjectObservation, ObservationResolutionMethod } from '../entities/ObjectObservationEntity';
 
-import { isSentBackToReview, ObjectObservationService } from './ObjectObservationService';
+import {
+  isSentBackToReview,
+  ObjectObservationService,
+  touchObjectLastSeen,
+} from './ObjectObservationService';
 
 /**
  * Confidence declared by each rung of the ladder.
@@ -238,8 +242,15 @@ export class ObjectResolutionService {
       resolutionConfidence: candidate.confidence,
     });
 
-    if (candidate.objectId != null) {
-      await this.touchLastSeen(context, candidate.objectId, observation);
+    // What the row says now, as in ObjectObservationService.confirm: `resolve`
+    // returns a sighting a person answered since the read above unchanged, and
+    // that answer, not this match, says which thing it is.
+    if (
+      candidate.objectId != null &&
+      updated?.resolvedObjectId === candidate.objectId &&
+      updated.resolutionMethod !== 'user'
+    ) {
+      await touchObjectLastSeen(this.dataSource, context.userId, candidate.objectId, updated);
     }
 
     return { ...candidate, applied: true, observation: updated };
@@ -614,31 +625,5 @@ export class ObjectResolutionService {
       productId: null,
       reason: `exactly one owned unit is named "${label}"`,
     };
-  }
-
-  /**
-   * Denormalize the sighting onto the unit it resolved to.
-   *
-   * `last_seen_at` / `last_seen_place_entity_id` exist so the things list can
-   * sort and filter without a per-row subquery over observations. Guarded on
-   * the timestamp so an out-of-order backfill of old photos cannot walk a
-   * unit's "last seen" backwards.
-   */
-  private async touchLastSeen(
-    context: UserServiceContext,
-    objectId: string,
-    observation: ObjectObservation,
-  ): Promise<void> {
-    await this.dataSource.query(
-      `UPDATE ci.objects
-          SET last_seen_at = $3,
-              last_seen_place_entity_id = COALESCE($4::uuid, last_seen_place_entity_id),
-              updated_at = now()
-        WHERE object_id = $2::uuid
-          AND user_id = $1::uuid
-          AND merged_into_object_id IS NULL
-          AND (last_seen_at IS NULL OR last_seen_at < $3)`,
-      [context.userId, objectId, observation.observedAt, observation.placeEntityId],
-    );
   }
 }

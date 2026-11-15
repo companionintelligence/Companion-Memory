@@ -21,6 +21,21 @@ vi.mock('@/api/useUploadFile', () => ({
   ],
 }));
 
+/** A chat stream that sends these frames in order, then closes. */
+function framedStream(frames: [Channel, string][]): ReadableStream<Uint8Array> {
+  const encoder = new FrameEncoder();
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const [channel, text] of frames) {
+        controller.enqueue(encoder.encodeFrame(channel, text));
+      }
+
+      controller.close();
+    },
+  });
+}
+
 describe('Chat', () => {
   it('shows the empty state when there are no messages', () => {
     const { getByText } = renderWithProviders(<Chat emptyState={<div>Start the conversation</div>} />);
@@ -192,6 +207,68 @@ describe('Chat', () => {
     await waitFor(() => expect(container.textContent).toContain('Hello there.'));
     expect(warn).not.toHaveBeenCalledWith('Ignored unsupported chunk channel:', expect.anything());
     warn.mockRestore();
+  });
+
+  it('shows the last character of a finished reply', async () => {
+    // `streaming-markdown` keeps back the last character it was given until the next one arrives or the parser is
+    // ended. A reply with no trailing newline lost it on screen until a reload.
+    const readable = framedStream([
+      [Channel.TEXT, 'Hi '],
+      [Channel.TEXT, 'Blake!'],
+    ]);
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Hi Blake!'));
+  });
+
+  it('shows the last character of a reply block that a tool call ends', async () => {
+    const readable = framedStream([
+      [Channel.TEXT, 'Let me look that up.'],
+      [Channel.TOOL, JSON.stringify([{ function: { name: 'memory.search' } }])],
+    ]);
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Let me look that up.'));
+  });
+
+  it('shows the last character of the thinking block once the answer starts', async () => {
+    const readable = framedStream([
+      [Channel.THINK, 'Checking what was requested.'],
+      [Channel.TEXT, 'Hi there\n\n'],
+    ]);
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'hi' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.textContent).toContain('Hi there'));
+    expect(container.textContent).toContain('Checking what was requested.');
+  });
+
+  it('hands over the reply text once when the answer starts after a thinking block', async () => {
+    // The first frame after a block change waits a render for its new block and is tried again. It was added to the
+    // reply text on every try.
+    const readable = framedStream([
+      [Channel.THINK, 'Checking.'],
+      [Channel.TEXT, 'Hi there'],
+    ]);
+    const onResponseFinished = vi.fn();
+
+    renderWithProviders(
+      <Chat
+        messages={[{ role: 'user', content: 'hi' }]}
+        readable={readable}
+        onResponseFinished={onResponseFinished}
+      />,
+    );
+
+    await waitFor(() => expect(onResponseFinished).toHaveBeenCalledWith('Hi there'));
   });
 
   /**

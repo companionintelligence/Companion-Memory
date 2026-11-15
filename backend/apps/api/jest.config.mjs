@@ -14,8 +14,9 @@ export default {
     // Ignore .yarn/cache packages EXCEPT ESM-only ones that require transformation
     // (jose arrives via PortalAuthModule, so anything booting the whole App needs it;
     // uuid 14, serialize-error 13, non-error, and htmlparser2 12 with its domhandler,
-    // domutils, domelementtype and entities dependencies, are ESM-only too)
-    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose|uuid|serialize-error|non-error|htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities)-npm-)',
+    // domutils, domelementtype and entities dependencies, are ESM-only too, and so are the
+    // identikey domain's @noble/hashes 2, @noble/curves 2 and @noble/post-quantum, which its crypto suites load)
+    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose|uuid|serialize-error|non-error|htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities|@noble-hashes|@noble-curves|@noble-post-quantum)-npm-)',
     '\\.pnp\\.cjs$',
   ],
 

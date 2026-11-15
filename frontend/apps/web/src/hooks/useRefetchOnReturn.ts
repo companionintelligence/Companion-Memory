@@ -5,9 +5,11 @@ const RETURN_THROTTLE_MS = 1_000;
 
 /**
  * Re-run `refetch` when the person comes back: the tab becomes visible again,
- * or the window regains focus. A page left open on another screen while an
- * edit was made elsewhere is then current the moment it is looked at, whether
- * or not the live stream was up while it was away.
+ * the window regains focus, or the browser comes back online. A page left open
+ * on another screen while an edit was made elsewhere is then current the moment
+ * it is looked at, whether or not the live stream was up while it was away. A
+ * page that sat through a dropped connection is current again as soon as the
+ * connection is, instead of at the next poll.
  *
  * Not on mount — the query already ran — and not while hidden, where a focus
  * event can still arrive.
@@ -37,12 +39,27 @@ export function useRefetchOnReturn(refetch: () => void): void {
       refetchRef.current();
     };
 
+    // Not throttled against the other two. On waking a laptop the focus or
+    // visibility refetch often goes out before the network is back and fails,
+    // and `online` lands a moment later; swallowing it as the same return
+    // would leave the page on that failure until the next poll.
+    const onOnline = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+
+      last = Date.now();
+      refetchRef.current();
+    };
+
     document.addEventListener('visibilitychange', onReturn);
     window.addEventListener('focus', onReturn);
+    window.addEventListener('online', onOnline);
 
     return () => {
       document.removeEventListener('visibilitychange', onReturn);
       window.removeEventListener('focus', onReturn);
+      window.removeEventListener('online', onOnline);
     };
   }, []);
 }

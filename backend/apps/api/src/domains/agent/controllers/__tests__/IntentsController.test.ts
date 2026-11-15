@@ -1,4 +1,5 @@
 import type { ApiKeyScopedRequest } from '@ci/common/guards';
+import config from '@ci/configuration';
 import type { IntentCatalogService, IntentManifest, ToolRegistry, ToolResult } from '@ci/domains/tools';
 
 import { IntentsController } from '../IntentsController';
@@ -113,6 +114,28 @@ describe('IntentsController', () => {
         { query: 'Ada' },
       );
       expect(result).toEqual(OK_RESULT);
+    });
+
+    it("hands back hit links absolute on the app's public origin, not relative to the caller's", async () => {
+      const original = config.auth.oidc.publicBaseUrl;
+      config.auth.oidc.publicBaseUrl = 'https://ci-memory-box.example';
+
+      try {
+        const registry = stubRegistry({
+          executeTool: jest.fn().mockResolvedValue({
+            success: true,
+            data: { summary: 'Found 1', items: [{ id: 'f1', type: 'file', link: '/content/c1' }] },
+          }),
+        });
+        const result = await controllerWith(MANIFEST, registry).execute('people_find', {}, CONTEXT, REQ);
+
+        expect(result.data).toEqual({
+          summary: 'Found 1',
+          items: [{ id: 'f1', type: 'file', link: 'https://ci-memory-box.example/content/c1' }],
+        });
+      } finally {
+        config.auth.oidc.publicBaseUrl = original;
+      }
     });
 
     it('runs an underscored Hermes-shaped name through the registry', async () => {
