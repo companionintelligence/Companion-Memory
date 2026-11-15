@@ -5,7 +5,7 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import parseDuration from 'parse-duration';
-import { MoreThan, Not, Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
@@ -339,11 +339,14 @@ export class AuthService {
     const hashedUserAgent = this.digest(data.userAgent);
     const hashedToken = this.digest(token);
 
+    // A request without the value matches only a session issued without one.
+    // A bare undefined would drop the predicate (TypeORM 0.3) or throw (TypeORM
+    // 1.x, which this repo now runs).
     const match = await this.sessionRepository.findOne({
       where: {
         token: hashedToken,
-        ip: hashedIp,
-        user_agent: hashedUserAgent,
+        ip: hashedIp ?? IsNull(),
+        user_agent: hashedUserAgent ?? IsNull(),
         expires_at: MoreThan(now),
         user: {
           id: userId,
@@ -367,8 +370,8 @@ export class AuthService {
         where: {
           previous_token: hashedToken,
           rotated_at: MoreThan(graceDeadline),
-          ip: hashedIp,
-          user_agent: hashedUserAgent,
+          ip: hashedIp ?? IsNull(),
+          user_agent: hashedUserAgent ?? IsNull(),
           expires_at: MoreThan(now),
           user: {
             id: userId,

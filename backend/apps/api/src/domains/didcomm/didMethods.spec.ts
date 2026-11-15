@@ -1,10 +1,12 @@
-import { relationshipKeys, didcommEndpoints } from './didDocument';
+import { GENUINE, WEAK } from './__tests__/weakEd25519';
+import { parseDidDocument, relationshipKeys, didcommEndpoints } from './didDocument';
 import { didKeyFromJwk, jwkFromDidKey, resolveDidKey } from './didKey';
 import { createDidPeer2, resolveDidPeer } from './didPeer';
 import { createDidWebResolver, didWebToUrl } from './didWeb';
+import { base58btcEncode, multibaseEncodeBase58btc } from './encoding';
 import { DidcommError } from './errors';
 import { generateKeyPair, type KeyCurve } from './jwk';
-import { multikeyFromJwk } from './multikey';
+import { jwkFromMultikey, multikeyFromJwk } from './multikey';
 
 describe('did:key', () => {
   const ED = 'did:key:z6MkqRYqQiSgvZQdnBytw86Qbs2ZWUkGv22od935YF4s8M7V';
@@ -278,5 +280,67 @@ describe('did:web', () => {
     await expect(impostor.resolve('did:web:example.com')).rejects.toThrow(/different DID/);
     await expect(down.resolve('did:web:example.com')).rejects.toThrow(/could not fetch/);
     await expect(down.resolve('did:web:example.com')).rejects.not.toThrow(/10\.0\.0\.5/);
+  });
+});
+
+describe('a small-order or non-canonical Ed25519 key names no one, in any method', () => {
+  const INVALID_KEY = expect.objectContaining({ name: 'DidcommError', code: 'invalid-key' });
+  const raw = (hex: string) => Buffer.from(hex, 'hex');
+  const multikeyOf = (hex: string) =>
+    multibaseEncodeBase58btc(Buffer.concat([Buffer.from([0xed, 0x01]), raw(hex)]));
+
+  it.each(WEAK)('jwkFromMultikey refuses %s', (_name, hex) => {
+    expect(() => jwkFromMultikey(multikeyOf(hex))).toThrow(INVALID_KEY);
+  });
+
+  it.each(WEAK)('resolveDidKey refuses the did:key of %s', (_name, hex) => {
+    expect(() => resolveDidKey(`did:key:${multikeyOf(hex)}`)).toThrow(INVALID_KEY);
+  });
+
+  it.each(WEAK)('resolveDidPeer refuses a did:peer:2 whose authentication key is %s', (_name, hex) => {
+    expect(() => resolveDidPeer(`did:peer:2.V${multikeyOf(hex)}`)).toThrow(INVALID_KEY);
+  });
+
+  it.each(GENUINE)('still resolves %s as a did:key and as a did:peer:2 key', (_name, hex) => {
+    const x = raw(hex).toString('base64url');
+
+    expect(relationshipKeys(resolveDidKey(`did:key:${multikeyOf(hex)}`), 'authentication')[0].jwk.x).toBe(x);
+    expect(
+      relationshipKeys(resolveDidPeer(`did:peer:2.V${multikeyOf(hex)}`), 'authentication')[0].jwk.x,
+    ).toBe(x);
+  });
+
+  it('gives a did:web document no usable key for one, as publicKeyJwk, publicKeyMultibase or publicKeyBase58', () => {
+    const did = 'did:web:example.com';
+    const documentFor = (hex: string) =>
+      parseDidDocument(
+        {
+          id: did,
+          verificationMethod: [
+            {
+              id: `${did}#jwk`,
+              type: 'JsonWebKey2020',
+              controller: did,
+              publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: raw(hex).toString('base64url') },
+            },
+            { id: `${did}#multikey`, type: 'Multikey', controller: did, publicKeyMultibase: multikeyOf(hex) },
+            {
+              id: `${did}#base58`,
+              type: 'Ed25519VerificationKey2018',
+              controller: did,
+              publicKeyBase58: base58btcEncode(raw(hex)),
+            },
+          ],
+          authentication: [`${did}#jwk`, `${did}#multikey`, `${did}#base58`],
+        },
+        did,
+      );
+
+    // The control: the same document with a genuine key lists it three times.
+    expect(relationshipKeys(documentFor(GENUINE[0][1]), 'authentication')).toHaveLength(3);
+
+    for (const [, hex] of WEAK) {
+      expect(relationshipKeys(documentFor(hex), 'authentication')).toEqual([]);
+    }
   });
 });

@@ -539,7 +539,7 @@ describe('FileService signed links — what the browser is told to do with the b
 
     const signed = await service.findById(ownerCtx, 'f');
 
-    // infrastructure/gateway/nginx.conf, location /static/, matches this exact text.
+    // infrastructure/gateway/nginx.conf, the /static/ location for signed links, matches this exact text.
     expect(signed?.url).toMatch(/[?&]response-content-type=application%2Fpdf(&|$)/);
   });
 });

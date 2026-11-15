@@ -7,7 +7,8 @@ import {
   randomBytes,
 } from 'node:crypto';
 
-import { ed25519PublicKeyToX25519, ed25519SeedToX25519Secret } from './edwards';
+import { encodePoint, FIELD_PRIME, GENUINE, ORDER_8_Y, REFUSED_Y, WEAK } from './__tests__/weakEd25519';
+import { ed25519PublicKeyToX25519, ed25519SeedToX25519Secret, isWeakEd25519PublicKey } from './edwards';
 import { base64urlDecode, multibaseDecodeBase58btc, multibaseEncodeBase58btc } from './encoding';
 import { DidcommError } from './errors';
 
@@ -96,13 +97,20 @@ describe('Ed25519 → X25519', () => {
     expect(() => ed25519SeedToX25519Secret(Buffer.alloc(33))).toThrow(DidcommError);
   });
 
-  it('refuses the identity, the order-2 point and the order-4 points', () => {
+  it('refuses the identity, the order-2 point, the order-4 points and the order-8 points', () => {
     const identity = Buffer.alloc(32);
     identity[0] = 1; // y = 1
     const minusOne = Buffer.from('ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', 'hex'); // y = p − 1
     const orderFour = Buffer.alloc(32); // y = 0
+    // y = y8 (libsodium's blocklist entry) and y = p − y8, each at either sign of x.
+    const orderEight = [
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+    ].map((hex) => Buffer.from(hex, 'hex'));
 
-    for (const key of [identity, minusOne, orderFour]) {
+    for (const key of [identity, minusOne, orderFour, ...orderEight]) {
       expect(() => ed25519PublicKeyToX25519(key)).toThrow(/small order/);
     }
   });
@@ -134,5 +142,61 @@ describe('Ed25519 → X25519', () => {
 
     // About half of all y values have no x; a handful of 38 must hit the branch.
     expect(rejected).toBeGreaterThan(5);
+  });
+});
+
+describe('isWeakEd25519PublicKey (the y-value test of peers/ed25519Weak.ts)', () => {
+  const bytes = (hex: string) => Uint8Array.from(Buffer.from(hex, 'hex'));
+
+  it.each(WEAK)('refuses %s', (_name, hex) => {
+    expect(isWeakEd25519PublicKey(bytes(hex))).toBe(true);
+  });
+
+  it.each(GENUINE)('accepts %s', (_name, hex) => {
+    expect(isWeakEd25519PublicKey(bytes(hex))).toBe(false);
+  });
+
+  it('accepts freshly generated keys', () => {
+    for (let round = 0; round < 100; round += 1) {
+      expect(isWeakEd25519PublicKey(ed25519Pair().publicKey)).toBe(false);
+    }
+  });
+
+  it('refuses anything that is not 32 bytes', () => {
+    const genuine = bytes(GENUINE[0][1]);
+
+    expect(isWeakEd25519PublicKey(genuine.subarray(0, 31))).toBe(true);
+    expect(isWeakEd25519PublicKey(Uint8Array.of(...genuine, 0))).toBe(true);
+    expect(isWeakEd25519PublicKey(new Uint8Array(0))).toBe(true);
+  });
+
+  it('refuses all 48 encodings: five small-order y values and the 19 non-canonical ones, at either sign', () => {
+    const encodings = new Set<string>();
+    for (const y of REFUSED_Y) {
+      for (const negative of [false, true]) {
+        const key = encodePoint(y, negative);
+
+        expect(isWeakEd25519PublicKey(key)).toBe(true);
+        encodings.add(Buffer.from(key).toString('hex'));
+      }
+    }
+
+    expect(encodings.size).toBe(48);
+  });
+
+  it('does not refuse the y values next to the refused ones', () => {
+    for (const y of [2n, 3n, FIELD_PRIME - 2n, FIELD_PRIME - 18n, ORDER_8_Y - 1n, ORDER_8_Y + 1n]) {
+      expect(isWeakEd25519PublicKey(encodePoint(y, false))).toBe(false);
+      expect(isWeakEd25519PublicKey(encodePoint(y, true))).toBe(false);
+    }
+  });
+
+  it('does not modify the key it is given', () => {
+    const key = bytes(WEAK[1][1]);
+    const before = Buffer.from(key).toString('hex');
+
+    isWeakEd25519PublicKey(key);
+
+    expect(Buffer.from(key).toString('hex')).toBe(before);
   });
 });

@@ -147,7 +147,8 @@ describe('gateway /static/ location', () => {
     }
 
     const conf = readFileSync(join(dir, 'infrastructure/gateway/nginx.conf'), 'utf8');
-    const start = conf.indexOf('location /static/ {');
+    // The location for signed object links (/static/<bucket>/<uuid>); `location /static/` only answers 404.
+    const start = conf.indexOf('location ~ "^/static/');
     const end = conf.indexOf('\n    }\n', start);
 
     expect(start).toBeGreaterThan(-1);

@@ -249,9 +249,9 @@ export class SavedSearchResolver {
    */
   @Query(() => SavedSearchType, { nullable: true })
   async sharedSavedSearch(@Args('token') token: string): Promise<SavedSearchType | null> {
-    // Gated behind 'shared.search': while the access model is being hardened the
-    // shared-URL surface stays dark. Disabled resolves to null — indistinguishable
-    // from an unknown/revoked token — so the viewer shows "link unavailable".
+    // Gated behind 'shared.search' (on by default; ENABLE_SHARED_SEARCH=false
+    // turns it off). Disabled resolves to null — indistinguishable from an
+    // unknown/revoked token — so the viewer shows "link unavailable".
     if (!(await this.featureService.isFeatureEnabled('shared.search'))) {
       return null;
     }

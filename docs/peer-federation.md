@@ -1,6 +1,6 @@
 # Peer federation: asking questions across Companion memories
 
-> Two Companion Memory boxes exchanging questions, discovered through CI-Portal.
+> Two Companion Memory boxes exchanging questions over links their owners enter by hand. Discovery through CI-Portal is designed but not wired (see [The shape of it](#the-shape-of-it)).
 > Feature flag: **`ask`** — **on** by default since 2026-08-17 (commit `793e618c0`), so the
 > local ask/grant GraphQL surface is live out of the box. The *inbound peer* route stays
 > dark for Portal-token asks for a separate reason: it also requires `peers.audience`, and 503s
@@ -24,15 +24,18 @@ The human stays in the loop exactly where they add value (consent, redaction) an
 ```
    Asker's box                 CI-Portal                  Responder's box
   ┌───────────┐            ┌──────────────┐             ┌───────────────┐
-  │ Companion │──resolve──▶│  directory   │             │   Companion   │
-  │           │◀─endpoint──│ (phone book) │             │               │
+  │ Companion │─resolve*──▶│  directory   │             │   Companion   │
+  │           │◀endpoint*──│ (phone book) │             │               │
   │           │            └──────────────┘             │               │
   │           │─────── POST /agent/v1/ask ─────────────▶│  consent gate │
   │           │◀────── filtered answer ─────────────────│  run-as-owner │
   └───────────┘                                         └───────────────┘
+  * planned: nothing calls the directory today
 ```
 
-**CI-Portal is a phone book, not a social network.** It answers exactly one question — *"who is `@handle`, where does their Companion listen, and what OIDC identity will they present?"* It stores **no** relationships, grants, asks, or answers. Those live only on the two boxes involved, so the cloud plane never accumulates the social graph.
+Today nothing calls the directory, and Companion Memory publishes nothing to it. The owner enters each peer's handle and address by hand: the **Link someone new** form on the `/asks` page, `ci peers add`, or `createPeerLink`. The diagram shows the Portal-directory design. Nor could a box call the directory as it is built: it answers only a signed-in Portal browser session, and the Portal does not accept on `/api/peers` the Portal OAuth access token that `PeerDirectoryService` sends. In a directory entry, only `issuer` and `subject` (the person's Portal user id) are set by the Portal. `memoryEndpoint` and `displayName` are whatever the registrant typed: the Portal checks the URL's shape, not that the registrant controls the host. Never create a peer link from a directory entry without an identity proof served by the endpoint itself.
+
+**In the design, CI-Portal is a phone book, not a social network.** Its directory answers *"who is `@handle`, where does their Companion listen, and what OIDC identity will they present?"*, and offers a search by handle prefix over entries that opted in. It stores **no** relationships, grants, asks, or answers. Those live only on the two boxes involved, so the cloud plane never accumulates the social graph.
 
 ## The three archetypes
 
@@ -115,7 +118,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **Revocation is immediate** | Only `status='active'` links match, so revoking takes effect on the very next ask. |
 | **No existence oracle** | Declines and pending-review responses are shaped identically to "nothing found". |
 | **Hostile input** | Bodies are zod-validated against the archetype union and rejected off-contract. Peer *responses* are equally untrusted — `PeerAskClient.normalize()` carries forward only recognized fields, folds anything that is not `answered` to `delivered`, and drops the peer's `reason` string outright rather than echoing an attacker-supplied string into the local UI. |
-| **No enumeration** | Portal search returns only opt-in `discoverable` entries; resolution requires an exact handle. |
+| **Directory lookups (not wired)** | Memory calls neither Portal route today. Portal search returns only entries that opted in (`discoverable`); resolving an exact handle returns any registered entry to a signed-in Portal account. |
 | **Bounded blast radius** | Every outbound call is timeout-bounded; a slow or hostile peer degrades to a non-answer rather than hanging the caller. |
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
 | **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. CGNAT specifically is opt-in-permittable ([below](#peering-over-a-private-network-tailscale--cgnat)); everything else in that list is unconditional. |
@@ -139,8 +142,8 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 ```jsonc
 // backend/apps/api/config/default.json
 "peers": {
-  "directoryUrl": "",      // CI-Portal peer-discovery base; empty disables discovery
-  "memoryEndpoint": "",    // this box's own /agent/v1, published to the directory
+  "directoryUrl": "",      // reserved: a CI-Portal directory client exists, but nothing calls it
+  "memoryEndpoint": "",    // this box's own /agent/v1 base (https://<host>/api/agent/v1 behind the packaged gateway): peers store it on their link, and signed asks are checked against it. Memory publishes it nowhere: give it to your peers
   "handle": "",            // this box's Portal handle
   "audience": "",          // REQUIRED for Portal-token inbound asks: the audience Portal mints for THIS box
   "timeoutMs": 10000       // bound on every outbound peer/directory call
@@ -205,6 +208,21 @@ What it does **not** do, on purpose:
   still refused, flag or no flag; only which addresses are considered *in
   range to try in the first place* changes.
 
+### Where peers can reach this box
+<a id="where-peers-can-reach-this-box"></a>
+
+A peer dials the `memoryEndpoint` on its link to this box over `https` on port 443 (`checkEgressUrl` allows no other port), so whatever terminates TLS on port 443 for that name must forward to this box. The examples in this guide write `https://<host>/agent/v1`, the shape of a box whose API is reached directly. The live runs below were made that way (Alice's API on port 3030), and the federation harness runs on loopback.
+
+**A packaged install serves the API under `/api/`.** The production compose and Companion Hub publish only the gateway (port 8642), which serves the API under `/api/`. The endpoint to give peers is therefore `https://<host>/api/agent/v1`. A bare `/agent/v1` reaches the web app, not the API, and the web app answers a POST with `405`.
+
+**Behind the gateway, set `peers.memoryEndpoint` to that same address.** The gateway removes `/api` from the path before the API sees it, so the API rebuilds the signed `@target-uri` from `peers.memoryEndpoint` (its authority and its path up to `/agent/v1`) and the rest of the path it received, never from `Host`. With `CI_PEER_MEMORY_ENDPOINT=https://<host>/api/agent/v1`, and peers linking exactly that address, a signed ask is checked against the URL the peer signed. That holds since Companion-Memory#PR_MEMORY. Companion Memory v2026.11.4 and earlier rebuild the target from the endpoint's origin alone, so behind the gateway they refuse every signed ask with `401`: a `did:keri:D<x>` ask, and a Portal-token ask from a box that has a signing key. An unsigned Portal-token ask carries no signed URL, so the rebuild does not affect it. A Trust Task document does not depend on the URL at all: its proof covers the document, not the address it is posted to (`<memoryEndpoint>/trust-tasks`).
+
+**A Companion Memory installed from Companion Hub cannot take peer asks yet.**
+
+- The Hub sign-in sits in front of its Public Web address by default. It exempts none of the peer routes, and lets a request through only with a Hub session, one of this Memory's API keys, or a Portal token for a member of the Hub's organization. A peer's ask normally carries none of these, so the Hub answers it (`401`, `403` or a redirect to the sign-in) before Memory sees it.
+- Its Private VPN address is on the app's own port, which a peer box cannot dial: it dials port 443 only.
+- The Hub has no setting for the peer options. The listing passes none of the `CI_PEER_*` settings or `ENABLE_TRUST_TASKS`, the Hub rebuilds the app's environment file on every install, start and update, and `peers.signingKeyJwk` and `peers.requireHttpSignature` have no environment variable at all. The non-secret settings can go in the app's compose override in the Hub's user-config folder (`environment:` on the `api` service). **Do not put `peers.signingKeyJwk` there**: that file is ordinary app configuration, not a secret store. The Hub's app-configuration API and its MCP tools return it, and Hub backups copy it.
+
 ## Federating two REAL boxes, end to end
 
 Everything below was executed between two genuinely separate appliances — box A
@@ -226,20 +244,25 @@ On the **sender**:
 | | |
 |---|---|
 | `CI_PEER_ALLOW_CGNAT_ENDPOINTS=true` | only if the peer is on a tailnet — see [above](#peering-over-a-private-network-tailscale--cgnat) |
-| a peer link naming the peer's `/agent/v1` base | `createPeerLink`, or the **People I'm linked to** tab |
+| a peer link naming the peer's `/agent/v1` base (for a peer behind its own gateway, `https://<host>/api/agent/v1`) | `createPeerLink`, or the **People I'm linked to** tab |
 
 On the **receiver**:
 
 | | |
 |---|---|
 | `CI_PEER_AUDIENCE` | REQUIRED for Portal-token asks — without it every Portal-token ask is `503`, indistinguishable from no peer surface. A signed `did:key` / `did:keri:D<x>` ask does not consult it |
-| `CI_PEER_MEMORY_ENDPOINT` | the box's own `/agent/v1`; also the `@target-uri` authority if signatures are on. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
+| `CI_PEER_MEMORY_ENDPOINT` | the `/agent/v1` base peers store on their link to this box: `https://<host>/api/agent/v1` behind the packaged gateway (as in `docker-compose.production.yml`), which strips `/api`; a bare `https://<host>/agent/v1` there is served by the web app, which answers a POST with `405` (see [Where peers can reach this box](#where-peers-can-reach-this-box)). Signed requests are checked against `<this value>/ask`, so peers must link exactly this address. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
 | **`peer_links.peer_issuer` + `peer_subject`** | `createPeerLink` / `updatePeerLink`, or `ci peers add --peer-issuer … --peer-subject …` — see [below](#binding-a-link-to-the-peers-identity) |
 
 Both boxes must agree on the issuer, and the receiver must be reachable at
 `https` on port 443 or `''` (`checkEgressUrl` allows no other port).
+
+A Companion Memory installed from Companion Hub does not receive peer asks
+today: the Hub's sign-in sits in front of `/api/agent/v1`
+(`FORWARD_AUTH_APP_PUBLIC_PREFIXES` in Companion-Hub's `auth.controller.ts`).
+See [Where peers can reach this box](#where-peers-can-reach-this-box).
 
 ### Confirmed working over the real network
 
@@ -448,12 +471,14 @@ write without echoing the pair, which is the write-only property above.
 What a directory lookup would add is filling these in for you — `peers.directoryUrl`
 exists precisely so a handle can resolve to an endpoint *and* an identity, and
 `PeerDirectoryService` still does not populate a link. That is convenience now,
-not a blocker.
+not a blocker. Nothing calls it, and the directory is not ready to be called
+(gap 3 below).
 
 ### What a real operator still cannot do
 
-Two gaps survived the 2026-09-07 run. Neither is a policy hole — both are
-missing plumbing, and both were worked around by hand rather than fixed.
+Three gaps remain, and none is a policy hole: all three are missing plumbing.
+The first two survived the 2026-09-07 run and were worked around by hand; the
+third is why the directory is not used at all.
 
 **1. There is no way to obtain a peer access token.**
 `SendPeerAskInput.peerAccessToken` is non-nullable and documented as *"Supplied
@@ -472,7 +497,7 @@ audience and expiry are all still verified on their merits. It must never be a
 real box's issuer: **the signing key is checked in.**
 
 **2. The asker's box cannot collect an answer it did not get synchronously.**
-This is the sharper of the two, because it makes the `review` outcome a
+This is the sharper of the first two, because it makes the `review` outcome a
 dead end for the asker's *records*.
 
 `OutboundAskService.pollForAnswer` is the asker's half of the return path — it
@@ -499,6 +524,14 @@ second `sendPeerAsk` is a new ask on the peer, not a collection of the old one.
 
 Until `pollForAnswer` is exposed, `auto` is the only outcome an asker's appliance
 records end to end on its own.
+
+**3. Nothing publishes a directory entry, and the directory cannot be used as it stands.**
+No code in Companion Memory, the CI-Portal web app or Companion Hub calls the
+Portal's `POST /api/peers`. The Portal's peer routes accept only a browser
+session cookie, so a box's own token is refused. The endpoint an entry carries
+is whatever the registrant typed: the Portal checks the URL's shape, not that
+the registrant controls the host. Wiring `PeerDirectoryService` needs Portal
+changes first.
 
 ## Known limitations
 
@@ -546,7 +579,7 @@ records end to end on its own.
   raced. One thing the connect-time guard does **not** cover: `net.connect` skips `lookup`
   entirely for a literal IP, so `checkEgressUrl`'s literal-address checks are load-bearing, not
   redundant (pinned by a test that measures it).
-- **Rate limits are per-process and in-memory.** Correct for a single-instance appliance; a shared store is needed before the ask path goes multi-instance.
+- ~~**Rate limits are per-process and in-memory.**~~ **Fixed** (#2475): the rate limits and the signature nonce cache keep their state in `ConsumptionStore`, which is Postgres unless `consumption.store` is `memory`, so they are shared across replicas and survive a restart.
 - **The peer access token is supplied by the caller**, not minted here, until Portal token exchange lands.
 - **Nothing in GraphQL drives the collect route.** `OutboundAskService.pollForAnswer` and
   `PeerAskClient.poll` are both here and both tested, but no mutation calls them, so
@@ -605,10 +638,10 @@ The profile is deliberately narrow — `ed25519` only, exactly five parameters, 
 Details that are load-bearing rather than incidental:
 
 - **The digest covers the raw bytes.** `BodyParserMiddleware` retains the unparsed body for `/agent/v1` only (a `verify` hook on express `json()`), because `JSON.stringify` of a parsed object is not guaranteed to reproduce what the sender sent. Re-serializing before digesting is the classic way to make a check pass over content nobody signed. Scoped to that one prefix so a second copy of every 10mb GraphQL body is not retained.
-- **`@target-uri` is built from config, never from `Host`.** It is a *signed* component, so whatever this box reconstructs is what gets checked; letting a caller pick the authority half would let a signature minted for `evil.example` verify here. The origin comes from `peers.memoryEndpoint` and the path from the route — the same rule as UMA's "authorization inputs never come from transport headers". A box with no published endpoint refuses to verify at all rather than guessing.
+- **`@target-uri` is built from config, never from `Host`.** It is a *signed* component, so whatever this box reconstructs is what gets checked; letting a caller pick the authority half would let a signature minted for `evil.example` verify here. The authority and any path prefix come from `peers.memoryEndpoint`, and the rest of the path comes from the route, so `https://<host>/api/agent/v1` verifies behind the gateway ([Where peers can reach this box](#where-peers-can-reach-this-box)) — the same rule as UMA's "authorization inputs never come from transport headers". A box with no published endpoint refuses to verify at all rather than guessing.
 - **The window is bounded at both ends.** `expires` is the *sender's* choice, so `MAX_SIGNATURE_LIFETIME_MS` (5 min) caps it — otherwise a peer signs one request with a year-long window and has a bearer token again. That bound is also what keeps the nonce cache finite.
-- **The nonce cache is the replay defence**, checked *last* and only for an otherwise-valid signature: checking earlier would let an attacker burn a victim's nonce with a corrupted copy and deny the honest request behind it. Scoped per key thumbprint so one peer cannot burn another's. In-memory and per-process — the same caveat as the rate limiters (guide §9, G8).
-- **The key and the token must agree.** A signature is accepted only when a live link holds that key *and* names the same `(issuer, subject)` the token asserts. Accepting any link that merely holds the key would let peer A's signature authorize a request carrying peer B's token.
+- **The nonce cache is the replay defence**, checked *last* and only for an otherwise-valid signature: checking earlier would let an attacker burn a victim's nonce with a corrupted copy and deny the honest request behind it. Scoped per key thumbprint so one peer cannot burn another's. Nonces are claimed in `ConsumptionStore` (Postgres by default; `consumption.store`), so a nonce is single-use across replicas and restarts, and a claim that cannot reach the database is refused. With `consumption.store` set to `memory` the cache is per-process again.
+- **The key and the token must agree.** A signature is accepted only when a live link holds that key *and* names the same `(issuer, subject)` the token asserts. Accepting any link that merely holds the key would let peer A's signature authorize a request carrying peer B's token. The key may be named by its thumbprint or, since Companion-Memory#PR_MEMORY, by the `did:key` or `did:keri:D<x>` that spells it.
 - **One refusal for every failure.** Missing, malformed, unknown key, bad digest, replayed, wrong peer — all raise the identical 401. Which check failed is a fact about this box's configuration and the owner's links; the reason is logged where the operator sees it and the caller does not.
 
 **Rollout is two switches, deliberately.** Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. Generate a key with:
@@ -618,6 +651,28 @@ node -e "const {generateKeyPairSync}=require('node:crypto');console.log(JSON.str
 ```
 
 The peer records the **public** half on its `ci.peer_links` row (`peer_key_jwk` + `peer_key_thumbprint`); `publicKeyFromJwk` refuses a JWK carrying `d`, so a private key cannot be stored there and then used to "verify" its own signatures.
+
+**There is no API or CLI for recording a peer's key yet.** On the receiving box, record it with SQL, on the link that names the sender's Portal identity:
+
+```sql
+UPDATE ci.peer_links
+   SET peer_key_jwk = '<public JWK>'::jsonb, peer_key_thumbprint = '<thumbprint>'
+ WHERE id = '<link id>';
+```
+
+The JWK must be the public half only (`{"crv":"Ed25519","kty":"OKP","x":"…"}`; a `d` member makes `publicKeyFromJwk` refuse it). The sender prints it from its private JWK file:
+
+```bash
+node -e "const c=require('node:crypto');const k=c.createPrivateKey({key:JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')),format:'jwk'});console.log(JSON.stringify(c.createPublicKey(k).export({format:'jwk'})))" key.jwk
+```
+
+The thumbprint is the RFC 7638 base64url SHA-256 of `{"crv":"Ed25519","kty":"OKP","x":"…"}`, 43 characters:
+
+```bash
+node -e "const j=JSON.parse(process.argv[1]);console.log(require('node:crypto').createHash('sha256').update(JSON.stringify({crv:j.crv,kty:j.kty,x:j.x})).digest('base64url'))" '<public JWK>'
+```
+
+Both columns are set together, and an owner can hold only one live link per key. Until the receiver has done this, every signed ask the sender makes to it is refused: `401`, or `503` if the receiver has no `peers.memoryEndpoint`. So do not set `peers.signingKeyJwk` on a box that asks Portal-linked peers until each of them has recorded the key. Leave `kid` unset too while any of them runs v2026.11.4 or earlier: such a peer refuses a `did:key` or `did:keri:D<x>` keyid even with the key recorded (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). On a Companion Memory installed from Companion Hub, do not set the key at all yet ([Where peers can reach this box](#where-peers-can-reach-this-box)).
 
 ### Keyids that name themselves: `did:key` and `did:keri:D<x>`
 
@@ -638,6 +693,8 @@ To sign as a `did:key`, put the key's own `did:key` in `kid` of `peers.signingKe
 node -e "const {generateKeyPairSync}=require('node:crypto');const A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';const k=generateKeyPairSync('ed25519');const pub=Buffer.from(k.publicKey.export({format:'jwk'}).x,'base64url');let n=BigInt('0x'+Buffer.concat([Buffer.from([0xed,1]),pub]).toString('hex')),s='';for(;n>0n;n/=58n)s=A[Number(n%58n)]+s;console.log(JSON.stringify({...k.privateKey.export({format:'jwk'}),kid:'did:key:z'+s}))"
 ```
 
+A `did:key` or `did:keri:D<x>` keyid names this box's signing key, so it identifies the Companion box, not one person on it. An ask sent with no Portal token is authenticated by that key alone and carries the box's `peers.handle`, so only the box's administrator account may send one; anyone else on the box passes a Portal token of their own. Link a self-certifying identifier only for a box one person uses. A `kid` changes the keyid of every signed ask the box sends, Portal-token asks included. Since Companion-Memory#PR_MEMORY a receiver also finds a Portal link that records the key the keyid spells; an older receiver refuses such an ask with `401`.
+
 The peer's owner links you with `createPeerLink`, passing your `did:key` as the subject:
 
 ```graphql
@@ -654,7 +711,7 @@ mutation { createPeerLink(input: {
 
 One key has two spellings, so an owner is not allowed to hold a `did:key` link and a `did:keri:D<x>` link for the same key: otherwise the signer could choose which link, and so which tier, answers. A write that binds the second one is refused with a conflict error. The check is made when a write sets or changes a link's issuer and subject, and it is a read followed by a write with nothing in the database behind it (the unique indexes see the two spellings as two identities), so two writes racing from two tabs or devices can both get through. If that happens the owner can still edit or revoke each link, because an edit that leaves the binding alone is not checked.
 
-To **receive** asks signed this way, the `ask` feature must be on and `peers.memoryEndpoint` (`CI_PEER_MEMORY_ENDPOINT`) must be set; without it every signed ask is refused with a 503. `peers.audience` is not consulted, because there is no bearer token. The peer-egress policy is unchanged: two boxes can reach each other over the internet or a tailnet (`peers.allowCgnatEndpoints`), and RFC 1918 LAN ranges stay blocked. Sending a cross-box ask from the app is not available yet.
+To **receive** asks signed this way, the `ask` feature must be on and `peers.memoryEndpoint` (`CI_PEER_MEMORY_ENDPOINT`) must be set; without it every signed ask is refused with a 503. `peers.audience` is not consulted, because there is no bearer token. The peer-egress policy is unchanged: a peer dials this box over `https` on port 443, across the internet or, when the peer sets `peers.allowCgnatEndpoints`, a tailnet, and RFC 1918 LAN ranges stay blocked. Behind the packaged gateway, set `peers.memoryEndpoint` to `https://<host>/api/agent/v1`; see [Where peers can reach this box](#where-peers-can-reach-this-box). Sending a cross-box ask from the app is not available yet.
 
 ### Looking a person up on Local.Pub (opt-in)
 

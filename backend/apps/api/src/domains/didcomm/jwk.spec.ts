@@ -1,5 +1,6 @@
 import { createPublicKey } from 'node:crypto';
 
+import { GENUINE, WEAK } from './__tests__/weakEd25519';
 import { base64urlDecode, base64urlEncode } from './encoding';
 import { DidcommError } from './errors';
 import {
@@ -114,6 +115,30 @@ describe('JWK parsing', () => {
       const fromPublic = publicKeyObject(publicJwk).export({ format: 'jwk' });
 
       expect(fromPrivate).toEqual(fromPublic);
+    }
+  });
+});
+
+describe('small-order and non-canonical Ed25519 keys', () => {
+  const okp = (crv: 'Ed25519' | 'X25519', hex: string) => ({
+    kty: 'OKP',
+    crv,
+    x: Buffer.from(hex, 'hex').toString('base64url'),
+  });
+
+  it.each(WEAK)('refuses %s as an Ed25519 key, with invalid-key', (_name, hex) => {
+    expect(() => parsePublicJwk(okp('Ed25519', hex))).toThrow(
+      expect.objectContaining({ name: 'DidcommError', code: 'invalid-key' }),
+    );
+  });
+
+  it.each(GENUINE)('accepts %s', (_name, hex) => {
+    expect(parsePublicJwk(okp('Ed25519', hex))).toEqual(okp('Ed25519', hex));
+  });
+
+  it('leaves X25519 keys alone: key agreement refuses a small-order X25519 key itself', () => {
+    for (const [, hex] of WEAK) {
+      expect(parsePublicJwk(okp('X25519', hex))).toEqual(okp('X25519', hex));
     }
   });
 });

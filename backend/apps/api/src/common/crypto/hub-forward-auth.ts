@@ -83,15 +83,19 @@ export interface ForwardAuthHeaders {
 }
 
 /**
- * The KERI identifiers a Hub sends beside a stable id: `X-CI-Hub-User-AID`, `X-CI-Hub-AID` and
- * `X-CI-Hub-KEL-Digest`.
+ * Three header names a Hub reserves for KERI identifiers: `X-CI-Hub-User-AID`, `X-CI-Hub-AID` and
+ * `X-CI-Hub-KEL-Digest`. The Hub has not set them since its KERI freeze (Companion-Hub #2208,
+ * 2026-10-31).
  *
  * ═══ NOTHING HERE IS SIGNED ═══
  *
  * No signature covers these headers: not the stable-id HMAC, not the bound assertion (the Hub's
  * `buildForwardAuthAssertionMessage` signs audience, nonce, timestamp, username, issuer and id,
- * and nothing else). Nor does the Hub's Traefik list them in `authResponseHeaders`, so a
- * visitor's own copy reaches this app untouched. Each is whatever the browser chose to send.
+ * and nothing else). A Hub whose Traefik config carries the current `authResponseHeaders` list
+ * (since #2208, first released in v0.3.9) deletes a visitor's copy on routes behind its `ci-hub`
+ * forward-auth middleware (not exercised against a running Traefik), so nothing arrives. An
+ * install whose Traefik config was never rewritten passes a visitor's copy through untouched.
+ * Either way, any value present came from the visitor and is untrusted.
  *
  * An AID is a public identifier, so treating one as an identity would let anyone signed in to
  * the Hub name somebody else's and be signed in as them. They are kept only as hints: format

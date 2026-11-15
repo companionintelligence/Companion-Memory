@@ -9,6 +9,7 @@ jest.mock('undici', () => {
   return { __esModule: true, ...actual, fetch: jest.fn() };
 });
 
+import { BadRequestException } from '@nestjs/common';
 import { fetch as undiciFetch } from 'undici';
 
 import { type PeerLink } from '../entities/PeerLinkEntity';
@@ -49,6 +50,10 @@ function makeService(
     storedAnswer?: unknown;
     /** Swap in a REAL PeerAskClient; the returned `client` stub stays unused. */
     peerClient?: PeerAskClient;
+    /** The caller's `UserEntity.role`; `admin` is the account that claimed the box. */
+    role?: string;
+    /** This box's signer, for the token-less path; absent means no signing key. */
+    signatureService?: unknown;
   } = {},
 ) {
   const peerLinkService = {
@@ -111,6 +116,9 @@ function makeService(
     },
   };
   const logger = { setContext: jest.fn(), warn: jest.fn() };
+  const userService = {
+    findById: jest.fn().mockResolvedValue({ id: CTX.userId, role: overrides.role ?? 'admin' }),
+  };
 
   const service = new OutboundAskService(
     peerLinkService as never,
@@ -121,6 +129,8 @@ function makeService(
     (overrides.peerClient ?? client) as never,
     repositoryWithManager as never,
     logger as never,
+    userService as never,
+    overrides.signatureService as never,
   );
 
   return {
@@ -132,6 +142,7 @@ function makeService(
     correlationService,
     client,
     persisted,
+    userService,
   };
 }
 
@@ -196,6 +207,46 @@ describe('OutboundAskService.send', () => {
     const { service, client } = makeService();
     await expect(service.send(CTX as never, DTO, '  ')).rejects.toThrow();
     expect(client.send).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ═══ TWO ACCOUNTS ON ONE BOX ═══
+   *
+   * Without a Portal token the ask is authenticated by the box's signing key
+   * alone and carries the box's `peers.handle`, so the peer reads it as the
+   * box's own identity. Only the administrator may send that; every other
+   * account on the box asks with its own Portal token.
+   */
+  it('refuses a token-less ask from an account other than the box administrator, before anything is recorded', async () => {
+    const { service, askService, correlationService, client, userService } = makeService({
+      role: 'user',
+      signatureService: { hasSigningKey: true },
+    });
+
+    const attempt = service.send(CTX as never, DTO, '');
+
+    await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+    await expect(attempt).rejects.toThrow(/peer access token is required/);
+    expect(userService.findById).toHaveBeenCalledWith(CTX, CTX.userId);
+    expect(askService.create).not.toHaveBeenCalled();
+    expect(correlationService.record).not.toHaveBeenCalled();
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('lets the box administrator send a token-less ask, signed with the box key', async () => {
+    const { service, client } = makeService({ role: 'admin', signatureService: { hasSigningKey: true } });
+
+    await service.send(CTX as never, DTO, '');
+
+    expect(client.send).toHaveBeenCalledWith(link(), expect.objectContaining({ prompt: DTO.prompt }), '');
+  });
+
+  it('still sends an ask that carries the account’s own Portal token', async () => {
+    const { service, client } = makeService({ role: 'user', signatureService: { hasSigningKey: true } });
+
+    await service.send(CTX as never, DTO, 'portal-token');
+
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'portal-token');
   });
 
   it('audits an answered reply without claiming WE disclosed anything', async () => {
@@ -351,6 +402,21 @@ describe('OutboundAskService.pollForAnswer', () => {
 
     expect(client.poll).not.toHaveBeenCalled();
     expect(result.response.status).toBe('delivered');
+  });
+
+  it('lets only the box administrator collect without a Portal token', async () => {
+    const member = makeService({ role: 'user', signatureService: { hasSigningKey: true } });
+
+    await expect(member.service.pollForAnswer(CTX as never, 'ask-1', '')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(member.client.poll).not.toHaveBeenCalled();
+
+    const owner = makeService({ role: 'admin', signatureService: { hasSigningKey: true } });
+
+    await owner.service.pollForAnswer(CTX as never, 'ask-1', '');
+
+    expect(owner.client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', '');
   });
 });
 

@@ -176,7 +176,7 @@ Entities surface as the typed `PersonType`/`PlaceType`/`ConceptType` lists (rows
 
 ### 3.5d Asks & grants (peer federation)
 
-Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason (it also needs `peers.audience` configured).
+Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason: it needs settings that ship empty. `peers.audience` gates the asks that carry a Portal token, and an ask signed under a `did:keri:D<x>` or `did:key` keyid carries no token and needs `peers.memoryEndpoint` and a link the owner made for exactly that keyid instead. The signed `@target-uri`, which the box rebuilds from `peers.memoryEndpoint`, and a single-use nonce bind that ask to the box (see [Keyids that name themselves](../peer-federation.md#keyids-that-name-themselves-didkey-and-didkeridx)).
 
 | Query | Return |
 |---|---|

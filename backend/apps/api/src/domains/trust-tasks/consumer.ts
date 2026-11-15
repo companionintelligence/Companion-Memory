@@ -65,9 +65,8 @@ export interface AcceptanceWindow {
 /**
  * The window this box applies. It mirrors the peer-signature window (`MAX_SIGNATURE_LIFETIME_MS`,
  * `MAX_CLOCK_SKEW_MS`) so the two doors into the ask pipeline agree on how long a captured request
- * stays useful. No `expiryHorizonSeconds`: for a document that states `issuedAt` (which every
- * consequential specification here REQUIRES) the maximum age applies whatever `expiresAt` it states,
- * which also bounds the duplicate record at a few minutes.
+ * stays useful. No `expiryHorizonSeconds`: every document must state `issuedAt` (step 3), so the maximum
+ * age applies whatever `expiresAt` it states, which also bounds the duplicate record at a few minutes.
  */
 export const DEFAULT_ACCEPTANCE_WINDOW: AcceptanceWindow = { maxAgeSeconds: 300, clockSkewSeconds: 30 };
 
@@ -233,7 +232,11 @@ export class TrustTaskConsumer {
     const expiresAt =
       document.expiresAt === undefined ? undefined : (parseRfc3339(document.expiresAt) ?? undefined);
 
-    if (spec.issuedAt === 'REQUIRED' && issuedAt === undefined) {
+    // This box applies its acceptance window to every document it serves (discovery advertises the window
+    // and no `expiryHorizonSeconds`), so a document must say when it was issued, whatever level its
+    // specification gives `issuedAt`. Without it, nothing would bound how long a captured copy stays
+    // acceptable. An `issuedAt` that is present but unparseable counts as absent.
+    if (issuedAt === undefined) {
       return refuse('malformedRequest', 'issuedAt is required');
     }
 
@@ -356,6 +359,8 @@ export class TrustTaskConsumer {
     let duplicate = false;
     if (isConsequential(spec) && !spec.repeatSafe) {
       // §7.2 "Bounding the record": no window to place the document in means no safe way to remember it.
+      // Step 3 now refuses every document without `issuedAt`, so this branch is unreachable. It is kept so
+      // the record stays bounded if that rule is ever relaxed.
       if (acceptanceEnd === undefined) {
         return refuse('malformedRequest', 'a consequential task needs issuedAt or expiresAt');
       }
@@ -375,6 +380,9 @@ export class TrustTaskConsumer {
         duplicate = outcome === 'duplicate';
       } catch {
         // Cannot establish whether this is a duplicate, so it must not execute (binding §5.1 item 5).
+        // PostgresConsumptionStore.claimOnce reports a failed claim statement as a key already taken
+        // instead of throwing, so with that store this branch is not reached today: such a failure reads
+        // as a duplicate and is answered 204 (TRUST-TASKS.md G-TT7).
         return refuse('unavailable', 'the duplicate record is unavailable');
       }
     }

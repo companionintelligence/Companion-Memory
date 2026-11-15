@@ -3,8 +3,8 @@
 # TRUSTED_PROXY_CIDRS. Runs on any POSIX sh, no Docker; the final `exec` is
 # pointed at `true`. Wired into `make test` by scripts/xtask/commands/test.ts.
 #
-# Also reads nginx.conf for its request-body limits and its upstream connect
-# timeout (the last two sections below): static checks, since no nginx runs here.
+# Also reads nginx.conf for its request-body limits, what /static/ may reach and
+# its upstreams (the sections below): static checks, since no nginx runs here.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -55,9 +55,12 @@ blocks=$(awk '
 
 grep -q '^    client_max_body_size 1m;$' "$nginx_conf" || fail "server block lost its 1m body limit"
 
+# The location that serves signed object links, /static/<bucket>/<uuid>.
+static_link='    location ~ "^/static/[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" {'
+
 # Only the object-store passthrough may still take gigabytes.
-big=$(printf '%s\n' "$blocks" | grep -E 'client_max_body_size [0-9]+[gG];' | grep -v '^    location /static/ ' || true)
-[ -z "$big" ] || fail "a location other than /static/ allows a body in gigabytes: $big"
+big=$(printf '%s\n' "$blocks" | grep -E 'client_max_body_size [0-9]+[gG];' | grep -vF "$static_link |" || true)
+[ -z "$big" ] || fail "a location other than the /static/ object links allows a body in gigabytes: $big"
 
 # A location that lifts the limit must stream the body to the API, which
 # checks the caller first; buffered, nginx would store it before anyone did.
@@ -88,6 +91,36 @@ printf '%s\n' "$blocks" | grep -F 'location ~ ^/api/graphql/?$ {' | grep -q 'cli
   || fail "GraphQL lost its 10m limit"
 printf '%s\n' "$blocks" | grep -F 'location /v1/ {' | grep -q 'client_max_body_size 10m;' \
   || fail "/v1/ lost its 10m limit"
+
+# ── nginx.conf: /static/ reaches the object store only for a signed object link,
+# /static/<bucket>/<uuid> (what FileService.signFile signs). Every other path under
+# /static/ answers 404, so the store's own endpoints stay internal.
+store=$(printf '%s\n' "$blocks" | grep -F 'proxy_pass http://object_store' || true)
+store_names=$(printf '%s\n' "$store" | sed 's/ |.*//')
+[ "$(printf '%s\n' "$store" | grep -c .)" = "1" ] \
+  || fail "expected exactly one location to reach the object store, found: ${store_names:-none}"
+case "$store" in
+  "$static_link |"*) ;;
+  *) fail "the object store is reached from ${store%% |*}, not the signed-link location" ;;
+esac
+fallback=$(printf '%s\n' "$blocks" | grep -F '    location /static/ { |' || true)
+[ "$(printf '%s\n' "$fallback" | grep -c .)" = "1" ] || fail "expected one 'location /static/' block"
+case "$fallback" in *"return 404;"*) ;; *) fail "location /static/ does not answer 404" ;; esac
+case "$fallback" in *proxy_pass*) fail "location /static/ passes requests on instead of answering 404" ;; esac
+
+# The regex itself, on the shapes it must admit and refuse (nginx matches the
+# decoded, normalized path, without the query).
+static_re=$(printf '%s\n' "$static_link" | sed -n 's/^    location ~ "\(.*\)" {$/\1/p')
+[ -n "$static_re" ] || fail "could not read the signed-link regex"
+for path in /static/companion/b3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d \
+            /static/ci-files/B3F1C2D4-5E6F-4A7B-8C9D-0E1F2A3B4C5D; do
+  printf '%s' "$path" | LC_ALL=C grep -Eq "$static_re" || fail "$path is a signed-link shape but would answer 404"
+done
+for path in /static/ /static/health /static/minio/health/live /static/rustfs/rpc/x /static/companion \
+            /static/companion/ /static/companion/not-a-uuid \
+            /static/companion/b3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d/x; do
+  if printf '%s' "$path" | LC_ALL=C grep -Eq "$static_re"; then fail "$path would reach the object store"; fi
+done
 
 # ── nginx.conf: a stopped upstream answers fast. Every upstream is on the same
 # network, so a connect that takes seconds means it is gone; at nginx's 60s

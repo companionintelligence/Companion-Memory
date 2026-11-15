@@ -1,12 +1,14 @@
+import { resolveDidKey } from './didKey';
 import { createFromPrior } from './fromPrior';
 import { parseDidDocument, relationshipKeys } from './didDocument';
-import { utf8Encode } from './encoding';
+import { base58btcEncode, base64urlEncode, utf8Encode } from './encoding';
 import { DidcommError } from './errors';
 import { generateDidKeyIdentity, generateDidPeerIdentity, secretsOf } from './identity';
 import { encryptJwe } from './jwe';
-import { type PrivateJwk, parsePrivateJwk } from './jwk';
-import { createJws } from './jws';
+import { type PrivateJwk, parsePrivateJwk, type PublicJwk } from './jwk';
+import { createJws, parseJws, verifyJwsSignature } from './jws';
 import { createMessage, type DidcommMessage } from './message';
+import { multikeyFromJwk } from './multikey';
 import { packEncrypted, packPlaintext, packSigned, unpack } from './pack';
 import { createDidResolver, firstOf, StaticDidResolver } from './resolver';
 import { InMemorySecretsResolver } from './secrets';
@@ -728,4 +730,98 @@ describe('packEncrypted refuses to build something inconsistent or weak', () => 
       packSigned(MESSAGE, { resolver: specResolver, secrets: impostor, signFrom: 'did:example:alice' }),
     ).rejects.toMatchObject({ code: 'secret-not-found' });
   });
+});
+
+describe('unpack: a signature under a small-order Ed25519 key authenticates no one', () => {
+  // The identity point (y = 1). A signature can be made for it without any private key: R = the
+  // identity and S = 0 verify for every message.
+  const identityKey: PublicJwk = {
+    kty: 'OKP',
+    crv: 'Ed25519',
+    x: Buffer.from(`01${'00'.repeat(31)}`, 'hex').toString('base64url'),
+  };
+  const keylessSignature = Buffer.from(`01${'00'.repeat(63)}`, 'hex');
+  const peerDid = `did:peer:2.V${multikeyFromJwk(identityKey)}`;
+
+  /** A signed message from `from`, naming the key `kid`, whose one signature is the keyless one above. */
+  const signedWithoutKey = (from: string, kid: string, to: string[] = ['did:example:bob']) => ({
+    payload: base64urlEncode(
+      utf8Encode(
+        JSON.stringify(createMessage({ type: 'https://example.com/protocols/hello/1.0/greeting', from, to })),
+      ),
+    ),
+    signatures: [
+      {
+        protected: base64urlEncode(
+          utf8Encode(JSON.stringify({ typ: 'application/didcomm-signed+json', alg: 'EdDSA' })),
+        ),
+        signature: base64urlEncode(keylessSignature),
+        header: { kid },
+      },
+    ],
+  });
+
+  it('builds a signature that verifies against the bare key, so each refusal below is the key check', () => {
+    expect(verifyJwsSignature(parseJws(signedWithoutKey(peerDid, `${peerDid}#key-1`)), identityKey)).toBe(
+      true,
+    );
+  });
+
+  it('refuses a did:peer:2 sender whose authentication key is the identity point, with invalid-key', async () => {
+    await expect(
+      unpack(JSON.stringify(signedWithoutKey(peerDid, `${peerDid}#key-1`)), {
+        resolver: didResolver,
+        secrets: secretsOf(),
+        require: { encrypted: false },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid-key' });
+  });
+
+  it('refuses it inside anoncrypt as well, under the default policy', async () => {
+    const bob = generateDidKeyIdentity();
+    const wrapped = encryptJwe({
+      plaintext: utf8Encode(JSON.stringify(signedWithoutKey(peerDid, `${peerDid}#key-1`, [bob.did]))),
+      enc: 'A256CBC-HS512',
+      recipients: relationshipKeys(resolveDidKey(bob.did), 'keyAgreement').map((key) => ({
+        kid: key.id,
+        publicJwk: key.jwk,
+      })),
+    });
+
+    await expect(
+      unpack(JSON.stringify(wrapped), { resolver: didResolver, secrets: secretsOf(bob) }),
+    ).rejects.toMatchObject({ code: 'invalid-key' });
+  });
+
+  it.each([
+    ['publicKeyJwk', 'JsonWebKey2020', identityKey],
+    ['publicKeyMultibase', 'Multikey', multikeyFromJwk(identityKey)],
+    [
+      'publicKeyBase58',
+      'Ed25519VerificationKey2018',
+      base58btcEncode(Buffer.from(identityKey.x, 'base64url')),
+    ],
+  ])(
+    'refuses a did:web sender whose %s is the identity point, with key-not-found',
+    async (member, type, material) => {
+      const did = 'did:web:example.com';
+      const resolver = createDidResolver({
+        web: {
+          fetchJson: async () => ({
+            id: did,
+            verificationMethod: [{ id: `${did}#key-1`, type, controller: did, [member]: material }],
+            authentication: [`${did}#key-1`],
+          }),
+        },
+      });
+
+      await expect(
+        unpack(JSON.stringify(signedWithoutKey(did, `${did}#key-1`)), {
+          resolver,
+          secrets: secretsOf(),
+          require: { encrypted: false },
+        }),
+      ).rejects.toMatchObject({ code: 'key-not-found' });
+    },
+  );
 });

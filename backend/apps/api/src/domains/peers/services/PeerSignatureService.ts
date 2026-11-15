@@ -109,6 +109,9 @@ export class PeerSignatureService {
    * make a signature check pass over content the sender never signed, because
    * `JSON.stringify` of a parsed object is not guaranteed to reproduce the
    * input byte for byte.
+   *
+   * An absent `rawBody` is read as an empty body, so a signature whose covered
+   * `content-digest` names any other body is then refused as `bad-digest`.
    */
   async verifyInbound(request: {
     method: string;
@@ -135,7 +138,10 @@ export class PeerSignatureService {
       throw error;
     }
 
-    const hasBody = request.rawBody != null && request.rawBody.length > 0;
+    // The bytes BodyParserMiddleware kept for this request: the empty string
+    // when it kept none.
+    const rawBody = request.rawBody ?? '';
+    const hasBody = rawBody.length > 0;
 
     // Derived from the REQUEST, never from the signature -- a sender must not
     // be able to drop the body binding by declining to cover it.
@@ -143,7 +149,13 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unsupported-components' };
     }
 
-    if (hasBody && !verifyContentDigest(request.contentDigestHeader, request.rawBody as string)) {
+    // A covered Content-Digest is always checked against the bytes received, so
+    // a signed digest never stands in for a body this box did not keep (RFC 9421
+    // section 7.2.8).
+    if (
+      (hasBody || parsed.params.components.includes(BODY_COMPONENT)) &&
+      !verifyContentDigest(request.contentDigestHeader, rawBody)
+    ) {
       return { ok: false, reason: 'bad-digest' };
     }
 
@@ -329,7 +341,12 @@ export class PeerSignatureService {
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.
-      this.logger.warn(`peers.signingKeyJwk is unusable, outbound asks will be unsigned: ${String(error)}`);
+      //
+      // Only the error class is logged: a JSON parse error quotes part of its
+      // input, and the input is a private key.
+      this.logger.warn(
+        `peers.signingKeyJwk is unusable (${error instanceof Error ? error.name : 'unknown error'}); outbound asks will be unsigned`,
+      );
       this.cachedSigningKey = null;
     }
 

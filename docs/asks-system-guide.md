@@ -40,7 +40,8 @@ that makes that survivable — a standing-consent model the owner writes in
 advance, a disclosure ladder that can only ever be walked downward, and an audit
 that records both what crossed and what was read to produce it. It works two
 ways: **locally**, between two accounts on one box, and **federated**, between
-two peer-linked boxes discovered through CI-Portal.
+two boxes whose owners have linked each other (by hand today: discovery through
+CI-Portal is designed but not wired; see [`peer-federation.md`](peer-federation.md)).
 
 ---
 
@@ -730,19 +731,24 @@ Migrations: `20260715070602_add_asks` … `20260821120000_add_peer_ask_correlati
 // backend/apps/api/config/default.json
 "features": { "ask": true },        // ENABLE_ASK — ships true
 "peers": {
-  "directoryUrl": "",   // CI_PEER_DIRECTORY_URL   — empty disables discovery
-  "memoryEndpoint": "", // CI_PEER_MEMORY_ENDPOINT — this box's own /agent/v1
+  "directoryUrl": "",   // CI_PEER_DIRECTORY_URL   — reserved: nothing calls the directory yet
+  "memoryEndpoint": "", // CI_PEER_MEMORY_ENDPOINT — this box's own /agent/v1 base (https://<host>/api/agent/v1 behind the packaged gateway)
   "handle": "",         // CI_PEER_HANDLE
-  "audience": "",       // CI_PEER_AUDIENCE — REQUIRED for inbound
+  "audience": "",       // CI_PEER_AUDIENCE — REQUIRED for Portal-token inbound asks
   "timeoutMs": 10000    // CI_PEER_TIMEOUT_MS
 }
 ```
 
-**`peers.audience` is not optional for inbound.** Without it, a token issued for
-*any* first-party client would verify here — including one minted for a different
-Companion. The peer route refuses every request until it is set rather than
-falling back to the broad list. With the `ask` flag off, `POST /agent/v1/ask`
-returns 503, indistinguishable from a box with no peer surface at all.
+**`peers.audience` is not optional for Portal-token asks.** Without it, a token
+issued for *any* first-party client would verify here — including one minted for
+a different Companion. The peer route refuses every Portal-token request until it
+is set rather than falling back to the broad list. A signed `did:keri:D<x>` or
+`did:key` ask carries no token and does not consult it: it needs
+`peers.memoryEndpoint` set (503 until it is) and a link the owner made for exactly
+that keyid, and the signed `@target-uri`, rebuilt from `peers.memoryEndpoint`,
+and a single-use nonce bind it to this box. With the `ask` flag off,
+`POST /agent/v1/ask` returns 503, indistinguishable from a box with no peer
+surface at all.
 
 ---
 
@@ -1076,9 +1082,11 @@ half of that exemption is pinned by **no test**.
 **G7 — The first `make fed-demo` on cold state fails a JWKS race** before any
 scenario runs. The second succeeds.
 
-**G8 — Rate limits are per-process in-memory maps.** Multiple processes multiply
-the effective limit, and a restart resets the window. Both files say so
-themselves; a shared store is needed before the ask path goes multi-instance.
+**G8 — Rate limits are per-process in-memory maps.** ✅ **Closed** (#2475). The
+ask and peer limiters, and the peer-signature nonce cache, keep their state in
+`ConsumptionStore`, which is Postgres unless `consumption.store` is `memory`, so a
+limit is shared across replicas and survives a restart. (Before #2475, multiple
+processes multiplied the effective limit, and a restart reset the window.)
 
 **G9 — Rate limits bound RATE, not TOTAL.** Nothing *enforces* a cumulative
 disclosure budget. (The owner can now SEE consumption per relationship — see

@@ -40,6 +40,24 @@ describe('Concat KDF', () => {
     ).toBe(false);
   });
 
+  it('derives the ECDH-1PU+A128KW key of draft 04 Appendix B.9', () => {
+    // draft-madden-jose-ecdh-1pu-04 §2.3: Z = Ze ‖ Zs, and SuppPubInfo is the 32-bit key length, then
+    // the tag's 32-bit length and the tag. Appendix B.9 works this example through to the key.
+    const key = concatKdfSha256({
+      z: Buffer.concat([
+        hex('32810896e0fe4d570ed1acfcedf67117dc194ed5daac21d8ff7af3244694897f'),
+        hex('2157612c9048edfae77cb2e4237140605967c05c7f77a48eeaf2cf29a5737c4a'),
+      ]),
+      algorithmId: 'ECDH-1PU+A128KW',
+      apu: Buffer.from('Alice'),
+      apv: Buffer.from('Bob and Charlie'),
+      keyBits: 128,
+      tag: Buffer.from('HLb4fTlm8spGmij3RyOs2gJ4DpHM4hhVRwdF_hGb3WQ', 'base64url'),
+    });
+
+    expect(key.toString('hex')).toBe('df4c37a0668306a11e3d6b0074b5d8df');
+  });
+
   it('separates parties: swapping apu and apv changes the key', () => {
     const base = { z: Buffer.alloc(32, 3), algorithmId: 'ECDH-ES+A256KW', keyBits: 256 };
 

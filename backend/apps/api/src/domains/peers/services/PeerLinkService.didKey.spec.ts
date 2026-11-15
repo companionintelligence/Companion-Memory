@@ -3,8 +3,9 @@ import { generateKeyPairSync } from 'node:crypto';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { FindOperator, IsNull } from 'typeorm';
 
-import { base58btcEncode, didKeyIdFor } from '../didKeyId';
-import { sovereignKeyIdFor } from '../sovereignKeyId';
+import { base58btcEncode, didKeyIdFor, didKeyPublicJwk } from '../didKeyId';
+import { jwkThumbprint } from '../httpSignature';
+import { sovereignKeyIdFor, sovereignPublicJwk } from '../sovereignKeyId';
 
 import { PeerLinkService } from './PeerLinkService';
 
@@ -478,10 +479,15 @@ describe('PeerLinkService.findActiveByKeyThumbprint — a did:key keyid', () => 
     await service.findActiveByKeyThumbprint(did);
 
     const where = clauses(repository);
-    expect(where).toHaveLength(2);
+    expect(where).toHaveLength(3);
     expect(where[0]).toMatchObject({ peerKeyThumbprint: did, status: 'active' });
     expect(where[1]).toMatchObject({ peerIssuer: 'did:key', peerSubject: did, status: 'active' });
     expect(where[1].revokedAt).toBeInstanceOf(FindOperator);
+    expect(where[2]).toMatchObject({
+      peerKeyThumbprint: jwkThumbprint(didKeyPublicJwk(did)!),
+      status: 'active',
+    });
+    expect(where[2].revokedAt).toBeInstanceOf(FindOperator);
   });
 
   it('looks under did:keri for a sovereign AID, exactly as before', async () => {
@@ -491,6 +497,7 @@ describe('PeerLinkService.findActiveByKeyThumbprint — a did:key keyid', () => 
     await service.findActiveByKeyThumbprint(aid);
 
     expect(clauses(repository)[1]).toMatchObject({ peerIssuer: 'did:keri', peerSubject: aid });
+    expect(clauses(repository)[2].peerKeyThumbprint).toBe(jwkThumbprint(sovereignPublicJwk(aid)!));
   });
 
   it('adds no identity clause for a thumbprint or for a DID it does not understand', async () => {

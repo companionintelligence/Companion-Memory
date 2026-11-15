@@ -82,7 +82,7 @@ function peerRow(overrides: Record<string, unknown> = {}) {
     id: 'peer-link-1',
     peerHandle: 'ada',
     displayName: null,
-    memoryEndpoint: 'https://ada.example/api/peer',
+    memoryEndpoint: 'https://ada.example/api/agent/v1',
     personEntityId: null,
     avatarUrl: null,
     trustTier: 'stranger',
@@ -1393,7 +1393,7 @@ describe('AsksPage', () => {
       id: 'peer-link-1',
       peerHandle: 'ada',
       displayName: null,
-      memoryEndpoint: 'https://ada.example/api/peer',
+      memoryEndpoint: 'https://ada.example/api/agent/v1',
       avatarUrl: null,
       trustTier: tier,
       status: 'active',
@@ -1466,7 +1466,7 @@ describe('AsksPage', () => {
                   id: 'peer-link-1',
                   peerHandle: 'ada',
                   displayName: null,
-                  memoryEndpoint: 'https://ada.example/api/peer',
+                  memoryEndpoint: 'https://ada.example/api/agent/v1',
                   avatarUrl: null,
                   trustTier: 'family',
                   status: 'active',
@@ -1520,7 +1520,7 @@ describe('AsksPage', () => {
                   id: 'peer-link-9',
                   peerHandle: 'bo',
                   displayName: null,
-                  memoryEndpoint: 'https://bo.example/api/peer',
+                  memoryEndpoint: 'https://bo.example/api/agent/v1',
                   avatarUrl: null,
                   trustTier: 'stranger',
                   status: 'active',
@@ -1538,7 +1538,7 @@ describe('AsksPage', () => {
 
     fireEvent.change(await screen.findByPlaceholderText('ada'), { target: { value: 'bo' } });
     fireEvent.change(screen.getByPlaceholderText(/bo|https:/i), {
-      target: { value: 'https://bo.example/api/peer' },
+      target: { value: 'https://bo.example/api/agent/v1' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Add peer' }));
 

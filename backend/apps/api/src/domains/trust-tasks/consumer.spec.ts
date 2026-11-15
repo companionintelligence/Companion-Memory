@@ -186,6 +186,33 @@ describe('TrustTaskConsumer', () => {
 
       rejected(await consumer.consume(sign(unsigned, alice)), 'malformedRequest');
     });
+
+    it('requires issuedAt even where the specification only recommends it', async () => {
+      const { consumer } = consumerFor(echoSpec({ issuedAt: 'RECOMMENDED' }));
+      const unsigned = draft({ from: alice, to: box.vid });
+      delete (unsigned as { issuedAt?: string }).issuedAt;
+
+      // Refused at the freshness step, before admission, not later by the duplicate record's own bound.
+      expect(rejected(await consumer.consume(sign(unsigned, alice)), 'malformedRequest')).toMatchObject({
+        reason: 'issuedAt is required',
+        stage: 'unauthenticated',
+      });
+    });
+
+    it('requires issuedAt where the specification only recommends it, even beside a future expiresAt', async () => {
+      const { consumer } = consumerFor(echoSpec({ issuedAt: 'RECOMMENDED' }));
+      const unsigned = draft({
+        from: alice,
+        to: box.vid,
+        extra: { expiresAt: new Date(T0 + 86_400_000).toISOString() },
+      });
+      delete (unsigned as { issuedAt?: string }).issuedAt;
+
+      expect(rejected(await consumer.consume(sign(unsigned, alice)), 'malformedRequest')).toMatchObject({
+        reason: 'issuedAt is required',
+        stage: 'unauthenticated',
+      });
+    });
   });
 
   describe('the parties — SPEC §4.8 and §7.2 items 5 and 6', () => {

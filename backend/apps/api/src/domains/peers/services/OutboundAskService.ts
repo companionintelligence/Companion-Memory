@@ -16,6 +16,7 @@ import {
   type AnswerForm,
   type DisclosedAnswer,
 } from '@ci/domains/asks';
+import { UserService } from '@ci/domains/user';
 
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import type { AskerVisiblePeerReply, PeerAskBody, PeerAskRequest } from '../protocol';
@@ -79,6 +80,7 @@ export class OutboundAskService {
     @InjectRepository(AskEntity)
     private readonly askRepository: Repository<AskEntity>,
     private readonly logger: LoggerService,
+    private readonly userService: UserService,
     @Optional()
     private readonly signatureService?: PeerSignatureService,
   ) {
@@ -91,7 +93,8 @@ export class OutboundAskService {
    * `accessToken` must be a Portal-issued token whose audience is the PEER box
    * (the peer verifies that binding on receipt). Until Portal token exchange
    * lands, the caller supplies it; this service never mints or caches one.
-   * For sovereign KERI peers, an outbound signature satisfies authentication.
+   * With no token the request is signed with this box's key alone, which only
+   * the box's administrator may do (see {@link assertMaySignAsBox}).
    */
   async send(context: UserServiceContext, dto: SendAskDto, accessToken?: string): Promise<SendAskResult> {
     const link = await this.activeLink(context, dto.handle);
@@ -99,6 +102,10 @@ export class OutboundAskService {
     const effectiveToken = accessToken?.trim() ?? '';
     if (!effectiveToken && !this.signatureService?.hasSigningKey) {
       throw new BadRequestException('A peer access token or signing key is required');
+    }
+
+    if (!effectiveToken) {
+      await this.assertMaySignAsBox(context);
     }
 
     const ask = await this.askService.create(context, {
@@ -167,6 +174,10 @@ export class OutboundAskService {
       throw new BadRequestException('A peer access token or signing key is required');
     }
 
+    if (!effectiveToken) {
+      await this.assertMaySignAsBox(context);
+    }
+
     if (ask.status === 'answered') {
       const stored = await this.answerService.findByAskId(ask.id);
 
@@ -223,6 +234,22 @@ export class OutboundAskService {
     }
 
     return link;
+  }
+
+  /**
+   * An ask with no Portal token is authenticated by this box's signing key
+   * alone, so the peer reads it as the box's own identity (the `did:key` or
+   * `did:keri:D<x>` link it made for this box), and it carries this box's
+   * `peers.handle`. Only the appliance's administrator (`UserEntity.role`
+   * `admin`, the account that claimed the box) may send one. Anyone else on the
+   * box asks with a Portal token of their own.
+   */
+  private async assertMaySignAsBox(context: UserServiceContext): Promise<void> {
+    const user = await this.userService.findById(context, context.userId);
+
+    if (user?.role !== 'admin') {
+      throw new BadRequestException('A peer access token is required');
+    }
   }
 
   private toBody(link: PeerLink, dto: SendAskDto): PeerAskBody {

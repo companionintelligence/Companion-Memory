@@ -91,8 +91,10 @@ const SENSITIVE_CLASSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Default disclosure ceiling per trust tier, mirroring the tier table in
- * ARCHITECTURE.md §8.1. `'*'` is the fallback for any class not named.
+ * Default disclosure ceiling per trust tier, set here. CI-Engineering
+ * ARCHITECTURE.md §8.1 is the 2026-07 design table, and its tiers (Family,
+ * Trusted friend, Colleague, Stranger) differ. `'*'` is the fallback for any
+ * class not named.
  *
  * This is a CEILING, not a grant: it can only ever reduce what a grant allows.
  * A tier never authorizes disclosure on its own — an ask still needs a matching

@@ -46,7 +46,7 @@ new key material. It is a statement about the key and not about KERI.
 | `jwk.ts` | JWK validation for Ed25519, X25519, P-256, P-384, P-521, secp256k1; on-curve and `d`↔`x` checks | every key in the specification's Appendix A |
 | `edwards.ts` | Ed25519 → X25519 public and secret conversion (`BigInt`, no dependency) | a published `did:key` pair; two property tests |
 | `contentEncryption.ts` | `A256CBC-HS512`, `A256GCM`, `XC20P` (HChaCha20 written here) | RFC 7518 §B.3; draft-irtf-cfrg-xchacha-03 §2.2.1 and A.3.1 |
-| `keyAgreement.ts` | ECDH, Concat KDF, AES Key Wrap; ES and 1PU derivation | RFC 7518 Appendix C; RFC 3394 §4.6; the 1PU layout by Appendix C.3 |
+| `keyAgreement.ts` | ECDH, Concat KDF, AES Key Wrap; ES and 1PU derivation | RFC 7518 Appendix C; RFC 3394 §4.6; the 1PU layout of draft-madden-jose-ecdh-1pu-04 §2.3 (cctag = 32-bit length ‖ tag; SuppPubInfo = keydatalen ‖ cctag), pinned by DIDComm Appendix C.3 and the draft's Appendix B.9 derived key |
 | `jwe.ts` | General JSON JWE: anoncrypt (`ECDH-ES+A256KW`) and authcrypt (`ECDH-1PU+A256KW`) | all six Appendix C.3 messages; four Rust-reference messages |
 | `jws.ts` | `EdDSA`, `ES256`, `ES256K` (written low-S); compact JWS for `from_prior` | Appendix C.2: the Ed25519 vector is reproduced byte for byte |
 | `multikey.ts`, `didKey.ts`, `didPeer.ts`, `didWeb.ts` | `did:key`, `did:peer:2`, `did:web` URL rules | the `did:peer:2` specification example is reproduced character for character |
@@ -139,7 +139,12 @@ const { message, metadata } = await unpack(packed, { resolver, secrets, require:
   `prepareDelivery` refuses anything but `https:` and `wss:` by default, and URLs with credentials.
 - **Bounded.** 1 MiB per envelope, 100 recipients, 64 attachments, length caps on DIDs and base58.
 - **Replays.** `InMemoryReplayGuard` remembers (sender, message id) pairs. It is process-local; see the
-  wiring gate.
+  wiring gate. It is also bounded: it keeps at most 100,000 entries by default (`maxEntries`) and evicts the
+  oldest first, because refusing new messages instead would let a flood lock a recipient out. So once about
+  100,000 later authenticated messages have arrived, from one sender or from many, an earlier message's
+  entry is gone, and that message is accepted again inside its window. A message without `expires_time` is
+  remembered for `replayWindowSeconds` (24 h by default) plus the clock skew (60 s by default), and is
+  accepted again after that, because nothing compares `created_time` with the clock.
 
 ### Where it differs from the specification's text
 
@@ -182,10 +187,11 @@ reference reports it opened (cipher, curve, signer, flags). They cover authcrypt
 (A256CBC-HS512, A256GCM, XC20P) over X25519 and P-256, signed messages and sign-then-encrypt (EdDSA,
 ES256, ES256K), a protected sender, `from_prior`, one and two mediator hops, a `did:key` identity and a
 range of message shapes; 32 of the rows are negative controls that must be refused for the right
-reason. Sixteen defects planted in the compiled library were all caught by it. That settles what the
-ECDH-1PU key derivation raised (it was found by testing candidate encodings against the specification's
-vector): the reference accepts what this domain writes. The harness and the steps to repeat the run are
-in CI-Engineering, `projects/decentralized-trust-graphs/didcomm-interop/`.
+reason. Sixteen defects planted in the compiled library were all caught by it. The reference also
+accepts the ECDH-1PU key derivation this domain writes, whose layout is the one
+draft-madden-jose-ecdh-1pu-04 §2.3 defines (DIDComm's text cites the draft and does not repeat it). The
+harness and the steps to repeat the run are in CI-Engineering,
+`projects/decentralized-trust-graphs/didcomm-interop/`.
 
 It found one bug, fixed here: the reference refused about half of the ES256K signatures (OpenSSL writes
 `s` or `n - s` at random, and Rust's `k256` accepts only the low form), so the domain now writes low-S.

@@ -1,4 +1,5 @@
 import { ORIGIN, World, alice, app, bob, carol } from './__tests__/testKit';
+import { IDENTITY_DID_KEY } from './__tests__/weakEd25519';
 import { rootZcapId } from './zcap';
 
 const SPACE = '81246131-69a4-45ab-9bff-9c946b59cf2e';
@@ -125,6 +126,22 @@ describe('Create Space: POST /spaces/', () => {
       });
       expect(res.status).toBe(400);
       expect(res.type).toBe('invalid-request-body');
+    });
+
+    it('refuses a did:key of a small-order key, which a signature can be made for without its private key', async () => {
+      const w = new World();
+      // Signed by Alice, so the request authenticates: what is refused is the controller in the body,
+      // before the check that the signer is that controller.
+      const res = await w.send({
+        method: 'POST',
+        path: 'spaces/',
+        as: alice,
+        json: { controller: IDENTITY_DID_KEY },
+      });
+      expect(res.status).toBe(400);
+      expect(res.type).toBe('invalid-request-body');
+      expect(res.json.detail).toMatch(/does not resolve/);
+      expect(await w.store.transaction((tx) => tx.countSpaces())).toBe(0);
     });
   });
 

@@ -18,6 +18,13 @@
 > threat analysis itself is unaffected:** every ceiling, tier, exemption and default it argues
 > about is unchanged.
 >
+> **Δ 2026-11-08 — two passages re-read at `136937d65`.** In T5, both rate limiters have kept
+> their windows in `ConsumptionStore` (Postgres by default) since #2475, so T5's proposal 2 is
+> done, and `AskRateLimitService.consumeDisclosureBudget` (#3066) has no caller outside its
+> tests. In T6, `peers.audience` gates only Portal-token asks: a signed `did:keri:D<x>` or
+> `did:key` ask needs `peers.memoryEndpoint` and a link for that keyid instead. The references
+> in those two passages were read at that commit.
+>
 > **This document is not reassuring, and that is the point.** A threat model whose conclusion
 > is "we are fine" has not been written, it has been performed. What follows names the
 > things this feature is genuinely excellent at defending, and then names — with file and
@@ -561,19 +568,18 @@ most in exactly the relationships that last: family, ex-partners, employers.
 
 ### What the code does today
 
-**Rate limits bound rate, and are per-process and in-memory.**
+**Rate limits bound rate.** Both limiters keep their windows in `ConsumptionStore` (Postgres
+by default since #2475), so a budget is shared across replicas and survives a restart.
 
-- Local: 20 asks per rolling minute per asker (`AskRateLimitService.ts:8-9`), state in a
-  `Map` (`:19`).
+- Local: 20 asks per rolling minute per asker (`AskRateLimitService.ts:7-8`).
 - Inbound peer: 10 asks/min plus a separate 30 polls/min per `(issuer, subject)`
-  (`PeerRateLimitService.ts:10-11, 29`), also a `Map` (`:46`). Both files say so: *"a shared
-  store can back it when the ask path goes multi-instance"*.
+  (`PeerRateLimitService.ts:10-11, 29`).
 
-So the ceiling is **28 800 local asks and 14 400 peer asks per day**, and it resets on
-restart.
+So the ceiling is **28 800 local asks and 14 400 peer asks per day**.
 
-**There is no total.** Grepping `domains/asks` and `domains/peers` for `budget`, `quota`,
-`cumulative` returns only the rate-limiter's own comments. `AskAuditService.listForResponder`
+**There is no total.** `AskRateLimitService.consumeDisclosureBudget` (#3066) keeps a rolling
+24-hour disclosure count per `(owner, asker)` in the same store, but nothing outside its own
+tests calls it. `AskAuditService.listForResponder`
 (`AskAuditService.ts:63-70`) reads every row with no aggregation. The audit **has the data
 to compute a budget** — `disclosed_entities`, `disclosed_count`, `backing_entities`,
 `consent_basis`, `peer_handle` (`AskAuditEntity.ts:18-80`) — and nothing consumes it.
@@ -687,8 +693,14 @@ The peer-facing defaults are genuinely conservative and each is deliberate:
 - **A missing or revoked link is `stranger`,** not a wider fallback
   (`AskResolver.ts:749`), and an unknown tier falls back to `stranger` too
   (`policy.ts:152`).
-- **Federation is off unless an operator binds `peers.audience`**
-  (`PeerAskController.ts:35-37`), independently of the feature flag.
+- **Inbound federation is off until an operator configures it,** independently of the
+  feature flag. `peers.audience` gates Portal-token asks: each is refused with a 503 until it
+  is bound (`PeerAskController.authenticate`). A signed `did:keri:D<x>` or `did:key` ask
+  carries no token and does not consult `peers.audience`. It needs `peers.memoryEndpoint` (a
+  503 until it is set) and a link the owner made for exactly that keyid, and it is bound to
+  this box by the signed `@target-uri`, which is rebuilt from `peers.memoryEndpoint`, and a
+  single-use nonce (`PeerAskController.assertSignature`; see
+  [`peer-federation.md`](peer-federation.md#keyids-that-name-themselves-didkey-and-didkeridx)).
 - **Blocks beat auto; nulls resolve toward denial on both sides**
   (`grantMatch.ts:39-47, 206-252`).
 

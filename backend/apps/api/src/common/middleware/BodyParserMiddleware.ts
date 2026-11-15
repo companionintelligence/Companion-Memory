@@ -66,6 +66,9 @@ const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
  * Scoped to this ONE prefix on purpose. `verify` retains the whole buffer, and
  * doing that for every request would hold a second copy of every 10mb GraphQL
  * and bulk-ingest body for the life of the request.
+ *
+ * The prefix is matched case-insensitively and by parsed path, the way express
+ * routes ({@link isSignedPeerRequest}), and `urlencoded()` never runs on it.
  */
 const SIGNED_PEER_PREFIX = '/agent/v1';
 
@@ -89,6 +92,23 @@ export function isGraphqlRequest(req: Request): boolean {
   return (
     (req.baseUrl ?? '').toLowerCase() === GRAPHQL_PATH ||
     [routePath, parsedPath].some((path) => path === GRAPHQL_PATH || path.startsWith(`${GRAPHQL_PATH}/`))
+  );
+}
+
+/**
+ * Whether `req` is for the signed peer surface ({@link SIGNED_PEER_PREFIX}).
+ * Built like {@link isGraphqlRequest}, for the same two reasons: express routes
+ * case-insensitively, so `/AGENT/V1/ask` reaches the peer controllers too, and
+ * it routes an absolute-form request by its parsed pathname while its
+ * `originalUrl` starts `http:`. Both forms must match, or the bytes a peer
+ * signed would not be kept for the controller that checks them.
+ */
+export function isSignedPeerRequest(req: Request): boolean {
+  const routePath = (req.originalUrl || req.url || req.path).split('?')[0].toLowerCase();
+  const parsedPath = `${req.baseUrl ?? ''}${req.path ?? ''}`.toLowerCase();
+
+  return [routePath, parsedPath].some(
+    (path) => path === SIGNED_PEER_PREFIX || path.startsWith(`${SIGNED_PEER_PREFIX}/`),
   );
 }
 
@@ -132,8 +152,7 @@ export class BodyParserMiddleware implements NestMiddleware {
     // Retain the exact bytes for the signed peer surface only. `verify` runs
     // before parsing and receives the raw buffer, which is the only hook that
     // sees the body as sent.
-    const isSignedPeerRoute =
-      routePath === SIGNED_PEER_PREFIX || routePath.startsWith(`${SIGNED_PEER_PREFIX}/`);
+    const isSignedPeerRoute = isSignedPeerRequest(req);
 
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.
@@ -149,6 +168,13 @@ export class BodyParserMiddleware implements NestMiddleware {
     })(req, res, (err?: unknown) => {
       if (err) {
         return next(err as Error);
+      }
+
+      // The peer surface accepts JSON only. Its signatures cover a digest of the
+      // exact bytes json() kept above, so a body in any other encoding is left
+      // unparsed and the peer controllers refuse it.
+      if (isSignedPeerRoute) {
+        return next();
       }
 
       urlencoded({ extended: true, limit: bodyLimit })(req, res, next);

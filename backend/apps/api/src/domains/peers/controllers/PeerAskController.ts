@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  Body,
   Controller,
   Get,
   Headers,
@@ -70,7 +69,6 @@ export class PeerAskController {
   async ask(
     @Headers('authorization') authorization: string | undefined,
     @Req() request: RawBodyRequest,
-    @Body() body: unknown,
   ): Promise<PeerAskResponse> {
     const identity = await this.authenticate(authorization, request);
     const channel = await this.assertSignature(request, identity, request.rawBody);
@@ -79,7 +77,10 @@ export class PeerAskController {
     // an unlinked caller cannot hammer the endpoint for free.
     await this.rateLimitService.consume(identity);
 
-    const parsed = peerAskBodySchema.safeParse(body);
+    // As TrustTasksController does, the ask is read from the exact bytes a
+    // signature's digest is checked against (BodyParserMiddleware keeps them for
+    // /agent/v1), never from a separately parsed body.
+    const parsed = peerAskBodySchema.safeParse(parseRawJson(request.rawBody));
     if (!parsed.success) {
       // The body is attacker-controlled; reject anything off-contract outright.
       throw new BadRequestException('Malformed ask');
@@ -216,9 +217,10 @@ export class PeerAskController {
    * would let a caller choose the authority half of the string and thereby make
    * a signature minted for `evil.example` verify here — the request would carry
    * its own idea of what it was addressed to. `peers.memoryEndpoint` is the
-   * endpoint this box PUBLISHES to the directory, which is the authority a
-   * peer would have signed over. Same rule as UMA's: authorization inputs never
-   * come from transport headers.
+   * `/agent/v1` base the owner gave peers, which they store on their link to
+   * this box and sign `<base>/ask` against. Nothing publishes it to a
+   * directory. Same rule as UMA's: authorization inputs never come from
+   * transport headers.
    *
    * ═══ ONE REFUSAL FOR EVERY FAILURE ═══
    *
@@ -247,14 +249,22 @@ export class PeerAskController {
       throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
-    const authority = originOf(config.peers?.memoryEndpoint);
-    if (!authority) {
+    const base = publishedBase(config.peers?.memoryEndpoint);
+    if (!base) {
       // Refusing is the only safe answer: with nothing to reconstruct
       // `@target-uri` from, the alternative is trusting a header for a signed
       // component. An operator who turns on signing must publish the endpoint
       // peers sign against.
       this.logger.warn('peer ask refused: peers.memoryEndpoint is not configured');
       throw new ServiceUnavailableException('Peer asks are not enabled');
+    }
+
+    // A path outside `/agent/v1` has no signed target to rebuild, so it gets the
+    // same refusal as every other signature failure.
+    const targetUri = signedTargetUri(base, request.originalUrl ?? request.url);
+    if (targetUri == null) {
+      this.logger.warn('peer ask refused: request path is outside /agent/v1');
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     let keyid: string;
@@ -306,7 +316,7 @@ export class PeerAskController {
 
     const verification = await this.signatureService.verifyInbound({
       method: request.method,
-      targetUri: `${authority}${request.originalUrl ?? request.url}`,
+      targetUri,
       signatureInput: header(request, 'signature-input'),
       signature: header(request, 'signature'),
       contentDigestHeader: header(request, 'content-digest'),
@@ -338,30 +348,89 @@ export class PeerAskController {
 /** The ONE refusal a signature failure ever produces. See {@link PeerAskController.assertSignature}. */
 const SIGNATURE_REFUSED = 'Invalid token';
 
+/** The path every peer route is served under, as this process receives it. */
+const PEER_ROUTE_PREFIX = '/agent/v1';
+
 /**
- * The ORIGIN of this box's published endpoint — scheme, host, port, and nothing
- * else.
+ * This box's published `/agent/v1` base: the origin and path of
+ * `peers.memoryEndpoint`, with no trailing slash, query or fragment.
  *
- * `peers.memoryEndpoint` is the full `/agent/v1` base URL, while
- * `request.originalUrl` already carries `/agent/v1/...`; concatenating the two
- * whole strings doubles the prefix and every honest signature fails. The
- * authority half comes from config (never from `Host`) and the path half comes
- * from the route, which is exactly the split that keeps a caller from choosing
- * either one.
+ * Peers sign `${memoryEndpoint}/ask` (and `${memoryEndpoint}/ask/<correlation>`
+ * to collect): `PeerAskClient` signs the very URL it dials. Behind Companion
+ * Memory's gateway the base is `https://<host>/api/agent/v1`, and the gateway
+ * strips `/api` before proxying, so this process sees `/agent/v1/...` and the
+ * prefix survives only in config. The authority and any path prefix therefore
+ * come from config, never from `Host` or a forwarded header: a server behind a
+ * reverse proxy has to know the original request URI to use `@target-uri`
+ * (RFC 9421 section 1.4), and a header says whatever the caller wrote.
  *
- * Returns null for anything unparseable, which the caller turns into a refusal
+ * Returns null for anything empty or unparseable, and for a URL with no origin
+ * of its own (`mailto:` and the like), which the caller turns into a refusal
  * rather than a guess.
  */
-function originOf(endpoint: string | undefined): string | null {
+function publishedBase(endpoint: string | undefined): string | null {
   const trimmed = endpoint?.trim();
   if (!trimmed) {
     return null;
   }
 
+  let url: URL;
   try {
-    return new URL(trimmed).origin;
+    url = new URL(trimmed);
   } catch {
     return null;
+  }
+
+  // `URL.origin` is the string 'null' for a scheme with an opaque origin.
+  if (url.origin === 'null') {
+    return null;
+  }
+
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+/**
+ * The `@target-uri` a peer signed, rebuilt from this box's {@link publishedBase}
+ * and the path the route `received`; null when that path is outside
+ * `/agent/v1`.
+ *
+ * A base that ends in `/agent/v1` (`https://<host>/api/agent/v1` behind the
+ * gateway, `https://<host>/agent/v1` in front of the API itself) is followed by
+ * whatever was received after `/agent/v1`. Any other base, such as an endpoint
+ * published at the bare origin, is read as its origin plus the path received,
+ * as before.
+ */
+function signedTargetUri(base: string, received: string): string | null {
+  const onPeerRoute =
+    received === PEER_ROUTE_PREFIX ||
+    received.startsWith(`${PEER_ROUTE_PREFIX}/`) ||
+    received.startsWith(`${PEER_ROUTE_PREFIX}?`);
+  if (!onPeerRoute) {
+    return null;
+  }
+
+  const url = new URL(base);
+  if (url.pathname.endsWith(PEER_ROUTE_PREFIX)) {
+    return `${base}${received.slice(PEER_ROUTE_PREFIX.length)}`;
+  }
+
+  return `${url.origin}${received}`;
+}
+
+/**
+ * The JSON value in the bytes this box kept for the request; undefined when it
+ * kept none, or they are empty or not JSON, which the ask schema then refuses
+ * as a malformed ask.
+ */
+function parseRawJson(raw: string | undefined): unknown {
+  if (raw == null || raw.length === 0) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
   }
 }
 

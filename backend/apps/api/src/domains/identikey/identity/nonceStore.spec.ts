@@ -228,6 +228,20 @@ describe('InMemoryNonceStore', () => {
 
       expect(await store.consume(challenge.nonce, bytes)).toBe('used');
     });
+
+    // gc keeps an entry until `expiresAt + retainSeconds`. A NaN retention would keep every entry, so a
+    // full store would never recover, and a negative one would forget entries before they expire. So
+    // anything but a whole, non-negative number of seconds is refused when the store is built.
+    it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'refuses to be built with a retention of %s seconds',
+      (retainSeconds) => {
+        expect(() => new InMemoryNonceStore({ retainSeconds })).toThrow(RangeError);
+      },
+    );
+
+    it.each([0, 60])('accepts a retention of %s seconds', (retainSeconds) => {
+      expect(() => new InMemoryNonceStore({ retainSeconds })).not.toThrow();
+    });
   });
 
   describe('capacity', () => {
@@ -284,6 +298,19 @@ describe('InMemoryNonceStore', () => {
       await store.recordIssued(later.challenge.nonce, later.bytes, later.challenge.expiresAt, NOW + 500);
 
       expect(store.size).toBe(1);
+    });
+
+    // The capacity is the bound on what an anonymous caller can make the process hold. A NaN or
+    // infinite one would never refuse anyone, so anything but a positive integer is refused up front.
+    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'refuses to be built with room for %s challenges',
+      (maxEntries) => {
+        expect(() => new InMemoryNonceStore({ maxEntries })).toThrow(RangeError);
+      },
+    );
+
+    it.each([1, 10_000])('accepts room for %s challenges', (maxEntries) => {
+      expect(() => new InMemoryNonceStore({ maxEntries })).not.toThrow();
     });
   });
 });

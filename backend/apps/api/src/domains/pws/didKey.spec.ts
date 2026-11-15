@@ -1,3 +1,4 @@
+import { didKeyOf, fromHex, GENUINE, IDENTITY_DID_KEY, IDENTITY_KEY, WEAK } from './__tests__/weakEd25519';
 import {
   DidKeyError,
   didKeyFromPublicKey,
@@ -139,5 +140,34 @@ describe('resolveDidKey', () => {
     expect(() => resolveDidKey('did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme')).toThrow(
       DidKeyError,
     );
+  });
+});
+
+describe('a did:key that spells a small-order or non-canonical key names no one', () => {
+  it('spells the identity point as the expected did:key', () => {
+    expect(didKeyOf(IDENTITY_KEY)).toBe(IDENTITY_DID_KEY);
+  });
+
+  it.each(WEAK)('refuses the did:key of %s', (_name, key) => {
+    const did = didKeyOf(fromHex(key));
+
+    expect(isDidKey(did)).toBe(false);
+    expect(() => publicKeyFromDidKey(did)).toThrow(DidKeyError);
+    expect(() => resolveDidKey(did)).toThrow(DidKeyError);
+    expect(() => resolveDidKey(`${did}#${did.slice('did:key:'.length)}`)).toThrow(DidKeyError);
+    expect(() => keyIdFromDidKey(did)).toThrow(DidKeyError);
+  });
+
+  it.each(GENUINE)('still accepts the did:key of %s', (_name, key) => {
+    const did = didKeyOf(fromHex(key));
+
+    expect(isDidKey(did)).toBe(true);
+    expect(hex(publicKeyFromDidKey(did))).toBe(key);
+    expect(resolveDidKey(did).id).toBe(did);
+  });
+
+  it('still accepts the W3C Appendix B key', () => {
+    expect(isDidKey(`did:key:${W3C_PUBLIC}`)).toBe(true);
+    expect(resolveDidKey(`did:key:${W3C_PUBLIC}`).id).toBe(`did:key:${W3C_PUBLIC}`);
   });
 });

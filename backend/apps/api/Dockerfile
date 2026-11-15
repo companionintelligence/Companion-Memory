@@ -63,7 +63,10 @@ COPY backend/apps/api/scripts ./backend/apps/api/scripts
 WORKDIR /app/backend/apps/api
 
 # `tsc --build && tsc-alias` — see the `build` script in package.json.
-RUN yarn build
+# The PWS dev server (scripts/pws-dev-server.ts) is a development tool run
+# from source (docs/pws.md); its compiled copy is dropped so the runtime
+# image does not carry it.
+RUN yarn build && rm -f dist/scripts/pws-dev-server.js dist/scripts/pws-dev-server.js.map dist/scripts/pws-dev-server.d.ts
 
 # ──────────────────────────────────────────────────
 # Stage 2 — runtime

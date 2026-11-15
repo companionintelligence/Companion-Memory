@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
 import { AskEntity, AskExecutorService, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
 
@@ -246,6 +246,21 @@ describe('PeerAskService.handle', () => {
         responderUserId: 'owner-1',
         peerLinkId: 'link-1',
         direction: 'inbound',
+      }),
+    );
+  });
+
+  // `handle` is where both peer doors arrive: `PeerAskController.ask` and the
+  // Trust Tasks engine's `ask/request`.
+  it('stores the normalized query, not the raw wire text', async () => {
+    const { service, askService } = makeService();
+
+    await service.handle(PEER, body({ archetype: 'relationship', subject: 'Car\u200Bol' }));
+
+    expect(askService.create).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({
+        query: expect.objectContaining({ prompt: 'Carol', promptHiddenCharactersRemoved: true }),
       }),
     );
   });
@@ -568,6 +583,69 @@ describe('toAskQuery', () => {
         body({ archetype: 'availability', from: '2026-08-07T09:00:00.000Z', to: '2026-08-07T17:00:00.000Z' }),
       ),
     ).toMatchObject({ queryType: 'availability', dataClass: 'calendar' });
+  });
+});
+
+/**
+ * A peer's question is stored as a local one is: through the same parser, so
+ * zero-width, bidi and tag characters are removed and the owner is told they
+ * were. The web card strips them again at render, but the stored query is also
+ * what an AI client reads through the ask inbox.
+ */
+describe('toAskQuery — hidden characters are removed as on a local ask', () => {
+  const window = { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' };
+
+  it('removes a zero-width space from a relationship subject and says so', () => {
+    expect(toAskQuery(body({ archetype: 'relationship', subject: 'Car\u200Bol' }))).toMatchObject({
+      prompt: 'Carol',
+      promptHiddenCharactersRemoved: true,
+    });
+  });
+
+  it('removes a bidi override and a tag-character run from a content subject', () => {
+    const query = toAskQuery(
+      body({ archetype: 'content', subject: '\u202Ephotos\u{E0041}\u{E0042}', dataClass: 'photos' }),
+    );
+
+    expect(query).toMatchObject({ prompt: 'photos', promptHiddenCharactersRemoved: true });
+  });
+
+  it('removes hidden characters from the actor label', () => {
+    const query = toAskQuery({
+      ...body({ archetype: 'relationship', subject: 'Carol' }),
+      actor: { kind: 'first-party-agent', label: 'Ag\u200Bent' },
+    });
+
+    expect(query.actor).toEqual({ kind: 'first-party-agent', label: 'Agent' });
+  });
+
+  it('removes hidden characters from the stated purpose', () => {
+    const query = toAskQuery({
+      ...body({ archetype: 'relationship', subject: 'Carol' }),
+      purpose: 'wedding \u200Binvites',
+    });
+
+    expect(query.filters?.purpose).toBe('wedding invites');
+  });
+
+  it('removes them from availability’s purpose, which is both its prompt and its stated purpose', () => {
+    const query = toAskQuery(body({ archetype: 'availability', ...window, purpose: '\u200Blunch' }));
+
+    expect(query.prompt).toBe('lunch');
+    expect(query.filters?.purpose).toBe('lunch');
+  });
+
+  it('refuses a subject made only of hidden characters with the peer surface’s one refusal', () => {
+    const empty = () => toAskQuery(body({ archetype: 'relationship', subject: '\u200B\u200B' }));
+
+    expect(empty).toThrow(BadRequestException);
+    expect(empty).toThrow(/^Malformed ask$/);
+  });
+
+  it('adds no flag for a subject that had nothing hidden in it', () => {
+    expect(toAskQuery(body({ archetype: 'relationship', subject: 'Carol' }))).not.toHaveProperty(
+      'promptHiddenCharactersRemoved',
+    );
   });
 });
 

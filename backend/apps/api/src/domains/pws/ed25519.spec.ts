@@ -1,4 +1,16 @@
-import { LocalEd25519Signer, publicKeyFromSeed, verifyEd25519 } from './ed25519';
+import { createPublicKey, generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+
+import {
+  encodePoint,
+  FIELD_PRIME,
+  GENUINE,
+  IDENTITY_KEY,
+  KEYLESS_SIGNATURES,
+  ORDER_8_Y,
+  REFUSED_Y,
+  WEAK,
+} from './__tests__/weakEd25519';
+import { isWeakEd25519PublicKey, LocalEd25519Signer, publicKeyFromSeed, verifyEd25519 } from './ed25519';
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 const fromHex = (text: string): Uint8Array => new Uint8Array(Buffer.from(text, 'hex'));
@@ -111,6 +123,90 @@ describe('verifyEd25519 refuses what is not a plain valid signature', () => {
 
   it('refuses a signature of all zeros', () => {
     expect(verifyEd25519(publicKey, message, new Uint8Array(64))).toBe(false);
+  });
+});
+
+describe('isWeakEd25519PublicKey (a copy of peers/ed25519Weak.ts)', () => {
+  it.each(WEAK)('refuses %s', (_name, key) => {
+    expect(isWeakEd25519PublicKey(fromHex(key))).toBe(true);
+  });
+
+  it.each(GENUINE)('accepts %s', (_name, key) => {
+    expect(isWeakEd25519PublicKey(fromHex(key))).toBe(false);
+  });
+
+  it('accepts freshly generated keys', () => {
+    for (let i = 0; i < 100; i += 1) {
+      const x = (generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as { x: string }).x;
+
+      expect(isWeakEd25519PublicKey(new Uint8Array(Buffer.from(x, 'base64url')))).toBe(false);
+    }
+  });
+
+  it('refuses anything that is not 32 bytes of key', () => {
+    const genuine = fromHex(GENUINE[0][1]);
+
+    expect(isWeakEd25519PublicKey(genuine.subarray(0, 31))).toBe(true);
+    expect(isWeakEd25519PublicKey(Uint8Array.of(...genuine, 0))).toBe(true);
+    expect(isWeakEd25519PublicKey(new Uint8Array(0))).toBe(true);
+    expect(isWeakEd25519PublicKey(null as unknown as Uint8Array)).toBe(true);
+    expect(isWeakEd25519PublicKey(Array.from(genuine) as unknown as Uint8Array)).toBe(true);
+  });
+
+  it('refuses all 48 encodings: five small-order y values and the 19 non-canonical ones, at either sign', () => {
+    const encodings = new Set<string>();
+    for (const y of REFUSED_Y) {
+      for (const negative of [false, true]) {
+        const key = encodePoint(y, negative);
+
+        expect(isWeakEd25519PublicKey(key)).toBe(true);
+        encodings.add(hex(key));
+      }
+    }
+
+    expect(encodings.size).toBe(48);
+  });
+
+  it('does not refuse the y values next to the refused ones', () => {
+    for (const y of [2n, 3n, FIELD_PRIME - 2n, FIELD_PRIME - 18n, ORDER_8_Y - 1n, ORDER_8_Y + 1n]) {
+      expect(isWeakEd25519PublicKey(encodePoint(y, false))).toBe(false);
+      expect(isWeakEd25519PublicKey(encodePoint(y, true))).toBe(false);
+    }
+  });
+
+  it('does not modify the key it is given', () => {
+    const key = fromHex(WEAK[1][1]);
+    const before = hex(key);
+
+    isWeakEd25519PublicKey(key);
+
+    expect(hex(key)).toBe(before);
+  });
+});
+
+describe('verifyEd25519 refuses a small-order or non-canonical key', () => {
+  const message = new TextEncoder().encode('any message at all');
+  const spki = (key: Uint8Array) =>
+    createPublicKey({
+      key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), key]),
+      format: 'der',
+      type: 'spki',
+    });
+
+  it.each(KEYLESS_SIGNATURES)(
+    'refuses %s under the identity key, which OpenSSL alone accepts for every message',
+    (_name, signature) => {
+      // The control: without the key check, this signature verifies.
+      expect(cryptoVerify(null, message, spki(IDENTITY_KEY), signature)).toBe(true);
+
+      expect(verifyEd25519(IDENTITY_KEY, message, signature)).toBe(false);
+    },
+  );
+
+  it.each(WEAK)('verifies nothing under %s', (_name, key) => {
+    for (const [, signature] of KEYLESS_SIGNATURES) {
+      expect(verifyEd25519(fromHex(key), message, signature)).toBe(false);
+    }
   });
 });
 

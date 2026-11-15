@@ -3,7 +3,7 @@ import { createHmac } from 'crypto';
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
-import type { Repository } from 'typeorm';
+import { FindOperator, type Repository } from 'typeorm';
 
 import config from '@ci/configuration';
 
@@ -187,9 +187,21 @@ describe('AuthService — session id binding', () => {
             return (row as unknown as { user: { id: string } }).user?.id === (value as { id: string }).id;
           }
 
-          // MoreThan(now) FindOperator — compare against its wrapped value.
-          if (value && typeof value === 'object' && 'value' in (value as Record<string, unknown>)) {
-            return (row as unknown as Record<string, Date>)[key] > (value as { value: Date }).value;
+          // The two operators findSession uses. Anything else fails loudly rather
+          // than being read as one of them: every FindOperator has a `value`
+          // getter, so testing for that property took IsNull() for MoreThan.
+          if (value instanceof FindOperator) {
+            const actual = (row as unknown as Record<string, unknown>)[key];
+
+            if (value.type === 'isNull') {
+              return actual == null;
+            }
+
+            if (value.type === 'moreThan') {
+              return (actual as Date) > (value.value as Date);
+            }
+
+            throw new Error(`unmodelled operator ${value.type}`);
           }
 
           return (row as unknown as Record<string, unknown>)[key] === value;
@@ -268,6 +280,47 @@ describe('AuthService — session id binding', () => {
       await scopedService.invalidateSession('user-1', rawToken, meta);
 
       expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+    });
+
+    /**
+     * A request with no User-Agent header has no user agent to compare. It must
+     * match only a session that was issued without one, never skip the check.
+     */
+    describe('a request without a user agent', () => {
+      const withoutUserAgent = { ip: meta.ip, userAgent: undefined };
+
+      const rowWithoutUserAgent = (): SessionEntity =>
+        ({ ...sessionRowForUser('sess-1', 'user-1'), user_agent: null }) as unknown as SessionEntity;
+
+      it('rotates a session that was issued without one', async () => {
+        const repo = makeScopedSessionRepository([rowWithoutUserAgent()]);
+        const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+        const result = await scopedService.rotateSessionToken('user-1', rawToken, withoutUserAgent);
+
+        expect(result.sessionId).toBe('sess-1');
+        expect(result.sessionToken).not.toBeNull();
+      });
+
+      it('is refused for a session that was issued with one', async () => {
+        const repo = makeScopedSessionRepository([sessionRowForUser('sess-1', 'user-1')]);
+        const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+        await expect(
+          scopedService.rotateSessionToken('user-1', rawToken, withoutUserAgent),
+        ).rejects.toBeInstanceOf(UnauthorizedException);
+      });
+
+      it('looks the session up with user_agent IS NULL', async () => {
+        const repo = makeScopedSessionRepository([rowWithoutUserAgent()]);
+        const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+        await scopedService.rotateSessionToken('user-1', rawToken, withoutUserAgent);
+
+        const { user_agent: userAgent } = repo.findOne.mock.calls[0][0].where;
+        expect(userAgent).toBeInstanceOf(FindOperator);
+        expect((userAgent as FindOperator<unknown>).type).toBe('isNull');
+      });
     });
   });
 });

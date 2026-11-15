@@ -3,7 +3,7 @@ import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 
 import { BODY_LIMIT_KEY } from '../../decorators';
-import { BodyParserMiddleware } from '../BodyParserMiddleware';
+import { BodyParserMiddleware, isSignedPeerRequest } from '../BodyParserMiddleware';
 
 // Stub the express parsers: capture the options they're constructed with and
 // hand back a pass-through handler so use() completes synchronously.
@@ -210,5 +210,49 @@ describe('BodyParserMiddleware NDJSON streaming bypass', () => {
       urlencodedLimit: '10mb',
       parsersInvoked: true,
     });
+  });
+});
+
+/**
+ * The peer surface's signatures cover a digest of the body as sent, so the raw
+ * bytes must be kept for every spelling of the prefix express routes there, and
+ * only the JSON parser, which keeps them, may fill the body.
+ */
+describe('BodyParserMiddleware signed peer surface', () => {
+  it.each([
+    ['/agent/v1/ask', 'application/x-www-form-urlencoded'],
+    ['/AGENT/V1/ask', 'application/json'],
+    ['/agent/v1/trust-tasks', 'application/json'],
+  ])('keeps the raw body for %s (%s) and never runs urlencoded()', (url, contentType) => {
+    runMiddleware(url, contentType);
+
+    expect(typeof (json as jest.Mock).mock.calls[0][0].verify).toBe('function');
+    expect(urlencoded).not.toHaveBeenCalled();
+  });
+
+  it('keeps no raw body and still runs urlencoded() off the peer surface', () => {
+    runMiddleware('/v1/events');
+
+    expect((json as jest.Mock).mock.calls[0][0].verify).toBeUndefined();
+    expect(urlencoded).toHaveBeenCalled();
+  });
+});
+
+describe('isSignedPeerRequest', () => {
+  const request = (url: string) => ({ originalUrl: url, url, path: url, baseUrl: '' }) as unknown as Request;
+
+  it('matches an absolute-form request by its parsed path', () => {
+    expect(
+      isSignedPeerRequest({
+        originalUrl: 'http://host/agent/v1/ask',
+        url: 'http://host/agent/v1/ask',
+        path: '/agent/v1/ask',
+        baseUrl: '',
+      } as unknown as Request),
+    ).toBe(true);
+  });
+
+  it.each(['/agent/v10/ask', '/agentv1'])('does not match the lookalike %s', (url) => {
+    expect(isSignedPeerRequest(request(url))).toBe(false);
   });
 });

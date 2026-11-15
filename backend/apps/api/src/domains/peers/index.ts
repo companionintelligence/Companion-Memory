@@ -12,6 +12,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AskEntity, AsksModule } from '@ci/domains/asks';
 import { AuthModule } from '@ci/domains/auth';
 import { MemoryModule, EventEntity } from '@ci/domains/memory';
+import { UserModule } from '@ci/domains/user';
 
 import { PeerAskController } from './controllers/PeerAskController';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
@@ -36,6 +37,9 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     AsksModule,
     AuthModule,
     MemoryModule,
+    // `OutboundAskService` reads the caller's role: only the box's administrator
+    // may send an ask signed with the box key alone.
+    UserModule,
   ],
   controllers: [PeerAskController],
   providers: [

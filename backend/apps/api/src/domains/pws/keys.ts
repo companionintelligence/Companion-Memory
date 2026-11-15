@@ -7,7 +7,8 @@
  * does not support with `invalid-request-body` (400). That refusal is how `did:keri` is handled
  * here: it is not in the registry the specification defines, the Hub's in-tree KERI module is frozen, and
  * Memory's own `did:keri:D<jwk-x>` is not CESR (see `docs/pws.md`), so no `DidMethodSupport` for it exists. When a
- * conformant KERI resolver does, it plugs in below and nothing else in this domain changes.
+ * conformant KERI resolver does, it plugs in below, once the specification's Space Controller DID Method Registry
+ * lists its method with a profile; nothing else in this domain changes.
  *
  * The current-key-set rule (PWS-AUTHZ): the key that verifies an invocation or a delegation is
  * the one in the signer's DID document *as resolved at verification time*, under the relationship
@@ -18,6 +19,7 @@
  */
 import { didMethodOf, resolveDidKey } from './didKey';
 import type { DidDocument } from './didKey';
+import { isWeakEd25519PublicKey } from './ed25519';
 import { multibaseDecode } from './multibase';
 
 export type VerificationRelationship = 'capabilityInvocation' | 'capabilityDelegation';
@@ -59,14 +61,20 @@ export interface ResolvedKey {
   publicKey: Uint8Array;
 }
 
-/** Ed25519 Multikey: multibase base58btc of `0xed 0x01 || key`. */
+/**
+ * Ed25519 Multikey: multibase base58btc of `0xed 0x01 || key`. A small-order or non-canonical key is undefined,
+ * whichever method's document lists it (`isWeakEd25519PublicKey` in `ed25519.ts`).
+ */
 export function publicKeyFromEd25519Multikey(publicKeyMultibase: string): Uint8Array | undefined {
   try {
     const { prefix, bytes } = multibaseDecode(publicKeyMultibase);
     if (prefix !== 'z' || bytes.length !== 34 || bytes[0] !== 0xed || bytes[1] !== 0x01) {
       return undefined;
     }
-    return bytes.slice(2);
+
+    const key = bytes.slice(2);
+
+    return isWeakEd25519PublicKey(key) ? undefined : key;
   } catch {
     return undefined;
   }

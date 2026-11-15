@@ -36,17 +36,21 @@ import type { VidResolver } from './vid';
  * the sovereign peer path already produces. The per-peer budgets are the same ones too, spent through
  * the same service — but BEFORE the document is recorded as accepted (see `consumer.ts`).
  *
- * ═══ EVERY DOCUMENT IS SINGLE-USE ═══
+ * ═══ EVERY ASK DOCUMENT IS SINGLE-USE ═══
  *
- * A document is accepted for execution once. The identical document arriving again is NOT executed and
- * its stored answer is NOT returned: it is absorbed with an empty reply (HTTPS binding §4: "duplicate of a
- * completed execution for which no response was retained → 204"). The peer route behaves the same way —
- * its single-use nonce makes a replayed request yield nothing — whereas answering a duplicate from the
- * record would hand the owner-released answer to anyone who holds the captured bytes for the length of
- * the acceptance window. A producer that lost a response sends a FRESH `ask/collect` document, which is
- * exactly the asker's poll in ADR-0003. A failure AFTER acceptance is reported as not retryable for the
- * same reason: the identical bytes would be absorbed, so the producer is told to send a new document
- * (the carried protocol's `askId` makes that safe).
+ * An `ask/request` or `ask/collect` document is accepted for execution once. The identical document
+ * arriving again is NOT executed and its stored answer is NOT returned: it is absorbed with an empty
+ * reply (HTTPS binding §4: "duplicate of a completed execution for which no response was retained →
+ * 204"). The peer route behaves the same way — its single-use nonce makes a replayed request yield
+ * nothing — whereas answering a duplicate from the record would hand the owner-released answer to anyone
+ * who holds the captured bytes for the length of the acceptance window. A producer that lost a response
+ * sends a FRESH `ask/collect` document, which is exactly the asker's poll in ADR-0003. A failure AFTER
+ * acceptance is reported as not retryable for the same reason: the identical bytes would be absorbed, so
+ * the producer is told to send a new document (the carried protocol's `askId` makes that safe).
+ *
+ * A discovery document changes nothing (repeatSafe), so it is not recorded: the same discovery document
+ * is answered again, with 200, each time it arrives inside its acceptance window, which the consumer's
+ * step 3 now bounds for every document.
  *
  * ═══ WHAT AN UNAUTHENTICATED SENDER IS TOLD ═══
  *

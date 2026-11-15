@@ -11,6 +11,10 @@ import {
  *
  * `ed25519.spec.ts` pins sign and verify to RFC 8032 §7.1 test vectors 1-3 (Ed25519 is deterministic, so a
  * signature must come out byte for byte) and checks that a malleated signature (`S + L`) is refused.
+ *
+ * `isWeakEd25519PublicKey` mirrors `peers/ed25519Weak.ts` (the same 48 encodings, the same y-value test): the
+ * dependency rules keep this library from importing another domain's internals, so it is a copy, and folding the
+ * copies into one shared module is a follow-up. `verifyEd25519`, `didKey.ts` and `keys.ts` refuse such a key.
  */
 
 /** DER `SubjectPublicKeyInfo` header for an Ed25519 key; the 32 raw bytes follow it. */
@@ -21,6 +25,22 @@ const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 /** The order L of the Ed25519 base point, 2^252 + 27742317777372353535851937790883648493 (RFC 8032 §5.1). */
 const GROUP_ORDER = 2n ** 252n + 27742317777372353535851937790883648493n;
+
+/** p = 2^255 - 19, the field prime of Curve25519. */
+const FIELD_PRIME = (1n << 255n) - 19n;
+
+/** y of the two points of order 8: libsodium's blocklist entry, and its negation modulo p. */
+const ORDER_8_Y = littleEndian(
+  Buffer.from('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', 'hex'),
+);
+
+const SMALL_ORDER_Y: ReadonlySet<bigint> = new Set([
+  0n,
+  1n,
+  FIELD_PRIME - 1n,
+  ORDER_8_Y,
+  FIELD_PRIME - ORDER_8_Y,
+]);
 
 /** What the rest of the module needs from a signing key: its verification method id and a signature. */
 export interface Signer {
@@ -63,9 +83,44 @@ function hasCanonicalScalar(signature: Uint8Array): boolean {
   return scalar < GROUP_ORDER;
 }
 
-/** Whether `signature` is a valid Ed25519 signature over `message`. Never throws. */
+/**
+ * Whether a 32-byte Ed25519 public key is a small-order point or a non-canonical encoding (y ≥ p). Any other
+ * length is weak. A signature can be made for a small-order key without its private key, so such a key names no
+ * one; a non-canonical encoding is a second spelling of a key.
+ */
+export function isWeakEd25519PublicKey(key: Uint8Array): boolean {
+  if (!(key instanceof Uint8Array) || key.length !== 32) {
+    return true;
+  }
+
+  // Bit 255 is the sign of x; y is the other 255 bits.
+  const bytes = Uint8Array.from(key);
+  bytes[31] &= 0x7f;
+  const y = littleEndian(bytes);
+
+  return y >= FIELD_PRIME || SMALL_ORDER_Y.has(y);
+}
+
+function littleEndian(bytes: Uint8Array): bigint {
+  let value = 0n;
+  for (let i = bytes.length - 1; i >= 0; i -= 1) {
+    value = (value << 8n) | BigInt(bytes[i] ?? 0);
+  }
+
+  return value;
+}
+
+/**
+ * Whether `signature` is a valid Ed25519 signature over `message`. Never throws. Under a small-order or
+ * non-canonical key (`isWeakEd25519PublicKey`) nothing verifies.
+ */
 export function verifyEd25519(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
-  if (signature.length !== 64 || publicKey.length !== 32 || !hasCanonicalScalar(signature)) {
+  if (
+    signature.length !== 64 ||
+    publicKey.length !== 32 ||
+    !hasCanonicalScalar(signature) ||
+    isWeakEd25519PublicKey(publicKey)
+  ) {
     return false;
   }
 
