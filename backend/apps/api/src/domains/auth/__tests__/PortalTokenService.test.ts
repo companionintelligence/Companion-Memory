@@ -443,6 +443,17 @@ describe('PortalTokenService', () => {
       expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
     });
 
+    it('confines a ci-meta token the Portal stamped to the capture scope, as a capture client', async () => {
+      // Companion Scan Quest (CI-Spatial-Web-Meta): its Worker sends the id_token the Portal
+      // stamped, addressed to no appliance. Listed as a capture client, it records captures and
+      // nothing else, as the shipped default lists it.
+      portalConfig.audience = 'ci-server,ci-import-tools,ci-even,ci-meta';
+      portalConfig.captureClients = 'ci-import-tools,ci-even,ci-meta';
+      signedInAs({ aud: 'ci-meta', ci_appliance_binding: 1 });
+
+      expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
+    });
+
     it('keeps an unaddressed token from an older Portal working for pairing, but not for admin routes', async () => {
       // Before the Portal addresses tokens, nothing could have addressed this one: phone pairing
       // mints its key with it, so it keeps credential routes. Admin routes it loses.
@@ -601,6 +612,8 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     expect(audiences).toContain('ci-applet');
     // Companion Atlas, the globe viewer. A capture client, so its tokens are capture-only here.
     expect(audiences).toContain('companion-atlas');
+    // Companion Scan Quest, the Quest 3 room scanner. A capture client, so its tokens are capture-only here.
+    expect(audiences).toContain('ci-meta');
 
     expect(new Set(audiences).size).toBe(audiences.length);
     expect(audiences.every((a) => a.length > 0)).toBe(true);
@@ -613,7 +626,7 @@ describe('shipped PORTAL_OIDC_AUDIENCE default', () => {
     ).auth;
 
     expect(portal.captureClients.split(',').sort()).toEqual(
-      ['ci-applet', 'ci-browser-extension', 'ci-even', 'companion-atlas'].sort(),
+      ['ci-applet', 'ci-browser-extension', 'ci-even', 'companion-atlas', 'ci-meta'].sort(),
     );
     // Nothing presents a service token: the sidecars authenticate with SIDECAR_AUTH_SECRET.
     expect(portal.serviceClients).toBe('');
