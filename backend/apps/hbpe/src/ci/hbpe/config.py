@@ -215,6 +215,40 @@ class Settings(BaseSettings):
         )
     )
 
+    # ── Decision-model promotion gate (see model/decision_gate.py) ───────────
+    # DecisionModelClient uses a remote endpoint only while the gate file says the
+    # export passed. A missing, malformed or failed gate falls back to
+    # LocalDecisionEngine and records the reason on each result. The export writes
+    # decision_gate.json next to the model; point this at that file. Each threshold
+    # is read from its HBPE_ name only, so a generic DECISION_GATE_* variable in a
+    # shared env file cannot change the gate (same reason as enable_admin_routes).
+    decision_gate_file: str = Field(
+        default="", validation_alias="HBPE_DECISION_GATE_FILE"
+    )
+    decision_gate_brier_max: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        validation_alias="HBPE_DECISION_GATE_BRIER_MAX",
+    )
+    decision_gate_ece_max: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        validation_alias="HBPE_DECISION_GATE_ECE_MAX",
+    )
+    decision_gate_accuracy_margin: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=1.0,
+        validation_alias="HBPE_DECISION_GATE_ACCURACY_MARGIN",
+    )
+    decision_gate_min_eval: int = Field(
+        default=200,
+        ge=0,
+        validation_alias="HBPE_DECISION_GATE_MIN_EVAL",
+    )
+
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))

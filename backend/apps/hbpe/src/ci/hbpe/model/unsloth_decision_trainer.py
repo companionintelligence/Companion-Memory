@@ -14,16 +14,34 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ci.hbpe.inference.decision_model import (
     MEMORY_INGRESS_QUESTIONS,
+    LocalDecisionEngine,
+)
+from ci.hbpe.model.decision_gate import (
+    DECISION_GATE_FILENAME,
+    GateResult,
+    GateThresholds,
+    evaluate_decision_gate,
 )
 from ci.hbpe.model.train_io import atomic_write, seed_everything
 
 log = logging.getLogger(__name__)
+
+INTENT_QUESTION = "intent"
+_INTENT_CHOICES: tuple[str, ...] = tuple(
+    MEMORY_INGRESS_QUESTIONS[INTENT_QUESTION].criteria or {}
+)
+
+# Maps one state text to a distribution over intent choices. The GPU path passes
+# the trained model's predictor. The CPU path leaves it unset and uses
+# LocalDecisionEngine.
+TrainedPredictor = Callable[[str], Mapping[str, float]]
 
 
 @dataclass
@@ -147,6 +165,82 @@ def compute_calibration_error(
     return ece
 
 
+def local_intent_distribution(
+    state: str, engine: LocalDecisionEngine | None = None
+) -> dict[str, float]:
+    """Intent distribution from the rule-based LocalDecisionEngine (CPU path)."""
+    scorer = engine or LocalDecisionEngine()
+    results = scorer.evaluate(
+        state, {INTENT_QUESTION: MEMORY_INGRESS_QUESTIONS[INTENT_QUESTION]}
+    )
+    return dict(results[INTENT_QUESTION].distribution)
+
+
+def compute_intent_metrics(
+    predictions: list[Mapping[str, float]],
+    labels: list[str],
+) -> dict[str, float | int | None]:
+    """
+    Brier score, ECE and top-1 accuracy of intent distributions on held-out items.
+
+    With no items every metric is None, not 0.0. compute_brier_score returns 0.0
+    for empty input, which would read as a perfect score.
+    """
+    n = len(labels)
+    if len(predictions) != n:
+        raise ValueError(
+            f"{len(predictions)} predictions for {n} held-out labels; they must match"
+        )
+    if n == 0:
+        return {
+            "brier_score": None,
+            "expected_calibration_error": None,
+            "accuracy": None,
+            "eval_size": 0,
+        }
+
+    dists = [dict(p) for p in predictions]
+    for i, dist in enumerate(dists):
+        if not dist:
+            raise ValueError(f"predictor returned no intent distribution for item {i}")
+
+    tops = [max(dist.items(), key=lambda kv: kv[1]) for dist in dists]
+    correct = [
+        top_label == truth for (top_label, _), truth in zip(tops, labels, strict=True)
+    ]
+    return {
+        "brier_score": compute_brier_score(dists, labels),
+        "expected_calibration_error": compute_calibration_error(
+            [prob for _, prob in tops], correct
+        ),
+        "accuracy": sum(correct) / n,
+        "eval_size": n,
+    }
+
+
+def intent_eval_items(
+    eval_dataset: list[dict[str, Any]],
+) -> tuple[list[str], list[str], int]:
+    """
+    Held-out (state, intent label) pairs from eval items, plus the count skipped.
+
+    An item is skipped when it has no state or its intent is not a known choice.
+    """
+    states: list[str] = []
+    labels: list[str] = []
+    skipped = 0
+    for item in eval_dataset:
+        state = item.get("state")
+        answers = item.get("answers") or {}
+        label = answers.get(INTENT_QUESTION)
+        if not isinstance(state, str) or not state or label not in _INTENT_CHOICES:
+            skipped += 1
+            continue
+        states.append(state)
+        labels.append(str(label))
+    return states, labels, skipped
+
+
 @dataclass
 class UnslothDecisionTrainConfig:
     base_model_name: str = "Qwen/Qwen3.5-0.8B"
@@ -166,13 +260,25 @@ class UnslothDecisionTrainer:
     """
     Trainer coordinator for Decision Models.
 
-    If Unsloth is installed, configures and runs FastDecisionModel / DecisionTrainer.
-    If running in a CPU-only test environment, performs validation and exports
-    a mock verified decision checkpoint with calibrated metadata.
+    No Unsloth training runs in this class yet. train_and_export scores the
+    held-out eval items and writes the metrics and the promotion gate:
+      - GPU path: when trained_predictor is given, the predictions come from it.
+      - CPU path: otherwise the predictions come from LocalDecisionEngine.
+    The gate result goes under "gate" in decision_model_meta.json and into
+    decision_gate.json beside it. CPU-path exports always fail the gate: there is
+    no trained model to promote, and the candidate is the baseline.
     """
 
-    def __init__(self, config: UnslothDecisionTrainConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: UnslothDecisionTrainConfig | None = None,
+        *,
+        trained_predictor: TrainedPredictor | None = None,
+        gate_thresholds: GateThresholds | None = None,
+    ) -> None:
         self.config = config or UnslothDecisionTrainConfig()
+        self.trained_predictor = trained_predictor
+        self.gate_thresholds = gate_thresholds
 
     def train_and_export(
         self,
@@ -198,30 +304,82 @@ class UnslothDecisionTrainer:
                 "Unsloth library not present in environment; running CPU verification pipeline"
             )
 
-        # Mock / CPU calibration evaluation
-        eval_brier = 0.08
-        eval_ece = 0.03
-        eval_accuracy = 0.94
+        # A gate file from an earlier export must not outlive this run. If this
+        # run dies before it writes its own gate, the old pass would still be served.
+        gate_file = out_path / DECISION_GATE_FILENAME
+        gate_file.unlink(missing_ok=True)
 
+        states, labels, skipped = intent_eval_items(eval_dataset)
+        baseline_predictions = [local_intent_distribution(s) for s in states]
+        baseline = compute_intent_metrics(baseline_predictions, labels)
+
+        if self.trained_predictor is None:
+            prediction_source = "local_engine"
+            candidate = baseline
+        else:
+            prediction_source = "trained_model"
+            candidate = compute_intent_metrics(
+                [dict(self.trained_predictor(s)) for s in states], labels
+            )
+
+        from ci.hbpe.config import settings
+
+        thresholds = self.gate_thresholds or GateThresholds.from_settings(settings)
+        gate = evaluate_decision_gate(candidate, baseline, thresholds)
+        if prediction_source == "local_engine":
+            # Nothing was trained, so there is nothing to promote, whatever the
+            # thresholds say. The metric reasons above are still reported.
+            gate = GateResult(
+                passed=False,
+                reasons=[
+                    *gate.reasons,
+                    "no trained model: predictions come from LocalDecisionEngine",
+                ],
+            )
+        gate_record: dict[str, Any] = {
+            "passed": gate.passed,
+            "reasons": list(gate.reasons),
+            "thresholds": thresholds.to_dict(),
+            "prediction_source": prediction_source,
+            "metrics": candidate,
+            "baseline": baseline,
+            "eval_skipped": skipped,
+        }
+
+        ece = candidate["expected_calibration_error"]
         metadata = {
             "model_type": "decision-laya-unsloth",
             "base_model": self.config.base_model_name,
             "lora_rank": self.config.lora_r,
             "eval_metrics": {
-                "brier_score": eval_brier,
-                "expected_calibration_error": eval_ece,
-                "top1_accuracy": eval_accuracy,
+                "brier_score": candidate["brier_score"],
+                "expected_calibration_error": ece,
+                "accuracy": candidate["accuracy"],
+                # Kept for readers of the original key. It is the same accuracy.
+                "top1_accuracy": candidate["accuracy"],
+                "eval_size": candidate["eval_size"],
             },
-            "calibrated": True,
+            "prediction_source": prediction_source,
+            "baseline_metrics": baseline,
+            "calibrated": ece is not None and ece <= thresholds.ece_max,
+            "gate": gate_record,
             "train_samples": len(train_dataset),
             "eval_samples": len(eval_dataset),
         }
 
-        # Atomically write decision metadata and adapter configuration
+        # Atomically write decision metadata, then the gate beside it
         meta_file = out_path / "decision_model_meta.json"
         atomic_write(
             meta_file, lambda tmp: tmp.write_text(json.dumps(metadata, indent=2))
         )
+        atomic_write(
+            gate_file, lambda tmp: tmp.write_text(json.dumps(gate_record, indent=2))
+        )
 
-        log.info("Decision model training and export complete at %s", out_path)
+        log.info(
+            "Decision model export at %s: gate %s (%s)",
+            out_path,
+            "passed" if gate.passed else "failed",
+            "; ".join(gate.reasons) or "all thresholds met",
+        )
         return metadata

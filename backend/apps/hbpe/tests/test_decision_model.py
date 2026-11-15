@@ -141,7 +141,11 @@ def test_unsloth_trainer_export():
         meta = trainer.train_and_export(train_data, eval_data, tmpdir)
         assert meta["model_type"] == "decision-laya-unsloth"
         assert meta["lora_rank"] == 16
-        assert meta["eval_metrics"]["top1_accuracy"] > 0.9
+        # Computed from the single held-out item, not the old hard-coded 0.94.
+        # The gate fails because one item is far below the minimum eval size.
+        assert meta["eval_metrics"]["eval_size"] == 1
+        assert meta["eval_metrics"]["top1_accuracy"] in (0.0, 1.0)
+        assert meta["gate"]["passed"] is False
 
         meta_path = Path(tmpdir) / "decision_model_meta.json"
         assert meta_path.exists()

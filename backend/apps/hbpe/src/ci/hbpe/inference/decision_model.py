@@ -25,6 +25,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ci.hbpe.model.decision_gate import GateResult, check_gate_file
+
 log = logging.getLogger(__name__)
 
 QuestionType = Literal["choice", "noul", "score"]
@@ -53,15 +55,55 @@ class DecisionResult:
     probability: float
     distribution: dict[str, float] = field(default_factory=dict)
     calibrated: bool = True
+    # Set when a remote endpoint was configured but this result came from the
+    # local engine instead (gate not passed, gate file missing, or endpoint error).
+    # None otherwise, including when no endpoint is configured.
+    fallback_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "type": self.question_type,
             "value": self.value,
             "probability": round(self.probability, 4),
             "distribution": {k: round(v, 4) for k, v in self.distribution.items()},
             "calibrated": self.calibrated,
         }
+        if self.fallback_reason is not None:
+            d["fallback_reason"] = self.fallback_reason
+        return d
+
+
+# Last gate file read, keyed by path, mtime and size. Each evaluate() call only
+# stats the file, and re-reads it when the export replaces it.
+_GATE_CACHE: tuple[tuple[str, int | None, int | None], GateResult] | None = None
+
+
+def _gate_file_key(path: str) -> tuple[str, int | None, int | None]:
+    if not path:
+        return ("", None, None)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None, None)
+    return (path, st.st_mtime_ns, st.st_size)
+
+
+def _gate_for_path(path: str) -> GateResult:
+    """The gate for *path*, re-read only when the file changes."""
+    global _GATE_CACHE
+    key = _gate_file_key(path)
+    cached = _GATE_CACHE
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    result = check_gate_file(path)
+    _GATE_CACHE = (key, result)
+    if result.passed:
+        log.info("Decision gate passed for %s; remote endpoint enabled", path)
+    else:
+        log.warning(
+            "Decision gate blocks the remote endpoint: %s", "; ".join(result.reasons)
+        )
+    return result
 
 
 # ── Standard Companion Memory Decision Question Suites ──────────────────────────
@@ -255,6 +297,10 @@ class DecisionModelClient:
     """
     Client for interacting with non-autoregressive decision engines
     (Convai Laya, Clef, or Unsloth Decision API /v1/systemone).
+
+    A remote endpoint is used only while the promotion gate passed. The gate file
+    is gate_file, or HBPE_DECISION_GATE_FILE when gate_file is None. Without a
+    remote endpoint the client never reads the gate and uses LocalDecisionEngine.
     """
 
     def __init__(
@@ -263,12 +309,34 @@ class DecisionModelClient:
         model_name: str = "decision-laya",
         timeout_seconds: float = 5.0,
         enable_local_fallback: bool = True,
+        gate_file: str | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("DECISION_MODEL_URL", "")).rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.enable_local_fallback = enable_local_fallback
+        self.gate_file = gate_file
         self.local_engine = LocalDecisionEngine()
+
+    def _gate(self) -> GateResult:
+        if self.gate_file is not None:
+            path = self.gate_file
+        else:
+            from ci.hbpe.config import settings
+
+            path = settings.decision_gate_file
+        return _gate_for_path(path)
+
+    def _local_with_reason(
+        self,
+        state: str,
+        questions: dict[str, DecisionQuestion],
+        reason: str,
+    ) -> dict[str, DecisionResult]:
+        results = self.local_engine.evaluate(state, questions)
+        for result in results.values():
+            result.fallback_reason = reason
+        return results
 
     def evaluate(
         self,
@@ -296,6 +364,13 @@ class DecisionModelClient:
             raise ValueError(
                 "No DECISION_MODEL_URL configured and local fallback disabled"
             )
+
+        gate = self._gate()
+        if not gate.passed:
+            reason = "decision gate not passed: " + "; ".join(gate.reasons)
+            if self.enable_local_fallback:
+                return self._local_with_reason(state, typed_questions, reason)
+            raise RuntimeError(f"Remote decision endpoint not used: {reason}")
 
         payload = {
             "model": self.model_name,
@@ -326,7 +401,11 @@ class DecisionModelClient:
                 err,
             )
             if self.enable_local_fallback:
-                return self.local_engine.evaluate(state, typed_questions)
+                return self._local_with_reason(
+                    state,
+                    typed_questions,
+                    f"endpoint error: {type(err).__name__}",
+                )
             raise
 
     def _parse_response(
