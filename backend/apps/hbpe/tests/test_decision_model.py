@@ -141,7 +141,22 @@ def test_unsloth_trainer_export():
         meta = trainer.train_and_export(train_data, eval_data, tmpdir)
         assert meta["model_type"] == "decision-laya-unsloth"
         assert meta["lora_rank"] == 16
-        assert meta["eval_metrics"]["top1_accuracy"] > 0.9
+        # No trained model is passed in, so no candidate metrics are reported.
+        # The old hard-coded metrics (0.08, 0.03, 0.94) must not come back.
+        assert meta["prediction_source"] == "none"
+        assert meta["eval_metrics"] == {
+            "brier_score": None,
+            "expected_calibration_error": None,
+            "accuracy": None,
+            "top1_accuracy": None,
+            "eval_size": None,
+        }
+        assert meta["calibrated"] is False
+        assert meta["gate"]["passed"] is False
+        assert meta["gate"]["reasons"] == ["no trained model"]
+        # The rule engine's score on the one held-out item is reported as the baseline.
+        assert meta["baseline_metrics"]["eval_size"] == 1
+        assert meta["baseline_metrics"]["accuracy"] == 0.0
 
         meta_path = Path(tmpdir) / "decision_model_meta.json"
         assert meta_path.exists()

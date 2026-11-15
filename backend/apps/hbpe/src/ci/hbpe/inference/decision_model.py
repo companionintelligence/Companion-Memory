@@ -25,9 +25,15 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ci.hbpe.model.decision_gate import GateResult, check_gate_file
+
 log = logging.getLogger(__name__)
 
 QuestionType = Literal["choice", "noul", "score"]
+
+# The one question the promotion gate measures. With enforcement on, only this
+# question may be answered by the remote endpoint.
+GATED_QUESTION = "intent"
 
 
 @dataclass(frozen=True)
@@ -251,10 +257,69 @@ class LocalDecisionEngine:
         return results
 
 
+# Identity of a gate file on disk: path, inode, size, mtime and ctime. An export
+# replaces the file atomically, which gives it a new inode, so every new export
+# is seen even when the size and timestamps happen to match.
+_GateKey = tuple[str, int | None, int | None, int | None, int | None]
+
+
+def _gate_file_key(path: str) -> _GateKey:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None, None, None, None)
+    return (path, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _typed_questions(
+    questions: dict[str, DecisionQuestion | dict[str, Any]],
+) -> dict[str, DecisionQuestion]:
+    typed: dict[str, DecisionQuestion] = {}
+    for k, v in questions.items():
+        if isinstance(v, DecisionQuestion):
+            typed[k] = v
+        elif isinstance(v, dict):
+            typed[k] = DecisionQuestion(
+                type=v.get("type", "choice"),
+                instructions=v.get("instructions", ""),
+                criteria=v.get("criteria"),
+            )
+    return typed
+
+
+@dataclass
+class DecisionEvaluation:
+    """
+    What one DecisionModelClient.evaluate_detailed call answered, and how.
+
+    results holds one DecisionResult per question answered. endpoint_questions
+    names the questions the client asked the endpoint for, whether or not it
+    answered; every other question was answered by LocalDecisionEngine. gate is
+    the promotion gate the client read, or None when no endpoint is configured,
+    which means the gate file was never read. enforced says whether that gate
+    decided the routing. fallback_reason says why the endpoint did not serve the
+    call. It stays None when the endpoint served it, and when enforcement kept
+    the other questions local by design.
+    """
+
+    results: dict[str, DecisionResult]
+    endpoint_questions: tuple[str, ...] = ()
+    gate: GateResult | None = None
+    enforced: bool = False
+    fallback_reason: str | None = None
+
+
 class DecisionModelClient:
     """
     Client for interacting with non-autoregressive decision engines
     (Convai Laya, Clef, or Unsloth Decision API /v1/systemone).
+
+    With a remote endpoint configured, the client reads the promotion gate file
+    and records its status on each evaluation. The gate decides routing only
+    when enforcement is on (gate_enforce, or HBPE_DECISION_GATE_ENFORCE). Then the
+    endpoint answers the intent question alone, and only while the gate passed.
+    Without a remote endpoint the client never reads the gate and uses
+    LocalDecisionEngine.
     """
 
     def __init__(
@@ -263,12 +328,56 @@ class DecisionModelClient:
         model_name: str = "decision-laya",
         timeout_seconds: float = 5.0,
         enable_local_fallback: bool = True,
+        gate_file: str | None = None,
+        gate_enforce: bool | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("DECISION_MODEL_URL", "")).rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.enable_local_fallback = enable_local_fallback
+        self.gate_file = gate_file
+        self.gate_enforce = gate_enforce
         self.local_engine = LocalDecisionEngine()
+        # The last gate file read, under the file identity it was read with.
+        self._gate_cache: tuple[_GateKey, GateResult] | None = None
+
+    @property
+    def _endpoint_url(self) -> str:
+        return f"{self.base_url}/v1/systemone"
+
+    def _gate(self) -> GateResult:
+        if self.gate_file is not None:
+            path = self.gate_file
+        else:
+            from ci.hbpe.config import settings
+
+            path = settings.decision_gate_file
+        return self._read_gate(path)
+
+    def _read_gate(self, path: str) -> GateResult:
+        """The gate for *path*, re-read only when the file on disk changes."""
+        key = _gate_file_key(path)
+        cached = self._gate_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = check_gate_file(path)
+        self._gate_cache = (key, result)
+        if result.passed:
+            log.info("Decision gate passed for %s", path)
+        else:
+            log.warning(
+                "Decision gate did not pass for %s: %s",
+                path,
+                "; ".join(result.reasons),
+            )
+        return result
+
+    def _enforced(self) -> bool:
+        if self.gate_enforce is not None:
+            return self.gate_enforce
+        from ci.hbpe.config import settings
+
+        return settings.decision_gate_enforce
 
     def evaluate(
         self,
@@ -278,56 +387,123 @@ class DecisionModelClient:
         """
         Evaluate a state against typed questions in a single forward pass.
         """
-        # Normalize questions to DecisionQuestion instances
-        typed_questions: dict[str, DecisionQuestion] = {}
-        for k, v in questions.items():
-            if isinstance(v, DecisionQuestion):
-                typed_questions[k] = v
-            elif isinstance(v, dict):
-                typed_questions[k] = DecisionQuestion(
-                    type=v.get("type", "choice"),
-                    instructions=v.get("instructions", ""),
-                    criteria=v.get("criteria"),
-                )
+        return self.evaluate_detailed(state, questions).results
+
+    def evaluate_detailed(
+        self,
+        state: str,
+        questions: dict[str, DecisionQuestion | dict[str, Any]],
+    ) -> DecisionEvaluation:
+        """
+        Evaluate as evaluate does, and also report the questions the endpoint was
+        asked, the gate status the client saw, and why the endpoint did not serve
+        the call.
+        """
+        typed_questions = _typed_questions(questions)
 
         if not self.base_url:
             if self.enable_local_fallback:
-                return self.local_engine.evaluate(state, typed_questions)
+                return DecisionEvaluation(
+                    results=self.local_engine.evaluate(state, typed_questions)
+                )
             raise ValueError(
                 "No DECISION_MODEL_URL configured and local fallback disabled"
             )
 
+        gate = self._gate()
+        enforced = self._enforced()
+
+        if enforced and not gate.passed:
+            reason = "decision gate not passed: " + "; ".join(gate.reasons)
+            if not self.enable_local_fallback:
+                raise RuntimeError(f"Remote decision endpoint not used: {reason}")
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                gate=gate,
+                enforced=True,
+                fallback_reason=reason,
+            )
+
+        # Without enforcement the endpoint is asked every question, as it always
+        # was. With enforcement it is asked only the question the gate measures.
+        remote_questions = {
+            name: q
+            for name, q in typed_questions.items()
+            if not enforced or name == GATED_QUESTION
+        }
+        local_questions = {
+            name: q
+            for name, q in typed_questions.items()
+            if name not in remote_questions
+        }
+        endpoint_questions = tuple(remote_questions)
+
+        if enforced and not remote_questions:
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                gate=gate,
+                enforced=True,
+            )
+
+        try:
+            remote_results = self._ask_endpoint(state, remote_questions)
+        except Exception as err:
+            log.warning(
+                "Remote decision endpoint %s failed (%s), falling back to local engine: %s",
+                self._endpoint_url,
+                type(err).__name__,
+                err,
+            )
+            if not self.enable_local_fallback:
+                raise
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                endpoint_questions=endpoint_questions,
+                gate=gate,
+                enforced=enforced,
+                fallback_reason=f"endpoint error: {type(err).__name__}",
+            )
+
+        local_results = (
+            self.local_engine.evaluate(state, local_questions)
+            if local_questions
+            else {}
+        )
+        results: dict[str, DecisionResult] = {}
+        for name in typed_questions:
+            source = local_results if name in local_questions else remote_results
+            if name in source:
+                results[name] = source[name]
+        return DecisionEvaluation(
+            results=results,
+            endpoint_questions=endpoint_questions,
+            gate=gate,
+            enforced=enforced,
+        )
+
+    def _ask_endpoint(
+        self,
+        state: str,
+        questions: dict[str, DecisionQuestion],
+    ) -> dict[str, DecisionResult]:
         payload = {
             "model": self.model_name,
             "state": state,
-            "questions": {k: q.to_dict() for k, q in typed_questions.items()},
+            "questions": {k: q.to_dict() for k, q in questions.items()},
         }
-
-        url = f"{self.base_url}/v1/systemone"
         req = urllib.request.Request(
-            url,
+            self._endpoint_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
 
         t0 = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                latency_ms = (time.monotonic() - t0) * 1000.0
-                log.debug("Decision model response received in %.1f ms", latency_ms)
-                return self._parse_response(data, typed_questions)
-        except Exception as err:
-            log.warning(
-                "Remote decision endpoint %s failed (%s), falling back to local engine: %s",
-                url,
-                type(err).__name__,
-                err,
-            )
-            if self.enable_local_fallback:
-                return self.local_engine.evaluate(state, typed_questions)
-            raise
+        with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latency_ms = (time.monotonic() - t0) * 1000.0
+        log.debug("Decision model response received in %.1f ms", latency_ms)
+        return self._parse_response(data, questions)
 
     def _parse_response(
         self,

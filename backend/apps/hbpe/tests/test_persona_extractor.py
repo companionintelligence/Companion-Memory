@@ -99,9 +99,14 @@ def test_persona_decision_model_training_end_to_end():
         assert meta["model_type"] == "decision-laya-unsloth"
         assert meta["lora_rank"] == 16
         assert meta["record_counts"]["total"] > 1000
-        assert meta["eval_metrics"]["top1_accuracy"] > 0.85
-        assert meta["eval_metrics"]["brier_score"] <= 0.15
-        assert meta["eval_metrics"]["expected_calibration_error"] <= 0.06
+        # The pipeline passes no trained predictor, so there is no model to score.
+        # The export reports no candidate metrics and the gate fails on that alone.
+        assert meta["prediction_source"] == "none"
+        assert meta["eval_metrics"]["top1_accuracy"] is None
+        assert meta["eval_metrics"]["brier_score"] is None
+        assert meta["eval_metrics"]["expected_calibration_error"] is None
+        assert meta["gate"]["passed"] is False
+        assert meta["gate"]["reasons"] == ["no trained model"]
 
         meta_file = Path(tmpdir) / "persona_decision_meta.json"
         assert meta_file.exists()
