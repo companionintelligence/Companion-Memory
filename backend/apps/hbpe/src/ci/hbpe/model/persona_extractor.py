@@ -227,7 +227,7 @@ def _infer_privacy(text: str) -> int:
 _NAME_PLACEHOLDER = "[NAME]"
 _NO_NAME_LABEL = "Contact"
 _WORD_RE = re.compile(r"\w+")
-_NAME_PART_RE = re.compile(r"[\s,\-]+")
+_NAME_PART_RE = re.compile(r"[\s,\-_.]+")
 # A single word is ambiguous when the chat uses it in lower case at least twice, and for at
 # least this share of its uses. See _name_policy.
 _AMBIGUOUS_SHARE = 0.05
@@ -246,23 +246,34 @@ def _unaccented(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+def _capitalised(word: str) -> str:
+    return word[:1].upper() + word[1:]
+
+
 def _title_case(word: str) -> str:
     return word[:1].upper() + word[1:].lower()
 
 
 def _sender_name(msg: Any) -> str:
-    """The normalised sender name of a chat message, or "" when it has none."""
+    """The normalised sender name of a chat message, or "" when it has none.
+
+    A name given as an object, such as {"givenName": ..., "familyName": ...}, is read as the
+    text of its parts.
+    """
     creator = msg.get("creator")
     name = creator.get("name") if isinstance(creator, dict) else None
+    if isinstance(name, dict):
+        name = " ".join(part for part in name.values() if isinstance(part, str))
     return "" if name is None else _normalised(str(name))
 
 
 def _sender_forms(name: str) -> list[str]:
     """Every spelling and word of a sender's name that the redactor should look for.
 
-    The name is taken as written, without accents, and word by word. Words are split on
-    spaces, hyphens and commas. A name whose display name is an e-mail address also gives
-    the words of the address's local part.
+    The name is taken as written and without accents. It is also taken word by word, with
+    words split on spaces, commas, hyphens, underscores and dots, and joined again with an
+    underscore, a dot or a hyphen, because file and list names often join a name that way.
+    A name whose display name is an e-mail address also gives the words of its local part.
     """
     spellings = [name, _normalised(_unaccented(name))]
     if "@" in name:
@@ -270,7 +281,13 @@ def _sender_forms(name: str) -> list[str]:
     forms: dict[str, None] = {}
     for spelling in spellings:
         forms[spelling] = None
-        forms.update(dict.fromkeys(_NAME_PART_RE.split(spelling)))
+        if "@" in spelling:
+            continue
+        words = [word for word in _NAME_PART_RE.split(spelling) if word]
+        forms.update(dict.fromkeys(words))
+        if len(words) > 1:
+            for joiner in ("_", ".", "-", "%20"):
+                forms[joiner.join(words)] = None
     return [form for form in forms if len(form) >= 2]
 
 
@@ -283,14 +300,19 @@ def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], lis
 
     A form with a space, a hyphen or another mark is denied wherever it occurs. A single
     word is ambiguous when the chat also uses it as an ordinary word in lower case, at least
-    twice and for at least a twentieth of its uses. Denying an ambiguous word would damage
-    that text: a sender called Will would turn "I will" into "I [NAME]". An ambiguous word is
-    masked only where it is capitalised, see _mask_capitalised_names. Any other single word
-    is denied wherever it occurs.
+    twice and for at least a twentieth of its uses, whatever the capitals of the name. Denying
+    an ambiguous word would damage that text: a sender called Will would turn "I will" into
+    "I [NAME]". An ambiguous word is masked only where it is capitalised, see
+    _mask_capitalised_names. Any other single word is denied wherever it occurs.
     """
-    counts: Counter[str] = Counter()
+    lower_uses: Counter[str] = Counter()
+    capital_uses: Counter[str] = Counter()
     for text in texts:
-        counts.update(_WORD_RE.findall(text))
+        for word in _WORD_RE.findall(text):
+            if word[:1].isupper():
+                capital_uses[word.lower()] += 1
+            else:
+                lower_uses[word.lower()] += 1
     deny: dict[str, None] = {}
     masked: dict[str, None] = {}
     for name in names:
@@ -298,9 +320,10 @@ def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], lis
             if not _is_single_word(form):
                 deny[form] = None
                 continue
-            lower = counts[form.lower()]
-            capital = counts[_title_case(form)]
+            lower = lower_uses[form.lower()]
+            capital = capital_uses[form.lower()]
             if lower >= 2 and lower >= _AMBIGUOUS_SHARE * (lower + capital):
+                masked[_capitalised(form)] = None
                 masked[_title_case(form)] = None
             else:
                 deny[form] = None
@@ -426,7 +449,7 @@ class PersonaDataExtractor:
         Two exceptions keep ordinary text intact, and both depend on the export. A single
         word that the chat also uses as a lower-case word is masked only where it is
         capitalised (see ``_name_policy``). In chat, a capital that starts a sentence is kept,
-        unless a comma, an apostrophe or a colon follows it. Names that no sender supplies
+        unless a comma, an apostrophe or a colon follows it. Names that no readable chat file supplies
         are not known here, so only the redactor's pattern rules apply to them, and the
         redactor's documented gaps still apply, such as a name directly after a dot.
         """
@@ -453,7 +476,8 @@ class PersonaDataExtractor:
                         speaker = _sender_name(msg)
                         if speaker:
                             sender_names[speaker] = None
-                        text = (msg.get("text") or "").strip()
+                        raw_text = msg.get("text")
+                        text = raw_text.strip() if isinstance(raw_text, str) else ""
                         if len(text) >= 4:
                             chat_records.append((speaker, text))
             except Exception as e:

@@ -750,6 +750,120 @@ def test_name_parts_accents_and_email_display_names_are_denied(
     ]
 
 
+def test_joined_spellings_of_a_sender_name_are_denied_in_list_names(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Jane Doe is bringing the cake on Saturday",
+                "creator": {"name": "Jane Doe"},
+            }
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Jane_Doe list",
+                "items": [
+                    {
+                        "title": "Call Jane_Doe back about the rota",
+                        "notes": "Jane.Doe prefers email",
+                    }
+                ],
+            }
+        ],
+        saved={"Jane_Doe": "Title,Note\nBen's Cafe,\n"},
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: [NAME] is bringing the cake on Saturday",
+        "Task [[NAME] list]: Call [NAME] back about the rota. [NAME] prefers email",
+        "Saved place in [NAME]: Ben's Cafe",
+    ]
+
+
+def test_a_mixed_case_sender_name_is_masked_where_it_is_capitalised(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "ask deanna about the table", "creator": {"name": "DeAnna"}},
+            {"text": "tell deanna the time", "creator": {"name": "DeAnna"}},
+            {"text": "Thanks DeAnna for the table", "creator": {"name": "DeAnna"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: ask deanna about the table",
+        "[NAME]: tell deanna the time",
+        "[NAME]: Thanks [NAME] for the table",
+    ]
+
+
+def test_a_text_that_is_not_a_string_does_not_stop_the_chat_file(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": 42, "creator": {"name": "Sam Lee"}},
+            {"text": "Bring the car keys tomorrow", "creator": {"name": "Priya Raman"}},
+            {
+                "text": "Dinner with Priya Raman on Friday",
+                "creator": {"name": "Sam Lee"},
+            },
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Bring the car keys tomorrow",
+        "[NAME]: Dinner with [NAME] on Friday",
+    ]
+
+
+def test_a_structured_sender_name_is_read_as_its_parts(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Dinner with Priya Raman on Friday",
+                "creator": {"name": {"givenName": "Sam", "familyName": "Lee"}},
+            },
+            {"text": "Ask Sam Lee about the lease", "creator": {"name": "Priya Raman"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Dinner with [NAME] on Friday",
+        "[NAME]: Ask [NAME] about the lease",
+    ]
+
+
+def test_a_percent_encoded_sender_name_in_a_url_is_denied(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Jane Doe is bringing the cake on Saturday",
+                "creator": {"name": "Jane Doe"},
+            },
+            {
+                "text": "See https://example.com/u/Jane%20Doe for the profile",
+                "creator": {"name": "Sam Lee"},
+            },
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: [NAME] is bringing the cake on Saturday",
+        "[NAME]: See https://example.com/u/[NAME] for the profile",
+    ]
+
+
 def test_no_raw_contact_detail_reaches_any_state(tmp_path: Path) -> None:
     email = "sarah.jones@example.com"
     phone = "07700 900123"
