@@ -229,10 +229,10 @@ describe('SearchService RRF rerank (SEARCH_TRAINED_RERANK)', () => {
     );
   });
 
-  it('re-scores at most 20 candidates and leaves the rest of the list in RRF order', async () => {
+  it('re-scores at most 50 candidates and leaves the rest of the list in RRF order', async () => {
     process.env[FLAG] = 'true';
     const ids = Array.from(
-      { length: 25 },
+      { length: 55 },
       (_, i) => `0190c3f2-0000-7000-8000-${String(i).padStart(12, '0')}`,
     );
     const semantic: Hit[] = ids.map((id, i) => ({ id, type: 'communication', score: 1 - i / 100 }));
@@ -256,12 +256,12 @@ describe('SearchService RRF rerank (SEARCH_TRAINED_RERANK)', () => {
     });
     const { service } = build({ semantic, keyword: [], texted: ids });
 
-    const order = await topResults(service, 25);
+    const order = await topResults(service, 55);
     const sent = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as {
       passages: unknown[];
     };
 
-    expect(sent.passages).toHaveLength(20);
-    expect(order.slice(20)).toEqual(ids.slice(20));
+    expect(sent.passages).toHaveLength(50);
+    expect(order.slice(50)).toEqual(ids.slice(50));
   });
 });
