@@ -60,14 +60,27 @@
 # OpenID services (Steam), which otherwise return to
 # https://ci-server.localhost/openid/callback. `:+` leaves both empty (and the
 # api on its own fallbacks) if APP_BASE_URL is ever unset.
+#
+# ./desktop-app holds the presence file the app keeps up to date while it runs
+# (src-tauri/src/presence.rs). The containers outlive the app, and when the app
+# was what served their model, chat, search and summaries stop with it. The api
+# reads the file (DESKTOP_APP_PRESENCE_FILE) so the web app and MCP can say
+# that Memory Desktop is closed instead of only that the model is unreachable.
+# A relative source resolves against the compose directory, where the app
+# creates the folder before the first `up`. Read-only: nothing in the stack
+# writes it. The folder rather than the file, because the app replaces the file
+# by renaming over it and a single-file bind mount would keep the old inode.
 services:
   api:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
+    volumes:
+      - ./desktop-app:/run/ci-desktop-app:ro
     environment:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://hub.ci.computer}
       APP_BASE_URL: ${APP_BASE_URL:-}
       OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
       OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
+      DESKTOP_APP_PRESENCE_FILE: /run/ci-desktop-app/presence.json
   worker:
     image: ghcr.io/companionintelligence/companion/api:${CI_SERVER_IMAGE_TAG}
   migrate-database:

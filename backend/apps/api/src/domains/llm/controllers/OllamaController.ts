@@ -28,6 +28,7 @@ import { ActionService } from '@ci/domains/intelligence';
 import { isActiveGenerationStatus } from '../constants';
 import { ChatGenerationBroker } from '../services/ChatGenerationBroker';
 import { ChatTurnService } from '../services/ChatTurnService';
+import { DESKTOP_APP_CLOSED_MESSAGE, DesktopAppService } from '../services/DesktopAppService';
 import { OllamaService } from '../services/OllamaService';
 import type { PromptInput } from '../types';
 
@@ -52,6 +53,7 @@ export class OllamaController {
     private readonly threadService: ThreadService,
     private readonly broker: ChatGenerationBroker,
     private readonly chatTurnService: ChatTurnService,
+    private readonly desktopAppService: DesktopAppService,
     private readonly logger: LoggerService,
     // Same forwardRef as ChatTurnService: intelligence and llm import each other.
     @Inject(forwardRef(() => ActionService))
@@ -63,7 +65,29 @@ export class OllamaController {
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('models')
   async listModels(@Context() context: RequestContext) {
-    return await this.ollamaService.getAvailableModels(context);
+    try {
+      return await this.ollamaService.getAvailableModels(context);
+    } catch (error: unknown) {
+      return await this.desktopAppService.rethrow(error);
+    }
+  }
+
+  /**
+   * Whether Memory Desktop is closed and its model with it (see DesktopAppService.isClosed). The web app
+   * polls this to say so on every page, since chat, search and summaries all stop together; an agent can
+   * ask it too. `desktop: false` means this is not a desktop install and there is nothing to poll for.
+   * `message` is the plain answer to pass on, null while there is nothing to say.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('desktop-app')
+  async desktopAppStatus(): Promise<{ desktop: boolean; closed: boolean; message: string | null }> {
+    const closed = await this.desktopAppService.isClosed();
+
+    return {
+      desktop: this.desktopAppService.isDesktop(),
+      closed,
+      message: closed ? DESKTOP_APP_CLOSED_MESSAGE : null,
+    };
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -98,9 +122,11 @@ export class OllamaController {
     const serviceContext = toServiceContext(context);
     const ownerId = serviceContext.userId;
 
-    const { model: initialModel } = await this.ollamaService.resolveModel(context, {
-      requestedModel: input.model,
-    });
+    // The first call that needs the model. When Memory Desktop is closed and took the model with it, the
+    // answer says that instead of a bare 500.
+    const { model: initialModel } = await this.ollamaService
+      .resolveModel(context, { requestedModel: input.model })
+      .catch((error: unknown) => this.desktopAppService.rethrow(error));
 
     let thread: Thread;
 

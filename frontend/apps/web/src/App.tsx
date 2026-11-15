@@ -38,6 +38,7 @@ import { WidgetSnapshotSync } from '@/components/WidgetSnapshotSync';
 import {
   AuthProvider,
   CaptureModalProvider,
+  DesktopAppProvider,
   ModelProvider,
   useAuth,
   useLocationTracking,
@@ -205,22 +206,26 @@ function Providers({ children }: { children: ReactNode }) {
                   <UnsentCapturesSignOutDialog />
                   <FeaturesProvider args={[]}>
                     <ModelProvider args={[]}>
-                      <CaptureModalProvider args={[]}>
-                        <ApolloProvider>
-                          <WidgetSnapshotSync />
-                          {/* Re-signs photo and video links that expired while cached. */}
-                          <MediaLinkRefresh />
-                          {/* Inside Apollo: it reads the signed-in person's time format and
+                      {/* Beside the model list: whether Memory Desktop is closed, which is why the model is gone
+                          when it is. Read by the banner in the main layout and by Chat. */}
+                      <DesktopAppProvider args={[]}>
+                        <CaptureModalProvider args={[]}>
+                          <ApolloProvider>
+                            <WidgetSnapshotSync />
+                            {/* Re-signs photo and video links that expired while cached. */}
+                            <MediaLinkRefresh />
+                            {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
-                          <DateTimeFormatProvider>
-                            {/* Inside PowerSync and the outbox: the lock covers the page, never the
+                            <DateTimeFormatProvider>
+                              {/* Inside PowerSync and the outbox: the lock covers the page, never the
                                 sync behind it (SECURITY_ARCHITECTURE § 4.4). */}
-                            <PowerSyncBoundary>
-                              <AppLockGate>{children}</AppLockGate>
-                            </PowerSyncBoundary>
-                          </DateTimeFormatProvider>
-                        </ApolloProvider>
-                      </CaptureModalProvider>
+                              <PowerSyncBoundary>
+                                <AppLockGate>{children}</AppLockGate>
+                              </PowerSyncBoundary>
+                            </DateTimeFormatProvider>
+                          </ApolloProvider>
+                        </CaptureModalProvider>
+                      </DesktopAppProvider>
                     </ModelProvider>
                   </FeaturesProvider>
                 </AuthProvider>

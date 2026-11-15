@@ -2,10 +2,12 @@
 
 mod local_model;
 mod port_check;
+mod presence;
 mod stack_manager;
 mod tray;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -423,6 +425,20 @@ fn main() {
             app.manage(BundledImageTag(bundled_tag));
 
             tray::create_tray(app.handle())?;
+
+            // Before the first `compose up`: the api reads this file from its
+            // first request on (see presence.rs). The first beat is written
+            // here rather than by the thread, so it is on disk before the stack
+            // starts.
+            let presence = Arc::new(presence::Presence::new(presence::dir(&paths.compose_dir)));
+            presence.beat();
+            app.manage(presence.clone());
+            std::thread::spawn(move || loop {
+                std::thread::sleep(presence::HEARTBEAT);
+                if !presence.beat() {
+                    break;
+                }
+            });
 
             // The listener every deep link delivered while the app runs (macOS/iOS's
             // RunEvent::Opened and our own warm-start relaunch handling above)

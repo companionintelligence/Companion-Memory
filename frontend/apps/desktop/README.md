@@ -25,9 +25,12 @@ for them to become healthy, then shows the real web UI.
    session (standard cookie auth — no CORS/CSRF wiring needed for this app).
 5. A tray icon lets you show/hide the window, manually start/stop the stack,
    and view the desktop log, without quitting. Quit leaves the containers
-   running unless the app itself serves their model (its own Ollama, the
-   relay in front of one or the Apple bridge, which all stop with it). Then
-   Quit stops the stack too and the next launch starts it again.
+   running, as closing the window does. When the app itself serves their
+   model (its own Ollama, the relay in front of one or the Apple bridge), the
+   model stops with it. The app keeps `compose/desktop-app/presence.json` up
+   to date while it runs (`src-tauri/src/presence.rs`) and the overlay mounts
+   that folder into `api`, so the web app and MCP can say that Memory Desktop
+   is closed and that opening it brings chat, search and summaries back.
 
 Images are pulled from `ghcr.io/companionintelligence/companion/*` (see
 `../../../scripts/publish/images.sh`) at a version tag resolved at build time

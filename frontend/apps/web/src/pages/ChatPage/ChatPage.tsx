@@ -22,7 +22,7 @@ import { Chat, type FormData } from '@/components/Chat';
 import { ErrorState } from '@/components/ErrorState';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { useToolsOffReason } from '@/components/ModelSelector';
-import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
+import { useAuth, useChatRequester, useCounter, useDesktopApp, useModel } from '@/hooks';
 import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
@@ -87,6 +87,7 @@ function ChatPageContent() {
   const [{ selectedModel, loading: modelsLoading, error: modelsError }, { refetch: refetchModels }] =
     useModel();
   const { isFeatureEnabled } = useFeatures();
+  const desktopApp = useDesktopApp();
   const toolsOff = useToolsOffReason() !== null;
   const [localPrefs] = useLocalLlmPrefs();
   // With a phone model chosen and routing on, chat works with no appliance model at all — the case where
@@ -367,7 +368,9 @@ function ChatPageContent() {
   const hasNoModel = selectedModel == null && !modelsLoading && !localChatEnabled;
   const topics = joinTopics(chatTopicsFor(isFeatureEnabled), 'or');
   const inputPlaceholder = hasNoModel
-    ? 'Chat is off until a model is set up — Settings → Model'
+    ? modelsError != null && desktopApp.closed
+      ? 'Chat is off until Memory Desktop is open again'
+      : 'Chat is off until a model is set up — Settings → Model'
     : resolvedThreadId.current == null
       ? `Ask about ${topics}…`
       : `Continue — ${topics}…`;
