@@ -319,6 +319,18 @@ IBAN_CASES = [
         {"iban": 2},
         id="iban-two-in-a-row",
     ),
+    pytest.param(
+        "Pay GB82-WEST-1234-5698-7654-32 now",
+        "Pay [IBAN] now",
+        {"iban": 1},
+        id="iban-hyphen-separators",
+    ),
+    pytest.param(
+        "Pay GB82  WEST 1234 5698 7654 32 now",
+        "Pay [IBAN] now",
+        {"iban": 1},
+        id="iban-double-space-separators",
+    ),
 ]
 
 PHONE_CASES = [
@@ -531,9 +543,9 @@ CARD_CASES = [
     ),
     pytest.param(
         "Card 4111 1111 1111 1111 123 now",
-        "Card [CARD] 123 now",
+        "Card [CARD] now",
         {"card": 1},
-        id="card-trailing-digits-are-kept",
+        id="card-security-code-after-card-is-included",
     ),
     pytest.param(
         "Use 2 4111 1111 1111 1111 now",
@@ -591,15 +603,33 @@ CARD_CASES = [
     ),
     pytest.param(
         "Card 4111111111111111123 now",
-        "Card [CARD]123 now",
+        "Card [CARD] now",
         {"card": 1},
-        id="card-glued-to-security-code",
+        id="card-glued-security-code-is-included",
     ),
     pytest.param(
         "Card 4111   1111   1111   1111 now",
         "Card [CARD] now",
         {"card": 1},
         id="card-three-space-separators",
+    ),
+    pytest.param(
+        "Card 4000 0000 0000 0002 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-zero-led-groups-are-not-a-phone",
+    ),
+    pytest.param(
+        "Card 4111 0234 5678 9015 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-second-zero-led-example",
+    ),
+    pytest.param(
+        "Card 41111111111111111226 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-glued-four-digit-security-code",
     ),
 ]
 
@@ -681,6 +711,30 @@ ADDRESS_CASES = [
         "The 500 GB SSD Drive works with my laptop.",
         {},
         id="neg-memory-unit-before-drive-is-not-an-address",
+    ),
+    pytest.param(
+        "Visit 42 Wallaby Way today",
+        "Visit [ADDRESS] today",
+        {"address": 1},
+        id="address-way-suffix",
+    ),
+    pytest.param(
+        "Visit 10, Downing Street today",
+        "Visit [ADDRESS] today",
+        {"address": 1},
+        id="address-comma-after-house-number",
+    ),
+    pytest.param(
+        "Visit 221-B Baker Street today",
+        "Visit [ADDRESS] today",
+        {"address": 1},
+        id="address-hyphenated-letter-house-number",
+    ),
+    pytest.param(
+        "Visit 12 Élysée Road today",
+        "Visit [ADDRESS] today",
+        {"address": 1},
+        id="address-accented-capital",
     ),
 ]
 
@@ -841,6 +895,18 @@ QUERY_GLUE_CASES = [
         "Go to example.com?token=abcdefghijklmnopqrs 12 34 next",
         {},
         id="short-value-before-two-groups-is-kept",
+    ),
+    pytest.param(
+        "Ref https://example.com/?ref=40K4LpE5h5M9 Thanks for it",
+        "Ref https://example.com/ Thanks for it",
+        {"url": 1},
+        id="query-token-ending-in-digit-before-word-is-dropped",
+    ),
+    pytest.param(
+        "Open https://example.com/?9Xk2mQ7p now",
+        "Open https://example.com/ now",
+        {"url": 1},
+        id="query-plain-value-starting-with-digit-is-dropped",
     ),
 ]
 
@@ -1111,6 +1177,14 @@ NAME_CASES = [
         "Hi.Sarah, thanks a lot",
         {},
         id="known-gap-name-after-dot-is-kept",
+    ),
+    pytest.param(
+        "李明说你好",
+        ["李明"],
+        [],
+        "[NAME]说你好",
+        {"name": 1},
+        id="name-han-name-before-han-text",
     ),
 ]
 

@@ -25,39 +25,42 @@ to it is removed.
   and the decomposed spelling of a name match, and a German sharp s also matches ``ss``.
 - ``url``: a URL with a query string or fragment, with credentials (``user:pass@``), or
   with a token-like path segment. A URL is text that starts with a scheme, such as
-  ``https://`` or ``postgres://``, or with ``www.``, or with a host, optionally followed
-  by a port, and then a path, query or fragment, such as ``example.com/pay?x=1``. The
-  scheme, host and path are kept. The query, the fragment and the credentials are dropped.
-  A path segment of at least 20 letters, digits or underscores, with both a letter and a
-  digit, becomes ``[TOKEN]``. A query value of 20 or more characters is always dropped. A
-  shorter query is kept only when a phone number, a card or a placeholder follows it
-  straight away: two or more digit groups, five or more digits, ``+``, ``(`` before a
-  digit, or ``[``. Otherwise it is dropped, so a one-time code followed by words, as in
-  ``?code=8f3a2c (valid 15 min)``, goes with it. A query that ends in a digit and is
-  followed by a capitalised word is also kept, so ``?q=221 Baker Street`` keeps its house
-  number for the address rule. A URL with none of these is left alone.
+  ``https://`` or ``postgres://``, or with ``www.``, or with a host, optionally followed by
+  a port, and then a path, query or fragment, such as ``example.com/pay?x=1``. The scheme,
+  host and path are kept. The query, the fragment and the credentials are dropped. A path
+  segment of at least 20 letters, digits or underscores, with both a letter and a digit,
+  becomes ``[TOKEN]``. A query value of 20 or more characters is always dropped. A shorter
+  query is kept only when a phone number, a card or a placeholder follows it straight away,
+  or when a street address follows it, as in ``?q=221 Baker Street``. Any other shorter
+  query is dropped, so a one-time code followed by words goes with it. A URL with none of
+  these is left alone.
 - ``email``: an address with a dotted domain, or with an IPv4 domain, such as
   ``sarah@example.com``, becomes ``[EMAIL]``, and a path or query directly after it goes
   with it. Letters from any script count, so ``josé@example.com`` is caught. An apostrophe
   or an exclamation mark may sit inside the local part, but only after a letter, so
   ``o'brien@example.com`` is caught whole, and a digit glued before an address with either
   mark is not swallowed.
-- ``iban``: an IBAN of a country whose registered length is listed in this module, taken
-  at that length, becomes ``[IBAN]`` when it passes the mod-97 check, even when it is glued
-  to letters. For any other country, the longest prefix that ends at a space and passes the
-  check is taken.
+- ``iban``: an IBAN of a country whose registered length is listed in this module, taken at
+  that length, becomes ``[IBAN]`` when it passes the mod-97 check, even when it is glued to
+  letters. Spaces, tabs and hyphens may separate its groups. For any other country, the
+  longest prefix that ends before a separator and passes the check is taken.
 - ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
   French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits. A
   number may follow a letter, so ``call07700900123`` is caught.
 - ``card``: the longest run of whole digit groups that passes the Luhn check becomes
-  ``[CARD]``. Groups are separated by one to three spaces, tabs or non-breaking spaces, or
-  by a hyphen. A card may also be written as four groups of four digits joined by dots.
-  Separated dates and times are masked before the search, so a card never runs into one.
-  Digits after the card, as in ``4111 1111 1111 1111 123``, are kept, and a card with its
-  security code glued on, as in ``4111111111111111123``, is still found. A 14-digit
-  ``YYYYMMDDhhmmss`` stamp is not treated as a card.
-- ``address``: a house number, one to three capitalised words and a street suffix
-  (Street, Road, Avenue and so on) become ``[ADDRESS]``.
+  ``[CARD]``. Groups are separated by one to three spaces, tabs or non-breaking spaces, or by
+  a hyphen. A card may also be written as four groups of four digits joined by dots.
+  Separated dates and times are masked before the search, so a card never runs into one. A
+  security code of three or four digits that is the last group of the run is part of the
+  card, as in ``4111 1111 1111 1111 123``, and a card with its security code glued on, as in
+  ``4111111111111111123``, is found. Other digits after a card are kept. A 14-digit
+  ``YYYYMMDDhhmmss`` stamp is not treated as a card. A phone-shaped run inside a card is left
+  for the card rule.
+- ``address``: a house number, optionally with a hyphenated letter or a comma, one to three
+  capitalised words, the first of which may be an accented capital, and a street suffix
+  (Street, Road, Avenue, Way, Circle, Trail, Plaza, Path, Loop, Str and so on) become
+  ``[ADDRESS]``. A storage or memory unit, such as TB or GB, cannot be the first word.
+
 
 Names come in two lists. ``deny_names`` are redacted wherever they appear, including
 where two denied names overlap, except inside an address or a host name as described
@@ -73,21 +76,27 @@ number on its own with fewer than 8 digits. A bare run of 10 digits whose first 
 fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
 be redacted.
 
-Known gaps, by design: a name directly after a dot, as in ``Hi.Sarah``, or before a
-lowercase word after a dot, as in ``Sarah.pdf``, is not redacted, because a dot after a word
-marks a domain or a file name. 7-digit local phone numbers, including one that follows a
-longer number, lowercase street addresses, postcodes, and names that are not listed. A name
-inside a host label, such as ``sarah.example.com``, is not redacted. Digits glued straight to
-an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have the glued
-group taken into the address, so the rest of the number stays. A product name such as
-``2 Google Drive`` can match the address rule. The userinfo of a URL whose password contains
-a slash is not stripped. A card written with slashes or with line breaks is not recognised,
-and neither is a quoted local part such as ``"sarah"@example.com``. A phone number written
-with a space after the plus sign, such as ``+ 44 20 7946 0958``, or with a bracketed zero,
-such as ``(0)20 7946 0958``, is not matched, and neither is a national number without a plus
-sign or a 00 prefix outside North America, the UK and France. A UUID in a path is not
-treated as a token. A short value followed by two digit groups in a query is kept, as in
-``?ref=abc 12 34``, so a short token there is not removed.
+Known gaps, by design. Not covered at all: National Insurance numbers, UK bank account
+numbers and sort codes, and API keys or passwords, so the flag that turns this on must stay
+off until the owner decides on them. Email forms written out in words (``sarah at example
+dot com``), in brackets (``sarah [at] example [dot] com``), with a doubled ``@``, or with a
+quoted local part (``"sarah"@example.com``) are not matched, and nor is a domain written with
+an ideographic full stop. A name is not matched in a spelling other than the precomposed and
+decomposed forms and the German sharp s, nor directly after a dot, as in ``Hi.Sarah``, nor
+before a lowercase word after a dot, as in ``Sarah.pdf``, because a dot after a word marks a
+domain or a file name. A name followed directly by digits, as in ``Sarah2026``, is not
+matched. 7-digit local phone numbers are not matched, and neither are national numbers
+without a plus sign or a 00 prefix outside North America, the UK and France, or written with
+a space after the plus sign or a bracketed zero. A bare run of ten digits is read as a phone
+number when its first and fourth digits are 2 to 9, so order and reference numbers of that
+shape are redacted. Numbers with the shape of a phone number or of a Luhn-valid card are
+redacted whatever they are. Product and venue names such as ``2 Google Drive`` can match the
+address rule. Address ranges, lowercase street names, postcodes, house numbers glued to a
+street name, and cards written with slashes or with line breaks are not matched. Digits glued
+straight to an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have
+the glued group taken into the address, so the rest of the number stays. A UUID in a path is
+not treated as a token, and a short token in a path or query can be kept. The userinfo of a
+URL whose password contains a slash is not stripped.
 """
 
 from __future__ import annotations
@@ -142,6 +151,13 @@ _STREET_SUFFIXES = (
     "Hwy",
     "Gardens",
     "Grove",
+    "Way",
+    "Circle",
+    "Trail",
+    "Plaza",
+    "Path",
+    "Loop",
+    "Str",
 )
 _SUFFIX_ALTERNATION = "|".join(
     re.escape(suffix) for suffix in sorted(_STREET_SUFFIXES, key=len, reverse=True)
@@ -159,9 +175,11 @@ _URL_QUERY = (
     r"(?:[?#]"
     r"(?:[A-Za-z_][\w.-]*=[^\s<>\"'\[]{20,}(?=[\s<>\"'\]]|$)"
     r"|[^\s<>\"'\[=]{20,}(?=[\s<>\"'\]]|$)"
-    r"|[A-Za-z_][^\s<>\"'\[]*(?=[\s<>\"'\]]|$)"
+    r"|[^\s<>\"'\[][^\s<>\"'\[]*(?=[\s<>\"'\]]|$)"
     r"(?!\s+(?:[0-9]{2,}[ .-][0-9]{2,}|[0-9]{5,}|\+|\((?=[0-9])|\[))"
-    r"(?!(?<=[0-9])\s+(?-i:[A-Z]))"
+    r"(?!(?<=[0-9])\s+(?-i:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2})\s+(?:"
+    + _SUFFIX_ALTERNATION
+    + r")\b)"
     r"))?"
 )
 _URL_TAIL = _URL_PATH + _URL_QUERY
@@ -201,7 +219,9 @@ _EMAIL_RE = re.compile(
     r"(?<![\w.%+-])" + _EMAIL_LOCAL + r"@" + _EMAIL_DOMAIN + _URL_TAIL
 )
 
-_IBAN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2}[0-9]{2}(?: ?[A-Za-z0-9]){11,30}")
+_IBAN_RE = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]{2}[0-9]{2}(?:[ \t-]{0,2}[A-Za-z0-9]){11,40}"
+)
 
 _PHONE_RE = re.compile(
     r"(?<![0-9+])"
@@ -249,10 +269,12 @@ _DATE_OR_TIME_RE = re.compile(
 )
 
 _ADDRESS_RE = re.compile(
-    r"(?<![\w.])[0-9]{1,6}[A-Za-z]?\s+"
-    # A storage or speed unit after a number is not the start of a street name.
+    # A house number, with an optional hyphenated letter and an optional comma.
+    r"(?<![\w.])[0-9]{1,6}(?:-?[A-Za-z])?,?\s+"
+    # A storage or memory unit after a number is not the start of a street name.
     r"(?!(?:TB|GB|MB|KB|PB|GHz|MHz)\b)"
-    r"(?:[A-Z][\w'’-]*\.?\s+){1,3}"
+    # One to three capitalised words, which may begin with an accented capital.
+    r"(?:[A-ZÀ-ÖØ-Þ][\w'’-]*\.?\s+){1,3}"
     r"(?i:" + _SUFFIX_ALTERNATION + r")\b"
 )
 
@@ -324,7 +346,7 @@ def _is_card(digits: str) -> bool:
 
 
 def _iban_checksum_ok(value: str) -> bool:
-    compact = value.replace(" ", "").upper()
+    compact = "".join(ch for ch in value if ch.isascii() and ch.isalnum()).upper()
     if not 15 <= len(compact) <= 34:
         return False
     rearranged = compact[4:] + compact[:4]
@@ -430,7 +452,7 @@ def _iban_prefix(candidate: str) -> str | None:
 
     For a known country the IBAN is exactly its registered length, so the cut is taken
     there, even inside a run of letters, and must pass mod-97. For any other country the
-    longest prefix that ends at a space and passes mod-97 is taken, as before.
+    longest prefix that ends before a space, tab or hyphen and passes mod-97 is taken.
     """
     length = _IBAN_LENGTHS.get(candidate[:2].upper())
     if length is not None:
@@ -438,7 +460,7 @@ def _iban_prefix(candidate: str) -> str | None:
         if end is None or not _iban_checksum_ok(candidate[:end]):
             return None
         return candidate[:end]
-    ends = [index for index, ch in enumerate(candidate) if ch == " "]
+    ends = [index for index, ch in enumerate(candidate) if ch in " \t-"]
     ends.append(len(candidate))
     for end in reversed(ends):
         prefix = candidate[:end]
@@ -474,38 +496,54 @@ def _card_spans(groups: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     candidates, one that ends at the end of a group is preferred, then the longer one,
     then the one further left. A candidate that ends inside a group is used only in a
     group of 16 digits or more, so a card with its security code glued on is still found,
-    while a 14-digit timestamp is not split.
+    while a 14-digit timestamp is not split. A security code of three or four digits that
+    is the last group of the run is taken with the card.
     """
     digits = "".join(group[2] for group in groups)
+    total = len(digits)
     pos_start: list[int] = []
     pos_end: list[int] = []
     group_last: list[bool] = []
+    group_of: list[int] = []
+    group_end: list[int] = []
     first: list[int] = []
-    for start, _end, text in groups:
+    for index, (start, _end, text) in enumerate(groups):
         first.append(len(pos_start))
         for offset in range(len(text)):
             pos_start.append(start + offset)
             pos_end.append(start + offset + 1)
             group_last.append(offset == len(text) - 1)
+            group_of.append(index)
+        group_end.extend([len(pos_start) - 1] * len(text))
     candidates: list[tuple[bool, int, int, int]] = []
     for group_index, (_start, _end, text) in enumerate(groups):
         a0 = first[group_index]
         for length in range(13, 20):
             e = a0 + length - 1
-            if e >= len(digits):
+            if e >= total:
                 break
             if not group_last[e] and len(text) < 16:
                 continue
             if _is_card(digits[a0 : e + 1]):
                 candidates.append((not group_last[e], -length, a0, e))
     candidates.sort()
-    used = [False] * len(digits)
+    used = [False] * total
     spans: list[tuple[int, int]] = []
     for _partial, _negative, a0, e in candidates:
         if any(used[a0 : e + 1]):
             continue
-        used[a0 : e + 1] = [True] * (e + 1 - a0)
-        spans.append((pos_start[a0], pos_end[e]))
+        end = e
+        if not group_last[e]:
+            # The rest of the group is a security code when it has three or four digits.
+            if 3 <= group_end[e] - e <= 4 and not any(used[e + 1 : group_end[e] + 1]):
+                end = group_end[e]
+        elif group_of[e] + 2 == len(groups) and e + 1 < total:
+            # The next group is the last of the run and holds a security code.
+            last = group_end[e + 1]
+            if 3 <= last - e <= 4 and not any(used[e + 1 : last + 1]):
+                end = last
+        used[a0 : end + 1] = [True] * (end + 1 - a0)
+        spans.append((pos_start[a0], pos_end[end]))
     return spans
 
 
@@ -554,7 +592,14 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
 
 
 def _redact_phones(text: str, counts: Counter[str]) -> str:
+    cards = _card_spans_of(text)
+
     def repl(match: re.Match[str]) -> str:
+        # A card can contain a phone-shaped run, as in 4000 0000 0000 0002. A phone match that
+        # lies inside a card is left for the card rule. A card that only overlaps the match does
+        # not win, since the match is then more likely a phone number.
+        if any(start <= match.start() and match.end() <= end for start, end in cards):
+            return match.group(0)
         candidate = match.group(0)
         span = _phone_span(candidate)
         if span is None:
@@ -565,7 +610,8 @@ def _redact_phones(text: str, counts: Counter[str]) -> str:
     return _PHONE_RE.sub(repl, text)
 
 
-def _redact_cards(text: str, counts: Counter[str]) -> str:
+def _card_spans_of(text: str) -> list[tuple[int, int]]:
+    """Spans of the cards in the text. The text itself is not changed."""
     masked = _mask_dates(text)
     found: list[tuple[int, int]] = []
     for dotted in _DOT_CARD_RE.finditer(masked):
@@ -582,11 +628,16 @@ def _redact_cards(text: str, counts: Counter[str]) -> str:
             for group in _CARD_GROUP_RE.finditer(run.group(0))
         ]
         found.extend(_card_spans(groups))
+    return sorted(found)
+
+
+def _redact_cards(text: str, counts: Counter[str]) -> str:
+    found = _card_spans_of(text)
     if not found:
         return text
     pieces: list[str] = []
     cursor = 0
-    for start, end in sorted(found):
+    for start, end in found:
         pieces.append(text[cursor:start])
         pieces.append("[CARD]")
         cursor = end
