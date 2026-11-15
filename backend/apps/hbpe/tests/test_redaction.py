@@ -121,6 +121,36 @@ EMAIL_CASES = [
         {},
         id="neg-no-tld",
     ),
+    pytest.param(
+        "Card 4111 1111 1111 1111!sarah@example.com now",
+        "Card [CARD]![EMAIL] now",
+        {"card": 1, "email": 1},
+        id="email-after-exclamation-mark-after-card",
+    ),
+    pytest.param(
+        "Mail josé@example.com today",
+        "Mail [EMAIL] today",
+        {"email": 1},
+        id="email-decomposed-local-part",
+    ),
+    pytest.param(
+        "Mail sarah＠example.com today",
+        "Mail [EMAIL] today",
+        {"email": 1},
+        id="email-full-width-at-sign",
+    ),
+    pytest.param(
+        "Mail sarah@example.c now",
+        "Mail sarah@example.c now",
+        {},
+        id="neg-top-level-domain-of-one-letter",
+    ),
+    pytest.param(
+        "Open mailto:sarah%40example.com today",
+        "Open mailto:[EMAIL] today",
+        {"email": 1},
+        id="email-percent-encoded-in-mailto",
+    ),
 ]
 
 URL_CASES = [
@@ -208,6 +238,30 @@ URL_CASES = [
         {},
         id="neg-score-with-question-mark",
     ),
+    pytest.param(
+        "Connect postgres://app:s3cret@db.example.com:5432/prod now",
+        "Connect postgres://db.example.com:5432/prod now",
+        {"url": 1},
+        id="url-credentials-any-scheme",
+    ),
+    pytest.param(
+        "Use redis://:pw123@cache:6379/0 and ssh://deploy:key@host/x",
+        "Use redis://cache:6379/0 and ssh://host/x",
+        {"url": 2},
+        id="url-credentials-redis-and-ssh",
+    ),
+    pytest.param(
+        "Open https://example.com/verify/abcdefghijklmnopqrs1 now",
+        "Open https://example.com/verify/[TOKEN] now",
+        {"url": 1},
+        id="path-token-of-twenty-characters",
+    ),
+    pytest.param(
+        "Open https://example.com/verify/abcdefghijklmnopqr1 now",
+        "Open https://example.com/verify/abcdefghijklmnopqr1 now",
+        {},
+        id="neg-path-segment-of-nineteen-characters",
+    ),
 ]
 
 IBAN_CASES = [
@@ -252,6 +306,18 @@ IBAN_CASES = [
         "Code AB12 CDEF ok",
         {},
         id="neg-too-short",
+    ),
+    pytest.param(
+        "Pay GB82WEST12345698765432abc now",
+        "Pay [IBAN]abc now",
+        {"iban": 1},
+        id="iban-glued-to-letters",
+    ),
+    pytest.param(
+        "DE89 3704 0044 0532 0130 00 DE89 3704 0044 0532 0130 00",
+        "[IBAN] [IBAN]",
+        {"iban": 2},
+        id="iban-two-in-a-row",
     ),
 ]
 
@@ -388,6 +454,30 @@ PHONE_CASES = [
         {},
         id="neg-iso-timestamp",
     ),
+    pytest.param(
+        "電話番号は０７０－１２３４－５６７８です",
+        "電話番号は[PHONE]です",
+        {"phone": 1},
+        id="phone-full-width-digits-and-hyphens",
+    ),
+    pytest.param(
+        "٠٧٧٠٠٩٠٠١٢٣",
+        "[PHONE]",
+        {"phone": 1},
+        id="phone-arabic-indic-digits",
+    ),
+    pytest.param(
+        "Call 1 212 555 0198 now",
+        "Call [PHONE] now",
+        {"phone": 1},
+        id="phone-north-american-with-leading-one",
+    ),
+    pytest.param(
+        "Chat https://wa.me/447700900123 now",
+        "Chat https://wa.me/[PHONE] now",
+        {"phone": 1},
+        id="phone-in-whatsapp-link",
+    ),
 ]
 
 CARD_CASES = [
@@ -481,6 +571,36 @@ CARD_CASES = [
         {"card": 1},
         id="card-dot-separators",
     ),
+    pytest.param(
+        "Card 4111\t1111\t1111\t1111 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-tab-separators",
+    ),
+    pytest.param(
+        "Ref 4000000000000000006 ok",
+        "Ref [CARD] ok",
+        {"card": 1},
+        id="card-nineteen-digits-luhn-valid",
+    ),
+    pytest.param(
+        "Ref 4000 0000 0002 ok",
+        "Ref 4000 0000 0002 ok",
+        {},
+        id="neg-twelve-digits-are-not-a-card",
+    ),
+    pytest.param(
+        "Card 4111111111111111123 now",
+        "Card [CARD]123 now",
+        {"card": 1},
+        id="card-glued-to-security-code",
+    ),
+    pytest.param(
+        "Card 4111   1111   1111   1111 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-three-space-separators",
+    ),
 ]
 
 ADDRESS_CASES = [
@@ -543,6 +663,24 @@ ADDRESS_CASES = [
         "Version 2 Street Food",
         {},
         id="neg-street-food",
+    ),
+    pytest.param(
+        "Live at 10 Very Big Old Oak Road today",
+        "Live at 10 Very Big Old Oak Road today",
+        {},
+        id="neg-four-capitalised-words-are-not-an-address",
+    ),
+    pytest.param(
+        "I just bought a 2 TB Hard Drive for my photos.",
+        "I just bought a 2 TB Hard Drive for my photos.",
+        {},
+        id="neg-storage-unit-before-drive-is-not-an-address",
+    ),
+    pytest.param(
+        "The 500 GB SSD Drive works with my laptop.",
+        "The 500 GB SSD Drive works with my laptop.",
+        {},
+        id="neg-memory-unit-before-drive-is-not-an-address",
     ),
 ]
 
@@ -651,16 +789,58 @@ QUERY_GLUE_CASES = [
         id="query-house-number-is-left-for-address-rule",
     ),
     pytest.param(
-        "Pay example.com?ref=abc 12 times",
-        "Pay example.com?ref=abc 12 times",
+        "Pay example.com?ref=abc 12 34 times",
+        "Pay example.com?ref=abc 12 34 times",
         {},
-        id="query-before-two-digit-number-is-kept",
+        id="query-before-two-digit-groups-is-kept",
+    ),
+    pytest.param(
+        "Pay example.com?ref=abc 12 times",
+        "Pay example.com 12 times",
+        {"url": 1},
+        id="query-before-single-number-is-dropped",
     ),
     pytest.param(
         "Pay example.com?ref=abc later",
         "Pay example.com later",
         {"url": 1},
         id="query-before-word-is-dropped",
+    ),
+    pytest.param(
+        "Use example.com?code=8f3a2c 15 min",
+        "Use example.com 15 min",
+        {"url": 1},
+        id="query-short-code-before-number-is-dropped",
+    ),
+    pytest.param(
+        "Reset at example.com?code=8f3a2c (valid 15 min) now",
+        "Reset at example.com (valid 15 min) now",
+        {"url": 1},
+        id="query-short-code-before-remark-is-dropped",
+    ),
+    pytest.param(
+        "Call example.com?x=abc (555) 123-4567",
+        "Call example.com?x=abc [PHONE]",
+        {"phone": 1},
+        id="query-before-bracketed-phone-is-kept",
+    ),
+    pytest.param(
+        "Dial example.com?x=abc +44 20 7946 0958",
+        "Dial example.com?x=abc [PHONE]",
+        {"phone": 1},
+        id="query-before-international-phone-is-kept",
+    ),
+    pytest.param(
+        "Go to example.com?token=abcdefghijklmnopqrst 12 34 next",
+        "Go to example.com 12 34 next",
+        {"url": 1},
+        id="token-of-twenty-characters-is-dropped-before-groups",
+    ),
+    pytest.param(
+        "Go to example.com?token=abcdefghijklmnopqrs 12 34 next",
+        "Go to example.com?token=abcdefghijklmnopqrs 12 34 next",
+        {},
+        id="short-value-before-two-groups-is-kept",
     ),
 ]
 
@@ -868,6 +1048,70 @@ NAME_CASES = [
         {},
         id="no-names-configured",
     ),
+    pytest.param(
+        "Booked for 2 Ann Lane Smith",
+        ["Ann", "Smith"],
+        [],
+        "Booked for 2 [NAME] Lane [NAME]",
+        {"name": 2},
+        id="name-inside-address-and-surname-each-redacted",
+    ),
+    pytest.param(
+        "José and José",
+        ["José"],
+        [],
+        "[NAME] and [NAME]",
+        {"name": 2},
+        id="name-decomposed-deny-matches-precomposed-text",
+    ),
+    pytest.param(
+        "田中さんに連絡してください",
+        ["田中"],
+        [],
+        "[NAME]さんに連絡してください",
+        {"name": 1},
+        id="name-unspaced-script-matched-inside-text",
+    ),
+    pytest.param(
+        "Hi @Sarah, can you check the file?",
+        ["Sarah"],
+        [],
+        "Hi @[NAME], can you check the file?",
+        {"name": 1},
+        id="name-after-at-sign-is-a-mention",
+    ),
+    pytest.param(
+        "Thanks Sarah.Will send it tomorrow",
+        ["Sarah"],
+        [],
+        "Thanks [NAME].Will send it tomorrow",
+        {"name": 1},
+        id="name-before-capitalised-word-without-space",
+    ),
+    pytest.param(
+        "Ping Sarah@ when free",
+        ["Sarah"],
+        [],
+        "Ping [NAME]@ when free",
+        {"name": 1},
+        id="name-before-at-sign-without-domain",
+    ),
+    pytest.param(
+        "Frau GROSSMANN wohnt hier",
+        ["Großmann"],
+        [],
+        "Frau [NAME] wohnt hier",
+        {"name": 1},
+        id="name-german-sharp-s-matches-ss",
+    ),
+    pytest.param(
+        "Hi.Sarah, thanks a lot",
+        ["Sarah"],
+        [],
+        "Hi.Sarah, thanks a lot",
+        {},
+        id="known-gap-name-after-dot-is-kept",
+    ),
 ]
 
 
@@ -982,3 +1226,10 @@ def test_redaction_is_idempotent(text: str, expected: str) -> None:
     assert counts and all(count > 0 for count in counts.values())
     # A second pass over the output changes nothing.
     assert redactor.redact(once) == (once, {})
+
+
+def test_long_run_of_card_length_groups_is_redacted_without_recursion():
+    redacted, counts = Redactor().redact("4222222222222 " * 994)
+
+    assert redacted == "[CARD] " * 994
+    assert counts == {"card": 994}
