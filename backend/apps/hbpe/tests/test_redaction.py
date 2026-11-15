@@ -39,9 +39,45 @@ EMAIL_CASES = [
     ),
     pytest.param(
         "Mail o'brien@example.com or first_last@example.com now",
-        "Mail [EMAIL] or [EMAIL] now",
+        "Mail o'[EMAIL] or [EMAIL] now",
         {"email": 2},
-        id="email-apostrophe-and-underscore",
+        id="email-apostrophe-stays-outside-local-part",
+    ),
+    pytest.param(
+        "Mail sarah@example.com_backup now",
+        "Mail [EMAIL]_backup now",
+        {"email": 1},
+        id="email-underscore-after-tld",
+    ),
+    pytest.param(
+        "Mail sarah@example.com_ now",
+        "Mail [EMAIL]_ now",
+        {"email": 1},
+        id="email-underscore-after-tld-at-end",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111'sarah@example.com now",
+        "Card [CARD]'[EMAIL] now",
+        {"card": 1, "email": 1},
+        id="email-does-not-absorb-card-before-apostrophe",
+    ),
+    pytest.param(
+        "Mail sarah@example.com?token=3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b now",
+        "Mail [EMAIL] now",
+        {"email": 1},
+        id="email-query-token-goes-with-address",
+    ),
+    pytest.param(
+        "Mail sarah@example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b now",
+        "Mail [EMAIL] now",
+        {"email": 1},
+        id="email-path-token-goes-with-address",
+    ),
+    pytest.param(
+        "Mail sarah@example.com?ref=4111 1111 1111 1111 now",
+        "Mail [EMAIL]?ref=[CARD] now",
+        {"email": 1, "card": 1},
+        id="email-query-with-card-keeps-card-redacted",
     ),
     pytest.param(
         "Mail 'sarah@example.com' now",
@@ -461,6 +497,65 @@ NEGATIVE_NON_PII = [
     ),
 ]
 
+# A query or fragment glued to a host or path must not cut into a phone, card or
+# address that follows it. The rules for those run on the whole number.
+QUERY_GLUE_CASES = [
+    pytest.param(
+        "Visit example.com?+44 20 7946 0958 today",
+        "Visit example.com?[PHONE] today",
+        {"phone": 1},
+        id="glue-phone-after-question-mark",
+    ),
+    pytest.param(
+        "Visit example.com?4111 1111 1111 1111 today",
+        "Visit example.com?[CARD] today",
+        {"card": 1},
+        id="glue-card-after-question-mark",
+    ),
+    pytest.param(
+        "Visit example.com?ref=4111 1111 1111 1111 today",
+        "Visit example.com?ref=[CARD] today",
+        {"card": 1},
+        id="glue-card-after-query-value",
+    ),
+    pytest.param(
+        "Reset at example.com#10 Downing Street today",
+        "Reset at example.com#[ADDRESS] today",
+        {"address": 1},
+        id="glue-house-number-after-hash",
+    ),
+    pytest.param(
+        "See example.com/pay?+44 20 7946 0958 now",
+        "See example.com/pay?[PHONE] now",
+        {"phone": 1},
+        id="glue-phone-after-path-and-question-mark",
+    ),
+    pytest.param(
+        "Reach example.com?jones 4111 1111 1111 1111",
+        "Reach example.com?jones [CARD]",
+        {"card": 1},
+        id="glue-card-after-query-word-and-space",
+    ),
+    pytest.param(
+        "Open https://example.com/?4111 1111 1111 1111 now",
+        "Open https://example.com/?[CARD] now",
+        {"card": 1},
+        id="glue-card-after-scheme-url-question-mark",
+    ),
+    pytest.param(
+        "Pay example.com?ref=abc 2 times",
+        "Pay example.com 2 times",
+        {"url": 1},
+        id="query-followed-by-short-number-is-dropped",
+    ),
+    pytest.param(
+        "Go to example.com?token=3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b now",
+        "Go to example.com now",
+        {"url": 1},
+        id="query-token-is-dropped",
+    ),
+]
+
 
 @pytest.mark.parametrize(("text", "expected", "counts"), EMAIL_CASES)
 def test_email_cases(text: str, expected: str, counts: dict[str, int]) -> None:
@@ -496,6 +591,11 @@ def test_address_cases(text: str, expected: str, counts: dict[str, int]) -> None
 def test_non_pii_text_is_untouched(
     text: str, expected: str, counts: dict[str, int]
 ) -> None:
+    assert Redactor().redact(text) == (expected, counts)
+
+
+@pytest.mark.parametrize(("text", "expected", "counts"), QUERY_GLUE_CASES)
+def test_query_glue_cases(text: str, expected: str, counts: dict[str, int]) -> None:
     assert Redactor().redact(text) == (expected, counts)
 
 
@@ -688,6 +788,8 @@ def test_all_categories_together() -> None:
         "Booked (with Sarah) at www.example.com/x]#Oak[TOKEN][TOKEN] today",
         # Found by fuzzing: a scheme URL hidden inside a schemeless candidate.
         "12: : (--'josé,www.5,3@[RoadDowningwww.=https://:1[EMAIL]@0044555b",
+        "Visit example.com?ref=4111 1111 1111 1111 or mail sarah@example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b",
+        "Card 4111 1111 1111 1111'sarah@example.com?x=1 and example.com?+44 20 7946 0958",
     ],
 )
 def test_redaction_is_idempotent(text: str) -> None:

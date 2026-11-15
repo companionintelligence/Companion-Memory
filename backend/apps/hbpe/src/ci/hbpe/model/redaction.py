@@ -17,9 +17,15 @@ Categories, in the order they are applied:
   or a host followed by a path, query or fragment, such as ``example.com/pay?x=1``. The
   scheme, host and path are kept. The query, the fragment and the credentials are
   dropped. A path segment of at least 20 letters, digits or underscores, with both a
-  letter and a digit, becomes ``[TOKEN]``. A URL with none of these is left alone.
+  letter and a digit, becomes ``[TOKEN]``. A query or fragment is dropped only when it
+  starts with a letter, an underscore or such a token, and is not followed by a space and
+  a group of digits, ``+``, ``(`` or a placeholder. Otherwise the phone, card and address
+  rules see the digits whole, as in ``example.com?+44 20 7946 0958``. A URL with none of
+  these is left alone.
 - ``email``: an address with a dotted domain, such as ``sarah@example.com``, becomes
-  ``[EMAIL]``. Letters from any script count, so ``josé@example.com`` is caught.
+  ``[EMAIL]``, and a path or query directly after it goes with it. Letters from any
+  script count, so ``josé@example.com`` is caught. An apostrophe is not part of the local
+  part, so ``o'brien@example.com`` leaves ``o'`` before ``[EMAIL]``.
 - ``iban``: IBANs that pass the ISO 13616 mod-97 check become ``[IBAN]``.
 - ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
   French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits.
@@ -43,7 +49,9 @@ Dates and times in the usual separated forms are never redacted, and neither is 
 number on its own with fewer than 8 digits. A bare run of 10 digits whose first and
 fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
 be redacted. Known gaps, by design: 7-digit local phone numbers, lowercase street
-addresses, postcodes, and names that are not listed.
+addresses, postcodes, and names that are not listed. A number whose last group runs
+straight into an address, such as ``4111 1111 1111 1111sarah@example.com``, has that group
+taken into the address, so the rest of the number is left as it is.
 """
 
 from __future__ import annotations
@@ -102,12 +110,27 @@ _SUFFIX_ALTERNATION = "|".join(
     re.escape(suffix) for suffix in sorted(_STREET_SUFFIXES, key=len, reverse=True)
 )
 
+# The path of a URL. It stops at "?" and "#", which start the query and the fragment.
+_URL_PATH = r"(?:/[^\s<>\"'?#]*)?"
+# The query or fragment of a URL. It must start with a letter, an underscore or a
+# 20-character token, so a phone number, card or house number glued to "?" or "#" is
+# left for the rules below. It must end at a space, quote, bracket or the end of the
+# text, and must not contain "[", which starts a placeholder such as [CARD]. It must not
+# be followed by a space and then a group of digits, "+", "(" or a placeholder. Dropping
+# it there would cut into a number, so the URL stops before the "?" or "#" instead.
+_URL_QUERY = (
+    r"(?:[?#](?:[A-Za-z_]|(?=[0-9A-Za-z_]{20}))[^\s<>\"'\[]*"
+    r"(?=[\s<>\"'\]]|$)(?!\s+(?:[0-9]{2,}[ .-][0-9]{2,}|[+(\[])))?"
+)
+_URL_TAIL = _URL_PATH + _URL_QUERY
 _URL_RE = re.compile(
-    r"(?<![\w@.-])(?:(?:https?|ftp)://|www\.)[^\s<>\"']+"
-    # A bare host with a path, query or fragment, such as example.com/pay?x=1 or
+    # A scheme or www. URL, such as https://example.com/pay?x=1 or www.example.com.
+    r"(?<![\w@.-])(?:(?:https?|ftp)://|www\.)[^\s<>\"'?#/]*"
+    + _URL_TAIL
+    # A bare host followed by a path, query or fragment, such as example.com/pay?x=1 or
     # example.com?token=abc. _sanitise_url decides what, if anything, to remove.
-    r"|(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}"
-    r"(?:/[^\s<>\"']*|[?#][^\s<>\"']+)",
+    + r"|(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?=[/?#])"
+    + _URL_TAIL,
     re.IGNORECASE,
 )
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
@@ -115,10 +138,14 @@ _TOKEN_SEGMENT_RE = re.compile(
     r"(?=[A-Za-z0-9_]*[0-9])(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{20,}"
 )
 
-# Letters from any script count, and an apostrophe may sit inside a local part.
+# Letters from any script count. An apostrophe is not part of the local part, so a card
+# or street glued in front of an address is not swallowed by it. A path or query after
+# the address goes with it, under the same rules as a URL.
 _EMAIL_RE = re.compile(
-    r"(?<![\w.%+-])[\w.%+-][\w.%+'-]*@[\w-]+(?:\.[\w-]+)*"
-    r"\.[^\W\d_]{2,}(?![\w-])"
+    r"(?<![\w.%+-])[\w.%+-]+@[\w-]+(?:\.[\w-]+)*"
+    # The top-level domain must not be followed by a letter, digit or hyphen. An
+    # underscore may follow it.
+    r"\.[^\W\d_]{2,}(?![^\W_]|-)" + _URL_TAIL
 )
 
 _IBAN_RE = re.compile(
