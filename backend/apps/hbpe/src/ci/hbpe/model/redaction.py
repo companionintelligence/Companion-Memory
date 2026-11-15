@@ -588,15 +588,41 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
     return "".join(pieces)
 
 
-def _redact_phones(text: str, counts: Counter[str]) -> str:
-    # A phone-shaped run inside a card belongs to the card, which the card rule reads later.
-    # Without this check the last twelve digits of a zero-led card are labelled as a phone.
-    cards = _card_spans_of(text)
+def _redact_lone_cards(text: str, counts: Counter[str]) -> str:
+    """Redact a card written alone as four groups of four digits, before the phone rule.
 
+    The phone rule reads a zero-led run such as "0000 0000 0002" as a phone number, which
+    would cut into a card such as "4000 0000 0000 0002". This pass takes such a card first.
+    A longer run of digit groups is left to the general rules, which run the phone rule
+    first, so a phone that follows a card is never joined into a longer candidate card.
+    """
+    masked = _mask_dates(text)
+    found: list[tuple[int, int]] = []
+    for dotted in _DOT_CARD_RE.finditer(masked):
+        if _is_card(dotted.group(0).replace(".", "")):
+            found.append((dotted.start(), dotted.end()))
+    for run in _CARD_RUN_RE.finditer(masked):
+        groups = _CARD_GROUP_RE.findall(run.group(0))
+        if len(groups) != 4 or any(len(group) != 4 for group in groups):
+            continue
+        if _is_card("".join(groups)):
+            found.append((run.start(), run.end()))
+    if not found:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in sorted(found):
+        pieces.append(text[cursor:start])
+        pieces.append("[CARD]")
+        cursor = end
+        counts["card"] += 1
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _redact_phones(text: str, counts: Counter[str]) -> str:
     def repl(match: re.Match[str]) -> str:
         candidate = match.group(0)
-        if any(start <= match.start() and match.end() <= end for start, end in cards):
-            return candidate
         span = _phone_span(candidate)
         if span is None:
             return candidate
@@ -606,8 +632,7 @@ def _redact_phones(text: str, counts: Counter[str]) -> str:
     return _PHONE_RE.sub(repl, text)
 
 
-def _card_spans_of(text: str) -> list[tuple[int, int]]:
-    """Sorted spans of every card in the text: dotted cards first, then digit runs."""
+def _redact_cards(text: str, counts: Counter[str]) -> str:
     masked = _mask_dates(text)
     found: list[tuple[int, int]] = []
     for dotted in _DOT_CARD_RE.finditer(masked):
@@ -624,11 +649,6 @@ def _card_spans_of(text: str) -> list[tuple[int, int]]:
             for group in _CARD_GROUP_RE.finditer(run.group(0))
         ]
         found.extend(_card_spans(groups))
-    return sorted(found)
-
-
-def _redact_cards(text: str, counts: Counter[str]) -> str:
-    found = _card_spans_of(text)
     if not found:
         return text
     pieces: list[str] = []
@@ -882,6 +902,7 @@ class Redactor:
         out = _redact_urls(out, counts)
         out = _redact_emails(out, counts)
         out = _redact_ibans(out, counts)
+        out = _redact_lone_cards(out, counts)
         out = _redact_phones(out, counts)
         out = _redact_cards(out, counts)
         return _redact_addresses(out, counts)

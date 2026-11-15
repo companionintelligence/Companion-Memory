@@ -686,6 +686,30 @@ CARD_CASES = [
         id="card-second-zero-led-example",
     ),
     pytest.param(
+        "Card 4000.0000.0000.0002 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-zero-led-dotted-groups",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111 555-123-4567 now",
+        "Card [CARD] [PHONE] now",
+        {"card": 1, "phone": 1},
+        id="card-followed-by-phone-keeps-the-card-whole",
+    ),
+    pytest.param(
+        "Tel 06 48 62 25 88 4801 7007 2418 4070 Thanks",
+        "Tel [PHONE] [CARD] Thanks",
+        {"card": 1, "phone": 1},
+        id="phone-followed-by-card-keeps-the-card-whole",
+    ),
+    pytest.param(
+        "005 3976 0420 4819 6-936-918-8994 now",
+        "[PHONE] 6-[PHONE] now",
+        {"phone": 2},
+        id="phone-starting-inside-a-run-is-fully-hidden",
+    ),
+    pytest.param(
         "Card 4111   1111   1111   1111 now",
         "Card [CARD] now",
         {"card": 1},
