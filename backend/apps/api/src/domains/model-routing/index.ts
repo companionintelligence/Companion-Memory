@@ -13,6 +13,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
 
 import { EmbeddingModule } from '@ci/common/embeddings';
 import { MemoryModule } from '@ci/domains/memory';
@@ -40,13 +41,20 @@ import {
   type ScoreCriterionResult,
   type ScoreDecisionResult,
 } from './services/ContrastiveDecisionService';
+import {
+  GenerativeDecisionEvaluatorAdapter,
+  type DecisionChatModel,
+} from './services/GenerativeDecisionEvaluatorAdapter';
+import { GenerativeDecisionHandoffService } from './services/GenerativeDecisionHandoffService';
 import { ModelTierRouter, TIER_PROFILES } from './services/ModelTierRouter';
 import type { ModelTier, ReasoningLevel, RoutingDecision, RoutingRequest, TierProfile } from './types';
 
 @Module({
-  imports: [EmbeddingModule, MemoryModule, PredictionsModule],
+  imports: [EmbeddingModule, MemoryModule, PredictionsModule, DiscoveryModule],
   controllers: [ModelRoutingController],
-  providers: [ModelTierRouter, ContrastiveDecisionService],
+  // GenerativeDecisionHandoffService registers the local-LLM evaluator at init, only when
+  // DECISION_GENERATIVE_HANDOFF=true. It does nothing otherwise.
+  providers: [ModelTierRouter, ContrastiveDecisionService, GenerativeDecisionHandoffService],
   exports: [ModelTierRouter, ContrastiveDecisionService],
 })
 export class ModelRoutingModule {}
@@ -56,6 +64,7 @@ export {
   ContrastiveDecisionService,
   cosineSimilarity,
   deterministicTextEmbedding,
+  GenerativeDecisionEvaluatorAdapter,
   ModelTierRouter,
   normalizeVector,
   TIER_PROFILES,
@@ -63,6 +72,7 @@ export {
 export type {
   ChoiceCandidateScore,
   ChoiceDecisionResult,
+  DecisionChatModel,
   DecisionEngineMode,
   DecisionEngineUsed,
   DecisionOptions,
