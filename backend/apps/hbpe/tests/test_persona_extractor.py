@@ -864,6 +864,105 @@ def test_a_percent_encoded_sender_name_in_a_url_is_denied(tmp_path: Path) -> Non
     ]
 
 
+def test_a_sender_name_with_digits_does_not_split_a_phone_number(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Ring me on 07700 900123 tomorrow",
+                "creator": {"name": "+44 7700 900123"},
+            },
+            {
+                "text": "Call me on +44 20 7946 0958 after six",
+                "creator": {"name": "Alice Kim"},
+            },
+            {"text": "I'll be in room 44 after lunch", "creator": {"name": "Ben 44"}},
+            {"text": "Standup moved to 10:30 tomorrow", "creator": {"name": "Anna 10"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Ring me on [PHONE] tomorrow",
+        "[NAME]: Call me on [PHONE] after six",
+        "[NAME]: I'll be in room 44 after lunch",
+        "[NAME]: Standup moved to 10:30 tomorrow",
+    ]
+
+
+def test_a_common_word_sender_name_is_masked_in_capitals_and_full_width(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "I will call you tomorrow", "creator": {"name": "Will"}},
+            {"text": "I will send the deck", "creator": {"name": "Will"}},
+            {"text": "Will, are you coming?", "creator": {"name": "Will"}},
+            {"text": "THANKS WILL FOR THE DECK", "creator": {"name": "Will"}},
+            {"text": "thanks Ｗｉｌｌ for the deck", "creator": {"name": "Will"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: I will call you tomorrow",
+        "[NAME]: I will send the deck",
+        "[NAME]: [NAME], are you coming?",
+        "[NAME]: THANKS [NAME] FOR THE DECK",
+        "[NAME]: thanks [NAME] for the deck",
+    ]
+
+
+def test_a_caseless_sender_name_is_denied_everywhere(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "東京 is lovely in spring", "creator": {"name": "Ken 東京"}},
+            {"text": "We should go to 東京 together", "creator": {"name": "Ken 東京"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: [NAME] is lovely in spring",
+        "[NAME]: We should go to [NAME] together",
+    ]
+
+
+def test_a_sender_name_with_a_letter_that_does_not_decompose_is_denied_in_ascii(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Øyvind said the boat is ready",
+                "creator": {"name": "Øyvind Ødegård"},
+            },
+            {
+                "text": "Tell Oyvind the boat is ready too",
+                "creator": {"name": "Alice Kim"},
+            },
+            {"text": "Ask Odegard about the mooring", "creator": {"name": "Alice Kim"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: [NAME] said the boat is ready",
+        "[NAME]: Tell [NAME] the boat is ready too",
+        "[NAME]: Ask [NAME] about the mooring",
+    ]
+
+
+def test_an_export_path_with_glob_characters_is_read(tmp_path: Path) -> None:
+    root = tmp_path / "export [2026]"
+    _write_chat(
+        root, [{"text": "Bring the car keys tomorrow", "creator": {"name": "Sam Lee"}}]
+    )
+
+    assert _states(root) == ["[NAME]: Bring the car keys tomorrow"]
+
+
 def test_no_raw_contact_detail_reaches_any_state(tmp_path: Path) -> None:
     email = "sarah.jones@example.com"
     phone = "07700 900123"

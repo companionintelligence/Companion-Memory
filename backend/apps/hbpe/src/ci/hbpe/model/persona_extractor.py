@@ -240,10 +240,54 @@ def _normalised(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
+_TRANSLITERATIONS = str.maketrans(
+    {
+        "ø": "o",
+        "Ø": "O",
+        "ł": "l",
+        "Ł": "L",
+        "đ": "d",
+        "Đ": "D",
+        "þ": "th",
+        "Þ": "Th",
+        "æ": "ae",
+        "Æ": "AE",
+        "œ": "oe",
+        "Œ": "OE",
+    }
+)
+_DIGRAPHS = str.maketrans(
+    {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue"}
+)
+# A run of letters, with apostrophes inside it, such as Anna or O'Brien. Digits and
+# marks are not part of a name word.
+_NAME_WORD_RE = re.compile(r"[^\W\d_]+(?:['\u2019][^\W\d_]+)*")
+
+
 def _unaccented(text: str) -> str:
-    """``text`` with its accents removed, so that Jose matches José."""
-    decomposed = unicodedata.normalize("NFKD", text)
+    """``text`` with accents removed, and ø, ł, æ, œ, đ and þ spelt in plain ASCII."""
+    decomposed = unicodedata.normalize("NFKD", text.translate(_TRANSLITERATIONS))
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _digraphs(text: str) -> str:
+    """``text`` with umlauts spelt as digraphs, as in Mueller for Müller."""
+    return text.translate(_DIGRAPHS)
+
+
+def _is_name_form(form: str) -> bool:
+    """Whether a form can be a name: at least two characters, with a letter, and with
+    no digit or plus sign, so that a name never splits a phone number."""
+    plain = form.replace("%20", " ")
+    return (
+        len(plain) >= 2
+        and any(ch.isalpha() for ch in plain)
+        and not any(ch.isdecimal() or ch == "+" for ch in plain)
+    )
+
+
+def _is_cased(form: str) -> bool:
+    return any(ch.isupper() or ch.islower() for ch in form)
 
 
 def _capitalised(word: str) -> str:
@@ -270,12 +314,17 @@ def _sender_name(msg: Any) -> str:
 def _sender_forms(name: str) -> list[str]:
     """Every spelling and word of a sender's name that the redactor should look for.
 
-    The name is taken as written and without accents. It is also taken word by word, with
-    words split on spaces, commas, hyphens, underscores and dots, and joined again with an
-    underscore, a dot or a hyphen, because file and list names often join a name that way.
-    A name whose display name is an e-mail address also gives the words of its local part.
+    The name is taken as written, without accents, and with umlauts spelt as digraphs. Its
+    words are its runs of letters. Each run of two or more words is also joined with an
+    underscore, a dot, a hyphen or %20, because file and list names often join a name that
+    way. A name whose display name is an e-mail address also gives the words of its local
+    part. Only forms that can be names are kept, see _is_name_form.
     """
-    spellings = [name, _normalised(_unaccented(name))]
+    spellings = [
+        _normalised(name),
+        _normalised(_unaccented(name)),
+        _normalised(_digraphs(name)),
+    ]
     if "@" in name:
         spellings.append(_normalised(re.sub(r"\W+", " ", name.split("@", 1)[0])))
     forms: dict[str, None] = {}
@@ -283,12 +332,12 @@ def _sender_forms(name: str) -> list[str]:
         forms[spelling] = None
         if "@" in spelling:
             continue
-        words = [word for word in _NAME_PART_RE.split(spelling) if word]
+        words = _NAME_WORD_RE.findall(spelling)
         forms.update(dict.fromkeys(words))
         if len(words) > 1:
             for joiner in ("_", ".", "-", "%20"):
                 forms[joiner.join(words)] = None
-    return [form for form in forms if len(form) >= 2]
+    return [form for form in forms if _is_name_form(form)]
 
 
 def _is_single_word(form: str) -> bool:
@@ -298,19 +347,20 @@ def _is_single_word(form: str) -> bool:
 def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], list[str]]:
     """Split the sender names into the forms to deny and the words to mask.
 
-    A form with a space, a hyphen or another mark is denied wherever it occurs. A single
-    word is ambiguous when the chat also uses it as an ordinary word in lower case, at least
-    twice and for at least a twentieth of its uses, whatever the capitals of the name. Denying
-    an ambiguous word would damage that text: a sender called Will would turn "I will" into
-    "I [NAME]". An ambiguous word is masked only where it is capitalised, see
-    _mask_capitalised_names. Any other single word is denied wherever it occurs.
-    The counts come from the export itself, so a small export can misjudge a name, and then
-    its lower-case uses are kept.
+    A form with a space, a hyphen or another mark is denied wherever it occurs, and so is a
+    caseless word, such as a name in Japanese script. A cased single word is ambiguous when
+    the chat also uses it as an ordinary word in lower case, at least twice and for at least
+    a twentieth of its uses. Counting is on the NFKC form of the text, so full-width spellings
+    count as their plain forms. Denying an ambiguous word would damage that text: a sender
+    called Will would turn "I will" into "I [NAME]". An ambiguous word is masked only where it
+    is capitalised or written in capitals, see _mask_capitalised_names. Any other single word
+    is denied wherever it occurs. The counts come from the export itself, so a small export
+    can misjudge a name, and then its lower-case uses are kept.
     """
     lower_uses: Counter[str] = Counter()
     capital_uses: Counter[str] = Counter()
     for text in texts:
-        for word in _WORD_RE.findall(text):
+        for word in _WORD_RE.findall(unicodedata.normalize("NFKC", text)):
             if word[:1].isupper():
                 capital_uses[word.lower()] += 1
             else:
@@ -319,7 +369,7 @@ def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], lis
     masked: dict[str, None] = {}
     for name in names:
         for form in _sender_forms(name):
-            if not _is_single_word(form):
+            if not _is_single_word(form) or not _is_cased(form):
                 deny[form] = None
                 continue
             lower = lower_uses[form.lower()]
@@ -327,6 +377,7 @@ def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], lis
             if lower >= 2 and lower >= _AMBIGUOUS_SHARE * (lower + capital):
                 masked[_capitalised(form)] = None
                 masked[_title_case(form)] = None
+                masked[form.upper()] = None
             else:
                 deny[form] = None
     return list(deny), list(masked)
@@ -393,14 +444,14 @@ class PersonaDataExtractor:
         result = PersonaDatasetAuditResult()
 
         # 1. Chat impostor files
-        chat_pattern = str(
-            self.export_dir
-            / "_test-staging"
-            / "impostors"
-            / "chat"
-            / "Groups"
-            / "*"
-            / "messages.json"
+        chat_pattern = os.path.join(
+            glob.escape(str(self.export_dir)),
+            "_test-staging",
+            "impostors",
+            "chat",
+            "Groups",
+            "*",
+            "messages.json",
         )
         chat_files = glob.glob(chat_pattern)
         if chat_files:
@@ -459,14 +510,14 @@ class PersonaDataExtractor:
 
         # 1. Chat messages. Every sender is read before the length filter, so that a sender
         #    whose messages are all short still has their name denied in the other text.
-        chat_pattern = str(
-            self.export_dir
-            / "_test-staging"
-            / "impostors"
-            / "chat"
-            / "Groups"
-            / "*"
-            / "messages.json"
+        chat_pattern = os.path.join(
+            glob.escape(str(self.export_dir)),
+            "_test-staging",
+            "impostors",
+            "chat",
+            "Groups",
+            "*",
+            "messages.json",
         )
         chat_records: list[tuple[str, str]] = []
         sender_names: dict[str, None] = {}
@@ -498,7 +549,9 @@ class PersonaDataExtractor:
         mask_pattern = _mask_pattern(masked)
 
         def redact(text: str, *, chat: bool = False) -> str:
-            masked_text = _mask_capitalised_names(text, mask_pattern, chat=chat)
+            masked_text = _mask_capitalised_names(
+                unicodedata.normalize("NFKC", text), mask_pattern, chat=chat
+            )
             return redactor.redact(masked_text)[0]
 
         for speaker, text in chat_records:
