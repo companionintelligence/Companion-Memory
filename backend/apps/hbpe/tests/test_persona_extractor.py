@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 try:
@@ -19,11 +20,15 @@ except ImportError:
 
 from ci.hbpe.model.persona_extractor import (
     PersonaDataExtractor,
+    ToneExample,
+    ToneMessage,
     _infer_commitment,
     _infer_l0,
     _infer_urgency,
+    build_tone_examples,
     train_persona_decision_model,
 )
+from ci.hbpe.model.redaction import Redactor
 
 # The real-data tests read a personal export, so they run only when
 # HBPE_PERSONA_EXPORT_DIR points at one. Without it they skip, and the suite
@@ -109,6 +114,179 @@ def test_persona_decision_model_training_end_to_end():
         assert loaded["record_counts"]["total"] == meta["record_counts"]["total"]
 
 
+# Tone adapter examples: the builder, and the redaction it must always apply.
+
+
+class _RecordingRedactor(Redactor):
+    """Redactor that remembers every text it was asked to redact."""
+
+    def __init__(self, deny_names: Iterable[str] = ()) -> None:
+        super().__init__(deny_names=deny_names)
+        self.seen: list[str] = []
+
+    def redact(self, text: str) -> tuple[str, dict[str, int]]:
+        self.seen.append(text)
+        return super().redact(text)
+
+
+def test_tone_examples_pair_reply_with_inbound_context():
+    messages = [
+        ToneMessage(
+            "Are you free for lunch on Thursday to talk about the launch?",
+            sent_by_user=False,
+            thread_id="t1",
+        ),
+        ToneMessage(
+            "Yes I can do Thursday at noon, does that work for you both?",
+            sent_by_user=True,
+            thread_id="t1",
+        ),
+    ]
+    examples, dropped = build_tone_examples(messages, Redactor())
+
+    assert examples == [
+        ToneExample(
+            reply="Yes I can do Thursday at noon, does that work for you both?",
+            context="Are you free for lunch on Thursday to talk about the launch?",
+        )
+    ]
+    assert dropped == {"empty": 0, "too_short": 0}
+
+
+def test_tone_examples_use_single_message_when_no_inbound_context():
+    messages = [
+        ToneMessage(
+            "Sounds good to me, I will bring the slides on Friday morning",
+            sent_by_user=True,
+        ),
+        ToneMessage(
+            "Inbound message in the thread used for the reply test case",
+            sent_by_user=False,
+            thread_id="t2",
+        ),
+        ToneMessage(
+            "Yes that works fine for me, see you on Friday at nine",
+            sent_by_user=True,
+            thread_id="t2",
+        ),
+        ToneMessage(
+            "Following up with the agenda for the meeting we discussed earlier",
+            sent_by_user=True,
+            thread_id="t2",
+        ),
+    ]
+    examples, dropped = build_tone_examples(messages, Redactor())
+
+    assert [example.context for example in examples] == [
+        None,
+        "Inbound message in the thread used for the reply test case",
+        None,
+    ]
+    # Inbound messages only supply context, so none of them is emitted as a reply.
+    assert all("Inbound message" not in example.reply for example in examples)
+    assert dropped == {"empty": 0, "too_short": 0}
+
+
+def test_tone_examples_redact_every_field():
+    redactor = _RecordingRedactor(deny_names=["Sarah"])
+    inbound = (
+        "Sarah here, my card is 4111 1111 1111 1111 so please book the table for Friday"
+    )
+    reply = (
+        "Sure Sarah, I will email sarah@example.com with the table details by tonight"
+    )
+    messages = [
+        ToneMessage(inbound, sent_by_user=False, thread_id="t"),
+        ToneMessage(reply, sent_by_user=True, thread_id="t"),
+    ]
+    examples, dropped = build_tone_examples(messages, redactor)
+
+    # Both the context and the reply reached the redactor, unredacted.
+    assert inbound in redactor.seen
+    assert reply in redactor.seen
+    assert examples == [
+        ToneExample(
+            reply="Sure [NAME], I will email [EMAIL] with the table details by tonight",
+            context="[NAME] here, my card is [CARD] so please book the table for Friday",
+        )
+    ]
+    assert dropped == {"empty": 0, "too_short": 0}
+
+
+def test_tone_examples_count_drop_reasons():
+    messages = [
+        ToneMessage("", sent_by_user=True),
+        ToneMessage("   \n  ", sent_by_user=True),
+        ToneMessage("", sent_by_user=False),  # inbound: context only, not counted
+        ToneMessage("ok thanks mate", sent_by_user=True),
+        ToneMessage("Sounds good, see you at the station", sent_by_user=True),
+        ToneMessage("sarah@example.com", sent_by_user=True),  # redacts to one word
+        ToneMessage("Sounds good, see you at the station on Friday", sent_by_user=True),
+    ]
+    examples, dropped = build_tone_examples(messages, Redactor())
+
+    assert [example.reply for example in examples] == [
+        "Sounds good, see you at the station on Friday"
+    ]
+    assert dropped == {"empty": 2, "too_short": 3}
+
+
+def test_tone_examples_min_words_is_configurable():
+    messages = [ToneMessage("Yes, that works for me", sent_by_user=True)]
+
+    examples, dropped = build_tone_examples(messages, Redactor())
+    assert examples == []
+    assert dropped == {"empty": 0, "too_short": 1}
+
+    examples, dropped = build_tone_examples(messages, Redactor(), min_words=5)
+    assert examples == [ToneExample(reply="Yes, that works for me")]
+    assert dropped == {"empty": 0, "too_short": 0}
+
+    with pytest.raises(ValueError):
+        build_tone_examples(messages, Redactor(), min_words=0)
+
+
+def test_tone_examples_never_leave_a_redacted_category_behind():
+    redactor = Redactor(deny_names=["Sarah"])
+    messages = [
+        ToneMessage(
+            "Sarah, call me on +44 20 7946 0958 or mail sarah@example.com about the flat",
+            sent_by_user=False,
+            thread_id="t",
+        ),
+        ToneMessage(
+            "Thanks Sarah, my card 4111 1111 1111 1111 and IBAN GB82 WEST 1234 5698 "
+            "7654 32 are at 10 Downing Street, see https://shop.example.com/a?session=xyz",
+            sent_by_user=True,
+            thread_id="t",
+        ),
+        ToneMessage(
+            "Booking details are in the usual place, see "
+            "https://pay.example.com/c?token=9f8e7d6c5b4a",
+            sent_by_user=True,
+        ),
+    ]
+    examples, dropped = build_tone_examples(messages, redactor)
+
+    assert examples == [
+        ToneExample(
+            reply=(
+                "Thanks [NAME], my card [CARD] and IBAN [IBAN] are at [ADDRESS], "
+                "see https://shop.example.com/a"
+            ),
+            context="[NAME], call me on [PHONE] or mail [EMAIL] about the flat",
+        ),
+        ToneExample(
+            reply="Booking details are in the usual place, see https://pay.example.com/c"
+        ),
+    ]
+    assert dropped == {"empty": 0, "too_short": 0}
+    for example in examples:
+        for text in (example.reply, example.context or ""):
+            # Redacting again finds nothing, so no category match survived the builder.
+            assert redactor.redact(text) == (text, {})
+
+
 if __name__ == "__main__":
     print("Running test_keyword_heuristics...")
     test_keyword_heuristics()
@@ -118,4 +296,14 @@ if __name__ == "__main__":
     test_persona_extractor_splits_real_data()
     print("Running test_persona_decision_model_training_end_to_end...")
     test_persona_decision_model_training_end_to_end()
+    print("Running test_tone_examples_pair_reply_with_inbound_context...")
+    test_tone_examples_pair_reply_with_inbound_context()
+    print("Running test_tone_examples_use_single_message_when_no_inbound_context...")
+    test_tone_examples_use_single_message_when_no_inbound_context()
+    print("Running test_tone_examples_redact_every_field...")
+    test_tone_examples_redact_every_field()
+    print("Running test_tone_examples_count_drop_reasons...")
+    test_tone_examples_count_drop_reasons()
+    print("Running test_tone_examples_never_leave_a_redacted_category_behind...")
+    test_tone_examples_never_leave_a_redacted_category_behind()
     print("All persona extractor tests passed!")
