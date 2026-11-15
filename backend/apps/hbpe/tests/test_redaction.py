@@ -674,6 +674,18 @@ CARD_CASES = [
         id="card-glued-to-security-code",
     ),
     pytest.param(
+        "Card 4000 0000 0000 0002 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-zero-led-groups-are-not-a-phone",
+    ),
+    pytest.param(
+        "Card 4111 0234 5678 9015 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-second-zero-led-example",
+    ),
+    pytest.param(
         "Card 4111   1111   1111   1111 now",
         "Card [CARD] now",
         {"card": 1},
@@ -789,6 +801,18 @@ ADDRESS_CASES = [
         "Meet at [ADDRESS].",
         {"address": 1},
         id="address-house-number-range",
+    ),
+    pytest.param(
+        "Visit 5 Old Circle today.",
+        "Visit [ADDRESS] today.",
+        {"address": 1},
+        id="address-circle-suffix",
+    ),
+    pytest.param(
+        "Meet at 4 Station Plaza.",
+        "Meet at [ADDRESS].",
+        {"address": 1},
+        id="address-plaza-suffix",
     ),
     pytest.param(
         "Post it to Flat221 Baker Street.",

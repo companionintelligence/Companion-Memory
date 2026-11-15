@@ -171,6 +171,12 @@ _STREET_SUFFIXES = (
     "Rise",
     "Hill",
     "Gate",
+    "Circle",
+    "Trail",
+    "Plaza",
+    "Path",
+    "Loop",
+    "Str",
 )
 _SUFFIX_ALTERNATION = "|".join(
     re.escape(suffix) for suffix in sorted(_STREET_SUFFIXES, key=len, reverse=True)
@@ -583,8 +589,14 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
 
 
 def _redact_phones(text: str, counts: Counter[str]) -> str:
+    # A phone-shaped run inside a card belongs to the card, which the card rule reads later.
+    # Without this check the last twelve digits of a zero-led card are labelled as a phone.
+    cards = _card_spans_of(text)
+
     def repl(match: re.Match[str]) -> str:
         candidate = match.group(0)
+        if any(start <= match.start() and match.end() <= end for start, end in cards):
+            return candidate
         span = _phone_span(candidate)
         if span is None:
             return candidate
@@ -594,7 +606,8 @@ def _redact_phones(text: str, counts: Counter[str]) -> str:
     return _PHONE_RE.sub(repl, text)
 
 
-def _redact_cards(text: str, counts: Counter[str]) -> str:
+def _card_spans_of(text: str) -> list[tuple[int, int]]:
+    """Sorted spans of every card in the text: dotted cards first, then digit runs."""
     masked = _mask_dates(text)
     found: list[tuple[int, int]] = []
     for dotted in _DOT_CARD_RE.finditer(masked):
@@ -611,6 +624,11 @@ def _redact_cards(text: str, counts: Counter[str]) -> str:
             for group in _CARD_GROUP_RE.finditer(run.group(0))
         ]
         found.extend(_card_spans(groups))
+    return sorted(found)
+
+
+def _redact_cards(text: str, counts: Counter[str]) -> str:
+    found = _card_spans_of(text)
     if not found:
         return text
     pieces: list[str] = []
