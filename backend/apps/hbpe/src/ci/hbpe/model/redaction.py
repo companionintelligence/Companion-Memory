@@ -615,7 +615,17 @@ def _lone_card_spans(text: str) -> list[tuple[int, int]]:
 def _redact_phones(text: str, counts: Counter[str]) -> str:
     # A phone-shaped run inside a lone card is part of the card, which the card rule takes.
     # Without this check the zero-led tail of 4000 0000 0000 0002 is read as a phone number.
-    lone = _lone_card_spans(text)
+    # A lone card that a phone-shaped match only partly covers is not protected, so the
+    # phone rule treats it as the parent does.
+    matches = [match.span() for match in _PHONE_RE.finditer(text)]
+    lone = [
+        (start, end)
+        for start, end in _lone_card_spans(text)
+        if not any(
+            m_start < end and start < m_end and not (start <= m_start and m_end <= end)
+            for m_start, m_end in matches
+        )
+    ]
 
     def repl(match: re.Match[str]) -> str:
         candidate = match.group(0)

@@ -740,6 +740,18 @@ CARD_CASES = [
         id="phone-before-an-address-stays-hidden",
     ),
     pytest.param(
+        "+0000 0000 0000 0000.0000 4111 0046 0046",
+        "[PHONE] [PHONE] [PHONE]",
+        {"phone": 3},
+        id="phone-straddling-two-adjacent-cards-keeps-both-hidden",
+    ),
+    pytest.param(
+        "+8210 0564 3189 0046.0002 0753 0768 0462",
+        "[PHONE] [PHONE] [PHONE]",
+        {"phone": 3},
+        id="phone-straddling-a-card-and-the-next-group-stays-hidden",
+    ),
+    pytest.param(
         "Card 4111   1111   1111   1111 now",
         "Card [CARD] now",
         {"card": 1},
