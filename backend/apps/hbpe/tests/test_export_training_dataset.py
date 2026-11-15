@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -84,16 +85,23 @@ def _fields(**overrides: Any) -> dict[str, Any]:
     return fields
 
 
-def _assert_nothing_written(out: Path) -> None:
-    leftovers = sorted(p.name for p in out.iterdir()) if out.exists() else []
-    assert leftovers == []
-
-
 def _assert_only_export_files(out: Path) -> None:
     assert sorted(p.name for p in out.iterdir()) == [
         DATASET_FILENAME,
         MANIFEST_FILENAME,
     ]
+
+
+def _staging_leftovers(parent: Path) -> list[str]:
+    """Staging and retired directories that a failed or interrupted export left."""
+    if not parent.is_dir():
+        return []
+    return sorted(p.name for p in parent.iterdir() if p.name.startswith(".export-"))
+
+
+def _assert_nothing_written(out: Path) -> None:
+    assert not out.exists()
+    assert _staging_leftovers(out.parent) == []
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -153,6 +161,35 @@ def test_caller_fields_pass_through_and_defaults_fill_in(tmp_path: Path) -> None
     assert manifest["resourcePolicy"] == {"devicePreference": "cpu"}
 
 
+def test_omitted_manifest_fields_take_the_runner_defaults(tmp_path: Path) -> None:
+    export = write_training_export(
+        _days(4), tmp_path / "export", {"userId": USER_ID, "jobId": JOB_ID}
+    )
+    manifest = _load_json(export.manifest_path)
+    # The values run_headless_job uses when a manifest leaves these out.
+    assert manifest["hyperparameters"] == {
+        "batchSize": 16,
+        "epochs": 50,
+        "learningRate": 1e-4,
+    }
+    assert manifest["resourcePolicy"] == {"devicePreference": "auto"}
+    assert manifest["dataset"]["valFraction"] == 0.15
+
+
+@pytest.mark.parametrize("device", ["auto", "cpu", "mps", "cuda", "cuda:1"])
+def test_writer_accepts_each_device_preference_the_runner_knows(
+    tmp_path: Path, device: str
+) -> None:
+    export = write_training_export(
+        _days(4),
+        tmp_path / "export",
+        _fields(resourcePolicy={"devicePreference": device}),
+    )
+    assert _load_json(export.manifest_path)["resourcePolicy"] == {
+        "devicePreference": device
+    }
+
+
 # ── Manifest validation ───────────────────────────────────────────────────────
 
 
@@ -206,6 +243,21 @@ MANIFEST_FAILURES = [
         _set(("resourcePolicy", "devicePreference"), "tpu"),
         "devicePreference",
         id="unknown-device",
+    ),
+    pytest.param(
+        _set(("resourcePolicy", "devicePreference"), "cpu\n"),
+        "devicePreference",
+        id="device-trailing-newline",
+    ),
+    pytest.param(
+        _set(("resourcePolicy", "devicePreference"), "cuda:0\n"),
+        "devicePreference",
+        id="cuda-trailing-newline",
+    ),
+    pytest.param(
+        _set(("resourcePolicy", "devicePreference"), "cuda:"),
+        "devicePreference",
+        id="cuda-without-index",
     ),
     pytest.param(_set(("dataset", "valFraction"), 0), "valFraction", id="val-zero"),
     pytest.param(_set(("dataset", "valFraction"), 1.0), "valFraction", id="val-one"),
@@ -396,6 +448,11 @@ def test_writer_refuses_a_bad_day_and_writes_nothing(
             _fields(hyperparameters={"epochs": 0}), "epochs", id="epochs-zero"
         ),
         pytest.param(_fields(dataset={"valFraction": 1}), "valFraction", id="val-one"),
+        pytest.param(
+            _fields(resourcePolicy={"devicePreference": "cpu\n"}),
+            "devicePreference",
+            id="device-trailing-newline",
+        ),
     ],
 )
 def test_writer_checks_manifest_fields_before_writing(
@@ -404,7 +461,7 @@ def test_writer_checks_manifest_fields_before_writing(
     out = tmp_path / "export"
     with pytest.raises(TrainingExportError, match=fragment):
         write_training_export(_days(4), out, fields)
-    assert not out.exists()
+    _assert_nothing_written(out)
 
 
 def test_writer_refuses_to_replace_an_export_without_overwrite(tmp_path: Path) -> None:
@@ -424,13 +481,153 @@ def test_writer_refuses_to_replace_an_export_without_overwrite(tmp_path: Path) -
     _assert_only_export_files(out)
 
 
+# ── Re-read and publish ───────────────────────────────────────────────────────
+
+
+def _write_unknown_l0(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the written dataset carry an L0 id outside the class list.
+
+    The days still pass every check made on them in memory, so only the re-read
+    of the written pair can refuse them.
+    """
+    real_text = export_mod._dataset_text
+
+    def corrupted(days: Sequence[list[dict[str, Any]]]) -> str:
+        first_l0 = days[0][1]["token_id"]
+        return real_text(days).replace(f'"{first_l0}"', '"DANCING"', 1)
+
+    monkeypatch.setattr(export_mod, "_dataset_text", corrupted)
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["flat", "nested"])
+def test_writer_rereads_the_staged_pair_and_publishes_nothing_it_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested: bool
+) -> None:
+    _write_unknown_l0(monkeypatch)
+    out = tmp_path / "a" / "b" / "export" if nested else tmp_path / "export"
+
+    with pytest.raises(TrainingExportError, match="is not one of"):
+        write_training_export(_days(4), out, _fields())
+
+    _assert_nothing_written(out)
+    # Directories the failed export created on its way are removed as well.
+    assert not (tmp_path / "a").exists()
+
+
+def test_failed_rewrite_leaves_the_previous_export_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "export"
+    first = write_training_export(_days(4), out, _fields(jobId="job-a"))
+    before = {
+        DATASET_FILENAME: first.dataset_path.read_bytes(),
+        MANIFEST_FILENAME: first.manifest_path.read_bytes(),
+    }
+
+    _write_unknown_l0(monkeypatch)
+    with pytest.raises(TrainingExportError, match="is not one of"):
+        write_training_export(_days(5), out, _fields(jobId="job-b"), overwrite=True)
+
+    after = {
+        DATASET_FILENAME: (out / DATASET_FILENAME).read_bytes(),
+        MANIFEST_FILENAME: (out / MANIFEST_FILENAME).read_bytes(),
+    }
+    assert after == before
+    _assert_only_export_files(out)
+    assert _staging_leftovers(tmp_path) == []
+
+
+def test_a_failed_publish_leaves_the_previous_export_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "export"
+    write_training_export(_days(4), out, _fields(jobId="job-a"))
+    before = {
+        name: (out / name).read_bytes()
+        for name in (DATASET_FILENAME, MANIFEST_FILENAME)
+    }
+
+    # Fail the second rename the writer makes. Two separate file replaces would
+    # already have moved the new dataset over the old one by that point.
+    real_replace = export_mod.os.replace
+    renames: list[tuple[str, str]] = []
+
+    def fail_second_rename(src: str | Path, dst: str | Path) -> None:
+        renames.append((str(src), str(dst)))
+        if len(renames) == 2:
+            raise OSError("simulated failure during publish")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(export_mod.os, "replace", fail_second_rename)
+    with pytest.raises(OSError, match="simulated failure"):
+        write_training_export(_days(5), out, _fields(jobId="job-b"), overwrite=True)
+
+    after = {name: (out / name).read_bytes() for name in before}
+    assert after == before
+    _assert_only_export_files(out)
+    assert _staging_leftovers(tmp_path) == []
+
+
+def test_writer_publishes_into_an_existing_empty_directory(tmp_path: Path) -> None:
+    out = tmp_path / "export"
+    out.mkdir()
+
+    export = write_training_export(_days(4), out, _fields())
+
+    assert validate_training_export(export.manifest_path, export.dataset_path) == export
+    _assert_only_export_files(out)
+    assert _staging_leftovers(tmp_path) == []
+
+
+def test_writer_creates_missing_parent_directories(tmp_path: Path) -> None:
+    out = tmp_path / "a" / "b" / "export"
+
+    export = write_training_export(_days(4), out, _fields())
+
+    assert validate_training_export(export.manifest_path, export.dataset_path) == export
+    _assert_only_export_files(out)
+    assert _staging_leftovers(out.parent) == []
+
+
+def test_writer_keeps_a_directory_that_holds_other_files(tmp_path: Path) -> None:
+    out = tmp_path / "export"
+    out.mkdir()
+    (out / "notes.txt").write_text("keep me", encoding="utf-8")
+
+    with pytest.raises(TrainingExportError, match=re.escape("notes.txt")):
+        write_training_export(_days(4), out, _fields(), overwrite=True)
+
+    assert sorted(p.name for p in out.iterdir()) == ["notes.txt"]
+    assert (out / "notes.txt").read_text(encoding="utf-8") == "keep me"
+    assert _staging_leftovers(tmp_path) == []
+
+
+def test_writer_refuses_a_target_that_is_a_file(tmp_path: Path) -> None:
+    out = tmp_path / "export"
+    out.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(TrainingExportError, match="not a directory"):
+        write_training_export(_days(4), out, _fields(), overwrite=True)
+
+    assert out.read_text(encoding="utf-8") == "not a directory"
+
+
 # ── Source read ───────────────────────────────────────────────────────────────
+
+_Store = dict[str, dict[str, list[dict[str, Any]]]]
+_ORDER_BY = re.compile(r"ORDER BY (\w+)")
+_TOKEN_COLUMNS = ("level", "token_id", "soft_prob", "bucket_idx")
 
 
 class _FakeCursor:
-    """Answers the two nightly training reads from an in-memory store."""
+    """Answers the two nightly training reads from an in-memory store.
 
-    def __init__(self, store: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
+    A query gets its rows back in the order the store holds them, unless its
+    ORDER BY clause sorts them, as PostgreSQL does. The source test fills the
+    store out of order, so a removed ORDER BY clause changes what is read.
+    """
+
+    def __init__(self, store: _Store) -> None:
         self._store = store
         self._rows: list[Any] = []
 
@@ -441,12 +638,19 @@ class _FakeCursor:
         return False
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
-        user_id = params[0]
-        days = self._store.get(user_id, {})
+        days = self._store.get(params[0], {})
+        order = _ORDER_BY.search(sql)
+        sort_by = order.group(1) if order else None
+        if sort_by not in (None, "date", "seq_order"):
+            raise AssertionError(f"the fake cursor does not sort by {sort_by}")
         if "DISTINCT date::text" in sql:
-            self._rows = [(d,) for d in sorted(days)]
+            dates = sorted(days) if sort_by == "date" else list(days)
+            self._rows = [(d,) for d in dates]
         elif "SELECT level, token_id, soft_prob, bucket_idx" in sql:
-            self._rows = [dict(row) for row in days.get(params[1], [])]
+            rows = list(days.get(params[1], []))
+            if sort_by == "seq_order":
+                rows.sort(key=lambda row: row["seq_order"])
+            self._rows = [{c: row[c] for c in _TOKEN_COLUMNS} for row in rows]
         else:
             raise AssertionError(f"unexpected query: {sql}")
 
@@ -455,7 +659,7 @@ class _FakeCursor:
 
 
 class _FakeConnection:
-    def __init__(self, store: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
+    def __init__(self, store: _Store) -> None:
         self._store = store
 
     def cursor(self, *args: Any, **kwargs: Any) -> _FakeCursor:
@@ -463,7 +667,7 @@ class _FakeConnection:
 
 
 def _fake_database(
-    store: dict[str, dict[str, list[dict[str, Any]]]],
+    store: _Store,
 ) -> Callable[[], contextlib.AbstractContextManager[_FakeConnection]]:
     @contextlib.contextmanager
     def get_conn() -> Iterator[_FakeConnection]:
@@ -472,28 +676,32 @@ def _fake_database(
     return get_conn
 
 
+def _stored(day: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A day's rows as the table holds them: seq_order on each, last token first."""
+    rows = [dict(token, seq_order=position) for position, token in enumerate(day)]
+    return rows[::-1]
+
+
 def test_source_reads_one_users_days_since_the_cutoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     other = str(uuid.uuid4())
-    store = {
+    # Out of order on purpose: newest day first, and each day's rows last first.
+    store: _Store = {
         USER_ID: {
-            "2026-10-01": _day(1),
-            "2026-10-03": _day(3),
-            "2026-10-05": _day(5),
-            "2026-10-09": _day(9),
+            "2026-10-09": _stored(_day(9)),
+            "2026-10-05": _stored(_day(5)),
+            "2026-10-03": _stored(_day(3)),
+            "2026-10-01": _stored(_day(1)),
         },
-        other: {"2026-10-04": _day(4)},
+        other: {"2026-10-04": _stored(_day(4))},
     }
+    assert list(store[USER_ID]) != sorted(store[USER_ID])
     monkeypatch.setattr(dataset_mod, "get_conn", _fake_database(store))
 
     got = read_user_sequences(USER_ID.upper(), date(2026, 10, 3))
-    assert got == [
-        store[USER_ID]["2026-10-03"],
-        store[USER_ID]["2026-10-05"],
-        store[USER_ID]["2026-10-09"],
-    ]
-    assert read_user_sequences(USER_ID, date(2026, 10, 5))[0] == _day(5)
+    assert got == [_day(3), _day(5), _day(9)]
+    assert read_user_sequences(USER_ID, date(2026, 10, 5)) == [_day(5), _day(9)]
     assert read_user_sequences(USER_ID, date(2027, 1, 1)) == []
 
 
@@ -517,7 +725,7 @@ def _cli_args(out: Path, *extra: str) -> list[str]:
     ]
 
 
-def test_cli_writes_a_runner_ready_export(
+def test_cli_passes_each_flag_into_the_export(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -531,6 +739,7 @@ def test_cli_writes_a_runner_ready_export(
     monkeypatch.setattr(export_mod, "read_user_sequences", fake_read)
     out = tmp_path / "export"
 
+    # Each flag is set away from its default, so a flag the CLI drops shows up.
     code = main(
         _cli_args(
             out,
@@ -540,6 +749,10 @@ def test_cli_writes_a_runner_ready_export(
             "2",
             "--epochs",
             "1",
+            "--learning-rate",
+            "0.0003",
+            "--val-fraction",
+            "0.25",
             "--device",
             "cpu",
         )
@@ -547,10 +760,20 @@ def test_cli_writes_a_runner_ready_export(
 
     assert code == 0
     assert seen == [(USER_ID, date(2026, 10, 1))]
+    manifest = _load_json(out / MANIFEST_FILENAME)
+    assert manifest["userId"] == USER_ID
+    assert manifest["jobId"] == JOB_ID
+    assert manifest["hyperparameters"] == {
+        "batchSize": 2,
+        "epochs": 1,
+        "learningRate": 0.0003,
+    }
+    assert manifest["resourcePolicy"] == {"devicePreference": "cpu"}
+    assert manifest["dataset"]["valFraction"] == 0.25
+    assert manifest["source"] == {"table": "hbpe.token_stream", "since": "2026-10-01"}
+
     export = validate_training_export(out / MANIFEST_FILENAME, out / DATASET_FILENAME)
     assert (export.days, export.job_id, export.user_id) == (4, JOB_ID, USER_ID)
-    manifest = _load_json(out / MANIFEST_FILENAME)
-    assert manifest["source"] == {"table": "hbpe.token_stream", "since": "2026-10-01"}
     printed = capsys.readouterr().out
     assert "ci.hbpe.model.train_runner" in printed
     assert "--manifest" in printed
@@ -573,9 +796,13 @@ def test_cli_replaces_an_export_only_with_overwrite(
 ) -> None:
     monkeypatch.setattr(export_mod, "read_user_sequences", lambda u, s: _days(4))
     out = tmp_path / "export"
-    assert main(_cli_args(out)) == 0
-    assert main(_cli_args(out)) == 1
-    assert main(_cli_args(out, "--overwrite")) == 0
+    assert main(_cli_args(out, "--job-id", "job-a")) == 0
+
+    assert main(_cli_args(out, "--job-id", "job-b")) == 1
+    assert _load_json(out / MANIFEST_FILENAME)["jobId"] == "job-a"
+
+    assert main(_cli_args(out, "--job-id", "job-b", "--overwrite")) == 0
+    assert _load_json(out / MANIFEST_FILENAME)["jobId"] == "job-b"
 
 
 def test_cli_reports_too_few_days_with_exit_code_1(

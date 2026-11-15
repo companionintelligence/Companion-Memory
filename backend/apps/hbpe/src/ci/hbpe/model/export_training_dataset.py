@@ -8,13 +8,15 @@ The export is the pair of inputs ``ci.hbpe.model.train_runner`` reads:
   manifest.json  the TrainingJobManifest fields ``run_headless_job`` reads
                  (userId, jobId, hyperparameters, resourcePolicy, dataset).
                  The export also writes dataset.days, dataset.tokens and
-                 dataset.sha256 so a changed dataset is caught. The runner
-                 ignores those three keys.
+                 dataset.sha256, which validate_training_export compares with
+                 the dataset. The runner ignores those three keys.
 
 The runner is the reference for both formats. ``write_training_export``
-checks its inputs, writes both files into a staging directory, re-reads the
-pair with the runner's own loader, and only then moves them into ``out_dir``.
-A file the runner would reject never reaches ``out_dir``.
+checks its inputs, writes both files into a staging directory beside
+``out_dir``, re-reads the pair with the runner's own loader, and then moves the
+staging directory into place as a whole. A file the runner would reject never
+reaches ``out_dir``. ``out_dir`` is not created before that move, so a failed
+export leaves no empty directory behind.
 
 ``validate_training_export`` is the same re-read on its own, for an export made
 elsewhere. It is stricter than the runner: the runner fills in missing manifest
@@ -48,7 +50,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -88,7 +89,8 @@ DEFAULT_HYPERPARAMETERS: dict[str, Any] = {
 # Levels the serialized stream uses (SOD | L0 | L1 | L2 | EOD).
 TOKEN_LEVELS = frozenset({"SOD", "L0", "L1", "L2", "EOD"})
 
-_DEVICE_RE = re.compile(r"^(auto|cpu|mps|cuda(:[0-9]+)?)$")
+# Checked with fullmatch: "$" also accepts "cpu" followed by a newline.
+_DEVICE_RE = re.compile(r"auto|cpu|mps|cuda(?::[0-9]+)?")
 
 
 class TrainingExportError(ValueError):
@@ -176,7 +178,7 @@ def _check_manifest(manifest: Mapping[str, Any]) -> tuple[str, str]:
 
     resource = _require_mapping(manifest, "resourcePolicy")
     device = resource.get("devicePreference")
-    if not isinstance(device, str) or not _DEVICE_RE.match(device):
+    if not isinstance(device, str) or not _DEVICE_RE.fullmatch(device):
         raise TrainingExportError(
             "resourcePolicy.devicePreference must be auto, cpu, mps or cuda[:N], "
             f"got {device!r}"
@@ -335,6 +337,72 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _missing_dirs(path: Path) -> list[Path]:
+    """The directories from *path* upward that do not exist yet, nearest first."""
+    missing: list[Path] = []
+    current = path
+    while not current.exists() and current != current.parent:
+        missing.append(current)
+        current = current.parent
+    return missing
+
+
+def _remove_empty(dirs: Sequence[Path]) -> None:
+    """Remove the directories a failed export made, nearest first.
+
+    Stops at the first one that is not empty.
+    """
+    for directory in dirs:
+        try:
+            directory.rmdir()
+        except OSError:
+            return
+
+
+def _check_target(out: Path, overwrite: bool) -> None:
+    """Refuse a target the export cannot replace, before anything is written."""
+    if not out.exists():
+        return
+    if not out.is_dir():
+        raise TrainingExportError(f"{out} exists and is not a directory")
+    held = sorted(p.name for p in out.iterdir())
+    if not held:
+        return
+    export_names = (DATASET_FILENAME, MANIFEST_FILENAME)
+    other = [name for name in held if name not in export_names]
+    if other:
+        raise TrainingExportError(
+            f"{out} holds {', '.join(other)}; an export replaces its directory "
+            "as a whole, so choose an empty directory"
+        )
+    if not overwrite:
+        raise TrainingExportError(
+            f"{out} already holds {' and '.join(held)}; "
+            "pass overwrite=True to replace them"
+        )
+
+
+def _publish(staging: Path, out: Path) -> None:
+    """Move the staged directory into place as a whole.
+
+    The dataset and manifest move together, so they appear together or not at
+    all. An export being replaced is moved aside first and removed only once
+    the new one is in place. If moving the new one in fails, the old one is
+    moved back.
+    """
+    if not out.exists():
+        os.replace(staging, out)
+        return
+    retired = out.parent / f".export-retired-{uuid.uuid4().hex}"
+    os.replace(out, retired)
+    try:
+        os.replace(staging, out)
+    except OSError:
+        os.replace(retired, out)
+        raise
+    shutil.rmtree(retired, ignore_errors=True)
+
+
 def write_training_export(
     sequences: Iterable[list[dict[str, Any]]],
     out_dir: str | Path,
@@ -355,8 +423,13 @@ def write_training_export(
     sets ``dataset.days``, ``dataset.tokens`` and ``dataset.sha256`` itself, so
     any values the caller passes for those three are replaced.
 
-    The export is written only if every check passes. Existing files are
-    replaced only with ``overwrite=True``.
+    The export is written only if every check passes. Both files are staged
+    beside *out_dir* and re-read, then the staging directory is moved into place
+    as a whole, so the dataset and manifest appear together or not at all.
+    *out_dir* is created only at that move, and a failed export removes what it
+    made. An export already in *out_dir* is replaced only with
+    ``overwrite=True``, and only when the directory holds nothing but the two
+    export files.
     """
     days = [_check_day(day, f"day {i}") for i, day in enumerate(sequences, start=1)]
     if len(days) < RUNNER_MIN_DAYS:
@@ -367,23 +440,22 @@ def write_training_export(
     manifest = _complete_manifest(manifest_fields)
     user_id, job_id = _check_manifest(manifest)  # fails before anything is written
 
-    out = Path(out_dir)
-    dataset_target = out / DATASET_FILENAME
-    manifest_target = out / MANIFEST_FILENAME
-    if not overwrite:
-        existing = [p.name for p in (dataset_target, manifest_target) if p.exists()]
-        if existing:
-            raise TrainingExportError(
-                f"{out} already holds {' and '.join(existing)}; "
-                "pass overwrite=True to replace them"
-            )
-    out.mkdir(parents=True, exist_ok=True)
+    dataset_text = _dataset_text(days)  # fails before anything is written
 
+    out = Path(out_dir)
+    _check_target(out, overwrite)
     tokens = sum(len(day) for day in days)
-    staging = Path(tempfile.mkdtemp(prefix=".export-", dir=out))
+
+    created = _missing_dirs(out.parent)
+    staging: Path | None = None
+    published = False
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        staging = out.parent / f".export-{uuid.uuid4().hex}"
+        staging.mkdir()
+
         staged_dataset = staging / DATASET_FILENAME
-        _write_text(staged_dataset, _dataset_text(days))
+        _write_text(staged_dataset, dataset_text)
         manifest["dataset"].update(
             {
                 "days": len(days),
@@ -397,10 +469,13 @@ def write_training_export(
         # Re-read the staged pair with the runner's own loader before it counts.
         validate_training_export(staged_manifest, staged_dataset)
 
-        os.replace(staged_dataset, dataset_target)
-        os.replace(staged_manifest, manifest_target)
+        _publish(staging, out)
+        published = True
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not published:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
+            _remove_empty(created)
 
     log.info(
         "exported %d days (%d tokens) for user %s to %s",
@@ -410,8 +485,8 @@ def write_training_export(
         out,
     )
     return TrainingExport(
-        manifest_path=manifest_target,
-        dataset_path=dataset_target,
+        manifest_path=out / MANIFEST_FILENAME,
+        dataset_path=out / DATASET_FILENAME,
         user_id=user_id,
         job_id=job_id,
         days=len(days),
@@ -582,7 +657,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="replace dataset.jsonl and manifest.json if they already exist",
+        help=(
+            "replace the export in --out-dir; the directory may hold only "
+            "dataset.jsonl and manifest.json"
+        ),
     )
     return parser
 
