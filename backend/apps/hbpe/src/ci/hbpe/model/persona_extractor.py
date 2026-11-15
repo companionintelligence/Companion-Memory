@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import zipfile
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -220,6 +222,128 @@ def _infer_privacy(text: str) -> int:
     return 0
 
 
+# The label written for a chat sender, and the label for a message with no sender name.
+# The redactor writes the name placeholder in the same form.
+_NAME_PLACEHOLDER = "[NAME]"
+_NO_NAME_LABEL = "Contact"
+_WORD_RE = re.compile(r"\w+")
+_NAME_PART_RE = re.compile(r"[\s,\-]+")
+# A single word is ambiguous when the chat uses it in lower case at least twice, and for at
+# least this share of its uses. See _name_policy.
+_AMBIGUOUS_SHARE = 0.05
+# A chat capital followed by one of these is a name, even at the start of a sentence.
+_NAME_FOLLOWERS = (",", "'", "’", ":")
+
+
+def _normalised(text: str) -> str:
+    """The NFKC form of ``text`` with runs of whitespace collapsed, as a name is read."""
+    return " ".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _unaccented(text: str) -> str:
+    """``text`` with its accents removed, so that Jose matches José."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _title_case(word: str) -> str:
+    return word[:1].upper() + word[1:].lower()
+
+
+def _sender_name(msg: Any) -> str:
+    """The normalised sender name of a chat message, or "" when it has none."""
+    creator = msg.get("creator")
+    name = creator.get("name") if isinstance(creator, dict) else None
+    return "" if name is None else _normalised(str(name))
+
+
+def _sender_forms(name: str) -> list[str]:
+    """Every spelling and word of a sender's name that the redactor should look for.
+
+    The name is taken as written, without accents, and word by word. Words are split on
+    spaces, hyphens and commas. A name whose display name is an e-mail address also gives
+    the words of the address's local part.
+    """
+    spellings = [name, _normalised(_unaccented(name))]
+    if "@" in name:
+        spellings.append(_normalised(re.sub(r"\W+", " ", name.split("@", 1)[0])))
+    forms: dict[str, None] = {}
+    for spelling in spellings:
+        forms[spelling] = None
+        forms.update(dict.fromkeys(_NAME_PART_RE.split(spelling)))
+    return [form for form in forms if len(form) >= 2]
+
+
+def _is_single_word(form: str) -> bool:
+    return _WORD_RE.fullmatch(form) is not None
+
+
+def _name_policy(names: list[str], texts: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Split the sender names into the forms to deny and the words to mask.
+
+    A form with a space, a hyphen or another mark is denied wherever it occurs. A single
+    word is ambiguous when the chat also uses it as an ordinary word in lower case, at least
+    twice and for at least a twentieth of its uses. Denying an ambiguous word would damage
+    that text: a sender called Will would turn "I will" into "I [NAME]". An ambiguous word is
+    masked only where it is capitalised, see _mask_capitalised_names. Any other single word
+    is denied wherever it occurs.
+    """
+    counts: Counter[str] = Counter()
+    for text in texts:
+        counts.update(_WORD_RE.findall(text))
+    deny: dict[str, None] = {}
+    masked: dict[str, None] = {}
+    for name in names:
+        for form in _sender_forms(name):
+            if not _is_single_word(form):
+                deny[form] = None
+                continue
+            lower = counts[form.lower()]
+            capital = counts[_title_case(form)]
+            if lower >= 2 and lower >= _AMBIGUOUS_SHARE * (lower + capital):
+                masked[_title_case(form)] = None
+            else:
+                deny[form] = None
+    return list(deny), list(masked)
+
+
+def _mask_pattern(words: list[str]) -> re.Pattern[str] | None:
+    """One pattern for the capitalised uses of the masked words, longest first."""
+    if not words:
+        return None
+    ordered = sorted(words, key=len, reverse=True)
+    return re.compile(
+        r"(?<!\w)(?:" + "|".join(re.escape(word) for word in ordered) + r")(?!\w)"
+    )
+
+
+def _mask_capitalised_names(
+    text: str, pattern: re.Pattern[str] | None, *, chat: bool
+) -> str:
+    """Replace the capitalised uses of masked names with the name placeholder.
+
+    In chat, a capital that starts a sentence says nothing about a name, so it is kept,
+    unless one of _NAME_FOLLOWERS comes straight after it, as in "Will, are you coming?".
+    Other text, such as task titles and place names, has no such exception.
+    """
+    if pattern is None:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        if chat:
+            before = text[: match.start()]
+            stripped = before.rstrip()
+            starts_sentence = (
+                not stripped or stripped[-1] in ".!?" or "\n" in before[len(stripped) :]
+            )
+            follower = text[match.end() : match.end() + 1]
+            if starts_sentence and follower not in _NAME_FOLLOWERS:
+                return match.group(0)
+        return _NAME_PLACEHOLDER
+
+    return pattern.sub(replace, text)
+
+
 @dataclass
 class PersonaDatasetAuditResult:
     total_items: int = 0
@@ -292,10 +416,24 @@ class PersonaDataExtractor:
         return result
 
     def extract_decision_items(self) -> list[UnslothDecisionItem]:
-        """Extract and calibrate all items into UnslothDecisionItems."""
+        """Extract and calibrate all items into UnslothDecisionItems.
+
+        Free text is redacted before it reaches an item's ``state``: chat message text,
+        Google Tasks titles, notes and list titles, and saved place and list names. A chat
+        sender is written as ``[NAME]``. Every sender's name is denied in all of that text,
+        including the name of a sender whose messages are too short to become items.
+
+        Two exceptions keep ordinary text intact, and both depend on the export. A single
+        word that the chat also uses as a lower-case word is masked only where it is
+        capitalised (see ``_name_policy``). In chat, a capital that starts a sentence is kept,
+        unless a comma, an apostrophe or a colon follows it. Names that no sender supplies
+        are not known here, so only the redactor's pattern rules apply to them, and the
+        redactor's documented gaps still apply, such as a name directly after a dot.
+        """
         items: list[UnslothDecisionItem] = []
 
-        # 1. Chat messages
+        # 1. Chat messages. Every sender is read before the length filter, so that a sender
+        #    whose messages are all short still has their name denied in the other text.
         chat_pattern = str(
             self.export_dir
             / "_test-staging"
@@ -305,43 +443,66 @@ class PersonaDataExtractor:
             / "*"
             / "messages.json"
         )
+        chat_records: list[tuple[str, str]] = []
+        sender_names: dict[str, None] = {}
         for cf in glob.glob(chat_pattern):
             try:
                 with open(cf, encoding="utf-8") as f:
                     data = json.load(f)
                     for msg in data.get("messages", []):
+                        speaker = _sender_name(msg)
+                        if speaker:
+                            sender_names[speaker] = None
                         text = (msg.get("text") or "").strip()
-                        if len(text) < 4:
-                            continue
-                        creator = msg.get("creator", {}).get("name", "Contact")
-                        state = f"{creator}: {text}"
-                        is_comm = _infer_commitment(text)
-                        urgency = _infer_urgency(text)
-                        privacy = _infer_privacy(text)
-                        l0 = _infer_l0(text)
-                        intent = (
-                            "store_task"
-                            if is_comm
-                            else ("store_fact" if len(text) > 40 else "conversational")
-                        )
-
-                        items.append(
-                            UnslothDecisionItem(
-                                state=state,
-                                questions=PERSONA_DECISION_QUESTIONS,
-                                answers={
-                                    "intent": intent,
-                                    "is_commitment": is_comm,
-                                    "urgency": urgency,
-                                    "privacy_level": privacy,
-                                    "l0_class": l0,
-                                },
-                            )
-                        )
+                        if len(text) >= 4:
+                            chat_records.append((speaker, text))
             except Exception as e:
                 log.warning("Could not parse chat file %s: %s", cf, e)
 
-        # 2. Google Tasks
+        deny, masked = _name_policy(
+            sorted(sender_names), (text for _, text in chat_records)
+        )
+        if masked:
+            log.info(
+                "%d sender names are masked only where capitalised, because the chat "
+                "uses the same word in lower case",
+                len(masked),
+            )
+        redactor = Redactor(deny_names=deny)
+        mask_pattern = _mask_pattern(masked)
+
+        def redact(text: str, *, chat: bool = False) -> str:
+            masked_text = _mask_capitalised_names(text, mask_pattern, chat=chat)
+            return redactor.redact(masked_text)[0]
+
+        for speaker, text in chat_records:
+            text_out = redact(text, chat=True)
+            is_comm = _infer_commitment(text)
+            urgency = _infer_urgency(text)
+            privacy = _infer_privacy(text)
+            l0 = _infer_l0(text)
+            intent = (
+                "store_task"
+                if is_comm
+                else ("store_fact" if len(text) > 40 else "conversational")
+            )
+            label = _NAME_PLACEHOLDER if speaker else _NO_NAME_LABEL
+
+            items.append(
+                UnslothDecisionItem(
+                    state=f"{label}: {text_out}",
+                    questions=PERSONA_DECISION_QUESTIONS,
+                    answers={
+                        "intent": intent,
+                        "is_commitment": is_comm,
+                        "urgency": urgency,
+                        "privacy_level": privacy,
+                        "l0_class": l0,
+                    },
+                )
+            )
+
+        # 2. Google Tasks and saved places. The same redaction applies to every field.
         takeout_zip = self.export_dir / "_test-staging" / "takeout-smoke.zip"
         if takeout_zip.exists():
             try:
@@ -351,13 +512,17 @@ class PersonaDataExtractor:
                             z.read("Takeout/Tasks/Tasks.json").decode("utf-8")
                         )
                         for tl in raw.get("items", []):
-                            list_title = tl.get("title", "Tasks")
+                            list_title = redact(str(tl.get("title", "Tasks")))
                             for task in tl.get("items", []):
                                 title = (task.get("title") or "").strip()
                                 if not title:
                                     continue
                                 notes = (task.get("notes") or "").strip()
-                                state = f"Task [{list_title}]: {title}. {notes}".strip()
+                                title_out = redact(title)
+                                notes_out = redact(notes)
+                                state = (
+                                    f"Task [{list_title}]: {title_out}. {notes_out}"
+                                ).strip()
                                 l0 = _infer_l0(title + " " + notes)
                                 if l0 == "UNKNOWN":
                                     l0 = "ERRAND"
@@ -379,13 +544,13 @@ class PersonaDataExtractor:
                     # 3. Saved Places
                     for name in z.namelist():
                         if name.startswith("Takeout/Saved/") and name.endswith(".csv"):
-                            list_name = Path(name).stem
+                            list_name = redact(Path(name).stem)
                             content = z.read(name).decode("utf-8", errors="ignore")
                             reader = csv.reader(io.StringIO(content))
                             next(reader, None)  # skip the CSV header row
                             for row in reader:
                                 if row and row[0].strip():
-                                    place_name = row[0].strip()
+                                    place_name = redact(row[0].strip())
                                     state = f"Saved place in {list_name}: {place_name}"
                                     items.append(
                                         UnslothDecisionItem(

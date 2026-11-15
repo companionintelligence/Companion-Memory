@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import zipfile
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -446,15 +447,378 @@ def test_tone_flag_reads_only_true_values(monkeypatch):
         assert tone_examples_enabled() is enabled, value
 
 
+# Decision export: free text is redacted before it is written into an item's state.
+
+
+def _write_chat(root: Path, messages: list[dict[str, object]]) -> None:
+    group = root / "_test-staging" / "impostors" / "chat" / "Groups" / "group-1"
+    group.mkdir(parents=True)
+    (group / "messages.json").write_text(
+        json.dumps({"messages": messages}), encoding="utf-8"
+    )
+
+
+def _write_takeout(
+    root: Path,
+    tasks: list[dict[str, object]] | None = None,
+    saved: dict[str, str] | None = None,
+) -> None:
+    staging = root / "_test-staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(staging / "takeout-smoke.zip", "w") as z:
+        if tasks is not None:
+            z.writestr("Takeout/Tasks/Tasks.json", json.dumps({"items": tasks}))
+        for list_name, csv_text in (saved or {}).items():
+            z.writestr(f"Takeout/Saved/{list_name}.csv", csv_text)
+
+
+def _states(root: Path) -> list[str]:
+    return [item.state for item in PersonaDataExtractor(root).extract_decision_items()]
+
+
+def test_decision_export_redacts_contact_details_in_chat(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Send sarah.jones@example.com the card 4111 1111 1111 1111 tomorrow",
+                "creator": {"name": "Sam Lee"},
+            },
+            {
+                "text": "Call me on 07700 900123 about the flat at 12 Oak Road",
+                "creator": {"name": "Sam Lee"},
+            },
+            {
+                "text": "Pay GB82 WEST 1234 5698 7654 32 via https://pay.example.com/invoice?token=8f3a9c2b7d1e4f6a0c5b9d2e",
+                "creator": {"name": "Sam Lee"},
+            },
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Send [EMAIL] the card [CARD] tomorrow",
+        "[NAME]: Call me on [PHONE] about the flat at [ADDRESS]",
+        "[NAME]: Pay [IBAN] via https://pay.example.com/invoice",
+    ]
+
+
+def test_decision_export_denies_the_sender_name_in_chat_text(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Thanks Sarah, the Jones family is coming on Friday",
+                "creator": {"name": "Sarah Jones"},
+            },
+            {"text": "tell sarah hi from me", "creator": {"name": "Sarah Jones"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Thanks [NAME], the [NAME] family is coming on Friday",
+        "[NAME]: tell [NAME] hi from me",
+    ]
+
+
+def test_a_sender_name_that_is_a_common_word_is_masked_only_when_capitalised(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "I will send the deck tomorrow morning",
+                "creator": {"name": "Will"},
+            },
+            {"text": "I will call you after lunch today", "creator": {"name": "Will"}},
+            {
+                "text": "Will you be at the office on Monday?",
+                "creator": {"name": "Will"},
+            },
+            {"text": "Thanks Will for the deck", "creator": {"name": "Will"}},
+            {"text": "Will, are you bringing the ladder?", "creator": {"name": "Will"}},
+        ],
+    )
+
+    items = PersonaDataExtractor(tmp_path).extract_decision_items()
+
+    assert [item.state for item in items] == [
+        "[NAME]: I will send the deck tomorrow morning",
+        "[NAME]: I will call you after lunch today",
+        "[NAME]: Will you be at the office on Monday?",
+        "[NAME]: Thanks [NAME] for the deck",
+        "[NAME]: [NAME], are you bringing the ladder?",
+    ]
+    # The labels are still computed from the words as they were written.
+    assert items[0].answers["is_commitment"] is True
+
+
+def test_a_common_word_sender_name_keeps_its_lower_case_uses(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "I may be late tonight", "creator": {"name": "May"}},
+            {"text": "It may rain today", "creator": {"name": "May"}},
+            {"text": "May I call you tomorrow?", "creator": {"name": "May"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: I may be late tonight",
+        "[NAME]: It may rain today",
+        "[NAME]: May I call you tomorrow?",
+    ]
+
+
+def test_a_capitalised_sentence_start_name_without_a_comma_is_a_known_gap(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "Please mark the box for me", "creator": {"name": "Mark"}},
+            {"text": "I will mark it done", "creator": {"name": "Mark"}},
+            {"text": "Mark said the viewing is on Friday", "creator": {"name": "Mark"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Please mark the box for me",
+        "[NAME]: I will mark it done",
+        "[NAME]: Mark said the viewing is on Friday",
+    ]
+
+
+def test_decision_export_redacts_task_and_place_text(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Sarah Jones sent the quote for the roof",
+                "creator": {"name": "Sarah Jones"},
+            }
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Errands",
+                "items": [
+                    {
+                        "title": "Ask Sarah about the 12 Oak Road flat, email sarah@example.com",
+                        "notes": "Call 07700 900123 or pay with 4111 1111 1111 1111",
+                    }
+                ],
+            }
+        ],
+        saved={"Home Options": "Title,Note\n12 Oak Road,flat,\n"},
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: [NAME] sent the quote for the roof",
+        "Task [Errands]: Ask [NAME] about the [ADDRESS] flat, email [EMAIL]. Call [PHONE] or pay with [CARD]",
+        "Saved place in Home Options: [ADDRESS]",
+    ]
+
+
+def test_common_word_sender_names_are_masked_in_tasks_and_places(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "I will call you tomorrow", "creator": {"name": "Will"}},
+            {"text": "I will send the deck", "creator": {"name": "Will"}},
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Errands",
+                "items": [{"title": "Ask Will about the boiler", "notes": ""}],
+            }
+        ],
+        saved={"Favourite places": "Title,Note\nWill's Kitchen,good food,\n"},
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: I will call you tomorrow",
+        "[NAME]: I will send the deck",
+        "Task [Errands]: Ask [NAME] about the boiler.",
+        "Saved place in Favourite places: [NAME]'s Kitchen",
+    ]
+
+
+def test_a_sender_whose_messages_are_all_short_is_still_denied(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Dinner with Priya Raman on Friday",
+                "creator": {"name": "Sam Lee"},
+            },
+            {"text": "ok", "creator": {"name": "Priya Raman"}},
+            {"text": "", "creator": {"name": "Dana Ortiz"}},
+            {
+                "text": "Ask Dana Ortiz about the lease, thanks",
+                "creator": {"name": "Sam Lee"},
+            },
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Errands",
+                "items": [
+                    {
+                        "title": "Ask Priya Raman about the lease",
+                        "notes": "Dana Ortiz owes the invoice",
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Dinner with [NAME] on Friday",
+        "[NAME]: Ask [NAME] about the lease, thanks",
+        "Task [Errands]: Ask [NAME] about the lease. [NAME] owes the invoice",
+    ]
+
+
+def test_a_null_creator_is_read_as_no_name(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "Dinner at Nobu on Friday night", "creator": None},
+            {"text": "ok", "creator": None},
+            {"text": "Bring the car keys tomorrow", "creator": {"name": "Sam Lee"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "Contact: Dinner at Nobu on Friday night",
+        "[NAME]: Bring the car keys tomorrow",
+    ]
+
+
+def test_missing_blank_and_short_sender_names_are_handled(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {"text": "Dinner at Nobu on Friday night", "creator": {}},
+            {"text": "Bring the car keys tomorrow", "creator": {"name": "  "}},
+            {"text": "See you at the station at noon", "creator": {"name": "A"}},
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "Contact: Dinner at Nobu on Friday night",
+        "Contact: Bring the car keys tomorrow",
+        "[NAME]: See you at the station at noon",
+    ]
+
+
+def test_name_parts_accents_and_email_display_names_are_denied(
+    tmp_path: Path,
+) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "Thanks Sarah for the lift, see you Friday",
+                "creator": {"name": "Sarah-Jane Smith"},
+            },
+            {
+                "text": "Jose has the van, ask Garcia to call me",
+                "creator": {"name": "José García"},
+            },
+            {
+                "text": "Hi everyone, Sarah here, dinner is on Friday",
+                "creator": {"name": "sarah.jones@example.com"},
+            },
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: Thanks [NAME] for the lift, see you Friday",
+        "[NAME]: [NAME] has the van, ask [NAME] to call me",
+        "[NAME]: Hi everyone, [NAME] here, dinner is on Friday",
+    ]
+
+
+def test_no_raw_contact_detail_reaches_any_state(tmp_path: Path) -> None:
+    email = "sarah.jones@example.com"
+    phone = "07700 900123"
+    card = "4111 1111 1111 1111"
+    iban = "GB82 WEST 1234 5698 7654 32"
+    token = "8f3a9c2b7d1e4f6a0c5b9d2e"
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": f"Email {email} or call {phone}, pay {card} into {iban} via https://x.example.com/p?t={token}",
+                "creator": {"name": "Sam Lee"},
+            }
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {"title": "Errands", "items": [{"title": f"Ring {phone}", "notes": email}]}
+        ],
+        saved={"Places": f"Name\n{card}\n"},
+    )
+
+    joined = "\n".join(_states(tmp_path))
+
+    for raw in (email, phone, card, iban, token):
+        assert raw not in joined
+    assert joined.count("[NAME]") == 1
+
+
+def test_train_and_eval_records_carry_only_redacted_states(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": f"Email sarah.jones@example.com about the {day} meeting",
+                "creator": {"name": "Sam Lee"},
+            }
+            for day in (
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            )
+        ],
+    )
+
+    train, evaluation = PersonaDataExtractor(tmp_path).create_train_eval_splits(
+        eval_ratio=0.5
+    )
+
+    assert len(train) + len(evaluation) == 6
+    assert "sarah.jones@example.com" not in json.dumps(train + evaluation)
+
+
 if __name__ == "__main__":
     print("Running test_keyword_heuristics...")
     test_keyword_heuristics()
-    print("Running test_persona_extractor_audit_real_data...")
-    test_persona_extractor_audit_real_data()
-    print("Running test_persona_extractor_splits_real_data...")
-    test_persona_extractor_splits_real_data()
-    print("Running test_persona_decision_model_training_end_to_end...")
-    test_persona_decision_model_training_end_to_end()
+    if PERSONAL_EXPORT_DIR and Path(PERSONAL_EXPORT_DIR).exists():
+        print("Running test_persona_extractor_audit_real_data...")
+        test_persona_extractor_audit_real_data()
+        print("Running test_persona_extractor_splits_real_data...")
+        test_persona_extractor_splits_real_data()
+        print("Running test_persona_decision_model_training_end_to_end...")
+        test_persona_decision_model_training_end_to_end()
+    else:
+        print("Skipping the real-data tests: set HBPE_PERSONA_EXPORT_DIR to run them.")
     os.environ[TONE_EXAMPLES_FLAG] = "1"  # the tone builder is off by default
     print("Running test_tone_examples_pair_reply_with_inbound_context...")
     test_tone_examples_pair_reply_with_inbound_context()
