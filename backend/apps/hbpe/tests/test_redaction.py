@@ -262,6 +262,24 @@ URL_CASES = [
         {},
         id="neg-path-segment-of-nineteen-characters",
     ),
+    pytest.param(
+        "Open https://example.com/?ref=40K4LpE5h5M9 Thanks",
+        "Open https://example.com/ Thanks",
+        {"url": 1},
+        id="query-mixed-token-with-digit-ending-is-dropped",
+    ),
+    pytest.param(
+        "Open https://example.com/?9Xk2mQ7p now",
+        "Open https://example.com/ now",
+        {"url": 1},
+        id="query-short-mixed-token-starting-with-digit",
+    ),
+    pytest.param(
+        "See https://example.com/item?12345 now",
+        "See https://example.com/item?12345 now",
+        {},
+        id="known-gap-digits-only-short-query-is-kept",
+    ),
 ]
 
 IBAN_CASES = [
@@ -318,6 +336,30 @@ IBAN_CASES = [
         "[IBAN] [IBAN]",
         {"iban": 2},
         id="iban-two-in-a-row",
+    ),
+    pytest.param(
+        "Pay GB82-WEST-1234-5698-7654-32 today",
+        "Pay [IBAN] today",
+        {"iban": 1},
+        id="iban-with-hyphen-separators",
+    ),
+    pytest.param(
+        "Pay GB82  WEST 1234 5698 7654 32 today",
+        "Pay [IBAN] today",
+        {"iban": 1},
+        id="iban-with-double-spaces",
+    ),
+    pytest.param(
+        "Batch BR51 2074 2761 2833 failed on the third retry.",
+        "Batch BR51 2074 2761 2833 failed on the third retry.",
+        {},
+        id="neg-brazil-run-shorter-than-registered-length",
+    ),
+    pytest.param(
+        "Pay XQ97WEST123456987654 today",
+        "Pay XQ97WEST123456987654 today",
+        {},
+        id="known-gap-iban-of-unlisted-country-is-kept",
     ),
 ]
 
@@ -478,6 +520,42 @@ PHONE_CASES = [
         {"phone": 1},
         id="phone-in-whatsapp-link",
     ),
+    pytest.param(
+        "Open 07700900 123 now",
+        "Open [PHONE] now",
+        {"phone": 1},
+        id="phone-zero-led-in-two-groups",
+    ),
+    pytest.param(
+        "Date 01 12 2026 ok",
+        "Date 01 12 2026 ok",
+        {},
+        id="neg-day-month-year-with-spaces",
+    ),
+    pytest.param(
+        "Ref 4000 0000 0002 ok",
+        "Ref 4000 0000 0002 ok",
+        {},
+        id="neg-twelve-digits-in-groups-are-not-a-phone",
+    ),
+    pytest.param(
+        "Call 5551234567 now",
+        "Call 5551234567 now",
+        {},
+        id="known-gap-unseparated-nanp-exchange-starting-one",
+    ),
+    pytest.param(
+        "1999-12-31 23:59:59 1,000,000 3.14159 1 Jan 2025",
+        "1999-12-31 23:59:59 1,000,000 3.14159 1 Jan 2025",
+        {},
+        id="neg-thousands-group-before-decimal-and-date",
+    ),
+    pytest.param(
+        "1,000,000 15.03.2024",
+        "1,000,000 15.03.2024",
+        {},
+        id="neg-thousands-group-before-dotted-date",
+    ),
 ]
 
 CARD_CASES = [
@@ -554,7 +632,7 @@ CARD_CASES = [
         id="neg-card-not-read-across-date",
     ),
     pytest.param(
-        "Card 4111 1111 1111 1111 now",
+        "Card 4111\u00a01111\u00a01111\u00a01111 now",
         "Card [CARD] now",
         {"card": 1},
         id="card-non-breaking-space-separators",
@@ -681,6 +759,42 @@ ADDRESS_CASES = [
         "The 500 GB SSD Drive works with my laptop.",
         {},
         id="neg-memory-unit-before-drive-is-not-an-address",
+    ),
+    pytest.param(
+        "Walk to 10, Downing Street today",
+        "Walk to [ADDRESS] today",
+        {"address": 1},
+        id="address-comma-after-house-number",
+    ),
+    pytest.param(
+        "I live at 42 Wallaby Way, Sydney.",
+        "I live at [ADDRESS], Sydney.",
+        {"address": 1},
+        id="address-way-suffix",
+    ),
+    pytest.param(
+        "I live at 12 Ångström Road.",
+        "I live at [ADDRESS].",
+        {"address": 1},
+        id="address-latin-initial-letter",
+    ),
+    pytest.param(
+        "Post it to 221-B Baker Street.",
+        "Post it to [ADDRESS].",
+        {"address": 1},
+        id="address-hyphenated-house-number",
+    ),
+    pytest.param(
+        "Meet at 12-14 Main Street.",
+        "Meet at [ADDRESS].",
+        {"address": 1},
+        id="address-house-number-range",
+    ),
+    pytest.param(
+        "Post it to Flat221 Baker Street.",
+        "Post it to Flat221 Baker Street.",
+        {},
+        id="known-gap-house-number-glued-to-word-is-kept",
     ),
 ]
 
@@ -1111,6 +1225,38 @@ NAME_CASES = [
         "Hi.Sarah, thanks a lot",
         {},
         id="known-gap-name-after-dot-is-kept",
+    ),
+    pytest.param(
+        "Chat Sarahさんに連絡",
+        ["Sarah"],
+        [],
+        "Chat [NAME]さんに連絡",
+        {"name": 1},
+        id="name-beside-unspaced-script-is-a-whole-word",
+    ),
+    pytest.param(
+        "O’Brien and O'Brien",
+        ["O'Brien"],
+        [],
+        "[NAME] and [NAME]",
+        {"name": 2},
+        id="name-curly-apostrophe-matches-straight",
+    ),
+    pytest.param(
+        "@Sarah can you check",
+        ["Sarah"],
+        [],
+        "@[NAME] can you check",
+        {"name": 1},
+        id="name-after-at-sign-at-the-start-is-a-mention",
+    ),
+    pytest.param(
+        "See sarah-co.example.com today",
+        ["Sarah"],
+        [],
+        "See [NAME]-co.example.com today",
+        {"name": 1},
+        id="name-before-hyphen-in-host-is-redacted",
     ),
 ]
 

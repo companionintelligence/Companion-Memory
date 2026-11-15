@@ -20,22 +20,29 @@ to it is removed.
 - ``name``: caller-supplied names, matched case-insensitively as whole words, become
   ``[NAME]``. A name is left alone when it is followed by ``@`` and a dotted domain, or by
   ``.`` and a lowercase letter or digit, and when it follows ``@`` or ``.`` after a word,
-  so an address or a host name is not broken up. A name written in a script without
-  spaces, such as Chinese or Japanese, is matched wherever it occurs. Both the precomposed
-  and the decomposed spelling of a name match, and a German sharp s also matches ``ss``.
+  so an address or a host name is not broken up. A name followed by a hyphen is redacted
+  even inside a host name, so ``sarah-co.example.com`` becomes ``[NAME]-co.example.com``.
+  A name written in a script without spaces, such as Chinese or Japanese, is matched
+  wherever it occurs, and such a script beside a spaced name still leaves it a whole word,
+  so ``Chat Sarahさん`` becomes ``Chat [NAME]さん``. Both the precomposed and the
+  decomposed spelling of a name match, a German sharp s also matches ``ss``, and a
+  straight apostrophe matches a curly one.
 - ``url``: a URL with a query string or fragment, with credentials (``user:pass@``), or
   with a token-like path segment. A URL is text that starts with a scheme, such as
   ``https://`` or ``postgres://``, or with ``www.``, or with a host, optionally followed
   by a port, and then a path, query or fragment, such as ``example.com/pay?x=1``. The
   scheme, host and path are kept. The query, the fragment and the credentials are dropped.
   A path segment of at least 20 letters, digits or underscores, with both a letter and a
-  digit, becomes ``[TOKEN]``. A query value of 20 or more characters is always dropped. A
-  shorter query is kept only when a phone number, a card or a placeholder follows it
-  straight away: two or more digit groups, five or more digits, ``+``, ``(`` before a
-  digit, or ``[``. Otherwise it is dropped, so a one-time code followed by words, as in
-  ``?code=8f3a2c (valid 15 min)``, goes with it. A query that ends in a digit and is
-  followed by a capitalised word is also kept, so ``?q=221 Baker Street`` keeps its house
-  number for the address rule. A URL with none of these is left alone.
+  digit, becomes ``[TOKEN]``. A query value of 20 or more characters is always dropped.
+  A shorter value that starts with a letter is dropped too, so a one-time code followed by
+  words, as in ``?code=8f3a2c (valid 15 min)``, goes with it, and so does
+  ``?ref=40K4LpE5h5M9``. The exception is a number that follows the value straight away:
+  two or more digit groups, five or more digits, ``+``, ``(`` before a digit, or ``[``. Then
+  the value is kept, so the number after it is not cut into. A value that starts with a
+  digit is dropped when it mixes letters and digits and is at least six characters long, as
+  in ``?9Xk2mQ7p``. A short ``key=digits`` value followed by a capitalised word is kept, so
+  ``?q=221 Baker Street`` keeps its house number for the address rule. A URL with none of
+  these is left alone.
 - ``email``: an address with a dotted domain, or with an IPv4 domain, such as
   ``sarah@example.com``, becomes ``[EMAIL]``, and a path or query directly after it goes
   with it. Letters from any script count, so ``josé@example.com`` is caught. An apostrophe
@@ -44,11 +51,16 @@ to it is removed.
   mark is not swallowed.
 - ``iban``: an IBAN of a country whose registered length is listed in this module, taken
   at that length, becomes ``[IBAN]`` when it passes the mod-97 check, even when it is glued
-  to letters. For any other country, the longest prefix that ends at a space and passes the
-  check is taken.
+  to letters. Its groups may be separated by up to two spaces or hyphens, so
+  ``GB82-WEST-1234-5698-7654-32`` is caught. An IBAN of a country that is not listed is
+  kept, since its length is not known, and a mod-97 check passes by chance about one time
+  in a hundred for any run of letters and digits.
 - ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
-  French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits. A
-  number may follow a letter, so ``call07700900123`` is caught.
+  French style national numbers become ``[PHONE]``. A national number that starts with 0
+  and is written in groups, such as ``07700 900 123`` or ``07700900 123``, is read as a
+  phone number when it has 10 or 11 digits, but a zero that follows a digit and a comma or
+  dot, as in ``1,000,000``, does not start one. A match must carry 8 to 15 digits. A number
+  may follow a letter, so ``call07700900123`` is caught.
 - ``card``: the longest run of whole digit groups that passes the Luhn check becomes
   ``[CARD]``. Groups are separated by one to three spaces, tabs or non-breaking spaces, or
   by a hyphen. A card may also be written as four groups of four digits joined by dots.
@@ -57,7 +69,11 @@ to it is removed.
   security code glued on, as in ``4111111111111111123``, is still found. A 14-digit
   ``YYYYMMDDhhmmss`` stamp is not treated as a card.
 - ``address``: a house number, one to three capitalised words and a street suffix
-  (Street, Road, Avenue and so on) become ``[ADDRESS]``.
+  (Street, Road, Avenue and so on) become ``[ADDRESS]``. The house number may carry a
+  letter or a second number, as in ``221B``, ``221-B`` or ``12-14``, and a comma may follow
+  it, as in ``10, Downing Street``. A capitalised word may begin with an accented capital,
+  such as ``Å``. A number followed by a storage or speed unit, such as ``2 TB`` or
+  ``500 GB``, is not a house number.
 
 Names come in two lists. ``deny_names`` are redacted wherever they appear, including
 where two denied names overlap, except inside an address or a host name as described
@@ -73,7 +89,7 @@ number on its own with fewer than 8 digits. A bare run of 10 digits whose first 
 fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
 be redacted.
 
-Known gaps, by design: a name directly after a dot, as in ``Hi.Sarah``, or before a
+Known gaps, some by design: a name directly after a dot, as in ``Hi.Sarah``, or before a
 lowercase word after a dot, as in ``Sarah.pdf``, is not redacted, because a dot after a word
 marks a domain or a file name. 7-digit local phone numbers, including one that follows a
 longer number, lowercase street addresses, postcodes, and names that are not listed. A name
@@ -87,7 +103,13 @@ with a space after the plus sign, such as ``+ 44 20 7946 0958``, or with a brack
 such as ``(0)20 7946 0958``, is not matched, and neither is a national number without a plus
 sign or a 00 prefix outside North America, the UK and France. A UUID in a path is not
 treated as a token. A short value followed by two digit groups in a query is kept, as in
-``?ref=abc 12 34``, so a short token there is not removed.
+``?ref=abc 12 34``, so a short token there is not removed. A house number glued to a word,
+as in ``Flat221 Baker Street``, is not matched. An unseparated North American number whose
+exchange starts with 0 or 1, such as ``5551234567``, is not read as a phone number, though
+the separated form ``555-123-4567`` is. A query made only of digits and shorter than 20
+characters, such as ``?12345``, is kept. An IBAN of an unlisted country is kept, as
+described above. A secret written outside a URL, such as ``api_key=sk_live_...``, is not
+redacted, and neither are bank sort codes or national insurance numbers.
 """
 
 from __future__ import annotations
@@ -142,6 +164,13 @@ _STREET_SUFFIXES = (
     "Hwy",
     "Gardens",
     "Grove",
+    "Way",
+    "Mews",
+    "Row",
+    "Walk",
+    "Rise",
+    "Hill",
+    "Gate",
 )
 _SUFFIX_ALTERNATION = "|".join(
     re.escape(suffix) for suffix in sorted(_STREET_SUFFIXES, key=len, reverse=True)
@@ -159,9 +188,9 @@ _URL_QUERY = (
     r"(?:[?#]"
     r"(?:[A-Za-z_][\w.-]*=[^\s<>\"'\[]{20,}(?=[\s<>\"'\]]|$)"
     r"|[^\s<>\"'\[=]{20,}(?=[\s<>\"'\]]|$)"
-    r"|[A-Za-z_][^\s<>\"'\[]*(?=[\s<>\"'\]]|$)"
+    r"|[0-9](?=[0-9A-Za-z_-]*[A-Za-z])[0-9A-Za-z_-]{5,}(?=[\s<>\"'\]]|$)"
+    r"|(?![A-Za-z_]{1,8}=[0-9]{1,6}\s+(?-i:[A-Z]))[A-Za-z_][^\s<>\"'\[]*(?=[\s<>\"'\]]|$)"
     r"(?!\s+(?:[0-9]{2,}[ .-][0-9]{2,}|[0-9]{5,}|\+|\((?=[0-9])|\[))"
-    r"(?!(?<=[0-9])\s+(?-i:[A-Z]))"
     r"))?"
 )
 _URL_TAIL = _URL_PATH + _URL_QUERY
@@ -201,7 +230,9 @@ _EMAIL_RE = re.compile(
     r"(?<![\w.%+-])" + _EMAIL_LOCAL + r"@" + _EMAIL_DOMAIN + _URL_TAIL
 )
 
-_IBAN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2}[0-9]{2}(?: ?[A-Za-z0-9]){11,30}")
+_IBAN_RE = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]{2}[0-9]{2}(?:[ -]{0,2}[A-Za-z0-9]){11,30}"
+)
 
 _PHONE_RE = re.compile(
     r"(?<![0-9+])"
@@ -226,6 +257,9 @@ _PHONE_RE = re.compile(
     r"|0[0-9]{9,10}"
     # 06 12 34 56 78
     r"|0[0-9](?:[ .-][0-9]{2}){4}"
+    # 07700900 123, a 0-led number in more than one group. A zero that follows a digit and a
+    # comma or dot, as in 1,000,000 or 1.000.000, starts a thousands group, not a phone number.
+    r"|(?<![0-9][,.])0(?=(?:[ .-]?[0-9]){9,10}(?![0-9]))[0-9]{2,10}(?:[ .-][0-9]{1,6}){1,3}"
     r")"
     # A digit after the number would mean the match stopped in the middle of a longer run.
     r"(?![0-9])"
@@ -249,10 +283,10 @@ _DATE_OR_TIME_RE = re.compile(
 )
 
 _ADDRESS_RE = re.compile(
-    r"(?<![\w.])[0-9]{1,6}[A-Za-z]?\s+"
+    r"(?<![\w.])[0-9]{1,6}(?:-[0-9]{1,6}|-?[A-Za-z])?,?\s+"
     # A storage or speed unit after a number is not the start of a street name.
     r"(?!(?:TB|GB|MB|KB|PB|GHz|MHz)\b)"
-    r"(?:[A-Z][\w'’-]*\.?\s+){1,3}"
+    r"(?:[A-ZÀ-ÖØ-Þ][\w'’-]*\.?\s+){1,3}"
     r"(?i:" + _SUFFIX_ALTERNATION + r")\b"
 )
 
@@ -324,7 +358,7 @@ def _is_card(digits: str) -> bool:
 
 
 def _iban_checksum_ok(value: str) -> bool:
-    compact = value.replace(" ", "").upper()
+    compact = value.replace(" ", "").replace("-", "").upper()
     if not 15 <= len(compact) <= 34:
         return False
     rearranged = compact[4:] + compact[:4]
@@ -428,23 +462,18 @@ def _alnum_end(text: str, count: int) -> int | None:
 def _iban_prefix(candidate: str) -> str | None:
     """The IBAN at the start of the candidate, or None.
 
-    For a known country the IBAN is exactly its registered length, so the cut is taken
-    there, even inside a run of letters, and must pass mod-97. For any other country the
-    longest prefix that ends at a space and passes mod-97 is taken, as before.
+    Only a country whose registered length is listed here is read as an IBAN. The IBAN is
+    exactly that length, so the cut is taken there, even inside a run of letters, and it
+    must pass mod-97. Any other country code is not read as an IBAN, since a mod-97 check
+    passes by chance about one time in a hundred.
     """
     length = _IBAN_LENGTHS.get(candidate[:2].upper())
-    if length is not None:
-        end = _alnum_end(candidate, length)
-        if end is None or not _iban_checksum_ok(candidate[:end]):
-            return None
-        return candidate[:end]
-    ends = [index for index, ch in enumerate(candidate) if ch == " "]
-    ends.append(len(candidate))
-    for end in reversed(ends):
-        prefix = candidate[:end]
-        if _iban_checksum_ok(prefix):
-            return prefix
-    return None
+    if length is None:
+        return None
+    end = _alnum_end(candidate, length)
+    if end is None or not _iban_checksum_ok(candidate[:end]):
+        return None
+    return candidate[:end]
 
 
 def _phone_span(candidate: str) -> str | None:
@@ -633,7 +662,16 @@ def _with_unicode_forms(names: tuple[str, ...]) -> tuple[str, ...]:
             forms[name.replace("ß", "ss")] = None
         if "ẞ" in name:
             forms[name.replace("ẞ", "SS")] = None
+        if "'" in name:
+            forms[name.replace("'", "’")] = None
+        if "’" in name:
+            forms[name.replace("’", "'")] = None
     return tuple(forms)
+
+
+# A letter or digit that counts as part of a word. Scripts written without spaces are not
+# counted, so a name written beside their characters is still a whole word.
+_WORD = r"[^\W\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff]"
 
 
 # Scripts written without spaces between words. A name in one of them is matched wherever
@@ -671,8 +709,14 @@ def _name_pattern(names: tuple[str, ...]) -> re.Pattern[str] | None:
     alternatives: list[str] = []
     if spaced:
         alternatives.append(
-            r"(?<!\w)(?<!\w[.@])(?:" + _alternation(spaced) + r")"
-            r"(?!\w)(?!@[\w-]+\.)(?!\.(?-i:[a-z0-9]))"
+            r"(?<!"
+            + _WORD
+            + r")(?<!"
+            + _WORD
+            + r"[.@])(?:"
+            + _alternation(spaced)
+            + r")"
+            r"(?!" + _WORD + r")(?!@[\w-]+\.)(?!\.(?-i:[a-z0-9]))"
         )
     if unspaced:
         alternatives.append("(?:" + _alternation(unspaced) + ")")
