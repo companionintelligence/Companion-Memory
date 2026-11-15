@@ -516,10 +516,11 @@ def build_tone_examples(
     a single-message example.
 
     Every emitted field, context and reply alike, goes through ``redactor`` first, and
-    the length check applies to the redacted reply. A word is counted only if it is not a
-    placeholder such as ``[NAME]``, so a reply made of placeholders is too short. Returns
-    the examples and a count of dropped user messages by reason: ``empty`` (nothing left
-    after redaction), ``too_short`` (fewer than ``min_words`` words), and ``disabled``
+    the length check applies to the redacted reply. Placeholders such as ``[NAME]`` count
+    as words, but a reply with no word other than placeholders is too short, so a reply
+    made only of placeholders is never emitted. Returns the examples and a count of
+    dropped user messages by reason: ``empty`` (nothing left after redaction),
+    ``too_short`` (fewer than ``min_words`` words, or only placeholders), and ``disabled``
     (only while the flag is off). All three keys are always present. Inbound messages
     only supply context, so they are never counted as dropped.
 
@@ -549,7 +550,7 @@ def build_tone_examples(
                 context = context_text
         if not reply.strip():
             dropped["empty"] += 1
-        elif len(content_words(reply)) < min_words:
+        elif len(reply.split()) < min_words or not content_words(reply):
             dropped["too_short"] += 1
         else:
             examples.append(ToneExample(reply=reply, context=context))

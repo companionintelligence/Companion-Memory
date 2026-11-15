@@ -317,7 +317,7 @@ class _BlankingRedactor(Redactor):
 
 def test_too_short_is_measured_on_the_redacted_reply():
     # The raw reply has 11 words. Redacted, it reads "Ping me on [CARD] at [ADDRESS]",
-    # and only four of those are words, so under the minimum of eight it must be dropped.
+    # six words, so under the minimum of eight it must be dropped.
     reply = "Ping me on 4111 1111 1111 1111 at 10 Downing Street"
     assert len(reply.split()) >= 8
     examples, dropped = build_tone_examples(
@@ -328,11 +328,12 @@ def test_too_short_is_measured_on_the_redacted_reply():
     assert dropped == {"empty": 0, "too_short": 1, "disabled": 0}
 
 
-def test_placeholders_do_not_count_towards_the_minimum():
-    # Every piece of this reply redacts to a placeholder, so it has no words left and is
-    # too short. It is not empty, because placeholders remain.
+def test_a_reply_of_placeholders_alone_is_too_short():
+    # Eight placeholders are eight words, so the length check alone would keep this. Only
+    # the rule that a reply needs a word that is not a placeholder drops it.
     reply = (
-        "sarah@example.com 07700 900123 4111 1111 1111 1111 GB82 WEST 1234 5698 7654 32"
+        "sarah@example.com sarah@example.org sarah@example.net 07700 900123 07700 900124 "
+        "4111 1111 1111 1111 4111 1111 1111 1111 GB82 WEST 1234 5698 7654 32"
     )
     examples, dropped = build_tone_examples(
         [ToneMessage(reply, sent_by_user=True)], Redactor()
@@ -340,6 +341,20 @@ def test_placeholders_do_not_count_towards_the_minimum():
 
     assert examples == []
     assert dropped == {"empty": 0, "too_short": 1, "disabled": 0}
+
+
+def test_a_mixed_reply_counts_its_placeholders_as_words():
+    # Redacted, this reads "Sure, [NAME] will send [EMAIL] and [PHONE] tomorrow", eight
+    # words counting the placeholders, so it is kept.
+    reply = "Sure, Sarah will send sarah@example.com and 07700 900123 tomorrow"
+    examples, dropped = build_tone_examples(
+        [ToneMessage(reply, sent_by_user=True)], Redactor(deny_names=["Sarah"])
+    )
+
+    assert examples == [
+        ToneExample(reply="Sure, [NAME] will send [EMAIL] and [PHONE] tomorrow")
+    ]
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
 
 def test_disabled_and_enabled_return_the_same_keys(monkeypatch):
@@ -420,6 +435,7 @@ def test_tone_flag_reads_only_true_values(monkeypatch):
         ("0", False),
         ("false", False),
         ("", False),
+        ("y", False),
     ]:
         monkeypatch.setenv(TONE_EXAMPLES_FLAG, value)
         assert tone_examples_enabled() is enabled, value
@@ -449,3 +465,55 @@ if __name__ == "__main__":
     test_empty_is_measured_on_the_redacted_reply()
     test_messages_without_thread_id_never_pair()
     print("All persona extractor tests passed!")
+
+
+class _BlankInboundRedactor(Redactor):
+    """Redactor that blanks inbound text only, so the context redacts to nothing."""
+
+    def redact(self, text: str) -> tuple[str, dict[str, int]]:
+        if text.startswith("Are you free"):
+            return "", {"name": 1}
+        return super().redact(text)
+
+
+def test_a_blank_inbound_message_leaves_no_context():
+    messages = [
+        ToneMessage(
+            "Are you free on Friday afternoon?", sent_by_user=False, thread_id="t"
+        ),
+        ToneMessage(
+            "Yes I am free on Friday afternoon, see you then for sure",
+            sent_by_user=True,
+            thread_id="t",
+        ),
+    ]
+    examples, dropped = build_tone_examples(messages, _BlankInboundRedactor())
+
+    assert examples == [
+        ToneExample(
+            reply="Yes I am free on Friday afternoon, see you then for sure",
+            context=None,
+        )
+    ]
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
+
+
+def test_an_empty_thread_id_is_a_thread_of_its_own():
+    messages = [
+        ToneMessage(
+            "Are you free on Friday afternoon?", sent_by_user=False, thread_id=""
+        ),
+        ToneMessage(
+            "Yes I am free on Friday afternoon, see you then for sure",
+            sent_by_user=True,
+            thread_id="",
+        ),
+    ]
+    examples, _ = build_tone_examples(messages, Redactor())
+
+    assert examples == [
+        ToneExample(
+            reply="Yes I am free on Friday afternoon, see you then for sure",
+            context="Are you free on Friday afternoon?",
+        )
+    ]
