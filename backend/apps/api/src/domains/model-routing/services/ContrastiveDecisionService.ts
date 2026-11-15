@@ -97,12 +97,23 @@ export interface DecisionOptions {
   topK?: number;
 }
 
+/**
+ * System 2 callback. Its answer is blended with the contrastive score, or replaces it in `generative`
+ * mode, so the contract is strict. An answer the service cannot use falls back to the word-overlap
+ * score for that one call rather than failing the decision. Unusable answers are: `undefined`, a
+ * rejected promise, a probability outside [0, 1], or a choice that lacks a candidate id.
+ */
 export interface GenerativeDecisionEvaluator {
-  evaluateNoul?(state: string, action: string, negatedAction: string): Promise<number>;
+  /** P(`state` matches `action` rather than `negatedAction`): a finite number in [0, 1]. */
+  evaluateNoul?(state: string, action: string, negatedAction: string): Promise<number | undefined>;
+  /**
+   * One probability per candidate id, each a finite number in [0, 1]. The service ranks on
+   * `probabilities`. `selectedId` is informational.
+   */
   evaluateChoice?(
     state: string,
     candidates: ReadonlyArray<{ id: string; label: string }>,
-  ): Promise<{ selectedId: string; probabilities: Record<string, number> }>;
+  ): Promise<{ selectedId: string; probabilities: Record<string, number> } | undefined>;
 }
 
 const DEFAULT_TEMPERATURE = 0.12;
@@ -910,11 +921,20 @@ export class ContrastiveDecisionService {
   }
 
   private async runGenerativeNoul(state: string, action: string, negatedAction: string): Promise<number> {
-    if (this.generativeEvaluator?.evaluateNoul) {
-      return this.generativeEvaluator.evaluateNoul(state, action, negatedAction);
+    const evaluator = this.generativeEvaluator;
+    if (evaluator?.evaluateNoul) {
+      try {
+        const evaluated = await evaluator.evaluateNoul(state, action, negatedAction);
+        if (isUnitInterval(evaluated)) {
+          return evaluated;
+        }
+      } catch {
+        // A failing evaluator must not fail the decision: the lexical score below stands in.
+      }
     }
 
-    // Deliberative lexical-overlap + structural polarity fallback when no custom LLM callback is registered.
+    // Deliberative lexical-overlap + structural polarity fallback, used when no custom LLM callback
+    // is registered or its answer cannot be used.
     const posOverlap = tokenOverlapScore(state, action);
     const negOverlap = tokenOverlapScore(state, negatedAction);
     const [pYes] = softmax([posOverlap, negOverlap], 0.2);
@@ -926,8 +946,16 @@ export class ContrastiveDecisionService {
     state: string,
     candidates: ReadonlyArray<{ id: string; label: string }>,
   ): Promise<{ selectedId: string; probabilities: Record<string, number> }> {
-    if (this.generativeEvaluator?.evaluateChoice) {
-      return this.generativeEvaluator.evaluateChoice(state, candidates);
+    const evaluator = this.generativeEvaluator;
+    if (evaluator?.evaluateChoice) {
+      try {
+        const evaluated = await evaluator.evaluateChoice(state, candidates);
+        if (evaluated && coversCandidates(evaluated.probabilities, candidates)) {
+          return evaluated;
+        }
+      } catch {
+        // As for noul: the lexical score below stands in for an evaluator that cannot answer.
+      }
     }
 
     const overlaps = candidates.map((c) => tokenOverlapScore(state, c.label));
@@ -945,6 +973,17 @@ export class ContrastiveDecisionService {
 
     return { selectedId: bestId, probabilities: probMap };
   }
+}
+
+function isUnitInterval(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function coversCandidates(
+  probabilities: Record<string, number> | undefined,
+  candidates: ReadonlyArray<{ id: string }>,
+): boolean {
+  return probabilities !== undefined && candidates.every((c) => isUnitInterval(probabilities[c.id]));
 }
 
 function tokenOverlapScore(a: string, b: string): number {
@@ -982,7 +1021,10 @@ function detectAutomatedNonActionable(text: string): 'automated_otp' | 'marketin
     return 'automated_otp';
   }
 
-  if (MARKETING_BLAST_RE.test(text) && !/\b(invoice due|action required|please reply|confirm your appointment)\b/i.test(text)) {
+  if (
+    MARKETING_BLAST_RE.test(text) &&
+    !/\b(invoice due|action required|please reply|confirm your appointment)\b/i.test(text)
+  ) {
     return 'marketing_blast';
   }
 
