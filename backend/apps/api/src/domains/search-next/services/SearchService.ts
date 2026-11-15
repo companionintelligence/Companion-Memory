@@ -4,6 +4,9 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { defaultDecisionClient } from '@ci/common/hbpe/decisionClient';
+import { DECISION_FLAGS, isDecisionFlagOn } from '@ci/common/hbpe/decisionFlags';
+import { fuseRerankOrder, RERANK_TOP_N } from '@ci/common/hbpe/rerankFusion';
 import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import { EventService } from '@ci/domains/events';
 import {
@@ -1297,9 +1300,14 @@ export class SearchService {
 
     if (options.fusionMode === 'rrf') {
       const rrfFused = reciprocalRankFusion([semanticResults, keywordResults]);
+      // `SEARCH_TRAINED_RERANK` (default off): the head of the fused list is
+      // re-scored by HBPE. See {@link rerankFusedHead}.
+      const fused = isDecisionFlagOn(DECISION_FLAGS.searchRerank)
+        ? await this.rerankFusedHead(context.userId, options.query, rrfFused)
+        : rrfFused;
 
       return {
-        results: rrfFused.slice(0, maxResults),
+        results: fused.slice(0, maxResults),
         totalMatches: null,
         limit: maxResults,
       };
@@ -1364,6 +1372,68 @@ export class SearchService {
       totalMatches: null,
       limit: maxResults,
     };
+  }
+
+  /**
+   * Re-scores the head of an RRF list with HBPE `/decision/rerank`, the
+   * `SEARCH_TRAINED_RERANK` path. The head is the first {@link RERANK_TOP_N}
+   * candidates, and the combination formula is documented in
+   * {@link fuseRerankOrder}.
+   *
+   * Passage text comes from `ci_search.mobile_search_documents`, the plain-text
+   * projection of the index, which holds the device-indexed types only. A
+   * candidate with no projected text keeps its RRF position. Any failure
+   * (database, sidecar, timeout, malformed reply) returns the list unchanged.
+   */
+  private async rerankFusedHead(
+    userId: string,
+    query: string,
+    fused: ScoredSearchResult[],
+  ): Promise<ScoredSearchResult[]> {
+    const head = fused.slice(0, RERANK_TOP_N);
+    const keyOf = (item: ScoredSearchResult) => `${item.type}:${item.id}`;
+
+    try {
+      const texts = await this.rerankPassageTexts(userId, head);
+      const passages = head.flatMap((item) => {
+        const text = texts.get(keyOf(item));
+
+        return text ? [{ id: keyOf(item), text }] : [];
+      });
+      const ranked = await defaultDecisionClient().rerank(userId, query, passages);
+
+      if (!ranked) {
+        return fused;
+      }
+
+      const scores = new Map(ranked.map((item) => [item.id, item.score] as const));
+
+      return [...fuseRerankOrder(head, keyOf, scores), ...fused.slice(RERANK_TOP_N)];
+    } catch {
+      return fused;
+    }
+  }
+
+  /** `type:id` to passage text, for the given candidates, read from the user's own projection. */
+  private async rerankPassageTexts(
+    userId: string,
+    candidates: readonly ScoredSearchResult[],
+  ): Promise<Map<string, string>> {
+    if (candidates.length === 0) {
+      return new Map();
+    }
+
+    const rows: Array<{ entity_type: string; id: string; title: string; body: string }> =
+      await this.dataSource.query(
+        `SELECT k.entity_type, d.entity_id::text AS id, d.title, d.body
+         FROM unnest($2::text[], $3::uuid[]) AS k(entity_type, entity_id)
+         JOIN ci_search.mobile_search_documents d
+           ON d.entity_type = k.entity_type AND d.entity_id = k.entity_id
+        WHERE d.user_id = $1::uuid`,
+        [userId, candidates.map((item) => item.type), candidates.map((item) => item.id)],
+      );
+
+    return new Map(rows.map((row) => [`${row.entity_type}:${row.id}`, `${row.title}\n${row.body}`.trim()]));
   }
 
   /**

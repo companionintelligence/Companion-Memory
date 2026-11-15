@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
+import { planningCommitmentSignal } from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { AGENT_TURN_MESSAGE_CATEGORY, CommunicationEntity } from '@ci/domains/memory';
@@ -535,21 +536,24 @@ export class InboxScanService {
     context: UserServiceContext,
     message: CommunicationEntity,
   ): Promise<boolean> {
-    if (!this.decisionService) {
-      return false;
+    const text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
+
+    if (this.decisionService) {
+      try {
+        const score = await this.decisionService.scoreIngressCommitment(text, {
+          userId: context.userId,
+          threshold: 0.25,
+        });
+
+        return !score.isCommitment;
+      } catch {
+        // The pre-filter threw, so it has no verdict. Undecided, as below.
+      }
     }
 
-    try {
-      const text = `${message.subject ?? ''}\n${inboxBody(message)}`.trim();
-      const score = await this.decisionService.scoreIngressCommitment(text, {
-        userId: context.userId,
-        threshold: 0.25,
-      });
-
-      return !score.isCommitment;
-    } catch {
-      return false;
-    }
+    // Undecided (no pre-filter, or it failed), and the scan keeps the message.
+    // With PLANNING_COMMITMENT_DECISION on, HBPE's is_commitment can drop it.
+    return (await planningCommitmentSignal(context.userId, text)) === false;
   }
 }
 
