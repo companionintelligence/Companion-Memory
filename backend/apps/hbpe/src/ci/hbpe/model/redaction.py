@@ -882,7 +882,10 @@ class Redactor:
     def redact(self, text: str) -> tuple[str, dict[str, int]]:
         """Return the redacted text and the number of replacements per category.
 
-        The rules run again on their own output until a pass changes nothing. The
+        The name, URL, e-mail, IBAN, phone and card rules run again on their own output
+        until a pass changes nothing. Then the address rule runs once, and the others run
+        again on its output, until nothing changes. The address rule runs last, so a house
+        number is never taken from a phone or card that a later pass would find. The
         result is a fixed point, so redacting it a second time changes nothing. Each
         change removes at least one character that is not part of a placeholder, so the
         loop ends.
@@ -890,7 +893,12 @@ class Redactor:
         counts: Counter[str] = Counter()
         current = _normalise(text)
         while True:
-            step = self._redact_pass(current, counts)
+            while True:
+                step = self._redact_pass(current, counts)
+                if step == current:
+                    break
+                current = step
+            step = _redact_addresses(current, counts)
             if step == current:
                 return current, dict(counts)
             current = step
@@ -901,5 +909,4 @@ class Redactor:
         out = _redact_emails(out, counts)
         out = _redact_ibans(out, counts)
         out = _redact_phones(out, counts)
-        out = _redact_cards(out, counts)
-        return _redact_addresses(out, counts)
+        return _redact_cards(out, counts)

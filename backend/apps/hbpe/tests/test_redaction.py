@@ -728,6 +728,18 @@ CARD_CASES = [
         id="phone-starting-inside-a-run-is-fully-hidden",
     ),
     pytest.param(
+        "2831 0123 7430 0207+0207 946 0958-41 Station Circle0491-6264-7184 6744.Call\t+15/03/2024\t",
+        "2831 [PHONE][PHONE] Station Circle[PHONE] 6744.Call\t+15/03/2024\t",
+        {"phone": 3},
+        id="phone-split-by-a-new-suffix-stays-hidden",
+    ),
+    pytest.param(
+        "0456.0000.7837.0000-2024-01-15986 Oak Str 0333-328036-432535\t",
+        "[PHONE].[PHONE] Oak Str [PHONE]-432535\t",
+        {"phone": 3},
+        id="phone-before-an-address-stays-hidden",
+    ),
+    pytest.param(
         "Card 4111   1111   1111   1111 now",
         "Card [CARD] now",
         {"card": 1},
