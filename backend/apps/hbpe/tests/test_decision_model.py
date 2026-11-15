@@ -141,11 +141,22 @@ def test_unsloth_trainer_export():
         meta = trainer.train_and_export(train_data, eval_data, tmpdir)
         assert meta["model_type"] == "decision-laya-unsloth"
         assert meta["lora_rank"] == 16
-        # Computed from the single held-out item, not the old hard-coded 0.94.
-        # The gate fails because one item is far below the minimum eval size.
-        assert meta["eval_metrics"]["eval_size"] == 1
-        assert meta["eval_metrics"]["top1_accuracy"] in (0.0, 1.0)
+        # No trained model is passed in, so no candidate metrics are reported.
+        # The old hard-coded metrics (0.08, 0.03, 0.94) must not come back.
+        assert meta["prediction_source"] == "none"
+        assert meta["eval_metrics"] == {
+            "brier_score": None,
+            "expected_calibration_error": None,
+            "accuracy": None,
+            "top1_accuracy": None,
+            "eval_size": None,
+        }
+        assert meta["calibrated"] is False
         assert meta["gate"]["passed"] is False
+        assert meta["gate"]["reasons"] == ["no trained model"]
+        # The rule engine's score on the one held-out item is reported as the baseline.
+        assert meta["baseline_metrics"]["eval_size"] == 1
+        assert meta["baseline_metrics"]["accuracy"] == 0.0
 
         meta_path = Path(tmpdir) / "decision_model_meta.json"
         assert meta_path.exists()
@@ -238,6 +249,7 @@ def test_qwen_labeler_batch_resolve_hybrid(monkeypatch):
     # Qwen should have only been called for 1 item (the obscure one)!
     assert qwen_calls == [1]
 
+
 def test_decision_api_routes(monkeypatch):
     """Test the FastAPI /decision/ingress, /decision/rerank, and /decision/l0 endpoints."""
     from fastapi.testclient import TestClient
@@ -288,10 +300,7 @@ def test_decision_api_routes(monkeypatch):
     assert rerank_data["user_id"] == user_id
     assert len(rerank_data["results"]) == 2
     assert rerank_data["results"][0]["id"] == "p-relevant"
-    assert (
-        rerank_data["results"][0]["score"]
-        >= rerank_data["results"][1]["score"]
-    )
+    assert rerank_data["results"][0]["score"] >= rerank_data["results"][1]["score"]
 
     # 3. /decision/l0
     l0_resp = client.post(
@@ -308,6 +317,7 @@ def test_decision_api_routes(monkeypatch):
     assert l0_data["user_id"] == user_id
     assert l0_data["l0_class"] == "EXERCISE"
     assert l0_data["confidence"] > 0.5
+
 
 def test_decision_models_are_off_unless_enabled(monkeypatch):
     """The keyword fallback must not label events unless someone opts in."""

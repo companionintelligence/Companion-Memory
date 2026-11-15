@@ -1,13 +1,18 @@
 """
 Promotion gate for Unsloth decision-model exports.
 
-An export is served only when its gate passed. The trainer scores held-out
-items, evaluates them with ``evaluate_decision_gate`` against a baseline (the
-rule-based LocalDecisionEngine), and writes the result under ``gate`` in
-``decision_model_meta.json`` and as ``decision_gate.json`` next to the model.
+The gate measures the intent head only. The trainer scores held-out intent
+labels against a baseline (the rule-based LocalDecisionEngine) and evaluates
+them with ``evaluate_decision_gate``. The result goes under ``gate`` in
+``decision_model_meta.json`` and into ``decision_gate.json`` next to the model.
 DecisionModelClient reads that file from HBPE_DECISION_GATE_FILE via
-``check_gate_file``. A missing, malformed or failed gate means the client does
-not use the remote endpoint.
+``check_gate_file``.
+
+When HBPE_DECISION_GATE_ENFORCE is on, the client sends the intent question to
+the endpoint only while the gate passed, and answers every other question
+locally, because the gate does not measure them. A missing, malformed or failed
+gate then means the client does not use the endpoint. When enforcement is off,
+the client ignores the gate and only records its status.
 
 Default thresholds:
   brier_score                  <= 0.20
@@ -15,7 +20,8 @@ Default thresholds:
   accuracy                     >= baseline accuracy + 0.02
   eval_size                    >= 200
 
-Every threshold is overridable through Settings (HBPE_DECISION_GATE_*).
+Every threshold is overridable through Settings (HBPE_DECISION_GATE_*). An
+invalid threshold fails the gate with an "invalid threshold" reason.
 """
 
 from __future__ import annotations
@@ -29,8 +35,10 @@ from typing import Any
 
 DECISION_GATE_FILENAME = "decision_gate.json"
 
-# Tolerance for float comparisons. 0.50 + 0.02 is not exactly 0.52 in binary
-# floating point, so a model at exactly the margin must still pass.
+# Slack for the threshold comparisons. Float sums are not exact: 0.1 + 0.2 is
+# 0.30000000000000004, so an accuracy of 0.3 against a baseline of 0.1 and a
+# margin of 0.2 would miss by one ulp without this slack. Some sums are exact,
+# such as 0.5 + 0.02 == 0.52, and need none.
 _EPS = 1e-9
 
 
@@ -77,6 +85,35 @@ def _metric(source: Mapping[str, Any] | None, key: str) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _threshold_problems(t: GateThresholds) -> list[str]:
+    """Why a threshold cannot be used, one message each. Empty when all are usable."""
+    problems: list[str] = []
+    for name, value in (
+        ("brier_max", t.brier_max),
+        ("ece_max", t.ece_max),
+        ("accuracy_margin", t.accuracy_margin),
+    ):
+        if not _is_real(value) or not 0.0 <= value <= 1.0:
+            problems.append(f"{name} {value!r} must be a number from 0 to 1")
+    if (
+        isinstance(t.min_eval_size, bool)
+        or not isinstance(t.min_eval_size, int)
+        or t.min_eval_size < 0
+    ):
+        problems.append(
+            f"min_eval_size {t.min_eval_size!r} must be a whole number of 0 or more"
+        )
+    return problems
+
+
+def _is_real(value: object) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def evaluate_decision_gate(
     metrics: Mapping[str, Any],
     baseline: Mapping[str, Any] | None,
@@ -87,9 +124,16 @@ def evaluate_decision_gate(
 
     Every failed check adds one reason, so a result lists all failures. A metric
     that is missing, null, non-finite or boolean fails its check and is reported
-    as missing. A missing baseline accuracy fails the accuracy check.
+    as missing. A missing baseline accuracy fails the accuracy check. Thresholds
+    that are not usable fail the gate before any metric is read.
     """
     t = thresholds or GateThresholds()
+    problems = _threshold_problems(t)
+    if problems:
+        return GateResult(
+            passed=False, reasons=[f"invalid threshold: {p}" for p in problems]
+        )
+
     reasons: list[str] = []
 
     brier = _metric(metrics, "brier_score")

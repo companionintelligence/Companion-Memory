@@ -7,6 +7,7 @@ environment variables without touching code.
 
 from __future__ import annotations
 
+import math
 import os
 
 from dotenv import load_dotenv
@@ -216,38 +217,68 @@ class Settings(BaseSettings):
     )
 
     # ── Decision-model promotion gate (see model/decision_gate.py) ───────────
-    # DecisionModelClient uses a remote endpoint only while the gate file says the
-    # export passed. A missing, malformed or failed gate falls back to
-    # LocalDecisionEngine and records the reason on each result. The export writes
-    # decision_gate.json next to the model; point this at that file. Each threshold
-    # is read from its HBPE_ name only, so a generic DECISION_GATE_* variable in a
-    # shared env file cannot change the gate (same reason as enable_admin_routes).
+    # The export writes decision_gate.json next to the model; point
+    # HBPE_DECISION_GATE_FILE at that file. A missing, malformed or failed gate
+    # means the gate did not pass. Each setting is read from its HBPE_ name only,
+    # so a generic DECISION_GATE_* variable in a shared env file cannot change the
+    # gate (same reason as enable_admin_routes).
     decision_gate_file: str = Field(
         default="", validation_alias="HBPE_DECISION_GATE_FILE"
     )
+    # Off by default: a configured endpoint answers every question, as it always
+    # has, and the client only records the gate status on its results. On: the
+    # endpoint answers the intent question only, and only while the gate passed.
+    # Every other question is answered locally. Any value other than an explicit
+    # false spelling turns it on, so a typo cannot quietly switch the gate off.
+    decision_gate_enforce: bool = Field(
+        default=False, validation_alias="HBPE_DECISION_GATE_ENFORCE"
+    )
     decision_gate_brier_max: float = Field(
-        default=0.20,
-        ge=0.0,
-        le=1.0,
-        validation_alias="HBPE_DECISION_GATE_BRIER_MAX",
+        default=0.20, validation_alias="HBPE_DECISION_GATE_BRIER_MAX"
     )
     decision_gate_ece_max: float = Field(
-        default=0.10,
-        ge=0.0,
-        le=1.0,
-        validation_alias="HBPE_DECISION_GATE_ECE_MAX",
+        default=0.10, validation_alias="HBPE_DECISION_GATE_ECE_MAX"
     )
     decision_gate_accuracy_margin: float = Field(
-        default=0.02,
-        ge=0.0,
-        le=1.0,
-        validation_alias="HBPE_DECISION_GATE_ACCURACY_MARGIN",
+        default=0.02, validation_alias="HBPE_DECISION_GATE_ACCURACY_MARGIN"
     )
     decision_gate_min_eval: int = Field(
-        default=200,
-        ge=0,
-        validation_alias="HBPE_DECISION_GATE_MIN_EVAL",
+        default=200, validation_alias="HBPE_DECISION_GATE_MIN_EVAL"
     )
+
+    # Range checks live in evaluate_decision_gate, not here. A bad value must fail
+    # the gate with an "invalid threshold" reason, not stop the service from
+    # importing. A value that is not a number becomes NaN, or -1 for the count,
+    # and that check rejects it.
+    @field_validator(
+        "decision_gate_brier_max",
+        "decision_gate_ece_max",
+        "decision_gate_accuracy_margin",
+        mode="before",
+    )
+    @classmethod
+    def _parse_gate_threshold(cls, value: object) -> object:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return math.nan
+
+    @field_validator("decision_gate_min_eval", mode="before")
+    @classmethod
+    def _parse_gate_min_eval(cls, value: object) -> object:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    @field_validator("decision_gate_enforce", mode="before")
+    @classmethod
+    def _parse_gate_enforce(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() not in ("", "0", "false", "no", "off")
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(

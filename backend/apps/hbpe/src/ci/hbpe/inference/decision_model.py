@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 
 QuestionType = Literal["choice", "noul", "score"]
 
+# The one question the promotion gate measures. With enforcement on, only this
+# question may be answered by the remote endpoint.
+GATED_QUESTION = "intent"
+
 
 @dataclass(frozen=True)
 class DecisionQuestion:
@@ -55,55 +59,15 @@ class DecisionResult:
     probability: float
     distribution: dict[str, float] = field(default_factory=dict)
     calibrated: bool = True
-    # Set when a remote endpoint was configured but this result came from the
-    # local engine instead (gate not passed, gate file missing, or endpoint error).
-    # None otherwise, including when no endpoint is configured.
-    fallback_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {
+        return {
             "type": self.question_type,
             "value": self.value,
             "probability": round(self.probability, 4),
             "distribution": {k: round(v, 4) for k, v in self.distribution.items()},
             "calibrated": self.calibrated,
         }
-        if self.fallback_reason is not None:
-            d["fallback_reason"] = self.fallback_reason
-        return d
-
-
-# Last gate file read, keyed by path, mtime and size. Each evaluate() call only
-# stats the file, and re-reads it when the export replaces it.
-_GATE_CACHE: tuple[tuple[str, int | None, int | None], GateResult] | None = None
-
-
-def _gate_file_key(path: str) -> tuple[str, int | None, int | None]:
-    if not path:
-        return ("", None, None)
-    try:
-        st = os.stat(path)
-    except OSError:
-        return (path, None, None)
-    return (path, st.st_mtime_ns, st.st_size)
-
-
-def _gate_for_path(path: str) -> GateResult:
-    """The gate for *path*, re-read only when the file changes."""
-    global _GATE_CACHE
-    key = _gate_file_key(path)
-    cached = _GATE_CACHE
-    if cached is not None and cached[0] == key:
-        return cached[1]
-    result = check_gate_file(path)
-    _GATE_CACHE = (key, result)
-    if result.passed:
-        log.info("Decision gate passed for %s; remote endpoint enabled", path)
-    else:
-        log.warning(
-            "Decision gate blocks the remote endpoint: %s", "; ".join(result.reasons)
-        )
-    return result
 
 
 # ── Standard Companion Memory Decision Question Suites ──────────────────────────
@@ -293,14 +257,69 @@ class LocalDecisionEngine:
         return results
 
 
+# Identity of a gate file on disk: path, inode, size, mtime and ctime. An export
+# replaces the file atomically, which gives it a new inode, so every new export
+# is seen even when the size and timestamps happen to match.
+_GateKey = tuple[str, int | None, int | None, int | None, int | None]
+
+
+def _gate_file_key(path: str) -> _GateKey:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None, None, None, None)
+    return (path, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _typed_questions(
+    questions: dict[str, DecisionQuestion | dict[str, Any]],
+) -> dict[str, DecisionQuestion]:
+    typed: dict[str, DecisionQuestion] = {}
+    for k, v in questions.items():
+        if isinstance(v, DecisionQuestion):
+            typed[k] = v
+        elif isinstance(v, dict):
+            typed[k] = DecisionQuestion(
+                type=v.get("type", "choice"),
+                instructions=v.get("instructions", ""),
+                criteria=v.get("criteria"),
+            )
+    return typed
+
+
+@dataclass
+class DecisionEvaluation:
+    """
+    What one DecisionModelClient.evaluate_detailed call answered, and how.
+
+    results holds one DecisionResult per question answered. endpoint_questions
+    names the questions the client asked the endpoint for, whether or not it
+    answered; every other question was answered by LocalDecisionEngine. gate is
+    the promotion gate the client read, or None when no endpoint is configured,
+    which means the gate file was never read. enforced says whether that gate
+    decided the routing. fallback_reason says why the endpoint did not serve the
+    call. It stays None when the endpoint served it, and when enforcement kept
+    the other questions local by design.
+    """
+
+    results: dict[str, DecisionResult]
+    endpoint_questions: tuple[str, ...] = ()
+    gate: GateResult | None = None
+    enforced: bool = False
+    fallback_reason: str | None = None
+
+
 class DecisionModelClient:
     """
     Client for interacting with non-autoregressive decision engines
     (Convai Laya, Clef, or Unsloth Decision API /v1/systemone).
 
-    A remote endpoint is used only while the promotion gate passed. The gate file
-    is gate_file, or HBPE_DECISION_GATE_FILE when gate_file is None. Without a
-    remote endpoint the client never reads the gate and uses LocalDecisionEngine.
+    With a remote endpoint configured, the client reads the promotion gate file
+    and records its status on each evaluation. The gate decides routing only
+    when enforcement is on (gate_enforce, or HBPE_DECISION_GATE_ENFORCE). Then the
+    endpoint answers the intent question alone, and only while the gate passed.
+    Without a remote endpoint the client never reads the gate and uses
+    LocalDecisionEngine.
     """
 
     def __init__(
@@ -310,13 +329,21 @@ class DecisionModelClient:
         timeout_seconds: float = 5.0,
         enable_local_fallback: bool = True,
         gate_file: str | None = None,
+        gate_enforce: bool | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("DECISION_MODEL_URL", "")).rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.enable_local_fallback = enable_local_fallback
         self.gate_file = gate_file
+        self.gate_enforce = gate_enforce
         self.local_engine = LocalDecisionEngine()
+        # The last gate file read, under the file identity it was read with.
+        self._gate_cache: tuple[_GateKey, GateResult] | None = None
+
+    @property
+    def _endpoint_url(self) -> str:
+        return f"{self.base_url}/v1/systemone"
 
     def _gate(self) -> GateResult:
         if self.gate_file is not None:
@@ -325,18 +352,32 @@ class DecisionModelClient:
             from ci.hbpe.config import settings
 
             path = settings.decision_gate_file
-        return _gate_for_path(path)
+        return self._read_gate(path)
 
-    def _local_with_reason(
-        self,
-        state: str,
-        questions: dict[str, DecisionQuestion],
-        reason: str,
-    ) -> dict[str, DecisionResult]:
-        results = self.local_engine.evaluate(state, questions)
-        for result in results.values():
-            result.fallback_reason = reason
-        return results
+    def _read_gate(self, path: str) -> GateResult:
+        """The gate for *path*, re-read only when the file on disk changes."""
+        key = _gate_file_key(path)
+        cached = self._gate_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = check_gate_file(path)
+        self._gate_cache = (key, result)
+        if result.passed:
+            log.info("Decision gate passed for %s", path)
+        else:
+            log.warning(
+                "Decision gate did not pass for %s: %s",
+                path,
+                "; ".join(result.reasons),
+            )
+        return result
+
+    def _enforced(self) -> bool:
+        if self.gate_enforce is not None:
+            return self.gate_enforce
+        from ci.hbpe.config import settings
+
+        return settings.decision_gate_enforce
 
     def evaluate(
         self,
@@ -346,67 +387,123 @@ class DecisionModelClient:
         """
         Evaluate a state against typed questions in a single forward pass.
         """
-        # Normalize questions to DecisionQuestion instances
-        typed_questions: dict[str, DecisionQuestion] = {}
-        for k, v in questions.items():
-            if isinstance(v, DecisionQuestion):
-                typed_questions[k] = v
-            elif isinstance(v, dict):
-                typed_questions[k] = DecisionQuestion(
-                    type=v.get("type", "choice"),
-                    instructions=v.get("instructions", ""),
-                    criteria=v.get("criteria"),
-                )
+        return self.evaluate_detailed(state, questions).results
+
+    def evaluate_detailed(
+        self,
+        state: str,
+        questions: dict[str, DecisionQuestion | dict[str, Any]],
+    ) -> DecisionEvaluation:
+        """
+        Evaluate as evaluate does, and also report the questions the endpoint was
+        asked, the gate status the client saw, and why the endpoint did not serve
+        the call.
+        """
+        typed_questions = _typed_questions(questions)
 
         if not self.base_url:
             if self.enable_local_fallback:
-                return self.local_engine.evaluate(state, typed_questions)
+                return DecisionEvaluation(
+                    results=self.local_engine.evaluate(state, typed_questions)
+                )
             raise ValueError(
                 "No DECISION_MODEL_URL configured and local fallback disabled"
             )
 
         gate = self._gate()
-        if not gate.passed:
-            reason = "decision gate not passed: " + "; ".join(gate.reasons)
-            if self.enable_local_fallback:
-                return self._local_with_reason(state, typed_questions, reason)
-            raise RuntimeError(f"Remote decision endpoint not used: {reason}")
+        enforced = self._enforced()
 
+        if enforced and not gate.passed:
+            reason = "decision gate not passed: " + "; ".join(gate.reasons)
+            if not self.enable_local_fallback:
+                raise RuntimeError(f"Remote decision endpoint not used: {reason}")
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                gate=gate,
+                enforced=True,
+                fallback_reason=reason,
+            )
+
+        # Without enforcement the endpoint is asked every question, as it always
+        # was. With enforcement it is asked only the question the gate measures.
+        remote_questions = {
+            name: q
+            for name, q in typed_questions.items()
+            if not enforced or name == GATED_QUESTION
+        }
+        local_questions = {
+            name: q
+            for name, q in typed_questions.items()
+            if name not in remote_questions
+        }
+        endpoint_questions = tuple(remote_questions)
+
+        if enforced and not remote_questions:
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                gate=gate,
+                enforced=True,
+            )
+
+        try:
+            remote_results = self._ask_endpoint(state, remote_questions)
+        except Exception as err:
+            log.warning(
+                "Remote decision endpoint %s failed (%s), falling back to local engine: %s",
+                self._endpoint_url,
+                type(err).__name__,
+                err,
+            )
+            if not self.enable_local_fallback:
+                raise
+            return DecisionEvaluation(
+                results=self.local_engine.evaluate(state, typed_questions),
+                endpoint_questions=endpoint_questions,
+                gate=gate,
+                enforced=enforced,
+                fallback_reason=f"endpoint error: {type(err).__name__}",
+            )
+
+        local_results = (
+            self.local_engine.evaluate(state, local_questions)
+            if local_questions
+            else {}
+        )
+        results: dict[str, DecisionResult] = {}
+        for name in typed_questions:
+            source = local_results if name in local_questions else remote_results
+            if name in source:
+                results[name] = source[name]
+        return DecisionEvaluation(
+            results=results,
+            endpoint_questions=endpoint_questions,
+            gate=gate,
+            enforced=enforced,
+        )
+
+    def _ask_endpoint(
+        self,
+        state: str,
+        questions: dict[str, DecisionQuestion],
+    ) -> dict[str, DecisionResult]:
         payload = {
             "model": self.model_name,
             "state": state,
-            "questions": {k: q.to_dict() for k, q in typed_questions.items()},
+            "questions": {k: q.to_dict() for k, q in questions.items()},
         }
-
-        url = f"{self.base_url}/v1/systemone"
         req = urllib.request.Request(
-            url,
+            self._endpoint_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
 
         t0 = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                latency_ms = (time.monotonic() - t0) * 1000.0
-                log.debug("Decision model response received in %.1f ms", latency_ms)
-                return self._parse_response(data, typed_questions)
-        except Exception as err:
-            log.warning(
-                "Remote decision endpoint %s failed (%s), falling back to local engine: %s",
-                url,
-                type(err).__name__,
-                err,
-            )
-            if self.enable_local_fallback:
-                return self._local_with_reason(
-                    state,
-                    typed_questions,
-                    f"endpoint error: {type(err).__name__}",
-                )
-            raise
+        with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latency_ms = (time.monotonic() - t0) * 1000.0
+        log.debug("Decision model response received in %.1f ms", latency_ms)
+        return self._parse_response(data, questions)
 
     def _parse_response(
         self,
@@ -488,7 +585,8 @@ def score_memory_ingress(text: str) -> dict[str, Any]:
         if intent_res
         else 0.0,
         "intent_distribution": {
-            k: round(v, 4) for k, v in (intent_res.distribution.items() if intent_res else {})
+            k: round(v, 4)
+            for k, v in (intent_res.distribution.items() if intent_res else {})
         },
         "is_commitment": bool(commit_res.value) if commit_res else False,
         "commitment_probability": round(
@@ -498,7 +596,8 @@ def score_memory_ingress(text: str) -> dict[str, Any]:
         else 0.0,
         "sensitivity": int(sens_res.value) if sens_res else 0,
         "sensitivity_distribution": {
-            k: round(v, 4) for k, v in (sens_res.distribution.items() if sens_res else {})
+            k: round(v, 4)
+            for k, v in (sens_res.distribution.items() if sens_res else {})
         },
         "calibrated": bool(
             (intent_res.calibrated if intent_res else True)
@@ -520,9 +619,7 @@ def score_retrieval_relevance(query: str, memory_snippet: str) -> float:
     return round(float(rel.distribution.get("true", rel.probability)), 4)
 
 
-def rerank_passages(
-    query: str, passages: list[dict[str, str]]
-) -> list[dict[str, Any]]:
+def rerank_passages(query: str, passages: list[dict[str, str]]) -> list[dict[str, Any]]:
     """
     Score and rerank candidate retrieval passages using System 1 relevance and
     temporal freshness heads. Returns passages ordered by descending score.
@@ -538,9 +635,7 @@ def rerank_passages(
         rel = res.get("is_relevant")
         fresh = res.get("temporal_freshness")
 
-        rel_prob = (
-            float(rel.distribution.get("true", rel.probability)) if rel else 0.5
-        )
+        rel_prob = float(rel.distribution.get("true", rel.probability)) if rel else 0.5
         fresh_score = int(fresh.value) if fresh else 1
         # Combine calibrated relevance probability with a small freshness tie-breaker
         composite = round(0.85 * rel_prob + 0.15 * (fresh_score / 2.0), 4)
@@ -560,9 +655,7 @@ def rerank_passages(
     return scored
 
 
-def classify_l0_event(
-    title: str, description: str | None = None
-) -> dict[str, Any]:
+def classify_l0_event(title: str, description: str | None = None) -> dict[str, Any]:
     """
     Classify an event or task into one of the 8 canonical L0_CLASSES using the
     System 1 Fast Decision Model (or calibrated local fallback).
@@ -585,4 +678,3 @@ def classify_l0_event(
         "distribution": {k: round(v, 4) for k, v in l0_res.distribution.items()},
         "calibrated": bool(l0_res.calibrated),
     }
-
