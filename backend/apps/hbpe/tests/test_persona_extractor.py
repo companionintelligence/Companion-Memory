@@ -963,6 +963,59 @@ def test_an_export_path_with_glob_characters_is_read(tmp_path: Path) -> None:
     assert _states(root) == ["[NAME]: Bring the car keys tomorrow"]
 
 
+def test_decision_export_redacts_secrets(tmp_path: Path) -> None:
+    _write_chat(
+        tmp_path,
+        [
+            {
+                "text": "my PIN is 482193, password: Tr0ub4dor&3",
+                "creator": {"name": "Sam Lee"},
+            }
+        ],
+    )
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Set up the server",
+                "items": [
+                    {
+                        "title": "Add api_key=sk_live_EXAMPLEKEY1234567890",
+                        "notes": "AKIAIOSFODNN7EXAMPLE",
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "[NAME]: my PIN is [SECRET], password: [SECRET]",
+        "Task [Set up the server]: Add api_key=[SECRET]. [SECRET]",
+    ]
+
+
+def test_a_task_titled_with_a_secret_keyword_has_its_notes_redacted(
+    tmp_path: Path,
+) -> None:
+    _write_takeout(
+        tmp_path,
+        tasks=[
+            {
+                "title": "Errands",
+                "items": [
+                    {"title": "Wi-Fi password", "notes": "hunter2 is the new one"},
+                    {"title": "Secret santa gift", "notes": "buy a book"},
+                ],
+            }
+        ],
+    )
+
+    assert _states(tmp_path) == [
+        "Task [Errands]: Wi-Fi password. [SECRET]",
+        "Task [Errands]: Secret santa gift. buy a book",
+    ]
+
+
 def test_no_raw_contact_detail_reaches_any_state(tmp_path: Path) -> None:
     email = "sarah.jones@example.com"
     phone = "07700 900123"

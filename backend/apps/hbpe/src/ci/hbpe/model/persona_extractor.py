@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ci.hbpe.model.redaction import Redactor, content_words
+from ci.hbpe.model.redaction import Redactor, content_words, ends_with_secret_keyword
 from ci.hbpe.model.unsloth_decision_trainer import (
     DecisionDatasetItem,
     UnslothDecisionTrainConfig,
@@ -504,7 +504,9 @@ class PersonaDataExtractor:
         capitalised (see ``_name_policy``). In chat, a capital that starts a sentence is kept,
         unless a comma, an apostrophe or a colon follows it. Names that no readable chat file supplies
         are not known here, so only the redactor's pattern rules apply to them, and the
-        redactor's documented gaps still apply, such as a name directly after a dot.
+        redactor's documented gaps still apply, such as a name directly after a dot. A task
+        whose title ends with a secret keyword, such as Wi-Fi password, has its notes redacted
+        whole.
         """
         items: list[UnslothDecisionItem] = []
 
@@ -598,7 +600,13 @@ class PersonaDataExtractor:
                                     continue
                                 notes = (task.get("notes") or "").strip()
                                 title_out = redact(title)
-                                notes_out = redact(notes)
+                                # A title such as Wi-Fi password often means the notes hold the
+                                # secret itself, so the notes are redacted whole.
+                                notes_out = (
+                                    "[SECRET]"
+                                    if notes and ends_with_secret_keyword(title)
+                                    else redact(notes)
+                                )
                                 state = (
                                     f"Task [{list_title}]: {title_out}. {notes_out}"
                                 ).strip()
