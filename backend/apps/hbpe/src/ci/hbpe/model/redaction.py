@@ -10,53 +10,73 @@ Nothing in the runtime calls this module yet. Its only caller is
 ``persona_extractor.build_tone_examples``, which is off unless
 ``HBPE_TONE_EXAMPLES_ENABLED`` is set.
 
-Categories, in the order they are applied:
+The rules run in the order below, and the whole set repeats until a pass changes
+nothing. Names run first, so a denied name is replaced before a query or a number next
+to it is removed.
 
+- ``name``: caller-supplied names, matched case-insensitively as whole words, become
+  ``[NAME]``. A name is left alone when it is followed by ``@``, or by ``.`` and a letter
+  or digit, and when it is preceded by ``@`` or ``.``, so that an address or a host name
+  is not broken up. Both the precomposed and the decomposed spelling of a name match.
 - ``url``: a URL with a query string or fragment, with credentials (``user:pass@``), or
   with a token-like path segment. A URL is text that starts with a scheme or ``www.``,
-  or a host followed by a path, query or fragment, such as ``example.com/pay?x=1``. The
-  scheme, host and path are kept. The query, the fragment and the credentials are
-  dropped. A path segment of at least 20 letters, digits or underscores, with both a
-  letter and a digit, becomes ``[TOKEN]``. A query or fragment is dropped only when it
-  starts with a letter, an underscore or such a token, and is not followed by a space and
-  a group of digits, ``+``, ``(`` or a placeholder. Otherwise the phone, card and address
-  rules see the digits whole, as in ``example.com?+44 20 7946 0958``. A URL with none of
-  these is left alone.
-- ``email``: an address with a dotted domain, such as ``sarah@example.com``, becomes
-  ``[EMAIL]``, and a path or query directly after it goes with it. Letters from any
-  script count, so ``josé@example.com`` is caught. An apostrophe is not part of the local
-  part, so ``o'brien@example.com`` leaves ``o'`` before ``[EMAIL]``.
+  or with a host, optionally followed by a port, and then a path, query or fragment, such
+  as ``example.com/pay?x=1``. The scheme, host and path are kept. The query, the fragment
+  and the credentials are dropped. A path segment of at least 20 letters, digits or
+  underscores, with both a letter and a digit, becomes ``[TOKEN]``. A query value of 20
+  or more characters is always dropped. A shorter query is dropped only when no space and
+  then a number, ``+``, ``(`` or a placeholder follows it. Otherwise dropping it would
+  cut into that number, as in ``example.com?tel=07700 900123``, so the phone rule sees
+  the whole number. A URL with none of these is left alone.
+- ``email``: an address with a dotted domain, or with an IPv4 domain, such as
+  ``sarah@example.com``, becomes ``[EMAIL]``, and a path or query directly after it goes
+  with it. Letters from any script count, so ``josé@example.com`` is caught. An apostrophe
+  in the local part is allowed only between two letters, so ``o'brien@example.com`` is
+  caught whole.
 - ``iban``: IBANs that pass the ISO 13616 mod-97 check become ``[IBAN]``.
 - ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
-  French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits.
-- ``card``: runs of 13 to 19 digits, optionally grouped with single spaces or hyphens,
-  that pass the Luhn check become ``[CARD]``. A 14-digit run that reads as a
-  ``YYYYMMDDhhmmss`` timestamp is not treated as a card.
+  French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits. A
+  number may follow a letter, so ``call07700900123`` is caught.
+- ``card``: the longest run of whole digit groups that passes the Luhn check becomes
+  ``[CARD]``. Groups are separated by one or two spaces (a non-breaking space counts) or
+  by a hyphen. A card may also be written as four groups of four digits joined by dots.
+  Separated dates and times are masked before the search, so a card never runs into one.
+  Digits after the card, as in ``4111 1111 1111 1111 123``, are kept. A 14-digit
+  ``YYYYMMDDhhmmss`` stamp is not treated as a card.
 - ``address``: a house number, one to three capitalised words and a street suffix
   (Street, Road, Avenue and so on) become ``[ADDRESS]``.
-- ``name``: caller-supplied names, matched case-insensitively as whole words, become
-  ``[NAME]``.
 
 Names come in two lists. ``deny_names`` are redacted wherever they appear, including
-where two denied names overlap. ``allow_names`` are phrases that stay as written when a
-denied name sits wholly inside them: ``"Central Park"`` keeps ``"Park"`` when ``"Park"``
-is denied, and ``"I will"`` keeps ``"Will"`` when ``"Will"`` is denied. A denied name
-that only overlaps an allowed phrase is still redacted. With ``"Ann"`` allowed and
-``"Ann Marie"`` denied, ``"Ann Marie"`` becomes ``[NAME]``. A name that is on both
-lists is rejected, because the intent is unclear.
+where two denied names overlap, except inside an address or a host name as described
+above. ``allow_names`` are phrases that stay as written when a denied name sits wholly
+inside them: ``"Central Park"`` keeps ``"Park"`` when ``"Park"`` is denied, and
+``"I will"`` keeps ``"Will"`` when ``"Will"`` is denied. A denied name that only overlaps
+an allowed phrase is still redacted. With ``"Ann"`` allowed and ``"Ann Marie"`` denied,
+``"Ann Marie"`` becomes ``[NAME]``. A name that is on both lists is rejected, because
+the intent is unclear.
 
 Dates and times in the usual separated forms are never redacted, and neither is a
 number on its own with fewer than 8 digits. A bare run of 10 digits whose first and
 fourth digits are 2 to 9 is read as a phone number, so a compact ``YYYYMMDDhh`` stamp can
-be redacted. Known gaps, by design: 7-digit local phone numbers, lowercase street
-addresses, postcodes, and names that are not listed. A number whose last group runs
-straight into an address, such as ``4111 1111 1111 1111sarah@example.com``, has that group
-taken into the address, so the rest of the number is left as it is.
+be redacted.
+
+Known gaps, by design: 7-digit local phone numbers, including one that follows a longer
+number, lowercase street addresses, postcodes, and names that are not listed. A name
+inside a host label, such as ``sarah.example.com``, is not redacted. Digits glued straight
+to an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have the
+glued group taken into the address, so the rest of the number stays. An IBAN glued to
+letters is not matched. A product name such as ``2 Google Drive`` can match the address
+rule. The userinfo of a URL whose password contains a slash is not stripped. A card
+written with slashes is not recognised, and neither is a quoted local part such as
+``"sarah"@example.com``. A phone number with a space after the plus sign, such as
+``+ 44 20 7946 0958``, or with a bracketed zero, such as ``(0)20 7946 0958``, is not
+matched. A UUID in a path is not treated as a token, because it has hyphens.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
@@ -112,24 +132,35 @@ _SUFFIX_ALTERNATION = "|".join(
 
 # The path of a URL. It stops at "?" and "#", which start the query and the fragment.
 _URL_PATH = r"(?:/[^\s<>\"'?#]*)?"
-# The query or fragment of a URL. It must start with a letter, an underscore or a
-# 20-character token, so a phone number, card or house number glued to "?" or "#" is
-# left for the rules below. It must end at a space, quote, bracket or the end of the
-# text, and must not contain "[", which starts a placeholder such as [CARD]. It must not
-# be followed by a space and then a group of digits, "+", "(" or a placeholder. Dropping
-# it there would cut into a number, so the URL stops before the "?" or "#" instead.
+# The query or fragment of a URL, which is dropped with the URL. Two shapes are allowed.
+# A value of 20 or more characters, with an optional "key=" in front, is always dropped.
+# A plain key or word is dropped only when no space and then a number, "+", "(" or a
+# placeholder follows it, because dropping it there would cut into that number. It is
+# also kept when it ends in a digit and a capitalised word follows, as in "?q=221 Baker
+# Street", where the digits belong to an address. A "[" ends the match, so a query that
+# holds a placeholder such as [NAME] is kept as it is.
 _URL_QUERY = (
-    r"(?:[?#](?:[A-Za-z_]|(?=[0-9A-Za-z_]{20}))[^\s<>\"'\[]*"
-    r"(?=[\s<>\"'\]]|$)(?!\s+(?:[0-9]{2,}[ .-][0-9]{2,}|[+(\[])))?"
+    r"(?:[?#]"
+    r"(?:(?:[A-Za-z_][\w.-]*=)?[^\s<>\"'\[]{20,}(?=[\s<>\"'\]]|$)"
+    r"|[A-Za-z_][^\s<>\"'\[]*(?=[\s<>\"'\]]|$)(?!\s+(?:[0-9]{2,}|[+(\[]))"
+    r"(?!(?<=[0-9])\s+(?-i:[A-Z]))"
+    r"))?"
 )
 _URL_TAIL = _URL_PATH + _URL_QUERY
+# A host with an optional port: a dotted name that ends in letters, or an IPv4 address.
+_HOST = (
+    r"(?:(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}|(?:[0-9]{1,3}\.){3}[0-9]{1,3})"
+    r"(?::[0-9]{1,5})?"
+)
 _URL_RE = re.compile(
-    # A scheme or www. URL, such as https://example.com/pay?x=1 or www.example.com.
+    # A URL with a scheme or www., such as https://example.com/pay?x=1 or www.example.com.
     r"(?<![\w@.-])(?:(?:https?|ftp)://|www\.)[^\s<>\"'?#/]*"
     + _URL_TAIL
     # A bare host followed by a path, query or fragment, such as example.com/pay?x=1 or
     # example.com?token=abc. _sanitise_url decides what, if anything, to remove.
-    + r"|(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?=[/?#])"
+    + r"|(?<![\w@.-])"
+    + _HOST
+    + r"(?=[/?#])"
     + _URL_TAIL,
     re.IGNORECASE,
 )
@@ -138,14 +169,19 @@ _TOKEN_SEGMENT_RE = re.compile(
     r"(?=[A-Za-z0-9_]*[0-9])(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{20,}"
 )
 
-# Letters from any script count. An apostrophe is not part of the local part, so a card
-# or street glued in front of an address is not swallowed by it. A path or query after
-# the address goes with it, under the same rules as a URL.
+# The local part of an address. An apostrophe is allowed only between two letters, so
+# "o'brien" is one local part. A card number glued before an address ("1111'sarah") is
+# not swallowed, because the apostrophe there follows a digit.
+_EMAIL_LOCAL = r"(?:[\w!#$%&*+=?^{|}~.-]|(?<=[^\W\d_])'(?=[^\W\d_]))+"
+# A dotted domain that ends in letters, or an IPv4 address, optionally in brackets.
+_EMAIL_DOMAIN = (
+    r"(?:[\w-]+(?:\.[\w-]+)*\.[^\W\d_]{2,}|\[?(?:[0-9]{1,3}\.){3}[0-9]{1,3}\]?)"
+)
 _EMAIL_RE = re.compile(
-    r"(?<![\w.%+-])[\w.%+-]+@[\w-]+(?:\.[\w-]+)*"
-    # The top-level domain must not be followed by a letter, digit or hyphen. An
-    # underscore may follow it.
-    r"\.[^\W\d_]{2,}(?![^\W_]|-)" + _URL_TAIL
+    # The lookbehind stops a match from starting in the middle of a longer local part.
+    # Nothing follows the top-level domain except the path or query tail, so a digit or
+    # a hyphen right after it does not stop the match.
+    r"(?<![\w!#$%&*+=?^{|}~.-])" + _EMAIL_LOCAL + r"@" + _EMAIL_DOMAIN + _URL_TAIL
 )
 
 _IBAN_RE = re.compile(
@@ -153,7 +189,7 @@ _IBAN_RE = re.compile(
 )
 
 _PHONE_RE = re.compile(
-    r"(?<![\w+])"
+    r"(?<![0-9+])"
     r"(?:"
     # +44 20 7946 0958, +1 (555) 123-4567, +33 6 12 34 56 78
     r"\+[0-9]{1,3}(?:[ .-]?\(?[0-9]{1,4}\)?){2,5}"
@@ -172,10 +208,26 @@ _PHONE_RE = re.compile(
     # 06 12 34 56 78
     r"|0[0-9](?:[ .-][0-9]{2}){4}"
     r")"
-    r"(?!\w)"
+    # A digit after the number would mean the match stopped in the middle of a longer run.
+    r"(?![0-9])"
 )
 
-_CARD_RE = re.compile(r"(?<![0-9])[0-9](?:[ -]?[0-9]){12,18}(?![0-9])")
+# A run of digit groups. Groups are separated by one or two spaces (a non-breaking space
+# counts) or by one hyphen. Each group is a run of digits. Dots are not separators here,
+# because decimals such as 3.14159 are common in ordinary text.
+_CARD_RUN_RE = re.compile(r"[0-9]+(?:(?:[ \u00a0]{1,2}|-)[0-9]+)*")
+# Four groups of four digits joined by dots, as in 4111.1111.1111.1111.
+_DOT_CARD_RE = re.compile(r"(?<![0-9])[0-9]{4}(?:\.[0-9]{4}){3}(?![0-9])")
+_CARD_GROUP_RE = re.compile(r"[0-9]+")
+# Separated dates and times. They are masked before the card search, so that a card never
+# runs into one of them.
+_DATE_OR_TIME_RE = re.compile(
+    r"(?<![0-9])(?:"
+    r"[0-9]{4}[-/.][0-9]{1,2}[-/.][0-9]{1,2}"
+    r"|[0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2}(?:[0-9]{2})?"
+    r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?"
+    r")(?![0-9])"
+)
 
 _ADDRESS_RE = re.compile(
     r"(?<![\w.])[0-9]{1,6}[A-Za-z]?\s+"
@@ -242,6 +294,14 @@ def _is_compact_timestamp(digits: str) -> bool:
     return True
 
 
+def _is_card(digits: str) -> bool:
+    if not 13 <= len(digits) <= 19:
+        return False
+    if len(digits) == 14 and _is_compact_timestamp(digits):
+        return False
+    return _luhn_ok(digits)
+
+
 def _iban_checksum_ok(value: str) -> bool:
     compact = value.replace(" ", "").upper()
     if not 15 <= len(compact) <= 34:
@@ -275,6 +335,38 @@ def _phone_span(candidate: str) -> str | None:
         if 8 <= digit_count <= 15:
             return candidate[:end]
     return None
+
+
+def _mask_dates(text: str) -> str:
+    """Replace each separated date or time with letters of the same length."""
+    return _DATE_OR_TIME_RE.sub(lambda match: "x" * len(match.group(0)), text)
+
+
+def _find_cards(
+    groups: list[tuple[int, int, str]], found: list[tuple[int, int]]
+) -> None:
+    """Record the longest Luhn-valid run of whole digit groups, then search either side.
+
+    ``groups`` holds ``(start, end, digits)`` for each digit group, in order. The longest
+    valid run wins, and of two runs of equal length the one further left. Digits on either
+    side of the card are searched again, so two cards in one run are both found.
+    """
+    best: tuple[int, int, int] | None = None
+    for i in range(len(groups)):
+        total = 0
+        for j in range(i, len(groups)):
+            total += len(groups[j][2])
+            if total > 19:
+                break
+            if total >= 13 and (best is None or total > best[0]):
+                if _is_card("".join(group[2] for group in groups[i : j + 1])):
+                    best = (total, i, j)
+    if best is None:
+        return
+    _, i, j = best
+    found.append((groups[i][0], groups[j][1]))
+    _find_cards(groups[:i], found)
+    _find_cards(groups[j + 1 :], found)
 
 
 def _redact_urls(text: str, counts: Counter[str]) -> str:
@@ -320,17 +412,33 @@ def _redact_phones(text: str, counts: Counter[str]) -> str:
 
 
 def _redact_cards(text: str, counts: Counter[str]) -> str:
-    def repl(match: re.Match[str]) -> str:
-        raw = match.group(0)
-        digits = "".join(ch for ch in raw if ch in _DIGITS)
-        if len(digits) == 14 and _is_compact_timestamp(digits):
-            return raw
-        if not _luhn_ok(digits):
-            return raw
+    masked = _mask_dates(text)
+    found: list[tuple[int, int]] = []
+    for dotted in _DOT_CARD_RE.finditer(masked):
+        if _is_card(dotted.group(0).replace(".", "")):
+            found.append((dotted.start(), dotted.end()))
+    # A dotted card is masked before the digit runs are read, so they cannot find it again.
+    chars = list(masked)
+    for start, end in found:
+        chars[start:end] = "x" * (end - start)
+    masked = "".join(chars)
+    for run in _CARD_RUN_RE.finditer(masked):
+        groups = [
+            (run.start() + group.start(), run.start() + group.end(), group.group(0))
+            for group in _CARD_GROUP_RE.finditer(run.group(0))
+        ]
+        _find_cards(groups, found)
+    if not found:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in sorted(found):
+        pieces.append(text[cursor:start])
+        pieces.append("[CARD]")
+        cursor = end
         counts["card"] += 1
-        return "[CARD]"
-
-    return _CARD_RE.sub(repl, text)
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 def _redact_addresses(text: str, counts: Counter[str]) -> str:
@@ -352,16 +460,33 @@ def _alternation(names: Iterable[str]) -> str:
 _TOKEN_RE = re.compile(r"\[(?:" + "|".join(_TOKEN_WORDS) + r")\]")
 
 
+def content_words(text: str) -> list[str]:
+    """The words of ``text`` with placeholder tokens such as [NAME] left out."""
+    return _TOKEN_RE.sub(" ", text).split()
+
+
+def _with_unicode_forms(names: tuple[str, ...]) -> tuple[str, ...]:
+    """Add the precomposed and the decomposed spelling of each name, so either matches."""
+    forms: dict[str, None] = {}
+    for name in names:
+        for form in ("NFC", "NFD"):
+            forms[unicodedata.normalize(form, name)] = None
+    return tuple(forms)
+
+
 def _name_pattern(names: tuple[str, ...]) -> re.Pattern[str] | None:
     """Whole-word matches of the names, one per start position.
 
-    The lookahead lets a match start inside another match, so overlapping names are all
-    found. Group 1 holds the matched text.
+    A match is skipped when it is preceded by "@" or "." (inside an address or a host
+    name), or when it is followed by "@", or by "." and a letter or digit. The lookahead
+    lets a match start inside another match, so overlapping names are all found. Group 1
+    holds the matched text.
     """
     if not names:
         return None
     return re.compile(
-        r"(?<!\w)(?=((?:" + _alternation(names) + r")(?!\w)))", re.IGNORECASE
+        r"(?<![\w.@])(?=((?:" + _alternation(names) + r")(?!\w)(?!@)(?!\.[^\W_])))",
+        re.IGNORECASE,
     )
 
 
@@ -380,6 +505,27 @@ def _merge(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+def _covered_prefix(spans: list[tuple[int, int]], size: int) -> list[int]:
+    """Entry i is the number of characters before index i that some span covers."""
+    covered = [0] * size
+    for start, end in spans:
+        covered[start:end] = [1] * (end - start)
+    prefix = [0] * (size + 1)
+    for index, flag in enumerate(covered):
+        prefix[index + 1] = prefix[index] + flag
+    return prefix
+
+
+def _reach(spans: list[tuple[int, int]], size: int) -> list[int]:
+    """Entry i is the furthest end of a span that starts at or before index i, or -1."""
+    reach = [-1] * (size + 1)
+    for start, end in spans:
+        reach[start] = max(reach[start], end)
+    for index in range(1, size + 1):
+        reach[index] = max(reach[index], reach[index - 1])
+    return reach
+
+
 def _redact_names(
     text: str,
     deny: re.Pattern[str] | None,
@@ -395,13 +541,14 @@ def _redact_names(
     """
     if deny is None:
         return text
-    tokens = [m.span() for m in _TOKEN_RE.finditer(text)]
+    size = len(text)
+    protected = _covered_prefix([m.span() for m in _TOKEN_RE.finditer(text)], size)
     allowed = _occurrences(allow, text) if allow is not None else []
+    reach = _reach(allowed, size)
     targets = [
         (start, end)
         for start, end in _occurrences(deny, text)
-        if not any(start < t_end and t_start < end for t_start, t_end in tokens)
-        and not any(a_start <= start and end <= a_end for a_start, a_end in allowed)
+        if protected[end] == protected[start] and reach[start] < end
     ]
     pieces: list[str] = []
     cursor = 0
@@ -448,8 +595,8 @@ class Redactor:
             raise ValueError(
                 f"names appear on both deny_names and allow_names: {sorted(clash)}"
             )
-        self._deny_pattern = _name_pattern(deny)
-        self._allow_pattern = _name_pattern(allow)
+        self._deny_pattern = _name_pattern(_with_unicode_forms(deny))
+        self._allow_pattern = _name_pattern(_with_unicode_forms(allow))
 
     def redact(self, text: str) -> tuple[str, dict[str, int]]:
         """Return the redacted text and the number of replacements per category.
@@ -468,10 +615,10 @@ class Redactor:
             current = step
 
     def _redact_pass(self, text: str, counts: Counter[str]) -> str:
-        out = _redact_urls(text, counts)
+        out = _redact_names(text, self._deny_pattern, self._allow_pattern, counts)
+        out = _redact_urls(out, counts)
         out = _redact_emails(out, counts)
         out = _redact_ibans(out, counts)
         out = _redact_phones(out, counts)
         out = _redact_cards(out, counts)
-        out = _redact_addresses(out, counts)
-        return _redact_names(out, self._deny_pattern, self._allow_pattern, counts)
+        return _redact_addresses(out, counts)

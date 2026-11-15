@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ci.hbpe.model.redaction import Redactor
+from ci.hbpe.model.redaction import Redactor, content_words
 from ci.hbpe.model.unsloth_decision_trainer import (
     DecisionDatasetItem,
     UnslothDecisionTrainConfig,
@@ -516,17 +516,19 @@ def build_tone_examples(
     a single-message example.
 
     Every emitted field, context and reply alike, goes through ``redactor`` first, and
-    the length check applies to the redacted reply. Returns the examples and a count of
-    dropped user messages by reason: ``empty`` (nothing left after redaction) and
-    ``too_short`` (fewer than ``min_words`` words). Inbound messages only supply
-    context, so they are never counted as dropped.
+    the length check applies to the redacted reply. A word is counted only if it is not a
+    placeholder such as ``[NAME]``, so a reply made of placeholders is too short. Returns
+    the examples and a count of dropped user messages by reason: ``empty`` (nothing left
+    after redaction), ``too_short`` (fewer than ``min_words`` words), and ``disabled``
+    (only while the flag is off). All three keys are always present. Inbound messages
+    only supply context, so they are never counted as dropped.
 
     While HBPE_TONE_EXAMPLES_ENABLED is off, returns no examples, counts every user
     message under ``disabled``, and never calls ``redactor``.
     """
     if min_words < 1:
         raise ValueError("min_words must be at least 1")
-    dropped = dict.fromkeys(TONE_DROP_REASONS, 0)
+    dropped = dict.fromkeys((*TONE_DROP_REASONS, TONE_DISABLED_REASON), 0)
     if not tone_examples_enabled():
         dropped[TONE_DISABLED_REASON] = sum(1 for m in messages if m.sent_by_user)
         return [], dropped
@@ -547,7 +549,7 @@ def build_tone_examples(
                 context = context_text
         if not reply.strip():
             dropped["empty"] += 1
-        elif len(reply.split()) < min_words:
+        elif len(content_words(reply)) < min_words:
             dropped["too_short"] += 1
         else:
             examples.append(ToneExample(reply=reply, context=context))

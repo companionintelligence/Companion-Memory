@@ -159,7 +159,7 @@ def test_tone_examples_pair_reply_with_inbound_context():
             context="Are you free for lunch on Thursday to talk about the launch?",
         )
     ]
-    assert dropped == {"empty": 0, "too_short": 0}
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
 
 def test_tone_examples_use_single_message_when_no_inbound_context():
@@ -193,7 +193,7 @@ def test_tone_examples_use_single_message_when_no_inbound_context():
     ]
     # Inbound messages only supply context, so none of them is emitted as a reply.
     assert all("Inbound message" not in example.reply for example in examples)
-    assert dropped == {"empty": 0, "too_short": 0}
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
 
 def test_tone_examples_redact_every_field():
@@ -219,7 +219,7 @@ def test_tone_examples_redact_every_field():
             context="[NAME] here, my card is [CARD] so please book the table for Friday",
         )
     ]
-    assert dropped == {"empty": 0, "too_short": 0}
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
 
 def test_tone_examples_count_drop_reasons():
@@ -237,7 +237,7 @@ def test_tone_examples_count_drop_reasons():
     assert [example.reply for example in examples] == [
         "Sounds good, see you at the station on Friday"
     ]
-    assert dropped == {"empty": 2, "too_short": 3}
+    assert dropped == {"empty": 2, "too_short": 3, "disabled": 0}
 
 
 def test_tone_examples_min_words_is_configurable():
@@ -245,13 +245,13 @@ def test_tone_examples_min_words_is_configurable():
 
     examples, dropped = build_tone_examples(messages, Redactor())
     assert examples == []
-    assert dropped == {"empty": 0, "too_short": 1}
+    assert dropped == {"empty": 0, "too_short": 1, "disabled": 0}
 
     examples, dropped = build_tone_examples(messages, Redactor(), min_words=5)
     assert examples == [ToneExample(reply="Yes, that works for me")]
-    assert dropped == {"empty": 0, "too_short": 0}
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="min_words must be at least 1"):
         build_tone_examples(messages, Redactor(), min_words=0)
 
 
@@ -289,11 +289,23 @@ def test_tone_examples_never_leave_a_redacted_category_behind():
             reply="Booking details are in the usual place, see https://pay.example.com/c"
         ),
     ]
-    assert dropped == {"empty": 0, "too_short": 0}
-    for example in examples:
-        for text in (example.reply, example.context or ""):
-            # Redacting again finds nothing, so no category match survived the builder.
-            assert redactor.redact(text) == (text, {})
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
+    shown = " ".join(
+        part for example in examples for part in (example.reply, example.context or "")
+    )
+    # Each raw value below was in the messages. None may survive in any emitted field.
+    for raw in (
+        "sarah@example.com",
+        "+44 20 7946 0958",
+        "4111 1111 1111 1111",
+        "GB82 WEST",
+        "10 Downing Street",
+        "Sarah",
+        "token=9f8e7d6c5b4a",
+        "session=xyz",
+    ):
+        assert raw not in shown
+    assert "[EMAIL]" in shown and "[CARD]" in shown and "[NAME]" in shown
 
 
 class _BlankingRedactor(Redactor):
@@ -305,7 +317,7 @@ class _BlankingRedactor(Redactor):
 
 def test_too_short_is_measured_on_the_redacted_reply():
     # The raw reply has 11 words. Redacted, it reads "Ping me on [CARD] at [ADDRESS]",
-    # six words, so under the minimum of eight it must be dropped.
+    # and only four of those are words, so under the minimum of eight it must be dropped.
     reply = "Ping me on 4111 1111 1111 1111 at 10 Downing Street"
     assert len(reply.split()) >= 8
     examples, dropped = build_tone_examples(
@@ -313,7 +325,36 @@ def test_too_short_is_measured_on_the_redacted_reply():
     )
 
     assert examples == []
-    assert dropped == {"empty": 0, "too_short": 1}
+    assert dropped == {"empty": 0, "too_short": 1, "disabled": 0}
+
+
+def test_placeholders_do_not_count_towards_the_minimum():
+    # Every piece of this reply redacts to a placeholder, so it has no words left and is
+    # too short. It is not empty, because placeholders remain.
+    reply = (
+        "sarah@example.com 07700 900123 4111 1111 1111 1111 GB82 WEST 1234 5698 7654 32"
+    )
+    examples, dropped = build_tone_examples(
+        [ToneMessage(reply, sent_by_user=True)], Redactor()
+    )
+
+    assert examples == []
+    assert dropped == {"empty": 0, "too_short": 1, "disabled": 0}
+
+
+def test_disabled_and_enabled_return_the_same_keys(monkeypatch):
+    messages = [
+        ToneMessage(
+            "Please send the report to the team by Friday, thanks a lot",
+            sent_by_user=True,
+        )
+    ]
+    _, enabled = build_tone_examples(messages, Redactor())
+    monkeypatch.setenv(TONE_EXAMPLES_FLAG, "0")
+    _, disabled = build_tone_examples(messages, Redactor())
+
+    assert set(enabled) == set(disabled) == {"empty", "too_short", "disabled"}
+    assert disabled == {"empty": 0, "too_short": 0, "disabled": 1}
 
 
 def test_empty_is_measured_on_the_redacted_reply():
@@ -324,7 +365,7 @@ def test_empty_is_measured_on_the_redacted_reply():
     )
 
     assert examples == []
-    assert dropped == {"empty": 1, "too_short": 0}
+    assert dropped == {"empty": 1, "too_short": 0, "disabled": 0}
 
 
 def test_messages_without_thread_id_never_pair():
@@ -339,7 +380,7 @@ def test_messages_without_thread_id_never_pair():
     examples, dropped = build_tone_examples(messages, Redactor())
 
     assert examples == [ToneExample(reply=reply)]
-    assert dropped == {"empty": 0, "too_short": 0}
+    assert dropped == {"empty": 0, "too_short": 0, "disabled": 0}
 
 
 def test_tone_examples_are_off_unless_the_flag_is_set(monkeypatch):

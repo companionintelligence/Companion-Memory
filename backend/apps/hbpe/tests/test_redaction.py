@@ -39,9 +39,33 @@ EMAIL_CASES = [
     ),
     pytest.param(
         "Mail o'brien@example.com or first_last@example.com now",
-        "Mail o'[EMAIL] or [EMAIL] now",
+        "Mail [EMAIL] or [EMAIL] now",
         {"email": 2},
-        id="email-apostrophe-stays-outside-local-part",
+        id="email-apostrophe-inside-local-part",
+    ),
+    pytest.param(
+        "Mail sarah@example.com07700900123 now",
+        "Mail [EMAIL][PHONE] now",
+        {"email": 1, "phone": 1},
+        id="email-digits-glued-after-tld",
+    ),
+    pytest.param(
+        "Mail sarah@example.com-or-call now",
+        "Mail [EMAIL]-or-call now",
+        {"email": 1},
+        id="email-hyphen-after-tld",
+    ),
+    pytest.param(
+        "Mail sarah!x@example.com now",
+        "Mail [EMAIL] now",
+        {"email": 1},
+        id="email-local-part-with-punctuation",
+    ),
+    pytest.param(
+        "Mail sarah@192.168.0.1 now",
+        "Mail [EMAIL] now",
+        {"email": 1},
+        id="email-ip-literal-domain",
     ),
     pytest.param(
         "Mail sarah@example.com_backup now",
@@ -311,6 +335,12 @@ PHONE_CASES = [
         id="phone-trailing-number-not-swallowed",
     ),
     pytest.param(
+        "Call me on07700900123 now",
+        "Call me on[PHONE] now",
+        {"phone": 1},
+        id="phone-glued-after-letters",
+    ),
+    pytest.param(
         "Meeting on 2026-11-14 at 10:30",
         "Meeting on 2026-11-14 at 10:30",
         {},
@@ -408,6 +438,48 @@ CARD_CASES = [
         "Stamped 20261114103009 here",
         {},
         id="neg-compact-timestamp-passes-luhn",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111 123 now",
+        "Card [CARD] 123 now",
+        {"card": 1},
+        id="card-trailing-digits-are-kept",
+    ),
+    pytest.param(
+        "Use 2 4111 1111 1111 1111 now",
+        "Use 2 [CARD] now",
+        {"card": 1},
+        id="card-leading-number-is-not-joined",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111 10:30 now",
+        "Card [CARD] 10:30 now",
+        {"card": 1},
+        id="card-before-time-is-kept",
+    ),
+    pytest.param(
+        "Ref 8689688 2010-03-02 done",
+        "Ref 8689688 2010-03-02 done",
+        {},
+        id="neg-card-not-read-across-date",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-non-breaking-space-separators",
+    ),
+    pytest.param(
+        "Card 4111  1111  1111  1111 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-double-space-separators",
+    ),
+    pytest.param(
+        "Card 4111.1111.1111.1111 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-dot-separators",
     ),
 ]
 
@@ -553,6 +625,42 @@ QUERY_GLUE_CASES = [
         "Go to example.com now",
         {"url": 1},
         id="query-token-is-dropped",
+    ),
+    pytest.param(
+        "Open example.com:8080/?token=3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b now",
+        "Open example.com:8080/ now",
+        {"url": 1},
+        id="url-port-token-is-dropped",
+    ),
+    pytest.param(
+        "Go to example.com?token=3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b 2026 next",
+        "Go to example.com 2026 next",
+        {"url": 1},
+        id="query-token-before-number-is-dropped",
+    ),
+    pytest.param(
+        "Open https://example.com/?tel=07700 900123 now",
+        "Open https://example.com/?tel=[PHONE] now",
+        {"phone": 1},
+        id="query-phone-split-is-left-for-phone-rule",
+    ),
+    pytest.param(
+        "Map https://maps.example.com/?q=221 Baker Street today",
+        "Map https://maps.example.com/?q=[ADDRESS] today",
+        {"address": 1},
+        id="query-house-number-is-left-for-address-rule",
+    ),
+    pytest.param(
+        "Pay example.com?ref=abc 12 times",
+        "Pay example.com?ref=abc 12 times",
+        {},
+        id="query-before-two-digit-number-is-kept",
+    ),
+    pytest.param(
+        "Pay example.com?ref=abc later",
+        "Pay example.com later",
+        {"url": 1},
+        id="query-before-word-is-dropped",
     ),
 ]
 
@@ -721,6 +829,38 @@ NAME_CASES = [
         id="blank-names-ignored",
     ),
     pytest.param(
+        "Open https://example.com/?name=Sarah Jones now",
+        ["Sarah Jones"],
+        [],
+        "Open https://example.com/?name=[NAME] now",
+        {"name": 1},
+        id="name-inside-query-is-redacted-whole",
+    ),
+    pytest.param(
+        "Mail sarah@example.com?x=Sarah Jones now",
+        ["Sarah Jones"],
+        [],
+        "Mail [EMAIL]?x=[NAME] now",
+        {"email": 1, "name": 1},
+        id="name-after-address-query-is-redacted-whole",
+    ),
+    pytest.param(
+        "Ask sarah@example.com about it",
+        ["Sarah"],
+        [],
+        "Ask [EMAIL] about it",
+        {"email": 1},
+        id="name-inside-address-is-not-split",
+    ),
+    pytest.param(
+        "José and José",
+        ["José"],
+        [],
+        "[NAME] and [NAME]",
+        {"name": 2},
+        id="name-matches-decomposed-spelling",
+    ),
+    pytest.param(
         "Sarah",
         [],
         [],
@@ -776,28 +916,69 @@ def test_all_categories_together() -> None:
     assert set(counts) <= set(CATEGORIES)
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+# Each input is redacted to a known output, and a second pass over that output changes
+# nothing. The expected outputs were checked by hand.
+IDEMPOTENCE_CASES = [
+    pytest.param(
         "Mail sarah@example.com, call +44 20 7946 0958 about 10 Downing Street",
+        "Mail [EMAIL], call [PHONE] about [ADDRESS]",
+        id="mixed-contact-and-address",
+    ),
+    pytest.param(
         "Card 4111 1111 1111 1111 and IBAN GB82 WEST 1234 5698 7654 32",
+        "Card [CARD] and IBAN [IBAN]",
+        id="card-and-iban",
+    ),
+    pytest.param(
         "See https://example.com/reset?token=abc123 and Sarah's notes",
+        "See https://example.com/reset and [NAME]'s notes",
+        id="url-query-and-name",
+    ),
+    pytest.param(
         "Reset example.com?token=abc123, mail josé@example.com, call (555)123-4567",
+        "Reset example.com, mail [EMAIL], call [PHONE]",
+        id="bare-host-query-email-and-phone",
+    ),
+    pytest.param(
         "Ring 0044 20 7946 0958 about Sarah's flat at Central Park, 12 Oak Road",
+        "Ring [PHONE] about [NAME]'s flat at Central Park, [ADDRESS]",
+        id="allowed-phrase-kept",
+    ),
+    pytest.param(
         "Open https://example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b.#top now",
+        "Open https://example.com/verify/[TOKEN]. now",
+        id="token-segment-before-punctuation",
+    ),
+    pytest.param(
         "Booked (with Sarah) at www.example.com/x]#Oak[TOKEN][TOKEN] today",
-        # Found by fuzzing: a scheme URL hidden inside a schemeless candidate.
+        "Booked (with [NAME]) at www.example.com/x]#Oak[TOKEN][TOKEN] today",
+        id="placeholders-are-not-redacted-again",
+    ),
+    pytest.param(
         "12: : (--'josé,www.5,3@[RoadDowningwww.=https://:1[EMAIL]@0044555b",
-        "Visit example.com?ref=4111 1111 1111 1111 or mail sarah@example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b",
+        "12: : (--'josé,[RoadDowningwww.=https://0044555b",
+        id="fuzz-scheme-url-inside-schemeless-candidate",
+    ),
+    pytest.param(
+        "Visit example.com?ref=4111 1111 1111 1111 or mail "
+        "sarah@example.com/verify/3f9c2a7b1d4e8f6a0c5b9d2e7f1a4c8b",
+        "Visit example.com?ref=[CARD] or mail [EMAIL]",
+        id="query-card-and-email-path-token",
+    ),
+    pytest.param(
         "Card 4111 1111 1111 1111'sarah@example.com?x=1 and example.com?+44 20 7946 0958",
-    ],
-)
-def test_redaction_is_idempotent(text: str) -> None:
+        "Card [CARD]'[EMAIL] and example.com?[PHONE]",
+        id="card-glued-to-email-and-phone-after-query",
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "expected"), IDEMPOTENCE_CASES)
+def test_redaction_is_idempotent(text: str, expected: str) -> None:
     redactor = Redactor(deny_names=["Sarah"], allow_names=["Central Park"])
     once, counts = redactor.redact(text)
-    # The first pass must change this input and count what it changed. Otherwise the
-    # second pass proves nothing: a redactor that returned its input unchanged would
-    # pass the last assertion too.
-    assert once != text
+    # The first pass must give the known output, and it must count what it changed.
+    assert once == expected
     assert counts and all(count > 0 for count in counts.values())
+    # A second pass over the output changes nothing.
     assert redactor.redact(once) == (once, {})
