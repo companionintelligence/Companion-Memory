@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { DiscoveryService } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 
@@ -103,6 +104,29 @@ describe('GenerativeDecisionHandoffService', () => {
       },
     );
 
+    it('keeps the lexical fallback and logs, without throwing, when the provider lookup throws', () => {
+      setFlag('true');
+      const decisions = decisionsSpy();
+      const discovery = {
+        getProviders: jest.fn(() => {
+          throw new Error('discovery not ready');
+        }),
+      };
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const service = new GenerativeDecisionHandoffService(
+        decisions as unknown as ContrastiveDecisionService,
+        discovery as unknown as DiscoveryService,
+      );
+
+      try {
+        expect(() => service.onModuleInit()).not.toThrow();
+        expect(decisions.setGenerativeEvaluator).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('discovery not ready'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('stays unregistered, without throwing, when no chat service is registered', () => {
       setFlag('true');
       const decisions = decisionsSpy();
@@ -131,6 +155,30 @@ describe('GenerativeDecisionHandoffService', () => {
       await moduleRef.init();
 
       expect(decisions.setGenerativeEvaluator).toHaveBeenCalledTimes(1);
+      await moduleRef.close();
+    });
+
+    it('initialises the module, keeping the lexical fallback, when the provider lookup throws', async () => {
+      setFlag('true');
+      const decisions = decisionsSpy();
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          GenerativeDecisionHandoffService,
+          { provide: ContrastiveDecisionService, useValue: decisions },
+          {
+            provide: DiscoveryService,
+            useValue: {
+              getProviders: () => {
+                throw new Error('discovery not ready');
+              },
+            },
+          },
+        ],
+      }).compile();
+
+      await moduleRef.init();
+
+      expect(decisions.setGenerativeEvaluator).not.toHaveBeenCalled();
       await moduleRef.close();
     });
 

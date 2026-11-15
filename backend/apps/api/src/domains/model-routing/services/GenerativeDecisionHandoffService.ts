@@ -3,6 +3,7 @@ import { DiscoveryService } from '@nestjs/core';
 
 import { ContrastiveDecisionService } from './ContrastiveDecisionService';
 import {
+  describeError,
   GenerativeDecisionEvaluatorAdapter,
   type DecisionChatModel,
 } from './GenerativeDecisionEvaluatorAdapter';
@@ -34,24 +35,34 @@ export class GenerativeDecisionHandoffService implements OnModuleInit {
     private readonly discovery: DiscoveryService,
   ) {}
 
+  /**
+   * Never throws. A failed lookup is logged and leaves the lexical fallback in place, so a broken
+   * handoff cannot stop the application from starting.
+   */
   onModuleInit(): void {
-    if (!isGenerativeHandoffEnabled()) {
-      return;
-    }
+    try {
+      if (!isGenerativeHandoffEnabled()) {
+        return;
+      }
 
-    const chat = this.findChatModel();
-    if (!chat) {
-      this.logger.warn(
-        `${DECISION_GENERATIVE_HANDOFF_ENV} is on but the llm chat service is not registered; keeping the lexical fallback`,
+      const chat = this.findChatModel();
+      if (!chat) {
+        this.logger.warn(
+          `${DECISION_GENERATIVE_HANDOFF_ENV} is on but the llm chat service is not registered; keeping the lexical fallback`,
+        );
+
+        return;
+      }
+
+      this.decisions.setGenerativeEvaluator(
+        new GenerativeDecisionEvaluatorAdapter(chat, { logger: this.logger }),
       );
-
-      return;
+      this.logger.log('Generative decision handoff registered');
+    } catch (err) {
+      this.logger.warn(
+        `${DECISION_GENERATIVE_HANDOFF_ENV} is on but the handoff could not be registered; keeping the lexical fallback: ${describeError(err)}`,
+      );
     }
-
-    this.decisions.setGenerativeEvaluator(
-      new GenerativeDecisionEvaluatorAdapter(chat, { logger: this.logger }),
-    );
-    this.logger.log('Generative decision handoff registered');
   }
 
   private findChatModel(): DecisionChatModel | undefined {

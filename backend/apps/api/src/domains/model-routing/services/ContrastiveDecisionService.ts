@@ -975,7 +975,8 @@ export class ContrastiveDecisionService {
   }
 }
 
-function isUnitInterval(value: unknown): value is number {
+/** True for a finite number in [0, 1]: the only kind of probability the decision engine accepts from an evaluator. */
+export function isUnitInterval(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
