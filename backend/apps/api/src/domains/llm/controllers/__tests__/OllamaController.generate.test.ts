@@ -47,6 +47,12 @@ describe('OllamaController generate attach', () => {
       setGenerationStatus: jest.fn(async () => undefined),
       enqueueGenerate: jest.fn(async () => ['job-1']),
     };
+    const desktopAppService = {
+      isClosed: jest.fn(async () => false),
+      rethrow: jest.fn(async (error: unknown) => {
+        throw error;
+      }),
+    };
     const logger = { setContext: jest.fn(), log: jest.fn(), error: jest.fn() };
     const controller = new OllamaController(
       (overrides.messageService ?? messageService) as never,
@@ -54,6 +60,7 @@ describe('OllamaController generate attach', () => {
       (overrides.threadService ?? threadService) as never,
       (overrides.broker ?? broker) as never,
       (overrides.chatTurnService ?? chatTurnService) as never,
+      (overrides.desktopAppService ?? desktopAppService) as never,
       logger as never,
       actionService as never,
     );

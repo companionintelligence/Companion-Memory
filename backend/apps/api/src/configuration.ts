@@ -1385,6 +1385,14 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Memory Desktop only: the file the desktop app keeps up to date while it runs
+  // (frontend/apps/desktop/src-tauri/src/presence.rs), mounted read-only by its
+  // compose overlay. Empty everywhere else, which turns DesktopAppService off.
+  desktopApp: z
+    .object({
+      presenceFile: z.string().default(''),
+    })
+    .default({}),
   // Peer federation (CI-Server #1711 Phase 3). `directoryUrl` is CI-Portal's
   // peer-discovery API base (handle → Companion endpoint + issuer); empty
   // disables discovery, and with it any outbound ask. Inbound peer asks are

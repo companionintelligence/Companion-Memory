@@ -4,6 +4,7 @@ import type { Request } from 'express';
 
 import { isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import { DESKTOP_APP_CLOSED_MESSAGE, DesktopAppService } from '@ci/domains/llm';
 import { IntentCatalogService, toolErrorMessage } from '@ci/domains/tools';
 
 import { ToolExecutionError } from '../types';
@@ -15,6 +16,7 @@ export class McpServerService {
   constructor(
     private readonly toolService: McpToolService,
     private readonly intentCatalog: IntentCatalogService,
+    private readonly desktopApp: DesktopAppService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
@@ -117,6 +119,8 @@ export class McpServerService {
 
           this.logger.error(error, `MCP tool execution failed: ${tool.name}`);
 
+          const desktopAppClosed = await this.desktopApp.isClosed().catch(() => false);
+
           return {
             content: [
               {
@@ -130,7 +134,7 @@ export class McpServerService {
                 // both harness plugins already read `error.code` and
                 // `error.details.pendingActionId` from that. A genuine
                 // unexpected throw still falls back to the bare message.
-                text: JSON.stringify({ error: serializeToolError(error) }),
+                text: JSON.stringify(failedToolPayload(error, desktopAppClosed)),
               },
             ],
             isError: true,
@@ -159,6 +163,25 @@ export class McpServerService {
       count: tools.length,
     });
   }
+}
+
+/**
+ * What an MCP client reads for a failed tool call.
+ *
+ * `notice` is there while Memory Desktop is closed and its model with it (see DesktopAppService.isClosed).
+ * Search and anything else that needs the model then fails with a transport error that says nothing an
+ * agent can act on, and the agent cannot see the web app's notice. It sits beside the tool's own error
+ * rather than replacing it: a call can still fail for its own reason (a bad argument, a refusal) while the
+ * app is closed, and the agent needs that error to correct the call.
+ */
+export function failedToolPayload(
+  error: Error,
+  desktopAppClosed: boolean,
+): { error: ReturnType<typeof serializeToolError>; notice?: string } {
+  return {
+    error: serializeToolError(error),
+    ...(desktopAppClosed ? { notice: DESKTOP_APP_CLOSED_MESSAGE } : {}),
+  };
 }
 
 /**

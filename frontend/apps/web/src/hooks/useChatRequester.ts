@@ -71,9 +71,24 @@ export interface LocalTurnInfo {
  * revoked, a 500 from a broken model) for "offline" and quietly answers from a weaker model instead.
  */
 export class ApplianceRefusedError extends Error {
-  constructor(message = 'Request error') {
+  /** The refusal's own `code`, when the appliance sent one: `DESKTOP_APP_CLOSED` while Memory Desktop is closed. */
+  readonly code: string | undefined;
+
+  constructor(message = 'Request error', code?: string) {
     super(message);
     this.name = 'ApplianceRefusedError';
+    this.code = code;
+  }
+}
+
+/** The code the server put in a refusal's JSON body, if it is one. */
+async function refusalCode(res: Response): Promise<string | undefined> {
+  try {
+    const body = (await res.json()) as { code?: unknown } | null;
+
+    return typeof body?.code === 'string' ? body.code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -538,7 +553,7 @@ export function useChatRequester({ threadId, onNewThread, actionId }: Opts): Ret
             return await fallBackToDevice(prompt, controller, { fileIds: data.fileIds, images: data.images });
           }
 
-          throw new ApplianceRefusedError();
+          throw new ApplianceRefusedError(undefined, await refusalCode(res));
         }
 
         success = true;
@@ -566,7 +581,9 @@ export function useChatRequester({ threadId, onNewThread, actionId }: Opts): Ret
           // leaves no bubble in the transcript (see `Chat`), so this is the only sign it was even tried.
           toast.error(
             err instanceof ApplianceRefusedError
-              ? 'Your Companion could not answer that. Try again.'
+              ? err.code === 'DESKTOP_APP_CLOSED'
+                ? 'Memory Desktop is closed. Open it to bring chat back.'
+                : 'Your Companion could not answer that. Try again.'
               : 'Could not reach your Companion. Check your connection and try again.',
           );
         }

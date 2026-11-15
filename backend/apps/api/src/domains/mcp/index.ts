@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { GraphQLModule } from '@ci/domains/graphql';
+import { LlmCoreModule } from '@ci/domains/llm';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { McpController } from './controllers/McpController';
@@ -14,8 +15,9 @@ import { McpToolService } from './services/McpToolService';
 // McpToolService consolidates it (Nest initialises imported modules first), making them
 // discoverable as MCP tools. It also provides IntentCatalogService, which backs the
 // `intents://catalog` MCP resource.
+// LlmCoreModule for DesktopAppService: a failed tool call says when Memory Desktop is closed.
 @Module({
-  imports: [GraphQLModule, ToolsModule],
+  imports: [GraphQLModule, ToolsModule, LlmCoreModule],
   controllers: [McpController, ProtectedResourceMetadataController],
   providers: [GraphQLToolAdapter, McpExecutorService, McpToolService, McpServerService],
   exports: [McpServerService],

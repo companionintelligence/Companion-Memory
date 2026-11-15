@@ -422,6 +422,9 @@
     "deviceId": "HUB_DEVICE_ID",
     "apiKey": "HUB_API_KEY"
   },
+  "desktopApp": {
+    "presenceFile": "DESKTOP_APP_PRESENCE_FILE"
+  },
   "unfurl": {
     "enabled": {
       "__name": "UNFURL_ENABLED",

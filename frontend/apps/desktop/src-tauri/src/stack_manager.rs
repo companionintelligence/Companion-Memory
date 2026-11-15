@@ -12,6 +12,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -146,8 +147,12 @@ pub fn initialize_stack(resource_dir: &Path, data_dir: &Path) -> Result<StackPat
     let compose_dir = data_dir.join("compose");
     let logs_dir = data_dir.join("logs");
     let import_work_dir = data_dir.join("import-work");
+    // Made here, before any `compose up`: Docker creates a missing bind-mount
+    // source itself, owned by root, and this app could then never write the
+    // presence file into it (see presence.rs).
+    let desktop_app_dir = crate::presence::dir(&compose_dir);
 
-    for dir in [&compose_dir, &logs_dir, &import_work_dir] {
+    for dir in [&compose_dir, &logs_dir, &import_work_dir, &desktop_app_dir] {
         fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     }
 
@@ -552,6 +557,19 @@ pub fn is_docker_available() -> bool {
 /// already learns readiness by polling health, never from this return value.
 static START_IN_FLIGHT: Mutex<()> = Mutex::new(());
 
+/// Set by Quit. From then on no new `up` starts; one already running finishes.
+///
+/// Quit kills the Ollama this app runs, and when that happens during the first
+/// start's model pull, the pull fails and ensure_local_model_then_start_stack
+/// goes on to `compose up` anyway, in the moment before the app exits. The
+/// person quit before Memory had started, so it stays that way until they open
+/// the app again.
+static NO_NEW_STARTS: AtomicBool = AtomicBool::new(false);
+
+pub fn refuse_new_starts() {
+    NO_NEW_STARTS.store(true, Ordering::SeqCst);
+}
+
 /// `Some(guard)` if this caller now owns the start; `None` if another start is
 /// already running and this one should stand down.
 fn claim_start() -> Option<std::sync::MutexGuard<'static, ()>> {
@@ -615,6 +633,11 @@ pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
 }
 
 fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> Result<(), String> {
+    if NO_NEW_STARTS.load(Ordering::SeqCst) {
+        log::info!("start_stack: the app is quitting; not starting the stack");
+        return Ok(());
+    }
+
     if let Some(progress) = progress {
         set_progress(progress, "preflight", "Checking your machine…");
     }
@@ -986,30 +1009,6 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
 const STOP_ARGS: [&str; 1] = ["stop"];
 
 pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
-    compose_down(paths)?;
-    mark_user_stopped(paths);
-    Ok(())
-}
-
-/// Quit's `docker compose down`, for when the stack loses its model with the app.
-///
-/// Waits for an `up` already running to finish, then keeps START_IN_FLIGHT
-/// held for the rest of this process's life. A `down` beside an in-flight
-/// `up` leaves whatever that `up` creates after it, and its stale-network
-/// self-heal can run a whole new `up`. An `up` that starts after the `down`
-/// brings the stack back with nothing to serve it, and startup's own start
-/// does exactly that once Quit has killed the sidecar: its model pull fails
-/// and ensure_local_model_then_start_stack goes on to `up` anyway.
-///
-/// Leaves no user-stopped marker. The user quit the app rather than stopping
-/// the stack and the next launch starts it again, so a marker would only have
-/// the tray read "Stopped" and offer Start for the whole of that start.
-pub fn stop_stack_for_quit(paths: &StackPaths) -> Result<(), String> {
-    std::mem::forget(START_IN_FLIGHT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
-    compose_down(paths)
-}
-
-fn compose_down(paths: &StackPaths) -> Result<(), String> {
     let output = compose_command(paths)
         .args(STOP_ARGS)
         .output()
@@ -1023,6 +1022,7 @@ fn compose_down(paths: &StackPaths) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
+    mark_user_stopped(paths);
     Ok(())
 }
 

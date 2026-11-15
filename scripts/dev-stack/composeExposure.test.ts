@@ -36,8 +36,18 @@ interface RenderedPort {
   published?: string;
 }
 
+interface RenderedVolume {
+  type: string;
+  source?: string;
+  target: string;
+  read_only?: boolean;
+}
+
 interface Rendered {
-  services: Record<string, { ports?: RenderedPort[]; environment?: Record<string, string | null> }>;
+  services: Record<
+    string,
+    { ports?: RenderedPort[]; environment?: Record<string, string | null>; volumes?: RenderedVolume[] }
+  >;
 }
 
 const composeAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
@@ -131,6 +141,31 @@ test('rendered as the desktop app runs it, the api sends OAuth services back to 
 
   assert.equal(unset.services.api.environment?.OAUTH_CALLBACK_URL, '');
   assert.equal(unset.services.api.environment?.OPENID_CALLBACK_URL, '');
+});
+
+test('rendered as the desktop app runs it, the api reads the app’s presence file from the compose directory', (t) => {
+  if (!composeAvailable) {
+    t.skip('docker compose is not installed');
+
+    return;
+  }
+
+  // The app keeps compose/desktop-app/presence.json up to date while it runs (presence.rs). Without the
+  // mount the api cannot tell that Memory Desktop is closed. Read-only, and the folder rather than the
+  // file: the app renames a new file over the old one, which a single-file bind would not follow.
+  const config = render(t, DESKTOP_STACK, ['production'], { CI_SERVER_IMAGE_TAG: '2026.10.2' });
+  const presence = config.services.api.volumes?.find((volume) => volume.target === '/run/ci-desktop-app');
+
+  assert.ok(presence, 'the api mounts the presence folder');
+  assert.equal(presence.type, 'bind');
+  assert.equal(path.basename(presence.source ?? ''), 'desktop-app');
+  assert.equal(presence.read_only, true);
+  assert.equal(
+    config.services.api.environment?.DESKTOP_APP_PRESENCE_FILE,
+    '/run/ci-desktop-app/presence.json',
+  );
+  // The production mounts are still there: list-valued `volumes` merge by target across -f files.
+  assert.ok(config.services.api.volumes?.some((volume) => volume.target === '/var/lib/ci-import'));
 });
 
 /** Every `ports:` entry of the data services, in every compose file in the repo root. */
