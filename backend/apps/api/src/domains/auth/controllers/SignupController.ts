@@ -127,7 +127,7 @@ export class SignupController {
       this.authService.getSessionMetadata(req),
     );
 
-    const accessToken = await this.authService.issueAccessToken(user.id);
+    const accessToken = await this.authService.issueAccessToken(user.id, sessionId);
 
     setSessionCookie(req, res, sessionToken);
 

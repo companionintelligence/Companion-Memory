@@ -16,10 +16,12 @@ export interface JwtPayload {
   sub: string;
   /**
    * Session id (the SessionEntity row) the token belongs to. Present on
-   * session tokens minted since CSRF principal-binding; access tokens and
-   * legacy session tokens carry only `sub`. Optional so pre-upgrade cookies
-   * keep verifying — a sid-less session token resolves to the anonymous CSRF
-   * scope until its first rotation embeds the claim.
+   * session tokens minted since CSRF principal-binding. Access tokens minted
+   * for a session (sign-in, sign-up, refresh) carry it too. Legacy session tokens and
+   * access tokens with no session behind them (the native code exchange) carry
+   * only `sub`. Optional so pre-upgrade cookies keep verifying. A sid-less
+   * session token resolves to the anonymous CSRF scope until its first rotation
+   * embeds the claim.
    */
   sid?: string;
 }

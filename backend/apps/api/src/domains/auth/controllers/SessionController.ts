@@ -156,7 +156,7 @@ export class SessionController {
 
     const { sessionToken, sessionId } = await this.authService.issueSessionToken(user.id, metadata);
 
-    const accessToken = await this.authService.issueAccessToken(user.id);
+    const accessToken = await this.authService.issueAccessToken(user.id, sessionId);
 
     setSessionCookie(req, res, sessionToken);
 
@@ -190,7 +190,7 @@ export class SessionController {
       this.authService.getSessionMetadata(req),
     );
 
-    const accessToken = await this.authService.issueAccessToken(userId);
+    const accessToken = await this.authService.issueAccessToken(userId, sessionId);
 
     // If we obtain a new session token from calling `rotateSessionToken` then
     // we conclude that we have not matched a grace-period rotation and must set
