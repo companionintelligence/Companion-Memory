@@ -1,7 +1,8 @@
-import { streamingFetch } from '@ci/common';
+import { isNativePlatform, streamingFetch } from '@ci/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BACKGROUND_CLOSE_MS,
   DEBOUNCE_MS,
   isLiveChangesConnected,
   LIVE_CHANGES_PATH,
@@ -13,9 +14,11 @@ import {
 vi.mock('@ci/common', async (orig) => ({
   ...(await orig<typeof import('@ci/common')>()),
   streamingFetch: vi.fn(),
+  isNativePlatform: vi.fn(() => false),
 }));
 
 const mockedFetch = vi.mocked(streamingFetch);
+const mockedNative = vi.mocked(isNativePlatform);
 
 /** A response whose body is written to by the test, frame by frame. */
 function openStream(status = 200) {
@@ -50,9 +53,16 @@ function comeBack() {
   document.dispatchEvent(new Event('visibilitychange'));
 }
 
+/** The tab is hidden, or the phone app goes into the background. */
+function goAway() {
+  Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mockedFetch.mockReset();
+  mockedNative.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -272,6 +282,23 @@ describe('liveChanges', () => {
     setLiveChangesAuth('tok-2');
     await flush();
 
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(isLiveChangesConnected()).toBe(true);
+  });
+
+  it('keeps the stream open in a hidden browser tab', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('tok');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await stream.opened;
+    const signal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    comeBack();
+    await flush();
+
+    expect(signal?.aborted).toBe(false);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(isLiveChangesConnected()).toBe(true);
   });
@@ -527,3 +554,126 @@ describe('liveChanges with the phone API key', () => {
   });
 });
 
+describe('liveChanges in the phone app in the background', () => {
+  beforeEach(() => {
+    mockedNative.mockReturnValue(true);
+  });
+
+  it('keeps the stream through a quick switch to another app', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await stream.opened;
+    const signal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_CLOSE_MS - 1_000);
+    comeBack();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(signal?.aborted).toBe(false);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(isLiveChangesConnected()).toBe(true);
+    expect(tasks).not.toHaveBeenCalled();
+  });
+
+  it('closes the stream after a while in the background and reopens it on return, catching up', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_CLOSE_MS);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(isLiveChangesConnected()).toBe(false);
+
+    // Nothing while away, however long.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const second = openStream();
+    comeBack();
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reopen a stream that drops in the background until the app returns', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+
+    goAway();
+    first.close();
+    await flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const second = openStream();
+    comeBack();
+    await second.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces a stream held through the background when the close never ran', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    // The phone froze the app or slept: no timer ran, but the clock moved on.
+    goAway();
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    const second = openStream();
+    comeBack();
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a refused key on return, not while in the background', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    comeBack();
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens no stream for a page that subscribes in the background', async () => {
+    goAway();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockedFetch).not.toHaveBeenCalled();
+
+    const stream = openStream();
+    comeBack();
+    await stream.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});

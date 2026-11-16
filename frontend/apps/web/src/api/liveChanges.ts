@@ -1,4 +1,4 @@
-import { streamingFetch } from '@ci/common';
+import { isNativePlatform, streamingFetch } from '@ci/common';
 
 /**
  * The server's hint stream: `GET /api/live/changes`, server-sent events, one
@@ -37,6 +37,21 @@ import { streamingFetch } from '@ci/common';
  * Nothing that changed while the stream was down was announced, so the first
  * stream that opens after a drop announces every topic with listeners once.
  * They re-read and are current again without waiting for their next poll.
+ *
+ * ═══ THE PHONE APP IN THE BACKGROUND ═══
+ *
+ * A hidden phone app reads nothing the stream announces, but an open stream
+ * still takes the server's keep-alive every 25 s, and on mobile data each one
+ * wakes the phone's radio. So once the app has been in the background for
+ * `BACKGROUND_CLOSE_MS` the stream is closed, and no stream opens while it
+ * stays there. A quick switch to another app and back keeps it. On return it
+ * opens at once and catches up like any other drop.
+ *
+ * The close is a timer, and a phone can freeze a background app or sleep
+ * before it runs. A stream held through that may have been dropped by the
+ * network without noticing, so on return it is replaced, not trusted.
+ *
+ * A browser tab or the desktop window keeps its stream in the background.
  */
 export type LiveChangeTopic = 'tasks' | 'calendar';
 
@@ -54,6 +69,12 @@ export const DEBOUNCE_MS = 300;
 const RECONNECT_FLOOR_MS = 1_000;
 const RECONNECT_CEILING_MS = 30_000;
 const UNAUTHORIZED_WAIT_MS = 60_000;
+/**
+ * How long the phone app stays in the background before its stream closes.
+ * Long enough for a quick look at another app, and shorter than the server's
+ * 25 s keep-alive, so a backgrounded app takes one at most.
+ */
+export const BACKGROUND_CLOSE_MS = 15_000;
 
 const subscribers = new Map<LiveChangeTopic, Set<Listener>>();
 const debounces = new Map<LiveChangeTopic, ReturnType<typeof setTimeout>>();
@@ -71,6 +92,9 @@ let refusedToken: string | null = null;
 let refusedUntil = 0;
 /** A stream subscribers wanted was down, so changes may have gone unannounced. */
 let missedChanges = false;
+let backgroundTimer: ReturnType<typeof setTimeout> | null = null;
+/** When the phone app went into the background, by `performance.now()` and by the wall clock. */
+let hiddenAt: { ticks: number; wall: number } | null = null;
 
 function subscriberCount(): number {
   let count = 0;
@@ -87,6 +111,18 @@ function clearReconnect(): void {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+}
+
+function clearBackgroundTimer(): void {
+  if (backgroundTimer) {
+    clearTimeout(backgroundTimer);
+    backgroundTimer = null;
+  }
+}
+
+/** The phone app is in the background, where it opens no stream. */
+function inBackgroundOnPhone(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden' && isNativePlatform();
 }
 
 function emit(topic: LiveChangeTopic): void {
@@ -154,7 +190,7 @@ function scheduleReconnect(delay = reconnectDelay): void {
 }
 
 async function connect(): Promise<void> {
-  if (controller || !token || subscriberCount() === 0) {
+  if (controller || !token || subscriberCount() === 0 || inBackgroundOnPhone()) {
     return;
   }
 
@@ -373,6 +409,8 @@ export function resetLiveChangesForTests(): void {
   }
 
   debounces.clear();
+  clearBackgroundTimer();
+  hiddenAt = null;
   token = null;
   tokenKind = 'bearer';
   streamToken = null;
@@ -392,6 +430,16 @@ function reconnectNow(): void {
   }
 }
 
+/** Drop a stream that is still held, as one that may be dead; the next connect catches up. */
+function replaceHeldStream(): void {
+  if (controller && subscriberCount() > 0) {
+    const held = controller;
+    controller = null;
+    missedChanges = true;
+    held.abort();
+  }
+}
+
 /**
  * Back online. A stream that dropped is waiting out a backoff of up to 30 s.
  * One that is still held went through the offline spell and may be dead
@@ -399,22 +447,64 @@ function reconnectNow(): void {
  * network goes), so it is replaced rather than trusted.
  */
 function onOnline(): void {
-  if (controller && subscriberCount() > 0) {
-    const held = controller;
-    controller = null;
-    missedChanges = true;
-    held.abort();
+  replaceHeldStream();
+  reconnectNow();
+}
+
+/** The phone app went into the background: its stream closes if it stays there. */
+function onHidden(): void {
+  if (!isNativePlatform() || backgroundTimer) {
+    return;
+  }
+
+  hiddenAt = { ticks: performance.now(), wall: Date.now() };
+  backgroundTimer = setTimeout(() => {
+    backgroundTimer = null;
+
+    if (!inBackgroundOnPhone()) {
+      return;
+    }
+
+    if (controller && subscriberCount() > 0) {
+      missedChanges = true;
+    }
+
+    disconnect();
+  }, BACKGROUND_CLOSE_MS);
+}
+
+/**
+ * Back in view. A backgrounded tab or a phone app may have lost its stream
+ * while away: try now, and the catch-up on connect covers whatever was missed.
+ * A phone app whose close never ran although it was away long enough was
+ * frozen or asleep, and the stream it still holds is replaced.
+ */
+function onVisible(): void {
+  const away = hiddenAt;
+  const closePending = backgroundTimer !== null;
+  hiddenAt = null;
+  clearBackgroundTimer();
+
+  // `performance.now()` can stand still while the phone sleeps, and the wall
+  // clock can be set. Either one past the grace counts: a needless reconnect
+  // costs one request, a dead stream kept costs every change until the next poll.
+  if (
+    closePending &&
+    away &&
+    Math.max(performance.now() - away.ticks, Date.now() - away.wall) >= BACKGROUND_CLOSE_MS
+  ) {
+    replaceHeldStream();
   }
 
   reconnectNow();
 }
 
 if (typeof document !== 'undefined') {
-  // A backgrounded tab or a phone app brought back may have lost its stream
-  // while away. Try now; the catch-up on connect covers whatever was missed.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      reconnectNow();
+      onVisible();
+    } else if (document.visibilityState === 'hidden') {
+      onHidden();
     }
   });
   window.addEventListener('online', onOnline);
