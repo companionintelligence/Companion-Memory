@@ -25,8 +25,9 @@ const CURRENT_STATE_KEY = 'current';
 
 /**
  * Nightly (02:30) and ensure_bootstrap (boot+30s / 03:00) share one worker and
- * one pipeline. Distinct keys let both sit `active` after a missed callback.
- * Manual Predict keeps `fn:nightly:<user>:manual` and is not this path.
+ * one pipeline. Manual Predict keeps `fn:nightly:<user>:manual` and is not this
+ * path. The key alone does not stop a second run beside a live one (see
+ * `fanOut`).
  */
 function hbpePipelineSingleton(
   target: PythonFunctionTarget,
@@ -220,12 +221,20 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
+    // One prediction run per person: a user whose run is still waiting or
+    // going (a Predict, yesterday's nightly, the start-up sweep before a
+    // restart) is skipped. The `short` key refused only an identical key that
+    // had not started yet, so an API restart or a Predict at 02:00 queued a
+    // second whole pipeline behind the first.
     const { enqueued } = await fanOutPerUser(
       userIds,
-      (userId) =>
-        this.pythonFunctionService.dispatch(target, functionName, userId, args, {
-          singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey),
-        }),
+      (userId) => {
+        const options = { singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey) };
+
+        return target === 'hbpe'
+          ? this.pythonFunctionService.dispatchUnlessRunning(target, functionName, userId, args, options)
+          : this.pythonFunctionService.dispatch(target, functionName, userId, args, options);
+      },
       { logger: this.logger, label: functionName },
     );
 

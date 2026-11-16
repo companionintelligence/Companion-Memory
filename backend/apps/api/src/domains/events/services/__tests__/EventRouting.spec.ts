@@ -204,6 +204,25 @@ describe('event routing', () => {
       });
     });
 
+    // A deferred job whose executor reports in carries its own heartbeat window,
+    // so the queue row never holds one an older release would inherit.
+    it("passes a job's heartbeatSeconds through to pg-boss", async () => {
+      EventListenerRegistry.register('infer.question.answer', 'InferListener', 'infer', 'llm-background');
+      const service = makePgBossService();
+
+      await (service.send.bind(service) as LooseSend)(
+        'infer.question.answer',
+        { ownerId: 'u1', questionId: 'q1' },
+        { singletonKey: 'infer:u1:q1', heartbeatSeconds: 300 },
+      );
+
+      expect(bossSend.mock.calls[0][2]).toStrictEqual({
+        priority: DEFAULT_JOB_PRIORITY,
+        singletonKey: 'infer:u1:q1',
+        heartbeatSeconds: 300,
+      });
+    });
+
     it('enqueues nothing and warns when no queue listens to the event', async () => {
       EventListenerRegistry.register('note.created', 'NoteListener', 'onCreated', 'search-index');
       const service = makePgBossService();
