@@ -1,6 +1,6 @@
 import config from '@ci/configuration';
 
-import { oauthCallbackUrl, openIdCallbackUrl } from './callbackUrls';
+import { oauthCallbackUrl, oauthCallbackUrlForConnection, openIdCallbackUrl } from './callbackUrls';
 
 /**
  * The addresses a connected service sends the person back to. A plain production install passed
@@ -80,5 +80,44 @@ describe('connection callback addresses', () => {
     config.auth.oidc.publicBaseUrl = ' ';
 
     expect(oauthCallbackUrl()).toBe('https://memory.example.com/oauth/callback');
+  });
+
+  it('collapses the doubled slash the compose files give when APP_BASE_URL ends in one', () => {
+    config.auth.oauth.callbackUrl = 'http://192.168.1.20:8642//oauth/callback';
+    config.auth.openid.callbackUrl = 'http://192.168.1.20:8642//openid/callback';
+
+    expect(oauthCallbackUrl()).toBe('http://192.168.1.20:8642/oauth/callback');
+    expect(openIdCallbackUrl()).toBe('http://192.168.1.20:8642/openid/callback');
+  });
+
+  it('leaves a set OAUTH_CALLBACK_URL otherwise untouched, query and case included', () => {
+    config.auth.oauth.callbackUrl = 'https://Connect.Example.com/oauth/callback?tenant=a//b';
+
+    expect(oauthCallbackUrl()).toBe('https://Connect.Example.com/oauth/callback?tenant=a//b');
+  });
+
+  it('passes over a base address with no scheme', () => {
+    process.env.APP_PUBLIC_URL = 'memory.example.org';
+    config.auth.oidc.publicBaseUrl = 'http://192.168.1.20:8642';
+
+    expect(oauthCallbackUrl()).toBe('http://192.168.1.20:8642/oauth/callback');
+
+    config.auth.oidc.publicBaseUrl = '192.168.1.20:8642';
+
+    expect(openIdCallbackUrl()).toBe('https://memory.example.com/openid/callback');
+  });
+
+  it('adds the connection id to the proxied callback with the right separator', () => {
+    config.auth.oidc.publicBaseUrl = 'http://192.168.1.20:8642';
+
+    expect(oauthCallbackUrlForConnection('conn-1')).toBe(
+      'http://192.168.1.20:8642/oauth/callback?connectionId=conn-1',
+    );
+
+    config.auth.oauth.callbackUrl = 'https://connect.example.com/oauth/callback?tenant=a';
+
+    expect(oauthCallbackUrlForConnection('conn-1')).toBe(
+      'https://connect.example.com/oauth/callback?tenant=a&connectionId=conn-1',
+    );
   });
 });

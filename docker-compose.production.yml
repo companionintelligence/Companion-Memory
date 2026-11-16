@@ -98,8 +98,9 @@ services:
       # Built from APP_BASE_URL only, as in Memory Desktop's compose file, and
       # deliberately not `${OAUTH_CALLBACK_URL:-...}`: `make init` copies
       # .env.default, whose OAUTH_CALLBACK_URL is the development callback
-      # host, and that form would hand every appliance the developers'
-      # address. To use another address, set it in an override file. `:+`
+      # host. That form would hand every appliance the developers' address,
+      # so an OAUTH_CALLBACK_URL in .env does not reach the api from this
+      # file. To use another address, set it in an override file. `:+`
       # leaves both empty while APP_BASE_URL is unset; the api then falls back
       # to https://<APP_PUBLIC_HOSTNAME>/..., which this file leaves at
       # ci-server.localhost (connections/utils/callbackUrls.ts).

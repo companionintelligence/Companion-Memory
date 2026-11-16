@@ -83,7 +83,7 @@ describe('BaseOAuth2Client redirect_uri (via GoogleClient)', () => {
     const authorizeRedirect = new URL(await client.getAuthorizationUrl(connection)).searchParams.get(
       'redirect_uri',
     );
-    await client.exchangeAuthorizationCode(connection, 'code-1').catch(() => undefined);
+    await client.exchangeAuthorizationCode(connection, 'code-1');
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(new URLSearchParams(String(init.body)).get('redirect_uri')).toBe(authorizeRedirect);

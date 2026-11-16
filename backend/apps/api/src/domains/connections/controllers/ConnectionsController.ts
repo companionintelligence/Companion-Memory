@@ -35,7 +35,7 @@ import {
   type CreateConnectionDto,
   type UpdateConnectionDto,
 } from '../types';
-import { oauthCallbackUrl } from '../utils/callbackUrls';
+import { oauthCallbackUrlForConnection } from '../utils/callbackUrls';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -238,10 +238,9 @@ export class ConnectionsController {
         throw new InternalServerErrorException();
       }
 
-      // Build the callback URL from the configured OAUTH_CALLBACK_URL, embedding
-      // the connectionId so we know which connection to update on return.
-      const baseCallbackUrl = oauthCallbackUrl();
-      const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+      // The callback address with the connectionId in it, so we know which
+      // connection to update on return.
+      const callbackUrl = oauthCallbackUrlForConnection(connection.id);
 
       const scopes = client.getScopesFromActiveEndpoints(connection.activeEndpoints);
 

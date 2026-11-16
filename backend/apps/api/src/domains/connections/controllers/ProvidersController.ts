@@ -27,7 +27,7 @@ import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
-import { oauthCallbackUrl } from '../utils/callbackUrls';
+import { oauthCallbackUrlForConnection } from '../utils/callbackUrls';
 
 @Controller('providers')
 export class ProvidersController {
@@ -168,8 +168,7 @@ export class ProvidersController {
       throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
     }
 
-    const baseCallbackUrl = oauthCallbackUrl();
-    const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+    const callbackUrl = oauthCallbackUrlForConnection(connection.id);
 
     const scopes = oauthClient.getScopesFromActiveEndpoints(input.endpoints);
     const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
