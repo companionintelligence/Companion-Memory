@@ -201,4 +201,119 @@ describeWithDb(`PlaceService — geocode hierarchy, in Postgres (${availability.
     );
     expect(cities).toBe(1);
   });
+
+  it('never adopts an unparented city that was merged into another', async () => {
+    const owner = await newOwner();
+
+    await service.findOrCreateForGeocode(owner, {
+      name: 'Cupertino Library',
+      lat: 37.3229,
+      lng: -122.0322,
+      components: components('Cupertino'),
+    });
+    const kept = (await places(owner)).get('Cupertino');
+    expect(kept).toMatchObject({ place_kind: 'city' });
+
+    // What a place merge leaves behind: the other Cupertino, merged into the
+    // kept one and without a parent.
+    const mergedAway = uuidv7();
+    await dataSource.query(
+      `INSERT INTO ci.entities
+              (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+       VALUES ($1, 'Location', 'Cupertino', '{}'::jsonb, $2, 'city', $3, FALSE)`,
+      [mergedAway, owner.userId, kept?.entity_id],
+    );
+
+    const later = await service.findOrCreateForGeocode(owner, {
+      name: 'Main Street Cupertino',
+      lat: 37.3236,
+      lng: -122.0105,
+      components: components('Cupertino'),
+    });
+
+    const rows: PlaceRow[] = await dataSource.query(
+      `SELECT entity_id, name, place_kind, parent_place_id FROM ci.entities WHERE entity_id = ANY($1::uuid[])`,
+      [[later.id, mergedAway]],
+    );
+    const byId = new Map(rows.map((row) => [row.entity_id, row]));
+    expect(byId.get(later.id)?.parent_place_id).toBe(kept?.entity_id);
+    expect(byId.get(mergedAway)?.parent_place_id).toBeNull();
+  });
+
+  it('hangs a place under the city its region already has, leaving an unparented twin of that city alone', async () => {
+    const owner = await newOwner();
+
+    // A full answer mints Palo Alto under California; a later locality-only
+    // answer mints a second, unparented Palo Alto beside it.
+    await service.findOrCreateForGeocode(owner, {
+      name: 'Palo Alto Library',
+      lat: 37.4419,
+      lng: -122.143,
+      components: components('Palo Alto'),
+    });
+    await service.findOrCreateForGeocode(owner, {
+      name: 'Palo Alto Station',
+      lat: 37.4434,
+      lng: -122.1651,
+      components: { address_components: [{ long_name: 'Palo Alto', types: ['locality', 'political'] }] },
+    });
+
+    const later = await service.findOrCreateForGeocode(owner, {
+      name: 'University Avenue',
+      lat: 37.4476,
+      lng: -122.1596,
+      components: components('Palo Alto'),
+    });
+
+    const cities: PlaceRow[] = await dataSource.query(
+      `SELECT entity_id, name, place_kind, parent_place_id
+         FROM ci.entities
+        WHERE owner_user_id = $1 AND entity_type = 'Location' AND place_kind = 'city'`,
+      [owner.userId],
+    );
+    const parented = cities.find((city) => city.parent_place_id != null);
+    const [placed]: PlaceRow[] = await dataSource.query(
+      `SELECT entity_id, name, place_kind, parent_place_id FROM ci.entities WHERE entity_id = $1`,
+      [later.id],
+    );
+
+    expect(cities).toHaveLength(2);
+    expect(placed.parent_place_id).toBe(parented?.entity_id);
+  });
+
+  it('resolves a city to its live node, never to a place merged into another', async () => {
+    const owner = await newOwner();
+    const keptElsewhere = uuidv7();
+    const mergedAway = uuidv7();
+
+    // A parentless Gilroy merged into another place, the way a place merge
+    // leaves it. It shares the key a parentless Gilroy city resolves to.
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, place_kind)
+       VALUES ($1, 'Location', 'Gilroy, CA', '{}'::jsonb, $2, 'city')`,
+      [keptElsewhere, owner.userId],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.entities
+              (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+       VALUES ($1, 'Location', 'Gilroy', '{}'::jsonb, $2, 'city', $3, FALSE)`,
+      [mergedAway, owner.userId, keptElsewhere],
+    );
+
+    const later = await service.findOrCreateForGeocode(owner, {
+      name: 'Gilroy Outlets',
+      lat: 37.0258,
+      lng: -121.5677,
+      components: { address_components: [{ long_name: 'Gilroy', types: ['locality', 'political'] }] },
+    });
+
+    const [row]: PlaceRow[] = await dataSource.query(
+      `SELECT p.entity_id, p.name, p.place_kind, p.parent_place_id
+         FROM ci.entities v JOIN ci.entities p ON p.entity_id = v.parent_place_id
+        WHERE v.entity_id = $1`,
+      [later.id],
+    );
+    expect(row).toMatchObject({ name: 'Gilroy', place_kind: 'city' });
+    expect(row.entity_id).not.toBe(mergedAway);
+  });
 });

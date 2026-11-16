@@ -411,6 +411,222 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
     expect(parentOf.get(stall)).toBe(target);
   });
 
+  describe('when the kept place takes a key only the other place holds', () => {
+    // The pin's snap cell, the provider place_id and a city's (kind, name,
+    // parent) are each unique per owner, tombstones included. The fold used to
+    // copy one onto the kept place while the other place still held it, and the
+    // whole merge failed with a duplicate key.
+    const insertPlace = async (place: {
+      name: string;
+      kind?: string;
+      parent?: string;
+      lngLat?: [number, number];
+      properties?: Record<string, unknown>;
+    }): Promise<string> => {
+      const id = uuidv7();
+
+      await dataSource.query(
+        `INSERT INTO ci.entities
+                (entity_id, entity_type, name, properties, owner_user_id, place_kind, parent_place_id, location_point)
+         VALUES ($1, 'Location', $2, $3::jsonb, $4, $5, $6,
+                 CASE WHEN $7::float8 IS NULL THEN NULL
+                      ELSE ST_SetSRID(ST_MakePoint($7, $8), 4326)::geography END)`,
+        [
+          id,
+          place.name,
+          JSON.stringify(place.properties ?? {}),
+          owner.userId,
+          place.kind ?? null,
+          place.parent ?? null,
+          place.lngLat?.[0] ?? null,
+          place.lngLat?.[1] ?? null,
+        ],
+      );
+
+      return id;
+    };
+
+    const readPlaces = async (
+      ids: string[],
+    ): Promise<
+      Map<
+        string,
+        {
+          merged_into_entity_id: string | null;
+          parent_place_id: string | null;
+          place_id: string | null;
+          point: string | null;
+        }
+      >
+    > => {
+      const rows: Array<{
+        entity_id: string;
+        merged_into_entity_id: string | null;
+        parent_place_id: string | null;
+        place_id: string | null;
+        point: string | null;
+      }> = await dataSource.query(
+        `SELECT entity_id, merged_into_entity_id, parent_place_id, properties->>'place_id' AS place_id,
+                ST_AsText(location_point) AS point
+           FROM ci.entities WHERE entity_id = ANY($1::uuid[])`,
+        [ids],
+      );
+
+      return new Map(rows.map(({ entity_id, ...row }) => [entity_id, row]));
+    };
+
+    it('takes the pin when only the other place has one', async () => {
+      const kept = await insertPlace({ name: 'Pier 39 Cafe' });
+      const other = await insertPlace({ name: 'Pier 39 Cafe', lngLat: [-122.4098, 37.8087] });
+
+      await merger.mergePlaces(owner, [other], kept);
+
+      const places = await readPlaces([kept, other]);
+      expect(places.get(kept)).toEqual(expect.objectContaining({ point: 'POINT(-122.4098 37.8087)' }));
+      expect(places.get(other)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: kept, point: null }),
+      );
+
+      // Both pages still list the merge: the kept place's row names the other
+      // one and the pin it gained, the other's row the move.
+      const deltas: Array<{ entity_id: string; changed_fields: Record<string, unknown> }> =
+        await dataSource.query(
+          `SELECT entity_id, changed_fields FROM ci.graph_deltas
+          WHERE change_type = 'merged' AND entity_id = ANY($1::uuid[])`,
+          [[kept, other]],
+        );
+      expect(deltas.find((row) => row.entity_id === kept)?.changed_fields).toEqual({
+        coordinates: { old: null, new: [-122.4098, 37.8087] },
+        merged_from_entity_ids: { old: null, new: [other] },
+      });
+      expect(deltas.find((row) => row.entity_id === other)?.changed_fields).toEqual({
+        is_active: { old: true, new: false },
+        merged_into_entity_id: { old: null, new: kept },
+      });
+    });
+
+    it("takes the provider place_id when only the other place has one, as the Places page's duplicate card offers", async () => {
+      // Two pins 133 m apart, either side of a snap-cell edge: the card's
+      // "Same name, within 150 m" pair, the second one geocoded.
+      const kept = await insertPlace({ name: 'Pine Cafe', lngLat: [-122.39, 37.8202] });
+      const other = await insertPlace({
+        name: 'Pine Cafe',
+        lngLat: [-122.39, 37.8214],
+        properties: { place_id: 'merge-test-pine-cafe' },
+      });
+
+      await merger.mergePlaces(owner, [other], kept);
+
+      const places = await readPlaces([kept, other]);
+      expect(places.get(kept)).toEqual(
+        expect.objectContaining({ place_id: 'merge-test-pine-cafe', point: 'POINT(-122.39 37.8202)' }),
+      );
+      // The other place keeps its own pin, which the kept one did not take.
+      expect(places.get(other)).toEqual(
+        expect.objectContaining({
+          merged_into_entity_id: kept,
+          place_id: null,
+          point: 'POINT(-122.39 37.8214)',
+        }),
+      );
+
+      const [audit]: Array<{ details: { sourceProperties: Record<string, unknown> } }> =
+        await dataSource.query(`SELECT details FROM ci.entity_merges WHERE source_entity_id = $1`, [other]);
+      expect(audit.details.sourceProperties).toEqual({ place_id: 'merge-test-pine-cafe' });
+    });
+
+    it('takes the region of a same-named city when the kept city has none', async () => {
+      const region = await insertPlace({ name: 'Merge Test Region', kind: 'region' });
+      const kept = await insertPlace({ name: 'Springfield', kind: 'city' });
+      const other = await insertPlace({ name: 'Springfield', kind: 'city', parent: region });
+
+      await merger.mergePlaces(owner, [other], kept);
+
+      const places = await readPlaces([kept, other]);
+      expect(places.get(kept)).toEqual(expect.objectContaining({ parent_place_id: region }));
+      expect(places.get(other)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: kept, parent_place_id: null }),
+      );
+    });
+
+    it('merges more same-named cities later, one call or one after another', async () => {
+      // Each merge leaves a parentless merged-away Shelbyville. A city's key
+      // leaves merged-away places out, so they don't collide with each other or
+      // with a live Shelbyville that has no region either.
+      const [north, south, east] = await Promise.all(
+        ['Merge Test North', 'Merge Test South', 'Merge Test East'].map((name) =>
+          insertPlace({ name, kind: 'region' }),
+        ),
+      );
+      const kept = await insertPlace({ name: 'Shelbyville', kind: 'city' });
+      const first = await insertPlace({ name: 'Shelbyville', kind: 'city', parent: north });
+      const second = await insertPlace({ name: 'Shelbyville', kind: 'city', parent: south });
+      const third = await insertPlace({ name: 'Shelbyville', kind: 'city', parent: east });
+
+      await merger.mergePlaces(owner, [first], kept);
+      await merger.mergePlaces(owner, [second, third], kept);
+      const newer = await insertPlace({ name: 'Shelbyville', kind: 'city' });
+
+      const places = await readPlaces([kept, first, second, third, newer]);
+      expect(places.get(kept)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: null, parent_place_id: north }),
+      );
+      for (const id of [first, second, third]) {
+        expect(places.get(id)).toEqual(
+          expect.objectContaining({ merged_into_entity_id: kept, parent_place_id: null }),
+        );
+      }
+
+      expect(places.get(newer)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: null, parent_place_id: null }),
+      );
+    });
+
+    it('merges two same-named regions after their same-named cities were merged', async () => {
+      const country = await insertPlace({ name: 'Merge Test Country', kind: 'country' });
+      const keptRegion = await insertPlace({ name: 'Merge Test State', kind: 'region', parent: country });
+      const otherRegion = await insertPlace({ name: 'Merge Test State', kind: 'region' });
+      const keptCity = await insertPlace({ name: 'Ogdenville', kind: 'city', parent: keptRegion });
+      const otherCity = await insertPlace({ name: 'Ogdenville', kind: 'city', parent: otherRegion });
+
+      await merger.mergePlaces(owner, [otherCity], keptCity);
+      await merger.mergePlaces(owner, [otherRegion], keptRegion);
+
+      const places = await readPlaces([keptCity, otherCity, otherRegion]);
+      expect(places.get(keptCity)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: null, parent_place_id: keptRegion }),
+      );
+      expect(places.get(otherRegion)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: keptRegion, parent_place_id: null }),
+      );
+      expect(places.get(otherCity)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: keptCity, parent_place_id: null }),
+      );
+    });
+
+    it('merges a kept city into a newer same-named one', async () => {
+      const region = await insertPlace({ name: 'Merge Test Valley', kind: 'region' });
+      const older = await insertPlace({ name: 'Capital City', kind: 'city' });
+      const other = await insertPlace({ name: 'Capital City', kind: 'city', parent: region });
+
+      await merger.mergePlaces(owner, [other], older);
+      const newer = await insertPlace({ name: 'Capital City', kind: 'city' });
+      await merger.mergePlaces(owner, [older], newer);
+
+      const places = await readPlaces([newer, older, other]);
+      expect(places.get(newer)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: null, parent_place_id: region }),
+      );
+      // Path compression: the first merged-away city now points at the newer one.
+      expect(places.get(older)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: newer, parent_place_id: null }),
+      );
+      expect(places.get(other)).toEqual(
+        expect.objectContaining({ merged_into_entity_id: newer, parent_place_id: null }),
+      );
+    });
+  });
+
   it('reports zeros when the sources are referenced by nothing — the old code reported 2, 4 and 6', async () => {
     const target = await insertEntity('Location', 'Blue Bottle, Mint Plaza');
     const source = await insertEntity('Location', 'Blue Bottle Coffee');

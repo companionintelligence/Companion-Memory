@@ -58,9 +58,13 @@ interface LocationRow {
   is_active: boolean | null;
   parent_place_id: string | null;
   place_kind: string | null;
-  has_point: boolean;
   /** `[lng, lat]` of `location_point`, as PlaceService.update records it; null without a point. */
   coordinates: number[] | null;
+  /**
+   * `location_point` as text (hex EWKB), null without a point, so the target
+   * can take it after the source lets go of it.
+   */
+  point: string | null;
   has_boundary: boolean;
 }
 
@@ -87,12 +91,14 @@ interface LocationRow {
  *     sweeps what that left behind — moving, not dropping, any edge a
  *     concurrent writer committed to a source after the re-point's snapshot (see
  *     {@link sweepLeftoverEdges});
- *  4. folds the row — target wins every non-null scalar it already has; the
+ *  4. tombstones each source (`is_active = FALSE`, `merged_into_entity_id`,
+ *     no parent) and has it let go of the pin or provider place_id the target
+ *     takes, each of which is unique per owner;
+ *  5. folds the row — target wins every non-null scalar it already has; the
  *     point, boundary, parent and provider place_id fill from the first
- *     source that has one; properties merge target-wins;
- *  5. tombstones each source (`is_active = FALSE`, `merged_into_entity_id`)
- *     and compresses any tombstone that already pointed at one, so the chain
- *     stays a single hop;
+ *     source that has one; properties merge target-wins; then compresses any
+ *     tombstone that already pointed at a source, so the chain stays a single
+ *     hop;
  *  6. deletes the sources' search rows and moves their tag links;
  *  7. writes one `ci.entity_merges` audit row per source.
  *
@@ -127,8 +133,8 @@ export class PlaceMergeService {
       const rows: LocationRow[] = await em.query(
         `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active,
                 parent_place_id, place_kind,
-                location_point IS NOT NULL AS has_point,
                 ST_AsGeoJSON(location_point)::jsonb -> 'coordinates' AS coordinates,
+                location_point::text AS point,
                 location_boundary IS NOT NULL AS has_boundary
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
@@ -195,9 +201,7 @@ export class PlaceMergeService {
         target.properties ?? {},
         sourceRows.map((row) => row.properties ?? {}),
       );
-      const pointDonor = target.has_point
-        ? null
-        : (sourceRows.find((row) => row.has_point)?.entity_id ?? null);
+      const pointDonor = target.point == null ? (sourceRows.find((row) => row.point != null) ?? null) : null;
       const boundaryDonor = target.has_boundary
         ? null
         : (sourceRows.find((row) => row.has_boundary)?.entity_id ?? null);
@@ -215,6 +219,33 @@ export class PlaceMergeService {
       const parentDonor =
         target.parent_place_id ?? parentCandidates.find((id) => !underTarget.has(id)) ?? null;
       const mergedKind = target.place_kind ?? sourceRows.find((row) => row.place_kind)?.place_kind ?? null;
+      // The source holding the provider place_id the fold hands the target.
+      const placeIdDonor =
+        target.properties?.place_id == null && mergedProperties.place_id != null
+          ? (sourceRows.find((row) => row.properties?.place_id === mergedProperties.place_id)?.entity_id ??
+            null)
+          : null;
+
+      // Tombstone the sources before the fold. The target's pin and provider
+      // place_id are each a key that is unique per owner, merged-away places
+      // included (entities_location_snap_dedup_uniq and
+      // entities_place_provider_id_uniq), so a source still holding the one the
+      // target takes failed the fold. The source the target takes them from lets
+      // go of them here (the place_id stays in the ci.entity_merges row's
+      // sourceProperties). A city's (kind, name, parent) key
+      // (entities_admin_place_uniq) leaves merged-away places out, so marking
+      // a source merged frees its key for the target's new parent.
+      await em.query(
+        `UPDATE ci.entities
+            SET merged_into_entity_id = $3,
+                is_active = FALSE,
+                parent_place_id = NULL,
+                location_point = CASE WHEN entity_id = $4::uuid THEN NULL ELSE location_point END,
+                properties = CASE WHEN entity_id = $5::uuid THEN properties - 'place_id' ELSE properties END,
+                updated_at = now()
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
+        [ownerUserId, sources, targetId, pointDonor?.entity_id ?? null, placeIdDonor],
+      );
 
       await em.query(
         `UPDATE ci.entities t
@@ -223,8 +254,7 @@ export class PlaceMergeService {
                 properties = $5::jsonb,
                 place_kind = $6,
                 parent_place_id = $7,
-                location_point = COALESCE(t.location_point,
-                  (SELECT d.location_point FROM ci.entities d WHERE d.entity_id = $8::uuid)),
+                location_point = COALESCE(t.location_point, $8::geography),
                 location_boundary = COALESCE(t.location_boundary,
                   (SELECT d.location_boundary FROM ci.entities d WHERE d.entity_id = $9::uuid)),
                 updated_at = now()
@@ -237,16 +267,9 @@ export class PlaceMergeService {
           JSON.stringify(mergedProperties),
           mergedKind,
           parentDonor,
-          pointDonor,
+          pointDonor?.point ?? null,
           boundaryDonor,
         ],
-      );
-
-      await em.query(
-        `UPDATE ci.entities
-            SET merged_into_entity_id = $3, is_active = FALSE, parent_place_id = NULL, updated_at = now()
-          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
-        [ownerUserId, sources, targetId],
       );
 
       // A point the target gains from a source is a change too, recorded as
@@ -270,7 +293,7 @@ export class PlaceMergeService {
               description: mergedDescription,
               place_kind: mergedKind,
               parent_place_id: parentDonor,
-              coordinates: pointDonor ? (byId.get(pointDonor)?.coordinates ?? null) : target.coordinates,
+              coordinates: pointDonor ? pointDonor.coordinates : target.coordinates,
             },
           },
           properties: { before: target.properties ?? {}, after: mergedProperties },

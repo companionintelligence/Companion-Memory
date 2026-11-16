@@ -680,7 +680,12 @@ export class PlaceService {
     // Providers return partial address_components (a result with locality but
     // no admin_area_level_1 is common outside the US), so the same city can be
     // resolved first without a parent and later with one; without this the
-    // keyed lookup below would miss and mint a duplicate city node.
+    // keyed lookup below would miss and mint a duplicate city node. Never a
+    // place merged into another: a merge leaves it without a parent, and
+    // adopting it would hang new places under a tombstone. Never when the
+    // parent already has a live node of that kind and name either: the
+    // unparented one is its twin, and giving it the parent would collide with
+    // that node on entities_admin_place_uniq and leave the place unparented.
     //
     // Read back through a CTE: a bare UPDATE … RETURNING resolves to the pair
     // [rows, rowCount], whose length is always 2 and whose [0] is the rows
@@ -700,6 +705,16 @@ export class PlaceService {
                  AND place_kind = $2
                  AND lower(btrim(name)) = lower(btrim($3))
                  AND parent_place_id IS NULL
+                 AND merged_into_entity_id IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1
+                     FROM ci.entities k
+                    WHERE k.entity_type = 'Location'
+                      AND k.owner_user_id = $1
+                      AND k.place_kind = $2
+                      AND lower(btrim(k.name)) = lower(btrim($3))
+                      AND k.parent_place_id = $4
+                      AND k.merged_into_entity_id IS NULL)
                ORDER BY created_at ASC
                LIMIT 1)
             RETURNING entity_id
@@ -722,6 +737,8 @@ export class PlaceService {
       [newId, context.userId, name, JSON.stringify({ source: 'geocode_hierarchy' }), kind, parentId],
     );
 
+    // Live rows only, as entities_admin_place_uniq keys them: a place merged
+    // into another can share the key with the live node.
     const rows: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
       `SELECT entity_id
          FROM ci.entities
@@ -731,6 +748,7 @@ export class PlaceService {
           AND lower(btrim(name)) = lower(btrim($3))
           AND COALESCE(parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
               = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+          AND merged_into_entity_id IS NULL
         LIMIT 1`,
       [context.userId, kind, name, parentId],
     );
@@ -1180,11 +1198,11 @@ export class PlaceService {
    * GraphQL layer would otherwise mask as "Internal server error". Name the place
    * that holds the cell so the person knows which one to edit instead.
    *
-   * A place merged into another keeps its point, so it still holds its cell
-   * although Places no longer lists it. Point at the place it was merged into,
-   * the one the person can find and edit, without claiming that place sits
-   * here: a merge can join places far apart. An archived place is named by
-   * nobody.
+   * A place merged into another keeps its point unless the kept place took it,
+   * so it can still hold its cell although Places no longer lists it. Point at
+   * the place it was merged into, the one the person can find and edit, without
+   * claiming that place sits here: a merge can join places far apart. An
+   * archived place is named by nobody.
    *
    * The name is a courtesy: with no user to scope the lookup to (a system
    * context), or when the lookup itself fails, the conflict still goes out
@@ -1739,6 +1757,19 @@ export class PlaceService {
         WHERE parent_place_id = $1
           AND ($2::uuid IS NULL OR owner_user_id = $2)`,
       [id, context.userId === SYSTEM_USER ? null : context.userId, place.parentPlaceId ?? null],
+    );
+
+    // The places merged into this one go with it, as in `purge`. merged_into_entity_id
+    // is ON DELETE SET NULL too, and that would put them back into
+    // entities_admin_place_uniq, which leaves only merged-away places out. A merge
+    // leaves each merged-away city without a parent, so two of one name, or one and
+    // a later unparented city of that name, would collide and refuse the delete.
+    await this.placeRepository.manager.query(
+      `DELETE FROM ci.entities
+        WHERE merged_into_entity_id = $1
+          AND entity_type = ANY($3::text[])
+          AND ($2::uuid IS NULL OR owner_user_id = $2)`,
+      [id, context.userId === SYSTEM_USER ? null : context.userId, [...GRAPH_ENTITY_TYPES.place]],
     );
 
     await this.placeRepository.delete({
