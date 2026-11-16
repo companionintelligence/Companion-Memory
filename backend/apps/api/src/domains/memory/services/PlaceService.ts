@@ -549,6 +549,13 @@ export class PlaceService {
     // COALESCE throughout: enrichment only FILLS gaps. A boundary a user drew
     // by hand, or a tighter one from an earlier resolution, is never replaced
     // by a provider box.
+    //
+    // Live places only. The lookups above can land on a place merged into
+    // another (a merged-away place keeps its own place_id unless the kept one
+    // took it), and a merge takes the pin off the place the kept one took it
+    // from. Filling that gap would hand the pin back to the merged-away place,
+    // in the cell the kept place now holds, and the unique snap-cell index
+    // would fail the whole resolution.
     const bounds = normalizeBounds(rawBounds);
 
     await this.placeRepository.manager.query(
@@ -564,7 +571,7 @@ export class PlaceService {
                 CASE WHEN $5::boolean
                      THEN ST_MakeEnvelope($6, $7, $8, $9, 4326)::geography
                      ELSE NULL END)
-        WHERE entity_id = $1 AND owner_user_id = $2`,
+        WHERE entity_id = $1 AND owner_user_id = $2 AND merged_into_entity_id IS NULL`,
       [
         entityId,
         context.userId,
@@ -584,6 +591,7 @@ export class PlaceService {
           `UPDATE ci.entities e
               SET properties = properties || jsonb_build_object('place_id', $3::text)
             WHERE e.entity_id = $1 AND e.owner_user_id = $2
+              AND e.merged_into_entity_id IS NULL
               AND e.properties->>'place_id' IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM ci.entities other
@@ -692,12 +700,18 @@ export class PlaceService {
     // array — so every call with a parent used to return `undefined` without
     // minting the node, and the chain broke below it (see
     // __tests__/PlaceService.hierarchy.integration.spec.ts).
+    //
+    // The outer WHERE repeats the live and unparented checks: the subquery runs
+    // once, before the row lock, so a merge that commits in between would
+    // otherwise still have its fresh tombstone adopted.
     if (parentId) {
       const adopted: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
         `WITH adopted AS (
            UPDATE ci.entities
               SET parent_place_id = $4
-            WHERE entity_id = (
+            WHERE parent_place_id IS NULL
+              AND merged_into_entity_id IS NULL
+              AND entity_id = (
               SELECT entity_id
                 FROM ci.entities
                WHERE entity_type = 'Location'
@@ -726,6 +740,45 @@ export class PlaceService {
       if (adopted.length > 0) {
         return adopted[0].entity_id;
       }
+    }
+
+    // A place merged into another no longer holds the key, so when only such a
+    // place matches, the insert below would mint a new live node: the duplicate
+    // the person merged away, back in Places. Follow it to the place it was
+    // merged into instead, when that is a live node of the same kind and no live
+    // node holds the key itself.
+    const followed: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
+      `SELECT kept.entity_id
+         FROM ci.entities merged
+         JOIN ci.entities kept ON kept.entity_id = merged.merged_into_entity_id
+        WHERE merged.entity_type = 'Location'
+          AND merged.owner_user_id = $1
+          AND merged.place_kind = $2
+          AND lower(btrim(merged.name)) = lower(btrim($3))
+          AND COALESCE(merged.parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+          AND kept.entity_type = 'Location'
+          AND kept.owner_user_id = $1
+          AND kept.place_kind = merged.place_kind
+          AND kept.merged_into_entity_id IS NULL
+          AND kept.is_active IS DISTINCT FROM FALSE
+          AND NOT EXISTS (
+            SELECT 1
+              FROM ci.entities live
+             WHERE live.entity_type = 'Location'
+               AND live.owner_user_id = $1
+               AND live.place_kind = merged.place_kind
+               AND lower(btrim(live.name)) = lower(btrim($3))
+               AND COALESCE(live.parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                   = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+               AND live.merged_into_entity_id IS NULL)
+        ORDER BY merged.updated_at DESC
+        LIMIT 1`,
+      [context.userId, kind, name, parentId],
+    );
+
+    if (followed.length > 0) {
+      return followed[0].entity_id;
     }
 
     const newId = uuidv7();
@@ -1745,41 +1798,69 @@ export class PlaceService {
       return false;
     }
 
-    // Re-parent children to the deleted node's own parent BEFORE deleting.
-    // parent_place_id is ON DELETE SET NULL, and nulling an admin child's
-    // parent can collide with a parentless same-name node on
-    // entities_admin_place_uniq — which would abort the cascade and make the
-    // place undeletable. Grafting also preserves the containment chain
-    // (city keeps its country when the region is removed).
-    await this.placeRepository.manager.query(
-      `UPDATE ci.entities
-          SET parent_place_id = $3
-        WHERE parent_place_id = $1
-          AND ($2::uuid IS NULL OR owner_user_id = $2)`,
-      [id, context.userId === SYSTEM_USER ? null : context.userId, place.parentPlaceId ?? null],
-    );
+    const ownerUserId = context.userId === SYSTEM_USER ? null : context.userId;
 
-    // The places merged into this one go with it, as in `purge`. merged_into_entity_id
-    // is ON DELETE SET NULL too, and that would put them back into
-    // entities_admin_place_uniq, which leaves only merged-away places out. A merge
-    // leaves each merged-away city without a parent, so two of one name, or one and
-    // a later unparented city of that name, would collide and refuse the delete.
-    await this.placeRepository.manager.query(
-      `DELETE FROM ci.entities
-        WHERE merged_into_entity_id = $1
-          AND entity_type = ANY($3::text[])
-          AND ($2::uuid IS NULL OR owner_user_id = $2)`,
-      [id, context.userId === SYSTEM_USER ? null : context.userId, [...GRAPH_ENTITY_TYPES.place]],
-    );
+    // One transaction, so the merged-away places never go without the place.
+    // The place is locked first: a merge into it locks it too, so one that is
+    // committing new merged-away places either lands before the delete below
+    // reads them or waits until the place is gone.
+    await this.placeRepository.manager.transaction(async (manager) => {
+      await manager.query(`SELECT entity_id FROM ci.entities WHERE entity_id = $1 FOR UPDATE`, [id]);
 
-    await this.placeRepository.delete({
-      id,
-      entityType: PLACE_ENTITY_TYPES,
-      ...(context.userId !== SYSTEM_USER && {
-        user: {
-          id: context.userId,
-        },
-      }),
+      // The places merged into this one go with it, as in `purge`, at any depth
+      // of a legacy chain. merged_into_entity_id is ON DELETE SET NULL too, and
+      // that would put them back into entities_admin_place_uniq, which leaves
+      // only merged-away places out. A merge leaves each merged-away city without
+      // a parent, so two of one name, or one and a later unparented city of that
+      // name, would collide and refuse the delete.
+      const merged: Array<{ entity_id: string }> = await manager.query(
+        `WITH RECURSIVE family AS (
+           SELECT entity_id
+             FROM ci.entities
+            WHERE merged_into_entity_id = $1
+              AND entity_type = ANY($3::text[])
+              AND ($2::uuid IS NULL OR owner_user_id = $2)
+           UNION
+           SELECT e.entity_id
+             FROM ci.entities e
+             JOIN family f ON e.merged_into_entity_id = f.entity_id
+            WHERE e.entity_type = ANY($3::text[])
+              AND ($2::uuid IS NULL OR e.owner_user_id = $2)
+         )
+         SELECT entity_id FROM family WHERE entity_id <> $1`,
+        [id, ownerUserId, [...GRAPH_ENTITY_TYPES.place]],
+      );
+      const mergedIds = merged.map((row) => row.entity_id);
+
+      // Re-parent children to the deleted node's own parent BEFORE deleting.
+      // parent_place_id is ON DELETE SET NULL, and nulling an admin child's
+      // parent can collide with a parentless same-name node on
+      // entities_admin_place_uniq, which would abort the cascade and make the
+      // place undeletable. Grafting also preserves the containment chain
+      // (city keeps its country when the region is removed). The children of
+      // the merged-away places too: older versions could hang a place under one.
+      await manager.query(
+        `UPDATE ci.entities
+            SET parent_place_id = $3
+          WHERE parent_place_id = ANY($1::uuid[])
+            AND NOT (entity_id = ANY($1::uuid[]))
+            AND ($2::uuid IS NULL OR owner_user_id = $2)`,
+        [[id, ...mergedIds], ownerUserId, place.parentPlaceId ?? null],
+      );
+
+      if (mergedIds.length > 0) {
+        await manager.query(`DELETE FROM ci.entities WHERE entity_id = ANY($1::uuid[])`, [mergedIds]);
+      }
+
+      await manager.getRepository(PlaceEntity).delete({
+        id,
+        entityType: PLACE_ENTITY_TYPES,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      });
     });
 
     await this.eventService.send(PlaceRemovedEvent, {

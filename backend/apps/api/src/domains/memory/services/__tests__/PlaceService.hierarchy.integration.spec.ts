@@ -281,7 +281,7 @@ describeWithDb(`PlaceService — geocode hierarchy, in Postgres (${availability.
     expect(placed.parent_place_id).toBe(parented?.entity_id);
   });
 
-  it('resolves a city to its live node, never to a place merged into another', async () => {
+  it('resolves a city to the place it was merged into, never to the merged-away place', async () => {
     const owner = await newOwner();
     const keptElsewhere = uuidv7();
     const mergedAway = uuidv7();
@@ -313,7 +313,100 @@ describeWithDb(`PlaceService — geocode hierarchy, in Postgres (${availability.
         WHERE v.entity_id = $1`,
       [later.id],
     );
-    expect(row).toMatchObject({ name: 'Gilroy', place_kind: 'city' });
-    expect(row.entity_id).not.toBe(mergedAway);
+    // The merge said the two are one city: the answer lands on the kept one
+    // and no new Gilroy is minted beside it.
+    expect(row).toMatchObject({ entity_id: keptElsewhere, name: 'Gilroy, CA', place_kind: 'city' });
+
+    const [{ count }]: Array<{ count: number }> = await dataSource.query(
+      `SELECT count(*)::int AS count
+         FROM ci.entities
+        WHERE owner_user_id = $1 AND place_kind = 'city' AND merged_into_entity_id IS NULL`,
+      [owner.userId],
+    );
+    expect(count).toBe(1);
+  });
+
+  it('finds a city merged under its region again from an answer that names only the city', async () => {
+    const owner = await newOwner();
+
+    // The kept Morgan Hill sits under California; the one merged into it had
+    // no region, as an answer with a locality only leaves a city.
+    await service.findOrCreateForGeocode(owner, {
+      name: 'Morgan Hill Library',
+      lat: 37.1305,
+      lng: -121.6544,
+      components: components('Morgan Hill'),
+    });
+    const kept = (await places(owner)).get('Morgan Hill');
+    expect(kept?.parent_place_id).not.toBeNull();
+
+    const mergedAway = uuidv7();
+    await dataSource.query(
+      `INSERT INTO ci.entities
+              (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+       VALUES ($1, 'Location', 'Morgan Hill', '{}'::jsonb, $2, 'city', $3, FALSE)`,
+      [mergedAway, owner.userId, kept?.entity_id],
+    );
+
+    const later = await service.findOrCreateForGeocode(owner, {
+      name: 'Morgan Hill Station',
+      lat: 37.1296,
+      lng: -121.6505,
+      components: { address_components: [{ long_name: 'Morgan Hill', types: ['locality', 'political'] }] },
+    });
+
+    const [placed]: PlaceRow[] = await dataSource.query(
+      `SELECT entity_id, name, place_kind, parent_place_id FROM ci.entities WHERE entity_id = $1`,
+      [later.id],
+    );
+    expect(placed.parent_place_id).toBe(kept?.entity_id);
+
+    const cities: PlaceRow[] = await dataSource.query(
+      `SELECT entity_id, name, place_kind, parent_place_id
+         FROM ci.entities
+        WHERE owner_user_id = $1 AND place_kind = 'city' AND merged_into_entity_id IS NULL`,
+      [owner.userId],
+    );
+    expect(cities.map((city) => city.entity_id)).toEqual([kept?.entity_id]);
+  });
+
+  it('resolves the place_id of a pinless merged-away place without handing it a pin back', async () => {
+    const owner = await newOwner();
+    const kept = uuidv7();
+    const mergedAway = uuidv7();
+
+    // What a merge leaves when the kept place had its own place_id and no pin:
+    // it took the other place's pin, and the other place kept its place_id.
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, location_point)
+       VALUES ($1, 'Location', 'Pine Cafe', $3::jsonb, $2,
+               ST_SetSRID(ST_MakePoint(-122.3934, 37.7955), 4326)::geography)`,
+      [kept, owner.userId, JSON.stringify({ place_id: 'hierarchy-test-kept' })],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.entities
+              (entity_id, entity_type, name, properties, owner_user_id, merged_into_entity_id, is_active)
+       VALUES ($1, 'Location', 'Pine Cafe', $3::jsonb, $2, $4, FALSE)`,
+      [mergedAway, owner.userId, JSON.stringify({ place_id: 'hierarchy-test-other' }), kept],
+    );
+
+    // A later answer names the other place_id at the same spot. Filling the
+    // merged-away place's missing pin put it in the kept place's cell, and
+    // the snap-cell index failed the whole resolution.
+    await expect(
+      service.findOrCreateForGeocode(owner, {
+        name: 'Pine Cafe',
+        lat: 37.7955,
+        lng: -122.3934,
+        placeId: 'hierarchy-test-other',
+        components: null,
+      }),
+    ).resolves.toBeDefined();
+
+    const [row]: Array<{ has_point: boolean }> = await dataSource.query(
+      `SELECT location_point IS NOT NULL AS has_point FROM ci.entities WHERE entity_id = $1`,
+      [mergedAway],
+    );
+    expect(row.has_point).toBe(false);
   });
 });

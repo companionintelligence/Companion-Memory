@@ -507,6 +507,13 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
         is_active: { old: true, new: false },
         merged_into_entity_id: { old: null, new: kept },
       });
+
+      // The pin the other place gave up stays in the merge record.
+      const [audit]: Array<{ details: { sourceCoordinates: number[] | null } }> = await dataSource.query(
+        `SELECT details FROM ci.entity_merges WHERE source_entity_id = $1`,
+        [other],
+      );
+      expect(audit.details.sourceCoordinates).toEqual([-122.4098, 37.8087]);
     });
 
     it("takes the provider place_id when only the other place has one, as the Places page's duplicate card offers", async () => {
