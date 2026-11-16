@@ -1,9 +1,9 @@
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { ImportInboxService, MAX_INBOX_BATCH_UNITS, SCAN_RECOGNITION_TIMING } from '../ImportInboxService';
 
 /**
@@ -102,20 +102,9 @@ async function withInbox<T>(userDir: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
-/**
- * Every folder (and symlink to one) a test makes under the system temp folder. The top-level
- * `afterEach` removes them, whether the test passed or not: the large-directory case alone writes
- * 25,000 files.
- */
-const tempDirs: string[] = [];
-
-async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
-
-  tempDirs.push(dir);
-
-  return dir;
-}
+// Two minutes for the cleanup, not jest's 5-second default: the large-directory case writes 25,000
+// files. On a slow or busy disk removing them can take longer than that.
+const { make: tempDir, removeAfterTest } = tempDirsRemovedAfterEach(120_000);
 
 /** A fresh shared root with the caller's subtree already in it. */
 async function freshInbox(): Promise<string> {
@@ -141,12 +130,6 @@ beforeEach(() => {
   dataSourcesRecognize.mockReset();
   dataSourcesRecognize.mockImplementation(async () => []);
 });
-
-// The large-directory case's own budget, not jest's 5-second default: on a slow or busy disk,
-// removing its 25,000 files can take longer than that.
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-}, 120_000);
 
 describe('ImportInboxService.scan', () => {
   it('reports unavailable when the inbox cannot be read, empty when it merely is', async () => {
@@ -364,7 +347,7 @@ describe('ImportInboxService.scan', () => {
     const linkRoot = `${real}-link`;
 
     await symlink(real, linkRoot);
-    tempDirs.push(linkRoot);
+    removeAfterTest(linkRoot);
     await mkdir(path.join(real, USER_FOLDER), { recursive: true });
     await writeFile(path.join(real, USER_FOLDER, 'export.zip'), 'bytes');
 
@@ -676,7 +659,7 @@ describe('service drop folders', () => {
     const real = await tempDir('ci-inbox-real-');
     const linkRoot = `${real}-link`;
     await symlink(real, linkRoot);
-    tempDirs.push(linkRoot);
+    removeAfterTest(linkRoot);
 
     const userDirReal = path.join(real, USER_FOLDER);
     await mkdir(path.join(userDirReal, 'reddit'), { recursive: true });

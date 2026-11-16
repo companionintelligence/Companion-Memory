@@ -1,22 +1,20 @@
 import {
   chmod,
   link,
-  mkdtemp,
   mkdir,
   readdir,
   readFile,
   realpath,
   rename,
-  rm,
   stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { PathOutsideImportRootsError } from '../importRoots';
 import {
   acquireLocalUnit,
@@ -45,20 +43,7 @@ async function withInbox<T>(dir: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Every folder `tempDir` makes, removed after each test whether it passed or not. */
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
-async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
-
-  tempDirs.push(dir);
-
-  return dir;
-}
+const { make: tempDir } = tempDirsRemovedAfterEach();
 
 async function fixture(): Promise<{ inbox: string; scratch: string }> {
   const parent = await realpath(await tempDir('ci-acquire-'));

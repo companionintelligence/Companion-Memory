@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import type { Graph, ImportParams } from '../timeline';
 import { UberFileImporter } from '../uber';
 
@@ -11,22 +11,7 @@ const HEADER =
   'City,Product Type,Begin Trip Time,Begin Trip Address,Dropoff Address,' +
   'Begin Trip Lat,Begin Trip Lng,Distance (miles),Fare Amount,Fare Currency';
 
-/** Every folder `tempDir` makes, removed after each test whether it passed or not. */
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function tempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-
-  tempDirs.push(dir);
-
-  return dir;
-}
+const { makeSync: tempDir } = tempDirsRemovedAfterEach();
 
 // Write a throwaway trips_data.csv (the file the importer recognizes) and import it.
 async function importTrips(rows: string[]) {

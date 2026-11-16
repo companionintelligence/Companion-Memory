@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import '../../datasources';
 import type { EmittedGraph } from '../../datasources/__tests__/support/emitted';
 import { allDataSources } from '../../datasources/registry';
@@ -38,20 +38,10 @@ const READY_IMPORTERS = Array.from(
   .filter((name) => !EXCLUDED.has(name))
   .sort();
 
-/** Every folder `tempFile` makes, removed after each test whether it passed or not. */
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+const { makeSync: tempDir } = tempDirsRemovedAfterEach();
 
 function tempFile(contents: string | Buffer, name = 'garbage'): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-harden-'));
-
-  tempDirs.push(dir);
-  const filePath = path.join(dir, name);
+  const filePath = path.join(tempDir('ci-harden-'), name);
 
   fs.writeFileSync(filePath, contents);
 
