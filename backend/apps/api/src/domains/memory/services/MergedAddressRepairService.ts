@@ -21,6 +21,7 @@ import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import {
   ADDRESS_KEYS,
   ADDRESSES_FOLDED,
+  PERSON_MERGE_CHANGE_SOURCE,
   addressKey,
   addressPartKey,
   withFoldedAddresses,
@@ -29,8 +30,8 @@ import {
 /** The flat keys that hold an address's parts: the mirror keys less the one-line `address`. */
 const FLAT_ADDRESS_PARTS: readonly string[] = PERSON_ADDRESS_MIRROR_KEYS.filter((key) => key !== 'address');
 
-/** The `change_source` of the Change History row a person merge writes on the person it went into. */
-const MERGE_CHANGE_SOURCE = 'PersonMergeService.mergePeople';
+/** How far up a chain of rows merged on into one another the repair follows them. */
+const MAX_HOPS = 32;
 
 /** Long enough for pg-boss and the pool to settle after a deploy, as the boot sweeps elsewhere wait. */
 const BOOT_DELAY_MS = 30_000;
@@ -57,6 +58,12 @@ interface MergeBags {
    * Change History row; null for a merge from before merges recorded one.
    */
   merged: unknown;
+}
+
+/** Where a row a merge went into was merged on to, and when, from its own merge record. */
+export interface MergedOn {
+  target_id: string;
+  merged_at: Date;
 }
 
 /** An app edit of an address on the survivor, or on a row merged into it, as `ci.graph_deltas` holds it. */
@@ -99,20 +106,22 @@ export interface MergedAddressRepairResult {
  * hand after the merge stays off: an edit through the app writes a
  * `PersonService` row into `ci.graph_deltas` with the old and new address list,
  * or the old and new flat fields, and an address on the old side and not on the
- * new is left out. Only edits on the row the merge went into count, and on the
- * survivor once that row was merged into it: an edit on another person, before
- * the two were merged, removed nothing this merge brought. A flat-field edit
- * counts only against the source's flat address, and only when the merge's own
- * Change History row shows the merge left that address in the flat fields. An
- * address removed any other way (an import that rewrote the bag, a direct
- * database edit) leaves no such trace and comes back. An address removed by
- * hand that the person has again, or that another of its merges brings back,
- * is not left off either: its copy here only gives it the label it had.
+ * new is left out. Only edits on the row the merge went into count, and on
+ * each row it was merged on into once it got there, the survivor last: an edit
+ * on another person, before the two were merged, removed nothing this merge
+ * brought. A flat-field edit counts only against the source's flat address,
+ * and only when the merge's own Change History row shows the merge left that
+ * address in the flat fields. An address removed any other way (an import that
+ * rewrote the bag, a direct database edit) leaves no such trace and comes back.
+ * An address removed by hand that the person has again, or that another of its
+ * merges brings back, is not left off either: its copy here only gives it the
+ * label it had.
  *
- * Merges into the survivor itself are folded first, oldest first, then those
- * reached through a hop, which is the order the merges put the addresses
- * together: a hop's row brought its own merges' addresses along when it was
- * merged in.
+ * Merges are folded in the order their addresses reached the survivor, which
+ * is the order the merges put them together: a merge into the survivor itself
+ * at its own time, and one reached through a hop when its row was merged in
+ * (just after the merge that brought that row, whose own addresses came
+ * first), or after every other when no merge record says when.
  *
  * Each merge read is flagged `addressesFolded` in its `details`, whether
  * anything changed or not, so the repair runs once per merge: a second run
@@ -221,11 +230,12 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
     return result;
   }
 
-  /** Folds every standing merge into one person, in one transaction, in the order `repair` read them. */
+  /** Folds every standing merge into one person, in one transaction, in the order their addresses reached it. */
   private async repairPerson(
     merges: StandingMerge[],
   ): Promise<{ changed: boolean; leftOff: number; flagged: number }> {
     const { owner_user_id: ownerUserId, survivor_id: personId } = merges[0];
+    let read = 0;
 
     const outcome = await this.dataSource.transaction(async (em) => {
       // The bag as it is now, locked: an edit or a merge that commits meanwhile
@@ -283,25 +293,37 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
            ) merged ON TRUE
           WHERE m.owner_user_id = $1 AND m.merge_id = ANY($2::uuid[])
             AND NOT (m.details ? $3)`,
-        [ownerUserId, merges.map((merge) => merge.merge_id), ADDRESSES_FOLDED, MERGE_CHANGE_SOURCE],
+        [ownerUserId, merges.map((merge) => merge.merge_id), ADDRESSES_FOLDED, PERSON_MERGE_CHANGE_SOURCE],
       );
       const bagsOf = new Map(bags.map((bag) => [bag.merge_id, bag]));
+      read = bags.length;
 
       // A merge reached through a hop went into a row that was itself merged
-      // in later, and an address removed by hand on that row is as removed.
-      const people = [...new Set([personId, ...merges.map((merge) => merge.target_id)])];
-      const hopRows = people.filter((id) => id !== personId);
-      const hoppedAt = hopRows.length > 0 ? await this.mergedAwayAt(em, ownerUserId, hopRows) : new Map();
+      // in later, maybe through further rows, and an address removed by hand on
+      // any of them while it held the merge's addresses is as removed.
+      const hops = await this.mergedOn(
+        em,
+        ownerUserId,
+        personId,
+        merges.map((merge) => merge.target_id),
+      );
+      const people = [
+        ...new Set([
+          personId,
+          ...merges.map((merge) => merge.target_id),
+          ...[...hops.values()].map((hop) => hop.target_id),
+        ]),
+      ];
       const since = new Date(Math.min(...merges.map((merge) => merge.created_at.getTime())));
       const edits = await this.addressEdits(em, ownerUserId, people, since);
-      const removals = merges.map((merge) => {
+      const removals = foldOrder(merges, personId, hops).map((merge) => {
         const bag = bagsOf.get(merge.merge_id);
 
         return bag && typeof bag.snapshot === 'object' && bag.snapshot !== null
           ? {
               bag,
               removed: removedByHand(
-                editsSinceMerge(edits, merge, personId, hoppedAt.get(merge.target_id) ?? null),
+                editsSinceMerge(edits, merge, personId, hops),
                 shownByMerge(bag.snapshot, bag.merged),
               ),
             }
@@ -398,28 +420,45 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
       }
     }
 
-    return { ...outcome, flagged: merges.length };
+    // Only the merges this run read: one another run flagged meanwhile is its count.
+    return { ...outcome, flagged: read };
   }
 
   /**
-   * When each of `rowIds`, rows a merge went into that were merged on later,
-   * stopped being a person of its own: its own merge's time. A row tombstoned
-   * without a merge record has none.
+   * Where each of `rowIds`, rows a merge went into, was merged on to and when,
+   * and so on up the chain to `personId`, from the rows' own merge records. A
+   * row tombstoned without a merge record has none, and the chain stops there.
    */
-  private async mergedAwayAt(
+  private async mergedOn(
     em: EntityManager,
     ownerUserId: string,
+    personId: string,
     rowIds: string[],
-  ): Promise<Map<string, Date>> {
-    const rows: Array<{ entity_id: string; merged_at: Date }> = await em.query(
-      `SELECT source_entity_id AS entity_id, max(created_at) AS merged_at
-         FROM ci.entity_merges
-        WHERE owner_user_id = $1 AND source_entity_id = ANY($2::uuid[])
-        GROUP BY source_entity_id`,
-      [ownerUserId, rowIds],
-    );
+  ): Promise<Map<string, MergedOn>> {
+    const hops = new Map<string, MergedOn>();
+    const asked = new Set<string>([personId]);
+    let pending = [...new Set(rowIds)].filter((id) => !asked.has(id));
 
-    return new Map(rows.map((row) => [row.entity_id, row.merged_at]));
+    for (let depth = 0; pending.length > 0 && depth < MAX_HOPS; depth += 1) {
+      pending.forEach((id) => asked.add(id));
+
+      const rows: Array<{ entity_id: string } & MergedOn> = await em.query(
+        `SELECT DISTINCT ON (source_entity_id)
+                source_entity_id AS entity_id, target_entity_id AS target_id, created_at AS merged_at
+           FROM ci.entity_merges
+          WHERE owner_user_id = $1 AND source_entity_id = ANY($2::uuid[])
+          ORDER BY source_entity_id, created_at DESC`,
+        [ownerUserId, pending],
+      );
+
+      for (const row of rows) {
+        hops.set(row.entity_id, { target_id: row.target_id, merged_at: row.merged_at });
+      }
+
+      pending = [...new Set(rows.map((row) => row.target_id))].filter((id) => !asked.has(id));
+    }
+
+    return hops;
   }
 
   /** The address edits in the app of any of `personIds` since `since`, oldest first. */
@@ -495,26 +534,88 @@ export function removedByHand(
 }
 
 /**
+ * The rows that held the addresses `merge` brought, each with the time from
+ * which it held them: the row the merge went into from the merge on, then each
+ * row it was merged on into (`hops`) from that merge on, `personId` last. With
+ * no record of a hop, `personId` holds them from the last time known. `joined`
+ * is when they reached `personId`, null when no record says.
+ */
+function rowsHolding(
+  merge: { target_id: string; created_at: Date },
+  personId: string,
+  hops: ReadonlyMap<string, MergedOn>,
+): { from: Map<string, Date>; joined: Date | null } {
+  const from = new Map<string, Date>();
+  let row = merge.target_id;
+  let since = merge.created_at;
+
+  while (row !== personId && !from.has(row)) {
+    from.set(row, since);
+
+    const hop = hops.get(row);
+    if (!hop) {
+      if (!from.has(personId)) {
+        from.set(personId, since);
+      }
+
+      return { from, joined: null };
+    }
+
+    since = hop.merged_at > since ? hop.merged_at : since;
+    row = hop.target_id;
+  }
+
+  if (!from.has(personId)) {
+    from.set(personId, since);
+  }
+
+  return { from, joined: row === personId ? since : null };
+}
+
+/**
  * The edits that can have removed an address `merge` brought: those on the row
- * it went into after the merge, and, when that row was merged on into
- * `personId` later (at `hoppedAt`, when known), those on `personId` from then
- * on. An edit on another row merged into the person, or on `personId` while the
- * merge's row was still a person of its own, is about addresses this merge
- * never put there.
+ * it went into after the merge, and, when that row was merged on (through
+ * `hops`, when known) into `personId` later, those on each row on the way from
+ * when it took the addresses on. An edit on another row merged into the person,
+ * or on `personId` while the merge's row was still a person of its own, is
+ * about addresses this merge never put there.
  */
 export function editsSinceMerge(
   edits: AddressEdit[],
   merge: { target_id: string; created_at: Date },
   personId: string,
-  hoppedAt: Date | null,
+  hops: ReadonlyMap<string, MergedOn>,
 ): AddressEdit[] {
-  const joined = hoppedAt != null && hoppedAt > merge.created_at ? hoppedAt : merge.created_at;
+  const { from } = rowsHolding(merge, personId, hops);
 
-  return edits.filter((edit) =>
-    edit.entity_id === merge.target_id
-      ? edit.changed_at > merge.created_at
-      : edit.entity_id === personId && edit.changed_at > joined,
+  return edits.filter((edit) => {
+    const after = from.get(edit.entity_id);
+
+    return after != null && edit.changed_at > after;
+  });
+}
+
+/**
+ * `merges` in the order their addresses reached `personId`: a merge into it at
+ * its own time, one through a hop when its row was merged in, and one whose hop
+ * no record dates after all the others. Merges that reached it at once keep
+ * their order in `merges`, where a merge into the person comes before those
+ * reached through a row it brought, as that row's own addresses came first.
+ */
+export function foldOrder<T extends { target_id: string; created_at: Date }>(
+  merges: T[],
+  personId: string,
+  hops: ReadonlyMap<string, MergedOn>,
+): T[] {
+  const reached = new Map(
+    merges.map((merge) => [merge, rowsHolding(merge, personId, hops).joined?.getTime() ?? Infinity]),
   );
+
+  return [...merges].sort((a, b) => {
+    const [x, y] = [reached.get(a)!, reached.get(b)!];
+
+    return x === y ? 0 : x < y ? -1 : 1;
+  });
 }
 
 /**

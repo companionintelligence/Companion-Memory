@@ -293,10 +293,12 @@ export class PlaceService {
     const placeId = input.placeId?.trim() || null;
 
     // 1. Provider place_id is the primary identity when available: venue
-    // renames and name variants converge on the same row.
+    // renames and name variants converge on the same row. A place merged into
+    // another keeps its own place_id unless the kept one took it, and stands for
+    // the kept place: the resolution lands there, as Places shows only that one.
     if (placeId) {
       const byPlaceId: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-        `SELECT entity_id
+        `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id
            FROM ci.entities
           WHERE entity_type = 'Location'
             AND owner_user_id = $1
@@ -384,9 +386,10 @@ export class PlaceService {
     );
 
     // Read back the canonical row (whether we inserted or hit a conflict).
-    // Predicate matches entities_location_snap_dedup_uniq.
+    // Predicate matches entities_location_snap_dedup_uniq, which keeps a place
+    // merged into another while it holds its pin: that one resolves to the kept place.
     const rows: Array<{ entity_id: string; was_new: boolean }> = await this.placeRepository.manager.query(
-      `SELECT entity_id, entity_id = $1 AS was_new
+      `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id, entity_id = $1 AS was_new
          FROM ci.entities
         WHERE entity_type = 'Location'
           AND owner_user_id = $2
@@ -406,7 +409,7 @@ export class PlaceService {
       // so resolve it by place_id rather than failing the whole resolution.
       if (placeId) {
         const winner: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-          `SELECT entity_id
+          `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id
              FROM ci.entities
             WHERE entity_type = 'Location'
               AND owner_user_id = $1
@@ -550,12 +553,11 @@ export class PlaceService {
     // by hand, or a tighter one from an earlier resolution, is never replaced
     // by a provider box.
     //
-    // Live places only. The lookups above can land on a place merged into
-    // another (a merged-away place keeps its own place_id unless the kept one
-    // took it), and a merge takes the pin off the place the kept one took it
-    // from. Filling that gap would hand the pin back to the merged-away place,
-    // in the cell the kept place now holds, and the unique snap-cell index
-    // would fail the whole resolution.
+    // Live places only. The lookups above resolve a place merged into another
+    // to the kept one, and this guards the rest: a merge takes the pin off the
+    // place the kept one took it from. Filling that gap would hand the pin back
+    // to the merged-away place, in the cell the kept place now holds, and the
+    // unique snap-cell index would fail the whole resolution.
     const bounds = normalizeBounds(rawBounds);
 
     await this.placeRepository.manager.query(
@@ -660,11 +662,13 @@ export class PlaceService {
 
       // Hang the place under the most specific admin node (never itself — an
       // admin-level place can resolve to its own hierarchy node).
+      // Never a place merged into another: the merge left it without a parent.
       if (parentId && parentId !== entityId) {
         await this.placeRepository.manager.query(
           `UPDATE ci.entities
               SET parent_place_id = $3
-            WHERE entity_id = $1 AND owner_user_id = $2 AND parent_place_id IS NULL`,
+            WHERE entity_id = $1 AND owner_user_id = $2 AND parent_place_id IS NULL
+              AND merged_into_entity_id IS NULL`,
           [entityId, context.userId, parentId],
         );
       }
@@ -742,6 +746,32 @@ export class PlaceService {
       }
     }
 
+    // Live rows only, as entities_admin_place_uniq keys them: a place merged
+    // into another can share the key with the live node. Read first, so a node
+    // that already exists (nearly every call) costs one statement.
+    const liveNode = async (): Promise<string | null> => {
+      const rows: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
+        `SELECT entity_id
+           FROM ci.entities
+          WHERE entity_type = 'Location'
+            AND owner_user_id = $1
+            AND place_kind = $2
+            AND lower(btrim(name)) = lower(btrim($3))
+            AND COALESCE(parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+            AND merged_into_entity_id IS NULL
+          LIMIT 1`,
+        [context.userId, kind, name, parentId],
+      );
+
+      return rows[0]?.entity_id ?? null;
+    };
+
+    const live = await liveNode();
+    if (live) {
+      return live;
+    }
+
     // A place merged into another no longer holds the key, so when only such a
     // place matches, the insert below would mint a new live node: the duplicate
     // the person merged away, back in Places. Follow it to the place it was
@@ -790,27 +820,14 @@ export class PlaceService {
       [newId, context.userId, name, JSON.stringify({ source: 'geocode_hierarchy' }), kind, parentId],
     );
 
-    // Live rows only, as entities_admin_place_uniq keys them: a place merged
-    // into another can share the key with the live node.
-    const rows: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-      `SELECT entity_id
-         FROM ci.entities
-        WHERE entity_type = 'Location'
-          AND owner_user_id = $1
-          AND place_kind = $2
-          AND lower(btrim(name)) = lower(btrim($3))
-          AND COALESCE(parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
-              = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-          AND merged_into_entity_id IS NULL
-        LIMIT 1`,
-      [context.userId, kind, name, parentId],
-    );
+    // Whether this call inserted it or another won the race.
+    const resolved = await liveNode();
 
-    if (rows.length === 0) {
+    if (!resolved) {
       throw new Error(`findOrCreateAdminPlace: failed to resolve ${kind} "${name}"`);
     }
 
-    return rows[0].entity_id;
+    return resolved;
   }
 
   /**
@@ -1803,9 +1820,13 @@ export class PlaceService {
     // One transaction, so the merged-away places never go without the place.
     // The place is locked first: a merge into it locks it too, so one that is
     // committing new merged-away places either lands before the delete below
-    // reads them or waits until the place is gone.
-    await this.placeRepository.manager.transaction(async (manager) => {
-      await manager.query(`SELECT entity_id FROM ci.entities WHERE entity_id = $1 FOR UPDATE`, [id]);
+    // reads them or waits until the place is gone. Its parent is read under
+    // the lock: such a merge can have given it one since the read above.
+    const mergedIds = await this.placeRepository.manager.transaction(async (manager) => {
+      const [locked]: Array<{ parent_place_id: string | null }> = await manager.query(
+        `SELECT parent_place_id FROM ci.entities WHERE entity_id = $1 FOR UPDATE`,
+        [id],
+      );
 
       // The places merged into this one go with it, as in `purge`, at any depth
       // of a legacy chain. merged_into_entity_id is ON DELETE SET NULL too, and
@@ -1830,7 +1851,7 @@ export class PlaceService {
          SELECT entity_id FROM family WHERE entity_id <> $1`,
         [id, ownerUserId, [...GRAPH_ENTITY_TYPES.place]],
       );
-      const mergedIds = merged.map((row) => row.entity_id);
+      const duplicateIds = merged.map((row) => row.entity_id);
 
       // Re-parent children to the deleted node's own parent BEFORE deleting.
       // parent_place_id is ON DELETE SET NULL, and nulling an admin child's
@@ -1845,11 +1866,11 @@ export class PlaceService {
           WHERE parent_place_id = ANY($1::uuid[])
             AND NOT (entity_id = ANY($1::uuid[]))
             AND ($2::uuid IS NULL OR owner_user_id = $2)`,
-        [[id, ...mergedIds], ownerUserId, place.parentPlaceId ?? null],
+        [[id, ...duplicateIds], ownerUserId, locked?.parent_place_id ?? null],
       );
 
-      if (mergedIds.length > 0) {
-        await manager.query(`DELETE FROM ci.entities WHERE entity_id = ANY($1::uuid[])`, [mergedIds]);
+      if (duplicateIds.length > 0) {
+        await manager.query(`DELETE FROM ci.entities WHERE entity_id = ANY($1::uuid[])`, [duplicateIds]);
       }
 
       await manager.getRepository(PlaceEntity).delete({
@@ -1861,11 +1882,14 @@ export class PlaceService {
           },
         }),
       });
+
+      return duplicateIds;
     });
 
-    await this.eventService.send(PlaceRemovedEvent, {
-      placeId: id,
-    });
+    // The merged-away places went too, as `purge` announces them.
+    for (const placeId of [id, ...mergedIds]) {
+      await this.eventService.send(PlaceRemovedEvent, { placeId });
+    }
 
     return true;
   }

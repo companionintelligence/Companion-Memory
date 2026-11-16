@@ -392,7 +392,8 @@ describeWithDb(`PlaceService — geocode hierarchy, in Postgres (${availability.
 
     // A later answer names the other place_id at the same spot. Filling the
     // merged-away place's missing pin put it in the kept place's cell, and
-    // the snap-cell index failed the whole resolution.
+    // the snap-cell index failed the whole resolution. The answer lands on
+    // the kept place, the one Places shows.
     await expect(
       service.findOrCreateForGeocode(owner, {
         name: 'Pine Cafe',
@@ -401,7 +402,7 @@ describeWithDb(`PlaceService — geocode hierarchy, in Postgres (${availability.
         placeId: 'hierarchy-test-other',
         components: null,
       }),
-    ).resolves.toBeDefined();
+    ).resolves.toEqual({ id: kept, created: false });
 
     const [row]: Array<{ has_point: boolean }> = await dataSource.query(
       `SELECT location_point IS NOT NULL AS has_point FROM ci.entities WHERE entity_id = $1`,

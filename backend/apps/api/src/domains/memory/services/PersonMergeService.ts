@@ -25,6 +25,9 @@ import { GraphDeltaWriter, mergeDeltaInputs } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
 import { withoutSyncStamps } from './PersonService';
 
+/** The `change_source` of the Change History rows a person merge writes. */
+export const PERSON_MERGE_CHANGE_SOURCE = 'PersonMergeService.mergePeople';
+
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
 export interface MergeCounts {
   identifiers: number;
@@ -205,7 +208,7 @@ export class PersonMergeService {
         mergeDeltaInputs({
           entityType: 'Person',
           ownerUserId,
-          changeSource: 'PersonMergeService.mergePeople',
+          changeSource: PERSON_MERGE_CHANGE_SOURCE,
           targetId,
           columns: {
             before: { name: target.name, description: target.description },
@@ -547,7 +550,7 @@ export class PersonMergeService {
       ownerUserId,
       sources,
       targetId,
-      changeSource: 'PersonMergeService.mergePeople',
+      changeSource: PERSON_MERGE_CHANGE_SOURCE,
       changeReason: 'person_merge.rescued_edge',
     };
     const sweptFrom = await sweepLeftoverEdges(em, this.graphDeltaWriter, { ...sweep, end: 'from' });
