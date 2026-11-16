@@ -142,15 +142,15 @@ correct: the run still ends red and nothing is released. `docs/CI.md`'s
 generated "Cut a release" block still says `--ref main` — it is wrong; see the
 hand-maintained note in that file.
 
-**A release is one `release.yml` run on the tag.** It calls `publish.yml`, creates
-the GitHub Release, builds Memory Desktop (`desktop-release.yml`) and the phone apps
+**A release is one `release.yml` run on the tag.** It calls `publish.yml`, creates the
+GitHub Release, builds Memory Desktop (`desktop-release.yml`) and the phone apps
 (`mobile-release.yml`, only when something they contain changed), then checks every
 platform with `scripts/release/release-check.mjs`. The desktop and phone apps take the
 server's version number (server 2026.11.17 ships Memory Desktop 2026.11.17). Before
-tagging, `ci.yml`, `migration-integrity-check.yml` and `desktop-build.yml` must be green
-at that commit. Steps, version rules and what stays manual: `docs/CI.md`, section
-"Release in one run". To see where a release has landed at any time, run
-`node scripts/release/release-check.mjs`.
+tagging, the gates `publish.yml`'s `GATED_WORKFLOWS` marks required, plus
+`desktop-build.yml`, must be green at that commit. Steps, version rules and what stays
+manual: `docs/CI.md`, section "Release in one run". To see where a release has landed at
+any time, run `node scripts/release/release-check.mjs`.
 
 **The release gate is a LIST now, not just `ci.yml`.** `verify-ci-passed` loops
 over a `GATED_WORKFLOWS` env block in `publish.yml` (`<workflow>:<required|advisory>`

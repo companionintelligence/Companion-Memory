@@ -973,8 +973,8 @@ jobs:
     # the `!= 'failure'` clauses, so only a real failure blocks the release.
     # `always()` is what lets this job run at all when a `needs` job was
     # skipped; without it, a skipped macOS lane would skip the release too. A
-    # cancelled run reports 'cancelled', which is likewise not 'failure' —
-    # deliberate: a cancel is an operator action, not a broken build.
+    # cancelled run reports 'cancelled', which is likewise not 'failure'. That
+    # is deliberate: a cancel is an operator action, not a broken build.
     #
     # `signing` must have succeeded: when it fails (a half-configured lane),
     # macos/windows are skipped as its dependents, and without this clause the

@@ -81,12 +81,16 @@ that directory to `PATH`.
 
 `release.yml` ships a server release to every place it goes, in one run: the
 images (`publish.yml`), the GitHub Release, Memory Desktop
-(`desktop-release.yml`), the phone apps (`mobile-release.yml`, then
-`testflight-distribute.yml` for the iOS testers) and, last, a check of every
-platform. It calls the same workflows you can still dispatch one at a time.
+(`desktop-release.yml`), the phone apps (`mobile-release.yml` once for iOS and
+once for Android, then `testflight-distribute.yml` for the iOS testers) and,
+last, a check of every platform. It calls the same workflows you can still
+dispatch one at a time. iOS and Android are separate steps, so an iOS build
+reaches TestFlight testers even when the Play upload fails.
 
 ```bash
-# 1. Test the commit you will tag and wait for all three to pass. The gates
+# 1. Test the commit you will tag and wait for these to pass: the gates that
+#    publish.yml's GATED_WORKFLOWS marks required (ci.yml and
+#    migration-integrity-check.yml today) plus desktop-build.yml. The gates
 #    match runs by commit, so main works as long as it hasn't moved.
 gh workflow run ci.yml --repo companionintelligence/CI-Server --ref main
 gh workflow run migration-integrity-check.yml --repo companionintelligence/CI-Server --ref main
@@ -96,8 +100,8 @@ git tag v2026.11.17 <sha> && git push origin v2026.11.17
 gh workflow run release.yml --repo companionintelligence/CI-Server --ref v2026.11.17
 ```
 
-Its first job looks for those three runs and stops in a minute if one is
-missing. If a lane fails, "Re-run failed jobs" retries it and keeps the lanes
+Its first job reads the required list from `GATED_WORKFLOWS`, looks for those
+runs and `desktop-build.yml`, and stops in a minute if one is missing. If a lane fails, "Re-run failed jobs" retries it and keeps the lanes
 that passed.
 
 **Version numbers.** The desktop and phone apps take the server's version.
@@ -116,8 +120,10 @@ old 0.1.x desktop and 1.0.x phone numbers can't be undone.
 **Phone apps rebuild only when they would change.** They bundle the web build,
 so on the default `phones=auto` the run builds them only when
 `frontend/apps/web`, `frontend/packages`, `frontend/apps/android`,
-`frontend/apps/ios` or `mobile-release.yml` changed since the last phone
-release. Each phone release tags its commit `mobile-v<server version>`, which
+`frontend/apps/ios`, the root `package.json`, `yarn.lock`, `.yarnrc.yml` or
+`mobile-release.yml` changed since the last phone release. The root dependency
+files are in the list because they decide which library versions the web build
+bundles; a dependency-only release still reaches the phones. Each phone release tags its commit `mobile-v<server version>`, which
 is what the next run compares against. `phones=always` and `phones=skip`
 override it. The desktop app has no such shortcut: it runs the server images
 it was built with, so it needs a build for every server release.
@@ -133,7 +139,9 @@ each of those places which version it has and prints one table; add
 `--version 2026.11.17` for an older release and `PLAY_KEY_FILE=<key.json>` for
 the Play rows. Run it from a checkout with tags fetched. In the workflow the
 CI-Marketplace rows show SKIP, because a workflow token can't read another
-private repository; locally `gh` can.
+private repository; locally `gh` can. It exits 1 when a place is behind and 3
+when the script itself fails, so the workflow's check job fails on a crash
+instead of reporting an empty table.
 
 **A lane without its signing secrets shows as skipped.** The macOS and Windows
 desktop jobs and the iOS and Android phone jobs used to run, skip every step

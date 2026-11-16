@@ -10,6 +10,7 @@ import {
   formatMarkdown,
   imagesInPublishScript,
   isReleaseVersion,
+  livePlayReleases,
   maxVersion,
   missingFiles,
   normalizeVersion,
@@ -137,4 +138,22 @@ test('readFileFromDeb reads image-tag.txt out of data.tar.gz', () => {
 test('formatMarkdown bolds failing statuses and escapes pipes', () => {
   const md = formatMarkdown([{ where: 'a|b', expected: '1', found: '0', status: 'BEHIND', note: '' }]);
   assert.match(md, /\| a\\\|b \| 1 \| 0 \| \*\*BEHIND\*\* \|/);
+});
+
+test('livePlayReleases keeps what each track serves, staged rollouts included', () => {
+  const releases = [
+    { track: 'production', status: 'completed', name: '2026.11.11', codes: ['460100'] },
+    { track: 'production', status: 'inProgress', name: '2026.11.17', codes: ['468000'] },
+    { track: 'internal', status: 'draft', name: '2026.11.18', codes: ['469000'] },
+    { track: 'beta', status: 'halted', name: '2026.11.12', codes: ['461000'] },
+  ];
+  assert.deepEqual(
+    livePlayReleases(releases).map((r: { track: string; name: string }) => `${r.track} ${r.name}`),
+    ['production 2026.11.17'],
+  );
+  assert.deepEqual(livePlayReleases([{ track: 'internal', status: 'draft', name: 'x', codes: ['1'] }]), []);
+});
+
+test('versionStatus treats a release candidate as behind the release', () => {
+  assert.equal(versionStatus('2026.11.17', '2026.11.17-rc1'), 'BEHIND');
 });
