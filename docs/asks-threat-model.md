@@ -18,22 +18,34 @@
 > threat analysis itself is unaffected:** every ceiling, tier, exemption and default it argues
 > about is unchanged.
 >
-> **Δ 2026-11-15 — three passages re-read at `744ace035`.** In T2, #2442 (merged 2026-08-30
+> **Δ 2026-11-15 — four passages re-read at `744ace035`.** In T1, #2414 (merged 2026-08-27
+> UTC, in v2026.8.26 and every later release) added `ci.household_tiers`: an owner can give
+> another local account any tier, `stranger` included, with `setHouseholdTier`, and
+> `resolveTier` uses that tier. The Grant Manager offers the same choice beside a local account
+> that holds a grant in force. A local asker with no tier set still gets `household`. The same
+> PR added tests that pin the household exemption (D6). T1's
+> *Every local asker is `household`, unconditionally* and
+> *There is no way to demote a housemate* paragraphs, its *Mutation evidence*, the
+> *Zero current tests break* clause in its proposal 1 and T6's
+> *The safest tier is unreachable* bullet describe `fe5075a79`, as do the *cannot be demoted*
+> and *breaks no test* clauses in §12's decision 1 and the *therefore receive `household`*
+> clause in decision 2. T1's proposal 5 is done. In T2, #2442 (merged 2026-08-30
 > UTC, in every v2026.11 release) gave `redacted` its own availability branch, so a `trusted`
 > peer gets free slots only, shrunk inward to a 30-minute grid, and no busy intervals (D2).
 > T2's *So `redacted` is not a redaction for this archetype* paragraph, its *Latent code bug*
 > sentence and its *Mutation evidence* describe `fe5075a79`. T2's proposals 1 and 2 are done,
 > and proposal 3 is done for `trusted` only: a `family` peer still gets unrounded instants. The
-> Δ 2026-08-23 line that the threat analysis is unaffected stopped holding for T2 when #2442
-> merged: the tier ceilings are the same, but the `redacted` rung now returns less for
+> Δ 2026-08-23 line that the threat analysis is unaffected stopped holding for T1 when #2414
+> merged and for T2 when #2442 merged: the tier ceilings are the same, but an owner can now set
+> a local account's tier, and the `redacted` rung now returns less for
 > availability. In T5, both rate limiters have kept their windows in `ConsumptionStore`
 > (Postgres by default) since #2475, so T5's proposal 2 is done, and
 > `AskRateLimitService.consumeDisclosureBudget` (#3066) has no caller outside its tests. In T6,
 > `peers.audience` gates only Portal-token asks: a signed `did:keri:D<x>` or `did:key` ask
 > needs `peers.memoryEndpoint` and a link for that keyid instead. The references in the T5 and
 > T6 passages (T5's *Rate limits bound rate* and *There is no total*, and T6's
-> *Inbound federation is off* bullet) were read at that commit. T2's file:line references are
-> still those of `fe5075a79`, and the rest of T2, T5 and T6 was not re-read.
+> *Inbound federation is off* bullet) were read at that commit. T1's and T2's file:line
+> references are still those of `fe5075a79`, and the rest of T1, T2, T5 and T6 was not re-read.
 >
 > **This document is not reassuring, and that is the point.** A threat model whose conclusion
 > is "we are fine" has not been written, it has been performed. What follows names the
@@ -70,7 +82,7 @@ two of the six are inherent to the product concept and can only be mitigated.
 
 | # | Threat | Class | Worst case today |
 |---|---|---|---|
-| T1 | Coercion / intimate-partner abuse | Design gap | The person who shares the appliance is by construction the most privileged asker, with no ceiling, no cooling period, and no way to demote them |
+| T1 | Coercion / intimate-partner abuse | Design gap | The person who shares the appliance is by default the most privileged asker, with no ceiling and no cooling period. The owner can demote them |
 | T2 | Stalking via availability | Design gap (+ under-classification) | A `family` peer receives real calendar interval boundaries, and a `trusted` peer free slots on a 30-minute grid, over 31-day windows, auto-answered, 14 400 times a day |
 | T3 | Social engineering at the consent moment | Code bug + design gap | Unbounded asker-authored text renders directly above the Approve button |
 | T4 | Prompt injection into the owner's archive | **Not present today** | Traced end to end; no LLM is on the ask path. Two named tripwires would create one |
@@ -90,8 +102,8 @@ is not its owner.* That framing is the whole risk.
 
 | Actor | How they authenticate | Tier they receive |
 |---|---|---|
-| Local user on the same box | `JwtOrApiKeyAuthGuard` | `household` — unconditionally (`AskResolver.ts:744-750`) |
-| Portal-brokered principal | `PortalTokenService.verifyAndProvision` (`JwtOrApiKeyAuthGuard.ts:35`) | `household` — a JIT-provisioned local account is indistinguishable from a housemate |
+| Local user on the same box | `JwtOrApiKeyAuthGuard` | ~~`household` — unconditionally (`AskResolver.ts:744-750`)~~ `household` unless the owner has set another tier for that account (#2414) |
+| Portal-brokered principal | `PortalTokenService.verifyAndProvision` (`JwtOrApiKeyAuthGuard.ts:35`) | `household` unless the owner has set another tier for that account — a JIT-provisioned local account is indistinguishable from a housemate |
 | Linked peer box | Portal OIDC token, attributed by `(iss,sub)` | The tier the owner assigned the link, default `peer` (`PeerLinkService.ts:65`) |
 | Unlinked caller | Verified token, no link | Refused; rate-limited before the link lookup (`PeerAskController.ts:59-61`) |
 
@@ -178,7 +190,9 @@ be assigned to a remote box.
 `household` (`PeerLinkEntity.ts:34`, with a compile-time proof at `:51-59` that it stays
 excluded), and a local asker has no peer link at all — so there is no row, no column and no
 mutation that could store "this housemate is only `trusted`". The tier is a `return`
-statement.
+statement. *(Δ 2026-11-15: this paragraph and the `resolveTier` excerpt above describe
+`fe5075a79`. Since #2414 an owner can set the tier of another local account, and one with no
+tier set is still `household`.)*
 
 **The only private lever is a `block` grant, and it is unreachable from the UI.** A block
 grant *is* genuinely private — the asker cannot distinguish `declined` from `pending`
