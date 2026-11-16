@@ -27,7 +27,11 @@ public class InsightWidgetProvider extends MemoryWidgetProvider {
             return;
         }
 
-        String prediction = insight == null ? "" : insight.optString("prediction", "");
+        // optString hands back the text "null" for a JSON null, and the snapshot
+        // carries a null prediction until the forecast has been built.
+        String prediction = insight == null || insight.isNull("prediction")
+                ? ""
+                : insight.optString("prediction", "");
         double confidence = insight == null ? Double.NaN : insight.optDouble("confidence", Double.NaN);
         String confidenceText = !Double.isNaN(confidence) && !Double.isInfinite(confidence)
                 ? ((int) (Math.max(0, Math.min(1, confidence)) * 100)) + "% likely"

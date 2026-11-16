@@ -105,6 +105,20 @@ function safeLabel(value: unknown, maxLength = 72): string | null {
   return cleaned || null;
 }
 
+/**
+ * Whether the forecast has been built yet, so a slot's class means something.
+ *
+ * The forecast service answers before its first run has finished, with a
+ * placeholder class for every slot: COLD_START while nothing has run, or a
+ * pipeline step ("BOOTSTRAP:label", "NIGHTLY:train") over a cold-start
+ * baseline (`stillLearning`) while that first run is going. Printed, that read
+ * "Unsorted, 97% likely" on a new account. READY has a forecast. So does a
+ * later run over a model that is already built.
+ */
+function forecastBuilt(systemStatus: string, stillLearning: boolean): boolean {
+  return systemStatus === 'READY' || (systemStatus.includes(':') && !stillLearning);
+}
+
 function safeDate(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') {
     return null;
@@ -186,14 +200,23 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
     }
   }
 
-  const predictedClass = safeLabel(forecastBucket?.predictedL0, 48);
-  const matchingProbability =
-    forecastBucket?.l0Probs?.find((entry) => entry.label === predictedClass)?.probability ?? null;
+  const systemStatus = safeLabel(input.forecast?.systemStatus, 32) ?? 'UNKNOWN';
+  const stillLearning = input.forecast?.stillLearning === true;
+  // Nothing to name until the first run has built the forecast. Until then the
+  // snapshot carries no prediction and no likelihood: the Widgets card says the
+  // forecast is updating and the home-screen widgets say "No forecast yet".
+  const predictedClass = forecastBuilt(systemStatus, stillLearning)
+    ? safeLabel(forecastBucket?.predictedL0, 48)
+    : null;
+  // A likelihood belongs to the class it is for. With no class named there is
+  // nothing for it to describe, so a bucket without `predictedL0` carries none.
+  const l0Probs = predictedClass === null ? [] : (forecastBucket?.l0Probs ?? []);
+  const matchingProbability = l0Probs.find((entry) => entry.label === predictedClass)?.probability ?? null;
   const prediction =
     predictedClass && input.predictionLabel
       ? (safeLabel(input.predictionLabel(predictedClass), 48) ?? predictedClass)
       : predictedClass;
-  const probabilityEntries = (forecastBucket?.l0Probs ?? [])
+  const probabilityEntries = l0Probs
     .filter((entry) => typeof entry.probability === 'number' && Number.isFinite(entry.probability))
     .map((entry) => Math.max(0, Math.min(1, entry.probability as number)));
   const confidenceValue =
@@ -227,8 +250,8 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
       updatedAt: input.tasks ? (safeDate(input.tasksUpdatedAt) ?? generatedAt) : null,
     },
     insight: {
-      systemStatus: safeLabel(input.forecast?.systemStatus, 32) ?? 'UNKNOWN',
-      stillLearning: input.forecast?.stillLearning === true,
+      systemStatus,
+      stillLearning,
       prediction,
       confidence: confidenceValue === null ? null : Math.max(0, Math.min(1, confidenceValue)),
       forecastGeneratedAt,

@@ -231,12 +231,16 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
               <p className="text-xl font-semibold leading-snug">
                 {snapshot.insight.prediction ?? 'Forecast is updating'}
               </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {snapshot.insight.confidence === null
-                  ? 'Confidence not available'
-                  : `${Math.round(snapshot.insight.confidence * 100)}% likely`}
-                {snapshot.insight.stillLearning ? ' · still learning' : ''}
-              </p>
+              {/* No prediction until the first run has built the forecast; a
+                  likelihood under "Forecast is updating" would describe nothing. */}
+              {snapshot.insight.prediction !== null ? (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {snapshot.insight.confidence === null
+                    ? 'Confidence not available'
+                    : `${Math.round(snapshot.insight.confidence * 100)}% likely`}
+                  {snapshot.insight.stillLearning ? ' · still learning' : ''}
+                </p>
+              ) : null}
               {forecastStatus ? <p className="mt-2 text-xs text-muted-foreground">{forecastStatus}</p> : null}
             </>
           ) : (
