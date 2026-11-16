@@ -1,11 +1,15 @@
 # DIDComm Messaging v2.1
 
-> **Status (2026-11-05): a tested library, not yet a feature.** `backend/apps/api/src/domains/didcomm/`
+> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/didcomm/`
 > packs and unpacks [DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/)
 > envelopes (authcrypt, anoncrypt, signed, and the combinations), routes them through mediators, and
-> speaks the small protocols DIDComm itself defines. It is **not** registered with Nest, has **no
-> HTTP route or socket**, writes **no database rows**, makes **no network request** and is imported
-> by **nothing else** in the API. [What is not built](#what-is-not-built) lists the rest and
+> speaks the small protocols DIDComm itself defines. Since Companion-Memory#3439 (merged 2026-11-12, not
+> yet in a release) `DidcommModule` is registered with Nest: `GET /didcomm/did`, `POST /didcomm/oob`,
+> `POST /didcomm/oob/parse` and `POST /didcomm/message` answer `404` unless `didcomm.messaging`
+> (`ENABLE_DIDCOMM_MESSAGING`, default false) is on. With it on they use a `did:peer` identity the
+> process generates at first use, an in-memory replay guard, and a resolver for `did:key` and
+> `did:peer` only. The module writes **no database rows** and makes **no network request**, and nothing
+> else in the API calls it. [What is not built](#what-is-not-built) lists the rest and
 > [How it is meant to be wired](#how-it-is-meant-to-be-wired) says what connecting it takes.
 > The decision and its history are in
 > [ADR-0018](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0018-didcomm-messaging-alongside-keri.md).
@@ -59,8 +63,8 @@ new key material. It is a statement about the key and not about KERI.
 | `agent.ts`, `replayGuard.ts` | One DID, a handler table, replay protection | tests |
 | `identity.ts`, `secrets.ts` | `did:key` and `did:peer` identities with their keys; the `SecretsResolver` seam | tests |
 
-`yarn jest src/domains/didcomm` runs 609 tests in 22 suites in about two seconds. **No new dependency
-was added**: everything uses `node:crypto`. Statement coverage is 98% and branch coverage 96% (the
+`yarn jest src/domains/didcomm` runs 716 tests in 25 suites in about two seconds. **No new dependency
+was added**: everything uses `node:crypto`. Statement coverage is 98% and branch coverage 95% (the
 barrel, which only re-exports, excluded). A mutation check planted twenty defects in the security
 checks, one at a time (apv, the 1PU tag, the small-order secret, the on-curve check, the authentication
 relationship, `from`/`to`/signer consistency, expiry, nesting, the replay guard, cross-DID references,
@@ -223,6 +227,12 @@ Gate, in this order, before anything is connected:
    Companion presents (`didKeyIdentityFromEd25519Seed` of the device key is the no-new-key answer).
 4. **A shared replay store** if more than one process receives.
 5. **A flag that defaults off**, and Hub security review.
+
+Companion-Memory#3439 registered the routes listed under *Status* behind gate 5's flag
+(`didcomm.messaging`). The rest of gate 1, gates 2 to 4 and the Hub security review are still open: the
+routes use an identity generated in the process rather than the device key, and a process-local replay
+guard. `POST /didcomm/message` also differs from the binding above: it answers with a JSON body that
+carries the agent's packed replies, where the binding answers `202` with none.
 
 ### Carrying Trust Tasks
 

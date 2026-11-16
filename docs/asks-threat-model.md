@@ -18,12 +18,14 @@
 > threat analysis itself is unaffected:** every ceiling, tier, exemption and default it argues
 > about is unchanged.
 >
-> **Δ 2026-11-08 — two passages re-read at `136937d65`.** In T5, both rate limiters have kept
+> **Δ 2026-11-15 — two passages re-read at `744ace035`.** In T5, both rate limiters have kept
 > their windows in `ConsumptionStore` (Postgres by default) since #2475, so T5's proposal 2 is
 > done, and `AskRateLimitService.consumeDisclosureBudget` (#3066) has no caller outside its
 > tests. In T6, `peers.audience` gates only Portal-token asks: a signed `did:keri:D<x>` or
 > `did:key` ask needs `peers.memoryEndpoint` and a link for that keyid instead. The references
-> in those two passages were read at that commit.
+> in those two passages (T5's *Rate limits bound rate* and *There is no total*, and T6's
+> *Inbound federation is off* bullet) were read at that commit; the rest of T5 and T6 was not
+> re-read.
 >
 > **This document is not reassuring, and that is the point.** A threat model whose conclusion
 > is "we are fine" has not been written, it has been performed. What follows names the
@@ -580,7 +582,8 @@ So the ceiling is **28 800 local asks and 14 400 peer asks per day**.
 **There is no total.** `AskRateLimitService.consumeDisclosureBudget` (#3066) keeps a rolling
 24-hour disclosure count per `(owner, asker)` in the same store, but nothing outside its own
 tests calls it. `AskAuditService.listForResponder`
-(`AskAuditService.ts:63-70`) reads every row with no aggregation. The audit **has the data
+(`AskAuditService.ts:165`) reads at most 5 000 rows (`MAX_AUDIT_ROWS`), newest first, and what
+folds them (`summaryForResponder`, `usageByGrant`) only reports. The audit **has the data
 to compute a budget** — `disclosed_entities`, `disclosed_count`, `backing_entities`,
 `consent_basis`, `peer_handle` (`AskAuditEntity.ts:18-80`) — and nothing consumes it.
 

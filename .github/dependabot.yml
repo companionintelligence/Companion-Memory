@@ -66,13 +66,6 @@ updates:
         versions: [">=2.0.0"]
       - dependency-name: "@powersync/attachments"
         versions: [">=3.0.0"]
-      # IdentiKey pins @noble/post-quantum exactly (docs/identikey.md;
-      # crypto/mlDsa.ts:15-17). 0.5 and later are ESM-only and reorder sign/verify
-      # to (msg, key). The NobleMlDsa cast in mlDsa.ts hides that from tsc, and no
-      # workflow runs on a Dependabot PR. Move it by hand: widen the
-      # jest.config.mjs ESM allow-list and run mlDsa.spec.ts.
-      - dependency-name: "@noble/post-quantum"
-        versions: [">=0.5.0"]
     groups:
       minor-patch:
         update-types:

@@ -194,13 +194,22 @@ describe('verifyEd25519 refuses a small-order or non-canonical key', () => {
       type: 'spki',
     });
 
-  it.each(KEYLESS_SIGNATURES)(
-    'refuses %s under the identity key, which OpenSSL alone accepts for every message',
-    (_name, signature) => {
-      // The control: without the key check, this signature verifies.
-      expect(cryptoVerify(null, message, spki(IDENTITY_KEY), signature)).toBe(true);
+  // node:crypto accepted these signatures for every message until nodejs/node#64026 (first in Node
+  // 24.19.0 and 26.5.0, not in 22.x), which refuses a small-order key or R itself. The control, that
+  // they verify without this module's key check, can only be shown on a Node from before that change.
+  const nodeAcceptsKeyless = cryptoVerify(null, message, spki(IDENTITY_KEY), KEYLESS_SIGNATURES[0][1]);
 
+  it.each(KEYLESS_SIGNATURES)(
+    'refuses %s under the identity key, which node:crypto accepted for every message before nodejs/node#64026',
+    (_name, signature) => {
       expect(verifyEd25519(IDENTITY_KEY, message, signature)).toBe(false);
+    },
+  );
+
+  (nodeAcceptsKeyless ? it.each(KEYLESS_SIGNATURES) : it.skip.each(KEYLESS_SIGNATURES))(
+    'CONTROL: on a Node from before nodejs/node#64026, node:crypto alone accepts %s under the identity key',
+    (_name, signature) => {
+      expect(cryptoVerify(null, message, spki(IDENTITY_KEY), signature)).toBe(true);
     },
   );
 

@@ -1,9 +1,13 @@
 # Verifiable Trust Community (VTC) credentials
 
-> **Status (2026-11-05): a tested library, not yet a feature.** `backend/apps/api/src/domains/vtc/`
+> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/vtc/`
 > issues, reads and checks credentials in the formats an [OpenVTC](https://github.com/OpenVTC/verifiable-trust-infrastructure)
-> Verifiable Trust Community documents. It is **not** registered with Nest, has **no HTTP route**, writes
-> **no database rows** and is imported by **nothing else** in the API. It has **not been run against
+> Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12, not yet in a
+> release) `VtcModule` is registered with Nest and serves `POST /vtc/verify` and
+> `POST /vtc/status-list/evaluate` behind `vtc.credentials` (`ENABLE_VTC_CREDENTIALS`, default false);
+> with the flag off both answer `404`. They check a credential and a status list that the caller
+> presents, accept proofs from `did:key` issuers only (configuration pins no community), make no
+> outbound request and write **no database rows**; nothing else in the API calls the module. It has **not been run against
 > OpenVTC's software**, and the status list OpenVTC's live test community serves is **refused today**,
 > and so, by OpenVTC's source, are the credentials any community holding more than one key issues
 > ([Interoperability evidence](#interoperability-evidence)). Section
@@ -210,13 +214,17 @@ upstream. That is a deliberate decision, not a bug fix, and it is not made here.
 ## How it is meant to be wired
 
 1. A `VtcModule` that provides a recognizer built from configuration (the list of recognised
-   communities and their pinned keys), registered behind a feature flag that defaults off.
+   communities and their pinned keys), registered behind a feature flag that defaults off. The module
+   and its flag (`vtc.credentials`) landed in Companion-Memory#3439; the recognizer built from
+   configuration did not, so its routes pin no community and verify `did:key` issuers only.
 2. A `fetchStatusList` built on the existing peer egress, with a size cap and a cache that honours
    the list's `ttl` when it has one (OpenVTC's lists have none and are served `no-store`).
 3. `StatusSlots` and issued credentials persisted in `ci.*` tables, behind a service that serializes
    allocation.
 4. A route that takes a presented credential together with an authenticated DID, calls the
-   recognizer with `expectedSubject`, and writes each decision to the audit chain.
+   recognizer with `expectedSubject`, and writes each decision to the audit chain. Not built:
+   `POST /vtc/verify` (#3439) takes `expectedSubject` from the request body and writes nothing to the
+   audit chain.
 5. Only then: grants that name a community ("anyone in this community may ask for my availability")
    in place of one person at a time.
 

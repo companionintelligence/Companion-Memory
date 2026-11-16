@@ -1,12 +1,14 @@
 # Portable Web Spaces (PWS)
 
-> **Status (2026-11-05): a tested library, not yet a feature.** `backend/apps/api/src/domains/pws/`
+> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/pws/`
 > implements the W3C Credentials Community Group's
 > [Portable Web Spaces](https://w3c-ccg.github.io/portable-web-spaces-spec/) storage API (draft v0.5,
 > formerly Wallet Attached Storage) and its
-> [Authorization Profile](https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/) (v0.1). It is
-> **not** registered with Nest, has **no route** in the API, writes **no database rows** and is imported
-> by **nothing else** in `src`. Against the Interop Alliance's conformance suite it passes 203 of 305
+> [Authorization Profile](https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/) (v0.1). Since
+> Companion-Memory#3439 (merged 2026-11-12, not yet in a release) `PwsModule` is registered with Nest:
+> `/pws/*` answers `404` unless `pws.storage` (`ENABLE_PWS_STORAGE`, default false) is on, and then serves
+> the handler over the in-memory store, so it writes **no database rows** and keeps nothing across a
+> restart. Nothing else in `src` calls it. Against the Interop Alliance's conformance suite it passes 203 of 305
 > checks (55 fail, 47 are skipped). Every failure traces to a feature that is not built (Encrypted
 > Collections, pluggable backends and quotas, export/import, `Ed25519Signature2020`); for 17 of them the
 > suite's setup creates an Encrypted Collection first, so the checks never ran. The suite calls that
@@ -68,7 +70,7 @@ exists, and this document does not claim one.
 | `stamp.ts` | The write stamp (a hybrid logical clock; an extension, see decision 9) |
 | `scripts/pws-dev-server.ts` | Runs the handler on a port over the in-memory store, on `127.0.0.1` only (`PWS_HOST` overrides). Not imported by `src`. Not in the API image: the Dockerfile drops its compiled copy |
 
-`yarn jest src/domains/pws` runs 22 suites and 503 tests in a few seconds.
+`yarn jest src/domains/pws` runs 24 suites and 605 tests in a few seconds.
 
 ## Using it
 
@@ -347,7 +349,8 @@ Collection to run at all.
   signature. For `did:key` that costs nothing; for `did:webvh` or anything that fetches it must go through
   the box's hardened egress (no redirects, DNS pinned at connect time, a size cap; Asks ADR-0004) and be
   cached, or an unauthenticated request could make the server fetch.
-- **Duplication.** This is another copy of JCS and `eddsa-jcs-2022` (after `domains/vtc` and
+- **Duplication.** This is another copy of JCS (after `domains/vtc`, `domains/trust-tasks` and
+  `src/common/crypto/jcs.ts`, #3439) and of `eddsa-jcs-2022` (after `domains/vtc` and
   `domains/trust-tasks`), of the Ed25519 `did:key`/Multikey codec (after `domains/vtc`, `domains/didcomm`,
   `domains/trust-tasks` and `peers/didKeyId.ts`, #3388), of base58btc (after those and `domains/identikey`,
   #3387), of the Ed25519 weak-key check (`peers/ed25519Weak.ts`, #3388, beside those in `domains/identikey`,
@@ -366,7 +369,9 @@ Collection to run at all.
 2. A TypeORM `PwsStore` with serializable transactions, Resource bytes in the existing object store, a
    migration, and quotas.
 3. A `PwsModule` and controller on the handler (`nodeListener` is the model), registered behind a feature
-   flag that defaults off, like `solid.protocol`; Hub security review before any route.
+   flag that defaults off, like `solid.protocol`; Hub security review before any route. The module, its
+   controller and the flag (`pws.storage`) landed in Companion-Memory#3439, over the in-memory store. That
+   pull request records no review, so the Hub security review is still to do.
 4. Consent grants issued as zCaps and revoked through `isRevoked`.
 5. Export and import of a user's data to and from a Space, once the Space Archive Format
    ([spec PR #92](https://github.com/w3c-ccg/portable-web-spaces-spec/pull/92)) settles; `domains/portability`

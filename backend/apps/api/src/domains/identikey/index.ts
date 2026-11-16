@@ -2,8 +2,10 @@
  * IdentiKey protocol tier: self-sovereign authentication that sits beside the KERI-shaped peer
  * identity (CI-Engineering ADR-0020). See docs/identikey.md for what is here, what is not, and why.
  *
- * Phase 1 is a LIBRARY. Nothing in this barrel registers a Nest module, opens a route, reads
- * configuration or touches the database; the wiring is a later phase behind its own flag.
+ * Phase 1 is a LIBRARY. Since #3439 `IdentikeyModule` registers `IdentikeyController`
+ * (`POST /auth/identikey/challenge` and `/verify`) behind the `auth.identikey` flag, which is off by
+ * default; while it is off both routes answer 404. Nothing here touches the database; enrollment,
+ * pins and a shared nonce store are a later phase.
  */
 
 export { IdentikeyController } from './IdentikeyController';

@@ -15,11 +15,12 @@
  *     domain. Authcrypt/anoncrypt envelopes, signed messages, mediator routing, trust-ping,
  *     discover-features, problem reports and out-of-band invitations.
  *
- * Nothing here is registered with Nest, exposed over HTTP, stored in the database or called from
- * any other domain. It makes no network request: DID resolution for `did:web` goes through a
- * caller-supplied `fetchJson`, and delivery returns the endpoint and bytes for the caller to send
- * through its own egress policy. See `docs/didcomm.md` for what exists, what does not, and how it is
- * meant to be wired.
+ * Since #3439 `DidcommModule` registers `DidcommController` (`/didcomm/*`) behind the
+ * `didcomm.messaging` flag, which is off by default; while it is off every route answers 404. Nothing
+ * here is stored in the database or called from any other domain. It makes no network request: DID
+ * resolution for `did:web` goes through a caller-supplied `fetchJson`, and delivery returns the
+ * endpoint and bytes for the caller to send through its own egress policy. See `docs/didcomm.md` for
+ * what exists, what does not, and how it is meant to be wired.
  */
 export { DidcommController } from './DidcommController';
 export { DidcommModule } from './DidcommModule';

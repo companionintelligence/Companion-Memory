@@ -1,15 +1,21 @@
 # IdentiKey: a second way to prove who you are
 
-> **Status: Phase 1 of 5. A library, wired to nothing.** Everything in
-> [`domains/identikey/`](../backend/apps/api/src/domains/identikey/) is pure code and tests: no Nest module,
-> no route, no configuration key, no feature flag, no table, no migration. Nothing in the running
-> application calls it, and merging it changes no behavior. What it gives the next phases is a verifier
+> **Status: Phase 1 of 5. A library, with a route behind a flag that is off by default.** Apart from
+> `IdentikeyModule` and `IdentikeyController`, everything in
+> [`domains/identikey/`](../backend/apps/api/src/domains/identikey/) is pure code and tests, and the domain
+> has no table and no migration. Since Companion-Memory#3439 (merged 2026-11-12, not yet in a
+> release) `IdentikeyModule` is registered with Nest: `POST /auth/identikey/challenge` and
+> `POST /auth/identikey/verify` answer `404` unless `auth.identikey` (`ENABLE_AUTH_IDENTIKEY`, default
+> false) is on. With it on they keep challenges in the process-local `InMemoryNonceStore` and answer a
+> verified response with the key's fingerprint; they enroll and pin nothing, write nothing to the database
+> and create no session.
+> What it gives the next phases is a verifier
 > that has been through an independent attack-and-fix review by a second AI agent (see
 > [Evidence](#evidence-what-was-checked-and-what-was-not)). No person has reviewed it.
-> Phases 2 to 5 are listed under [What is not built](#what-is-not-built) and none of them exists yet.
+> Phases 2 to 5 are listed under [What is not built](#what-is-not-built); of Phase 2, only the route exists.
 > Design record: CI-Engineering
 > [ADR-0020](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0020-identikey-protocol-alongside-keri.md).
-> Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711).
+> Tracking: [Companion-Memory #1711](https://github.com/companionintelligence/Companion-Memory/issues/1711).
 
 [IdentiKey](https://github.com/identikey) is an open protocol suite (Apache-2.0 OR BSD-2-Clause-Patent,
 Rust reference implementation) for four things a personal-AI appliance needs and the peer-federation work
@@ -349,7 +355,7 @@ the checksums, provenance and the generator script.
 
 | Phase | Scope | Why it is separate |
 | --- | --- | --- |
-| 2 | Custody and authentication wiring: **enrollment** (registering a key and its post-quantum key in one step, both signing a message that names both, the only place a pin may come from), a database nonce store and pin table, a route behind a default-off flag, rate limiting of `issue`, the IKEYW v2 wallet behind the `Signer` seam | Needs a migration and a decision about who may enroll a key |
+| 2 | Custody and authentication wiring: **enrollment** (registering a key and its post-quantum key in one step, both signing a message that names both, the only place a pin may come from), a database nonce store and pin table, a route behind a default-off flag, rate limiting of `issue`, the IKEYW v2 wallet behind the `Signer` seam. Of these, only the route exists (Companion-Memory#3439, `auth.identikey`), over the in-memory nonce store | Needs a migration and a decision about who may enroll a key |
 | 3 | Capability tokens (Biscuit) for agent and MCP scopes | Needs a Biscuit implementation for Node chosen and tested against Rust-made tokens |
 | 4 | Encrypted sharing (`identikey-share` v1) | Needs a proxy re-encryption (Recrypt) implementation or a service boundary |
 | 5 | Signed operation log (`identikey-log`) for grants, revocations and audit | Needs tags, negative integers and Gordian Envelope in the codec |

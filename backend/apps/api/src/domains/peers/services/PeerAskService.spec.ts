@@ -641,6 +641,18 @@ describe('toAskQuery — hidden characters are removed as on a local ask', () =>
     expect(query.filters?.purpose).toBe('lunch');
   });
 
+  it.each([
+    ['empty', ''],
+    ['blank', '   '],
+    ['made only of hidden characters', '\u200B'],
+  ])('uses the ask’s own prompt for an availability purpose that is %s', (_label, purpose) => {
+    const query = toAskQuery(body({ archetype: 'availability', ...window, purpose }));
+
+    expect(query.prompt).toBe('q?');
+    expect(query.filters?.purpose).toBeUndefined();
+    expect(query).not.toHaveProperty('promptHiddenCharactersRemoved');
+  });
+
   it('refuses a subject made only of hidden characters with the peer surface’s one refusal', () => {
     const empty = () => toAskQuery(body({ archetype: 'relationship', subject: '\u200B\u200B' }));
 

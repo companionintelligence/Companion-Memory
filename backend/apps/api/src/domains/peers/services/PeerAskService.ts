@@ -1006,7 +1006,9 @@ export function toAskQuery(body: PeerAskBody): AskQuery {
         ...parsePeerAskQuery({
           queryType: 'availability',
           dataClass: 'calendar',
-          prompt: body.request.purpose ?? body.prompt,
+          // The wire allows an empty purpose, and one with nothing visible in it
+          // is no question to show the owner: the ask's own prompt is used then.
+          prompt: normalizeText(body.request.purpose) == null ? body.prompt : body.request.purpose,
           actor: body.actor,
         }),
         filters: { from: body.request.from, to: body.request.to, ...purpose },
