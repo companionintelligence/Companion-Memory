@@ -43,6 +43,9 @@ const HOME = { ...WORK, label: 'home', street_address: null, city: 'Berkeley', i
 const CABIN = { ...HOME, label: 'cabin', city: 'Bend' };
 /** The flat keys the app writes beside the list, mirroring its primary. */
 const WORK_FLAT = { address: '1 Market St, Oakland', street_address: '1 Market St', city: 'Oakland' };
+const NEW_ROAD = { ...WORK, label: null, street_address: '3 New Rd', city: 'Eugene' };
+const NEW_ROAD_FLAT = { address: '3 New Rd, Eugene', street_address: '3 New Rd', city: 'Eugene' };
+const OAK_AVE = { ...WORK, label: null, street_address: '5 Oak Ave' };
 
 describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})`, () => {
   let dataSource: DataSource;
@@ -218,6 +221,8 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
   let foreign: string;
   let ownFlat: string;
   let mixed: string;
+  let reprimaried: string;
+  let movedOn: string;
   let result: Awaited<ReturnType<MergedAddressRepairService['repair']>>;
 
   beforeAll(async () => {
@@ -310,13 +315,57 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
     await insertMerge(await insertPerson('Mia', miaS, mixed), mixed, miaS);
     await insertEdit(miaOld, { addresses: { old: [HOME], new: null } });
 
+    // 10. The address the merge had shown stayed on the list when the person
+    // made another one primary, so the flat fields moved off it. It is still
+    // there: the merge gives it back its label.
+    reprimaried = await insertPerson('Pia Holt', {
+      addresses: [NEW_ROAD, { ...WORK, label: null, is_primary: false }],
+      ...NEW_ROAD_FLAT,
+      user_edited_keys: ['address', 'addresses', 'city', 'street_address'],
+    });
+    const pia = { addresses: [WORK, HOME], ...WORK_FLAT };
+    await insertMergeWithHistory(await insertPerson('P. Holt', pia, reprimaried), reprimaried, pia, {
+      addresses: [],
+      ...WORK_FLAT,
+    });
+    await insertEdit(reprimaried, {
+      addresses: { old: null, new: [NEW_ROAD, { ...WORK, label: null, is_primary: false }] },
+      address: { old: '1 Market St, Oakland', new: '3 New Rd, Eugene' },
+      street_address: { old: '1 Market St', new: '3 New Rd' },
+      city: { old: 'Oakland', new: 'Eugene' },
+    });
+
+    // 11. One hop where the row merged on showed the merged-in address only in
+    // its flat fields, into a person with an address of its own that later
+    // moved city. The kept person never showed the work address, and it comes
+    // back with its label.
+    movedOn = await insertPerson('Nia Shaw', {
+      addresses: [{ ...OAK_AVE, city: 'Berkeley' }],
+      street_address: '5 Oak Ave',
+      city: 'Berkeley',
+      user_edited_keys: ['address', 'addresses', 'city'],
+    });
+    const niaT = { addresses: [], ...WORK_FLAT };
+    const niaOld = await insertPerson('Nia', niaT, movedOn);
+    const niaA = { addresses: [WORK, HOME], ...WORK_FLAT };
+    await insertMergeWithHistory(await insertPerson('N. Shaw', niaA, movedOn), niaOld, niaA, niaT);
+    await insertMergeWithHistory(niaOld, movedOn, niaT, {
+      addresses: [OAK_AVE],
+      street_address: '5 Oak Ave',
+      city: 'Oakland',
+    });
+    await insertEdit(movedOn, {
+      addresses: { old: [OAK_AVE], new: [{ ...OAK_AVE, city: 'Berkeley' }] },
+      city: { old: 'Oakland', new: 'Berkeley' },
+    });
+
     result = await repairer.repair([owner, otherOwner]);
   });
 
   it('puts back the addresses a merge dropped, as a merge folds them now, and says so in Change History', async () => {
-    // Eight of this owner's merges (one more already folded its addresses);
-    // six people changed; three addresses left off as removed by hand.
-    expect(result).toEqual({ merges: 8, people: 6, leftOff: 3 });
+    // Eleven of this owner's merges (one more already folded its addresses);
+    // eight people changed; three addresses left off as removed by hand.
+    expect(result).toEqual({ merges: 11, people: 8, leftOff: 3 });
 
     const johnny = await propertiesOf(lost);
     expect(johnny.addresses).toEqual([
@@ -386,6 +435,30 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
     expect((await propertiesOf(mixed)).addresses).toEqual([
       expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: true }),
       expect.objectContaining({ label: 'cabin', city: 'Bend', is_primary: false }),
+    ]);
+  });
+
+  it('gives an address removed by hand its label back when the person still has it or another merge brings it', async () => {
+    expect((await propertiesOf(reprimaried)).addresses).toEqual([
+      expect.objectContaining({ label: null, street_address: '3 New Rd', is_primary: true }),
+      expect.objectContaining({ label: 'work', street_address: '1 Market St', is_primary: false }),
+      expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: false }),
+    ]);
+
+    expect((await propertiesOf(movedOn)).addresses).toEqual([
+      expect.objectContaining({
+        label: null,
+        street_address: '5 Oak Ave',
+        city: 'Berkeley',
+        is_primary: true,
+      }),
+      expect.objectContaining({
+        label: 'work',
+        street_address: '1 Market St',
+        city: 'Oakland',
+        is_primary: false,
+      }),
+      expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: false }),
     ]);
   });
 

@@ -105,7 +105,9 @@ export interface MergedAddressRepairResult {
  * counts only against the source's flat address, and only when the merge's own
  * Change History row shows the merge left that address in the flat fields. An
  * address removed any other way (an import that rewrote the bag, a direct
- * database edit) leaves no such trace and comes back.
+ * database edit) leaves no such trace and comes back. An address removed by
+ * hand that the person has again, or that another of its merges brings back,
+ * is not left off either: its copy here only gives it the label it had.
  *
  * Merges into the survivor itself are folded first, oldest first, then those
  * reached through a hop, which is the order the merges put the addresses
@@ -292,27 +294,50 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
       const hoppedAt = hopRows.length > 0 ? await this.mergedAwayAt(em, ownerUserId, hopRows) : new Map();
       const since = new Date(Math.min(...merges.map((merge) => merge.created_at.getTime())));
       const edits = await this.addressEdits(em, ownerUserId, people, since);
-      let leftOff = 0;
-
-      const sources = merges.map((merge) => {
+      const removals = merges.map((merge) => {
         const bag = bagsOf.get(merge.merge_id);
 
-        if (!bag || typeof bag.snapshot !== 'object' || bag.snapshot === null) {
-          return {};
-        }
-
-        const removed = removedByHand(
-          editsSinceMerge(edits, merge, personId, hoppedAt.get(merge.target_id) ?? null),
-          shownByMerge(bag.snapshot, bag.merged),
-        );
-        const offered = offeredAddresses(bag.snapshot, bag.tombstone ?? {}, removed);
-        leftOff += offered.leftOff;
-
-        return offered.bag;
+        return bag && typeof bag.snapshot === 'object' && bag.snapshot !== null
+          ? {
+              bag,
+              removed: removedByHand(
+                editsSinceMerge(edits, merge, personId, hoppedAt.get(merge.target_id) ?? null),
+                shownByMerge(bag.snapshot, bag.merged),
+              ),
+            }
+          : null;
       });
 
       const before = current as Record<string, unknown>;
-      const after = withFoldedAddresses(before, sources);
+
+      // `held` are addresses that stay whatever this merge offers: one removed
+      // by hand that the person has again, or that another merge brings back,
+      // is no longer gone, and its copy here may still give it a label.
+      const fold = (held: ReadonlySet<string>) => {
+        let leftOff = 0;
+
+        const sources = removals.map((removal) => {
+          if (!removal) {
+            return {};
+          }
+
+          const offered = offeredAddresses(
+            removal.bag.snapshot,
+            removal.bag.tombstone ?? {},
+            (address) => !held.has(addressKey(address)) && removal.removed(address),
+          );
+          leftOff += offered.leftOff;
+
+          return offered.bag;
+        });
+
+        return { after: withFoldedAddresses(before, sources), leftOff };
+      };
+
+      const keysOf = (properties: Record<string, unknown>) =>
+        new Set(readPersonAddresses(properties).map(addressKey));
+      const first = fold(keysOf(before));
+      const { after, leftOff } = first.after ? fold(keysOf(first.after)) : first;
 
       if (after) {
         await em.query(
