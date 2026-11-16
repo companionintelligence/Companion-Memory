@@ -18,14 +18,21 @@
 > threat analysis itself is unaffected:** every ceiling, tier, exemption and default it argues
 > about is unchanged.
 >
-> **Δ 2026-11-15 — two passages re-read at `744ace035`.** In T5, both rate limiters have kept
-> their windows in `ConsumptionStore` (Postgres by default) since #2475, so T5's proposal 2 is
-> done, and `AskRateLimitService.consumeDisclosureBudget` (#3066) has no caller outside its
-> tests. In T6, `peers.audience` gates only Portal-token asks: a signed `did:keri:D<x>` or
-> `did:key` ask needs `peers.memoryEndpoint` and a link for that keyid instead. The references
-> in those two passages (T5's *Rate limits bound rate* and *There is no total*, and T6's
-> *Inbound federation is off* bullet) were read at that commit; the rest of T5 and T6 was not
-> re-read.
+> **Δ 2026-11-15 — three passages re-read at `744ace035`.** In T2, #2442 (merged 2026-08-30
+> UTC, in every v2026.11 release) gave `redacted` its own availability branch, so a `trusted`
+> peer gets free slots only, shrunk inward to a 30-minute grid, and no busy intervals (D2).
+> T2's *So `redacted` is not a redaction for this archetype* paragraph, its *Latent code bug*
+> sentence and its *Mutation evidence* describe `fe5075a79`. T2's proposals 1 and 2 are done,
+> and proposal 3 is done for `trusted` only: a `family` peer still gets unrounded instants. The
+> Δ 2026-08-23 line that every ceiling is unchanged stopped holding when #2442 merged. In T5,
+> both rate limiters have kept their windows in `ConsumptionStore` (Postgres by default)
+> since #2475, so T5's proposal 2 is done, and `AskRateLimitService.consumeDisclosureBudget`
+> (#3066) has no caller outside its tests. In T6, `peers.audience` gates only Portal-token asks:
+> a signed `did:keri:D<x>` or `did:key` ask needs `peers.memoryEndpoint` and a link for that
+> keyid instead. The references in the T5 and T6 passages (T5's *Rate limits bound rate* and
+> *There is no total*, and T6's *Inbound federation is off* bullet) were read at that commit.
+> T2's file:line references are still those of `fe5075a79`, and the rest of T2, T5 and T6 was
+> not re-read.
 >
 > **This document is not reassuring, and that is the point.** A threat model whose conclusion
 > is "we are fine" has not been written, it has been performed. What follows names the
@@ -63,7 +70,7 @@ two of the six are inherent to the product concept and can only be mitigated.
 | # | Threat | Class | Worst case today |
 |---|---|---|---|
 | T1 | Coercion / intimate-partner abuse | Design gap | The person who shares the appliance is by construction the most privileged asker, with no ceiling, no cooling period, and no way to demote them |
-| T2 | Stalking via availability | Design gap (+ under-classification) | A `trusted` or `family` peer receives real calendar interval boundaries over 31-day windows, auto-answered, 14 400 times a day |
+| T2 | Stalking via availability | Design gap (+ under-classification) | A `family` peer receives real calendar interval boundaries, and a `trusted` peer free slots on a 30-minute grid, over 31-day windows, auto-answered, 14 400 times a day |
 | T3 | Social engineering at the consent moment | Code bug + design gap | Unbounded asker-authored text renders directly above the Approve button |
 | T4 | Prompt injection into the owner's archive | **Not present today** | Traced end to end; no LLM is on the ask path. Two named tripwires would create one |
 | T5 | Cumulative disclosure | Design gap | Rate limits bound rate, not total. There is no disclosure budget of any kind |
@@ -272,7 +279,7 @@ tier's `'*'` fallback:
 |---|---|---|
 | `household` | `full` | Real busy + free intervals |
 | `family` | `full` | **Real busy + free intervals** |
-| `trusted` | `redacted` | **Real busy + free intervals** — `redacted` and `full` are the same branch (`:758-765`) |
+| `trusted` | `redacted` | ~~**Real busy + free intervals** — `redacted` and `full` are the same branch (`:758-765`)~~ Free slots only, shrunk inward to a 30-minute grid. No busy array, but the gaps between slots still give the busy time to the half hour (D2, fixed in #2442) |
 | `peer` | `summary` | Slot count + longest gap, no instants |
 | `stranger` | `boolean` | "some free time" / "no free time" |
 

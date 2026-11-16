@@ -336,7 +336,7 @@ Collection to run at all.
 - **Where a Companion's controller key comes from.** A Companion's Ed25519 key spells a `did:key`, and
   `peers/didKeyId.ts` (Companion-Memory#3388, written in the Local.Pub work) is that mapping. This domain does
   not import it, by design (ADR-0019 decision 5: PWS imports nothing from another domain). `pws/didKey.ts` is
-  a separate copy; since Companion-Memory#PR_MEMORY it refuses the same small-order and non-canonical keys.
+  a separate copy; since Companion-Memory#3542 it refuses the same small-order and non-canonical keys.
   It does not test that a key is a point on the curve, which `peers/didKeyId.ts` does when it admits a key;
   a key that is not one verifies no signature. Key custody and how the Hub's signed forward-auth identity
   (`X-CI-Hub-User-Issuer` with `X-CI-Hub-User-Id`) maps to a controller are open. The reserved

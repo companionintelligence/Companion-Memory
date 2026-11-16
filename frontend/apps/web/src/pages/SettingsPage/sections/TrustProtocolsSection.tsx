@@ -18,6 +18,8 @@ export interface TrustProtocolSpec {
   cryptoOrProof: string;
   maturity: 'Core' | 'Provisional (Flag-gated)' | 'Experimental';
   securityBoundary: string;
+  /** Shown as text beside the activation line when the flag must stay off for now. */
+  caveat?: string;
 }
 
 /**
@@ -88,6 +90,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'eddsa-jcs-2022 signed task envelopes & state transitions',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Fail-closed 404 when flag disabled; bounded task payloads',
+    caveat: 'Leave off until its security review (CI-Engineering ADR-0015)',
   },
   {
     id: 'pws',
@@ -277,6 +280,9 @@ export function TrustProtocolsSection() {
                   <dd className="font-mono break-all">
                     {spec.flagKey ? `${spec.flagKey} (${spec.envVar})` : spec.envVar}
                   </dd>
+                  {spec.caveat ? (
+                    <dd className="pt-0.5 font-medium text-amber-700 dark:text-amber-300">{spec.caveat}</dd>
+                  ) : null}
                 </div>
               </dl>
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TrustProtocolsSection } from './TrustProtocolsSection';
@@ -49,6 +49,25 @@ describe('TrustProtocolsSection', () => {
     fireEvent.change(screen.getByLabelText('Filter protocols'), { target: { value: 'eddsa-jcs-2022' } });
     expect(screen.getByText('Verifiable Trust Community (OpenVTC)')).toBeInTheDocument();
     expect(screen.queryByText('Solid Protocol & WebID Pod Facade')).not.toBeInTheDocument();
+  });
+
+  it('says beside the Trust Tasks activation line to leave it off, and on no other card', () => {
+    render(<TrustProtocolsSection />);
+
+    const caveat = 'Leave off until its security review (CI-Engineering ADR-0015)';
+    const card = (name: string) => screen.getByText(name).closest<HTMLElement>('[data-slot="card"]')!;
+
+    expect(screen.getAllByText(caveat)).toHaveLength(1);
+    expect(within(card('Trust Tasks HTTPS 0.3')).getByText(caveat)).toBeInTheDocument();
+
+    for (const name of [
+      'Solid Protocol & WebID Pod Facade',
+      'Companion Asks & Delegated Consent',
+      'MCP Protected Resource Metadata (PRM)',
+      'Capability Attenuated API Keys & Field Crypto',
+    ]) {
+      expect(within(card(name)).queryByText(caveat)).not.toBeInTheDocument();
+    }
   });
 
   it('calls refresh when clicking Refresh flags', () => {
