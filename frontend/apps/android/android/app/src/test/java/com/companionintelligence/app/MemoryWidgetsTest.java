@@ -65,6 +65,21 @@ public class MemoryWidgetsTest {
     }
 
     @Test
+    public void insight_widget_says_no_forecast_yet_before_the_forecast_is_built() throws Exception {
+        JSONObject unbuilt = snapshot();
+        unbuilt.getJSONObject("insight")
+                .put("systemStatus", "COLD_START")
+                .put("stillLearning", true)
+                .put("prediction", JSONObject.NULL)
+                .put("confidence", JSONObject.NULL);
+        storeSnapshot(unbuilt);
+        WidgetView widget = render(InsightWidgetProvider.class, R.layout.widget_insight);
+
+        assertEquals("No forecast yet", text(widget, R.id.insight_prediction));
+        assertEquals("Forecast warming up · still learning", text(widget, R.id.insight_confidence));
+    }
+
+    @Test
     public void jobs_widget_is_read_only_and_surfaces_failed_and_dead_lettered_count() throws Exception {
         storeSnapshot(snapshot());
         WidgetView widget = render(JobsWidgetProvider.class, R.layout.widget_jobs);
