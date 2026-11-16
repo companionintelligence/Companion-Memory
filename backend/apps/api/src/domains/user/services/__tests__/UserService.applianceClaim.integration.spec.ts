@@ -120,7 +120,7 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
   afterEach(async () => {
     // jest still runs this after a failed beforeAll. `service` is set only once the guard has passed,
     // so without it no case ran and there is nothing to remove. Skipping also keeps any statement off
-    // a handle the guard refused, and a second error on every case would only bury the setup failure.
+    // a handle the guard refused. A second error on every case would only bury the setup failure.
     if (service == null) {
       return;
     }
