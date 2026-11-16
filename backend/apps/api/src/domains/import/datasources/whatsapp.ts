@@ -350,9 +350,15 @@ const SYSTEM_VERB_RE =
  * its own: it also sits on every `image omitted` placeholder and every
  * `<attached: …>` reference, which must be kept. So both conditions are
  * required, and each covers the other's failure.
+ *
+ * The verb pattern reads the text after the marker. Its first alternative is
+ * anchored (`^Messages and calls…`), so with the marker still in front it
+ * never matched, and every iPhone export saved the encryption notice as a
+ * message from the other person. The `.+` alternative only worked because `.+`
+ * swallowed the marker.
  */
 function isSystemLine(text: string): boolean {
-  return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(text);
+  return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(stripLeadingInvisible(text));
 }
 
 // Shared-location messages embed a maps link, e.g.
@@ -523,6 +529,15 @@ export class WhatsAppFileImporter implements FileImporter {
         // the attachment block, a photo whose caption tripped the old regex lost
         // its bytes with no record either.
         params.pipeline.drop?.('whatsapp_system_line');
+
+        // A line the check missed while it still read the marker (the iPhone
+        // encryption notice) was saved as a message and took a number. It
+        // still takes one: the ids after it end in that number, and if they
+        // moved down by one, importing a chat that was imported back then
+        // would save every message in it a second time.
+        if (!SYSTEM_VERB_RE.test(p.text)) {
+          seq++;
+        }
 
         return;
       }
