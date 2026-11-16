@@ -648,6 +648,19 @@ describe('the system-line filter must not eat human messages', () => {
     expect((pipeline as EmittedGraph[] & { drops?: string[] }).drops).toEqual(['whatsapp_system_line']);
   });
 
+  it('drops the encryption notice an iPhone export starts with', async () => {
+    // The pattern for it is anchored at the start, so it has to be tested
+    // after the marker WhatsApp puts in front of the notice.
+    const pipeline = await importChat(
+      line(
+        `${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`,
+      ) + line('Are we still on for Saturday?'),
+    );
+
+    expect(bodies(pipeline)).toEqual(['Are we still on for Saturday?']);
+    expect((pipeline as EmittedGraph[] & { drops?: string[] }).drops).toEqual(['whatsapp_system_line']);
+  });
+
   it('keeps a media placeholder, which carries the marker but is not a system line', async () => {
     // The marker alone cannot be the rule: WhatsApp puts it on every line it
     // generates, including these. 745 of one export's lines carry it and only
@@ -818,9 +831,46 @@ describe('a _chat.txt in a folder the system named', () => {
     const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
     const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
 
-    expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    // The notice names the chat but is not saved as one of its messages.
+    expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice']);
+    expect(dropped.map((entry) => entry.item.metadata.Text)).toEqual([
+      'Are we still on for the ferry on Saturday?',
+      'Yes, the 10:40 one',
+    ]);
     expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
   });
+
+  it.each([
+    ['a one-to-one chat', 'Alice', NOTICE_EXPORT],
+    [
+      'a group chat',
+      'Ferry trip',
+      [
+        `[1/3/21, 9:00:00 AM] Ferry trip: ${LRM}Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them.`,
+        `[1/3/21, 9:00:05 AM] Ferry trip: ${LRM}Alice created group "Ferry trip"`,
+        `[1/3/21, 9:00:06 AM] Ferry trip: ${LRM}Alice added Sam`,
+        '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+        '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+      ].join('\n'),
+    ],
+  ])(
+    'lands a re-import of %s saved with its notice on the ids it already has',
+    async (_, chat, transcript) => {
+      // The ids a chat got while the notice was still saved: the notice took
+      // number 0 and the messages after it 1 and 2. Importing the same export
+      // again must produce those ids, or every message is saved a second time.
+      const at = (time: string) => new Date(`1/3/21 ${time}`).toISOString();
+      const savedBefore = [
+        `whatsapp:${chat}:${at('9:00:00 AM')}:0`,
+        `whatsapp:${chat}:${at('9:01:00 AM')}:1`,
+        `whatsapp:${chat}:${at('9:02:10 AM')}:2`,
+      ];
+
+      const again = await importFrom([`WhatsApp_Chat_-_${chat.replace(/ /g, '_')}`], transcript);
+
+      expect(again.map((entry) => entry.item.id)).toEqual(savedBefore.slice(1));
+    },
+  );
 
   it('names a transcript without the notice after its people, never after the service', async () => {
     const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
@@ -838,7 +888,7 @@ describe('a _chat.txt in a folder the system named', () => {
     const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
     const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
 
-    expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice', 'Alice']);
+    expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice']);
     expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
   });
 
