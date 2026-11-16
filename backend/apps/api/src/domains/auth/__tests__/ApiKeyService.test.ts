@@ -737,3 +737,48 @@ describe('ApiKeyService — revoking at sign-out', () => {
     });
   });
 });
+
+describe('ApiKeyService — telling open live-update streams', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function withLiveChanges(repo: ReturnType<typeof makeRepo>) {
+    const liveChanges = { publishRevoked: jest.fn().mockResolvedValue(undefined) };
+
+    return {
+      service: new ApiKeyService(repo as never, makeLogger() as never, liveChanges as never),
+      liveChanges,
+    };
+  }
+
+  it("announces a revoke once the owner's key is gone", async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    await expect(service.remove(ownerCtx, 'key-1')).resolves.toBe(true);
+
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('owner-1');
+    expect(repo.delete.mock.invocationCallOrder[0]).toBeLessThan(
+      liveChanges.publishRevoked.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('announces nothing when no key went, or when a system revoke does not know the owner', async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    repo.delete.mockResolvedValueOnce({ affected: 0 });
+    await service.remove(ownerCtx, 'key-gone');
+    await service.remove({ userId: SYSTEM_USER } as ServiceContext, 'key-1');
+
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+
+  it('announces the sign-in keys a password change revokes', async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    await service.revokeSignInKeys('owner-1');
+
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('owner-1');
+  });
+});

@@ -25,5 +25,6 @@ export {
   LIVE_CHANGE_TOPICS,
   LiveChangesService,
   type LiveChangeListener,
+  type LiveChangesCredential,
   type LiveChangeTopic,
 } from './services/LiveChangesService';

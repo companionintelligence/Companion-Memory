@@ -142,6 +142,59 @@ describe('LiveChangesService', () => {
     });
   });
 
+  describe('revocations', () => {
+    it('sends a revoke notice on the same channel', async () => {
+      const { service, dataSource } = makeService();
+
+      await service.publishRevoked('alice');
+
+      expect(dataSource.query).toHaveBeenCalledWith('SELECT pg_notify($1, $2)', [
+        LIVE_CHANGES_CHANNEL,
+        JSON.stringify({ userId: 'alice', revoked: true }),
+      ]);
+    });
+
+    it("tells that user's revocation listeners and nobody's change listeners", () => {
+      const { service, logger } = makeService();
+      const changes = jest.fn();
+      const alice = jest.fn();
+      const bob = jest.fn();
+      service.subscribe('alice', changes);
+      service.subscribeRevocations('alice', alice);
+      const offBob = service.subscribeRevocations('bob', bob);
+      offBob();
+
+      service.dispatch(JSON.stringify({ userId: 'alice', revoked: true }));
+      service.dispatch(JSON.stringify({ userId: 'bob', revoked: true }));
+
+      expect(alice).toHaveBeenCalledTimes(1);
+      expect(bob).not.toHaveBeenCalled();
+      expect(changes).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('looks up a key or a session, and nothing for a token with neither', async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValueOnce([{ '?column?': 1 }] as never).mockResolvedValueOnce([] as never);
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).resolves.toBe(true);
+      await expect(service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' })).resolves.toBe(
+        false,
+      );
+      await expect(service.isCredentialLive('alice', { kind: 'token' })).resolves.toBe(true);
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(dataSource.query).toHaveBeenNthCalledWith(1, expect.stringContaining('ci.api_keys'), [
+        'key-1',
+        'alice',
+      ]);
+      expect(dataSource.query).toHaveBeenNthCalledWith(2, expect.stringContaining('ci.sessions'), [
+        'sess-1',
+        'alice',
+      ]);
+    });
+  });
+
   describe('the listening connection', () => {
     beforeEach(() => {
       jest.useFakeTimers();

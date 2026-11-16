@@ -21,9 +21,23 @@ export type LiveChangeTopic = (typeof LIVE_CHANGE_TOPICS)[number];
 
 export type LiveChangeListener = (topic: LiveChangeTopic) => void;
 
+/**
+ * What opened a stream, for {@link LiveChangesService.isCredentialLive}: an api
+ * key, the session a bearer token was minted for, or a credential with nothing
+ * to look up (a token without a session, which ends when it expires).
+ */
+export type LiveChangesCredential =
+  { kind: 'apiKey'; keyId: string } | { kind: 'session'; sessionId: string } | { kind: 'token' };
+
 interface LiveChangePayload {
   userId: string;
   topic: LiveChangeTopic;
+}
+
+/** Sent on the same channel when a key or a session of `userId` is revoked. */
+interface RevokedPayload {
+  userId: string;
+  revoked: true;
 }
 
 const RECONNECT_FLOOR_MS = 1_000;
@@ -31,6 +45,32 @@ const RECONNECT_CEILING_MS = 30_000;
 
 function isTopic(value: unknown): value is LiveChangeTopic {
   return typeof value === 'string' && (LIVE_CHANGE_TOPICS as readonly string[]).includes(value);
+}
+
+/** Add `listener` to the set kept for `userId`. Returns the removal, which forgets an emptied user. */
+function addListener<T>(map: Map<string, Set<T>>, userId: string, listener: T): () => void {
+  let set = map.get(userId);
+
+  if (!set) {
+    set = new Set();
+    map.set(userId, set);
+  }
+
+  set.add(listener);
+
+  return () => {
+    const current = map.get(userId);
+
+    if (!current) {
+      return;
+    }
+
+    current.delete(listener);
+
+    if (current.size === 0) {
+      map.delete(userId);
+    }
+  };
 }
 
 /**
@@ -59,6 +99,8 @@ function isTopic(value: unknown): value is LiveChangeTopic {
 @Injectable()
 export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
   private readonly listeners = new Map<string, Set<LiveChangeListener>>();
+
+  private readonly revocationListeners = new Map<string, Set<() => void>>();
 
   private client: Client | null = null;
 
@@ -120,30 +162,66 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Tell the open streams of `userId` that one of their keys or sessions was
+   * revoked, so each checks its own credential now ({@link isCredentialLive})
+   * rather than at its next keep-alive. Called after the revoke is written.
+   */
+  async publishRevoked(userId: string): Promise<void> {
+    const payload: RevokedPayload = { userId, revoked: true };
+
+    try {
+      await this.dataSource.query('SELECT pg_notify($1, $2)', [
+        LIVE_CHANGES_CHANNEL,
+        JSON.stringify(payload),
+      ]);
+    } catch (error) {
+      this.logger.warn('Live change revoke notify failed', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /** Hear every change announced for one user. Returns the unsubscribe. */
   subscribe(userId: string, listener: LiveChangeListener): () => void {
-    let set = this.listeners.get(userId);
+    return addListener(this.listeners, userId, listener);
+  }
 
-    if (!set) {
-      set = new Set();
-      this.listeners.set(userId, set);
+  /** Hear every revoke announced for one user. Returns the unsubscribe. */
+  subscribeRevocations(userId: string, listener: () => void): () => void {
+    return addListener(this.revocationListeners, userId, listener);
+  }
+
+  /**
+   * Whether the credential a stream of `userId` was opened with still lets it
+   * in: the key still exists and has not expired, or the session has not been
+   * signed out or run out. A token with no session to look up is good until it
+   * expires, which the stream times itself.
+   *
+   * Read straight from the tables rather than through the auth services, which
+   * would make this module import the auth module that publishes to it.
+   */
+  async isCredentialLive(userId: string, credential: LiveChangesCredential): Promise<boolean> {
+    if (credential.kind === 'apiKey') {
+      const rows: unknown[] = await this.dataSource.query(
+        'SELECT 1 FROM ci.api_keys WHERE id = $1 AND user_id = $2 AND (expires_at IS NULL OR expires_at > now())',
+        [credential.keyId, userId],
+      );
+
+      return rows.length > 0;
     }
 
-    set.add(listener);
+    if (credential.kind === 'session') {
+      const rows: unknown[] = await this.dataSource.query(
+        'SELECT 1 FROM ci.sessions WHERE id = $1 AND user_id = $2 AND expires_at > now()',
+        [credential.sessionId, userId],
+      );
 
-    return () => {
-      const current = this.listeners.get(userId);
+      return rows.length > 0;
+    }
 
-      if (!current) {
-        return;
-      }
-
-      current.delete(listener);
-
-      if (current.size === 0) {
-        this.listeners.delete(userId);
-      }
-    };
+    return true;
   }
 
   /** How many sessions are listening, across every user. Diagnostics only. */
@@ -176,7 +254,13 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const payload = parsed as Partial<LiveChangePayload> | null;
+    const payload = parsed as Partial<LiveChangePayload & RevokedPayload> | null;
+
+    if (payload && typeof payload.userId === 'string' && payload.revoked === true) {
+      this.dispatchRevoked(payload.userId);
+
+      return;
+    }
 
     if (!payload || typeof payload.userId !== 'string' || !isTopic(payload.topic)) {
       this.logger.warn('Live change payload has the wrong shape', { raw: raw.slice(0, 200) });
@@ -195,6 +279,18 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
         listener(payload.topic);
       } catch (error) {
         this.logger.warn('Live change listener threw', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private dispatchRevoked(userId: string): void {
+    for (const listener of this.revocationListeners.get(userId) ?? []) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger.warn('Live change revoke listener threw', {
           error: error instanceof Error ? error.message : String(error),
         });
       }

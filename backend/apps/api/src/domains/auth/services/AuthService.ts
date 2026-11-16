@@ -1,6 +1,6 @@
 import { createHmac } from 'crypto';
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
@@ -9,6 +9,7 @@ import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { SessionEntity } from '../entities/SessionEntity';
 import type { IssuedSession, JwtPayload, RotationResult, SessionMetadata } from '../types';
@@ -88,6 +89,7 @@ export class AuthService {
     private jwtService: JwtService,
     @InjectRepository(SessionEntity)
     private readonly sessionRepository: Repository<SessionEntity>,
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {}
 
   /**
@@ -279,6 +281,8 @@ export class AuthService {
     await this.sessionRepository.delete({
       id: session.id,
     });
+    // Its open live-update streams end now, not at their next keep-alive.
+    await this.liveChanges?.publishRevoked(userId);
   }
 
   /**
@@ -296,6 +300,7 @@ export class AuthService {
       user: { id: userId },
       ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
+    await this.liveChanges?.publishRevoked(userId);
   }
 
   /**
@@ -313,9 +318,15 @@ export class AuthService {
     return session?.created_at ?? null;
   }
 
-  issueAccessToken(userId: string): string {
+  /**
+   * `sessionId` is the session the token is minted for, carried as `sid`. Only
+   * the live-update stream reads it, to end when that session is signed out;
+   * every other request takes the token as it is until it expires.
+   */
+  issueAccessToken(userId: string, sessionId?: string): string {
     const payload = {
       sub: userId,
+      ...(sessionId ? { sid: sessionId } : {}),
     } satisfies JwtPayload;
 
     const accessToken = this.jwtService.sign(payload);

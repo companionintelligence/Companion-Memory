@@ -159,6 +159,7 @@ describe('SignupController', () => {
       const response = await request(app.getHttpServer()).post('/signup').send(validPayload).expect(201);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(mockUser.id, MOCK_SESSION_ID);
     });
 
     it('should not return session token in the response body', async () => {
