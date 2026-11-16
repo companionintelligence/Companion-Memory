@@ -9,7 +9,7 @@ import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { FileService } from '@ci/domains/files';
+import { FileService, type ObjectWriter } from '@ci/domains/files';
 import { UserService } from '@ci/domains/user';
 
 import {
@@ -66,11 +66,21 @@ const ARCHIVE_VERSION = 1 as const;
 const FILES_TABLE = 'ci.files';
 const EXPORT_ROW_PAGE_SIZE = 500;
 
+/**
+ * A file the stream import is partway through. Its chunks go to the object
+ * store as they arrive, so only the part being filled is held in memory, not
+ * the file (see {@link FileService.openObjectWriter}).
+ */
 interface PendingFileImport {
-  /** The key the ARCHIVE names — resolved through the import's FileKeyMap at write time. */
-  archivedKey: string;
+  /** Where the bytes land: the archive's key resolved through the import's FileKeyMap. */
+  key: string;
+  writer: ObjectWriter;
   total: number;
-  parts: Map<number, string>;
+  /**
+   * Chunks written so far. The export writes a file's chunks one after another
+   * in index order, so this is also the index the next chunk must have.
+   */
+  received: number;
 }
 
 /**
@@ -96,6 +106,11 @@ class FileKeyMap {
   private readonly minted = new Map<string, string>();
 
   constructor(private readonly ownedKeys: ReadonlySet<string>) {}
+
+  /** Whether `key` held one of this account's files before the import began. */
+  isOwned(key: string): boolean {
+    return this.ownedKeys.has(key);
+  }
 
   resolve(archivedKey: string): string {
     if (this.ownedKeys.has(archivedKey)) {
@@ -320,6 +335,9 @@ export class UserDataPortabilityService {
     const tableByName = new Map(tables.map((table) => [qualifiedName(table), table]));
     const touchedTables = new Set<string>();
     const pendingFiles = new Map<string, PendingFileImport>();
+    // Objects stored under a key this import minted. No row points at them if
+    // the import fails, so they go with its rollback.
+    const storedNewKeys: string[] = [];
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -402,37 +420,49 @@ export class UserDataPortabilityService {
           return;
         }
 
-        const pending =
-          pendingFiles.get(record.id) ??
-          ({
-            archivedKey: record.key,
+        let pending = pendingFiles.get(record.id);
+
+        if (!pending) {
+          const key = keyMap.resolve(record.key);
+
+          pending = {
+            key,
+            writer: this.fileService.openObjectWriter(
+              context,
+              config.staticfiles.bucket,
+              key,
+              record.total * FILE_CHUNK_BYTES,
+            ),
             total: record.total,
-            parts: new Map<number, string>(),
-          } satisfies PendingFileImport);
+            received: 0,
+          };
+          pendingFiles.set(record.id, pending);
+        }
 
-        pending.parts.set(record.index, record.data);
-        pendingFiles.set(record.id, pending);
-
-        if (pending.parts.size === pending.total) {
-          const ordered = Array.from({ length: pending.total }, (_, index) => {
-            const part = pending.parts.get(index);
-
-            // An empty file is one chunk of "" (falsy), which is still there.
-            if (part === undefined) {
-              throw new BadRequestException(`Missing file chunk ${index} for ${record.id}`);
-            }
-
-            return part;
-          });
-
-          await this.fileService.putObject(
-            context,
-            config.staticfiles.bucket,
-            keyMap.resolve(pending.archivedKey),
-            Buffer.concat(ordered.map((part) => Buffer.from(part, 'base64'))),
+        // Counted, not kept: a chunk out of turn means the one before it is
+        // missing (or this one came twice), and the bytes already written
+        // cannot be put back in order.
+        if (record.index !== pending.received) {
+          throw new BadRequestException(
+            record.index < pending.received
+              ? `File chunk ${record.index} for ${record.id} arrived twice`
+              : `Missing file chunk ${pending.received} for ${record.id}`,
           );
-          filesRestored += 1;
+        }
+
+        await pending.writer.write(Buffer.from(record.data, 'base64'));
+        pending.received += 1;
+
+        // An empty file is one chunk of "", so it completes here too.
+        if (pending.received === pending.total) {
+          await pending.writer.finish();
           pendingFiles.delete(record.id);
+
+          if (!keyMap.isOwned(pending.key)) {
+            storedNewKeys.push(pending.key);
+          }
+
+          filesRestored += 1;
         }
       });
 
@@ -470,7 +500,13 @@ export class UserDataPortabilityService {
       await queryRunner.commitTransaction();
     } catch (error) {
       await this.setReplicationRole(queryRunner, 'origin').catch(() => undefined);
-      await queryRunner.rollbackTransaction();
+
+      try {
+        await queryRunner.rollbackTransaction();
+      } finally {
+        await this.discardStreamedFiles(pendingFiles.values(), storedNewKeys);
+      }
+
       throw error;
     } finally {
       await queryRunner.release();
@@ -482,6 +518,37 @@ export class UserDataPortabilityService {
       filesRestored,
       format: 'ndjson',
     };
+  }
+
+  /**
+   * Take back what a failed stream import put in the object store, as the
+   * rollback takes back its rows: abort the files it was partway through, so
+   * no half-written file or unfinished upload stays behind, and delete the
+   * files it stored under keys it minted, which nothing points at now.
+   *
+   * A file restored under a key the account already owned stays: the row that
+   * points at it survives the rollback, and the archive held that same file.
+   * Never throws, so the import's own error is what the caller sees.
+   */
+  private async discardStreamedFiles(
+    pending: Iterable<PendingFileImport>,
+    storedNewKeys: string[],
+  ): Promise<void> {
+    for (const file of pending) {
+      await file.writer.abort().catch((error: unknown) => {
+        this.logger.warn('Could not abort a file upload after a failed import', {
+          key: file.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    await this.fileService.deleteObjects(config.staticfiles.bucket, storedNewKeys).catch((error: unknown) => {
+      this.logger.warn('Could not delete the files a failed import stored', {
+        files: storedNewKeys.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /** Legacy single-json export for small accounts and tests. */

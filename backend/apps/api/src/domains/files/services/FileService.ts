@@ -10,6 +10,11 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   PutObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  type CompletedPart,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
@@ -46,6 +51,141 @@ export interface HourlyFileCount {
   userId: string;
   bucketStart: Date;
   count: number;
+}
+
+/** The smallest part of a multipart upload the S3 API takes, for every part but the last. */
+const MIN_PART_BYTES = 5 * 1024 * 1024;
+/** The most parts one multipart upload may have. */
+const MAX_PARTS = 10_000;
+/**
+ * The largest part this writer holds, whatever size the caller expects: the
+ * expected size comes from the caller's input (an archive's chunk count), and
+ * a part is held in memory until it goes out. 10,000 of these is 640 GiB.
+ */
+const MAX_PART_BYTES = 64 * 1024 * 1024;
+
+/**
+ * One object written a piece at a time, from {@link FileService.openObjectWriter}.
+ * Nothing shows under the key until {@link ObjectWriter.finish}.
+ */
+export interface ObjectWriter {
+  /** Add the object's next bytes. */
+  write(piece: Buffer): Promise<void>;
+  /** Store the object. */
+  finish(): Promise<void>;
+  /** Give the object up. An upload in progress is aborted, so none of its parts stay in the store. */
+  abort(): Promise<void>;
+}
+
+/**
+ * Writes an object as a multipart upload, a part at a time, holding at most
+ * one part. An object that never fills a part (most files, and an empty one)
+ * is stored with one PutObject at the end instead, so it costs no more than
+ * `putObject` did.
+ */
+class MultipartObjectWriter implements ObjectWriter {
+  private pending: Buffer[] = [];
+
+  private pendingBytes = 0;
+
+  private uploadId: string | null = null;
+
+  private readonly parts: CompletedPart[] = [];
+
+  constructor(
+    private readonly s3: S3Client,
+    private readonly bucket: string,
+    private readonly key: string,
+    private readonly partBytes: number,
+  ) {}
+
+  async write(piece: Buffer): Promise<void> {
+    this.pending.push(piece);
+    this.pendingBytes += piece.length;
+
+    if (this.pendingBytes >= this.partBytes) {
+      await this.uploadPart();
+    }
+  }
+
+  async finish(): Promise<void> {
+    if (this.uploadId === null) {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key,
+          Body: Buffer.concat(this.pending, this.pendingBytes),
+        }),
+      );
+      this.pending = [];
+      this.pendingBytes = 0;
+
+      return;
+    }
+
+    // The last part may be smaller than the minimum.
+    if (this.pendingBytes > 0) {
+      await this.uploadPart();
+    }
+
+    await this.s3.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: this.key,
+        UploadId: this.uploadId,
+        MultipartUpload: { Parts: this.parts },
+      }),
+    );
+    this.uploadId = null;
+  }
+
+  async abort(): Promise<void> {
+    this.pending = [];
+    this.pendingBytes = 0;
+
+    if (this.uploadId === null) {
+      return;
+    }
+
+    const uploadId = this.uploadId;
+
+    this.uploadId = null;
+    await this.s3.send(
+      new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: this.key, UploadId: uploadId }),
+    );
+  }
+
+  private async uploadPart(): Promise<void> {
+    if (this.uploadId === null) {
+      const created = await this.s3.send(
+        new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: this.key }),
+      );
+
+      if (!created.UploadId) {
+        throw new Error(`The object store started no upload for key: ${this.key}`);
+      }
+
+      this.uploadId = created.UploadId;
+    }
+
+    const body = Buffer.concat(this.pending, this.pendingBytes);
+    const partNumber = this.parts.length + 1;
+
+    this.pending = [];
+    this.pendingBytes = 0;
+
+    const uploaded = await this.s3.send(
+      new UploadPartCommand({
+        Bucket: this.bucket,
+        Key: this.key,
+        UploadId: this.uploadId,
+        PartNumber: partNumber,
+        Body: body,
+      }),
+    );
+
+    this.parts.push({ ETag: uploaded.ETag, PartNumber: partNumber });
+  }
 }
 
 /** Shape of every `ci.files.key` — the column is `uuid`, minted by `uuidv4()` on upload. */
@@ -843,6 +983,21 @@ export class FileService implements OnModuleInit {
         Key: key,
         Body: body,
       }),
+    );
+  }
+
+  /**
+   * Write an object a piece at a time, for a writer that gets its bytes in
+   * pieces and must not hold them all (the account import restores a file
+   * chunk by chunk). `expectedBytes`, when known, sizes the parts so a large
+   * object stays under the store's part count, up to {@link MAX_PART_BYTES}.
+   */
+  openObjectWriter(_context: ServiceContext, bucket: string, key: string, expectedBytes = 0): ObjectWriter {
+    return new MultipartObjectWriter(
+      this.s3,
+      bucket,
+      key,
+      Math.min(MAX_PART_BYTES, Math.max(MIN_PART_BYTES, Math.ceil(expectedBytes / MAX_PARTS))),
     );
   }
 
