@@ -852,6 +852,12 @@ describe('UserDataPortabilityService', () => {
       ],
       ['a gap', [chunkOf(0, 'a', 3), chunkOf(2, 'c', 3)], 'Missing file chunk 1 for f1'],
       ['a chunk sent twice', [chunkOf(0, 'a', 3), chunkOf(0, 'a', 3)], 'File chunk 0 for f1 arrived twice'],
+      // Each file in progress holds a part in memory, so only one may be.
+      [
+        'a file started before the last one is whole',
+        [chunkOf(0, 'a', 2, 'f1'), chunkOf(0, 'b', 2, 'f2', 'user-1/f2'), chunkOf(1, 'c', 2, 'f1')],
+        'Missing file chunk 1 for f1',
+      ],
     ])('refuses %s, aborts the upload and rolls back', async (_, chunks, message) => {
       dataSource.query = jest.fn().mockResolvedValue([]);
 

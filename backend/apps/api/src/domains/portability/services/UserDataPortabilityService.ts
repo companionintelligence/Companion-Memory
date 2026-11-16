@@ -336,8 +336,9 @@ export class UserDataPortabilityService {
     const touchedTables = new Set<string>();
     const pendingFiles = new Map<string, PendingFileImport>();
     // Objects stored under a key this import minted. No row points at them if
-    // the import fails, so they go with its rollback.
-    const storedNewKeys: string[] = [];
+    // the import fails, so they go with its rollback. A set: two files of a
+    // crafted archive can name the same key.
+    const storedNewKeys = new Set<string>();
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -436,6 +437,18 @@ export class UserDataPortabilityService {
         let pending = pendingFiles.get(record.id);
 
         if (!pending) {
+          // One file at a time, as the export writes them. Each file in
+          // progress holds a part in memory, so files started side by side
+          // would bring back the memory this streaming exists to save. A new
+          // file before the last one is whole means that one is missing chunks.
+          const [unfinished] = pendingFiles;
+
+          if (unfinished) {
+            const [unfinishedId, { received }] = unfinished;
+
+            throw new BadRequestException(`Missing file chunk ${received} for ${unfinishedId}`);
+          }
+
           const key = keyMap.resolve(record.key);
 
           pending = {
@@ -472,7 +485,7 @@ export class UserDataPortabilityService {
           pendingFiles.delete(record.id);
 
           if (!keyMap.isOwned(pending.key)) {
-            storedNewKeys.push(pending.key);
+            storedNewKeys.add(pending.key);
           }
 
           filesRestored += 1;
@@ -518,7 +531,7 @@ export class UserDataPortabilityService {
       try {
         await queryRunner.rollbackTransaction();
       } finally {
-        await this.discardStreamedFiles(pendingFiles.values(), committing ? [] : storedNewKeys);
+        await this.discardStreamedFiles(pendingFiles.values(), committing ? [] : [...storedNewKeys]);
       }
 
       throw error;
