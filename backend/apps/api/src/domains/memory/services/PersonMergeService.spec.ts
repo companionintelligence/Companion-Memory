@@ -535,9 +535,12 @@ describe('PersonMergeService', () => {
 
     expect(kept).toEqual(
       expect.objectContaining({
-        changeType: 'updated',
+        changeType: 'merged',
         changeSource: 'PersonMergeService.mergePeople',
-        changedFields: { emails: { old: null, new: ['yuki.tanaka@example.com'] } },
+        changedFields: {
+          emails: { old: null, new: ['yuki.tanaka@example.com'] },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+        },
       }),
     );
   });
@@ -557,13 +560,18 @@ describe('PersonMergeService', () => {
       .flatMap(([inputs]) => inputs)
       .find((input: { entityId: string }) => input.entityId === TARGET);
 
-    expect(kept?.changedFields).toEqual({ website: { old: null, new: 'https://dana.example.com' } });
+    expect(kept?.changedFields).toEqual({
+      website: { old: null, new: 'https://dana.example.com' },
+      merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+    });
   });
 
-  it('writes no row for the kept person when the merge changed nothing on it', async () => {
+  it("still records the merge on the kept person's page when the merge brought nothing new, naming whom it took in", async () => {
+    // Before, a merge of two identical copies left no row on the kept page at
+    // all. The merged-away record's page is no longer linked from anywhere.
     const harness = makeHarness([
-      personRow(TARGET, { name: 'Dana', properties: { emails: ['dana@example.com'] } }),
-      personRow(SOURCE_A, { name: 'Dana', properties: { emails: ['dana@example.com'] } }),
+      personRow(TARGET, { name: 'Johnny Doe', properties: { emails: ['johnny.doe@example.com'] } }),
+      personRow(SOURCE_A, { name: 'Johnny D.', properties: { emails: ['johnny.doe@example.com'] } }),
     ]);
 
     await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
@@ -571,10 +579,17 @@ describe('PersonMergeService', () => {
     const entityDeltas = harness.recordMany.mock.calls.flatMap(([inputs]) =>
       inputs.filter((input: { nodeType: string }) => input.nodeType === 'entity'),
     );
-    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([SOURCE_A]);
+    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([TARGET, SOURCE_A]);
+    expect(entityDeltas[0]).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changeSource: 'PersonMergeService.mergePeople',
+        changedFields: { merged_from_entity_ids: { old: null, new: [SOURCE_A] } },
+      }),
+    );
   });
 
-  it('writes no row for the kept person when the merge only carried a sync stamp over, as PersonService records an edit', async () => {
+  it("lists no field on the kept person's row when the merge only carried a sync stamp over, as PersonService records an edit", async () => {
     const harness = makeHarness([
       personRow(TARGET, { name: 'Dana', properties: { emails: ['dana@example.com'] } }),
       personRow(SOURCE_A, {
@@ -585,10 +600,11 @@ describe('PersonMergeService', () => {
 
     await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
 
-    const entityDeltas = harness.recordMany.mock.calls.flatMap(([inputs]) =>
-      inputs.filter((input: { nodeType: string }) => input.nodeType === 'entity'),
-    );
-    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([SOURCE_A]);
+    const kept = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept?.changedFields).toEqual({ merged_from_entity_ids: { old: null, new: [SOURCE_A] } });
   });
 
   it('records each merged-away person as moved into the kept one and no longer live, not as losing its name', async () => {
@@ -606,6 +622,14 @@ describe('PersonMergeService', () => {
       .filter((input: { changeType: string }) => input.changeType === 'merged');
 
     expect(merged).toEqual([
+      // One row on the kept page names both, whatever else the merge carried.
+      expect.objectContaining({
+        nodeType: 'entity',
+        entityId: TARGET,
+        changedFields: expect.objectContaining({
+          merged_from_entity_ids: { old: null, new: [SOURCE_A, SOURCE_B] },
+        }),
+      }),
       expect.objectContaining({
         nodeType: 'entity',
         entityId: SOURCE_A,

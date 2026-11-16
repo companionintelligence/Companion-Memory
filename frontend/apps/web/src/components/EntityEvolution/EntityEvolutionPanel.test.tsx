@@ -328,6 +328,88 @@ describe('EntityEvolutionPanel', () => {
     expect(screen.getByText('Yuki Tanaka')).toBeInTheDocument();
   });
 
+  it('reads a merge on the kept record as the record it took in, with the details that came along', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: {
+          phones: { old: null, new: ['+1 555 010 0133'] },
+          merged_from_entity_ids: { old: null, new: ['away-1'] },
+        },
+        fieldChanges: [
+          { field: 'phones', oldValue: null, newValue: ['+1 555 010 0133'] },
+          { field: 'merged_from_entity_ids', oldValue: null, newValue: ['away-1'] },
+        ],
+        fromEntity: { entityId: 'away-1', entityType: 'person', name: 'Johnny D.' },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged in Johnny D.')).toBeInTheDocument();
+    expect(screen.getByText(/Phones:/)).toBeInTheDocument();
+    expect(screen.getByText('[+1 555 010 0133]')).toBeInTheDocument();
+    expect(screen.queryByText(/Merged From Entity Ids/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Fields edited')).not.toBeInTheDocument();
+  });
+
+  it('reads a merge that brought the kept record nothing new as a plain entry naming whom it took in', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: { merged_from_entity_ids: { old: null, new: ['away-1'] } },
+        fieldChanges: [{ field: 'merged_from_entity_ids', oldValue: null, newValue: ['away-1'] }],
+        fromEntity: { entityId: 'away-1', entityType: 'person', name: 'Johnny D.' },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged in Johnny D.')).toBeInTheDocument();
+    expect(screen.queryByText(/Merged From Entity Ids/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/empty/)).not.toBeInTheDocument();
+  });
+
+  it('counts the others when a merge took in several records', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: { merged_from_entity_ids: { old: null, new: ['away-1', 'away-2', 'away-3'] } },
+        fieldChanges: [
+          { field: 'merged_from_entity_ids', oldValue: null, newValue: ['away-1', 'away-2', 'away-3'] },
+        ],
+        fromEntity: { entityId: 'away-1', entityType: 'person', name: 'Johnny D.' },
+      }),
+      delta({
+        deltaId: 'delta-2',
+        changeType: 'merged',
+        changedFields: { merged_from_entity_ids: { old: null, new: ['away-4', 'away-5'] } },
+        fieldChanges: [{ field: 'merged_from_entity_ids', oldValue: null, newValue: ['away-4', 'away-5'] }],
+        fromEntity: { entityId: 'away-4', entityType: 'person', name: null },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged in Johnny D. and 2 others')).toBeInTheDocument();
+    expect(screen.getByText('Merged in 2 other records')).toBeInTheDocument();
+  });
+
+  it('still reads a merge on the kept record whose merged-in record can no longer be named', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: { merged_from_entity_ids: { old: null, new: ['gone-1'] } },
+        fieldChanges: [{ field: 'merged_from_entity_ids', oldValue: null, newValue: ['gone-1'] }],
+        fromEntity: { entityId: 'gone-1', entityType: null, name: null },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged in another record')).toBeInTheDocument();
+  });
+
   it('does not end the merge headline on a blank name', () => {
     mockDeltas([
       delta({

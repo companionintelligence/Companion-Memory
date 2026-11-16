@@ -350,6 +350,62 @@ describeWithDb(`PersonMergeService — audit counts, in Postgres (${availability
     expect(columns.map((row) => row.column_name)).toEqual([...RELATIONSHIP_COLUMNS]);
   });
 
+  it("records an automatic merge that brought nothing new on the kept person's own page too", async () => {
+    // The fold of two people sharing an email, as People runs it on opening.
+    // Neither copy has anything the other lacks, which used to leave the kept
+    // person's Change History without a trace of the merge.
+    const insertWithEmail = async (name: string): Promise<string> => {
+      const id = uuidv7();
+
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id)
+         VALUES ($1, 'Person', $2, '{"emails": ["johnny.doe@example.com"]}'::jsonb, $3)`,
+        [id, name, owner.userId],
+      );
+
+      return id;
+    };
+
+    const kept = await insertWithEmail('Johnny Doe');
+    const away = await insertWithEmail('Johnny D.');
+    const [lo, hi] = [kept, away].sort();
+
+    await dataSource.query(
+      `INSERT INTO ci.merge_candidates
+              (owner_user_id, entity_type, entity_id_a, entity_id_b, score, status, detected_by, detector_version, evidence)
+       VALUES ($1, 'Person', $2, $3, 1, 'pending', 'test', 1, '[{"kind": "email"}]'::jsonb)`,
+      [owner.userId, lo, hi],
+    );
+
+    await expect(candidates.autoMergeDeterministicPairs(owner, { budgetMs: 30_000 })).resolves.toEqual(
+      expect.objectContaining({ merged: 1 }),
+    );
+
+    const rows: Array<{ entity_id: string; change_type: string; changed_fields: unknown }> =
+      await dataSource.query(
+        `SELECT entity_id, change_type, changed_fields FROM ci.graph_deltas
+          WHERE owner_user_id = $1 AND node_type = 'entity' AND entity_id = ANY($2::uuid[])
+          ORDER BY entity_id = $3 DESC`,
+        [owner.userId, [kept, away], kept],
+      );
+
+    expect(rows).toEqual([
+      {
+        entity_id: kept,
+        change_type: 'merged',
+        changed_fields: { merged_from_entity_ids: { old: null, new: [away] } },
+      },
+      {
+        entity_id: away,
+        change_type: 'merged',
+        changed_fields: {
+          is_active: { old: true, new: false },
+          merged_into_entity_id: { old: null, new: kept },
+        },
+      },
+    ]);
+  });
+
   it('resolvePairs reports the pending candidates it stamped', async () => {
     const people = (
       await Promise.all(['Ada', 'Ada Q', 'A. Quill', 'Ada Quill', 'Somebody Else'].map(insertPerson))

@@ -39,6 +39,23 @@ function toEntityIdOf(delta: Delta): string | null {
   return typeof mergedInto === 'string' ? mergedInto : null;
 }
 
+/**
+ * The entity a delta comes from: a relationship's near end, or for the record
+ * a merge kept, the first record merged into it (`merged_from_entity_ids` in its
+ * changed fields), so Change History can say whom it took in. The list's length
+ * says how many others came with it.
+ */
+function fromEntityIdOf(delta: Delta): string | null {
+  if (delta.fromEntityId) {
+    return delta.fromEntityId;
+  }
+
+  const mergedFrom = delta.changeType === 'merged' ? delta.changedFields?.merged_from_entity_ids?.new : null;
+  const first: unknown = Array.isArray(mergedFrom) ? mergedFrom[0] : null;
+
+  return typeof first === 'string' ? first : null;
+}
+
 @Controller('audit')
 @UseGuards(JwtOrApiKeyAuthGuard)
 export class AuditController {
@@ -90,6 +107,7 @@ export class AuditController {
       until: query.until,
     });
 
+    const fromEntityIds = deltas.map(fromEntityIdOf);
     const toEntityIds = deltas.map(toEntityIdOf);
     const relatedEntityIds = new Set<string>();
     for (const [index, delta] of deltas.entries()) {
@@ -97,8 +115,9 @@ export class AuditController {
         relatedEntityIds.add(delta.entityId);
       }
 
-      if (delta.fromEntityId) {
-        relatedEntityIds.add(delta.fromEntityId);
+      const fromEntityId = fromEntityIds[index];
+      if (fromEntityId) {
+        relatedEntityIds.add(fromEntityId);
       }
 
       const toEntityId = toEntityIds[index];
@@ -123,7 +142,8 @@ export class AuditController {
 
     const mappedDeltas = deltas.map((delta, index) => {
       const entityNode = delta.entityId ? nodeById.get(delta.entityId) : null;
-      const fromEntityNode = delta.fromEntityId ? nodeById.get(delta.fromEntityId) : null;
+      const fromEntityId = fromEntityIds[index];
+      const fromEntityNode = fromEntityId ? nodeById.get(fromEntityId) : null;
       const toEntityId = toEntityIds[index];
       const toEntityNode = toEntityId ? nodeById.get(toEntityId) : null;
 
@@ -154,9 +174,9 @@ export class AuditController {
               name: entityNode?.name ?? null,
             }
           : null,
-        fromEntity: delta.fromEntityId
+        fromEntity: fromEntityId
           ? {
-              entityId: delta.fromEntityId,
+              entityId: fromEntityId,
               entityType: fromEntityNode?.entityType ?? null,
               name: fromEntityNode?.name ?? null,
             }

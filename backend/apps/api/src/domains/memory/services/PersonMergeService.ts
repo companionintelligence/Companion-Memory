@@ -189,8 +189,8 @@ export class PersonMergeService {
       );
 
       // Real before and after values, as PersonService records an edit, sync
-      // stamps aside like there: a merge that only carries a source's stamp
-      // over has not changed the person.
+      // stamps aside like there: carrying a source's stamp over has not changed
+      // the person, so the kept row lists only the merge itself.
       await this.graphDeltaWriter.recordMany(
         mergeDeltaInputs({
           entityType: 'Person',

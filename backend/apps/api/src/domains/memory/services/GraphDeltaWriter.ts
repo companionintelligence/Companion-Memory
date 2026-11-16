@@ -64,11 +64,15 @@ export function changedFieldsBetween(
 
 /**
  * The rows a merge writes into Change History, which reads a side a delta
- * leaves out as "empty". The kept record's row holds each field the merge
- * moved, with its real before and after values, and is left out when the merge
- * moved nothing. Each merged-away record keeps its name; its row says where it
- * now points and, when it was live, that it no longer is. The hand-set list is
- * bookkeeping rather than a field anyone edited, so neither row records it.
+ * leaves out as "empty". Each record's row sits on its own page, so both pages
+ * list the merge.
+ *
+ * The kept record's row is always written, even when the merge brought nothing
+ * new: `merged_from_entity_ids` names the records merged into it. Each field
+ * the merge moved follows with its real before and after values. Each
+ * merged-away record keeps its name; its row says where it now points and, when
+ * it was live, that it no longer is. The hand-set list is bookkeeping rather
+ * than a field anyone edited, so neither row records it.
  */
 export function mergeDeltaInputs(merge: {
   entityType: string;
@@ -100,9 +104,15 @@ export function mergeDeltaInputs(merge: {
   };
 
   return [
-    ...(Object.keys(keptChanges).length > 0
-      ? [{ ...row, changeType: 'updated' as const, entityId: merge.targetId, changedFields: keptChanges }]
-      : []),
+    {
+      ...row,
+      changeType: 'merged' as const,
+      entityId: merge.targetId,
+      changedFields: {
+        ...keptChanges,
+        merged_from_entity_ids: { old: null, new: merge.sources.map((source) => source.entityId) },
+      },
+    },
     ...merge.sources.map((source) => ({
       ...row,
       changeType: 'merged' as const,

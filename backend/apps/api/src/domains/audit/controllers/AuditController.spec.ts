@@ -75,11 +75,28 @@ describe('AuditController.getDeltas', () => {
     expect(merged.toEntity?.name).toBe('Yuki T.');
   });
 
-  it('leaves toEntity empty on an entity edit that is not a merge', async () => {
+  it('names the first record merged into a kept one, so its own page can say whom it took in', async () => {
+    const OTHER = '00000000-0000-4000-8000-0000000000c1';
+    const [kept] = await deltasFor([
+      delta({
+        entityId: KEPT,
+        changedFields: {
+          phones: { old: null, new: ['+1 555 010 0133'] },
+          merged_from_entity_ids: { old: null, new: [MERGED_AWAY, OTHER] },
+        },
+      }),
+    ]);
+
+    expect(kept.fromEntity).toEqual({ entityId: MERGED_AWAY, entityType: 'Person', name: 'Yuki Tanaka' });
+    expect(kept.toEntity).toBeNull();
+  });
+
+  it('leaves toEntity and fromEntity empty on an entity edit that is not a merge', async () => {
     const [edit] = await deltasFor([
       delta({ changeType: 'updated', changedFields: { name: { old: 'Yuki', new: 'Yuki Tanaka' } } }),
     ]);
 
     expect(edit.toEntity).toBeNull();
+    expect(edit.fromEntity).toBeNull();
   });
 });

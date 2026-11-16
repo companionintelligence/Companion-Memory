@@ -529,11 +529,12 @@ describe('PlaceMergeService', () => {
 
     expect(entityDeltas).toEqual([
       expect.objectContaining({
-        changeType: 'updated',
+        changeType: 'merged',
         entityId: TARGET,
         changedFields: {
           place_kind: { old: null, new: 'venue' },
           website: { old: null, new: 'https://bluebottle.example.com' },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A, SOURCE_B] },
         },
       }),
       expect.objectContaining({
@@ -552,7 +553,7 @@ describe('PlaceMergeService', () => {
     ]);
   });
 
-  it('records the point a kept place gains from a source, so a merge that only places it on the map still leaves a row', async () => {
+  it('records the point a kept place gains from a source', async () => {
     const harness = makeHarness([
       locationRow(TARGET, { name: 'Blue Bottle', has_point: false, coordinates: null }),
       locationRow(SOURCE_A, { name: 'Blue Bottle', has_point: true, coordinates: [-122.3934, 37.7955] }),
@@ -566,8 +567,33 @@ describe('PlaceMergeService', () => {
 
     expect(kept).toEqual(
       expect.objectContaining({
-        changeType: 'updated',
-        changedFields: { coordinates: { old: null, new: [-122.3934, 37.7955] } },
+        changeType: 'merged',
+        changedFields: {
+          coordinates: { old: null, new: [-122.3934, 37.7955] },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+        },
+      }),
+    );
+  });
+
+  it("still records the merge on the kept place's page when the merge brought nothing new", async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Ferry Market' }),
+      locationRow(SOURCE_A, { name: 'Ferry Market' }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .filter((input: { nodeType: string }) => input.nodeType === 'entity');
+
+    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([TARGET, SOURCE_A]);
+    expect(entityDeltas[0]).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changeSource: 'PlaceMergeService.mergePlaces',
+        changedFields: { merged_from_entity_ids: { old: null, new: [SOURCE_A] } },
       }),
     );
   });
@@ -588,7 +614,7 @@ describe('PlaceMergeService', () => {
   });
 
   it('never gives the target a parent that already hangs below it, which would close a parent loop', async () => {
-    // SOURCE_A sits inside SHOP, and SHOP sits inside the target (or inside
+    // SOURCE_A sits inside SHOP. SHOP sits inside the target (or inside
     // SOURCE_B, which the re-point just moved under the target). CITY is the
     // next source's parent and is not below the target.
     const SHOP = '00000000-0000-0000-0000-0000000000d1';

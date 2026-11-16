@@ -210,6 +210,13 @@ function storedSide(delta: EvolutionDelta, field: string, side: 'old' | 'new'): 
   return entry != null && typeof entry === 'object' ? side in entry : null;
 }
 
+/** The ids a merge row says were merged into this record, or null on any other row. */
+function mergedFromIds(delta: EvolutionDelta): unknown[] | null {
+  const ids = delta.changeType === 'merged' ? delta.changedFields?.merged_from_entity_ids?.new : null;
+
+  return Array.isArray(ids) ? ids : null;
+}
+
 /**
  * Field edits worth showing.
  *
@@ -220,8 +227,11 @@ function meaningfulFieldChanges(delta: EvolutionDelta) {
   return delta.fieldChanges.filter(
     (change) =>
       !isSameValue(change.oldValue, change.newValue) &&
-      // A merge's headline names the record it went into; its id says nothing more.
-      !(delta.changeType === 'merged' && change.field === 'merged_into_entity_id') &&
+      // A merge's headline names the records on its other side; their ids say nothing more.
+      !(
+        delta.changeType === 'merged' &&
+        (change.field === 'merged_into_entity_id' || change.field === 'merged_from_entity_ids')
+      ) &&
       // A merge row stored before merges recorded both sides held the merged-away record's own name
       // with no new side, which read as "Name: Yuki Tanaka -> empty". The name did not change.
       !(delta.changeType === 'merged' && storedSide(delta, change.field, 'new') !== true),
@@ -235,7 +245,20 @@ function entityChangeHeadline(delta: EvolutionDelta): string {
   }
 
   if (delta.changeType === 'merged') {
-    // The API names the record this one was merged into as `toEntity`.
+    // The record a merge kept lists the records it took in; the API names the first as `fromEntity`.
+    const mergedFrom = mergedFromIds(delta);
+    if (mergedFrom) {
+      const name = delta.fromEntity?.name?.trim();
+      const others = mergedFrom.length - 1;
+
+      if (!name) {
+        return `Merged in ${others > 0 ? `${mergedFrom.length} other records` : 'another record'}`;
+      }
+
+      return `Merged in ${name}${others > 0 ? ` and ${others} other${others === 1 ? '' : 's'}` : ''}`;
+    }
+
+    // A merged-away record: the API names the record it was merged into as `toEntity`.
     return `Merged into ${delta.toEntity?.name?.trim() || 'another record'}`;
   }
 

@@ -249,9 +249,8 @@ export class PlaceMergeService {
         [ownerUserId, sources, targetId],
       );
 
-      // A point the target gains from a source is a change too (PlaceService.update
-      // records it as `coordinates`), or a merge that only places the kept row on
-      // the map would leave no row for it.
+      // A point the target gains from a source is a change too, recorded as
+      // `coordinates` the way PlaceService.update records it.
       await this.graphDeltaWriter.recordMany(
         mergeDeltaInputs({
           entityType: LOCATION_ENTITY_TYPE,
