@@ -12,9 +12,11 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { z } from 'zod/v3';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
@@ -35,7 +37,7 @@ import {
   type CreateConnectionDto,
   type UpdateConnectionDto,
 } from '../types';
-import { oauthCallbackUrlForConnection } from '../utils/callbackUrls';
+import { callbackRequestOrigin, oauthCallbackUrlForConnection, sentRedirectUri } from '../utils/callbackUrls';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -199,7 +201,7 @@ export class ConnectionsController {
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id/connect')
-  async connect(@Context() context: RequestContext, @Param('id') id: string) {
+  async connect(@Context() context: RequestContext, @Param('id') id: string, @Req() req?: Request) {
     const serviceContext = toServiceContext(context);
 
     const connection = await this.connectionService.findById(serviceContext, id);
@@ -225,9 +227,15 @@ export class ConnectionsController {
     //If the user has saved OAuth credentials for this provider, then just return the auth url generated for their OAuth app.
     //Otherwise refresh through the proxy service on CI Portal
     if (clientCredentials) {
-      return {
-        url: await client.getAuthorizationUrl(connection),
-      };
+      const url = await client.getAuthorizationUrl(connection, callbackRequestOrigin(req));
+      const redirectUri = sentRedirectUri(url);
+
+      // The code exchange must send the same redirect_uri; keep it rather than work it out again.
+      if (redirectUri) {
+        await this.connectionService.setOAuthRedirectUri(serviceContext, connection.id, redirectUri);
+      }
+
+      return { url };
     } else {
       const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId);
 
@@ -260,6 +268,7 @@ export class ConnectionsController {
   async completeCallback(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(completeConnectionSchema)) body: CompleteConnectionDto,
+    @Req() req?: Request,
   ) {
     const serviceContext = toServiceContext(context);
 
@@ -352,7 +361,13 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(connection, body.code);
+    // Sent with the redirect_uri the authorization kept on the connection. A connection authorized
+    // before that was kept works it out for this request, the callback page's.
+    const tokenExchange = await client.exchangeAuthorizationCode(
+      connection,
+      body.code,
+      callbackRequestOrigin(req),
+    );
 
     await this.update(context, connectionId, {
       ...tokenExchange,

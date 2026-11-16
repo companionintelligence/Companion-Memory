@@ -12,6 +12,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -27,7 +28,7 @@ import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
-import { oauthCallbackUrlForConnection } from '../utils/callbackUrls';
+import { callbackRequestOrigin, oauthCallbackUrlForConnection, sentRedirectUri } from '../utils/callbackUrls';
 
 @Controller('providers')
 export class ProvidersController {
@@ -65,9 +66,10 @@ export class ProvidersController {
     @Context() context: RequestContext,
     @Param('id') id: string,
     @Body(new ValidationPipe(connectProviderSchema)) input: connectProviderDto,
-    @Req() request?: { user?: { role?: string } },
+    @Req() request?: Partial<Pick<Request, 'headers' | 'secure'>> & { user?: { role?: string } },
   ) {
     const serviceContext = toServiceContext(context);
+    const requestOrigin = callbackRequestOrigin(request);
 
     const provider = await this.providerService.findById(serviceContext, id);
 
@@ -108,7 +110,7 @@ export class ProvidersController {
         endpoints: input.endpoints,
       });
 
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
 
       return {
         authorizationUrl,
@@ -154,7 +156,13 @@ export class ProvidersController {
     const credentials = await oauthClient.getClientCredentials(connection);
 
     if (credentials) {
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
+      const redirectUri = sentRedirectUri(authorizationUrl);
+
+      // The code exchange must send the same redirect_uri; keep it rather than work it out again.
+      if (redirectUri) {
+        await this.connectionService.setOAuthRedirectUri(serviceContext, connection.id, redirectUri);
+      }
 
       return {
         authorizationUrl,

@@ -3,7 +3,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 
 import type { Connection } from '../entities/ConnectionEntity';
-import { oauthCallbackUrl } from '../utils/callbackUrls';
+import { type CallbackRequestOrigin, exchangeRedirectUri, oauthCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseOAuth2Client } from './BaseOAuth2Client';
 import type { TokenExchange } from './types';
@@ -82,7 +82,7 @@ export class SlackClient extends BaseOAuth2Client {
     return this.fetchAuthedUser(connection).then((result) => result.id);
   }
 
-  async getAuthorizationUrl(connection: Connection): Promise<string> {
+  async getAuthorizationUrl(connection: Connection, request?: CallbackRequestOrigin): Promise<string> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error('Cannot getAuthorizationUrl because client credentials not found for connection', {
@@ -94,7 +94,7 @@ export class SlackClient extends BaseOAuth2Client {
 
     const params = new URLSearchParams({
       client_id: clientCredentials.clientId,
-      redirect_uri: oauthCallbackUrl(),
+      redirect_uri: oauthCallbackUrl(request),
       user_scope: this.getScopesFromActiveEndpoints(connection.activeEndpoints),
       state: connection.id,
     });
@@ -102,7 +102,11 @@ export class SlackClient extends BaseOAuth2Client {
     return `${this.authorizationEndpoint}?${params.toString()}`;
   }
 
-  async exchangeAuthorizationCode(connection: Connection, code: string): Promise<TokenExchange> {
+  async exchangeAuthorizationCode(
+    connection: Connection,
+    code: string,
+    request?: CallbackRequestOrigin,
+  ): Promise<TokenExchange> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       throw new Error('Cannot exchangeAuthorizationCode because client credentials not found');
@@ -112,7 +116,7 @@ export class SlackClient extends BaseOAuth2Client {
       code,
       client_id: clientCredentials.clientId,
       client_secret: clientCredentials.clientSecret,
-      redirect_uri: oauthCallbackUrl(),
+      redirect_uri: exchangeRedirectUri(connection, request),
       grant_type: 'authorization_code',
     });
 

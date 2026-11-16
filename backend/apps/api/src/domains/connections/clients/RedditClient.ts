@@ -3,7 +3,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 
 import type { Connection } from '../entities/ConnectionEntity';
-import { oauthCallbackUrl } from '../utils/callbackUrls';
+import { type CallbackRequestOrigin, exchangeRedirectUri } from '../utils/callbackUrls';
 
 import { firstAccountLabel } from './accountLabel';
 import { BaseOAuth2Client, formatTokenExchangeError } from './BaseOAuth2Client';
@@ -98,7 +98,11 @@ export class RedditClient extends BaseOAuth2Client {
     });
   }
 
-  async exchangeAuthorizationCode(connection: Connection, code: string): Promise<TokenExchange> {
+  async exchangeAuthorizationCode(
+    connection: Connection,
+    code: string,
+    request?: CallbackRequestOrigin,
+  ): Promise<TokenExchange> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error(
@@ -113,7 +117,7 @@ export class RedditClient extends BaseOAuth2Client {
 
     const tokenParams = new URLSearchParams({
       code,
-      redirect_uri: oauthCallbackUrl(),
+      redirect_uri: exchangeRedirectUri(connection, request),
       grant_type: 'authorization_code',
     });
 

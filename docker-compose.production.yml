@@ -101,9 +101,9 @@ services:
       # host. That form would hand every appliance the developers' address,
       # so an OAUTH_CALLBACK_URL in .env does not reach the api from this
       # file. To use another address, set it in an override file. `:+`
-      # leaves both empty while APP_BASE_URL is unset; the api then falls back
-      # to https://<APP_PUBLIC_HOSTNAME>/..., which this file leaves at
-      # ci-server.localhost (connections/utils/callbackUrls.ts).
+      # leaves both empty while APP_BASE_URL is unset; the api then builds them
+      # from the address the browser used, as sign-in does without
+      # APP_BASE_URL (connections/utils/callbackUrls.ts).
       OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
       OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
       # POWERSYNC_JWT_SECRET is deliberately absent here: it is a generated
@@ -173,7 +173,9 @@ services:
       CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
       # The api's two callback addresses. No worker job builds one today (the
       # dialog and the connect flow run in the api); this keeps both halves
-      # agreeing if one ever does.
+      # agreeing if one ever does while APP_BASE_URL is set. Without it the
+      # api reads the address from the browser's request, which the worker
+      # never has, so a worker job would get https://<APP_PUBLIC_HOSTNAME>/...
       OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
       OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
     networks:

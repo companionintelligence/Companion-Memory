@@ -3,7 +3,7 @@ import { BadRequestException, Inject } from '@nestjs/common';
 import type { Connection } from '../entities/ConnectionEntity';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
-import { oauthCallbackUrl } from '../utils/callbackUrls';
+import { type CallbackRequestOrigin, exchangeRedirectUri, oauthCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
 import type { TokenExchange, TokenResponse } from './types';
@@ -152,7 +152,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
     return (await response.json()) as T;
   }
 
-  async getAuthorizationUrl(connection: Connection): Promise<string> {
+  async getAuthorizationUrl(connection: Connection, request?: CallbackRequestOrigin): Promise<string> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error('Cannot getAuthorizationUrl because client credentials not found for connection', {
@@ -164,7 +164,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
     const params = new URLSearchParams({
       client_id: clientCredentials.clientId,
-      redirect_uri: oauthCallbackUrl(),
+      redirect_uri: oauthCallbackUrl(request),
       response_type: 'code',
       scope: this.getScopesFromActiveEndpoints(connection.activeEndpoints),
       state: connection.id,
@@ -174,7 +174,11 @@ export abstract class BaseOAuth2Client extends BaseClient {
     return `${this.authorizationEndpoint}?${params.toString()}`;
   }
 
-  async exchangeAuthorizationCode(connection: Connection, code: string): Promise<TokenExchange> {
+  async exchangeAuthorizationCode(
+    connection: Connection,
+    code: string,
+    request?: CallbackRequestOrigin,
+  ): Promise<TokenExchange> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error(
@@ -191,7 +195,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
       code,
       client_id: clientCredentials.clientId,
       client_secret: clientCredentials.clientSecret,
-      redirect_uri: oauthCallbackUrl(),
+      redirect_uri: exchangeRedirectUri(connection, request),
       grant_type: 'authorization_code',
     });
 

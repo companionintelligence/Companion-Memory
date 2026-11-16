@@ -37,6 +37,7 @@ import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/auth
 import {
   OIDC_ORIGIN_BOUNCE_PARAM,
   type OidcCallbackRequestOrigin,
+  readRequestOrigin,
   resolveOidcCallbackUrl,
   resolveOidcOriginBounce,
 } from '../utils/oidcCallbackUrl';
@@ -232,12 +233,7 @@ export class OidcController {
 
   /** The origin the browser used to reach this app, honouring the reverse proxy. */
   private requestOrigin(req: Request): OidcCallbackRequestOrigin {
-    return {
-      forwardedProto: req.headers['x-forwarded-proto'],
-      forwardedHost: req.headers['x-forwarded-host'],
-      host: req.headers.host,
-      secure: req.secure,
-    };
+    return readRequestOrigin(req);
   }
 
   /**
