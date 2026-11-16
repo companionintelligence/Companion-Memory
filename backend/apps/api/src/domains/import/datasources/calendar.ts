@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { isValidTimezone, serverTimezone } from '@ci/common/time/zoned';
 import { normalizeIcsRecurrenceId } from '@ci/domains/memory';
 
 import { htmlToText } from './htmlToText';
@@ -34,6 +35,23 @@ export interface ParsedIcsEvent {
   isAllDay: boolean;
   /** `RRULE` present and non-empty (the VEVENT is a series master). */
   isRecurring: boolean;
+  /**
+   * A series master's `RRULE`, `EXDATE` and `RDATE` lines as written
+   * (`RRULE:FREQ=WEEKLY;BYDAY=MO`, `EXDATE;TZID=America/Los_Angeles:20261026T100000`),
+   * in the order they appear. Stored as `metadata.recurrenceRule`, the shape
+   * Google sync writes there, which is where the calendar reads a series' rule
+   * from (`seriesRuleOf`). Absent on a one-off event, on an override, on an
+   * all-day series and on a series whose DTSTART did not parse (see where it is
+   * set in {@link parseIcsEvents}).
+   */
+  recurrence?: string[];
+  /**
+   * The zone the series repeats in, stored as `metadata.recurrenceTimeZone`:
+   * DTSTART's `TZID` when the runtime knows it, `UTC` for a UTC DTSTART, and
+   * the server's zone for a floating DTSTART or a `TZID` the runtime does not
+   * know, because that is the zone {@link parseICSDate} read its wall clock in.
+   */
+  recurrenceTimeZone?: string;
   /**
    * The block's own `STATUS`, as the `ci.events.status` it means (see
    * {@link icsEventStatus}). Absent when the block states none.
@@ -168,6 +186,10 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // we can detect DTSTART's `VALUE=DATE` (all-day) — the value-only `map`
     // can't distinguish midnight-UTC from a date-only event after parsing.
     const paramsMap: Record<string, string> = {};
+    // RRULE, EXDATE and RDATE lines, every one of them. `map` keeps one value
+    // per name. A series that skips several dates often writes one EXDATE line
+    // per date.
+    const recurrenceLines: string[] = [];
     // RFC 5545 §3.6.1 nests sub-components INSIDE the VEVENT — today only
     // VALARM (§3.6.6) is legal there — and every Apple/Google export emits the
     // alarm AFTER the event's own properties. Folding the whole block into one
@@ -221,6 +243,10 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       if (m[2]) {
         paramsMap[name] = m[2].slice(1);
       } // drop leading `;`
+
+      if (name === 'RRULE' || name === 'EXDATE' || name === 'RDATE') {
+        recurrenceLines.push(ln.trim());
+      }
     }
 
     const uid = map['UID'];
@@ -251,7 +277,8 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       /(?:^|;)VALUE=DATE(?:;|$)/i.test(paramsMap['DTSTART'] || '') ||
       /^\d{8}$/.test((map['DTSTART'] || '').trim());
     // RRULE presence => recurring event. (We don't expand instances here; the
-    // canonical row represents the series master, same as before.)
+    // canonical row represents the series master, same as before. Its rule
+    // rides along as `recurrence` and the calendar expands it when it reads.)
     const isRecurring = !!(map['RRULE'] && map['RRULE'].trim());
     // sig hashes the RAW (still-escaped) summary/location/description (cid
     // markers included) so ids of rows imported before the cid extraction —
@@ -296,7 +323,7 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // with the API-synced copy of the same override, which keys on the UTC
     // instant — docs/design/cross-pipeline-identity.md §3.5.
     const rawRecurrenceId = (map['RECURRENCE-ID'] || '').trim();
-    const recurrenceTzid = (paramsMap['RECURRENCE-ID'] || '').match(/(?:^|;)TZID=([^;]+)/)?.[1];
+    const recurrenceTzid = tzidParam(paramsMap['RECURRENCE-ID']);
     const recurrenceId = rawRecurrenceId
       ? normalizeIcsRecurrenceId(rawRecurrenceId, recurrenceTzid ?? null)
       : '';
@@ -304,6 +331,20 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // Read from the depth-0 `map`, so a nested component's STATUS cannot stand
     // in for the event's own (see the depth counter above).
     const status = icsEventStatus(map['STATUS']);
+    // Only a master carries the rule. An override is one occurrence of its
+    // series, and with a rule of its own it would expand into a second series
+    // on top of the first. A master whose DTSTART did not parse gets none
+    // either: the push dates it at import time and the rule would repeat that.
+    //
+    // Nor does an all-day series, yet. `parseRecurrence` walks one in UTC
+    // because it expects it at UTC midnight, where this parser puts it. The
+    // nightly time repair (`TemporalRepairStage`, `floatingAsUtc`) then moves
+    // an imported all-day row to the owner's local midnight, and from there a
+    // `BYDAY` rule lands a day late east of UTC and no DATE-valued EXDATE
+    // matches. Until the expander follows the repair, the series shows on its
+    // first date only, as it did before.
+    const recurrence = isRecurring && !recurrenceId && dtStart && !isAllDay ? recurrenceLines : undefined;
+    const recurrenceTimeZone = recurrence ? seriesTimeZone(map['DTSTART'], paramsMap['DTSTART']) : undefined;
     out.push({
       id,
       summary,
@@ -313,6 +354,8 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       dtEnd,
       isAllDay,
       isRecurring,
+      ...(recurrence ? { recurrence } : {}),
+      ...(recurrenceTimeZone ? { recurrenceTimeZone } : {}),
       ...(status ? { status } : {}),
       ...(inlineCids.length ? { inlineCids } : {}),
     });
@@ -413,6 +456,11 @@ export class CalendarFileImporter implements FileImporter {
           Location: ev.location,
           isAllDay: ev.isAllDay,
           isRecurring: ev.isRecurring,
+          // The series' rule and the zone it repeats in, as Google sync stores
+          // them (see ParsedIcsEvent.recurrence). Without the rule the calendar
+          // draws a series on its first date only.
+          recurrenceRule: ev.recurrence,
+          recurrenceTimeZone: ev.recurrenceTimeZone,
           // Lifted to ci.events.status by the push (see icsEventStatus).
           eventStatus: ev.status,
           // Inline images the export dropped (see ParsedIcsEvent.inlineCids).
@@ -440,6 +488,40 @@ export class CalendarFileImporter implements FileImporter {
 //
 // Its parser-side tests ARE restored, in `__tests__/calendar.test.ts`; only the
 // backfill describe block stayed behind.
+
+/** A property's `TZID` parameter, from its `;KEY=VAL;…` segment (the `paramsMap` entry). */
+function tzidParam(params: string | undefined): string | undefined {
+  return params?.match(/(?:^|;)TZID=([^;]+)/)?.[1];
+}
+
+/**
+ * The zone a series repeats in, from its DTSTART value and params.
+ *
+ * That is the `TZID` when the runtime knows it. A UTC date-time gives `UTC`:
+ * its occurrences fall at the same UTC time all year.
+ *
+ * A floating date-time, or one in a zone the runtime does not know, gives the
+ * server's zone. {@link parseICSDate} stored DTSTART by reading its wall clock
+ * there, and `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID`
+ * in the series' zone. Left to the owner's zone instead, the two disagree for
+ * anyone whose zone is not the server's: the series starts from a shifted wall
+ * clock and none of its excluded dates match an occurrence.
+ */
+function seriesTimeZone(value: string | undefined, params: string | undefined): string | undefined {
+  const tzid = tzidParam(params);
+
+  if (tzid && isValidTimezone(tzid)) {
+    return tzid;
+  }
+
+  const raw = (value ?? '').trim();
+
+  if (/^\d{8}T\d{6}Z$/i.test(raw)) {
+    return 'UTC';
+  }
+
+  return /^\d{8}T\d{6}$/.test(raw) ? serverTimezone() : undefined;
+}
 
 /**
  * Parse one DATE / DATE-TIME property value. `params` is the property's own
@@ -469,7 +551,7 @@ function parseICSDate(val?: string, params?: string): Date | undefined {
   // deliberate non-guesses: a DATE-only value, an already-`Z` value, a floating
   // value with no TZID, or a TZID the runtime does not recognize all come back
   // untouched and fall through to the branches below unchanged.
-  const tzid = params?.match(/(?:^|;)TZID=([^;]+)/)?.[1];
+  const tzid = tzidParam(params);
   const v = tzid ? normalizeIcsRecurrenceId(raw, tzid) : raw;
   // All-day DATE: YYYYMMDD
   if (/^\d{8}$/.test(v)) {

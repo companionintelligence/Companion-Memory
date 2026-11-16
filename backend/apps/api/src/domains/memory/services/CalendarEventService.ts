@@ -256,10 +256,12 @@ const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'plann
  * calendar never showed at all, and on a box with no Google or Outlook
  * connection that is every calendar the person has.
  *
- * The importer keeps only whether a VEVENT had an RRULE, not the rule itself,
- * so an imported series is drawn at its DTSTART and nowhere else until the
- * import carries the rule through (see `seriesRuleOf`). A row a Google sync
- * later converged onto does carry it and expands like any other.
+ * The importer stores a timed series' RRULE, EXDATE and RDATE lines in
+ * `metadata.recurrenceRule`, the way Google sync does, so an imported series
+ * expands like a synced one (see `seriesRuleOf`). An all-day series keeps none
+ * yet (see `parseIcsEvents`), and neither does one imported before the rule
+ * was kept: both are drawn at their DTSTART only. Importing the file again
+ * finds the row already there and leaves it as it is.
  */
 const IMPORTED_CALENDAR_EVENT_SQL = `(event.event_type = 'event' AND event.source_system = '${FEDERATED_SYSTEMS.calendar}')`;
 
@@ -2083,9 +2085,9 @@ export class CalendarEventService {
    *
    * One extra filter: the row has to hold a rule where `seriesRuleOf` looks for
    * one. `is_recurring` alone also marks Outlook's server-expanded instances and
-   * every series from an imported .ics (which keeps no rule), and none of those
-   * can expand. Left in, they spent the MAX_RECURRING_MASTERS budget and could
-   * push an older series that does have a rule out of it.
+   * every series imported from an .ics before the importer kept the rule. None
+   * of those can expand. Left in, they spent the MAX_RECURRING_MASTERS budget
+   * and could push an older series that does have a rule out of it.
    */
   private recurringMasters(userId: string, to: Date): Promise<EventEntity[]> {
     return this.dataSource
