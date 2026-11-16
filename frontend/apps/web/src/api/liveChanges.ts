@@ -1,4 +1,4 @@
-import { isNativePlatform, streamingFetch } from '@ci/common';
+import { isIosPlatform, isNativePlatform, streamingFetch } from '@ci/common';
 
 /**
  * The server's hint stream: `GET /api/live/changes`, server-sent events, one
@@ -42,14 +42,24 @@ import { isNativePlatform, streamingFetch } from '@ci/common';
  *
  * A hidden phone app reads nothing the stream announces, but an open stream
  * still takes the server's keep-alive every 25 s. On mobile data each one
- * wakes the phone's radio. So once the app has been in the background for
- * `BACKGROUND_CLOSE_MS` the stream is closed and no stream opens while it
- * stays there. A quick switch to another app and back keeps it. On return it
- * opens at once and catches up like any other drop.
+ * wakes the phone's radio. So the stream closes when the app goes into the
+ * background and no stream opens while it stays there. On return it opens at
+ * once and catches up like any other drop.
  *
- * The close is a timer. A phone can freeze a background app or sleep before
- * it runs. A stream held through that may have been dropped by the network
- * without noticing, so on return it is replaced, not trusted.
+ * On Android the close waits `BACKGROUND_CLOSE_MS`, so a quick switch to
+ * another app and back keeps the stream. The close is a timer. A phone can
+ * freeze a background app or sleep before it runs. A stream held through that
+ * may have been dropped by the network without noticing, so on return it is
+ * replaced, not trusted.
+ *
+ * On iOS it closes as soon as the page goes hidden. iOS suspends the web view
+ * within seconds of the app leaving the screen, long before a timer could run,
+ * and the stream would stay open taking keep-alives until iOS or the network
+ * dropped it. The signal is `visibilitychange`: the web view marks the page
+ * hidden when the app enters the background, the same moment the App plugin's
+ * `pause` fires, and the page hears it without a round trip through the
+ * native bridge. The App plugin's `appStateChange` would also fire for a pull
+ * of Control Center, which is not leaving the app.
  *
  * A browser tab or the desktop window keeps its stream in the background.
  */
@@ -70,9 +80,9 @@ const RECONNECT_FLOOR_MS = 1_000;
 const RECONNECT_CEILING_MS = 30_000;
 const UNAUTHORIZED_WAIT_MS = 60_000;
 /**
- * How long the phone app stays in the background before its stream closes.
+ * How long the Android app stays in the background before its stream closes.
  * Long enough for a quick look at another app and shorter than the server's
- * 25 s keep-alive, so a backgrounded app takes one at most.
+ * 25 s keep-alive, so a backgrounded app takes one at most. iOS closes at once.
  */
 export const BACKGROUND_CLOSE_MS = 15_000;
 
@@ -478,9 +488,19 @@ function onOnline(): void {
   reconnectNow();
 }
 
-/** The phone app went into the background: its stream closes if it stays there. */
+/**
+ * The phone app went into the background. On iOS its stream closes now: the
+ * web view is suspended before a timer would run. On Android it closes if the
+ * app stays there.
+ */
 function onHidden(): void {
   if (!isNativePlatform() || backgroundTimer) {
+    return;
+  }
+
+  if (isIosPlatform()) {
+    closeStream();
+
     return;
   }
 

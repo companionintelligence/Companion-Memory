@@ -1,4 +1,4 @@
-import { isNativePlatform, streamingFetch } from '@ci/common';
+import { isIosPlatform, isNativePlatform, streamingFetch } from '@ci/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -15,10 +15,12 @@ vi.mock('@ci/common', async (orig) => ({
   ...(await orig<typeof import('@ci/common')>()),
   streamingFetch: vi.fn(),
   isNativePlatform: vi.fn(() => false),
+  isIosPlatform: vi.fn(() => false),
 }));
 
 const mockedFetch = vi.mocked(streamingFetch);
 const mockedNative = vi.mocked(isNativePlatform);
+const mockedIos = vi.mocked(isIosPlatform);
 
 /** A response whose body is written to by the test, frame by frame. */
 function openStream(status = 200) {
@@ -63,6 +65,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mockedFetch.mockReset();
   mockedNative.mockReturnValue(false);
+  mockedIos.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -607,7 +610,7 @@ describe('liveChanges with the phone API key', () => {
   });
 });
 
-describe('liveChanges in the phone app in the background', () => {
+describe('liveChanges in the Android app in the background', () => {
   beforeEach(() => {
     mockedNative.mockReturnValue(true);
   });
@@ -768,6 +771,116 @@ describe('liveChanges in the phone app in the background', () => {
     comeBack();
     await stream.opened;
 
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('liveChanges in the iOS app in the background', () => {
+  beforeEach(() => {
+    mockedNative.mockReturnValue(true);
+    mockedIos.mockReturnValue(true);
+  });
+
+  it('closes the stream as soon as the app leaves the screen and reopens it on return, catching up', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    expect(firstSignal?.aborted).toBe(true);
+    expect(isLiveChangesConnected()).toBe(false);
+
+    // Nothing while away, however long.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const second = openStream();
+    comeBack();
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a new stream after a quick switch to another app', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const second = openStream();
+    comeBack();
+    await second.opened;
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+  });
+
+  it('replaces a held stream when hidden and visible both arrive as the app resumes', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    // Suspended before the page heard it was hidden: both events land on resume.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    const second = openStream();
+    goAway();
+    comeBack();
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a refused key to its minute across a spell in the background', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(30_000);
+    comeBack();
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a hidden browser tab on an iPhone alone', async () => {
+    mockedNative.mockReturnValue(false);
+    mockedIos.mockReturnValue(false);
+    const stream = openStream();
+    setLiveChangesAuth('tok');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await stream.opened;
+    const signal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    await vi.advanceTimersByTimeAsync(60_000);
+    comeBack();
+    await flush();
+
+    expect(signal?.aborted).toBe(false);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 });
