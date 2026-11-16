@@ -1,6 +1,6 @@
 import { createHmac } from 'crypto';
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
@@ -9,6 +9,7 @@ import { type FindOptionsWhere, IsNull, MoreThan, Not, Repository } from 'typeor
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { SessionEntity } from '../entities/SessionEntity';
 import type { IssuedSession, JwtPayload, RotationResult, SessionMetadata } from '../types';
@@ -88,6 +89,7 @@ export class AuthService {
     private jwtService: JwtService,
     @InjectRepository(SessionEntity)
     private readonly sessionRepository: Repository<SessionEntity>,
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {}
 
   /**
@@ -280,7 +282,14 @@ export class AuthService {
     });
 
     // Postgres always reports the count; a driver that reports none is taken at its word that it ran.
-    return affected !== 0;
+    const ended = affected !== 0;
+
+    if (ended) {
+      // Its open live-update streams end now, not at their next keep-alive.
+      await this.liveChanges?.publishRevoked(userId);
+    }
+
+    return ended;
   }
 
   /**
@@ -294,10 +303,14 @@ export class AuthService {
   async invalidateOtherSessions(userId: string, currentToken: string | null | undefined): Promise<void> {
     const currentHashed = currentToken ? this.digest(currentToken) : null;
 
-    await this.sessionRepository.delete({
+    const result = await this.sessionRepository.delete({
       user: { id: userId },
       ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
+
+    if ((result.affected ?? 0) > 0) {
+      await this.liveChanges?.publishRevoked(userId);
+    }
   }
 
   /**
@@ -315,9 +328,15 @@ export class AuthService {
     return session?.created_at ?? null;
   }
 
-  issueAccessToken(userId: string): string {
+  /**
+   * `sessionId` is the session the token is minted for, carried as `sid`. Only
+   * the live-update stream reads it, to end when that session is signed out;
+   * every other request takes the token as it is until it expires.
+   */
+  issueAccessToken(userId: string, sessionId?: string): string {
     const payload = {
       sub: userId,
+      ...(sessionId ? { sid: sessionId } : {}),
     } satisfies JwtPayload;
 
     const accessToken = this.jwtService.sign(payload);

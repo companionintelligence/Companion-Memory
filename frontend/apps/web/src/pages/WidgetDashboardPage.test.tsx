@@ -140,13 +140,18 @@ describe('WidgetDashboardPage Jobs card', () => {
 const NOW = new Date('2026-11-12T12:00:00.000Z');
 const PATHS = { plan: '/plan/tasks', chat: '/chat', forecast: '/forecast', jobs: '/jobs' };
 
-function renderPrediction(systemStatus: string, predictedL0: string, probability: number) {
+function renderPrediction(
+  systemStatus: string,
+  predictedL0: string,
+  probability: number,
+  stillLearning = false,
+) {
   const snapshot = buildWidgetSnapshot({
     now: NOW,
     forecast: {
       generatedAt: '2026-11-12T11:00:00.000Z',
       systemStatus,
-      stillLearning: false,
+      stillLearning,
       buckets: [
         {
           startTime: '2026-11-12T12:15:00.000Z',
@@ -199,10 +204,33 @@ describe('WidgetDashboardView: the Prediction card', () => {
     expect(screen.queryByText(/NIGHTLY/)).not.toBeInTheDocument();
   });
 
-  it('says a new account is waiting for its first model, not COLD_START', () => {
-    renderPrediction('COLD_START', 'UNKNOWN', 0.5);
+  // Before the first run has built the forecast, every slot carries a
+  // placeholder class: the card read "Unsorted, 97% likely" on a new account.
+  it('says a new account is waiting for its first model, not COLD_START or a placeholder class', () => {
+    renderPrediction('COLD_START', 'UNKNOWN', 0.97, true);
 
+    expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
     expect(screen.getByText('Waiting to initialize...')).toBeInTheDocument();
     expect(screen.queryByText(/COLD_START/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    expect(screen.queryByText(/likely|Confidence/)).not.toBeInTheDocument();
+  });
+
+  it('says the forecast is updating while the first run is going', () => {
+    renderPrediction('BOOTSTRAP:label', 'UNKNOWN', 0.97, true);
+
+    expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
+    expect(screen.getByText('Labeling your events and content...')).toBeInTheDocument();
+    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    expect(screen.queryByText(/likely/)).not.toBeInTheDocument();
+  });
+
+  it('still names the activity during a later run over a built forecast', () => {
+    renderPrediction('NIGHTLY:label', 'WORK', 0.62, false);
+
+    expect(screen.getByText('Work')).toBeInTheDocument();
+    expect(screen.getByText('62% likely')).toBeInTheDocument();
+    expect(screen.getByText('Labeling new events...')).toBeInTheDocument();
+    expect(screen.queryByText('Forecast is updating')).not.toBeInTheDocument();
   });
 });

@@ -23,6 +23,9 @@
 
 pub mod ollama_sidecar;
 
+/// "Download recommended model" in Settings > Model, for a user's own Ollama.
+pub mod recommended;
+
 /// Compiled everywhere, used only on Linux — see its module doc comment.
 pub mod bridge_relay;
 

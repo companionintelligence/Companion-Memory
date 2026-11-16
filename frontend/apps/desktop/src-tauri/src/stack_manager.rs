@@ -342,10 +342,7 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
     let env_path = paths.compose_dir.join(".env");
 
     if let Some(model) = &llm_env.chat_model {
-        let current =
-            fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
-        fs::write(&env_path, with_chat_model(&current, model))
-            .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))?;
+        set_env_chat_model(paths, model)?;
     }
 
     let (Some(api_base), Some(api_key)) = (&llm_env.llm_api_base, &llm_env.llm_api_key) else {
@@ -360,16 +357,50 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
         .map_err(|e| format!("Failed to append LLM override to {}: {e}", env_path.display()))
 }
 
+const CHAT_MODEL_KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
+
+/// Points `.env` at `model` for chat and background work. Takes effect for a
+/// container only when it is recreated (see apply_env_change).
+///
+/// Written beside `.env` and renamed over it. "Download recommended model"
+/// calls this from its own thread, outside START_IN_FLIGHT, so a `compose up`
+/// from the tray or the splash can be reading `.env` at that moment. A rename
+/// gives it the old file or the new one. A truncate-and-write could give it an
+/// empty one. An `up` without CI_SERVER_IMAGE_TAG or CI_LOCAL_ONLY recreates
+/// the containers wrongly.
+pub fn set_env_chat_model(paths: &StackPaths, model: &str) -> Result<(), String> {
+    let env_path = paths.compose_dir.join(".env");
+    let staged = paths.compose_dir.join(".env.next");
+    let current = fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
+    fs::write(&staged, with_chat_model(&current, model))
+        .and_then(|()| fs::rename(&staged, &env_path))
+        .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))
+}
+
+/// The chat model `.env` names, if it can be read.
+pub fn env_chat_model(paths: &StackPaths) -> Option<String> {
+    let contents = fs::read_to_string(paths.compose_dir.join(".env")).ok()?;
+
+    chat_model_in(&contents)
+}
+
+fn chat_model_in(env_contents: &str) -> Option<String> {
+    env_contents
+        .lines()
+        .rev()
+        .find_map(|line| line.split_once('=').filter(|(name, _)| *name == CHAT_MODEL_KEY))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// `.env` contents with LLM_DEFAULT_CHAT_MODEL naming `model`, exactly once.
 fn with_chat_model(env_contents: &str, model: &str) -> String {
-    const KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
-
     let mut contents: String = env_contents
         .lines()
-        .filter(|line| !line.split_once('=').is_some_and(|(name, _)| name == KEY))
+        .filter(|line| !line.split_once('=').is_some_and(|(name, _)| name == CHAT_MODEL_KEY))
         .map(|line| format!("{line}\n"))
         .collect();
-    contents.push_str(&format!("{KEY}={model}\n"));
+    contents.push_str(&format!("{CHAT_MODEL_KEY}={model}\n"));
     contents
 }
 
@@ -630,6 +661,27 @@ pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
     };
 
     start_stack_inner(paths, None)
+}
+
+/// Recreates the containers whose settings changed in `.env`: the same `up`
+/// as `start_stack`, which leaves unchanged containers running. Unlike
+/// `start_stack` it waits for a start already under way instead of standing
+/// down, because that start may have read `.env` before the change.
+///
+/// A stack the person stopped from the tray stays stopped (its next start reads
+/// the new `.env`), as does one the app is quitting on. Returns whether it ran
+/// the `up`.
+pub fn apply_env_change(paths: &StackPaths) -> Result<bool, String> {
+    let _in_flight = START_IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+
+    if is_user_stopped(paths) || NO_NEW_STARTS.load(Ordering::SeqCst) {
+        log::info!("apply_env_change: the stack is stopped or the app is quitting; its next start reads the new .env");
+        return Ok(false);
+    }
+
+    start_stack_inner(paths, None)?;
+
+    Ok(true)
 }
 
 fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> Result<(), String> {
@@ -1170,8 +1222,13 @@ pub fn gateway_runs_image_tag(image_tag: &str) -> bool {
     inspect_gateway().is_some_and(|gateway| gateway.serves_image_tag(image_tag))
 }
 
+/// Memory's health check, through the gateway.
+fn health_url() -> String {
+    format!("http://127.0.0.1:{GATEWAY_PORT}/api/health")
+}
+
 pub async fn is_healthy() -> bool {
-    let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
+    let url = health_url();
     let client = match reqwest::Client::builder().timeout(Duration::from_millis(2500)).build() {
         Ok(client) => client,
         Err(_) => return false,
@@ -1179,6 +1236,30 @@ pub async fn is_healthy() -> bool {
     match client.get(url).send().await {
         Ok(response) => response.status().is_success(),
         Err(_) => false,
+    }
+}
+
+/// Blocks until Memory answers its health check through the gateway, or
+/// `timeout` passes. For a caller already off the async runtime.
+pub fn wait_until_healthy(timeout: Duration) -> bool {
+    let url = health_url();
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(2500))
+        .no_proxy()
+        .build()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        if client.get(&url).send().is_ok_and(|response| response.status().is_success()) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -1365,6 +1446,56 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(untouched(&after), untouched(&before));
+    }
+
+    /// "Download recommended model" reads which chat model Memory runs on and,
+    /// once the download is in, points `.env` back at the default. That is a
+    /// second rewrite of the same line. The file ends up as the app would
+    /// have written it had the model been there at launch.
+    #[test]
+    fn the_chat_model_is_read_back_and_can_be_switched_to_the_default() {
+        use crate::local_model::ollama_sidecar::DEFAULT_CHAT_MODEL;
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        assert_eq!(env_chat_model(&paths), None, "no .env yet");
+
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let as_written = fs::read_to_string(&env_path).unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+
+        set_env_chat_model(&paths, "qwen3.5:122b").unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some("qwen3.5:122b"));
+
+        set_env_chat_model(&paths, DEFAULT_CHAT_MODEL).unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+        assert!(
+            !paths.compose_dir.join(".env.next").exists(),
+            "the staged copy is renamed over .env, not left beside it"
+        );
+        let mut lines_now: Vec<_> = fs::read_to_string(&env_path).unwrap().lines().map(str::to_string).collect();
+        let mut lines_then: Vec<_> = as_written.lines().map(str::to_string).collect();
+        lines_now.sort();
+        lines_then.sort();
+        assert_eq!(lines_now, lines_then);
+
+        assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL=\n"), None);
+        assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL_X=a\nLLM_DEFAULT_CHAT_MODEL=b\n").as_deref(), Some("b"));
+    }
+
+    /// A download that ends after the person stopped Memory from the tray
+    /// leaves it stopped. Its `up` would have started the stack again and
+    /// cleared the marker that tells the tray it was stopped on purpose.
+    #[test]
+    fn an_env_change_leaves_a_stopped_stack_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        mark_user_stopped(&paths);
+
+        assert_eq!(apply_env_change(&paths), Ok(false));
+        assert!(is_user_stopped(&paths));
     }
 
     /// Every key write_env_file generates, in one list.

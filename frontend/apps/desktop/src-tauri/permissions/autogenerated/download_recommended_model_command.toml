@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-download-recommended-model-command"
+description = "Enables the download_recommended_model_command command without any pre-configured scope."
+commands.allow = ["download_recommended_model_command"]
+
+[[permission]]
+identifier = "deny-download-recommended-model-command"
+description = "Denies the download_recommended_model_command command without any pre-configured scope."
+commands.deny = ["download_recommended_model_command"]

@@ -528,3 +528,83 @@ describe('AuthService — intents and sessions do not cross', () => {
     });
   });
 });
+
+describe('AuthService: telling open live-update streams', () => {
+  const ACCESS_SECRET = config.auth.jwt.authTokenSecret;
+
+  function makeService(rows: Array<Partial<SessionEntity>> = []) {
+    const repo = {
+      findOne: jest.fn(async () => rows[0] ?? null),
+      delete: jest.fn(async () => ({ affected: rows.length })),
+    };
+    const liveChanges = { publishRevoked: jest.fn().mockResolvedValue(undefined) };
+    const service = new AuthService(
+      new JwtService({ secret: ACCESS_SECRET }),
+      repo as unknown as Repository<SessionEntity>,
+      liveChanges as never,
+    );
+
+    return { service, repo, liveChanges };
+  }
+
+  it('ties an access token to the session it was minted for', () => {
+    const { service } = makeService();
+
+    const tied = new JwtService({}).verify<JwtPayload>(service.issueAccessToken('user-1', 'sess-1'), {
+      secret: ACCESS_SECRET,
+    });
+    const untied = new JwtService({}).verify<JwtPayload>(service.issueAccessToken('user-1'), {
+      secret: ACCESS_SECRET,
+    });
+
+    expect(tied).toMatchObject({ sub: 'user-1', sid: 'sess-1' });
+    expect(untied.sub).toBe('user-1');
+    expect(untied).not.toHaveProperty('sid');
+  });
+
+  it('tells open streams once a session is signed out', async () => {
+    const { service, repo, liveChanges } = makeService([{ id: 'sess-1' }]);
+
+    await service.invalidateSession('user-1', 'cookie-token');
+
+    expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('user-1');
+    expect(repo.delete.mock.invocationCallOrder[0]).toBeLessThan(
+      liveChanges.publishRevoked.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('tells nobody when the session was already signed out', async () => {
+    const { service, repo, liveChanges } = makeService();
+
+    await expect(service.invalidateSession('user-1', 'cookie-token')).resolves.toBe(false);
+
+    expect(repo.delete).not.toHaveBeenCalled();
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+
+  it('tells nobody when a concurrent sign-out deleted the session first', async () => {
+    const { service, repo, liveChanges } = makeService([{ id: 'sess-1' }]);
+    repo.delete.mockResolvedValueOnce({ affected: 0 });
+
+    await expect(service.invalidateSession('user-1', 'cookie-token')).resolves.toBe(false);
+
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+
+  it('tells open streams once the other sessions are signed out', async () => {
+    const { service, liveChanges } = makeService([{ id: 'sess-2' }]);
+
+    await service.invalidateOtherSessions('user-1', 'cookie-token');
+
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('user-1');
+  });
+
+  it('tells nobody when there were no other sessions to sign out', async () => {
+    const { service, liveChanges } = makeService();
+
+    await service.invalidateOtherSessions('user-1', 'cookie-token');
+
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+});

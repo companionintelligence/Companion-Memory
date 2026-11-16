@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import { CreateMultipartUploadCommand, UploadPartCommand } from '@aws-sdk/client-s3';
 import { NotFoundException } from '@nestjs/common';
 
 import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -623,5 +624,218 @@ describe('FileService.resignLinks — a fresh link for one that expired', () => 
     await expect(service.resignLinks(ownerCtx, [`/static/ci/${KEY}?X-Amz-Signature=x`])).resolves.toEqual([
       null,
     ]);
+  });
+});
+
+describe('FileService.openObjectWriter writes an object a piece at a time', () => {
+  const MiB = 1024 * 1024;
+  const ctx = { userId: SYSTEM_USER } as unknown as UserServiceContext;
+
+  /** The commands the writer sent, by name, with their input. */
+  function storeAnswering(s3Send: jest.Mock) {
+    const sent: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+    s3Send.mockImplementation(
+      async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+
+        if (command instanceof CreateMultipartUploadCommand) {
+          return { UploadId: 'upload-1' };
+        }
+
+        if (command instanceof UploadPartCommand) {
+          return { ETag: `"etag-${String(command.input.PartNumber)}"` };
+        }
+
+        return {};
+      },
+    );
+
+    return sent;
+  }
+
+  const bodySize = (input: Record<string, unknown>) => (input.Body as Buffer).length;
+
+  it('stores an object smaller than one part with a single PutObject', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.from('hello '));
+    await writer.write(Buffer.from('world'));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual(['PutObjectCommand']);
+    expect((sent[0].input.Body as Buffer).toString('utf8')).toBe('hello world');
+  });
+
+  it('hands a lone piece to the store as it is, without a copy', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+    const piece = Buffer.from('one chunk');
+
+    await writer.write(piece);
+    await writer.finish();
+
+    expect(sent[0].input.Body).toBe(piece);
+  });
+
+  it('stores an empty object', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(0));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual(['PutObjectCommand']);
+    expect(bodySize(sent[0].input)).toBe(0);
+  });
+
+  it('sends a larger object in parts as it fills them, holding no more than one', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1', 10 * MiB);
+
+    await writer.write(Buffer.alloc(3 * MiB, 1));
+    expect(sent).toHaveLength(0);
+
+    // Past the 5 MiB minimum: the first part goes out before the next piece.
+    await writer.write(Buffer.alloc(3 * MiB, 2));
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+    ]);
+
+    await writer.write(Buffer.alloc(3 * MiB, 3));
+    await writer.write(Buffer.alloc(1 * MiB, 4));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'UploadPartCommand',
+      'CompleteMultipartUploadCommand',
+    ]);
+    expect(
+      sent.filter((command) => command.name === 'UploadPartCommand').map((c) => bodySize(c.input)),
+    ).toEqual([6 * MiB, 4 * MiB]);
+    expect(sent[3].input).toEqual({
+      Bucket: 'bucket',
+      Key: 'key-1',
+      UploadId: 'upload-1',
+      MultipartUpload: {
+        Parts: [
+          { ETag: '"etag-1"', PartNumber: 1 },
+          { ETag: '"etag-2"', PartNumber: 2 },
+        ],
+      },
+    });
+  });
+
+  it('aborts an upload it has started, so none of its parts stay in the store', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    await writer.abort();
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+    expect(sent[2].input).toEqual({ Bucket: 'bucket', Key: 'key-1', UploadId: 'upload-1' });
+  });
+
+  it('has nothing to abort before the first part and stores nothing', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.from('partial'));
+    await writer.abort();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses a second finish, which would store an empty object over the first', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    await writer.finish();
+
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.from('more'))).rejects.toThrow('is closed');
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'CompleteMultipartUploadCommand',
+    ]);
+  });
+
+  it('closes after a part fails to go out, so a finish cannot store the object without it', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB, 1));
+    await writer.write(Buffer.alloc(3 * MiB, 2));
+    // The second part: its 6 MiB are dropped from memory before the request.
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+    await expect(writer.write(Buffer.alloc(3 * MiB, 3))).rejects.toThrow('store down');
+
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.alloc(1))).rejects.toThrow('is closed');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+  });
+
+  it('aborts an upload whose finish failed', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+
+    await expect(writer.finish()).rejects.toThrow('store down');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+  });
+
+  it.each([
+    ['a 100 GiB object', 100 * 1024 * MiB, Math.ceil((100 * 1024 * MiB) / 10_000)],
+    ['a 10 TiB object, capped at 64 MiB', 10 * 1024 * 1024 * MiB, 64 * MiB],
+  ])('sizes the parts of %s to stay within the part count', async (_, expected, partBytes) => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1', expected);
+
+    await writer.write(Buffer.alloc(partBytes - 1));
+    expect(sent).toHaveLength(0);
+
+    await writer.write(Buffer.alloc(1));
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+    ]);
+
+    await writer.abort();
   });
 });

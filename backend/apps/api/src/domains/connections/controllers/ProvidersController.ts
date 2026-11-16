@@ -12,13 +12,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { isOutboundEnabled } from '@ci/common/outbound';
 import { ValidationPipe } from '@ci/common/pipes';
-import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
@@ -28,6 +28,7 @@ import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
+import { callbackRequestOrigin, oauthCallbackUrlForConnection, sentRedirectUri } from '../utils/callbackUrls';
 
 @Controller('providers')
 export class ProvidersController {
@@ -65,9 +66,10 @@ export class ProvidersController {
     @Context() context: RequestContext,
     @Param('id') id: string,
     @Body(new ValidationPipe(connectProviderSchema)) input: connectProviderDto,
-    @Req() request?: { user?: { role?: string } },
+    @Req() request?: Partial<Pick<Request, 'headers' | 'secure'>> & { user?: { role?: string } },
   ) {
     const serviceContext = toServiceContext(context);
+    const requestOrigin = callbackRequestOrigin(request);
 
     const provider = await this.providerService.findById(serviceContext, id);
 
@@ -108,7 +110,7 @@ export class ProvidersController {
         endpoints: input.endpoints,
       });
 
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
 
       return {
         authorizationUrl,
@@ -154,7 +156,13 @@ export class ProvidersController {
     const credentials = await oauthClient.getClientCredentials(connection);
 
     if (credentials) {
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
+      const redirectUri = sentRedirectUri(authorizationUrl);
+
+      // The code exchange must send the same redirect_uri; keep it rather than work it out again.
+      if (redirectUri) {
+        await this.connectionService.setOAuthRedirectUri(serviceContext, connection.id, redirectUri);
+      }
 
       return {
         authorizationUrl,
@@ -168,8 +176,7 @@ export class ProvidersController {
       throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
     }
 
-    const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
-    const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+    const callbackUrl = oauthCallbackUrlForConnection(connection.id);
 
     const scopes = oauthClient.getScopesFromActiveEndpoints(input.endpoints);
     const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(

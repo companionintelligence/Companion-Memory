@@ -142,6 +142,90 @@ describe('LiveChangesService', () => {
     });
   });
 
+  describe('revocations', () => {
+    it('sends a revoke notice on the same channel', async () => {
+      const { service, dataSource } = makeService();
+
+      await service.publishRevoked('alice');
+
+      expect(dataSource.query).toHaveBeenCalledWith('SELECT pg_notify($1, $2)', [
+        LIVE_CHANGES_CHANNEL,
+        JSON.stringify({ userId: 'alice', revoked: true }),
+      ]);
+    });
+
+    it("tells that user's revocation listeners and nobody's change listeners", () => {
+      const { service, logger } = makeService();
+      const changes = jest.fn();
+      const alice = jest.fn();
+      const bob = jest.fn();
+      service.subscribe('alice', changes);
+      service.subscribeRevocations('alice', alice);
+      const offBob = service.subscribeRevocations('bob', bob);
+      offBob();
+
+      service.dispatch(JSON.stringify({ userId: 'alice', revoked: true }));
+      service.dispatch(JSON.stringify({ userId: 'bob', revoked: true }));
+
+      expect(alice).toHaveBeenCalledTimes(1);
+      expect(bob).not.toHaveBeenCalled();
+      expect(changes).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('looks up a key or a session but nothing for a token with neither', async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValueOnce([{ '?column?': 1 }] as never).mockResolvedValueOnce([] as never);
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).resolves.toBe(true);
+      await expect(service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' })).resolves.toBe(
+        false,
+      );
+      await expect(service.isCredentialLive('alice', { kind: 'token' })).resolves.toBe(true);
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(dataSource.query).toHaveBeenNthCalledWith(1, expect.stringContaining('ci.api_keys'), [
+        'key-1',
+        'alice',
+      ]);
+      expect(dataSource.query).toHaveBeenNthCalledWith(2, expect.stringContaining('ci.sessions'), [
+        'sess-1',
+        'alice',
+      ]);
+    });
+
+    it("counts a deleted account's keys and sessions as gone", async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValue([] as never);
+
+      await service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' });
+      await service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' });
+
+      const statements = (dataSource.query.mock.calls as unknown as Array<[string]>).map(([sql]) => sql);
+
+      expect(statements).toHaveLength(2);
+
+      for (const sql of statements) {
+        expect(sql).toMatch(/JOIN ci\.users u ON u\.id = \w\.user_id/);
+        expect(sql).toContain('u.deleted_at IS NULL');
+      }
+    });
+
+    it('logs a lookup that failed before passing the error on', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).rejects.toThrow(
+        'connection reset',
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Live change credential check failed',
+        expect.objectContaining({ userId: 'alice', kind: 'apiKey', error: 'connection reset' }),
+      );
+    });
+  });
+
   describe('the listening connection', () => {
     beforeEach(() => {
       jest.useFakeTimers();

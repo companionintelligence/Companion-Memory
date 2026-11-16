@@ -961,6 +961,49 @@ export function serializePersonAddress(address: PersonAddress): Record<string, u
 }
 
 /**
+ * The flat keys that mirror a person's primary address for readers that
+ * predate the `addresses` list (the search projection, older importers).
+ */
+export const PERSON_ADDRESS_MIRROR_KEYS = [
+  'address',
+  'street_address',
+  'street_address_2',
+  'city',
+  'region',
+  'postal_code',
+  'country',
+] as const;
+
+/** The flat mirror keys for `primary`, every one null when there is none. */
+export function personAddressMirror(
+  primary: PersonAddress | null,
+): Record<(typeof PERSON_ADDRESS_MIRROR_KEYS)[number], string | null> {
+  return {
+    address: primary ? formatPersonAddress(primary) : null,
+    street_address: primary?.streetAddress ?? null,
+    street_address_2: primary?.streetAddress2 ?? null,
+    city: primary?.city ?? null,
+    region: primary?.region ?? null,
+    postal_code: primary?.postalCode ?? null,
+    country: primary?.country ?? null,
+  };
+}
+
+/**
+ * One stored `addresses` entry as an address, or null when it is not an
+ * object or carries no address line.
+ */
+export function readStoredPersonAddress(entry: unknown): PersonAddress | null {
+  if (typeof entry !== 'object' || entry === null) {
+    return null;
+  }
+
+  const address = toPersonAddress(entry as StoredPersonAddress);
+
+  return isPersonAddressEmpty(address) ? null : address;
+}
+
+/**
  * Read a person's address list out of the raw properties bag.
  *
  * Rows written before the list existed carry only the flat `street_address`,
@@ -972,9 +1015,8 @@ export function readPersonAddresses(properties: Record<string, unknown> | null |
 
   if (Array.isArray(raw)) {
     const addresses = raw
-      .filter((entry): entry is StoredPersonAddress => typeof entry === 'object' && entry !== null)
-      .map(toPersonAddress)
-      .filter((address) => !isPersonAddressEmpty(address));
+      .map(readStoredPersonAddress)
+      .filter((address): address is PersonAddress => address != null);
 
     if (addresses.length > 0) {
       return ensureSinglePrimary(addresses);

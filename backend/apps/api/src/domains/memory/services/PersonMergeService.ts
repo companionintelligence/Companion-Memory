@@ -5,14 +5,25 @@ import { EntityManager, Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
+import { stableJson } from '@ci/common/stableJson';
 import { USER_EDITED_KEYS, userEditedKeys } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+import {
+  type PersonAddress,
+  PERSON_ADDRESS_MIRROR_KEYS,
+  ensureSinglePrimary,
+  personAddressMirror,
+  readPersonAddresses,
+  readStoredPersonAddress,
+  serializePersonAddress,
+} from '../types';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, mergeDeltaInputs } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
+import { withoutSyncStamps } from './PersonService';
 
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
 export interface MergeCounts {
@@ -59,7 +70,7 @@ export interface MergeCounts {
  *    committed to a source after the re-point's snapshot (see
  *    {@link sweepLeftoverEdges}),
  * 5. folds source properties into the target (target wins scalars;
- *    emails/phones/names arrays are unioned),
+ *    emails/phones/names arrays and the address list are unioned),
  * 6. tombstones each source (is_active = FALSE, merged_into_entity_id =
  *    target) and deletes its search-index embedding,
  * 7. re-points any tombstone that already aimed at a source, so
@@ -106,8 +117,9 @@ export class PersonMergeService {
         description: string | null;
         properties: Record<string, unknown>;
         merged_into_entity_id: string | null;
+        is_active: boolean | null;
       }> = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
           FOR UPDATE`,
@@ -186,36 +198,28 @@ export class PersonMergeService {
         [ownerUserId, sources, targetId],
       );
 
+      // Real before and after values, as PersonService records an edit, sync
+      // stamps aside like there: carrying a source's stamp over has not changed
+      // the person, so the kept row lists only the merge itself.
       await this.graphDeltaWriter.recordMany(
-        [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
-            },
+        mergeDeltaInputs({
+          entityType: 'Person',
+          ownerUserId,
+          changeSource: 'PersonMergeService.mergePeople',
+          targetId,
+          columns: {
+            before: { name: target.name, description: target.description },
+            after: { name: mergedName, description: mergedDescription },
           },
-          ...sources.map((sourceId) => ({
-            nodeType: 'entity' as const,
-            changeType: 'merged' as const,
+          properties: {
+            before: withoutSyncStamps(target.properties ?? {}) as Record<string, unknown>,
+            after: withoutSyncStamps(mergedProperties) as Record<string, unknown>,
+          },
+          sources: sources.map((sourceId) => ({
             entityId: sourceId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            isActive: byId.get(sourceId)?.is_active,
           })),
-        ],
+        }),
         em,
       );
 
@@ -285,7 +289,14 @@ export class PersonMergeService {
             ownerUserId,
             id,
             targetId,
-            JSON.stringify({ counts, sourceProperties: byId.get(id)?.properties ?? {} }),
+            // `addressesFolded`: this merge put the source's addresses on the
+            // target, so the repair of merges that dropped them leaves it out
+            // (MergedAddressRepairService).
+            JSON.stringify({
+              counts,
+              sourceProperties: byId.get(id)?.properties ?? {},
+              [ADDRESSES_FOLDED]: true,
+            }),
           ],
         );
       }
@@ -599,8 +610,260 @@ function firstNonEmpty(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
+/** A value the fold may fill: missing, null, '' or an empty list. */
+function isBlank(value: unknown): boolean {
+  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
 /**
- * Target wins scalars; emails/phones/names arrays are unioned across all rows.
+ * The `ci.entity_merges.details` flag of a merge whose source's addresses are
+ * on the person it went into: every merge from this fold on, and each older
+ * one once MergedAddressRepairService has put them back.
+ */
+export const ADDRESSES_FOLDED = 'addressesFolded';
+
+/** `addresses` and the flat keys that mirror its primary entry. */
+export const ADDRESS_KEYS: ReadonlySet<string> = new Set(['addresses', ...PERSON_ADDRESS_MIRROR_KEYS]);
+
+/** What the scalar fill leaves alone when no one has an address: only the list. */
+const ADDRESS_LIST_KEY: ReadonlySet<string> = new Set(['addresses']);
+
+/** The keys of a stored address entry, as {@link serializePersonAddress} writes them. */
+const STORED_ADDRESS_KEYS: ReadonlySet<string> = new Set([
+  'label',
+  'street_address',
+  'street_address_2',
+  'city',
+  'region',
+  'postal_code',
+  'country',
+  'is_primary',
+]);
+
+/** Two copies of one address match whatever their label, case or spacing. */
+export function addressKey(address: PersonAddress): string {
+  return [
+    address.streetAddress,
+    address.streetAddress2,
+    address.city,
+    address.region,
+    address.postalCode,
+    address.country,
+  ]
+    .map((part) => (part ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .join('|');
+}
+
+/**
+ * An `addresses` entry that is another writer's data rather than a blank: not
+ * null or empty text, and not an entry in this app's own shape with no address
+ * line, which is a blank row and would otherwise come across as a second primary.
+ */
+function isForeignAddressEntry(entry: unknown): boolean {
+  if (entry == null || (typeof entry === 'string' && entry.trim() === '')) {
+    return false;
+  }
+
+  if (typeof entry !== 'object' || Array.isArray(entry)) {
+    return true;
+  }
+
+  return Object.keys(entry).some((key) => !STORED_ADDRESS_KEYS.has(key));
+}
+
+/**
+ * Stored `addresses` entries that do not read as an address (another importer's
+ * shape), kept as they are. A lone value stored in place of a list is one such
+ * entry, so the list a merge writes does not drop it.
+ */
+function unreadableAddressEntries(properties: Record<string, unknown>): unknown[] {
+  const list = properties.addresses;
+
+  if (!Array.isArray(list)) {
+    return readStoredPersonAddress(list) != null || isForeignAddressEntry(list) ? [list] : [];
+  }
+
+  return list.filter((entry) => readStoredPersonAddress(entry) == null && isForeignAddressEntry(entry));
+}
+
+/**
+ * Every address of the target and the sources, each once: the target's first,
+ * its primary still primary, then each source's it lacks. A copy the target
+ * already has gives it only a label it had none for. When no source adds
+ * anything, `list` is null and the target's address keys stay as they are. So
+ * they do when the target's person cleared its address by hand, which leaves
+ * no address but an address key in its hand-set list.
+ *
+ * `ownedKeys` are the keys the scalar fill must leave alone: `addresses` always,
+ * and the flat mirror keys whenever anyone has an address, so they follow the
+ * merged list rather than a mix of two people's parts. `firstFrom` is the
+ * source the first address came from, or null when it is the target's own.
+ */
+function foldAddresses(
+  target: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): {
+  list: unknown[] | null;
+  first: PersonAddress | null;
+  firstFrom: number | null;
+  givers: number[];
+  ownedKeys: ReadonlySet<string>;
+} {
+  const own = readPersonAddresses(target);
+
+  if (own.length === 0 && userEditedKeys(target).some((key) => ADDRESS_KEYS.has(key))) {
+    return { list: null, first: null, firstFrom: null, givers: [], ownedKeys: ADDRESS_KEYS };
+  }
+
+  const merged: PersonAddress[] = [];
+  const at = new Map<string, number>();
+  const unreadable: unknown[] = [];
+  const seenUnreadable = new Set<string>();
+
+  // Adds the addresses and unreadable entries of one person that the list
+  // lacks, and labels a copy it has without one. True when the list changed.
+  const take = (properties: Record<string, unknown>, addresses: PersonAddress[]): boolean => {
+    let changed = false;
+
+    for (const address of addresses) {
+      const key = addressKey(address);
+      const existing = at.get(key);
+
+      if (existing === undefined) {
+        at.set(key, merged.length);
+        merged.push({ ...address, isPrimary: false });
+        changed = true;
+      } else if (merged[existing].label == null && address.label != null) {
+        merged[existing] = { ...merged[existing], label: address.label };
+        changed = true;
+      }
+    }
+
+    for (const entry of unreadableAddressEntries(properties)) {
+      const key = stableJson(entry);
+
+      if (!seenUnreadable.has(key)) {
+        seenUnreadable.add(key);
+        unreadable.push(entry);
+        changed = true;
+      }
+    }
+
+    return changed;
+  };
+
+  take(target, own);
+
+  const givers: number[] = [];
+  let firstFrom: number | null = null;
+
+  for (const [index, source] of sources.entries()) {
+    const hadAddress = merged.length > 0;
+
+    if (take(source, readPersonAddresses(source))) {
+      givers.push(index);
+    }
+
+    if (!hadAddress && merged.length > 0) {
+      firstFrom = index;
+    }
+  }
+
+  const ownedKeys = merged.length > 0 ? ADDRESS_KEYS : ADDRESS_LIST_KEY;
+
+  if (givers.length === 0) {
+    return { list: null, first: null, firstFrom: null, givers, ownedKeys };
+  }
+
+  // The target's primary is first in `merged` (readPersonAddresses puts it
+  // there); with no address of its own, the first source's primary is.
+  // Every entry was added unflagged, so the first one becomes the primary.
+  const ordered = ensureSinglePrimary(merged);
+
+  return {
+    list: [...ordered.map((address) => serializePersonAddress(address)), ...unreadable],
+    first: ordered[0] ?? null,
+    firstFrom,
+    givers,
+    ownedKeys,
+  };
+}
+
+/**
+ * Writes the folded address list onto `out`, a target's folded properties,
+ * with the flat keys that mirror its first address and the hand-set claims
+ * that come with them, into `handSet`. Nothing when no source added one.
+ */
+function applyFoldedAddresses(
+  out: Record<string, unknown>,
+  handSet: Set<string>,
+  targetHandSet: ReadonlySet<string>,
+  sources: Array<Record<string, unknown>>,
+  addresses: ReturnType<typeof foldAddresses>,
+): void {
+  if (!addresses.list) {
+    return;
+  }
+
+  out.addresses = addresses.list;
+
+  // A flat key the target's person set or cleared by hand keeps the
+  // target's value, as any scalar does, even where it no longer matches the
+  // list (an edit through the flat fields leaves the list as it was).
+  if (addresses.first) {
+    for (const [key, value] of Object.entries(personAddressMirror(addresses.first))) {
+      if (!targetHandSet.has(key)) {
+        out[key] = value;
+      }
+    }
+  }
+
+  // As for a scalar, a key a source's person set by hand stays hand-set when
+  // its value came from that source: `addresses` from any source that added
+  // to it, the flat mirror keys only from the one whose address they mirror.
+  for (const giver of addresses.givers) {
+    for (const key of userEditedKeys(sources[giver])) {
+      if (key === 'addresses' || (giver === addresses.firstFrom && ADDRESS_KEYS.has(key))) {
+        handSet.add(key);
+      }
+    }
+  }
+}
+
+/**
+ * `target` with the addresses `sources` bring, folded exactly as a merge folds
+ * them (see {@link foldAddresses}), or null when they bring none. Only the
+ * address keys and the hand-set list change. For the repair of merges made
+ * before the fold kept addresses (MergedAddressRepairService).
+ */
+export function withFoldedAddresses(
+  target: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  const addresses = foldAddresses(target, sources);
+
+  if (!addresses.list) {
+    return null;
+  }
+
+  const out: Record<string, unknown> = { ...target };
+  const targetHandSet = new Set(userEditedKeys(target));
+  const handSet = new Set(targetHandSet);
+
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
+
+  if (handSet.size > 0) {
+    out[USER_EDITED_KEYS] = [...handSet];
+  }
+
+  return out;
+}
+
+/**
+ * Target wins scalars; emails/phones/names arrays are unioned across all rows,
+ * and so are addresses (see {@link foldAddresses}). An empty list is as empty as
+ * a null: a person made in the app carries `addresses: []`, which used to keep
+ * every address of the person merged into it out.
  *
  * The hand-set list ({@link USER_EDITED_KEYS}) is not a scalar to fill: a key
  * the target's person cleared or set by hand keeps the target's value, and the
@@ -615,24 +878,36 @@ function foldProperties(
   const out: Record<string, unknown> = { ...target };
   const targetHandSet = new Set(userEditedKeys(target));
   const handSet = new Set(targetHandSet);
+  const addresses = foldAddresses(target, sources);
 
   for (const source of sources) {
     const sourceHandSet = new Set(userEditedKeys(source));
 
     for (const [key, value] of Object.entries(source)) {
-      if (value == null || key === USER_EDITED_KEYS || targetHandSet.has(key)) {
+      if (
+        value == null ||
+        key === USER_EDITED_KEYS ||
+        targetHandSet.has(key) ||
+        addresses.ownedKeys.has(key)
+      ) {
         continue;
       }
 
-      if (out[key] == null || out[key] === '') {
+      if (isBlank(out[key])) {
         out[key] = value;
 
+        // An earlier source's blank may have filled this key first; its claim
+        // goes with the value it gave.
         if (sourceHandSet.has(key)) {
           handSet.add(key);
+        } else {
+          handSet.delete(key);
         }
       }
     }
   }
+
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
 
   if (handSet.size > 0) {
     out[USER_EDITED_KEYS] = [...handSet];

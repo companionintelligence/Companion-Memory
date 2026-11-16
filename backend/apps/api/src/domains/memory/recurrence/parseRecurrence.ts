@@ -76,10 +76,12 @@ function asLines(value: unknown): string[] {
  * there verbatim (RRULE + EXDATE + RDATE) and explicitly does NOT write
  * `recurrence_pattern`. Gating on that column instead would make every read
  * below a no-op against every row in the database — the same silent
- * nothing-happened this whole module exists to end.
+ * nothing-happened this whole module exists to end. The .ics importer writes a
+ * VEVENT's RRULE, EXDATE and RDATE lines to `metadata.recurrenceRule` too, in
+ * the same shape.
  *
  * `recurrence_pattern.rrule` is the second leg, for producers that fill the
- * column (and for the .ics import lane once it carries the rule text through).
+ * column.
  */
 export function seriesRuleOf(row: RecurringSeriesRow): SeriesRuleLines | null {
   const pattern = row.recurrencePattern ?? {};

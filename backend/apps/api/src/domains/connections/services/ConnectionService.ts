@@ -150,6 +150,17 @@ export class ConnectionService {
   }
 
   /**
+   * Keep the redirect_uri a connection's OAuth authorization was sent with, for the code exchange
+   * that completes it ({@link Connection.oauthRedirectUri}).
+   */
+  async setOAuthRedirectUri(context: UserServiceContext, id: string, redirectUri: string): Promise<void> {
+    await this.connectionRepository.update(
+      { id, user: { id: context.userId } },
+      { oauthRedirectUri: redirectUri },
+    );
+  }
+
+  /**
    * Whether an account other than `userId` has a connection (active or not) to the provider
    * account `externalId` on `providerId`.
    *

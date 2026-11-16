@@ -189,6 +189,8 @@ describe('SessionController', () => {
         .expect(200);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
+      // Tied to the session it was minted for, so the live-update stream ends when that session is signed out.
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(mockUser.id, MOCK_SESSION_ID);
     });
 
     it('should not return session token in the response body', async () => {
@@ -290,6 +292,7 @@ describe('SessionController', () => {
         .expect(200);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith('user-1', MOCK_SESSION_ID);
     });
 
     it('should return 400 when no session cookie is present', async () => {

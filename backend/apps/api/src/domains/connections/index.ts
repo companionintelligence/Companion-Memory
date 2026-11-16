@@ -145,3 +145,4 @@ export type {
 } from './clients/types';
 
 export { OUTLOOK_SKIP_REGEX, ONEDRIVE_ETAG_REGEX } from './clients/constants';
+export { callbackRequestOrigin } from './utils/callbackUrls';

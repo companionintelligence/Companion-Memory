@@ -7,6 +7,8 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
+import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { DerivedRelationshipService } from '../DerivedRelationshipService';
 
 /**
@@ -64,6 +66,7 @@ const noopLogger = {
 
 describeWithDatabase(`DerivedRelationshipService against the live schema (${availability.target})`, () => {
   let dataSource: DataSource;
+  let schemaLock: SchemaLock | null = null;
   let service: DerivedRelationshipService;
 
   const userId = randomUUID();
@@ -194,6 +197,13 @@ describeWithDatabase(`DerivedRelationshipService against the live schema (${avai
     });
     await dataSource.initialize();
 
+    // SHARED: this suite commits real ci.* rows and deletes its user in
+    // teardown. See domains/__tests__/support/schemaLock.ts.
+    schemaLock = await acquireSchemaWriteLock(
+      dataSource,
+      'maintenance/DerivedRelationshipService.integration',
+    );
+
     await createSyntheticTestUser(
       (sql, params) => dataSource.query(sql, params as unknown[]),
       'DerivedRelationship',
@@ -277,6 +287,9 @@ describeWithDatabase(`DerivedRelationshipService against the live schema (${avai
     // Café: three fixes on three separate days. Gym: FIVE fixes, all inside one
     // afternoon — more rows than the café and still a single day, which is the
     // difference between "goes there" and "was there once for a while".
+    // The chunk they go into, created up front: see positionChunks.ts.
+    await createPositionChunks(dataSource, userId, '2026-03-01T09:00:00Z', '2026-03-04T18:00:00Z');
+
     const fixes: Array<[string, string]> = [
       ['2026-03-01T09:00:00Z', cafe],
       ['2026-03-02T09:05:00Z', cafe],
@@ -328,16 +341,23 @@ describeWithDatabase(`DerivedRelationshipService against the live schema (${avai
 
   afterAll(async () => {
     if (dataSource?.isInitialized) {
-      await dataSource.query('DELETE FROM ci.graph_deltas WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.position WHERE user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.communications WHERE user_id = $1', [userId]);
-      // ci.users.entity_id has no ON DELETE action, so the anchor has to be
-      // released before the entity it points at can go.
-      await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [userId]);
-      await dataSource.destroy();
+      // The schema lock goes back even when a step here fails: a jest worker
+      // keeps its process (with the connection holding the lock) for the files
+      // it runs next.
+      try {
+        await dataSource.query('DELETE FROM ci.graph_deltas WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.position WHERE user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.communications WHERE user_id = $1', [userId]);
+        // ci.users.entity_id has no ON DELETE action, so the anchor has to be
+        // released before the entity it points at can go.
+        await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = $1', [userId]);
+      } finally {
+        await schemaLock?.release();
+        await dataSource.destroy();
+      }
     }
   });
 

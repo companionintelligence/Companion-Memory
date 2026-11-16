@@ -1260,6 +1260,59 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   return noop;
 }
 
+/** Where a "Download recommended model" started in Memory Desktop has got. */
+export type DesktopModelDownload =
+  | { state: 'idle' }
+  | { state: 'downloading'; model: string; completedBytes: number; totalBytes: number }
+  | { state: 'switching'; model: string }
+  | { state: 'done'; downloaded: string[]; chatModel: string }
+  | { state: 'failed'; message: string };
+
+/**
+ * What Memory Desktop says about the models of the person's own Ollama
+ * (`frontend/apps/desktop/src-tauri/src/local_model/recommended.rs`, whose field names these are).
+ */
+export interface DesktopRecommendedModel {
+  /** The person's own Ollama serves Memory. Otherwise the app runs its own, which has the recommended models. */
+  ownOllama: boolean;
+  /** The chat model Memory Desktop would have downloaded for itself. */
+  recommended: string;
+  /** The chat model Memory runs on now for anyone who has not picked one. */
+  chatModel: string | null;
+  /**
+   * Recommended models the person's Ollama does not have, the embedding model included. Null when it was not asked
+   * (not the person's own Ollama, or a download is running) or did not answer, which says nothing about what it has.
+   */
+  missing: string[] | null;
+  download: DesktopModelDownload;
+}
+
+/**
+ * Memory Desktop's view of the recommended models, or null when there is none to ask for: not inside Memory
+ * Desktop, or a Memory Desktop from before it could answer (the command is unknown to it, or not granted to this
+ * page).
+ */
+export async function getDesktopRecommendedModel(): Promise<DesktopRecommendedModel | null> {
+  if (!isTauriPlatform()) {
+    return null;
+  }
+
+  try {
+    return await tauriInvoke<DesktopRecommendedModel>('get_recommended_model_command');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Has Memory Desktop download the recommended models the person's Ollama lacks and switch Memory to the
+ * recommended chat model. Resolves once the download has started; follow it with
+ * {@link getDesktopRecommendedModel}. Rejects with Memory Desktop's own message when it cannot start.
+ */
+export async function downloadDesktopRecommendedModel(): Promise<DesktopRecommendedModel> {
+  return tauriInvoke<DesktopRecommendedModel>('download_recommended_model_command');
+}
+
 /** Quit the native app (Android). No-op on web/iOS (iOS has no programmatic exit). */
 export async function exitApp(): Promise<void> {
   const app = plugins()?.App;

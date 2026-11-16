@@ -22,11 +22,16 @@ interface LocationRow {
   description: string | null;
   properties: Record<string, unknown>;
   merged_into_entity_id: string | null;
+  is_active?: boolean | null;
   parent_place_id: string | null;
   place_kind: string | null;
-  has_point: boolean;
+  coordinates?: number[] | null;
+  point: string | null;
   has_boundary: boolean;
 }
+
+/** A `location_point` as the merge reads it back: hex EWKB, SRID 4326. */
+const PIN = '0101000020E6100000295C8FC2F5985EC085EB51B81EE54240';
 
 function locationRow(id: string, overrides: Partial<LocationRow> = {}): LocationRow {
   return {
@@ -38,7 +43,7 @@ function locationRow(id: string, overrides: Partial<LocationRow> = {}): Location
     merged_into_entity_id: null,
     parent_place_id: null,
     place_kind: null,
-    has_point: true,
+    point: PIN,
     has_boundary: false,
     ...overrides,
   };
@@ -116,6 +121,7 @@ function makeHarness(
   entityRows: LocationRow[],
   ancestorsOfTarget: string[] = [],
   swept: Array<SweepAnswer | 'wrong-shape'> = SWEPT,
+  underTarget: string[] = [],
 ): Harness {
   const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
   const sweeps = [...swept];
@@ -139,6 +145,13 @@ function makeHarness(
       const sources = (params?.[2] as string[]) ?? [];
 
       return ancestorsOfTarget.filter((id) => sources.includes(id)).map((entity_id) => ({ entity_id }));
+    }
+
+    // Which candidate parents already hang below the target.
+    if (sql.includes('WITH RECURSIVE climb AS')) {
+      const candidates = (params?.[2] as string[]) ?? [];
+
+      return underTarget.filter((id) => candidates.includes(id)).map((place_id) => ({ place_id }));
     }
 
     // A sweep ends in a plain SELECT, so the driver hands its one row back as is.
@@ -253,7 +266,6 @@ describe('PlaceMergeService', () => {
       locationRow(TARGET, {
         name: '61 Plantation, Irvine, CA, United States',
         properties: { source: 'reverse_geocode', lat: 33.695, lng: -117.748 },
-        has_point: true,
         has_boundary: false,
         place_kind: 'address',
       }),
@@ -261,11 +273,10 @@ describe('PlaceMergeService', () => {
         name: '61 Plantation, Irvine, CA, United States',
         description: 'Home',
         properties: { source: 'reverse_geocode', place_id: 'ChIJabc', lat: 33.695, lng: -117.749 },
-        has_point: true,
         has_boundary: true,
         parent_place_id: CITY,
       }),
-      locationRow(SOURCE_B, { has_point: false }),
+      locationRow(SOURCE_B, { point: null }),
     ]);
 
     const result = await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
@@ -309,7 +320,7 @@ describe('PlaceMergeService', () => {
     // provider place_id, the parent and the boundary fill from the source.
     const fold = statementsMatching(harness, 'properties = $5::jsonb');
     expect(fold).toHaveLength(1);
-    const [, , name, description, propertiesJson, kind, parent, pointDonor, boundaryDonor] =
+    const [, , name, description, propertiesJson, kind, parent, donatedPoint, boundaryDonor] =
       fold[0].params ?? [];
     expect(name).toBe('61 Plantation, Irvine, CA, United States');
     expect(description).toBe('Home');
@@ -318,13 +329,18 @@ describe('PlaceMergeService', () => {
     expect(folded.lng).toBe(-117.748); // target wins the scalar it already had
     expect(kind).toBe('address');
     expect(parent).toBe(CITY);
-    expect(pointDonor).toBeNull(); // target already has a point
+    expect(donatedPoint).toBeNull(); // target already has a point
     expect(boundaryDonor).toBe(SOURCE_A); // first source with a boundary
 
-    // Sources tombstoned, chain compressed, search rows gone from both stores, tags moved.
+    // Sources tombstoned before the fold, SOURCE_A letting go of the place_id
+    // the target takes.
     const tombstone = statementsMatching(harness, 'is_active = FALSE');
     expect(tombstone).toHaveLength(1);
-    expect(tombstone[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
+    expect(tombstone[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET, null, SOURCE_A]);
+    expect(tombstone[0].sql).toContain('parent_place_id = NULL');
+    expect(harness.statements.indexOf(tombstone[0])).toBeLessThan(harness.statements.indexOf(fold[0]));
+
+    // Chain compressed, search rows gone from both stores, tags moved.
     expect(
       statementsMatching(harness, 'WHERE owner_user_id = $1 AND merged_into_entity_id = ANY($2::uuid[])'),
     ).toHaveLength(1);
@@ -498,6 +514,178 @@ describe('PlaceMergeService', () => {
         expect(input.nodeType).toBe('entity');
       }
     }
+  });
+
+  it("records the kept place's real before and after values and each merged-away place's move instead of a name changing to or from nothing", async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Blue Bottle', properties: { address: '1 Ferry Building' } }),
+      locationRow(SOURCE_A, {
+        name: 'Blue Bottle Coffee',
+        place_kind: 'venue',
+        properties: { address: '1 Ferry Bldg', website: 'https://bluebottle.example.com' },
+      }),
+      locationRow(SOURCE_B, { name: 'Blue Bottle', is_active: false }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .filter((input: { nodeType: string }) => input.nodeType === 'entity');
+
+    expect(entityDeltas).toEqual([
+      expect.objectContaining({
+        changeType: 'merged',
+        entityId: TARGET,
+        changedFields: {
+          place_kind: { old: null, new: 'venue' },
+          website: { old: null, new: 'https://bluebottle.example.com' },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A, SOURCE_B] },
+        },
+      }),
+      expect.objectContaining({
+        changeType: 'merged',
+        entityId: SOURCE_A,
+        changedFields: {
+          merged_into_entity_id: { old: null, new: TARGET },
+          is_active: { old: true, new: false },
+        },
+      }),
+      expect.objectContaining({
+        changeType: 'merged',
+        entityId: SOURCE_B,
+        changedFields: { merged_into_entity_id: { old: null, new: TARGET } },
+      }),
+    ]);
+  });
+
+  it('records the point a kept place gains from a source', async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Blue Bottle', point: null, coordinates: null }),
+      locationRow(SOURCE_A, { name: 'Blue Bottle', coordinates: [-122.3934, 37.7955] }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    // The pin the history records is the one the fold writes.
+    const [fold] = statementsMatching(harness, 'properties = $5::jsonb');
+    expect(fold.params?.[7]).toBe(PIN);
+
+    const kept = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changedFields: {
+          coordinates: { old: null, new: [-122.3934, 37.7955] },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+        },
+      }),
+    );
+  });
+
+  it("still records the merge on the kept place's page when the merge brought nothing new", async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Ferry Market' }),
+      locationRow(SOURCE_A, { name: 'Ferry Market' }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .filter((input: { nodeType: string }) => input.nodeType === 'entity');
+
+    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([TARGET, SOURCE_A]);
+    expect(entityDeltas[0]).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changeSource: 'PlaceMergeService.mergePlaces',
+        changedFields: { merged_from_entity_ids: { old: null, new: [SOURCE_A] } },
+      }),
+    );
+  });
+
+  it('has the source let go of the pin it gives the target before the target takes it', async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Pine Cafe', point: null, properties: { place_id: 'ChIJkept' } }),
+      locationRow(SOURCE_A, { name: 'Pine Cafe', properties: { place_id: 'ChIJother' } }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const [release] = statementsMatching(harness, 'is_active = FALSE');
+    const [fold] = statementsMatching(harness, 'properties = $5::jsonb');
+    // The pin moves; the target keeps its own place_id, so the source keeps its one.
+    expect(release.params?.slice(3)).toEqual([SOURCE_A, null]);
+    expect(fold.params?.[7]).toBe(PIN);
+    expect(harness.statements.indexOf(release)).toBeLessThan(harness.statements.indexOf(fold));
+  });
+
+  it('never gives the target a parent that is itself one of the places being merged away', async () => {
+    // SOURCE_A sits inside SOURCE_B, which sits inside CITY: SOURCE_B is about
+    // to become a tombstone, so the parent the target inherits is CITY.
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Ferry Building' }),
+      locationRow(SOURCE_A, { name: 'Ferry Building', parent_place_id: SOURCE_B }),
+      locationRow(SOURCE_B, { name: 'Ferry Building Marketplace', parent_place_id: CITY }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBe(CITY);
+  });
+
+  it('never gives the target a parent that already hangs below it, which would close a parent loop', async () => {
+    // SOURCE_A sits inside SHOP. SHOP sits inside the target (or inside
+    // SOURCE_B, which the re-point just moved under the target). CITY is the
+    // next source's parent and is not below the target.
+    const SHOP = '00000000-0000-0000-0000-0000000000d1';
+    const harness = makeHarness(
+      [
+        locationRow(TARGET, { name: 'Ferry Building' }),
+        locationRow(SOURCE_A, { name: 'Ferry Building', parent_place_id: SHOP }),
+        locationRow(SOURCE_B, { name: 'Ferry Building Marketplace', parent_place_id: CITY }),
+      ],
+      [],
+      SWEPT,
+      [SHOP],
+    );
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBe(CITY);
+    expect(statementsMatching(harness, 'WITH RECURSIVE climb AS')[0].params?.[2]).toEqual([SHOP, CITY]);
+  });
+
+  it('leaves the target without a parent when the only one on offer hangs below it', async () => {
+    const SHOP = '00000000-0000-0000-0000-0000000000d1';
+    const harness = makeHarness(
+      [locationRow(TARGET), locationRow(SOURCE_A, { parent_place_id: SHOP })],
+      [],
+      SWEPT,
+      [SHOP],
+    );
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBeNull();
+  });
+
+  it('asks nothing about the parent chain when the target keeps its own parent', async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { parent_place_id: CITY }),
+      locationRow(SOURCE_A, { parent_place_id: '00000000-0000-0000-0000-0000000000d1' }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    expect(statementsMatching(harness, 'WITH RECURSIVE climb AS')).toHaveLength(0);
   });
 
   it('refuses a sweep answer that is not one { deleted, rescued } row, rather than reading it as "nothing swept"', async () => {

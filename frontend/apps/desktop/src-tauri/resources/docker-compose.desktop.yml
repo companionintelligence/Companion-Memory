@@ -51,15 +51,15 @@
 # app is guaranteed to actually be reachable at).
 #
 # OAUTH_CALLBACK_URL is where a service (Google and the others) sends the
-# person back after they connect it with their own OAuth app. The api builds
-# it from OAUTH_CALLBACK_URL, else from APP_PUBLIC_URL. No compose file sets
-# either, so on Desktop the OAuth Setup dialog asked people to register
+# person back after they connect it with their own OAuth app. Before any
+# compose file set it, the api built it from APP_PUBLIC_URL, which nothing
+# sets, so on Desktop the OAuth Setup dialog asked people to register
 # "undefined/oauth/callback" and the redirect_uri sent to the provider was the
 # same, which every provider refuses. The gateway serves /oauth/callback, so
 # it is APP_BASE_URL plus that path. OPENID_CALLBACK_URL does the same for the
-# OpenID services (Steam), which otherwise return to
-# https://ci-server.localhost/openid/callback. `:+` leaves both empty (and the
-# api on its own fallbacks) if APP_BASE_URL is ever unset.
+# OpenID services (Steam). docker-compose.production.yml now sets both the
+# same way. `:+` leaves both empty (and the api on its own fallbacks in
+# connections/utils/callbackUrls.ts) if APP_BASE_URL is ever unset.
 #
 # ./desktop-app holds the presence file the app keeps up to date while it runs
 # (src-tauri/src/presence.rs). The containers outlive the app, and when the app

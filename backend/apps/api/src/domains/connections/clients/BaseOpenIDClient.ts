@@ -1,6 +1,5 @@
-import config from '@ci/configuration';
-
 import type { Connection } from '../entities/ConnectionEntity';
+import { type CallbackRequestOrigin, openIdCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
 import type { TokenExchange } from './types';
@@ -15,8 +14,8 @@ export abstract class BaseOpenIDClient extends BaseClient {
 
   protected abstract baseUrl: string;
 
-  async getAuthorizationUrl(connection: Connection): Promise<string> {
-    const callbackUrl = config.auth.openid.callbackUrl || `https://${config.hostname}/openid/callback`;
+  async getAuthorizationUrl(connection: Connection, request?: CallbackRequestOrigin): Promise<string> {
+    const callbackUrl = openIdCallbackUrl(request);
 
     const returnTo = new URL(callbackUrl);
     returnTo.searchParams.set('connection_id', connection.id);

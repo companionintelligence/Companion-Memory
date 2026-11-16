@@ -103,6 +103,65 @@ describe('native widget snapshot', () => {
     expect(snapshot.insight.prediction).toBe('WORK');
   });
 
+  // The service answers before its first run has finished, with a placeholder
+  // class for every slot. The home-screen widgets and the Widgets card printed
+  // it as a prediction ("Unsorted, 97% likely").
+  it('carries no prediction until the forecast has been built', () => {
+    const now = new Date('2026-11-11T12:00:00.000Z');
+    const forecast = (systemStatus: string, stillLearning: boolean) => ({
+      generatedAt: '2026-11-11T11:00:00Z',
+      systemStatus,
+      stillLearning,
+      buckets: [
+        {
+          startTime: '2026-11-12T12:15:00Z',
+          predictedL0: 'WORK',
+          l0Probs: [{ label: 'WORK', probability: 0.97 }],
+        },
+      ],
+    });
+    const insight = (systemStatus: string, stillLearning: boolean) =>
+      buildWidgetSnapshot({ now, forecast: forecast(systemStatus, stillLearning) }).insight;
+
+    // Nothing has run yet, or the first run is still going.
+    for (const status of ['COLD_START', 'BOOTSTRAP:label', 'NIGHTLY:train']) {
+      expect(insight(status, true)).toMatchObject({
+        prediction: null,
+        confidence: null,
+        systemStatus: status,
+      });
+    }
+
+    // Built: READY (still learning or not), or a later run over a built model.
+    expect(insight('READY', true)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+    expect(insight('READY', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+    expect(insight('NIGHTLY:label', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+  });
+
+  // The native widgets print the likelihood under "No forecast yet", so one
+  // without a named class read "No forecast yet, 97% likely".
+  it('carries no likelihood when the slot names no class', () => {
+    const snapshot = buildWidgetSnapshot({
+      now: new Date('2026-11-11T12:00:00.000Z'),
+      forecast: {
+        generatedAt: '2026-11-11T11:00:00Z',
+        systemStatus: 'READY',
+        buckets: [
+          {
+            startTime: '2026-11-12T12:15:00Z',
+            predictedL0: null,
+            l0Probs: [
+              { label: null, probability: 0.97 },
+              { label: 'WORK', probability: 0.6 },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.insight).toMatchObject({ prediction: null, confidence: null });
+  });
+
   it('caps extreme server counts so native Int-backed widgets can still decode the snapshot', () => {
     const snapshot = buildWidgetSnapshot({
       now: new Date('2026-11-11T12:00:00.000Z'),

@@ -1415,7 +1415,11 @@ export const ConfigSchema = z.object({
      * need it. Nothing publishes it to the directory.
      */
     memoryEndpoint: z.string().optional(),
-    /** This box's Portal handle. */
+    /**
+     * The handle this box sends as `askerHandle` on its outbound asks; a receiver refuses an empty
+     * one. Memory does not register it in the CI-Portal directory or check it against the Portal's
+     * handle rules.
+     */
     handle: z.string().optional(),
     /**
      * The audience value CI-Portal mints into tokens addressed to THIS box.

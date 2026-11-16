@@ -66,7 +66,7 @@ const ENFORCING_QUEUE_POLICIES: ReadonlySet<NonNullable<QueueOptions['policy']>>
   'stately',
 ]);
 
-// The states a job is still pending or running in, as `hasLiveJob` counts them.
+// The states a job is still pending or running in, as `hasLiveJobForUser` counts them.
 const LIVE_JOB_STATES: ReadonlySet<QueuedJobState> = new Set(['created', 'retry', 'active']);
 
 // Serializes queue PROVISIONING across processes. The web and worker halves
@@ -683,6 +683,7 @@ export class PGBossEventService
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
       ...(options?.startAfter !== undefined ? { startAfter: options.startAfter } : {}),
       ...(options?.retentionMinutes !== undefined ? { retentionSeconds: options.retentionMinutes * 60 } : {}),
+      ...(options?.heartbeatSeconds !== undefined ? { heartbeatSeconds: options.heartbeatSeconds } : {}),
     };
 
     // If a specific queue is provided and that queue exists, send only to that queue.
@@ -1682,8 +1683,17 @@ export class PGBossEventService
    * Called out-of-band, typically by a webhook controller once the external
    * executor reports success.
    */
-  async completeJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void> {
-    await this.boss.complete(queue, jobId, output);
+  async completeJob(
+    queue: string,
+    jobId: string,
+    output?: Record<string, unknown>,
+    options?: { includeQueued?: boolean },
+  ): Promise<void> {
+    // pg-boss completes only an `active` job unless told otherwise; with
+    // `includeQueued` it takes one waiting for a retry too (`state < completed`).
+    await (options?.includeQueued
+      ? this.boss.complete(queue, jobId, output, { includeQueued: true })
+      : this.boss.complete(queue, jobId, output));
     this.logger.log('Completed deferred job', { queue, jobId });
   }
 
@@ -1752,10 +1762,19 @@ export class PGBossEventService
     };
   }
 
-  async hasLiveJob(queue: string, singletonKey: string): Promise<boolean> {
-    const jobs = await this.boss.findJobs(queue, { key: singletonKey });
+  async hasLiveJobForUser(queue: string, userId: string): Promise<boolean> {
+    // Every payload names its user at the top level (`executeJob` reads
+    // `job.data.userId`), so this finds them whatever key each was sent with.
+    const jobs = await this.boss.findJobs(queue, { data: { userId } });
 
     return jobs.some((job) => LIVE_JOB_STATES.has(job.state));
+  }
+
+  async touchJob(queue: string, jobId: string): Promise<boolean> {
+    // pg-boss touches only an `active` job and `affected` counts the ones it moved.
+    const { affected } = await this.boss.touch(queue, jobId);
+
+    return affected > 0;
   }
 
   private async executeJob(

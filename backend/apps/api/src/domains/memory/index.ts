@@ -94,6 +94,7 @@ import { ItemService } from './services/ItemService';
 import { KnownPlacesService } from './services/KnownPlacesService';
 import { LifeStatsService } from './services/LifeStatsService';
 import { MergeCandidateService } from './services/MergeCandidateService';
+import { MergedAddressRepairService } from './services/MergedAddressRepairService';
 import { ObjectDuplicateService } from './services/ObjectDuplicateService';
 import { ObjectMergeService } from './services/ObjectMergeService';
 import { ObjectMintService } from './services/ObjectMintService';
@@ -178,6 +179,8 @@ import { UserContextService } from './services/UserContextService';
     DeterministicPersonMergeCron,
     StoredObjectDeletionSweepCron,
     PersonMergeService,
+    // Worker-role, once per start: puts back addresses earlier person merges dropped.
+    MergedAddressRepairService,
     PlaceMergeService,
     PlaceDuplicateService,
     ConceptService,
@@ -552,6 +555,7 @@ export {
   ensureSinglePrimary,
   formatPersonAddress,
   isPersonAddressEmpty,
+  personAddressMirror,
   readPersonAddresses,
   serializePersonAddress,
 } from './types';
