@@ -175,7 +175,6 @@ jobs:
       SCHEDULE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
-      USER_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       # The admin credential above is only for this throwaway Postgres service.
       # It lets every `scratchDatabaseAvailability()` suite create its own
       # uniquely named database and replay migrations there. CI_REQUIRE_DB

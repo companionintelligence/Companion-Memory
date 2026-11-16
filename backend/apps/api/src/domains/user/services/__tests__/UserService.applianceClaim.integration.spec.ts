@@ -1,15 +1,14 @@
-import { DataSource } from 'typeorm';
+import { DataSource, type DataSourceOptions } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER } from '@ci/common/context';
 
 import { syntheticTestUserEmail } from '../../../__tests__/support/applianceUser';
 import {
-  type DatabaseAvailability,
-  databaseAvailability,
-  resolveConnection,
-} from '../../../__tests__/support/databaseConnection';
-import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
+  assertScratchDatabase,
+  ScratchDatabase,
+  scratchDatabaseAvailability,
+} from '../../../__tests__/support/scratchDatabase';
 import { type User, UserEntity } from '../../entities/UserEntity';
 import type { AccountGrantRevoker } from '../accountGrantRevoker';
 import { LastAdminDeletionRefused, UserService } from '../UserService';
@@ -31,37 +30,25 @@ import { LastAdminDeletionRefused, UserService } from '../UserService';
  *
  * Each case compares the User `create()` RETURNS with the row it WROTE. The row was always right.
  *
- * ── Opt-in, and deliberately with no `DATABASE_URL` fallback ──────────────
+ * ── In a database of its own ───────────────────────────────────────────────
  *
- * Set `USER_TEST_DATABASE_URL` to a migrated database. Unlike most suites built on
- * `databaseConnection.ts`, this one does not fall back to `DATABASE_URL` or `.env`'s
- * `DATABASE_PASSWORD`, because what it tests is APPLIANCE-WIDE: an account is promoted only when
- * no live admin exists anywhere in `ci.users`. A developer's running stack almost always has one —
- * its owner — so the fallback would fail `yarn test` on every claimed dev stack, and on an unclaimed
- * one it would write an admin into somebody's database. Pointed at a database that already has a
- * live admin, the suite refuses to run rather than demote one it did not create.
+ * What this tests is APPLIANCE-WIDE: an account is promoted only when no other account exists
+ * anywhere in `ci.users`. So the suite never runs in a database anything else uses. In the one
+ * `make test-db` shares between suites it would find their accounts and refuse to run. A
+ * developer's stack almost always has an owner already. An unclaimed one would get an admin
+ * written into it.
  *
- * Once opted in it is still port-probed, so a URL with nothing listening SKIPS instead of failing.
- * A private container is the intended target:
+ * It creates a freshly migrated database for the run (`scratchDatabase.ts`) and drops it
+ * afterwards, like the account purge suite. That needs the admin credential the other scratch
+ * suites use: `PIPELINE_TEST_ADMIN_DATABASE_URL`, which `make test-db` sets, or
+ * `DATABASE_ADMIN_PASSWORD`, which CI and `.env.default` set. Without one the suite SKIPS (or
+ * fails, under `CI_REQUIRE_DB=1`). Every case checks first that `ci.users` is empty and refuses
+ * to run if it is not.
  *
- *   docker run -d --name <worktree>-testdb -e PASSWORD=<admin pw> -p 127.0.0.1::5432 ci/database:latest
- *   # as postgres: CREATE ROLE companion LOGIN PASSWORD '<pw>'; CREATE DATABASE companion OWNER companion;
- *   # then, in companion, the extensions timescaledb postgis vector pg_stat_statements btree_gist
- *   DATABASE_URL=postgres://companion:<pw>@127.0.0.1:<port>/companion yarn workspace @ci/be-api migrate
- *   USER_TEST_DATABASE_URL=postgres://companion:<pw>@127.0.0.1:<port>/companion \
- *     yarn workspace @ci/be-api jest UserService.applianceClaim.integration
+ *   make test-db ARGS='UserService.applianceClaim.integration'
  */
 
-const OPT_IN_VARIABLE = 'USER_TEST_DATABASE_URL';
-
-const availability: DatabaseAvailability =
-  (process.env[OPT_IN_VARIABLE] ?? '').trim().length > 0
-    ? databaseAvailability({ urlEnvVar: OPT_IN_VARIABLE })
-    : {
-        available: false,
-        reason: `${OPT_IN_VARIABLE} is not set. This suite has no DATABASE_URL fallback, on purpose — see its header.`,
-        target: '(unset)',
-      };
+const availability = scratchDatabaseAvailability();
 const describeWithDb = availability.available ? describe : describe.skip;
 
 if (!availability.available) {
@@ -83,8 +70,8 @@ const noGrantsToRevoke = {
   }),
 } as never;
 describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${availability.target})`, () => {
+  let scratch: ScratchDatabase;
   let dataSource: DataSource;
-  let schemaLock: SchemaLock | null = null;
   let service: UserService;
 
   /** Every account a case creates, removed after it so the next case starts unowned again. */
@@ -93,34 +80,23 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
   const SYSTEM = { userId: SYSTEM_USER } as const;
 
   beforeAll(async () => {
-    const connection = resolveConnection({ urlEnvVar: OPT_IN_VARIABLE });
+    scratch = await ScratchDatabase.create({ createdBy: 'UserService.applianceClaim.integration.spec' });
 
-    if (connection == null) {
-      throw new Error('databaseAvailability passed but no connection resolved');
-    }
-
+    // The scratch handle maps no entities. The service's repository needs UserEntity.
     dataSource = new DataSource({
-      type: 'postgres',
-      ...(connection.url != null
-        ? { url: connection.url }
-        : {
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            password: connection.password,
-            database: connection.database,
-          }),
+      ...(scratch.dataSource.options as DataSourceOptions),
       entities: [UserEntity],
-    });
+    } as DataSourceOptions);
     await dataSource.initialize();
 
-    schemaLock = await acquireSchemaWriteLock(dataSource, 'user/UserService.applianceClaim.integration');
+    // The guard on this handle, since every statement below goes through it and not the scratch one.
+    await assertScratchDatabase(dataSource, scratch);
 
     // Nothing observing UserCreated is under test, and no listener should run against this database.
     const eventService = { send: async () => [] };
 
     service = new UserService(dataSource.getRepository(UserEntity), eventService as never, noGrantsToRevoke);
-  });
+  }, 300_000);
 
   beforeEach(async () => {
     // What makes an appliance claimed: any row in ci.users, live or awaiting its purge. The claim
@@ -132,26 +108,37 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
 
     if (existing.length > 0) {
       throw new Error(
-        `REFUSING TO RUN: ${availability.target} already has accounts ` +
+        `REFUSING TO RUN: ${scratch.name} already has accounts ` +
           `(${existing.map((row) => row.email).join(', ')}). The claim under test is appliance-wide, so ` +
-          `this suite needs an appliance nobody has claimed, and it will not delete accounts it did not ` +
-          `create. Point ${OPT_IN_VARIABLE} at a freshly migrated database of its own.`,
+          `every case needs an appliance nobody has claimed. It will not delete accounts it did not ` +
+          `create. This database was created empty for this run, so most likely an earlier case failed ` +
+          `to remove its own: fix that case first.`,
       );
     }
   });
 
   afterEach(async () => {
+    // jest still runs this after a failed beforeAll. `service` is set only once the guard has passed,
+    // so without it no case ran and there is nothing to remove. Skipping also keeps any statement off
+    // a handle the guard refused, and a second error on every case would only bury the setup failure.
+    if (service == null) {
+      return;
+    }
+
     // Hard-deleted rather than soft: a soft-deleted admin no longer owns the appliance, but it would
     // still be this suite's litter in ci.users.
     await dataSource.query(`DELETE FROM ci.users WHERE id = ANY($1::uuid[])`, [created.splice(0)]);
   });
 
   afterAll(async () => {
-    if (dataSource?.isInitialized) {
-      await schemaLock?.release();
-      await dataSource.destroy();
+    try {
+      if (dataSource?.isInitialized) {
+        await dataSource.destroy();
+      }
+    } finally {
+      await scratch?.drop();
     }
-  });
+  }, 60_000);
 
   /** An account through the real `create()`, named so a leaked row is recognisable as a fixture. */
   const createAccount = async (label: string): Promise<User> => {

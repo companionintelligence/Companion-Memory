@@ -122,13 +122,14 @@ Every suite that needs Postgres resolves the connection through
 2. then `DATABASE_URL`,
 3. then the discrete `DATABASE_HOST/PORT/USERNAME/NAME/PASSWORD`.
 
-Each domain has a variable of its own — `ASKS_`, `AUTH_`, `BROWSER_ACTIVITY_`,
-`CONNECTIONS_`, `EVENTS_`, `GEOCODE_`, `IMPORT_`, `MEMORY_`, `NOTES_`, `PEERS_`,
-`PERSISTENCE_`, `PERSONALIZATION_`, `PIPELINE_`, `PLANNING_`, `PORTABILITY_`,
-`SCHEDULE_`, `SEARCH_INGRESS_`, `SEARCH_NEXT_`, `USER_` (each `…_TEST_DATABASE_URL`), plus
-`MACOS_`, which only the Python summary suite reads and which must name an
-*empty* database. Naming one per suite is what lets you point a single domain at
-a scratch database without moving the whole app. `UserService.applianceClaim.integration.spec.ts` is the exception: it reads only `USER_TEST_DATABASE_URL` and skips when that is unset, because the claim it tests is appliance-wide and a dev stack's `DATABASE_URL` usually already has an admin. The list is checked against the
+Each domain has a variable of its own (each `…_TEST_DATABASE_URL`): `ACTIVITY_`,
+`AGENT_`, `ASKS_`, `AUTH_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`,
+`CONVERSATIONS_`, `EVENTS_`, `GEOCODE_`, `IMPORT_`, `MAINTENANCE_`, `MEMORY_`,
+`NOTES_`, `ONBOARDING_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`,
+`PIPELINE_`, `PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_` and
+`SEARCH_NEXT_`, plus `MACOS_`, which only the Python summary suite reads and
+which must name an *empty* database. Naming one per suite is what lets you point a single domain at
+a scratch database without moving the whole app. `UserService.applianceClaim.integration.spec.ts` reads none of them: the claim it tests is appliance-wide, so like the other suites built on `scratchDatabase.ts` it always creates a freshly migrated database of its own. Without an admin credential it skips, or fails under `CI_REQUIRE_DB=1`. The list is checked against the
 source tree by the unit tests of `scripts/xtask/lib/testDb.ts`, which is why this
 paragraph states no count.
 

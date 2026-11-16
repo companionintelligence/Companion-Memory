@@ -491,7 +491,6 @@ export const TEST_DATABASE_URL_VARS: readonly string[] = [
   'SCHEDULE_TEST_DATABASE_URL',
   'SEARCH_INGRESS_TEST_DATABASE_URL',
   'SEARCH_NEXT_TEST_DATABASE_URL',
-  'USER_TEST_DATABASE_URL',
 ];
 
 /** The variables that carry an ADMIN (superuser) URL, for suites that create their own database. */
