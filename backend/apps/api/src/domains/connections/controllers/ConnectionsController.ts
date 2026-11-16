@@ -20,6 +20,7 @@ import type { Request } from 'express';
 import { z } from 'zod/v3';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
+import { RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
@@ -86,6 +87,16 @@ interface PortalGrant {
 const PORTAL_REFRESH_TIMEOUT_MS = 30_000;
 
 /**
+ * A connection as these routes return it: without its tokens, and without the redirect_uri kept
+ * for its code exchange, which only the api reads.
+ */
+function connectionResponse(connection: Connection) {
+  const { accessToken, refreshToken, oauthRedirectUri, ...returned } = connection;
+
+  return returned;
+}
+
+/**
  * When a token that lives `seconds` from now expires; null when that is not a positive
  * number of seconds a date can hold. A numeric string counts, as it already does on the
  * refresh path in `BaseOAuth2Client`: CI Portal passes the provider's `expires_in` on as
@@ -138,9 +149,7 @@ export class ConnectionsController {
 
     const connection = await this.connectionService.create(serviceContext, input);
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -150,11 +159,7 @@ export class ConnectionsController {
 
     const connections = await this.connectionService.findAll(serviceContext);
 
-    return connections.map((connection) => {
-      const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-      return returnedConnection;
-    });
+    return connections.map(connectionResponse);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -168,9 +173,7 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -188,9 +191,7 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   // NOTE: DELETE /connections/:id is intentionally NOT defined here. Disconnect
@@ -201,6 +202,9 @@ export class ConnectionsController {
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id/connect')
+  // A GET, but it writes: it keeps the redirect_uri on the connection for the code exchange. Priced
+  // by its verb, a read-only api key could overwrite that of an authorization in flight.
+  @RequireCapability(WRITE_CAPABILITY)
   async connect(@Context() context: RequestContext, @Param('id') id: string, @Req() req?: Request) {
     const serviceContext = toServiceContext(context);
 

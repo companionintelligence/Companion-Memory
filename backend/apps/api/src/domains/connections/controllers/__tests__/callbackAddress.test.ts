@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 
 import type { RequestContext } from '@ci/common/context';
+import { REQUIRE_CAPABILITY_KEY, WRITE_CAPABILITY } from '@ci/common/decorators';
 import config from '@ci/configuration';
 
 import { GoogleClient } from '../../clients/GoogleClient';
@@ -79,6 +80,7 @@ function makeConnections(ownApp: boolean, stored: Partial<typeof CONNECTION> = {
   };
   const connectionService = {
     findById: jest.fn(async () => ({ ...CONNECTION, ...stored })),
+    findAll: jest.fn(async () => [{ ...CONNECTION, ...stored }]),
     search: jest.fn(async () => []),
     update: jest.fn(async () => CONNECTION),
     setOAuthRedirectUri: jest.fn(async () => undefined),
@@ -195,6 +197,12 @@ describe('connect routes on an install with no callback address configured', () 
     );
   });
 
+  it('GET /connections/:id/connect asks an api key for write, since it keeps the redirect_uri', () => {
+    expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, ConnectionsController.prototype.connect)).toBe(
+      WRITE_CAPABILITY,
+    );
+  });
+
   it('POST /connections/complete exchanges the code with the address the authorization kept', async () => {
     const fetchMock = mockGoogle();
     const { controller } = makeConnections(true, {
@@ -209,6 +217,24 @@ describe('connect routes on an install with no callback address configured', () 
     );
 
     expect(exchangedRedirectUri(fetchMock)).toBe('http://memory.home.arpa:8642/oauth/callback');
+  });
+
+  it('GET /connections and /connections/:id leave out the kept redirect_uri and the tokens', async () => {
+    const { controller } = makeConnections(true, {
+      oauthRedirectUri: 'http://memory.home.arpa:8642/oauth/callback',
+      accessToken: 'at',
+      refreshToken: 'rt',
+    } as Partial<typeof CONNECTION>);
+
+    const one = await controller.findOne(ctx, CONNECTION.id);
+    const [listed] = await controller.findAll(ctx);
+
+    for (const returned of [one, listed]) {
+      expect(returned).toMatchObject({ id: CONNECTION.id, accountLabel: 'someone@example.com' });
+      expect(returned).not.toHaveProperty('oauthRedirectUri');
+      expect(returned).not.toHaveProperty('accessToken');
+      expect(returned).not.toHaveProperty('refreshToken');
+    }
   });
 
   it('POST /connections/complete works it out for the callback page when the connection kept none', async () => {
