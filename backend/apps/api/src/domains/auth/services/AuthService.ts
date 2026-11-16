@@ -54,8 +54,9 @@ const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
  * refresh whose answer it never got: a reloaded tab refreshes at once. The app retries five seconds
  * after a refresh Memory did not answer and gives up waiting on one after 25 seconds, so two minutes
  * also cover a short outage. Shorter than the app's refresh interval (it refreshes a minute before
- * its five-minute access token runs out), so a copy of the cookie that refreshes only on that
- * schedule still drops out at most of the rotations it misses, as it always did.
+ * its five-minute access token runs out), so a stale copy of the cookie that refreshes only on that
+ * schedule usually lands outside the window after a rotation it missed and is refused, as it
+ * always was.
  */
 const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
 
@@ -293,7 +294,9 @@ export class AuthService {
       { previous_token: session.token, token: nextHash, rotated_at: rotatedAt },
     );
 
-    if (affected === 0) {
+    // `affected` is a number on Postgres. Read a missing count as "not written" too: looking again
+    // costs a query and still answers right, while trusting it would hand out a token nothing holds.
+    if (!affected) {
       // Another refresh replaced this token after it was read, or a sign-out ended the session.
       // Look again: the first is now a grace match, the second nothing.
       const raced = await this.findSession(userId, token, meta);
@@ -483,9 +486,10 @@ export class AuthService {
    * is stored, but the token itself is deterministic: a rotation signs it with `iat` taken from the
    * `rotated_at` it stores. Nothing else in it changes.
    *
-   * Null unless the result hashes to the stored token, for a session last rotated before `iat` came
-   * from `rotated_at` or since the refresh secret or token lifetime changed. The refresh then sets no
-   * cookie, as it always did on a grace match; it never hands out a token the session does not hold.
+   * Null unless the result hashes to the stored token: a session whose last rotation signed in another
+   * second than the `rotated_at` it stored (possible before `iat` came from `rotated_at`), or one last
+   * rotated before the refresh secret or token lifetime changed. The refresh then sets no cookie, as
+   * it always did on a grace match; it never hands out a token the session does not hold.
    */
   private currentSessionToken(userId: string, session: SessionEntity): string | null {
     if (!session.rotated_at) {

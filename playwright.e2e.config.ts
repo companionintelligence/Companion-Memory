@@ -40,7 +40,7 @@ export default defineConfig({
   // the app makes on load, with only a 2-minute grace window
   // (`auth.session.refreshGracePeriod`) that also ends when the new token
   // refreshes. One file replayed across a four-minute serial suite goes stale
-  // partway through, and the specs that follow fail on page assertions while
+  // partway through and the specs that follow fail on page assertions while
   // the real cause is a 401 nobody sees. See that fixture's header.
   use: {
     baseURL,

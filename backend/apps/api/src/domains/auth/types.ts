@@ -42,8 +42,9 @@ export interface RotationResult {
   sessionToken: string | null;
   /**
    * Id of the session row the refresh matched — returned on BOTH branches, so
-   * the refresh response can bind (or upgrade) the CSRF cookie to its session
-   * even when a grace match sets no new session cookie.
+   * the refresh response can bind (or upgrade) the CSRF cookie to its session,
+   * even on a grace match that sets no session cookie because its current token
+   * cannot be signed again.
    */
   sessionId: string;
 }

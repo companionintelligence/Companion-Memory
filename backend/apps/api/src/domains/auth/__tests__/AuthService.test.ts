@@ -177,6 +177,17 @@ describe('AuthService — session id binding', () => {
       expect(result).toEqual({ sessionToken: winner, sessionId: 'sess-1' });
     });
 
+    it('looks again rather than trusting a write whose row count the driver did not report', async () => {
+      const { token: winner, row } = await rotatedOnce();
+      sessionRepository.update.mockClear();
+      findOneResults = [sessionRow('sess-1'), null, row];
+      sessionRepository.update.mockResolvedValueOnce({ affected: undefined } as never);
+
+      const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+
+      expect(result).toEqual({ sessionToken: winner, sessionId: 'sess-1' });
+    });
+
     it('writes nothing when a rotation in the same second signs the token it was given', async () => {
       // Pinned inside one second: the second rotation signs the very token the first one issued.
       jest.useFakeTimers({

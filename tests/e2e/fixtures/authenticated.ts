@@ -10,7 +10,7 @@ import { test as base, type BrowserContext } from '@playwright/test';
  * `auth.session.refreshGracePeriod`, which is **2 minutes**
  * (`backend/apps/api/config/default.json`) and only until the new token is
  * itself refreshed. A static `storageState` therefore hands every spec the
- * *same* pre-rotation cookie, and once the grace window on that rotation has
+ * *same* pre-rotation cookie. Once the grace window on that rotation has
  * passed (or a later spec rotated again) the API answers `401 Invalid session`,
  * the app bounces to /login and the spec fails on an assertion about page
  * content that has nothing to do with what broke.
