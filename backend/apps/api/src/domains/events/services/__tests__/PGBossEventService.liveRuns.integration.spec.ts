@@ -11,8 +11,8 @@ import { PGBossEventService } from '../PGBossEventService';
 /**
  * What Predict and the hbpe queue lean on, against pg-boss 12 itself rather
  * than a stub that answers either way: a person's runs are found by the
- * payload's `userId` whatever key each was sent with, and an active job whose
- * heartbeat stops is failed into a retry while one that keeps beating is left
+ * payload's `userId` whatever key each was sent with. An active job whose
+ * heartbeat stops is failed into a retry, while one that keeps beating is left
  * alone.
  */
 
@@ -37,12 +37,20 @@ describeWithDatabase(`PGBossEventService live runs on pg-boss 12 (${availability
   let boss: PgBoss;
   let service: PGBossEventService;
 
-  /** A job shaped as PythonFunctionService sends one, under its own singleton key. */
-  async function sendRun(userId: string, key: string): Promise<string> {
+  /**
+   * A job shaped as PythonFunctionService sends one, under its own singleton
+   * key and with the heartbeat window on the job, as it sends hbpe runs.
+   * `heartbeatSeconds: null` sends one without, as a release before heartbeats did.
+   */
+  async function sendRun(
+    userId: string,
+    key: string,
+    heartbeatSeconds: number | null = HEARTBEAT_SECONDS,
+  ): Promise<string> {
     const id = await boss.send(
       QUEUE,
       { name: 'python.function.run', target: 'hbpe', function: 'nightly', args: { user_id: userId }, userId },
-      { singletonKey: key },
+      { singletonKey: key, ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }) },
     );
 
     if (id == null) {
@@ -89,9 +97,9 @@ describeWithDatabase(`PGBossEventService live runs on pg-boss 12 (${availability
     });
     boss.on('error', (error: Error) => console.error(`pg-boss: ${error.message}`));
     await boss.start();
+    // No heartbeat window on the queue itself, as the hbpe queue is provisioned.
     await boss.createQueue(QUEUE, {
       policy: 'short',
-      heartbeatSeconds: HEARTBEAT_SECONDS,
       retryLimit: 2,
       retryDelay: 300,
     });
@@ -105,7 +113,7 @@ describeWithDatabase(`PGBossEventService live runs on pg-boss 12 (${availability
     await scratch?.drop();
   });
 
-  it("finds a person's waiting or running job whatever key it was sent with, and nobody else's", async () => {
+  it("finds a person's waiting or running job whatever key it was sent with and nobody else's", async () => {
     const someone = uuidv7();
     const other = uuidv7();
 
@@ -123,11 +131,15 @@ describeWithDatabase(`PGBossEventService live runs on pg-boss 12 (${availability
     await expect(service.hasLiveJobForUser(QUEUE, someone)).resolves.toBe(false);
   });
 
-  it('fails an active job into a retry once its heartbeat stops, and leaves one that beats alone', async () => {
+  it('fails an active job into a retry once its heartbeat stops and leaves one that beats alone', async () => {
     const quiet = await sendRun(uuidv7(), 'fn:nightly:quiet:manual');
     expect(await start()).toBe(quiet);
     const beating = await sendRun(uuidv7(), 'fn:nightly:beating:manual');
     expect(await start()).toBe(beating);
+    // Sent without a window, as an older release (or one rolled back to) sends
+    // its jobs: nothing beats for it and nothing fails it before its expiry.
+    const unwatched = await sendRun(uuidv7(), 'fn:nightly:unwatched:manual', null);
+    expect(await start()).toBe(unwatched);
 
     await expect(service.touchJob(QUEUE, quiet)).resolves.toBe(true);
 
@@ -145,6 +157,8 @@ describeWithDatabase(`PGBossEventService live runs on pg-boss 12 (${availability
       output: expect.objectContaining({ value: { message: 'job heartbeat timeout' } }),
     });
     expect((await stateOf(beating)).state).toBe('active');
+    expect((await stateOf(unwatched)).state).toBe('active');
+    expect((await boss.getQueue(QUEUE))?.heartbeatSeconds ?? null).toBeNull();
 
     // A beat for a job that is no longer running moves nothing; the runner logs it.
     await expect(service.touchJob(QUEUE, quiet)).resolves.toBe(false);

@@ -82,7 +82,7 @@ describe('PythonFunctionService', () => {
     expect(eventService.send).not.toHaveBeenCalled();
   });
 
-  it('dispatches as usual when the user has no live run', async () => {
+  it('dispatches as usual when the user has no live run, with the heartbeat window on the job', async () => {
     const eventService = {
       hasLiveJobForUser: jest.fn().mockResolvedValue(false),
       send: jest.fn().mockResolvedValue(['job-1']),
@@ -103,7 +103,8 @@ describe('PythonFunctionService', () => {
     expect(eventService.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ function: 'ensure_bootstrap', userId: 'user-1' }),
-      { queue: 'py-fn-hbpe', singletonKey: 'fn:hbpe:user-1:2026-11-16' },
+      // Per job, so a downgrade's jobs (sent without it) are not watched.
+      { queue: 'py-fn-hbpe', singletonKey: 'fn:hbpe:user-1:2026-11-16', heartbeatSeconds: 300 },
     );
   });
 });

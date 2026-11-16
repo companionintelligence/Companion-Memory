@@ -209,7 +209,7 @@ export class LocalEventService extends EventService implements BeforeApplication
     return false;
   }
 
-  // No job row to keep alive, and nothing here fails one for going quiet.
+  // No job row to keep alive and nothing here fails one for going quiet.
   async touchJob(): Promise<boolean> {
     return false;
   }

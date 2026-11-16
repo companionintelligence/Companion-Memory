@@ -144,7 +144,7 @@ describe('PythonFunctionCrons', () => {
     );
   });
 
-  // Predict, the 02:30 nightly and the start-up sweep each use their own key,
+  // Predict, the 02:30 nightly and the start-up sweep each use their own key
   // and the queue refuses only an identical one that has not started. A
   // restart, or a Predict shortly before 02:30, queued a second whole pipeline.
   it.each([['hbpeNightly'], ['hbpeBootstrapSweep']] as const)(

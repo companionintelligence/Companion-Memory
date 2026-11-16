@@ -10,10 +10,10 @@ import { ForecastResolver } from '../ForecastResolver';
  * `triggerHbpe` reports `already_running` when a prediction run for this user
  * is still waiting or already running, however it was started. This fake
  * `EventService` reimplements the two mechanisms that decide it against an
- * in-memory job table: pg-boss's partial unique index on (queue,
+ * in-memory job table. One is pg-boss's partial unique index on (queue,
  * singleton_key) `WHERE state='created' AND policy='short'`, gated on the REAL
- * `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`, and `hasLiveJobForUser`, which
- * also sees a job that has started or carries another key. `hasLiveJobForUser`
+ * `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`. The other is `hasLiveJobForUser`,
+ * which also sees a job that has started or carries another key. `hasLiveJobForUser`
  * answers first, so only the simultaneous-trigger test reaches the dedup; that
  * test is the one that fails if the policy is ever removed, exactly the bug
  * this queue had.

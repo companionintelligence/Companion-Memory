@@ -45,12 +45,19 @@ function makeAck(): Acknowledgement {
   return { jobId: 'job-1', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
-/** A json-capable stand-in for the catalog route, listing every allowlisted name. */
-function catalogResponse(target: 'summary' | 'hbpe' = 'summary') {
+/**
+ * A json-capable stand-in for the catalog route, listing every allowlisted name
+ * and, unless told otherwise, saying the runner sends heartbeats as it does now.
+ */
+function catalogResponse(target: 'summary' | 'hbpe' = 'summary', heartbeats = true) {
   return {
     ok: true,
     status: 200,
-    json: () => Promise.resolve({ functions: [...PYTHON_FUNCTIONS[target]] }),
+    json: () =>
+      Promise.resolve({
+        functions: [...PYTHON_FUNCTIONS[target]],
+        ...(heartbeats ? { heartbeats: true } : {}),
+      }),
   };
 }
 
@@ -269,6 +276,50 @@ describe('PythonFunctionDispatchListener', () => {
         missing: ['bootstrap', 'ensure_bootstrap'],
         version: '0.2.0',
       });
+    });
+
+    // A runner older than heartbeats ignores `heartbeat_seconds`, so every hbpe
+    // job is failed a few minutes in and its retries queue more copies of the run.
+    it('logs an ERROR when the HBPE sidecar does not say it sends heartbeats', async () => {
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/functions')) {
+          return Promise.resolve(catalogResponse('hbpe', false));
+        }
+
+        if (url.endsWith('/health')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        }
+
+        return Promise.resolve({ ok: true });
+      }) as unknown as typeof fetch;
+
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
+      const ack = makeAck();
+
+      await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+
+      const [message, meta] = (logger.error as jest.Mock).mock.calls[0] as [string, Record<string, unknown>];
+
+      expect(message).toMatch(/does not send run heartbeats/);
+      expect(meta).toMatchObject({ target: 'hbpe', heartbeatSeconds: 300, version: 'not reported' });
+      expect(ack.defer).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not ask the summary sidecar about heartbeats, which its jobs do not use', async () => {
+      global.fetch = jest
+        .fn()
+        .mockImplementation((url: string) =>
+          Promise.resolve(url.endsWith('/functions') ? catalogResponse('summary', false) : { ok: true }),
+        ) as unknown as typeof fetch;
+
+      await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(
+        payload,
+        makeAck(),
+      );
+
+      expect(logger.error).not.toHaveBeenCalled();
     });
 
     it('probes each target once per process, not once per dispatch', async () => {

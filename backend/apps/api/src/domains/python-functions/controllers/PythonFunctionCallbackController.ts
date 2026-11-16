@@ -49,8 +49,8 @@ export class PythonFunctionCallbackController {
     assertRunTokenNamesJob(req, jobId, queue);
 
     if (status === 'completed') {
-      // Also while the job waits for a retry: its heartbeat lapsed (the API was
-      // away for minutes) or it expired, and the run finished before the retry
+      // Also while the job waits for a retry. Its heartbeat lapsed (the API was
+      // away for minutes) or it expired, then the run finished before the retry
       // reached the runner. Left `retry`, the job would run the whole thing again.
       await this.eventService.completeJob(queue, jobId, body.result, { includeQueued: true });
 
@@ -71,9 +71,9 @@ export class PythonFunctionCallbackController {
 
   /**
    * The runner, every minute or so while it holds a run that asked for it
-   * (queued or running): the run is still there. On a queue with
-   * `heartbeatSeconds` pg-boss fails an active job whose beats stop, so a run
-   * lost with its sidecar stops counting as running within minutes.
+   * (queued or running): the run is still there. pg-boss fails an active job
+   * sent with `heartbeatSeconds` once its beats stop, so a run lost with its
+   * sidecar stops counting as running within minutes.
    *
    * 409 when the job is not active any more (finished, failed, or waiting for
    * a retry after its beats lapsed). The runner only logs it.
@@ -96,7 +96,7 @@ export class PythonFunctionCallbackController {
 }
 
 /**
- * The body names a job on a python-function queue, and it is the one job the
+ * The body names a job on a python-function queue and it is the one job the
  * run token admits: a sidecar holding a token for job A cannot report on job B.
  */
 function assertRunTokenNamesJob(req: PythonRunCallbackRequest, jobId: unknown, queue: unknown): void {

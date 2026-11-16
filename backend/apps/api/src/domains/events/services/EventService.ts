@@ -85,7 +85,7 @@ export abstract class EventService {
   /**
    * Whether a job on `queue` whose payload names `userId` is still waiting,
    * retrying or running, whatever singleton key it was sent with. A `short`
-   * queue refuses a duplicate key only while the first copy is still waiting,
+   * queue refuses a duplicate key only while the first copy is still waiting
    * and only that key; a caller that must not start a second long run for the
    * same person beside one started some other way asks this first. Always
    * false where there is no persistent queue (LocalEventService).
@@ -94,8 +94,8 @@ export abstract class EventService {
 
   /**
    * Record that the external run behind an `active` deferred job is still
-   * going. On a queue that declares `heartbeatSeconds`, pg-boss fails (and so
-   * retries) an active job whose last heartbeat is older than that. True when
+   * going. For a job sent with `heartbeatSeconds`, pg-boss fails (and so
+   * retries) it once active and its last heartbeat is older than that. True when
    * the job was active and its heartbeat moved; false when it is not running
    * any more (finished, failed, waiting for a retry) or there is no persistent
    * queue (LocalEventService).

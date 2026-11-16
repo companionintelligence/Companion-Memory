@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { PYTHON_FUNCTION_QUEUE_OPTIONS, PYTHON_RUN_HEARTBEAT_SECONDS } from '../types';
+import {
+  PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS,
+  PYTHON_FUNCTION_QUEUE_OPTIONS,
+  PYTHON_RUN_HEARTBEAT_SECONDS,
+} from '../types';
 
 /**
  * The hbpe queue's `expireInSeconds` is a cross-language invariant: it bounds a
@@ -85,10 +89,21 @@ describe('py-fn-hbpe queue expiry', () => {
    * pg-boss's floor of 10 s and be minutes, not the hours of the expiry.
    */
   it('lets a run lost with its sidecar go within minutes, after several missed heartbeats', () => {
-    const window = PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.heartbeatSeconds ?? 0;
+    const window = PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS.hbpe ?? 0;
 
     expect(window).toBeGreaterThanOrEqual(10);
     expect(window).toBeGreaterThanOrEqual(3 * PYTHON_RUN_HEARTBEAT_SECONDS);
     expect(window).toBeLessThanOrEqual(10 * 60);
+  });
+
+  /**
+   * pg-boss's updateQueue keeps a setting the call leaves out, so a window on
+   * the queue row would outlive a downgrade to a sidecar that never beats.
+   * The window rides each job instead (PythonFunctionService.dispatch).
+   */
+  it('keeps the heartbeat window off the queue options that provision the queue row', () => {
+    for (const options of Object.values(PYTHON_FUNCTION_QUEUE_OPTIONS)) {
+      expect(options).not.toHaveProperty('heartbeatSeconds');
+    }
   });
 });

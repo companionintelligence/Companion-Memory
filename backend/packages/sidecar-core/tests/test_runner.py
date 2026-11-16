@@ -270,7 +270,7 @@ async def test_heartbeats_cover_a_queued_and_a_running_run_until_the_callback(
     """The API lets a job go once its beats stop, so they have to cover the whole hold.
 
     A run queued behind another one is held too: its pg-boss job is already
-    active, and without beats it would be failed while it waits its turn.
+    active and without beats it would be failed while it waits its turn.
     """
     fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
     release = asyncio.Event()
@@ -396,7 +396,7 @@ async def test_a_job_sent_again_while_held_joins_the_run_holding_it(fake_httpx):
 async def test_a_retry_that_joins_a_held_run_brings_its_token_and_heartbeat(
     fake_httpx,
 ):
-    """The retry's token is the newer one, and its request may be the first to ask for beats."""
+    """The retry's token is the newer one and its request may be the first to ask for beats."""
     fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
     release = asyncio.Event()
 
@@ -472,8 +472,120 @@ async def test_a_hook_that_raises_still_lets_the_job_go(fake_httpx):
 
         await _wait_for(lambda: runner._held_jobs == {})
         assert runner._heartbeats == {}
+
+        # The run itself went fine, so the API still hears that it completed
+        # and the worker is still there for the next run.
+        callbacks = [c for c in fake_httpx.calls if c["url"].endswith("/callback")]
+        assert [c["json"]["status"] for c in callbacks] == ["completed"]
+        assert all(not worker.done() for worker in runner._workers)
     finally:
         _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_a_start_hook_that_raises_fails_the_run_and_keeps_the_worker(
+    fake_httpx,
+):
+    """The job fails at once instead of when its beats lapse. The next run still gets a worker."""
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
+    ran: list[str] = []
+
+    async def quick(**kwargs: Any) -> dict:
+        ran.append(kwargs["user_id"])
+        return {}
+
+    class _BrokenStart(FunctionRunner):
+        def run_started(self, args: dict[str, Any], token: str | None) -> None:
+            if args["user_id"] == "user-10":
+                raise RuntimeError("hook broke")
+
+    runner = _BrokenStart({"quick": quick}, 1, api_url=lambda: "http://api:3030")
+
+    try:
+        for n in (10, 11):
+            runner.submit(
+                RunRequest(
+                    function="quick",
+                    args={"user_id": f"user-{n}"},
+                    job_id=f"job-{n}",
+                    queue="py-fn-hbpe",
+                    access_token=f"tok-{n}",
+                    heartbeat_seconds=0.01,
+                )
+            )
+
+        await _wait_for(lambda: runner._held_jobs == {})
+
+        callbacks = {
+            c["json"]["job_id"]: c["json"]
+            for c in fake_httpx.calls
+            if c["url"].endswith("/callback")
+        }
+        assert callbacks["job-10"]["status"] == "failed"
+        assert "hook broke" in callbacks["job-10"]["error"]
+        assert callbacks["job-11"]["status"] == "completed"
+        assert ran == ["user-11"]
+        assert runner._heartbeats == {}
+    finally:
+        _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_joins_a_queued_run_brings_the_workers_back(fake_httpx):
+    """A joined run that is still queued must not wait for some other job to restart the pool."""
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
+    ran: list[str] = []
+
+    async def quick(**kwargs: Any) -> dict:
+        ran.append(kwargs["user_id"])
+        return {}
+
+    runner = _runner({"quick": quick}, concurrency=1)
+    request = RunRequest(
+        function="quick",
+        args={"user_id": "user-12"},
+        job_id="job-12",
+        queue="py-fn-hbpe",
+        access_token="tok-12",
+    )
+
+    try:
+        # Queued with no worker left to take it, as after a worker died.
+        first = runner.submit(request)
+        _stop_workers(runner)
+        await _wait_for(lambda: all(worker.done() for worker in runner._workers))
+        assert ran == []
+
+        again = runner.submit(request.model_copy(update={"access_token": "tok-12b"}))
+
+        assert again.run_id == first.run_id
+        await _wait_for(lambda: ran == ["user-12"])
+        await _wait_for(lambda: runner._held_jobs == {})
+    finally:
+        _stop_workers(runner)
+
+
+def test_the_function_catalog_says_this_runner_sends_heartbeats():
+    """The API's dispatcher logs an error against a sidecar whose catalog does not say so."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ci.sidecar.runner import build_router
+
+    app = FastAPI()
+    app.include_router(
+        build_router(FunctionRunner({"f": _noop}, 2, api_url=lambda: ""))
+    )
+
+    assert TestClient(app).get("/functions").json() == {
+        "functions": ["f"],
+        "concurrency": 2,
+        "heartbeats": True,
+    }
+
+
+async def _noop(**_: Any) -> dict:
+    return {}
 
 
 def test_run_records_are_capped_at_the_configured_count():

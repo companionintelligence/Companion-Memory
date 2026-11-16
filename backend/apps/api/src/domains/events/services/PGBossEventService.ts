@@ -683,6 +683,7 @@ export class PGBossEventService
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
       ...(options?.startAfter !== undefined ? { startAfter: options.startAfter } : {}),
       ...(options?.retentionMinutes !== undefined ? { retentionSeconds: options.retentionMinutes * 60 } : {}),
+      ...(options?.heartbeatSeconds !== undefined ? { heartbeatSeconds: options.heartbeatSeconds } : {}),
     };
 
     // If a specific queue is provided and that queue exists, send only to that queue.
@@ -1770,7 +1771,7 @@ export class PGBossEventService
   }
 
   async touchJob(queue: string, jobId: string): Promise<boolean> {
-    // pg-boss touches only an `active` job, and `affected` counts the ones it moved.
+    // pg-boss touches only an `active` job and `affected` counts the ones it moved.
     const { affected } = await this.boss.touch(queue, jobId);
 
     return affected > 0;

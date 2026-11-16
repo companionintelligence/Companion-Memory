@@ -156,6 +156,10 @@ class FunctionRunner:
                 job_id=held.job_id,
             )
             self._rejoin(held, request)
+            # A run still queued here needs a live worker. If one died since, the
+            # run would beat with nothing running until some other job's submit
+            # restarted the pool.
+            self._ensure_workers()
             return held
 
         record = RunRecord(
@@ -204,7 +208,7 @@ class FunctionRunner:
     def _rejoin(self, record: RunRecord, request: RunRequest) -> None:
         """A retry of the held job: carry the run on with the retry's token.
 
-        The retry's token is newer, so it outlives the first one, and its job's
+        The retry's token is newer, so it outlives the first one. Its job's
         expiry restarted when pg-boss fetched it again. If the retry asks for
         heartbeats, the run beats with that token from now on, even when the
         request that started it did not ask.
@@ -256,10 +260,13 @@ class FunctionRunner:
 
             # Released whatever happens from here, a hook that raises included:
             # a heartbeat left going would keep the job alive with nothing running.
+            # Nor may a hook end this worker. A dead worker strands every run
+            # queued behind it, each still beating for its job.
             try:
-                self.run_started(args, token)
-
                 try:
+                    # A start hook that raises fails the run like the function
+                    # would, so its job is failed and retried now.
+                    self.run_started(args, token)
                     result = await self.registry[record.function](**args)
                     record.status = "completed"
                     record.result = (
@@ -285,12 +292,19 @@ class FunctionRunner:
                     record.finished_at = time.time()
                     self.queue.task_done()
 
-                self.run_finished(args)
+                try:
+                    self.run_finished(args)
+                except Exception as exc:
+                    logger.error(
+                        "function_run_finished_hook_failed",
+                        run_id=run_id,
+                        function=record.function,
+                        error=str(exc),
+                        traceback=traceback.format_exc(),
+                    )
 
                 if record.job_id and record.queue:
-                    await self._deliver_callback(
-                        record, token=self._tokens.get(run_id, token)
-                    )
+                    await self._deliver_callback(record, token=token)
             finally:
                 self._release(run_id)
 
@@ -299,7 +313,7 @@ class FunctionRunner:
 
         Runs from submit until the callback has been attempted, so a run queued
         behind another one keeps its job too. A refused or failed beat is only
-        logged: the next one may land, and the API lets the job go when none do.
+        logged: the next one may land and the API lets the job go when none do.
         """
         while True:
             await asyncio.sleep(every)
@@ -343,10 +357,13 @@ class FunctionRunner:
         for attempt, delay in enumerate((0, *CALLBACK_RETRY_DELAYS)):
             if delay:
                 await asyncio.sleep(delay)
+            # Read again on every attempt: a retry that joins this run while the
+            # API is unreachable brings a newer token than the one we started with.
+            current = self._tokens.get(record.run_id) or token
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     response = await client.post(
-                        url, json=body, headers=self._auth_headers(token)
+                        url, json=body, headers=self._auth_headers(current)
                     )
                 if response.status_code < 300:
                     logger.info(
@@ -422,7 +439,13 @@ def build_router(runner: FunctionRunner) -> APIRouter:
 
     @router.get("/functions")
     async def list_functions() -> dict[str, Any]:
-        return {"functions": sorted(runner.registry), "concurrency": runner.concurrency}
+        # `heartbeats`: this runner honours `heartbeat_seconds`. The API's
+        # dispatcher logs an error against a sidecar that does not say so.
+        return {
+            "functions": sorted(runner.registry),
+            "concurrency": runner.concurrency,
+            "heartbeats": True,
+        }
 
     return router
 

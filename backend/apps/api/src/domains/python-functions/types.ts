@@ -55,7 +55,8 @@ const HBPE_POST_LABEL_SECONDS = 4 * 60 * 60;
 
 /**
  * How often a sidecar reports that it still holds a run, queued or running,
- * for a queue that declares `heartbeatSeconds`. The dispatcher asks for it in
+ * for a target whose jobs carry a heartbeat window
+ * (`PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS`). The dispatcher asks for it in
  * the run request (`heartbeat_seconds`); see `ci.sidecar.runner`.
  */
 export const PYTHON_RUN_HEARTBEAT_SECONDS = 60;
@@ -70,7 +71,7 @@ export const PYTHON_RUN_HEARTBEAT_SECONDS = 60;
  * Five beats, not one: an API restart (about a minute) or a few dropped
  * requests must not fail a run that is still going. If the API is gone for
  * longer, the run's job is failed and retried while the sidecar still has it;
- * the retry carries the same job id, and the runner hands back the run already
+ * the retry carries the same job id and the runner hands back the run already
  * holding it instead of starting a second one.
  */
 const HBPE_HEARTBEAT_TIMEOUT_SECONDS = 5 * PYTHON_RUN_HEARTBEAT_SECONDS;
@@ -81,8 +82,9 @@ const HBPE_HEARTBEAT_TIMEOUT_SECONDS = 5 * PYTHON_RUN_HEARTBEAT_SECONDS;
  * `active` until this window elapses, then pg-boss retries it. It must exceed
  * the longest legitimate run on that target — an expiry that fires on a run
  * that is still working does not recover anything, it duplicates it.
- * `heartbeatSeconds` lets a queue recover sooner: the sidecar beats while it
- * holds the run, and pg-boss fails the job once the beats stop.
+ * `PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS` lets a target recover sooner: the
+ * sidecar beats while it holds the run and pg-boss fails the job once the beats
+ * stop.
  *
  * `policy: 'short'` is what makes every caller's singletonKey-based dedup
  * (fan-out crons, SmartRotationListener, ForecastResolver.triggerHbpe) actually
@@ -96,7 +98,6 @@ export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   {
     policy: 'short';
     expireInSeconds: number;
-    heartbeatSeconds?: number;
     retryLimit: number;
     retryDelay: number;
     yieldsTo?: string;
@@ -135,18 +136,37 @@ export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   // retryLimit's: with the window sized above, an expiry only fires when the
   // run really is gone.
   //
-  // A missed heartbeat is the failure that can tell the two apart: the sidecar
-  // stopped saying it holds the run, so the run went with it. Its retry, 300 s
-  // later, runs the pipeline again on the restarted sidecar. The expiry is
-  // unchanged. It frees nothing from a run that hangs while its sidecar keeps
-  // beating: the retry reaches the runner still holding that job and joins it.
+  // A missed heartbeat (PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS) is the
+  // failure that can tell the two apart: the sidecar stopped saying it holds
+  // the run, so the run went with it. Its retry, 300 s later, runs the pipeline
+  // again on the restarted sidecar. The expiry is unchanged. It frees nothing
+  // from a run that hangs while its sidecar keeps beating: the retry reaches
+  // the runner still holding that job and joins it.
   hbpe: {
     policy: 'short',
     expireInSeconds: HBPE_LABEL_BUDGET_SECONDS + HBPE_POST_LABEL_SECONDS,
-    heartbeatSeconds: HBPE_HEARTBEAT_TIMEOUT_SECONDS,
     retryLimit: 2,
     retryDelay: 300,
   },
+};
+
+/**
+ * Per target, how long an active job may go without a heartbeat before pg-boss
+ * fails it (and so retries it). Unset, the target's jobs are bounded by the
+ * queue's expiry alone and the dispatcher asks for no beats.
+ *
+ * `PythonFunctionService.dispatch` sets this on each job it sends, never on
+ * the queue. pg-boss's `updateQueue` keeps any setting a call leaves out, so a
+ * queue-level window would stay on the queue after a downgrade to a release
+ * whose sidecar never beats (or a dev stack switched back to an older branch):
+ * every run there would be failed five minutes in and dispatched again, up to
+ * three times, then dead-lettered. Per job, only the jobs already sent by this
+ * release carry it.
+ */
+export const PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS: Readonly<
+  Partial<Record<PythonFunctionTarget, number>>
+> = {
+  hbpe: HBPE_HEARTBEAT_TIMEOUT_SECONDS,
 };
 
 /**

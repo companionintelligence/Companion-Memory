@@ -5,6 +5,7 @@ import { EventService } from '@ci/domains/events';
 
 import { PythonFunctionRunEvent } from '../events';
 import {
+  PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS,
   PYTHON_FUNCTION_QUEUES,
   PYTHON_FUNCTIONS,
   type PythonFunctionDispatchOptions,
@@ -46,6 +47,7 @@ export class PythonFunctionService {
       );
     }
 
+    const heartbeatSeconds = PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS[target];
     const jobIds = await this.eventService.send(
       PythonFunctionRunEvent,
       {
@@ -58,6 +60,8 @@ export class PythonFunctionService {
         queue: PYTHON_FUNCTION_QUEUES[target],
         ...(options.singletonKey ? { singletonKey: options.singletonKey } : {}),
         ...(options.priority !== undefined ? { priority: options.priority } : {}),
+        // On the job, not the queue; see PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS.
+        ...(heartbeatSeconds !== undefined ? { heartbeatSeconds } : {}),
       },
     );
 
@@ -75,7 +79,7 @@ export class PythonFunctionService {
    * running on `target`'s queue, whatever key it was sent with.
    *
    * `dispatch` alone cannot say. The queues' `short` policy refuses a duplicate
-   * only while the first copy is still waiting, and only one with the same key:
+   * only while the first copy is still waiting and only one with the same key:
    * Predict (`fn:nightly:<user>:manual`), the 02:30 nightly and the start-up
    * bootstrap sweep (`fn:hbpe:<user>:<day>`) each use their own, so any of them
    * started a second hour-long pipeline beside a running one.
