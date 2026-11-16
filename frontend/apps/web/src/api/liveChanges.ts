@@ -29,11 +29,23 @@ import { streamingFetch } from '@ci/common';
  * what the next connect uses. The browser coming back online also reconnects
  * at once.
  *
+ * The phone app has no bearer: it signs in with the device's API key, which
+ * never rotates. A refused key is tried again after the same minute's wait,
+ * and a different key (signing in again) connects at once, replacing a
+ * stream the old key opened.
+ *
  * Nothing that changed while the stream was down was announced, so the first
  * stream that opens after a drop announces every topic with listeners once.
  * They re-read and are current again without waiting for their next poll.
  */
 export type LiveChangeTopic = 'tasks' | 'calendar';
+
+/**
+ * What the credential given to `setLiveChangesAuth` is: the web session's
+ * bearer token, sent as `Authorization: Bearer`, or the phone's API key, sent
+ * as `x-api-key`.
+ */
+export type LiveChangesAuthKind = 'bearer' | 'apiKey';
 
 type Listener = () => void;
 
@@ -47,10 +59,15 @@ const subscribers = new Map<LiveChangeTopic, Set<Listener>>();
 const debounces = new Map<LiveChangeTopic, ReturnType<typeof setTimeout>>();
 
 let token: string | null = null;
+let tokenKind: LiveChangesAuthKind = 'bearer';
 let controller: AbortController | null = null;
+/** The credential the open stream was opened with. */
+let streamToken: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = RECONNECT_FLOOR_MS;
 let refusedToken: string | null = null;
+/** When `refusedToken` may be tried again: never for a bearer, after a wait for a key. */
+let refusedUntil = 0;
 /** A stream subscribers wanted was down, so changes may have gone unannounced. */
 let missedChanges = false;
 
@@ -136,24 +153,55 @@ function scheduleReconnect(delay = reconnectDelay): void {
 }
 
 async function connect(): Promise<void> {
-  if (controller || !token || subscriberCount() === 0 || token === refusedToken) {
+  if (controller || !token || subscriberCount() === 0) {
     return;
+  }
+
+  if (token === refusedToken) {
+    // `performance.now()`, not the wall clock: a clock set back would put the
+    // retry off by the size of the jump.
+    const wait = refusedUntil - performance.now();
+
+    if (wait > 0) {
+      // A refused key's retry stays booked whatever cleared the timer (the
+      // last subscriber leaving, a return to the app). A bearer waits forever.
+      if (Number.isFinite(wait) && !reconnectTimer) {
+        scheduleReconnect(Math.max(wait, RECONNECT_FLOOR_MS));
+      }
+
+      return;
+    }
+
+    refusedToken = null;
+    // The minute's wait doubled the backoff to its ceiling; this is a fresh try.
+    reconnectDelay = RECONNECT_FLOOR_MS;
   }
 
   const own = new AbortController();
   controller = own;
   const usedToken = token;
+  const usedKind = tokenKind;
+  streamToken = usedToken;
 
   try {
+    // The key is sent as given rather than left to `streamingFetch`, which reads
+    // its own copy: the key recorded as open or refused is then the one sent.
+    // No buffered fallback on the phone: this response never ends.
     const response = await streamingFetch(LIVE_CHANGES_PATH, {
-      headers: { Authorization: `Bearer ${usedToken}`, Accept: 'text/event-stream' },
+      headers: {
+        Accept: 'text/event-stream',
+        ...(usedKind === 'apiKey' ? { 'x-api-key': usedToken } : { Authorization: `Bearer ${usedToken}` }),
+      },
       signal: own.signal,
+      bufferedFallback: false,
     });
 
     if (response.status === 401 || response.status === 403) {
       // This token is no good; a retry with it would be refused the same way.
-      // Wait for the next one, or a minute, whichever is first.
+      // A bearer waits for the next one, which comes when it rotates. A key has
+      // no next one coming, so after a minute the same key is tried again.
       refusedToken = usedToken;
+      refusedUntil = usedKind === 'apiKey' ? performance.now() + UNAUTHORIZED_WAIT_MS : Infinity;
       controller = null;
       missedChanges = true;
       scheduleReconnect(UNAUTHORIZED_WAIT_MS);
@@ -226,11 +274,19 @@ function disconnect(): void {
 }
 
 /**
- * The bearer token the next connect uses. A new token clears a 401 wait and
- * reconnects at once if subscribers are waiting; an open stream is left alone.
+ * The credential the next connect uses: the bearer token, or with `'apiKey'`
+ * the phone's API key. A new one clears a 401 wait and reconnects at once if
+ * subscribers are waiting. An open stream is left alone when a bearer merely
+ * rotates, and replaced when the key changes, since a new key is a new sign-in.
  */
-export function setLiveChangesAuth(next: string | null): void {
+export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKind = 'bearer'): void {
   token = next;
+  tokenKind = kind;
+
+  if (next && kind === 'apiKey' && controller && streamToken !== next) {
+    missedChanges = true;
+    disconnect();
+  }
 
   if (next && next !== refusedToken) {
     refusedToken = null;
@@ -302,7 +358,10 @@ export function resetLiveChangesForTests(): void {
 
   debounces.clear();
   token = null;
+  tokenKind = 'bearer';
+  streamToken = null;
   refusedToken = null;
+  refusedUntil = 0;
   reconnectDelay = RECONNECT_FLOOR_MS;
   missedChanges = false;
 }

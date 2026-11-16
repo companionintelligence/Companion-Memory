@@ -27,6 +27,12 @@ interface Opts extends RequestInit {
 export type ApiFetchInit = RequestInit & { allowOffline?: boolean };
 
 /**
+ * `streamingFetch`'s init. `bufferedFallback: false` keeps a native request on the
+ * webview fetch: no buffered CapacitorHttp retry when that fetch fails.
+ */
+export type StreamingFetchInit = RequestInit & { bufferedFallback?: boolean };
+
+/**
  * Field-level validation issue reported by the API. Mirrors the zod issue
  * shape the backend ValidationPipe puts in the `errors` array of 400 bodies,
  * so forms can attach server-side messages to the offending field.
@@ -403,14 +409,21 @@ export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): P
  *
  * On-device LocalLLM is a later opt-in. Do not route this helper through
  * `generateOffline` — `isAvailable()` is a RAM floor, not a loaded model.
+ *
+ * A response that never ends (the live change stream) passes
+ * `bufferedFallback: false`. The buffered request resolves only once the body
+ * is complete and takes no abort signal, so on an endless stream it would never
+ * resolve and would hold a connection to the server for good. Such a caller
+ * gets the webview fetch's own error, an abort included, and retries itself.
  */
-export async function streamingFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function streamingFetch(input: string, init?: StreamingFetchInit): Promise<Response> {
+  const { bufferedFallback = true, ...rest } = init ?? {};
   const url = buildApiUrl(input);
   const headers = {
     ...apiKeyHeaders(),
-    ...flattenHeaders(init?.headers),
+    ...flattenHeaders(rest.headers),
   };
-  const next = { ...init, headers };
+  const next = { ...rest, headers };
 
   if (!isNativePlatform()) {
     return fetch(url, next);
@@ -418,7 +431,11 @@ export async function streamingFetch(input: string, init?: RequestInit): Promise
 
   try {
     return await unpatchedWebFetch()(url, next);
-  } catch {
+  } catch (error) {
+    if (!bufferedFallback) {
+      throw error;
+    }
+
     return nativeBinaryFetch(url, next);
   }
 }

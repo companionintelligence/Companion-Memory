@@ -384,6 +384,28 @@ describe('streamingFetch', () => {
     expect(Array.from(body)).toEqual(Array.from(bytes));
   });
 
+  it('throws the webview error with no buffered retry when the caller asks for none', async () => {
+    const request = vi.fn();
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { CapacitorHttp: { request } },
+    };
+
+    setApiBaseUrl('https://memory.example.com');
+    const webFetch = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
+    );
+    (window as unknown as { __ciUnpatchedFetch?: typeof fetch }).__ciUnpatchedFetch =
+      webFetch as unknown as typeof fetch;
+
+    await expect(streamingFetch('/api/live/changes', { bufferedFallback: false })).rejects.toThrow(
+      'The operation was aborted.',
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(webFetch.mock.calls[0]?.[1]).not.toHaveProperty('bufferedFallback');
+  });
+
   it('builds the binary fallback response for a 204 (chat cancel) without a body', async () => {
     const request = vi.fn(async () => ({ status: 204, data: '' }));
 

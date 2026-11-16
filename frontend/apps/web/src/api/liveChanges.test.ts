@@ -44,6 +44,12 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** The tab, or the phone app, comes back into view. */
+function comeBack() {
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mockedFetch.mockReset();
@@ -52,6 +58,8 @@ beforeEach(() => {
 afterEach(() => {
   resetLiveChangesForTests();
   vi.useRealTimers();
+  // `comeBack` shadows jsdom's own getter; drop the override.
+  delete (document as { visibilityState?: unknown }).visibilityState;
 });
 
 describe('liveChanges', () => {
@@ -266,5 +274,193 @@ describe('liveChanges', () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(isLiveChangesConnected()).toBe(true);
+  });
+
+  it('still does not retry a refused bearer once the minute is over', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('stale');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    comeBack();
+    await flush();
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The phone app signs in with the device's API key, not a bearer.
+describe('liveChanges with the phone API key', () => {
+  it('connects with the key as x-api-key and no Authorization header', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await stream.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const headers = mockedFetch.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).toEqual({ Accept: 'text/event-stream', 'x-api-key': 'device-key' });
+    expect(isLiveChangesConnected()).toBe(true);
+  });
+
+  // The buffered native request resolves only when the body ends, and this one
+  // never does: the stream would hang open for good, with no way to abort it.
+  it('asks for no buffered fallback on the phone', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await stream.opened;
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      LIVE_CHANGES_PATH,
+      expect.objectContaining({ bufferedFallback: false }),
+    );
+  });
+
+  it('retries a refused key after a minute even when the wall clock is set back', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    vi.setSystemTime(Date.now() - 60 * 60_000);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('delivers change frames like the bearer stream', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    const calendar = vi.fn();
+    subscribeLiveChanges(['calendar'], calendar);
+    await stream.opened;
+
+    stream.push('event: change\ndata: {"topic":"calendar"}\n\n');
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(calendar).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries a refused key again after the wait, and catches up when it is let in', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await refused.opened;
+    await flush();
+
+    // Nothing early: not on a timer, not on a return to the app.
+    await vi.advanceTimersByTimeAsync(30_000);
+    comeBack();
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await retry.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps trying a refused key every minute', async () => {
+    const first = openStream(403);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+    await flush();
+
+    const second = openStream(401);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await second.opened;
+    await flush();
+
+    const third = openStream();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await third.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the retry of a refused key when everyone leaves and comes back', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    const off = subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    // Leaving cancels the timer; coming back inside the wait must not retry
+    // early, nor lose the retry.
+    off();
+    await vi.advanceTimersByTimeAsync(10_000);
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(50_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('connects at once with a new key after the old one was refused', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('old-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    const fresh = openStream();
+    setLiveChangesAuth('new-key', 'apiKey');
+    await fresh.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+  });
+
+  it('replaces the open stream when the key changes, and catches up', async () => {
+    const first = openStream();
+    setLiveChangesAuth('old-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    // The same key again (a re-render) leaves it alone.
+    setLiveChangesAuth('old-key', 'apiKey');
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const second = openStream();
+    setLiveChangesAuth('new-key', 'apiKey');
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(isLiveChangesConnected()).toBe(true);
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes on sign-out like the bearer stream', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await stream.opened;
+
+    setLiveChangesAuth(null);
+
+    expect(isLiveChangesConnected()).toBe(false);
   });
 });
