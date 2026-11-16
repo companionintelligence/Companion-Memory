@@ -72,6 +72,15 @@ export type QueueOptions = {
   expireInSeconds?: number;
 
   /**
+   * Seconds an `active` job may go without a heartbeat before pg-boss fails
+   * (and so retries) it. For deferred jobs whose external executor reports in
+   * while it works (see `EventService.touchJob`), so a run lost with its
+   * executor is let go in minutes instead of at `expireInSeconds`. pg-boss
+   * refuses less than 10. Unset, nothing watches heartbeats.
+   */
+  heartbeatSeconds?: number;
+
+  /**
    * Minutes an UNFINISHED job may sit on this queue before pg-boss throws it
    * away. Overrides the appliance-wide default the pg-boss implementation
    * stamps on every queue; ignored by LocalEventService.

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
@@ -12,6 +12,7 @@ function makeController() {
   const eventService = {
     completeJob: jest.fn().mockResolvedValue(undefined),
     failJob: jest.fn().mockResolvedValue(undefined),
+    touchJob: jest.fn().mockResolvedValue(true),
   } as unknown as EventService;
 
   return { controller: new PythonFunctionCallbackController(eventService, logger), eventService };
@@ -23,7 +24,7 @@ function reqFor(jobId: string, queue: string, userId = 'user-1'): PythonRunCallb
 }
 
 describe('PythonFunctionCallbackController', () => {
-  it('completes the deferred job with the run result', async () => {
+  it('completes the deferred job with the run result, even one waiting for a retry', async () => {
     const { controller, eventService } = makeController();
 
     await controller.callback(reqFor('job-1', 'py-fn-summary'), {
@@ -33,7 +34,14 @@ describe('PythonFunctionCallbackController', () => {
       result: { summaries: 3 },
     });
 
-    expect(eventService.completeJob).toHaveBeenCalledWith('py-fn-summary', 'job-1', { summaries: 3 });
+    // A job whose heartbeat lapsed sits in `retry` while the run is still
+    // going. Its result must land there, or the retry runs everything again.
+    expect(eventService.completeJob).toHaveBeenCalledWith(
+      'py-fn-summary',
+      'job-1',
+      { summaries: 3 },
+      { includeQueued: true },
+    );
     expect(eventService.failJob).not.toHaveBeenCalled();
   });
 
@@ -120,5 +128,40 @@ describe('PythonFunctionCallbackController', () => {
     ).rejects.toThrow(ForbiddenException);
     expect(eventService.completeJob).not.toHaveBeenCalled();
     expect(eventService.failJob).not.toHaveBeenCalled();
+  });
+
+  describe('heartbeat', () => {
+    it("moves the run's job heartbeat", async () => {
+      const { controller, eventService } = makeController();
+
+      await controller.heartbeat(reqFor('job-1', 'py-fn-hbpe'), { job_id: 'job-1', queue: 'py-fn-hbpe' });
+
+      expect(eventService.touchJob).toHaveBeenCalledWith('py-fn-hbpe', 'job-1');
+    });
+
+    it('answers 409 once the job is not running any more, so the runner can log it', async () => {
+      const { controller, eventService } = makeController();
+
+      (eventService.touchJob as jest.Mock).mockResolvedValue(false);
+
+      await expect(
+        controller.heartbeat(reqFor('job-1', 'py-fn-hbpe'), { job_id: 'job-1', queue: 'py-fn-hbpe' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('SECURITY: keeps alive only the job the run token was minted for', async () => {
+      const { controller, eventService } = makeController();
+
+      await expect(
+        controller.heartbeat(reqFor('job-1', 'py-fn-hbpe'), { job_id: 'job-2', queue: 'py-fn-hbpe' }),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        controller.heartbeat(reqFor('job-1', 'py-fn-hbpe'), { job_id: 'job-1', queue: 'search-index' }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.heartbeat({} as PythonRunCallbackRequest, { job_id: 'job-1', queue: 'py-fn-hbpe' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(eventService.touchJob).not.toHaveBeenCalled();
+    });
   });
 });

@@ -205,7 +205,12 @@ export class LocalEventService extends EventService implements BeforeApplication
   // left to find. A deferred listener's external run (a python-function on its
   // sidecar) may still be going, and this cannot see it, so a caller relying on
   // this to refuse a duplicate gets no protection here.
-  async hasLiveJob(): Promise<boolean> {
+  async hasLiveJobForUser(): Promise<boolean> {
+    return false;
+  }
+
+  // No job row to keep alive, and nothing here fails one for going quiet.
+  async touchJob(): Promise<boolean> {
     return false;
   }
 

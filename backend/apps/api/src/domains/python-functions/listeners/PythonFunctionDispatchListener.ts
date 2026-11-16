@@ -12,6 +12,7 @@ import {
   PYTHON_FUNCTION_QUEUE_OPTIONS,
   PYTHON_FUNCTION_QUEUES,
   PYTHON_FUNCTIONS,
+  PYTHON_RUN_HEARTBEAT_SECONDS,
   type PythonFunctionRunPayload,
   type PythonFunctionTarget,
 } from '../types';
@@ -35,7 +36,9 @@ const PREFLIGHT_TIMEOUT_MS = 5_000;
  * Forwards `python.function.run` jobs to the target Python service and DEFERS
  * pg-boss completion: the job stays `active` (holding no worker slot) until the
  * Python runner reports the outcome through PythonFunctionCallbackController,
- * or the queue's expireInSeconds elapses and pg-boss retries.
+ * or the queue's expireInSeconds elapses and pg-boss retries. On a queue with
+ * `heartbeatSeconds` the runner also beats while it holds the run, and pg-boss
+ * fails the job sooner once the beats stop.
  *
  * Both listeners are `autoAcknowledge: false` — a failed dispatch (service
  * down, pool full → 429) calls `fail()` so pg-boss retries with backoff.
@@ -103,6 +106,11 @@ export class PythonFunctionDispatchListener {
           // unchanged — the sidecars' pytest suites pin `job_id`.
           job_id: ack.jobId,
           queue,
+          // A queue that fails a job once its heartbeat stops asks the runner
+          // to beat while it holds the run; see PythonFunctionCallbackController.
+          ...(PYTHON_FUNCTION_QUEUE_OPTIONS[target].heartbeatSeconds
+            ? { heartbeat_seconds: PYTHON_RUN_HEARTBEAT_SECONDS }
+            : {}),
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
       });

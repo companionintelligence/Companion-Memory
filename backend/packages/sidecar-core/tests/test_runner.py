@@ -88,8 +88,10 @@ class _TrackingRunner(FunctionRunner):
 
 
 def _stop_workers(runner: FunctionRunner) -> None:
-    for worker in runner._workers:
-        worker.cancel()
+    # Heartbeats too: a test that fails while a run is still held would leave
+    # one beating into the next test's fake transport.
+    for task in [*runner._workers, *runner._heartbeats.values()]:
+        task.cancel()
 
 
 def test_submit_rejects_unknown_functions():
@@ -253,6 +255,223 @@ async def test_hooks_bracket_the_run_even_when_it_raises(fake_httpx):
             ("started", {"user_id": "user-4"}, "tok-4"),
             ("finished", {"user_id": "user-4"}, None),
         ]
+    finally:
+        _stop_workers(runner)
+
+
+def _heartbeats(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [call for call in calls if call["url"].endswith("/function-runs/heartbeat")]
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_cover_a_queued_and_a_running_run_until_the_callback(
+    fake_httpx,
+):
+    """The API lets a job go once its beats stop, so they have to cover the whole hold.
+
+    A run queued behind another one is held too: its pg-boss job is already
+    active, and without beats it would be failed while it waits its turn.
+    """
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
+    release = asyncio.Event()
+
+    async def slow(**_: Any) -> dict:
+        await release.wait()
+        return {}
+
+    runner = _runner({"slow": slow}, concurrency=1)
+
+    try:
+        for n in (1, 2):
+            runner.submit(
+                RunRequest(
+                    function="slow",
+                    job_id=f"job-{n}",
+                    queue="py-fn-hbpe",
+                    access_token=f"tok-{n}",
+                    heartbeat_seconds=0.01,
+                )
+            )
+
+        # job-1 is running and job-2 is waiting behind it; both beat.
+        await _wait_for(
+            lambda: (
+                {c["json"]["job_id"] for c in _heartbeats(fake_httpx.calls)}
+                == {"job-1", "job-2"}
+            )
+        )
+        beat = next(
+            c for c in _heartbeats(fake_httpx.calls) if c["json"]["job_id"] == "job-2"
+        )
+        assert beat["url"] == "http://api:3030/function-runs/heartbeat"
+        assert beat["json"] == {"job_id": "job-2", "queue": "py-fn-hbpe"}
+        assert beat["headers"] == {"Authorization": "Bearer tok-2"}
+
+        release.set()
+        await _wait_for(
+            lambda: sum(c["url"].endswith("/callback") for c in fake_httpx.calls) == 2
+        )
+        await asyncio.sleep(0.05)
+        settled = len(_heartbeats(fake_httpx.calls))
+        await asyncio.sleep(0.1)
+
+        # Both callbacks are in, so neither run beats any more.
+        assert len(_heartbeats(fake_httpx.calls)) == settled
+        assert runner._heartbeats == {}
+        assert runner._held_jobs == {}
+    finally:
+        _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_no_heartbeat_unless_the_request_asks_for_one(fake_httpx):
+    fake_httpx.responses = [_FakeResponse(204)]
+
+    async def napping(**_: Any) -> dict:
+        await asyncio.sleep(0.1)
+        return {}
+
+    runner = _runner({"napping": napping}, concurrency=1)
+
+    try:
+        runner.submit(
+            RunRequest(
+                function="napping",
+                job_id="job-5",
+                queue="py-fn-summary",
+                access_token="tok-5",
+            )
+        )
+
+        await _wait_for(lambda: len(fake_httpx.calls) == 1)
+
+        assert fake_httpx.calls[0]["url"].endswith("/function-runs/callback")
+    finally:
+        _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_a_job_sent_again_while_held_joins_the_run_holding_it(fake_httpx):
+    """pg-boss retries under the same id: a retry of a job still running here must not run it twice."""
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(10)]
+    release = asyncio.Event()
+    started: list[str] = []
+
+    async def slow(**kwargs: Any) -> dict:
+        started.append(kwargs["user_id"])
+        await release.wait()
+        return {}
+
+    runner = _runner({"slow": slow}, concurrency=1)
+    request = RunRequest(
+        function="slow",
+        args={"user_id": "user-6"},
+        job_id="job-6",
+        queue="py-fn-hbpe",
+        access_token="tok-6",
+    )
+
+    try:
+        first = runner.submit(request)
+        await _wait_for(lambda: started == ["user-6"])
+
+        again = runner.submit(request)
+
+        assert again.run_id == first.run_id
+        assert len(runner.runs) == 1
+
+        release.set()
+        await _wait_for(lambda: len(fake_httpx.calls) == 1)
+        await _wait_for(lambda: runner._held_jobs == {})
+
+        # Once its callback has gone, the same id is a new run again.
+        third = runner.submit(request)
+        assert third.run_id != first.run_id
+        await _wait_for(lambda: started == ["user-6", "user-6"])
+    finally:
+        _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_joins_a_held_run_brings_its_token_and_heartbeat(
+    fake_httpx,
+):
+    """The retry's token is the newer one, and its request may be the first to ask for beats."""
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
+    release = asyncio.Event()
+
+    async def slow(**_: Any) -> dict:
+        await release.wait()
+        return {}
+
+    runner = _runner({"slow": slow}, concurrency=1)
+
+    try:
+        first = runner.submit(
+            RunRequest(
+                function="slow",
+                job_id="job-8",
+                queue="py-fn-hbpe",
+                access_token="tok-old",
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert _heartbeats(fake_httpx.calls) == []
+
+        again = runner.submit(
+            RunRequest(
+                function="slow",
+                job_id="job-8",
+                queue="py-fn-hbpe",
+                access_token="tok-new",
+                heartbeat_seconds=0.01,
+            )
+        )
+        assert again.run_id == first.run_id
+
+        await _wait_for(lambda: len(_heartbeats(fake_httpx.calls)) > 0)
+        assert _heartbeats(fake_httpx.calls)[0]["headers"] == {
+            "Authorization": "Bearer tok-new"
+        }
+
+        release.set()
+        await _wait_for(
+            lambda: any(c["url"].endswith("/callback") for c in fake_httpx.calls)
+        )
+        callback = next(c for c in fake_httpx.calls if c["url"].endswith("/callback"))
+        assert callback["headers"] == {"Authorization": "Bearer tok-new"}
+        await _wait_for(lambda: runner._heartbeats == {} and runner._tokens == {})
+    finally:
+        _stop_workers(runner)
+
+
+@pytest.mark.asyncio
+async def test_a_hook_that_raises_still_lets_the_job_go(fake_httpx):
+    """A heartbeat left going after the run is over would keep its job alive for hours."""
+    fake_httpx.responses = [_FakeResponse(204) for _ in range(500)]
+
+    async def quick(**_: Any) -> dict:
+        return {}
+
+    class _BrokenFinish(FunctionRunner):
+        def run_finished(self, args: dict[str, Any]) -> None:
+            raise RuntimeError("hook broke")
+
+    runner = _BrokenFinish({"quick": quick}, 1, api_url=lambda: "http://api:3030")
+
+    try:
+        runner.submit(
+            RunRequest(
+                function="quick",
+                job_id="job-9",
+                queue="py-fn-hbpe",
+                access_token="tok-9",
+                heartbeat_seconds=0.01,
+            )
+        )
+
+        await _wait_for(lambda: runner._held_jobs == {})
+        assert runner._heartbeats == {}
     finally:
         _stop_workers(runner)
 

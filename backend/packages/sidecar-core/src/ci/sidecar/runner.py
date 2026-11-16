@@ -10,6 +10,12 @@ dispatcher left ``active``. If the callback is undeliverable the job recovers
 via pg-boss queue expiration, so delivery is best-effort-with-retries, never
 silently dropped.
 
+When the request asks for it (``heartbeat_seconds``), the runner also tells the
+API every so often that it still holds the run, queued or running
+(``{api_url}/function-runs/heartbeat``). On a queue that expects those beats the
+API lets a job go within minutes once they stop, when this service died with
+the run, instead of at the queue's expiry hours later.
+
 A service subclasses :class:`FunctionRunner` with where its API is and, if it
 has any, what a run needs around it (HBPE registers the run's token for its
 GraphQL client), then mounts :func:`build_router` on its app.
@@ -59,6 +65,15 @@ class RunRequest(BaseModel):
             "stored on the run record, so /runs/{id} cannot leak it."
         ),
     )
+    heartbeat_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Seconds between heartbeats for job_id while this service holds the run, "
+            "queued or running. The API asks for them on a queue that fails a job "
+            "whose heartbeat stops, so a run lost with this service is let go soon."
+        ),
+    )
 
 
 class RunRecord(BaseModel):
@@ -97,7 +112,13 @@ class FunctionRunner:
         self._workers: list[asyncio.Task[None]] = []
         # Args are held out of RunRecord so GET /runs never leaks payloads.
         self._pending_args: dict[str, dict[str, Any]] = {}
-        self._pending_tokens: dict[str, str | None] = {}
+        # Each held run's token, kept until its callback has been attempted: a
+        # retry that joins the run brings a newer one for the callback.
+        self._tokens: dict[str, str | None] = {}
+        # (queue, job_id) -> run_id for every job this runner holds, from submit
+        # until its callback has been attempted; and each held run's heartbeat.
+        self._held_jobs: dict[tuple[str, str], str] = {}
+        self._heartbeats: dict[str, asyncio.Task[None]] = {}
 
     def run_started(self, args: dict[str, Any], token: str | None) -> None:
         """Hook: on the worker, just before the function runs. Nothing by default."""
@@ -122,6 +143,21 @@ class FunctionRunner:
                 f"Known: {sorted(self.registry)}",
             )
 
+        held = self._held_run(request)
+        if held is not None:
+            # pg-boss retries a job under the same id. One whose heartbeats
+            # stopped reaching the API while this service still had it (the API
+            # was down for a while) comes back here: the run already going
+            # answers for it, rather than a second copy queued behind it.
+            logger.info(
+                "function_run_already_held",
+                run_id=held.run_id,
+                function=held.function,
+                job_id=held.job_id,
+            )
+            self._rejoin(held, request)
+            return held
+
         record = RunRecord(
             run_id=str(uuid.uuid4()),
             function=request.function,
@@ -140,7 +176,13 @@ class FunctionRunner:
 
         self._remember(record)
         self._pending_args[record.run_id] = request.args
-        self._pending_tokens[record.run_id] = request.access_token
+        self._tokens[record.run_id] = request.access_token
+        if request.job_id and request.queue:
+            self._held_jobs[(request.queue, request.job_id)] = record.run_id
+            if request.heartbeat_seconds and request.access_token:
+                self._start_heartbeat(
+                    record, request.access_token, request.heartbeat_seconds
+                )
         self._ensure_workers()
 
         logger.info(
@@ -152,6 +194,46 @@ class FunctionRunner:
 
         return record
 
+    def _held_run(self, request: RunRequest) -> RunRecord | None:
+        """The run already holding this request's job, if this runner has one."""
+        if not (request.job_id and request.queue):
+            return None
+        run_id = self._held_jobs.get((request.queue, request.job_id))
+        return self.runs.get(run_id) if run_id is not None else None
+
+    def _rejoin(self, record: RunRecord, request: RunRequest) -> None:
+        """A retry of the held job: carry the run on with the retry's token.
+
+        The retry's token is newer, so it outlives the first one, and its job's
+        expiry restarted when pg-boss fetched it again. If the retry asks for
+        heartbeats, the run beats with that token from now on, even when the
+        request that started it did not ask.
+        """
+        if not request.access_token:
+            return
+        self._tokens[record.run_id] = request.access_token
+        if request.heartbeat_seconds:
+            self._start_heartbeat(
+                record, request.access_token, request.heartbeat_seconds
+            )
+
+    def _start_heartbeat(self, record: RunRecord, token: str, every: float) -> None:
+        previous = self._heartbeats.pop(record.run_id, None)
+        if previous is not None:
+            previous.cancel()
+        self._heartbeats[record.run_id] = asyncio.create_task(
+            self._heartbeat(record, token, every)
+        )
+
+    def _release(self, run_id: str) -> None:
+        """Stop the run's heartbeat, drop its token and let its job id be run again."""
+        heartbeat = self._heartbeats.pop(run_id, None)
+        if heartbeat is not None:
+            heartbeat.cancel()
+        self._tokens.pop(run_id, None)
+        for key in [key for key, held in self._held_jobs.items() if held == run_id]:
+            del self._held_jobs[key]
+
     def _remember(self, record: RunRecord) -> None:
         self.runs[record.run_id] = record
         while len(self.runs) > self.max_run_records:
@@ -162,46 +244,89 @@ class FunctionRunner:
             run_id = await self.queue.get()
             record = self.runs.get(run_id)
             args = self._pending_args.pop(run_id, {})
-            token = self._pending_tokens.pop(run_id, None)
+            token = self._tokens.get(run_id)
 
             if record is None:  # evicted before it ran — should not happen
+                self._release(run_id)
                 self.queue.task_done()
                 continue
 
             record.status = "running"
             record.started_at = time.time()
-            self.run_started(args, token)
 
+            # Released whatever happens from here, a hook that raises included:
+            # a heartbeat left going would keep the job alive with nothing running.
             try:
-                result = await self.registry[record.function](**args)
-                record.status = "completed"
-                record.result = (
-                    result if isinstance(result, dict) else {"value": result}
-                )
-                logger.info(
-                    "function_run_completed",
-                    run_id=run_id,
-                    function=record.function,
-                    duration_s=round(time.time() - record.started_at, 1),
-                )
-            except Exception as exc:
-                record.status = "failed"
-                record.error = f"{type(exc).__name__}: {exc}"
-                logger.error(
-                    "function_run_failed",
-                    run_id=run_id,
-                    function=record.function,
-                    error=str(exc),
-                    traceback=traceback.format_exc(),
-                )
+                self.run_started(args, token)
+
+                try:
+                    result = await self.registry[record.function](**args)
+                    record.status = "completed"
+                    record.result = (
+                        result if isinstance(result, dict) else {"value": result}
+                    )
+                    logger.info(
+                        "function_run_completed",
+                        run_id=run_id,
+                        function=record.function,
+                        duration_s=round(time.time() - record.started_at, 1),
+                    )
+                except Exception as exc:
+                    record.status = "failed"
+                    record.error = f"{type(exc).__name__}: {exc}"
+                    logger.error(
+                        "function_run_failed",
+                        run_id=run_id,
+                        function=record.function,
+                        error=str(exc),
+                        traceback=traceback.format_exc(),
+                    )
+                finally:
+                    record.finished_at = time.time()
+                    self.queue.task_done()
+
+                self.run_finished(args)
+
+                if record.job_id and record.queue:
+                    await self._deliver_callback(
+                        record, token=self._tokens.get(run_id, token)
+                    )
             finally:
-                record.finished_at = time.time()
-                self.queue.task_done()
+                self._release(run_id)
 
-            self.run_finished(args)
+    async def _heartbeat(self, record: RunRecord, token: str, every: float) -> None:
+        """Tell the API, every ``every`` seconds, that this service still holds the run.
 
-            if record.job_id and record.queue:
-                await self._deliver_callback(record, token=token)
+        Runs from submit until the callback has been attempted, so a run queued
+        behind another one keeps its job too. A refused or failed beat is only
+        logged: the next one may land, and the API lets the job go when none do.
+        """
+        while True:
+            await asyncio.sleep(every)
+            url = f"{self._api_url().rstrip('/')}/function-runs/heartbeat"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(
+                        url,
+                        json={"job_id": record.job_id, "queue": record.queue},
+                        headers=self._auth_headers(token),
+                    )
+                if response.status_code >= 300:
+                    logger.warning(
+                        "function_run_heartbeat_rejected",
+                        run_id=record.run_id,
+                        job_id=record.job_id,
+                        http_status=response.status_code,
+                        body=response.text[:300],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "function_run_heartbeat_error",
+                    run_id=record.run_id,
+                    job_id=record.job_id,
+                    url=url,
+                    error=describe_transport_error(exc),
+                )
 
     async def _deliver_callback(self, record: RunRecord, token: str | None) -> None:
         url = f"{self._api_url().rstrip('/')}/function-runs/callback"

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { PYTHON_FUNCTION_QUEUE_OPTIONS } from '../types';
+import { PYTHON_FUNCTION_QUEUE_OPTIONS, PYTHON_RUN_HEARTBEAT_SECONDS } from '../types';
 
 /**
  * The hbpe queue's `expireInSeconds` is a cross-language invariant: it bounds a
@@ -76,5 +76,19 @@ describe('py-fn-hbpe queue expiry', () => {
     expect(PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.expireInSeconds).toBeGreaterThanOrEqual(
       labelBudgetSeconds() + longestObservedTailSeconds,
     );
+  });
+
+  /**
+   * The heartbeat window is how long a run lost with its sidecar keeps
+   * blocking Predict and the crons for that person. It must leave room for
+   * several missed beats (an API restart, a dropped request), stay above
+   * pg-boss's floor of 10 s and be minutes, not the hours of the expiry.
+   */
+  it('lets a run lost with its sidecar go within minutes, after several missed heartbeats', () => {
+    const window = PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.heartbeatSeconds ?? 0;
+
+    expect(window).toBeGreaterThanOrEqual(10);
+    expect(window).toBeGreaterThanOrEqual(3 * PYTHON_RUN_HEARTBEAT_SECONDS);
+    expect(window).toBeLessThanOrEqual(10 * 60);
   });
 });

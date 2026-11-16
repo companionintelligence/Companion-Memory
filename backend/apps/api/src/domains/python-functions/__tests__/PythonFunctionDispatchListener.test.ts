@@ -5,7 +5,7 @@ import type { Acknowledgement } from '@ci/domains/events';
 import { PythonFunctionDispatchListener } from '../listeners/PythonFunctionDispatchListener';
 import type { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
 import type { SummaryServiceYieldGate } from '../services/SummaryServiceYieldGate';
-import { PYTHON_FUNCTIONS } from '../types';
+import { PYTHON_FUNCTIONS, PYTHON_RUN_HEARTBEAT_SECONDS } from '../types';
 
 function makeLogger() {
   return {
@@ -98,6 +98,36 @@ describe('PythonFunctionDispatchListener', () => {
     expect(ack.defer).toHaveBeenCalledTimes(1);
     expect(ack.fail).not.toHaveBeenCalled();
     expect(ack.done).not.toHaveBeenCalled();
+  });
+
+  // The hbpe queue fails a job whose heartbeat stops, so its runs must beat;
+  // summary declares no heartbeat window and its runner is not asked to.
+  it('asks the runner for heartbeats only on a queue that watches them', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockImplementation((url: string) =>
+        Promise.resolve(
+          url.endsWith('/functions')
+            ? catalogResponse(url.includes('hbpe') ? 'hbpe' : 'summary')
+            : { ok: true },
+        ),
+      );
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
+
+    await listener.dispatchHbpe(
+      { target: 'hbpe', function: 'nightly', args: { user_id: 'user-1' }, userId: 'user-1' },
+      makeAck(),
+    );
+    await listener.dispatchSummary(payload, makeAck());
+
+    const [hbpe, summary] = runCalls(fetchMock).map(([, init]) => JSON.parse(String(init.body)));
+
+    expect(hbpe).toMatchObject({ queue: 'py-fn-hbpe', heartbeat_seconds: PYTHON_RUN_HEARTBEAT_SECONDS });
+    expect(summary.queue).toBe('py-fn-summary');
+    expect(summary).not.toHaveProperty('heartbeat_seconds');
   });
 
   it('takes job_id from the ACK, not from anything the payload happens to carry', async () => {

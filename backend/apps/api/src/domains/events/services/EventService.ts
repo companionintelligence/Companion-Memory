@@ -47,8 +47,18 @@ export abstract class EventService {
    * Complete a job whose listener called `ack.defer()` — used by out-of-band
    * completion paths (e.g. a webhook reporting that an external executor
    * finished). No-op in implementations without a persistent queue.
+   *
+   * `includeQueued` also completes the job while it waits for a retry: the
+   * queue gave up on the run (its heartbeat lapsed, or it expired) and the run
+   * finished anyway. Without it that report is dropped and the retry runs the
+   * whole job again.
    */
-  abstract completeJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void>;
+  abstract completeJob(
+    queue: string,
+    jobId: string,
+    output?: Record<string, unknown>,
+    options?: { includeQueued?: boolean },
+  ): Promise<void>;
 
   /**
    * Fail a job that is not running in this call stack, so the queue's
@@ -73,13 +83,24 @@ export abstract class EventService {
   abstract getJob(queue: string, jobId: string): Promise<QueuedJob | null>;
 
   /**
-   * Whether a job with `singletonKey` on `queue` is still waiting, retrying or
-   * running. A `short` queue refuses a duplicate key only while the first copy
-   * is still waiting; once it is running, the next send is accepted. A caller
-   * that must not start a second copy of a long run asks this first. Always
+   * Whether a job on `queue` whose payload names `userId` is still waiting,
+   * retrying or running, whatever singleton key it was sent with. A `short`
+   * queue refuses a duplicate key only while the first copy is still waiting,
+   * and only that key; a caller that must not start a second long run for the
+   * same person beside one started some other way asks this first. Always
    * false where there is no persistent queue (LocalEventService).
    */
-  abstract hasLiveJob(queue: string, singletonKey: string): Promise<boolean>;
+  abstract hasLiveJobForUser(queue: string, userId: string): Promise<boolean>;
+
+  /**
+   * Record that the external run behind an `active` deferred job is still
+   * going. On a queue that declares `heartbeatSeconds`, pg-boss fails (and so
+   * retries) an active job whose last heartbeat is older than that. True when
+   * the job was active and its heartbeat moved; false when it is not running
+   * any more (finished, failed, waiting for a retry) or there is no persistent
+   * queue (LocalEventService).
+   */
+  abstract touchJob(queue: string, jobId: string): Promise<boolean>;
 
   /**
    * Every queue that exists — the union of all listener queues plus the default.
