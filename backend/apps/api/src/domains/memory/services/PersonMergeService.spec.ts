@@ -5,7 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { PersonEntity } from '../entities/PersonEntity';
 
 import { RELATIONSHIP_COLUMNS } from './mergeEdgeSweep';
-import { PersonMergeService } from './PersonMergeService';
+import { PersonMergeService, withFoldedAddresses } from './PersonMergeService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const TARGET = '00000000-0000-0000-0000-0000000000b1';
@@ -333,8 +333,13 @@ describe('PersonMergeService', () => {
     const audits = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
     expect(audits).toHaveLength(2);
     for (const audit of audits) {
-      const details = JSON.parse(audit.params?.[3] as string) as { counts: unknown };
+      const details = JSON.parse(audit.params?.[3] as string) as {
+        counts: unknown;
+        addressesFolded?: boolean;
+      };
       expect(details.counts).toEqual(EXPECTED_COUNTS);
+      // The fold kept the source's addresses, so the repair of older merges skips this one.
+      expect(details.addressesFolded).toBe(true);
     }
 
     // Target re-indexes after commit.
@@ -1145,5 +1150,63 @@ describe('PersonMergeService', () => {
     const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
     expect(folded.is_self).toBeUndefined();
     expect(folded.first_name).toBe('Dana');
+  });
+
+  describe('withFoldedAddresses', () => {
+    const work = {
+      label: 'work',
+      street_address: '1 Market St',
+      street_address_2: null,
+      city: 'Oakland',
+      region: null,
+      postal_code: null,
+      country: null,
+      is_primary: true,
+    };
+    const home = { ...work, label: 'home', street_address: null, city: 'Berkeley', is_primary: false };
+
+    it('gives a person a merge dropped its addresses from exactly what a merge gives it now', async () => {
+      // What a merge left on the kept person before the fold kept addresses:
+      // the app's empty list and the other person's flat street and city.
+      const kept = {
+        emails: ['johnny.doe@example.com'],
+        addresses: [],
+        address: '1 Market St, Oakland',
+        street_address: '1 Market St',
+        city: 'Oakland',
+      };
+      const other = { emails: ['johnny.doe@example.com'], addresses: [work, home] };
+
+      const harness = makeHarness([
+        personRow(TARGET, { name: 'Johnny Doe', properties: kept }),
+        personRow(SOURCE_A, { name: 'John Doe', properties: other }),
+      ]);
+      await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+      const merged = JSON.parse(
+        statementsMatching(harness, 'SET properties =')[0].params?.[2] as string,
+      ) as Record<string, unknown>;
+
+      const repaired = withFoldedAddresses(kept, [other]);
+
+      expect(repaired?.addresses).toEqual(merged.addresses);
+      expect(repaired?.addresses).toEqual([
+        expect.objectContaining({ label: 'work', city: 'Oakland', is_primary: true }),
+        expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: false }),
+      ]);
+      expect(repaired).toMatchObject({ address: '1 Market St, Oakland', city: 'Oakland' });
+      expect(repaired?.emails).toEqual(['johnny.doe@example.com']);
+    });
+
+    it('changes nothing when the person already has every address', () => {
+      expect(withFoldedAddresses({ addresses: [work, home] }, [{ addresses: [work] }])).toBeNull();
+    });
+
+    it('leaves an address the kept person cleared by hand cleared', () => {
+      expect(
+        withFoldedAddresses({ addresses: [], user_edited_keys: ['city', 'street_address'] }, [
+          { addresses: [work] },
+        ]),
+      ).toBeNull();
+    });
   });
 });

@@ -295,7 +295,14 @@ export class PersonMergeService {
             ownerUserId,
             id,
             targetId,
-            JSON.stringify({ counts, sourceProperties: byId.get(id)?.properties ?? {} }),
+            // `addressesFolded`: this merge put the source's addresses on the
+            // target, so the repair of merges that dropped them leaves it out
+            // (MergedAddressRepairService).
+            JSON.stringify({
+              counts,
+              sourceProperties: byId.get(id)?.properties ?? {},
+              [ADDRESSES_FOLDED]: true,
+            }),
           ],
         );
       }
@@ -614,8 +621,15 @@ function isBlank(value: unknown): boolean {
   return value == null || value === '' || (Array.isArray(value) && value.length === 0);
 }
 
+/**
+ * The `ci.entity_merges.details` flag of a merge whose source's addresses are
+ * on the person it went into: every merge from this fold on, and each older
+ * one once MergedAddressRepairService has put them back.
+ */
+export const ADDRESSES_FOLDED = 'addressesFolded';
+
 /** `addresses` and the flat keys that mirror its primary entry. */
-const ADDRESS_KEYS: ReadonlySet<string> = new Set(['addresses', ...PERSON_ADDRESS_MIRROR_KEYS]);
+export const ADDRESS_KEYS: ReadonlySet<string> = new Set(['addresses', ...PERSON_ADDRESS_MIRROR_KEYS]);
 
 /** What the scalar fill leaves alone when no one has an address: only the list. */
 const ADDRESS_LIST_KEY: ReadonlySet<string> = new Set(['addresses']);
@@ -633,7 +647,7 @@ const STORED_ADDRESS_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /** Two copies of one address match whatever their label, case or spacing. */
-function addressKey(address: PersonAddress): string {
+export function addressKey(address: PersonAddress): string {
   return [
     address.streetAddress,
     address.streetAddress2,
@@ -782,6 +796,76 @@ function foldAddresses(
 }
 
 /**
+ * Writes the folded address list onto `out`, a target's folded properties,
+ * with the flat keys that mirror its first address and the hand-set claims
+ * that come with them, into `handSet`. Nothing when no source added one.
+ */
+function applyFoldedAddresses(
+  out: Record<string, unknown>,
+  handSet: Set<string>,
+  targetHandSet: ReadonlySet<string>,
+  sources: Array<Record<string, unknown>>,
+  addresses: ReturnType<typeof foldAddresses>,
+): void {
+  if (!addresses.list) {
+    return;
+  }
+
+  out.addresses = addresses.list;
+
+  // A flat key the target's person set or cleared by hand keeps the
+  // target's value, as any scalar does, even where it no longer matches the
+  // list (an edit through the flat fields leaves the list as it was).
+  if (addresses.first) {
+    for (const [key, value] of Object.entries(personAddressMirror(addresses.first))) {
+      if (!targetHandSet.has(key)) {
+        out[key] = value;
+      }
+    }
+  }
+
+  // As for a scalar, a key a source's person set by hand stays hand-set when
+  // its value came from that source: `addresses` from any source that added
+  // to it, the flat mirror keys only from the one whose address they mirror.
+  for (const giver of addresses.givers) {
+    for (const key of userEditedKeys(sources[giver])) {
+      if (key === 'addresses' || (giver === addresses.firstFrom && ADDRESS_KEYS.has(key))) {
+        handSet.add(key);
+      }
+    }
+  }
+}
+
+/**
+ * `target` with the addresses `sources` bring, folded exactly as a merge folds
+ * them (see {@link foldAddresses}), or null when they bring none. Only the
+ * address keys and the hand-set list change. For the repair of merges made
+ * before the fold kept addresses (MergedAddressRepairService).
+ */
+export function withFoldedAddresses(
+  target: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  const addresses = foldAddresses(target, sources);
+
+  if (!addresses.list) {
+    return null;
+  }
+
+  const out: Record<string, unknown> = { ...target };
+  const targetHandSet = new Set(userEditedKeys(target));
+  const handSet = new Set(targetHandSet);
+
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
+
+  if (handSet.size > 0) {
+    out[USER_EDITED_KEYS] = [...handSet];
+  }
+
+  return out;
+}
+
+/**
  * Target wins scalars; emails/phones/names arrays are unioned across all rows,
  * and so are addresses (see {@link foldAddresses}). An empty list is as empty as
  * a null: a person made in the app carries `addresses: []`, which used to keep
@@ -829,31 +913,7 @@ function foldProperties(
     }
   }
 
-  if (addresses.list) {
-    out.addresses = addresses.list;
-
-    // A flat key the target's person set or cleared by hand keeps the
-    // target's value, as any scalar does, even where it no longer matches the
-    // list (an edit through the flat fields leaves the list as it was).
-    if (addresses.first) {
-      for (const [key, value] of Object.entries(personAddressMirror(addresses.first))) {
-        if (!targetHandSet.has(key)) {
-          out[key] = value;
-        }
-      }
-    }
-
-    // As for a scalar, a key a source's person set by hand stays hand-set when
-    // its value came from that source: `addresses` from any source that added
-    // to it, the flat mirror keys only from the one whose address they mirror.
-    for (const giver of addresses.givers) {
-      for (const key of userEditedKeys(sources[giver])) {
-        if (key === 'addresses' || (giver === addresses.firstFrom && ADDRESS_KEYS.has(key))) {
-          handSet.add(key);
-        }
-      }
-    }
-  }
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
 
   if (handSet.size > 0) {
     out[USER_EDITED_KEYS] = [...handSet];
