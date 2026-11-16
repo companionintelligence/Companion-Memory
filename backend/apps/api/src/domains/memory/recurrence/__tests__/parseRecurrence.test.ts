@@ -52,8 +52,8 @@ describe('seriesRuleOf', () => {
   });
 
   it('falls back to recurrence_pattern.rrule, spelled bare', () => {
-    // The .ics lane and any producer that fills the column write the rule
-    // value on its own, without the property name.
+    // A producer that fills the column writes the rule value on its own,
+    // without the property name.
     expect(
       seriesRuleOf(row({ metadata: {}, recurrencePattern: { rrule: 'FREQ=DAILY;COUNT=3' } }))?.rrule,
     ).toBe('FREQ=DAILY;COUNT=3');

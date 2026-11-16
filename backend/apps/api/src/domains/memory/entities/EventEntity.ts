@@ -13,10 +13,11 @@ import {
 import { UserEntity, User } from '@ci/domains/user';
 
 /**
- * A series' rule as its source delivered it — `metadata.recurrenceRule` and
- * `metadata.recurrenceTimeZone`, which only the Google transform writes —
- * stored as {@link EventEntity.sourceRecurrence}. `rule` is kept as stored
- * (Google's `recurrence` array) and compared as JSON.
+ * A series' rule as its source delivered it, stored as
+ * {@link EventEntity.sourceRecurrence}: `metadata.recurrenceRule` and
+ * `metadata.recurrenceTimeZone`, which the Google transform and the .ics
+ * importer write. `rule` is kept as stored (an array of RRULE/EXDATE/RDATE
+ * lines from either) and compared as JSON.
  */
 export interface RecurrenceDefinition {
   rule: unknown;
