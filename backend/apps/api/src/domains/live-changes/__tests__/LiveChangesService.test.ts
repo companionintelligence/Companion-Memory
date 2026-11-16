@@ -173,7 +173,7 @@ describe('LiveChangesService', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it('looks up a key or a session, and nothing for a token with neither', async () => {
+    it('looks up a key or a session but nothing for a token with neither', async () => {
       const { service, dataSource } = makeService();
       dataSource.query.mockResolvedValueOnce([{ '?column?': 1 }] as never).mockResolvedValueOnce([] as never);
 
@@ -209,6 +209,20 @@ describe('LiveChangesService', () => {
         expect(sql).toMatch(/JOIN ci\.users u ON u\.id = \w\.user_id/);
         expect(sql).toContain('u.deleted_at IS NULL');
       }
+    });
+
+    it('logs a lookup that failed before passing the error on', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).rejects.toThrow(
+        'connection reset',
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Live change credential check failed',
+        expect.objectContaining({ userId: 'alice', kind: 'apiKey', error: 'connection reset' }),
+      );
     });
   });
 

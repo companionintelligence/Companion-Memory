@@ -186,39 +186,51 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
   /**
    * Whether the credential a stream of `userId` was opened with still lets it
    * in: the key still exists and has not expired, or the session has not been
-   * signed out or run out, and the account is not deleted. A token with no
-   * session to look up is good until it expires, which the stream times itself.
+   * signed out or run out. The account must not be deleted either. A token with
+   * no session to look up is good until it expires, which the stream times itself.
    *
    * Deleting an account only stamps `ci.users.deleted_at` and leaves its keys
    * and sessions for the purge, so the account is checked as well: the guard
-   * already refuses it, and a key never expires on its own.
+   * already refuses it. A key never expires on its own.
    *
    * Read straight from the tables rather than through the auth services, which
    * would make this module import the auth module that publishes to it.
+   *
+   * A failed lookup is logged and thrown. The stream keeps going on a throw,
+   * so without the log a check that always failed would go unnoticed.
    */
   async isCredentialLive(userId: string, credential: LiveChangesCredential): Promise<boolean> {
-    if (credential.kind === 'apiKey') {
-      const rows: unknown[] = await this.dataSource.query(
-        `SELECT 1 FROM ci.api_keys k JOIN ci.users u ON u.id = k.user_id
-          WHERE k.id = $1 AND k.user_id = $2 AND u.deleted_at IS NULL
-            AND (k.expires_at IS NULL OR k.expires_at > now())`,
-        [credential.keyId, userId],
-      );
-
-      return rows.length > 0;
+    if (credential.kind === 'token') {
+      return true;
     }
 
-    if (credential.kind === 'session') {
-      const rows: unknown[] = await this.dataSource.query(
-        `SELECT 1 FROM ci.sessions s JOIN ci.users u ON u.id = s.user_id
-          WHERE s.id = $1 AND s.user_id = $2 AND u.deleted_at IS NULL AND s.expires_at > now()`,
-        [credential.sessionId, userId],
-      );
+    const [sql, id] =
+      credential.kind === 'apiKey'
+        ? [
+            `SELECT 1 FROM ci.api_keys k JOIN ci.users u ON u.id = k.user_id
+              WHERE k.id = $1 AND k.user_id = $2 AND u.deleted_at IS NULL
+                AND (k.expires_at IS NULL OR k.expires_at > now())`,
+            credential.keyId,
+          ]
+        : [
+            `SELECT 1 FROM ci.sessions s JOIN ci.users u ON u.id = s.user_id
+              WHERE s.id = $1 AND s.user_id = $2 AND u.deleted_at IS NULL AND s.expires_at > now()`,
+            credential.sessionId,
+          ];
+
+    try {
+      const rows: unknown[] = await this.dataSource.query(sql, [id, userId]);
 
       return rows.length > 0;
-    }
+    } catch (error) {
+      this.logger.warn('Live change credential check failed', {
+        userId,
+        kind: credential.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
 
-    return true;
+      throw error;
+    }
   }
 
   /** How many sessions are listening, across every user. Diagnostics only. */

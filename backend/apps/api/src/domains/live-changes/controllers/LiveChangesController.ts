@@ -35,7 +35,7 @@ export const RETRY_MS = 3_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
- * What the request that opens a stream signed in with, and when that runs out.
+ * What the request that opens a stream signed in with and when that runs out.
  * The guard has already verified the token, so it is only decoded here. A
  * Portal token's `sid` names a Portal session, not one of ours, so only our
  * own access tokens are tied to a session.
@@ -124,7 +124,7 @@ export class LiveChangesController {
     }
 
     // A client that left during the guard or the lookup above has already had
-    // its `close`, and the listeners below would never hear one. Without this
+    // its `close`. The listeners below would never hear one. Without this
     // the keep-alive and its lookups ran on until the token expired, or for
     // good on a key.
     if (req.destroyed || res.destroyed) {
@@ -165,7 +165,7 @@ export class LiveChangesController {
     // Ends the stream if what opened it no longer lets it in. A notice that
     // lands while a check is out asks again once that check is back: the check
     // may have read before the revoke was written. A failed lookup keeps the
-    // stream, and the next keep-alive asks again.
+    // stream (the service logs it). The next keep-alive asks again.
     const recheck = async () => {
       if (res.writableEnded) {
         return;
