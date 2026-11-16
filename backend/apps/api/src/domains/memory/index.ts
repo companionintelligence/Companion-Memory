@@ -548,11 +548,14 @@ export {
   CommunicationType,
   CreateCommunicationDto,
   NORMALIZED_PERSON_FIELDS,
+  PERSON_ADDRESS_MIRROR_KEYS,
   UpdateCommunicationDto,
   ensureSinglePrimary,
   formatPersonAddress,
   isPersonAddressEmpty,
+  personAddressMirror,
   readPersonAddresses,
+  readStoredPersonAddress,
   serializePersonAddress,
 } from './types';
 export type { PersonAddress } from './types';

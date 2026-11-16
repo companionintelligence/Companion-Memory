@@ -28,8 +28,8 @@ import {
   PersonMergeService,
   PersonService,
   ensureSinglePrimary,
-  formatPersonAddress,
   isPersonAddressEmpty,
+  personAddressMirror,
   serializePersonAddress,
 } from '@ci/domains/memory';
 
@@ -148,17 +148,10 @@ function toPersonAddress(input: PersonAddressInput): PersonAddress {
  */
 function addressPropertiesPatch(addresses: PersonAddressInput[]): Record<string, unknown> {
   const parsed = ensureSinglePrimary(addresses.map(toPersonAddress).filter((a) => !isPersonAddressEmpty(a)));
-  const primary = parsed[0] ?? null;
 
   return {
     addresses: parsed.map((address) => serializePersonAddress(address)),
-    address: primary ? formatPersonAddress(primary) : null,
-    street_address: primary?.streetAddress ?? null,
-    street_address_2: primary?.streetAddress2 ?? null,
-    city: primary?.city ?? null,
-    region: primary?.region ?? null,
-    postal_code: primary?.postalCode ?? null,
-    country: primary?.country ?? null,
+    ...personAddressMirror(parsed[0] ?? null),
   };
 }
 

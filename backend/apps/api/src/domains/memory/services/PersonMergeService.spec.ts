@@ -782,6 +782,240 @@ describe('PersonMergeService', () => {
     expect(folded.phones).toEqual(['2025550142', '2125550118']);
   });
 
+  it('keeps every address of the person merged in when the kept one was made in the app with none', async () => {
+    // + > Person saves `addresses: []`, which the scalar fill used to read as a
+    // value: only the flat copy of the first address came across, unlabelled,
+    // and the second address was lost.
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Johnny Doe',
+        properties: { emails: ['john.doe@example.com'], addresses: [], address: null, city: null },
+      }),
+      personRow(SOURCE_A, {
+        name: 'John Doe',
+        properties: {
+          emails: ['john.doe@example.com'],
+          addresses: [
+            { label: 'work', street_address: '1 Market St', city: 'Oakland', is_primary: true },
+            { label: 'home', city: 'Berkeley', is_primary: false },
+          ],
+          address: '1 Market St, Oakland',
+          street_address: '1 Market St',
+          city: 'Oakland',
+          user_edited_keys: ['address', 'addresses', 'city', 'street_address'],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([
+      expect.objectContaining({
+        label: 'work',
+        street_address: '1 Market St',
+        city: 'Oakland',
+        is_primary: true,
+      }),
+      expect.objectContaining({ label: 'home', street_address: null, city: 'Berkeley', is_primary: false }),
+    ]);
+    expect(folded).toMatchObject({
+      address: '1 Market St, Oakland',
+      street_address: '1 Market St',
+      street_address_2: null,
+      city: 'Oakland',
+      region: null,
+    });
+    // Set by hand on the person they came from, so a later import of the kept
+    // person leaves them alone, as for any scalar the fold takes.
+    expect(folded.user_edited_keys).toEqual(
+      expect.arrayContaining(['addresses', 'address', 'city', 'street_address']),
+    );
+  });
+
+  it("keeps the kept person's primary address first, adds the other's once and takes a label it lacked", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Dana Quill',
+        properties: {
+          addresses: [
+            { label: null, street_address: '9 Elm St', city: 'Portland', is_primary: true },
+            { label: 'work', street_address: '1 Market St', city: 'Oakland', is_primary: false },
+          ],
+          address: '9 Elm St, Portland',
+          street_address: '9 Elm St',
+          city: 'Portland',
+        },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: {
+          addresses: [
+            { label: 'home', street_address: '9  elm st', city: 'PORTLAND', is_primary: true },
+            { label: 'cabin', city: 'Bend', is_primary: false },
+            { label: 'office', street_address: '1 Market St', city: 'Oakland', is_primary: false },
+          ],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([
+      expect.objectContaining({
+        label: 'home',
+        street_address: '9 Elm St',
+        city: 'Portland',
+        is_primary: true,
+      }),
+      expect.objectContaining({ label: 'work', street_address: '1 Market St', is_primary: false }),
+      expect.objectContaining({ label: 'cabin', city: 'Bend', is_primary: false }),
+    ]);
+    expect(folded).toMatchObject({
+      address: '9 Elm St, Portland',
+      street_address: '9 Elm St',
+      city: 'Portland',
+    });
+  });
+
+  it("adds to a kept person's address from before the list existed and keeps entries it cannot read", async () => {
+    const harness = makeHarness([
+      // Flat keys only, as rows written before `addresses` was a list.
+      personRow(TARGET, { name: 'Dana', properties: { street_address: '9 Elm St', city: 'Portland' } }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: {
+          addresses: [
+            { label: 'cabin', city: 'Bend', is_primary: true },
+            { value: '4 Pine Rd, Sisters', type: 'other' },
+          ],
+          // Its flat keys mirror its own first address; they must not fill the
+          // kept person's empty ones and make an address neither person has.
+          city: 'Bend',
+          region: 'OR',
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([
+      expect.objectContaining({
+        label: null,
+        street_address: '9 Elm St',
+        city: 'Portland',
+        is_primary: true,
+      }),
+      expect.objectContaining({ label: 'cabin', city: 'Bend', is_primary: false }),
+      { value: '4 Pine Rd, Sisters', type: 'other' },
+    ]);
+    expect(folded).toMatchObject({ address: '9 Elm St, Portland', city: 'Portland', region: null });
+  });
+
+  it('leaves the address keys alone when no one has an address but fills any other empty list', async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana', properties: { addresses: [], URLs: [] } }),
+      personRow(SOURCE_A, { name: 'Dana Q', properties: { URLs: ['https://dana.example.com'] } }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([]);
+    expect(folded).not.toHaveProperty('street_address');
+    expect(folded.URLs).toEqual(['https://dana.example.com']);
+  });
+
+  it('keeps an address the kept person cleared by hand cleared', async () => {
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Dana',
+        properties: {
+          addresses: [],
+          address: null,
+          street_address: null,
+          city: null,
+          user_edited_keys: ['address', 'addresses', 'city', 'street_address'],
+        },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: {
+          addresses: [{ label: 'home', street_address: '9 Elm St', city: 'Portland', is_primary: true }],
+          address: '9 Elm St, Portland',
+          street_address: '9 Elm St',
+          city: 'Portland',
+          region: 'OR',
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([]);
+    expect(folded).toMatchObject({ address: null, street_address: null, city: null });
+    expect(folded).not.toHaveProperty('region');
+    expect(folded.user_edited_keys).toEqual(['address', 'addresses', 'city', 'street_address']);
+  });
+
+  it("claims the address list but not the kept person's own flat address keys when a hand-set address is added", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Dana',
+        properties: {
+          addresses: [{ label: 'home', street_address: '9 Elm St', city: 'Portland', is_primary: true }],
+          address: '9 Elm St, Portland',
+          street_address: '9 Elm St',
+          city: 'Portland',
+        },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: {
+          addresses: [{ label: 'cabin', city: 'Bend', is_primary: true }],
+          address: 'Bend',
+          city: 'Bend',
+          user_edited_keys: ['address', 'addresses', 'city'],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.addresses).toEqual([
+      expect.objectContaining({ label: 'home', city: 'Portland', is_primary: true }),
+      expect.objectContaining({ label: 'cabin', city: 'Bend', is_primary: false }),
+    ]);
+    expect(folded).toMatchObject({ address: '9 Elm St, Portland', city: 'Portland' });
+    // Portland is the kept person's own, so a later import may still change it.
+    expect(folded.user_edited_keys).toEqual(['addresses']);
+  });
+
+  it("drops a source's hand-set claim on a blank that a later source's value replaced", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana' }),
+      personRow(SOURCE_A, { name: 'Dana Q', properties: { URLs: [], user_edited_keys: ['URLs'] } }),
+      personRow(SOURCE_B, { name: 'D. Q', properties: { URLs: ['https://dana.example.com'] } }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.URLs).toEqual(['https://dana.example.com']);
+    expect(folded).not.toHaveProperty('user_edited_keys');
+  });
+
   it("keeps what the target's person set or cleared by hand, and takes only the hand-set keys whose value came across", async () => {
     const harness = makeHarness([
       personRow(TARGET, {
