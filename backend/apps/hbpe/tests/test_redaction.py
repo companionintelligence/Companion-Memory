@@ -280,6 +280,12 @@ URL_CASES = [
         {},
         id="neg-path-segment-of-nineteen-characters",
     ),
+    pytest.param(
+        "See https://example.com/item?12345 now",
+        "See https://example.com/item now",
+        {"url": 1},
+        id="url-digits-only-short-query-is-dropped",
+    ),
 ]
 
 IBAN_CASES = [
@@ -348,6 +354,12 @@ IBAN_CASES = [
         "Pay [IBAN] now",
         {"iban": 1},
         id="iban-double-space-separators",
+    ),
+    pytest.param(
+        "Pay XQ97WEST123456987654 today",
+        "Pay [IBAN] today",
+        {"iban": 1},
+        id="iban-of-unlisted-country-is-redacted-by-prefix",
     ),
 ]
 
@@ -507,6 +519,12 @@ PHONE_CASES = [
         "Chat https://wa.me/[PHONE] now",
         {"phone": 1},
         id="phone-in-whatsapp-link",
+    ),
+    pytest.param(
+        "Open 07700900 123 now",
+        "Open [PHONE] now",
+        {"phone": 1},
+        id="phone-zero-led-in-two-groups",
     ),
 ]
 
@@ -753,6 +771,12 @@ ADDRESS_CASES = [
         "Visit [ADDRESS] today",
         {"address": 1},
         id="address-accented-capital",
+    ),
+    pytest.param(
+        "Meet at 12-14 Main Street.",
+        "Meet at [ADDRESS].",
+        {"address": 1},
+        id="address-house-number-range",
     ),
 ]
 
@@ -2134,6 +2158,22 @@ NAME_CASES = [
         "[NAME]说你好",
         {"name": 1},
         id="name-han-name-before-han-text",
+    ),
+    pytest.param(
+        "Chat Sarahさんに連絡",
+        ["Sarah"],
+        [],
+        "Chat [NAME]さんに連絡",
+        {"name": 1},
+        id="name-beside-unspaced-script-is-a-whole-word",
+    ),
+    pytest.param(
+        "O’Brien and O'Brien",
+        ["O'Brien"],
+        [],
+        "[NAME] and [NAME]",
+        {"name": 2},
+        id="name-curly-apostrophe-matches-straight",
     ),
 ]
 

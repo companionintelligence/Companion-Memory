@@ -21,8 +21,10 @@ to it is removed.
   ``[NAME]``. A name is left alone when it is followed by ``@`` and a dotted domain, or by
   ``.`` and a lowercase letter or digit, and when it follows ``@`` or ``.`` after a word,
   so an address or a host name is not broken up. A name written in a script without
-  spaces, such as Chinese or Japanese, is matched wherever it occurs. Both the precomposed
-  and the decomposed spelling of a name match, and a German sharp s also matches ``ss``.
+  spaces, such as Chinese or Japanese, is matched wherever it occurs, and a spaced name
+  beside such a script is still a whole word, so ``Chat Sarahさん`` becomes ``Chat [NAME]さん``.
+  Both the precomposed and the decomposed spelling of a name match, a German sharp s also
+  matches ``ss``, and a straight apostrophe matches a curly one.
 - ``url``: a URL with a query string or fragment, with credentials (``user:pass@``), or
   with a token-like path segment. A URL is text that starts with a scheme, such as
   ``https://`` or ``postgres://``, or with ``www.``, or with a host, optionally followed by
@@ -40,34 +42,35 @@ to it is removed.
   or an exclamation mark may sit inside the local part, but only after a letter, so
   ``o'brien@example.com`` is caught whole, and a digit glued before an address with either
   mark is not swallowed.
-- ``secret``: a value after a keyword such as ``password``, ``PIN``, ``api_key``,
-  ``token`` or ``clientSecret`` becomes ``[SECRET]``, and the keyword and its separator
-  are kept. A separator is a colon, an equals sign, a fat arrow, an arrow, a closing
-  angle bracket or a quote, or else a space or the word ``is``, ``was`` or ``are``. A keyword followed by a closing square bracket and then an
-  equals sign, as in ``config["password"] =``, is a separator too. A keyword in quotes followed by a space and a value, as in
-  ``"password" "hunter2"``, is read too. A word
+- ``secret``: a value after a keyword such as ``password``, ``PIN``, ``api_key``, ``token`` or
+  ``clientSecret`` becomes ``[SECRET]``, and the keyword and its separator are kept. A separator
+  is a colon, an equals sign, a fat arrow, an arrow, a closing angle bracket or a quote, or else
+  a space or the word ``is``, ``was`` or ``are``. A keyword followed by a closing square bracket
+  and then an equals sign, as in ``config["password"] =``, is a separator too. A keyword in
+  quotes followed by a space and a value, as in ``"password" "hunter2"``, is read too. A word
   followed by a colon or an equals sign, as in ``is:``, is a strong separator. A quote may be
-  escaped with a backslash, as in JSON inside a string, and a quote inside a quoted value may
-  be escaped too. A bracket in front of a value encloses it and is kept, so the value inside
-  ( ) or [ ] or < > is redacted. After a strong separator the value
-  is at least four characters. After a space or a word it must hold a digit or a symbol other than an apostrophe, or
-  be at least twelve characters, so that "reset my password please" is kept. A bare
-  ``pass``, which is also a verb, needs a strong separator or ``is`` after it. A PIN, a
-  one-time code or a CVV is digits, or digits with letters, and a run of more than ten
-  digits is left to the card rule. A quoted value of up to 4,096 characters is redacted to
-  its closing quote, so a passphrase with spaces is redacted whole. Curly double quotes count
-  as quotes too. A keyword may begin a
-  camel-case word, as in ``dbPassword``. A password in the credentials of a URL, and a token
-  in a known format, such as an AWS key ID, a Stripe, GitHub, Slack or Google key, a JSON
-  Web Token, a bearer token or a private key block, becomes ``[SECRET]`` whole. A private
-  key block runs to its END line, or else over the base64 lines after its BEGIN line.
+  escaped with a backslash, as in JSON inside a string, and a quote inside a quoted value may be
+  escaped too. A bracket in front of a value encloses it and is kept, so the value inside ( ) or
+  [ ] or < > is redacted. After a strong separator the value is at least four characters. After
+  a space or a word it must hold a digit or a symbol other than an apostrophe, or be at least
+  twelve characters, so that "reset my password please" is kept. A bare ``pass``, which is also
+  a verb, needs a strong separator or ``is`` after it. A PIN, a one-time code or a CVV is
+  digits, or digits with letters, and a run of more than ten digits is left to the card rule. A
+  quoted value of up to 4,096 characters is redacted to its closing quote, so a passphrase with
+  spaces is redacted whole. Curly double quotes count as quotes too. A keyword may begin a
+  camel-case word, as in ``dbPassword``. A password in the credentials of a URL, and a token in
+  a known format, such as an AWS key ID, a Stripe, GitHub, Slack or Google key, a JSON Web
+  Token, a bearer token or a private key block, becomes ``[SECRET]`` whole. A private key block
+  runs to its END line, or else over the base64 lines after its BEGIN line.
 - ``iban``: an IBAN of a country whose registered length is listed in this module, taken at
   that length, becomes ``[IBAN]`` when it passes the mod-97 check, even when it is glued to
   letters. Spaces, tabs and hyphens may separate its groups. For any other country, the
   longest prefix that ends before a separator and passes the check is taken.
 - ``phone``: numbers with a leading ``+`` or ``00``, North American numbers, and UK and
-  French style national numbers become ``[PHONE]``. A match must carry 8 to 15 digits. A
-  number may follow a letter, so ``call07700900123`` is caught.
+  French style national numbers become ``[PHONE]``. A UK national number that starts with
+  0 and is written as an 8-digit group and a 2- or 3-digit group, such as ``07700900 123``,
+  is caught too. A match must carry 8 to 15 digits. A number may follow a letter, so
+  ``call07700900123`` is caught.
 - ``card``: the longest run of whole digit groups that passes the Luhn check becomes
   ``[CARD]``. Groups are separated by one to three spaces, tabs or non-breaking spaces, or by
   a hyphen. A card may also be written as four groups of four digits joined by dots.
@@ -77,8 +80,9 @@ to it is removed.
   ``4111111111111111123``, is found. Other digits after a card are kept. A 14-digit
   ``YYYYMMDDhhmmss`` stamp is not treated as a card. A phone-shaped run inside a card is left
   for the card rule.
-- ``address``: a house number, optionally with a hyphenated letter or a comma, one to three
-  capitalised words, the first of which may be an accented capital, and a street suffix
+- ``address``: a house number, optionally with a hyphenated letter or a second number, such
+  as ``221B``, ``221-B`` or ``12-14``, and optionally with a comma, one to three capitalised
+  words, the first of which may be an accented capital, and a street suffix
   (Street, Road, Avenue, Way, Circle, Trail, Plaza, Path, Loop, Str and so on) become
   ``[ADDRESS]``. A storage or memory unit, such as TB or GB, cannot be the first word.
 
@@ -99,55 +103,51 @@ be redacted.
 
 Known gaps, some by design: a name directly after a dot, as in ``Hi.Sarah``, or before a
 lowercase word after a dot, as in ``Sarah.pdf``, is not redacted, because a dot after a word
-marks a domain or a file name. 7-digit local phone numbers, including one that follows a
-longer number, lowercase street addresses, postcodes, and names that are not listed. A name
-inside a host label, such as ``sarah.example.com``, is not redacted. Digits glued straight to
-an address with no space, such as ``4111 1111 1111 1111sarah@example.com``, have the glued
-group taken into the address, so the rest of the number stays. A product name such as
-``2 Google Drive`` can match the address rule. The userinfo of a URL whose password contains
-a slash is not stripped. A card written with slashes or with line breaks is not recognised,
-and neither is a quoted local part such as ``"sarah"@example.com``. A phone number written
-with a space after the plus sign, such as ``+ 44 20 7946 0958``, or with a bracketed zero,
-such as ``(0)20 7946 0958``, is not matched, and neither is a national number without a plus
-sign or a 00 prefix outside North America, the UK and France. A UUID in a path is not
-treated as a token. A short value followed by two digit groups in a query is kept, as in
-``?ref=abc 12 34``, so a short token there is not removed. A house number glued to a word,
-as in ``Flat221 Baker Street``, is not matched. An unseparated North American number whose
-exchange starts with 0 or 1, such as ``5551234567``, is not read as a phone number, though
-the separated form ``555-123-4567`` is. A query made only of digits and shorter than 20
-characters, such as ``?12345``, is kept. An IBAN of an unlisted country is kept, as
-described above. A secret with no keyword and no known format, such as a password written on
-its own, is not redacted. After a strong separator only the first word of an unquoted
-value is redacted, so the rest of a passphrase such as correct horse battery stays in
-the text. A squashed key, such as mypassword=, is not matched, nor is a spaced dash, as
-in password - hunter2, nor a keyword with a zero-width space in it. A denied name spelt
-like a keyword, such as a contact called Token, removes that keyword first. Bank sort
-codes and national insurance numbers are not redacted either. A bare value runs to the next
-space, so a second keyword glued to it, as in password:hunter2|pin: 4321, leaves its own value
-unredacted. A keyword in a URL query or an e-mail path does not reach a secret after a space,
-as in https://x.com/?note=password: hunter2, and a slash is not a separator, as in
-/password/hunter2. A bare pass followed only by a space, as in wifi pass 12345678, is not
-redacted, since pass is also a verb. A quoted value of more than 4,096 characters is not
-redacted beyond its first space, which bounds the work done for each keyword. An address
-whose local part is longer than 64 characters, which RFC 5321 does not allow, is not read. A query key of more than 256 characters, or a key-less query value
-of more than 256, is not read, which keeps the scan linear. A quote glued to a connector word, as in is"x", must enclose
-one word, since a quote after "is" may close a phrase. An angle bracket ends a bare value,
-since it marks markup, as in ``<password>hunter2</password>``, so a value such as ``Pa<ss>word9``
-is cut there. Only one level of backslash escaping
-is read. The name, card, IBAN and phone rules are quadratic on long runs of their own kind, such
-as "Sarah@" repeated 2,000 times, which takes about a second, or 20,000 digits, which take
-about 16 seconds, and a run of glued IBANs or phone numbers takes one pass per number, and a chain of values after placeholders, as in "[SECRET] =abcd",
-takes one pass per value. These
-rules predate the secret rules and are not changed here.
-Two kinds of over-redaction are
-accepted, because
-narrowing either would leak words that are secrets: a hyphen counts as a symbol, so
-``The token is well-known`` gives ``The token is [SECRET]``, and a strong separator takes
-any word, so ``Boarding pass: Gate`` gives ``Boarding pass: [SECRET]``. Also not
-matched: UK numbers with a bracketed area code, such as ``(020) 7946 0958``; street
-suffixes outside the list, and ordinal street names such as ``45 West 23rd Street``;
-postcodes; eight- or nine-digit compact numbers; dates of birth in separated or long
-forms; written-out e-mail addresses; and a zero-width space inside a name.
+marks a domain or a file name. 7-digit local phone numbers, including one that follows a longer
+number, lowercase street addresses, postcodes, and names that are not listed. A name inside a
+host label, such as ``sarah.example.com``, is not redacted. Digits glued straight to an address
+with no space, such as ``4111 1111 1111 1111sarah@example.com``, have the glued group taken into
+the address, so the rest of the number stays. A product name such as ``2 Google Drive`` can
+match the address rule. The userinfo of a URL whose password contains a slash is not stripped. A
+card written with slashes or with line breaks is not recognised, and neither is a quoted local
+part such as ``"sarah"@example.com``. A phone number written with a space after the plus sign,
+such as ``+ 44 20 7946 0958``, or with a bracketed zero, such as ``(0)20 7946 0958``, is not
+matched, and neither is a national number without a plus sign or a 00 prefix outside North
+America, the UK and France. A UUID in a path is not treated as a token. A short value followed
+by two digit groups in a query is kept, as in ``?ref=abc 12 34``, so a short token there is not
+removed. A house number glued to a word, as in ``Flat221 Baker Street``, is not matched. An
+unseparated North American number whose exchange starts with 0 or 1, such as ``5551234567``, is
+not read as a phone number, though the separated form ``555-123-4567`` is. A secret with no
+keyword and no known format, such as a password written on its own, is not redacted. After a
+strong separator only the first word of an unquoted value is redacted, so the rest of a
+passphrase such as correct horse battery stays in the text. A squashed key, such as mypassword=,
+is not matched, nor is a spaced dash, as in password - hunter2, nor a keyword with a zero-width
+space in it. A denied name spelt like a keyword, such as a contact called Token, removes that
+keyword first. Bank sort codes and national insurance numbers are not redacted either. A bare
+value runs to the next space, so a second keyword glued to it, as in password:hunter2|pin: 4321,
+leaves its own value unredacted. A keyword in a URL query or an e-mail path does not reach a
+secret after a space, as in https://x.com/?note=password: hunter2, and a slash is not a
+separator, as in /password/hunter2. A bare pass followed only by a space, as in wifi pass
+12345678, is not redacted, since pass is also a verb. A quoted value of more than 4,096
+characters is not redacted beyond its first space, which bounds the work done for each keyword.
+An address whose local part is longer than 64 characters, which RFC 5321 does not allow, is not
+read. A query key of more than 256 characters, or a key-less query value of more than 256, is
+not read, which keeps the scan linear. A quote glued to a connector word, as in is"x", must
+enclose one word, since a quote after "is" may close a phrase. An angle bracket ends a bare
+value, since it marks markup, as in ``<password>hunter2</password>``, so a value such as
+``Pa<ss>word9`` is cut there. Only one level of backslash escaping is read. The name, card, IBAN
+and phone rules are quadratic on long runs of their own kind, such as "Sarah@" repeated 2,000
+times, which takes about a second, or 20,000 digits, which take about 16 seconds, and a run of
+glued IBANs or phone numbers takes one pass per number, and a chain of values after
+placeholders, as in "[SECRET] =abcd", takes one pass per value. These rules predate the secret
+rules and are not changed here. Two kinds of over-redaction are accepted, because narrowing
+either would leak words that are secrets: a hyphen counts as a symbol, so ``The token is well-
+known`` gives ``The token is [SECRET]``, and a strong separator takes any word, so ``Boarding
+pass: Gate`` gives ``Boarding pass: [SECRET]``. Also not matched: UK numbers with a bracketed
+area code, such as ``(020) 7946 0958``; street suffixes outside the list, and ordinal street
+names such as ``45 West 23rd Street``; postcodes; eight- or nine-digit compact numbers; dates of
+birth in separated or long forms; written-out e-mail addresses; and a zero-width space inside a
+name.
 """
 
 from __future__ import annotations
@@ -218,12 +218,12 @@ _SUFFIX_ALTERNATION = "|".join(
 # The path of a URL. It stops at "?" and "#", which start the query and the fragment.
 _URL_PATH = r"(?:/(?:[^\s<>\"'?#]|'(?=[^\W_]))*)?"
 # The query or fragment of a URL, which is dropped with the URL. A value of 20 or more
-# characters, with any text in front of its "=", such as 2fa or filter[token], is always dropped. A shorter value is kept
-# only when a phone number, a card or a placeholder follows it straight away, since
-# dropping it there would cut into that number. A value that ends in a digit and is followed
-# by a capitalised word is kept too, since the digits may belong to an address. A "["
-# ends the match. A short query that ends at a "[" is kept as it is, since the bracket may
-# begin a placeholder such as [NAME]; a long one is dropped, as the rule above says.
+# characters, with any text in front of its "=", such as 2fa or filter[token], is always
+# dropped. A shorter value is kept only when a phone number, a card or a placeholder follows it
+# straight away, since dropping it there would cut into that number. A value that ends in a
+# digit and is followed by a capitalised word is kept too, since the digits may belong to an
+# address. A "[" ends the match. A short query that ends at a "[" is kept as it is, since the
+# bracket may begin a placeholder such as [NAME]; a long one is dropped, as the rule above says.
 _URL_QUERY = (
     r"(?:[?#]"
     r"(?:[^\s<>\"'=]{0,256}=(?:[^\s<>\"'\[]|'(?=[^\W_])){20,}(?=[\s<>\"'\[\]]|$)"
@@ -315,6 +315,8 @@ _PHONE_RE = re.compile(
     r"|0[0-9]{4}[ -][0-9]{6}"
     # 07700900123
     r"|0[0-9]{9,10}"
+    # 07700900 123: a 0-led national number in two groups, not after a digit and a comma or dot.
+    r"|(?<![0-9][,.])0[0-9]{7}[ .-][0-9]{2,3}"
     # 06 12 34 56 78
     r"|0[0-9](?:[ .-][0-9]{2}){4}"
     r")"
@@ -341,7 +343,7 @@ _DATE_OR_TIME_RE = re.compile(
 
 _ADDRESS_RE = re.compile(
     # A house number, with an optional hyphenated letter and an optional comma.
-    r"(?<![\w.])[0-9]{1,6}(?:-?[A-Za-z])?,?\s+"
+    r"(?<![\w.])[0-9]{1,6}(?:-?[A-Za-z]|-[0-9]{1,6})?,?\s+"
     # A storage or memory unit after a number is not the start of a street name.
     r"(?!(?:TB|GB|MB|KB|PB|GHz|MHz)\b)"
     # One to three capitalised words, which may begin with an accented capital.
@@ -1236,6 +1238,10 @@ def _with_unicode_forms(names: tuple[str, ...]) -> tuple[str, ...]:
             forms[name.replace("ß", "ss")] = None
         if "ẞ" in name:
             forms[name.replace("ẞ", "SS")] = None
+    for form in list(forms):
+        for straight, curly in (("'", "’"), ("’", "'")):
+            if straight in form:
+                forms[form.replace(straight, curly)] = None
     return tuple(forms)
 
 
@@ -1252,6 +1258,9 @@ _UNSPACED_RANGES = (
     (0xF900, 0xFAFF),  # CJK compatibility ideographs
     (0x20000, 0x2FFFF),  # CJK extensions B and later
 )
+
+
+_UNSPACED_CLASS = "".join(f"\\U{low:08x}-\\U{high:08x}" for low, high in _UNSPACED_RANGES)
 
 
 def _is_unspaced(name: str) -> bool:
@@ -1274,8 +1283,8 @@ def _name_pattern(names: tuple[str, ...]) -> re.Pattern[str] | None:
     alternatives: list[str] = []
     if spaced:
         alternatives.append(
-            r"(?<!\w)(?<!\w[.@])(?:" + _alternation(spaced) + r")"
-            r"(?!\w)(?!@[\w-]+\.)(?!\.(?-i:[a-z0-9]))"
+            r"(?<!(?![" + _UNSPACED_CLASS + r"])\w)(?<!\w[.@])(?:" + _alternation(spaced) + r")"
+            r"(?!(?![" + _UNSPACED_CLASS + r"])\w)(?!@[\w-]+\.)(?!\.(?-i:[a-z0-9]))"
         )
     if unspaced:
         alternatives.append("(?:" + _alternation(unspaced) + ")")
