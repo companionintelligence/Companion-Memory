@@ -750,6 +750,41 @@ describe('FileService.openObjectWriter — an object written a piece at a time',
     expect(sent).toHaveLength(0);
   });
 
+  it('refuses a second finish, which would store an empty object over the first', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    await writer.finish();
+
+    await expect(writer.finish()).rejects.toThrow('already finished or aborted');
+    await expect(writer.write(Buffer.from('more'))).rejects.toThrow('already finished or aborted');
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'CompleteMultipartUploadCommand',
+    ]);
+  });
+
+  it('aborts an upload whose finish failed', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+
+    await expect(writer.finish()).rejects.toThrow('store down');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+  });
+
   it.each([
     ['a 100 GiB object', 100 * 1024 * MiB, Math.ceil((100 * 1024 * MiB) / 10_000)],
     ['a 10 TiB object, capped at 64 MiB', 10 * 1024 * 1024 * MiB, 64 * MiB],

@@ -58,9 +58,11 @@ const MIN_PART_BYTES = 5 * 1024 * 1024;
 /** The most parts one multipart upload may have. */
 const MAX_PARTS = 10_000;
 /**
- * The largest part this writer holds, whatever size the caller expects: the
- * expected size comes from the caller's input (an archive's chunk count), and
- * a part is held in memory until it goes out. 10,000 of these is 640 GiB.
+ * The largest part size this writer picks, whatever size the caller expects:
+ * the expected size comes from the caller's input (an archive's chunk count),
+ * and a part is held in memory until it goes out. A part goes out once it
+ * reaches this size, so it can run over by the last piece written. 10,000 of
+ * these is 625 GiB.
  */
 const MAX_PART_BYTES = 64 * 1024 * 1024;
 
@@ -92,6 +94,9 @@ class MultipartObjectWriter implements ObjectWriter {
 
   private readonly parts: CompletedPart[] = [];
 
+  /** Set by finish and abort. A second finish would store an empty object over the first. */
+  private closed = false;
+
   constructor(
     private readonly s3: S3Client,
     private readonly bucket: string,
@@ -100,6 +105,7 @@ class MultipartObjectWriter implements ObjectWriter {
   ) {}
 
   async write(piece: Buffer): Promise<void> {
+    this.assertOpen();
     this.pending.push(piece);
     this.pendingBytes += piece.length;
 
@@ -109,6 +115,11 @@ class MultipartObjectWriter implements ObjectWriter {
   }
 
   async finish(): Promise<void> {
+    this.assertOpen();
+    // Closed before the first request: a finish that fails is followed by
+    // abort, which still works, and never by another write or finish.
+    this.closed = true;
+
     if (this.uploadId === null) {
       await this.s3.send(
         new PutObjectCommand({
@@ -140,6 +151,7 @@ class MultipartObjectWriter implements ObjectWriter {
   }
 
   async abort(): Promise<void> {
+    this.closed = true;
     this.pending = [];
     this.pendingBytes = 0;
 
@@ -153,6 +165,12 @@ class MultipartObjectWriter implements ObjectWriter {
     await this.s3.send(
       new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: this.key, UploadId: uploadId }),
     );
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error(`The object writer for key ${this.key} is already finished or aborted`);
+    }
   }
 
   private async uploadPart(): Promise<void> {

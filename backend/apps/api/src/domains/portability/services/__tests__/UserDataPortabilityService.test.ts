@@ -918,6 +918,63 @@ describe('UserDataPortabilityService', () => {
       });
     });
 
+    it('keeps the import error when a cleanup call throws before it returns a promise', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      fileService.deleteObjects = jest.fn(() => {
+        throw new TypeError('not wired');
+      }) as unknown as FileService['deleteObjects'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+    });
+
+    it('keeps the files it stored when COMMIT itself fails, since the rows may have committed', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.commitTransaction = jest.fn().mockRejectedValueOnce(new Error('Connection terminated'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1), { type: 'end', rows: 0, files: 1 }]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Connection terminated');
+      expect(objects[0].finished).toBe(true);
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it('asks the store to delete nothing when the import stored no file', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 })]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it('refuses a chunk numbered past its file, instead of starting the stored file over', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest(), chunkOf(0, 'a', 1), chunkOf(1, 'b', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow("File chunk 1 for f1 is past the file's 1 chunks");
+      expect(objects).toHaveLength(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    });
+
     it('rejects an archive whose file upload never completes (a chunk index never arrives)', async () => {
       dataSource.query = jest.fn().mockResolvedValue([]);
 

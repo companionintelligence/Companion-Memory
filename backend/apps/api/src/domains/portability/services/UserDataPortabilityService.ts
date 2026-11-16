@@ -349,6 +349,11 @@ export class UserDataPortabilityService {
     let state: ImportState | null = null;
     let archiveVersion: number | null = null;
     let end: { rows: number; files: number } | null = null;
+    // Set as COMMIT is sent. A COMMIT that fails may still have committed (the
+    // connection can drop after the database applied it), so the files it
+    // stored then stay: deleting them could leave committed rows pointing at
+    // nothing.
+    let committing = false;
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
@@ -418,6 +423,14 @@ export class UserDataPortabilityService {
           touchedTables.add(record.table);
 
           return;
+        }
+
+        // Checked before a writer opens. Past the end, the file was already
+        // stored, and the chunk would start it again from nothing.
+        if (record.index >= record.total) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} is past the file's ${record.total} chunks`,
+          );
         }
 
         let pending = pendingFiles.get(record.id);
@@ -497,6 +510,7 @@ export class UserDataPortabilityService {
 
       rowsImported += await this.finishImport(queryRunner, context.userId, begun);
       await this.setReplicationRole(queryRunner, 'origin');
+      committing = true;
       await queryRunner.commitTransaction();
     } catch (error) {
       await this.setReplicationRole(queryRunner, 'origin').catch(() => undefined);
@@ -504,7 +518,7 @@ export class UserDataPortabilityService {
       try {
         await queryRunner.rollbackTransaction();
       } finally {
-        await this.discardStreamedFiles(pendingFiles.values(), storedNewKeys);
+        await this.discardStreamedFiles(pendingFiles.values(), committing ? [] : storedNewKeys);
       }
 
       throw error;
@@ -534,21 +548,31 @@ export class UserDataPortabilityService {
     pending: Iterable<PendingFileImport>,
     storedNewKeys: string[],
   ): Promise<void> {
+    // try/catch rather than .catch(): a call that throws before it returns a
+    // promise would otherwise escape, and replace the import's own error.
     for (const file of pending) {
-      await file.writer.abort().catch((error: unknown) => {
+      try {
+        await file.writer.abort();
+      } catch (error) {
         this.logger.warn('Could not abort a file upload after a failed import', {
           key: file.key,
           error: error instanceof Error ? error.message : String(error),
         });
-      });
+      }
     }
 
-    await this.fileService.deleteObjects(config.staticfiles.bucket, storedNewKeys).catch((error: unknown) => {
+    if (storedNewKeys.length === 0) {
+      return;
+    }
+
+    try {
+      await this.fileService.deleteObjects(config.staticfiles.bucket, storedNewKeys);
+    } catch (error) {
       this.logger.warn('Could not delete the files a failed import stored', {
         files: storedNewKeys.length,
         error: error instanceof Error ? error.message : String(error),
       });
-    });
+    }
   }
 
   /** Legacy single-json export for small accounts and tests. */
