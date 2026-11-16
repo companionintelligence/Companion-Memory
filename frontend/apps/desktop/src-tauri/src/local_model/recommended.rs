@@ -16,6 +16,7 @@
 //! capabilities/remote-recommended-model.json grants to its origin. Neither
 //! takes an argument, so the page cannot choose what is pulled.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -70,8 +71,8 @@ pub struct RecommendedModelStatus {
     /// what chat and background work run on for anyone who has not picked one.
     pub chat_model: Option<String>,
     /// The recommended models the person's Ollama does not have. None when it
-    /// was not asked (not the person's own Ollama) or did not answer: the page
-    /// must not read that as "nothing missing".
+    /// was not asked (not the person's own Ollama, or a download is running)
+    /// or did not answer: the page must not read that as "nothing missing".
     pub missing: Option<Vec<String>>,
     pub download: Download,
 }
@@ -80,6 +81,10 @@ pub struct RecommendedModelStatus {
 #[derive(Default)]
 pub struct Downloader {
     download: Arc<Mutex<Download>>,
+    /// Set when a switch failed after `.env` was rewritten. `.env` then names
+    /// the recommended model while the containers still run the old one, so
+    /// `.env` alone no longer says whether a retry has to restart them.
+    switch_owed: Arc<AtomicBool>,
 }
 
 impl Downloader {
@@ -96,7 +101,10 @@ fn set(download: &Mutex<Download>, next: Download) {
 
 pub fn status(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Downloader) -> RecommendedModelStatus {
     let own_ollama = backend == Some(ChatBackend::HostOllama);
-    let missing = if own_ollama {
+    let download = downloader.current();
+    // Not asked while a download runs. What is missing cannot change until it
+    // ends, yet the page polls this every second.
+    let missing = if own_ollama && !download.is_running() {
         ollama_sidecar::host_ollama_missing_models(OLLAMA_PORT)
             .map_err(|e| log::warn!("Could not ask your Ollama which recommended models it has: {e}"))
             .ok()
@@ -109,18 +117,18 @@ pub fn status(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Dow
         recommended: DEFAULT_CHAT_MODEL.to_string(),
         chat_model: stack_manager::env_chat_model(paths),
         missing,
-        download: downloader.current(),
+        download,
     }
 }
 
-/// Starts the download Settings > Model's button asks for, unless one is
-/// already running, and returns at once. The models are those of
+/// Starts the download Settings > Model's button asks for (unless one is
+/// already running) and returns at once. The models are those of
 /// RECOMMENDED_MODELS the person's Ollama lacks. With none missing it still
 /// switches Memory to the recommended chat model when `.env` names another
 /// (pulled by hand since the app started, say).
 pub fn start(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Downloader) -> Result<(), String> {
     if backend != Some(ChatBackend::HostOllama) {
-        return Err("Memory Desktop runs its own Ollama here, and it already has the recommended models.".to_string());
+        return Err("Memory Desktop runs its own Ollama here. It already has the recommended models.".to_string());
     }
 
     let missing = ollama_sidecar::host_ollama_missing_models(OLLAMA_PORT).map_err(|e| {
@@ -147,13 +155,24 @@ pub fn start(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Down
 
     let paths = paths.clone();
     let download = Arc::clone(&downloader.download);
-    std::thread::spawn(move || run(&paths, &missing, &download));
+    let switch_owed = Arc::clone(&downloader.switch_owed);
+    std::thread::spawn(move || run(&paths, &missing, &download, &switch_owed));
 
     Ok(())
 }
 
-fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>) {
+fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>, switch_owed: &AtomicBool) {
     for model in missing {
+        // Named before Ollama reports the first layer, which can take a while:
+        // until then the page would still show the previous model at 100%.
+        set(
+            download,
+            Download::Downloading {
+                model: model.clone(),
+                completed_bytes: 0,
+                total_bytes: 0,
+            },
+        );
         log::info!("Download recommended model: pulling {model} into your Ollama");
         let pulled = ollama_sidecar::pull_model_reporting(OLLAMA_PORT, model, |progress| {
             set(
@@ -183,7 +202,10 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>) {
         chat_model: DEFAULT_CHAT_MODEL.to_string(),
     };
 
-    if stack_manager::env_chat_model(paths).as_deref() == Some(DEFAULT_CHAT_MODEL) {
+    // Memory already asks for it: an Ollama that had no chat model at launch,
+    // or only the embedding model was missing.
+    let asks_for_it = stack_manager::env_chat_model(paths).as_deref() == Some(DEFAULT_CHAT_MODEL);
+    if asks_for_it && !switch_owed.load(Ordering::SeqCst) {
         set(download, done);
         return;
     }
@@ -199,10 +221,12 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>) {
     match switch_chat_model(paths) {
         Ok(()) => {
             log::info!("Download recommended model: Memory runs on {DEFAULT_CHAT_MODEL}");
+            switch_owed.store(false, Ordering::SeqCst);
             set(download, done);
         }
         Err(e) => {
             log::error!("Download recommended model: switching to {DEFAULT_CHAT_MODEL} failed: {e}");
+            switch_owed.store(true, Ordering::SeqCst);
             set(
                 download,
                 Download::Failed {
@@ -221,9 +245,9 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>) {
 /// answers again, so the page can reload onto the new model.
 fn switch_chat_model(paths: &StackPaths) -> Result<(), String> {
     stack_manager::set_env_chat_model(paths, DEFAULT_CHAT_MODEL)?;
-    stack_manager::apply_env_change(paths)?;
 
-    if !stack_manager::wait_until_healthy(RESTART_TIMEOUT) {
+    let restarted = stack_manager::apply_env_change(paths)?;
+    if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT) {
         return Err(format!("Memory did not answer within {}s of the restart", RESTART_TIMEOUT.as_secs()));
     }
 
@@ -278,7 +302,7 @@ mod tests {
         );
     }
 
-    /// Only a person's own Ollama gets the offer, and the button refuses
+    /// Only a person's own Ollama gets the offer. The button refuses
     /// anything else before it asks Ollama anything.
     #[test]
     fn only_a_persons_own_ollama_is_offered_a_download() {

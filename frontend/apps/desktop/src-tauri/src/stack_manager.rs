@@ -658,10 +658,21 @@ pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
 /// as `start_stack`, which leaves unchanged containers running. Unlike
 /// `start_stack` it waits for a start already under way instead of standing
 /// down, because that start may have read `.env` before the change.
-pub fn apply_env_change(paths: &StackPaths) -> Result<(), String> {
+///
+/// A stack the person stopped from the tray stays stopped (its next start reads
+/// the new `.env`), as does one the app is quitting on. Returns whether it ran
+/// the `up`.
+pub fn apply_env_change(paths: &StackPaths) -> Result<bool, String> {
     let _in_flight = START_IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
 
-    start_stack_inner(paths, None)
+    if is_user_stopped(paths) || NO_NEW_STARTS.load(Ordering::SeqCst) {
+        log::info!("apply_env_change: the stack is stopped or the app is quitting; its next start reads the new .env");
+        return Ok(false);
+    }
+
+    start_stack_inner(paths, None)?;
+
+    Ok(true)
 }
 
 fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> Result<(), String> {
@@ -1202,8 +1213,13 @@ pub fn gateway_runs_image_tag(image_tag: &str) -> bool {
     inspect_gateway().is_some_and(|gateway| gateway.serves_image_tag(image_tag))
 }
 
+/// Memory's health check, through the gateway.
+fn health_url() -> String {
+    format!("http://127.0.0.1:{GATEWAY_PORT}/api/health")
+}
+
 pub async fn is_healthy() -> bool {
-    let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
+    let url = health_url();
     let client = match reqwest::Client::builder().timeout(Duration::from_millis(2500)).build() {
         Ok(client) => client,
         Err(_) => return false,
@@ -1217,7 +1233,7 @@ pub async fn is_healthy() -> bool {
 /// Blocks until Memory answers its health check through the gateway, or
 /// `timeout` passes. For a caller already off the async runtime.
 pub fn wait_until_healthy(timeout: Duration) -> bool {
-    let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
+    let url = health_url();
     let Ok(client) = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(2500))
         .no_proxy()
@@ -1425,7 +1441,7 @@ mod tests {
 
     /// "Download recommended model" reads which chat model Memory runs on and,
     /// once the download is in, points `.env` back at the default. That is a
-    /// second rewrite of the same line, and the file ends up as the app would
+    /// second rewrite of the same line. The file ends up as the app would
     /// have written it had the model been there at launch.
     #[test]
     fn the_chat_model_is_read_back_and_can_be_switched_to_the_default() {
@@ -1454,6 +1470,19 @@ mod tests {
 
         assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL=\n"), None);
         assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL_X=a\nLLM_DEFAULT_CHAT_MODEL=b\n").as_deref(), Some("b"));
+    }
+
+    /// A download that ends after the person stopped Memory from the tray
+    /// leaves it stopped. Its `up` would have started the stack again and
+    /// cleared the marker that tells the tray it was stopped on purpose.
+    #[test]
+    fn an_env_change_leaves_a_stopped_stack_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        mark_user_stopped(&paths);
+
+        assert_eq!(apply_env_change(&paths), Ok(false));
+        assert!(is_user_stopped(&paths));
     }
 
     /// Every key write_env_file generates, in one list.

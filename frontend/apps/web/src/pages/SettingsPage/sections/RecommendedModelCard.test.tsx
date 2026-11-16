@@ -134,6 +134,39 @@ describe('RecommendedModelCard', () => {
     expect(screen.queryByText(/doesn.t have it/)).not.toBeInTheDocument();
   });
 
+  it('does not claim Memory runs on the recommended model while the Ollama lacks it', async () => {
+    // An Ollama with no chat model at launch leaves `.env` naming the recommended one.
+    installDesktop(async () => status({ chatModel: 'gemma4:e4b', missing: ['gemma4:e4b'] }));
+
+    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/Memory asks for it, but your Ollama doesn.t have it yet/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/runs on gemma4:e4b for now/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Memory restarts on/)).not.toBeInTheDocument();
+  });
+
+  it('reports a restart that failed after the switch without contradicting itself', async () => {
+    installDesktop(async () =>
+      status({
+        chatModel: 'gemma4:e4b',
+        missing: [],
+        download: {
+          state: 'failed',
+          message:
+            'gemma4:e4b is downloaded, but Memory did not restart with it. Quit Memory Desktop and open it again to switch to it.',
+        },
+      }),
+    );
+
+    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Memory did not restart with it');
+    expect(screen.queryByText(/still runs on/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
   it("shows Memory Desktop's answer when a download cannot start", async () => {
     installDesktop(async (command) => {
       if (command === 'download_recommended_model_command') {
@@ -151,7 +184,7 @@ describe('RecommendedModelCard', () => {
     );
   });
 
-  it('offers to switch when the model arrived some other way, and leaves the button to an administrator', async () => {
+  it('offers to switch when the model arrived some other way but leaves the button to an administrator', async () => {
     installDesktop(async () => status({ missing: [] }));
 
     const { unmount } = render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);

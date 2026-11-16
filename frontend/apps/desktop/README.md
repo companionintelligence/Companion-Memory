@@ -118,11 +118,11 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is. Options 2 and 3 are skipped, and nothing is pulled into it unasked.
+   as-is. Options 2 and 3 are skipped. Nothing is pulled into it unasked.
    When it has the default chat model (`gemma4:e4b`, see option 3), Memory uses
    it wherever it sits in Ollama's list. When it lacks it, Memory uses the
    first local chat model it lists for chat and background work instead
-   (Ollama Cloud models are skipped), and Settings > Model in the app's window
+   (Ollama Cloud models are skipped). Settings > Model in the app's window then
    offers "Download recommended model": the app pulls the models of option 3
    that are missing (`nomic-embed-text` for search too) into that Ollama,
    showing progress and any failure, then points Memory at `gemma4:e4b` and

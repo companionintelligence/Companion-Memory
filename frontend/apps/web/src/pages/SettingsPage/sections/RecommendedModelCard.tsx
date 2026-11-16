@@ -38,7 +38,7 @@ function hasSomethingToSay(status: DesktopRecommendedModel): boolean {
 }
 
 /**
- * Settings → Model, inside Memory Desktop only: "Download recommended model" for a person whose own Ollama lacks the
+ * Settings > Model, inside Memory Desktop only: "Download recommended model" for a person whose own Ollama lacks the
  * model Memory Desktop would have downloaded for itself. Without it Memory runs on the first chat model that Ollama
  * lists, which can be one far too large for background work. Memory Desktop does the download and then restarts
  * Memory on the recommended model; this page starts it and shows how it is going.
@@ -125,6 +125,9 @@ export function RecommendedModelCard({
   // Unknown while the person's Ollama is not answering: then nothing is said about what it has.
   const chatMissing = missing?.includes(recommended) ?? false;
   const othersMissing = missing?.filter((model) => model !== recommended) ?? [];
+  // Memory asks for a model other than the recommended one. `.env` names the recommended one even when it is not on
+  // disk if the person's Ollama had no chat model at launch (or did not answer then).
+  const runsOnOther = chatModel != null && chatModel !== recommended;
 
   let body: React.ReactNode;
 
@@ -148,8 +151,8 @@ export function RecommendedModelCard({
   } else if (download.state === 'switching') {
     body = (
       <p className="text-sm" role="status">
-        Downloaded. Restarting Memory on {download.model}. This takes a minute or two, and Memory may not
-        answer until it is done.
+        Downloaded. Restarting Memory on {download.model}. This takes a minute or two. Memory may not answer
+        until it is done.
       </p>
     );
   } else if (download.state === 'done') {
@@ -164,13 +167,17 @@ export function RecommendedModelCard({
 
     body = (
       <div className="space-y-3">
-        {chatMissing ? (
+        {chatMissing && runsOnOther ? (
           <p className="text-sm text-muted-foreground leading-snug">
             Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.
-            Your Ollama doesn&apos;t have it, so Memory runs on {chatModel ?? 'another of its models'} for
-            now.
+            Your Ollama doesn&apos;t have it, so Memory runs on {chatModel} for now.
           </p>
-        ) : nothingMissing ? (
+        ) : chatMissing ? (
+          <p className="text-sm text-muted-foreground leading-snug">
+            Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.
+            Memory asks for it, but your Ollama doesn&apos;t have it yet. Background work fails until it does.
+          </p>
+        ) : nothingMissing && runsOnOther ? (
           <p className="text-sm text-muted-foreground leading-snug">
             Your Ollama has {recommended} now, but Memory still runs on {chatModel}.
           </p>
@@ -205,8 +212,8 @@ export function RecommendedModelCard({
             </Button>
             {nothingMissing ? null : (
               <p className="text-xs text-muted-foreground">
-                It goes into your own Ollama and can take a while. Memory restarts on {recommended} when it is
-                done.
+                It goes into your own Ollama and can take a while.
+                {runsOnOther ? ` Memory restarts on ${recommended} when it is done.` : ''}
               </p>
             )}
           </div>

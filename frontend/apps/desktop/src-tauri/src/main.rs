@@ -838,8 +838,11 @@ async fn download_recommended_model_command(
 ) -> Result<local_model::recommended::RecommendedModelStatus, String> {
     tokio::task::spawn_blocking(move || {
         let paths = app.state::<StackPathsState>().0.clone();
-        let backend = app.state::<local_model::LocalModelHandles>().status().map(|status| status.chat_backend);
-        local_model::recommended::start(&paths, backend, &app.state::<local_model::recommended::Downloader>())?;
+        local_model::recommended::start(
+            &paths,
+            resolved_chat_backend(&app),
+            &app.state::<local_model::recommended::Downloader>(),
+        )?;
 
         Ok(recommended_model_status(&app))
     })
@@ -849,9 +852,17 @@ async fn download_recommended_model_command(
 
 fn recommended_model_status(app: &tauri::AppHandle) -> local_model::recommended::RecommendedModelStatus {
     let paths = &app.state::<StackPathsState>().0;
-    let backend = app.state::<local_model::LocalModelHandles>().status().map(|status| status.chat_backend);
 
-    local_model::recommended::status(paths, backend, &app.state::<local_model::recommended::Downloader>())
+    local_model::recommended::status(
+        paths,
+        resolved_chat_backend(app),
+        &app.state::<local_model::recommended::Downloader>(),
+    )
+}
+
+/// What serves chat, once this launch's local-model resolution has finished.
+fn resolved_chat_backend(app: &tauri::AppHandle) -> Option<local_model::ChatBackend> {
+    app.state::<local_model::LocalModelHandles>().status().map(|status| status.chat_backend)
 }
 
 #[cfg(test)]

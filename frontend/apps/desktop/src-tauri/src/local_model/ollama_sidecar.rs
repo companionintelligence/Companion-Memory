@@ -626,7 +626,7 @@ fn wait_until_ready(port: u16, timeout: Duration) -> bool {
 /// `{"status":"pulling <digest>","digest":…,"total":…,"completed":…}` records
 /// and, when the pull fails after it has started, `{"error":"…"}` with no
 /// status at all (the HTTP status is already 200 by then).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct PullProgressLine {
     #[serde(default)]
     status: Option<String>,
@@ -663,8 +663,10 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
 /// `{"error":…}` line is a failed pull. Both used to read as finished: an error
 /// line has no `status`, so it was skipped as progress noise.
 pub fn pull_model_reporting(port: u16, model: &str, mut on_progress: impl FnMut(PullProgress)) -> Result<(), String> {
+    // No proxy: this is the host's own Ollama on loopback (see is_running_on).
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 60))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
@@ -746,7 +748,14 @@ pub fn describe_pull_failure(model: &str, detail: &str) -> String {
 
     if has(&["no space left", "disk full", "not enough space"]) {
         format!("There is not enough free disk space for {model}. Free up some space, then try again.")
-    } else if has(&["no such host", "dial tcp", "i/o timeout", "tls handshake", "registry.ollama.ai", "network is unreachable"]) {
+    } else if has(&[
+        "no such host",
+        "dial tcp",
+        "i/o timeout",
+        "tls handshake",
+        "registry.ollama.ai",
+        "network is unreachable",
+    ]) {
         format!("Your Ollama could not reach ollama.com to download {model}. Check your internet connection, then try again.")
     } else if has(&["failed to request pull", "failed to read pull progress", "stopped before it finished"]) {
         format!("Your Ollama stopped answering while it was downloading {model}. Check that Ollama is running, then try again.")
@@ -790,8 +799,10 @@ impl TagsModel {
 /// The models an Ollama runs locally, in the order `/api/tags` lists them.
 /// Cloud models are left out; see TagsModel::is_local.
 fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    // No proxy, for the same reason as pull_model_reporting.
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
     let response = client
@@ -1207,7 +1218,7 @@ mod tests {
     }
 
     /// Ollama reports a pull that fails once it has started as an `error` line
-    /// in a 200 stream, and a pull cut short (Ollama stopped) just ends. Both
+    /// in a 200 stream. A pull cut short (Ollama stopped) just ends. Both
     /// used to read as a finished download: the error line has no `status`, so
     /// it was skipped like progress noise.
     #[test]

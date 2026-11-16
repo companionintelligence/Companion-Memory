@@ -1281,7 +1281,7 @@ export interface DesktopRecommendedModel {
   chatModel: string | null;
   /**
    * Recommended models the person's Ollama does not have, the embedding model included. Null when it was not asked
-   * or did not answer, which says nothing about what it has.
+   * (not the person's own Ollama, or a download is running) or did not answer, which says nothing about what it has.
    */
   missing: string[] | null;
   download: DesktopModelDownload;
