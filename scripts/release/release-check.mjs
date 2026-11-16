@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Asks every place a Memory release ships to which version it has, and prints one table.
+// Asks every place a Memory release ships to which version it has and prints one table.
 // A row that is BEHIND or MISSING is a place the release hasn't reached.
 //
 //   node scripts/release/release-check.mjs                     # the newest server release
@@ -14,7 +14,8 @@
 // opens an edit, reads the tracks and deletes the edit.
 //
 // Exit code 0 when every row is OK, INFO or SKIP; 1 when any row is BEHIND, MISSING or ERROR;
-// 2 on a usage error. scripts/release-check.test.ts covers the parsing and comparison helpers.
+// 2 on a usage error; 3 when the script itself crashed, so a crash never reads as "behind".
+// scripts/release-check.test.ts covers the parsing and comparison helpers.
 
 import { execFileSync } from 'node:child_process';
 import { createSign } from 'node:crypto';
@@ -22,7 +23,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
-import { appVersion, lastPhoneTag, PHONE_PATHS, PHONE_TAG_PREFIX } from './release-plan.mjs';
+import { appVersion, compareVersions, phonesPlan, stripPrefix } from './release-plan.mjs';
+
+export { compareVersions };
 
 const ORG = 'companionintelligence';
 const MEMORY_REPO = `${ORG}/Companion-Memory`;
@@ -60,35 +63,27 @@ export const DESKTOP_INSTALLERS = [
 // Pure helpers
 
 export function normalizeVersion(value) {
-  if (value == null) {
-    return null;
-  }
-
-  return String(value)
-    .trim()
-    .replace(/^(desktop-|mobile-)?v/, '');
+  return value == null ? null : stripPrefix(value);
 }
 
-// Numeric compare of dotted versions: 2026.11.11.1 > 2026.11.11, 0.1.10 > 0.1.9.
-// A part that isn't a number sorts by text, so "1.0.0-rc1" still gets an answer.
-export function compareVersions(a, b) {
-  const pa = normalizeVersion(a).split(/[.+-]/);
-  const pb = normalizeVersion(b).split(/[.+-]/);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? '0';
-    const y = pb[i] ?? '0';
-    const nx = /^\d+$/.test(x) ? Number(x) : Number.NaN;
-    const ny = /^\d+$/.test(y) ? Number(y) : Number.NaN;
-    if (!Number.isNaN(nx) && !Number.isNaN(ny)) {
-      if (nx !== ny) {
-        return nx < ny ? -1 : 1;
-      }
-    } else if (x !== y) {
-      return x < y ? -1 : 1;
+// The release each Play track serves: the newest one that is completed, or inProgress (a staged
+// rollout). Drafts serve nobody, so they don't count.
+export function livePlayReleases(releases) {
+  const live = [];
+  for (const track of ['production', 'beta', 'alpha', 'internal']) {
+    const serving = releases.filter(
+      (r) => r.track === track && ['completed', 'inProgress'].includes(r.status),
+    );
+    if (serving.length) {
+      live.push(
+        serving.reduce((a, b) =>
+          Math.max(...a.codes.map(Number)) >= Math.max(...b.codes.map(Number)) ? a : b,
+        ),
+      );
     }
   }
 
-  return 0;
+  return live;
 }
 
 export function versionStatus(expected, found) {
@@ -272,8 +267,17 @@ const INDEX_ACCEPT = [
   'application/vnd.docker.distribution.manifest.v2+json',
 ].join(', ');
 
-async function ghcrToken(repository) {
-  return (await fetchJson(`https://ghcr.io/token?scope=repository:${repository}:pull`)).token;
+// One anonymous pull token per repository, reused for every manifest request.
+const ghcrTokens = new Map();
+function ghcrToken(repository) {
+  if (!ghcrTokens.has(repository)) {
+    ghcrTokens.set(
+      repository,
+      fetchJson(`https://ghcr.io/token?scope=repository:${repository}:pull`).then((r) => r.token),
+    );
+  }
+
+  return ghcrTokens.get(repository);
 }
 
 // Public GHCR images only (anonymous pull token). Returns null when the tag doesn't exist.
@@ -369,7 +373,9 @@ async function playTracks(key, packageName) {
       })),
     );
   } finally {
-    await call('DELETE', `${base}/${id}`);
+    // A failed cleanup mustn't replace the tracks just read (or the error that stopped the
+    // read). An edit nobody commits expires by itself.
+    await call('DELETE', `${base}/${id}`).catch(() => {});
   }
 }
 
@@ -421,33 +427,33 @@ class Rows {
 }
 
 // Which phone version this release should have. The phone apps only need a new build when
-// something they contain changed (PHONE_PATHS); otherwise the last phone release stays current.
+// something they contain changed (release-plan.mjs's PHONE_PATHS); otherwise the last phone
+// release stays current. This asks phonesPlan, the same rule release.yml's plan job follows.
 function expectedPhoneVersion(version) {
-  const tag = `v${version}`;
   try {
-    const lastTag = lastPhoneTag(git(['tag', '--list', `${PHONE_TAG_PREFIX}*`]).split('\n'), version);
-    if (!lastTag) {
-      return { expected: appVersion(version), note: 'no phone release carries a server version yet' };
+    const plan = phonesPlan(`v${version}`, 'auto', git);
+    if (!plan.last_tag) {
+      return { expected: plan.app_version, note: 'no phone release carries a server version yet' };
     }
 
-    const changed = git(['diff', '--name-only', lastTag, tag, '--', ...PHONE_PATHS])
-      .split('\n')
-      .filter(Boolean);
-    if (!changed.length) {
-      return { expected: appVersion(lastTag), note: `nothing in the phone apps changed after ${lastTag}` };
+    if (plan.build) {
+      return { expected: plan.app_version, note: `phone app files changed after ${plan.last_tag}` };
     }
 
-    return { expected: appVersion(version), note: `phone app files changed after ${lastTag}` };
+    return {
+      expected: appVersion(plan.last_tag),
+      note: `nothing in the phone apps changed after ${plan.last_tag}`,
+    };
   } catch {
-    return { expected: appVersion(version), note: `couldn't read ${tag} from git; run git fetch --tags` };
+    return {
+      expected: appVersion(version),
+      note: `couldn't read v${version} from git; run git fetch --tags`,
+    };
   }
 }
 
 async function checkMemory(requested) {
   const rows = new Rows();
-  const images = imagesInPublishScript(
-    readFileSync(new URL('../publish/publish.sh', import.meta.url), 'utf8'),
-  );
 
   let version = normalizeVersion(requested);
   if (!version) {
@@ -465,6 +471,9 @@ async function checkMemory(requested) {
   const tag = `v${version}`;
 
   await rows.try('Docker images', async () => {
+    const images = imagesInPublishScript(
+      readFileSync(new URL('../publish/publish.sh', import.meta.url), 'utf8'),
+    );
     const problems = [];
     for (const name of images) {
       const short = name.split('/').pop();
@@ -597,8 +606,7 @@ async function checkMemory(requested) {
   }
 
   const phone = expectedPhoneVersion(version);
-  const key = readPlayKey();
-  if (!key) {
+  if (!process.env.PLAY_KEY_JSON && !process.env.PLAY_KEY_FILE) {
     rows.add(
       'Android (Google Play)',
       phone.expected,
@@ -608,21 +616,28 @@ async function checkMemory(requested) {
     );
   } else {
     await rows.try('Android (Google Play)', async () => {
-      const releases = await playTracks(key, PLAY_PACKAGE);
-      for (const track of ['production', 'beta', 'alpha', 'internal']) {
-        const live = releases.filter((r) => r.track === track && r.status === 'completed');
-        if (!live.length) {
-          continue;
-        }
-
-        const newest = live.reduce((a, b) =>
-          Math.max(...a.codes.map(Number)) >= Math.max(...b.codes.map(Number)) ? a : b,
-        );
-        rows.version(
-          `Android (Google Play), ${track}`,
+      const releases = await playTracks(readPlayKey(), PLAY_PACKAGE);
+      const live = livePlayReleases(releases);
+      if (!live.length) {
+        const drafts = releases.filter((r) => r.status === 'draft').length;
+        rows.add(
+          'Android (Google Play)',
           phone.expected,
-          normalizeVersion(newest.name),
-          `build ${newest.codes.join(',')}; ${phone.note}`,
+          '',
+          'MISSING',
+          `nothing live on production, beta, alpha or internal${drafts ? `; ${drafts} draft(s) waiting` : ''}`,
+        );
+
+        return;
+      }
+
+      for (const release of live) {
+        const rollout = release.status === 'inProgress' ? 'staged rollout; ' : '';
+        rows.version(
+          `Android (Google Play), ${release.track}`,
+          phone.expected,
+          normalizeVersion(release.name),
+          `${rollout}build ${release.codes.join(',')}; ${phone.note}`,
         );
       }
     });
@@ -772,8 +787,15 @@ async function main(argv) {
   return failing ? 1 : 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv).then((code) => {
-    process.exitCode = code;
-  });
+// process.argv[1] is empty when another script imports this one through `node -e`.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (err) => {
+      console.error(`release-check crashed: ${err?.stack ?? err}`);
+      process.exitCode = 3;
+    },
+  );
 }

@@ -15,13 +15,19 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 // What the phone apps contain: the web build (frontend/apps/web and the frontend packages it
-// imports) inside the Capacitor shells, plus the workflow that builds them. A release that
-// changes none of these would ship the same phone app under a new number.
+// imports) inside the Capacitor shells, plus the workflow that builds them. The root
+// package.json, yarn.lock and .yarnrc.yml decide which library versions go into the web build,
+// so a dependency-only release (a security fix, say) rebuilds the phones too. That also
+// rebuilds them when only backend dependencies moved, which costs a build, not a stale app.
+// A release that changes none of these would ship the same phone app under a new number.
 export const PHONE_PATHS = [
   'frontend/apps/web',
   'frontend/packages',
   'frontend/apps/android',
   'frontend/apps/ios',
+  'package.json',
+  'yarn.lock',
+  '.yarnrc.yml',
   '.github/workflows/mobile-release.yml',
 ];
 
@@ -40,18 +46,35 @@ export function isNumericVersion(value) {
   return NUMERIC.test(stripPrefix(value));
 }
 
+// Dotted numbers compare as numbers: 2026.11.11.1 > 2026.11.11, 0.1.10 > 0.1.9. A pre-release
+// sorts before the release it leads up to (0.3.14-rc1 < 0.3.14). A part that isn't a
+// number sorts as text. Build metadata (+...) is ignored.
 export function compareVersions(a, b) {
-  const pa = stripPrefix(a).split('.').map(Number);
-  const pb = stripPrefix(b).split('.').map(Number);
+  const [coreA, preA = ''] = stripPrefix(a).split('+')[0].split(/-(.*)/s);
+  const [coreB, preB = ''] = stripPrefix(b).split('+')[0].split(/-(.*)/s);
+  const pa = coreA.split('.');
+  const pb = coreB.split('.');
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x !== y) {
+    const x = pa[i] ?? '0';
+    const y = pb[i] ?? '0';
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) {
+      if (Number(x) !== Number(y)) {
+        return Number(x) < Number(y) ? -1 : 1;
+      }
+    } else if (x !== y) {
       return x < y ? -1 : 1;
     }
   }
 
-  return 0;
+  if (preA === preB) {
+    return 0;
+  }
+
+  if (!preA || !preB) {
+    return preA ? -1 : 1;
+  }
+
+  return preA < preB ? -1 : 1;
 }
 
 // The version an app shows. Apple allows at most three numbers in an app version and Tauri
@@ -69,11 +92,12 @@ export function appVersion(version) {
 // Windows installers (MSI) allow at most 255 in the first two numbers, so 2026.11.17 can't be an
 // MSI version. A calendar version becomes 26.11.17 there, and a re-cut adds its number as a
 // fourth part (26.11.17.1). Tauri's installer replaces whatever version is installed, so the
-// re-cut still installs over the first build. Returns '' when the version already fits.
+// re-cut still installs over the first build. Returns '' when Tauri's own version already fits
+// and says everything, which is a three-number version under 256.
 export function windowsVersion(version) {
   const [major, minor, patch = 0, recut] = stripPrefix(version).split('.').map(Number);
   if (major <= 255 && minor <= 255) {
-    return '';
+    return recut ? [major, minor, patch, recut].join('.') : '';
   }
 
   if (major < 2000 || major > 2255 || minor > 255) {
@@ -137,7 +161,9 @@ function git(args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-export function phonesPlan(tag, mode) {
+// `run` runs a git command and returns its output. release-check.mjs passes one bound to the
+// repository root; the tests pass a fake.
+export function phonesPlan(tag, mode, run = git) {
   if (!['auto', 'always', 'skip'].includes(mode)) {
     throw new Error(`phones mode must be auto, always or skip, not ${mode}`);
   }
@@ -145,10 +171,10 @@ export function phonesPlan(tag, mode) {
   const version = stripPrefix(tag);
   const lastTag =
     mode === 'auto'
-      ? lastPhoneTag(git(['tag', '--list', `${PHONE_TAG_PREFIX}*`]).split('\n'), version)
+      ? lastPhoneTag(run(['tag', '--list', `${PHONE_TAG_PREFIX}*`]).split('\n'), version)
       : null;
   const changedFiles = lastTag
-    ? git(['diff', '--name-only', lastTag, tag, '--', ...PHONE_PATHS])
+    ? run(['diff', '--name-only', lastTag, tag, '--', ...PHONE_PATHS])
         .split('\n')
         .filter(Boolean)
     : [];
@@ -180,6 +206,6 @@ function main(argv) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = main(process.argv);
 }

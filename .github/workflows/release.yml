@@ -1,7 +1,8 @@
 # One run ships a Memory server release everywhere it goes, in this order:
 #   server images (publish.yml) > GitHub Release > Memory Desktop
-#   (desktop-release.yml) and the phone apps (mobile-release.yml, then
-#   testflight-distribute.yml) > a check of every place the release should be.
+#   (desktop-release.yml) and the phone apps (mobile-release.yml once for iOS
+#   and once for Android, then testflight-distribute.yml) > a check of every
+#   place the release should be.
 #
 # The desktop and phone apps take the server's version: server 2026.11.17 ships
 # Memory Desktop 2026.11.17 and phone apps 2026.11.17. A re-cut such as
@@ -9,10 +10,11 @@
 # at most; scripts/release/release-plan.mjs holds these rules.
 #
 # The phone apps only rebuild when something they contain changed since the last
-# phone release (the web UI, the frontend packages or the phone projects). On
-# auto, a backend-only release skips them, and the phones keep the version of the
-# release they were last built from. The commit each phone release came from is
-# tagged mobile-v<server version>, which is how the next run knows what changed.
+# phone release: the web UI, the frontend packages, the phone projects or the
+# root dependency files (scripts/release/release-plan.mjs, PHONE_PATHS). On auto
+# a release that changes none of them skips the phones, which keep the version of
+# the release they were last built from. The commit each phone release came from
+# is tagged mobile-v<server version>, which is how the next run knows what changed.
 #
 # To cut a release:
 #   1. Run the test workflows on main and wait for all three to pass:
@@ -74,8 +76,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Same shape publish.yml accepts.
-  RELEASE_TAG_RE: '^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+  # publish.yml's shape, with the leading v every release tag carries. publish.yml also takes
+  # a tag without it, but the check job and the mobile-v tag both build on v<version>.
+  RELEASE_TAG_RE: '^v[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
 
 jobs:
   plan:
@@ -121,7 +124,15 @@ jobs:
           DESKTOP: ${{ inputs.desktop }}
         run: |
           set -euo pipefail
-          workflows=(ci.yml migration-integrity-check.yml)
+          # The required gates come from publish.yml's GATED_WORKFLOWS, the list its
+          # verify-ci-passed job enforces, so making a gate required there covers this check
+          # too. desktop-build.yml is desktop-release.yml's own gate.
+          mapfile -t workflows < <(sed -n '/GATED_WORKFLOWS: |/,/^        run:/p' .github/workflows/publish.yml \
+            | sed 's/#.*//' | grep -oE '[A-Za-z0-9._-]+\.yml:required' | cut -d: -f1)
+          if (( ${#workflows[@]} == 0 )); then
+            echo "::error::Couldn't read the required gates from GATED_WORKFLOWS in publish.yml."
+            exit 1
+          fi
           if [[ "${DESKTOP}" == "true" ]]; then workflows+=(desktop-build.yml); fi
           missing=0
           for workflow in "${workflows[@]}"; do
@@ -178,15 +189,21 @@ jobs:
             echo "A Release for ${TAG} already exists; leaving it as it is."
             exit 0
           fi
-          previous=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          # Notes start at the newest server release older than this tag. That is
+          # the Latest one for a normal release and an earlier one for a re-cut of
+          # an older line, whose notes would otherwise compare against a later commit.
+          releases=$(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | grep -E '^v[0-9]{4}\.' | grep -vxF "${TAG}" || true)
+          previous=$({ printf '%s\n' "${releases}"; echo "${TAG}"; } | grep -v '^$' | sort -V \
+            | grep -B1 -xF "${TAG}" | grep -vxF "${TAG}" || true)
           args=(--verify-tag --title "${TAG}" --generate-notes)
           if [[ -n "${previous}" ]]; then
             args+=(--notes-start-tag "${previous}")
           fi
           # Latest belongs to the newest server release. A re-cut of an older
           # release doesn't take it back.
-          newest=$(printf '%s\n' "${previous#v}" "${TAG#v}" | sort -V | tail -1)
-          if [[ -z "${previous}" || "${newest}" == "${TAG#v}" ]]; then
+          newest=$({ printf '%s\n' "${releases}"; echo "${TAG}"; } | grep -v '^$' | sort -V | tail -1)
+          if [[ "${newest}" == "${TAG}" ]]; then
             args+=(--latest)
           else
             args+=(--latest=false)
@@ -215,8 +232,11 @@ jobs:
       skip_test_gate: ${{ inputs.skip_test_gate }}
       bypass_reason: ${{ inputs.bypass_reason }}
 
-  phones:
-    name: Phone apps
+  # iOS and Android are two calls of mobile-release.yml, so one store failing
+  # doesn't hold the other back: an iOS build reaches TestFlight testers even when
+  # the Play upload fails. "Re-run failed jobs" then retries only the failed store.
+  phones-ios:
+    name: Phone app (iOS)
     needs: [plan, publish]
     if: needs.plan.outputs.phones == 'true'
     uses: ./.github/workflows/mobile-release.yml
@@ -233,6 +253,20 @@ jobs:
       IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
       IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
       CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
+    with:
+      dry_run: false
+      version_name: ${{ needs.plan.outputs.app_version }}
+      platform: ios
+
+  phones-android:
+    name: Phone app (Android)
+    needs: [plan, publish]
+    if: needs.plan.outputs.phones == 'true'
+    uses: ./.github/workflows/mobile-release.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -241,12 +275,12 @@ jobs:
     with:
       dry_run: false
       version_name: ${{ needs.plan.outputs.app_version }}
-      platform: both
+      platform: android
 
   testflight:
     name: TestFlight testers
-    needs: phones
-    if: needs.phones.outputs.ios_ran == 'true'
+    needs: phones-ios
+    if: needs.phones-ios.outputs.ios_ran == 'true'
     uses: ./.github/workflows/testflight-distribute.yml
     permissions:
       contents: read
@@ -255,12 +289,15 @@ jobs:
       APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
       APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
     with:
-      build_number: ${{ needs.phones.outputs.build_number }}
+      build_number: ${{ needs.phones-ios.outputs.build_number }}
 
+  # Only when both stores succeeded: the tag tells the next run the phones are
+  # current. After a partial failure, "Re-run failed jobs" finishes the store that
+  # failed and then writes the tag.
   phone-tag:
     name: Record the phone release
-    needs: [plan, phones]
-    if: needs.phones.outputs.ios_ran == 'true' || needs.phones.outputs.android_ran == 'true'
+    needs: [plan, phones-ios, phones-android]
+    if: needs.phones-ios.outputs.ios_ran == 'true' || needs.phones-android.outputs.android_ran == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -281,7 +318,7 @@ jobs:
 
   check:
     name: Check every platform
-    needs: [plan, publish, github-release, desktop, phones, testflight, phone-tag]
+    needs: [plan, publish, github-release, desktop, phones-ios, phones-android, testflight, phone-tag]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -71,7 +71,7 @@ name: Mobile Release
 #                               "Release to testing tracks" permission
 #
 # A platform lane is skipped (not failed) only when *every* secret it consumes is
-# absent — that is the supported way to wire up one store before the other. The
+# absent. That is the supported way to wire up one store before the other. The
 # `version` job checks the secrets and the lane's job then shows as skipped on the run
 # page. (It used to run and skip every step, which reported a green job that built
 # nothing.) When some but not all of a lane's secrets are set the `version` job FAILS
@@ -247,8 +247,10 @@ permissions:
   contents: read
   packages: read
 
+# Per platform, so release.yml's separate iOS and Android calls on the same tag run
+# side by side instead of queueing behind each other.
 concurrency:
-  group: mobile-release-${{ github.ref }}
+  group: mobile-release-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: false
 
 env:
