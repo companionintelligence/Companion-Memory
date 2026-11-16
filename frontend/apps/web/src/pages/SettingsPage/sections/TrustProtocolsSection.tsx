@@ -22,6 +22,8 @@ export interface TrustProtocolSpec {
   caveat?: string;
 }
 
+const UNTIL_SECURITY_REVIEW = 'Leave off until its security review is done';
+
 /**
  * Canonical inventory of identity, decentralized trust, verifiable credential,
  * and provisional AI interoperability standards implemented in CI-Memory.
@@ -66,6 +68,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'eddsa-jcs-2022 Data Integrity Proof',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Strictly offline verification; refuses did:keri & remote fetches',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'didcomm',
@@ -78,6 +81,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'ECDH-1PU Authcrypt / ECDH-ES Anoncrypt + JWS',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Replay guard + refuses _oobid remote URLs & did:keri',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'trust-tasks',
@@ -90,7 +94,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'eddsa-jcs-2022 signed task envelopes & state transitions',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Fail-closed 404 when flag disabled; bounded task payloads',
-    caveat: 'Leave off until its security review is done',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'pws',
@@ -103,6 +107,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'Ed25519 zCap delegations + HTTP Signatures + Digest',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Fail-closed 404 on unauthorized or disabled routes; controller-scoped ACL',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'identikey',
@@ -115,6 +120,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'Ed25519 / P-256 + ML-DSA hybrid signatures (single-use nonce)',
     maturity: 'Experimental',
     securityBoundary: 'Disabled by default (404); Host-validated audience + in-memory nonce store',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'mcp-prm',
@@ -127,6 +133,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'OAuth 2.1 Bearer + Client ID Metadata Document (DCR disabled)',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Advertises auth server metadata only when mcp.prm is enabled',
+    caveat: UNTIL_SECURITY_REVIEW,
   },
   {
     id: 'capability-keys',

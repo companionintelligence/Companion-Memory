@@ -1,6 +1,6 @@
 # Verifiable Trust Community (VTC) credentials
 
-> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/vtc/`
+> **Status (2026-11-16): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/vtc/`
 > issues, reads and checks credentials in the formats an [OpenVTC](https://github.com/OpenVTC/verifiable-trust-infrastructure)
 > Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12) `VtcModule` is
 > registered with Nest. That pull request added `POST /vtc/verify`, and Companion-Memory#3443 (merged
@@ -10,7 +10,8 @@
 > `validUntil`. None of #3439, #3442 and #3443 records a review, so the Hub security review that
 > [ADR-0017](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0017-openvtc-verifiable-trust-community-alongside-keri.md)
 > asks for before anything here is wired to a route is still to do. Both routes answer `404` unless `vtc.credentials`
-> (`ENABLE_VTC_CREDENTIALS`, default false) is on. They check a credential and a status list that the caller
+> (`ENABLE_VTC_CREDENTIALS`, default false) is on. Do not turn it on until its security review is done.
+> They check a credential and a status list that the caller
 > presents, accept proofs from `did:key` issuers only (configuration pins no community), make no
 > outbound request and write **no database rows**; nothing else in the API calls the module. It has **not been run against
 > OpenVTC's software**, and the status list OpenVTC's live test community serves is **refused today**,

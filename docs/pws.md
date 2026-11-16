@@ -1,6 +1,6 @@
 # Portable Web Spaces (PWS)
 
-> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/pws/`
+> **Status (2026-11-16): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/pws/`
 > implements the W3C Credentials Community Group's
 > [Portable Web Spaces](https://w3c-ccg.github.io/portable-web-spaces-spec/) storage API (draft v0.5,
 > formerly Wallet Attached Storage) and its
@@ -8,7 +8,8 @@
 > Companion-Memory#3439 (merged 2026-11-12, not yet in a release) `PwsModule` is registered with Nest:
 > `/pws/*` answers `404` unless `pws.storage` (`ENABLE_PWS_STORAGE`, default false) is on, and then serves
 > the handler over the in-memory store, so it writes **no database rows** and keeps nothing across a
-> restart. Nothing else in `src` calls it. Against the Interop Alliance's conformance suite it passes 203 of 305
+> restart. Do not turn it on until its security review is done. Nothing else in `src` calls the module.
+> Against the Interop Alliance's conformance suite it passes 203 of 305
 > checks (55 fail, 47 are skipped). Every failure traces to a feature that is not built (Encrypted
 > Collections, pluggable backends and quotas, export/import, `Ed25519Signature2020`); for 17 of them the
 > suite's setup creates an Encrypted Collection first, so the checks never ran. The suite calls that

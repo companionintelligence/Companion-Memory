@@ -51,19 +51,29 @@ describe('TrustProtocolsSection', () => {
     expect(screen.queryByText('Solid Protocol & WebID Pod Facade')).not.toBeInTheDocument();
   });
 
-  it('says beside the Trust Tasks activation line to leave it off, and on no other card', () => {
+  it('says beside each unreviewed flag to leave it off, and on no other card', () => {
     render(<TrustProtocolsSection />);
 
     const caveat = 'Leave off until its security review is done';
     const card = (name: string) => screen.getByText(name).closest<HTMLElement>('[data-slot="card"]')!;
+    const unreviewed = [
+      ['Trust Tasks HTTPS 0.3', 'ENABLE_TRUST_TASKS'],
+      ['Portable Web Spaces (PWS)', 'ENABLE_PWS_STORAGE'],
+      ['IdentiKey Post-Quantum Challenge Auth', 'ENABLE_AUTH_IDENTIKEY'],
+      ['Verifiable Trust Community (OpenVTC)', 'ENABLE_VTC_CREDENTIALS'],
+      ['DIDComm Messaging v2.1', 'ENABLE_DIDCOMM_MESSAGING'],
+      ['MCP Protected Resource Metadata (PRM)', 'ENABLE_MCP_PRM'],
+    ] as const;
 
-    expect(screen.getAllByText(caveat)).toHaveLength(1);
-    expect(within(card('Trust Tasks HTTPS 0.3')).getByText(caveat)).toBeInTheDocument();
+    expect(screen.getAllByText(caveat)).toHaveLength(unreviewed.length);
+    for (const [name, envVar] of unreviewed) {
+      // The caveat sits in the same group as that card's activation line.
+      expect(within(card(name)).getByText(caveat).parentElement).toHaveTextContent(envVar);
+    }
 
     for (const name of [
       'Solid Protocol & WebID Pod Facade',
       'Companion Asks & Delegated Consent',
-      'MCP Protected Resource Metadata (PRM)',
       'Capability Attenuated API Keys & Field Crypto',
     ]) {
       expect(within(card(name)).queryByText(caveat)).not.toBeInTheDocument();
