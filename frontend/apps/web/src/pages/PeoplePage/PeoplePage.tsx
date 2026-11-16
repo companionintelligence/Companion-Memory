@@ -369,9 +369,10 @@ function RemotePeoplePage() {
     await Promise.all([refetch(), refetchCandidates()]);
   }, [pagination, refetch, refetchCandidates]);
 
-  // Numbers each merge's recount, so an answer that arrives after a later
-  // merge's recount was sent cannot put back the older count.
-  const lastRecount = useRef(0);
+  // Numbers each list's recounts, so an answer that arrives after a later
+  // merge's recount of the same list was sent cannot put back the older count.
+  // Kept per search: a merge made in one search says nothing about another's.
+  const lastRecount = useRef(new Map<string | null, number>());
 
   // Patch the accumulated list rather than refetch()ing it. refetch() replays
   // the hook's ORIGINAL variables (first: PAGE_SIZE, no cursor) and overwrites
@@ -381,43 +382,51 @@ function RemotePeoplePage() {
   const onMerged = useCallback(
     async ({ removedIds, keptId }: MergeOutcome) => {
       const removed = new Set(removedIds);
-
-      if (removed.size > 0) {
-        client.cache.updateQuery({ query: GET_PEOPLE, variables: peopleVariables }, (prev) => {
-          if (!prev?.people) {
-            return prev;
-          }
-
-          const edges = prev.people.edges.filter((edge) => !removed.has(edge.node.id));
-          // With no search the count is every live person, so it drops by
-          // everyone the merge removed, loaded on this page or not. A search's
-          // count drops by the loaded rows that matched. Both are read again below.
-          const gone = peopleVariables.query == null ? removed.size : prev.people.edges.length - edges.length;
-
-          if (gone === 0) {
-            return prev;
-          }
-
-          return {
-            ...prev,
-            people: {
-              ...prev.people,
-              edges,
-              totalCount: Math.max(0, prev.people.totalCount - gone),
-            },
-          };
-        });
-      }
-
       const candidatesRefetched = refetchCandidates();
 
-      // Reading the queue again folds exact email and phone pairs on the
-      // server, so more people than this merge removed may be gone by the time
-      // it returns. The count is read once that is done. It does not hold up
-      // the card. A failed recount keeps the drop made above, since the merge
-      // itself went through.
       if (removed.size > 0) {
-        const recount = ++lastRecount.current;
+        // A merge made in a search patches the full list too: clearing the
+        // search reads that list back from the cache, not from the server.
+        const lists =
+          peopleVariables.query == null
+            ? [peopleVariables]
+            : [peopleVariables, { query: null, first: PAGE_SIZE }];
+
+        for (const variables of lists) {
+          client.cache.updateQuery({ query: GET_PEOPLE, variables }, (prev) => {
+            if (!prev?.people) {
+              return prev;
+            }
+
+            const edges = prev.people.edges.filter((edge) => !removed.has(edge.node.id));
+            // With no search the count is every live person, so it drops by
+            // everyone the merge removed, loaded on this page or not. A
+            // search's count drops by the loaded rows that matched. The list
+            // on screen is read again below.
+            const gone = variables.query == null ? removed.size : prev.people.edges.length - edges.length;
+
+            if (gone === 0) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              people: {
+                ...prev.people,
+                edges,
+                totalCount: Math.max(0, prev.people.totalCount - gone),
+              },
+            };
+          });
+        }
+
+        // Reading the queue again folds exact email and phone pairs on the
+        // server, so more people than this merge removed may be gone by the
+        // time it returns. The count is read once that is done. It does not
+        // hold up the card. A failed recount keeps the drop made above, since
+        // the merge itself went through.
+        const recount = (lastRecount.current.get(peopleVariables.query) ?? 0) + 1;
+        lastRecount.current.set(peopleVariables.query, recount);
 
         void candidatesRefetched
           .catch(() => undefined)
@@ -434,8 +443,9 @@ function RemotePeoplePage() {
           .then(({ data: counted }) => {
             const totalCount = counted?.people.totalCount;
 
-            // A later merge has sent its own recount; this answer may predate it.
-            if (totalCount == null || recount !== lastRecount.current) {
+            // A later merge in this search has sent its own recount; this
+            // answer may predate it.
+            if (totalCount == null || recount !== lastRecount.current.get(peopleVariables.query)) {
               return;
             }
 

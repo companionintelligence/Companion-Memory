@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useSearchParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -1008,6 +1009,131 @@ describe('PeoplePage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
 
       await waitFor(() => expect(headerCount()).toBe('30'));
+    });
+
+    /**
+     * Clearing the search reads the full list back from the cache. A merge made
+     * in the search left that list at its old count, so "40" came back.
+     */
+    it('lowers the full list too when the merge was made in a search', async () => {
+      function SearchFor({ term }: { term: string }) {
+        const [, setSearchParams] = useSearchParams();
+
+        return (
+          <button type="button" onClick={() => setSearchParams(term === '' ? {} : { search: term })}>
+            {term === '' ? 'Everyone' : `Search ${term}`}
+          </button>
+        );
+      }
+
+      renderWithProviders(
+        <>
+          <PeoplePage />
+          <SearchFor term="Young" />
+          <SearchFor term="" />
+        </>,
+        {
+          mocks: [
+            peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+            {
+              request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+              result: candidatesResult([zoePair]),
+            },
+            peoplePage('Young', 31, [{ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }]),
+            ...mergeMocks,
+            {
+              request: { query: GET_PEOPLE_COUNT, variables: { query: 'Young' } },
+              result: {
+                data: { people: { __typename: 'PersonConnection' as const, totalCount: 30 } },
+              },
+            },
+          ],
+        },
+      );
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(headerCount()).toBe('40');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search Young' }));
+      await waitFor(() => expect(headerCount()).toBe('31'));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+      await waitFor(() => expect(headerCount()).toBe('30'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Everyone' }));
+      await waitFor(() => expect(headerCount()).toBe('39'));
+      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    });
+
+    it("keeps the latest merge's count when an earlier recount answers last", async () => {
+      const THEO_GLOBAL_ID = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff722');
+      const THEO_TWIN_GLOBAL_ID = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff723');
+      const theoPair = candidateEdge(
+        [
+          { id: THEO_GLOBAL_ID, name: 'Theo Park' },
+          { id: THEO_TWIN_GLOBAL_ID, name: 'Theo Park' },
+        ],
+        { id: 'candidate-2' },
+      );
+      const candidates = (edges: unknown[]) => ({
+        request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+        result: candidatesResult(edges),
+      });
+      const recount = (totalCount: number, delay = 0) => ({
+        request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+        delay,
+        result: { data: { people: { __typename: 'PersonConnection' as const, totalCount } } },
+      });
+
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          candidates([zoePair, theoPair]),
+          mergeMocks[0],
+          mergeMocks[1],
+          candidates([theoPair]),
+          // The first merge's recount is slow and answers after the second's.
+          recount(39, 300),
+          {
+            request: {
+              query: MERGE_PEOPLE,
+              variables: { input: { targetId: THEO_GLOBAL_ID, sourceIds: [THEO_TWIN_GLOBAL_ID] } },
+            },
+            result: {
+              data: {
+                mergePeople: {
+                  __typename: 'MergePeoplePayload' as const,
+                  success: true,
+                  person: { __typename: 'PersonType' as const, id: THEO_GLOBAL_ID, name: 'Theo Park' },
+                },
+              },
+            },
+          },
+          {
+            request: { query: GET_MERGED_PERSON, variables: { id: THEO_GLOBAL_ID } },
+            result: { data: { person: personNode({ id: THEO_GLOBAL_ID, name: 'Theo Park' }) } },
+          },
+          candidates([]),
+          recount(37),
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      const mergeButtons = await screen.findAllByRole('button', { name: 'Merge into one person' });
+      expect(mergeButtons).toHaveLength(2);
+
+      fireEvent.click(mergeButtons[0]);
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Merging' })).not.toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Merge into one person' })).toHaveLength(1);
+      });
+      expect(headerCount()).toBe('39');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Merge into one person' }));
+      await waitFor(() => expect(headerCount()).toBe('37'));
+
+      await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+      expect(headerCount()).toBe('37');
     });
   });
 
