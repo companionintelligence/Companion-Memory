@@ -1,5 +1,5 @@
+import { resolveOidcCallbackUrl } from '@ci/common/http/oidcCallbackUrl';
 import config from '@ci/configuration';
-import { resolveOidcCallbackUrl } from '@ci/domains/auth/utils/oidcCallbackUrl';
 
 import {
   type CallbackRequestOrigin,
