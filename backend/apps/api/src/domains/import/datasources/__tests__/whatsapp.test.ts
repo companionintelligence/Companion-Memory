@@ -920,6 +920,20 @@ describe("an Android export's own lines", () => {
     ]);
     expect(drops).toEqual(['whatsapp_system_line', 'whatsapp_system_line']);
   });
+
+  it('reads a 12-hour export day first when one of its dates shows it', async () => {
+    // `05/11/26` alone could be either. The file's later `14/11/26` can only
+    // be day first, so the whole file is read that way.
+    const times = async (lines: string[]) =>
+      (await importAndroid(lines, 'UTC')).items.map((g) => g.item.timestamp?.toISOString());
+
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '14/11/26, 9:32 AM - Robin Hale: later']),
+    ).toEqual(['2026-11-05T21:31:00.000Z', '2026-11-14T09:32:00.000Z']);
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '11/14/26, 9:32 AM - Robin Hale: later']),
+    ).toEqual(['2026-05-11T21:31:00.000Z', '2026-11-14T09:32:00.000Z']);
+  });
 });
 
 describe('a _chat.txt in a folder the system named', () => {
@@ -1116,7 +1130,9 @@ describe('a _chat.txt in a folder the system named', () => {
       spy.mockRestore();
     }
 
-    expect(created).toHaveLength(2);
+    // The name, the date order of a 12-hour Android export, then the import.
+    // The first two stop early.
+    expect(created).toHaveLength(3);
     expect(created.every((stream) => stream.destroyed)).toBe(true);
   });
 });

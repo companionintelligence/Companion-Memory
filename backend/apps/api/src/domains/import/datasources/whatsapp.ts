@@ -192,9 +192,52 @@ async function conversationNameFromTranscript(chatPath: string): Promise<string>
 // WhatsApp writes itself have the same header and no sender.
 const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([\s\S]*)$/;
 
-// Android in US English: M/D/YY, H:MM AM - Sender: message. Newer phones put a
-// U+202F NARROW NO-BREAK SPACE before AM/PM, which `\s` matches.
-const ANDROID_US_RE = /^(\d{1,2}\/\d{1,2}\/\d{2}), (\d{1,2}:\d{2}\s[AP]M) - ([\s\S]*)$/;
+// Android with a 12-hour clock, as in US English: M/D/YY, H:MM AM - Sender:
+// message. Newer phones put a U+202F NARROW NO-BREAK SPACE before AM/PM, which
+// `\s` matches. Some phones write the day first; see {@link androidDayFirst}.
+const ANDROID_12H_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2}), (\d{1,2}:\d{2}\s[AP]M) - ([\s\S]*)$/;
+
+/**
+ * Whether a 12-hour Android export puts the day before the month. A line
+ * doesn't say: `05/11/26, 9:31 PM` is May 11 on a US phone and November 5 on
+ * many others. The first date with a number above 12 settles it for the whole
+ * file. A file without one is read month first, the US order.
+ *
+ * Reading stops at that date, or at the first header of any other kind, so an
+ * iPhone or 24-hour export costs one line here.
+ */
+async function androidDayFirst(chatPath: string): Promise<boolean> {
+  const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+
+  try {
+    for await (const line of rl) {
+      const cleaned = stripLeadingInvisible(line);
+      const m = ANDROID_12H_RE.exec(cleaned);
+
+      if (m == null) {
+        if (IOS_RE.test(cleaned) || ANDROID_RE.test(cleaned)) {
+          return false;
+        }
+
+        continue;
+      }
+
+      if (Number(m[2]) > 12) {
+        return false;
+      }
+
+      if (Number(m[1]) > 12) {
+        return true;
+      }
+    }
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+
+  return false;
+}
 
 /** `Sender: message`, split at the first colon: how Android lines were always read. */
 const SENDER_RE = /^([^:]+):[ ]?([\s\S]*)$/;
@@ -206,7 +249,7 @@ const QUOTED_SENDER_RE = /^((?:[^:"]|"[^"]*")+):[ ]?([\s\S]*)$/;
  * The sender and text after an Android header, or null for a line WhatsApp
  * wrote itself, which has no sender: `Robin Hale added Casey Moreno`.
  *
- * WhatsApp puts a group's name in double quotes in those lines, and a name may
+ * WhatsApp puts a group's name in double quotes in those lines. A name may
  * hold a colon. Split at the first colon, `Robin Hale created group "Trip:
  * Lisbon"` became a message from `Robin Hale created group "Trip`. So a colon
  * inside quotes doesn't end the sender. When a line's quotes don't pair up,
@@ -268,13 +311,14 @@ interface ParsedLine {
   /**
    * A line WhatsApp wrote itself, which an Android export writes with no
    * sender (`14/11/2026, 10:02 - Robin Hale added Casey Moreno`). It is
-   * dropped, and the lines under it go with it.
+   * dropped along with the lines under it.
    */
   system?: boolean;
   /**
-   * For a `system` line: the parser before it was recognised read it as a
-   * message, which took a sequence number. Only a day-first line with a colon
-   * in a quoted name was; every other one was added to the message before it.
+   * For a `system` line: the old pattern read it as a message, which took a
+   * sequence number. Only a day-first line with a colon in a quoted name was
+   * read that way. The others were added to the message before them or not
+   * read at all.
    */
   savedBefore?: boolean;
 }
@@ -349,48 +393,53 @@ function androidWallClock(date: string, time: string): WallClock | undefined {
  * sat at 4 PM on Dec 31. The importer is told the account's zone
  * (`ImportParams.timeZone`) and stores them there. Without one, the stored
  * time stays the server's reading, the same instant the id carries.
+ *
+ * `dayFirst12h`: the file's 12-hour Android dates put the day first
+ * ({@link androidDayFirst}).
  */
-function parseWALine(line: string, accountZone: string | undefined): ParsedLine | null {
+function parseWALine(line: string, accountZone: string | undefined, dayFirst12h = false): ParsedLine | null {
   const cleaned = stripLeadingInvisible(line);
   let wall: WallClock | undefined;
   let idTime: Date | undefined;
   let said: { sender: string; text: string } | null;
-  let savedBefore = false;
-  let m = IOS_RE.exec(cleaned);
+  let rest = '';
+  const ios = IOS_RE.exec(cleaned);
+  const android = ios ? null : ANDROID_RE.exec(cleaned);
+  const android12h = ios || android ? null : ANDROID_12H_RE.exec(cleaned);
 
-  if (m) {
-    wall = iosWallClock(m[1], m[2]);
-    idTime = dated(new Date(`${m[1]} ${m[2]}`));
-    said = { sender: m[3], text: m[4] };
+  if (ios) {
+    wall = iosWallClock(ios[1], ios[2]);
+    idTime = dated(new Date(`${ios[1]} ${ios[2]}`));
+    said = { sender: ios[3], text: ios[4] };
+  } else if (android) {
+    // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
+    const [day, month, year] = android[1].split('/');
+
+    wall = androidWallClock(android[1], android[2]);
+    idTime = dated(new Date(`${year}-${month}-${day}T${android[2]}:00`));
+    rest = android[3];
+    said = androidSender(rest);
+  } else if (android12h) {
+    // As M/D/YY, the order the iPhone's dates are read in.
+    const [first, second, year, time] = android12h.slice(1, 5);
+    const date = dayFirst12h ? `${second}/${first}/${year}` : `${first}/${second}/${year}`;
+
+    wall = iosWallClock(date, time);
+    idTime = dated(new Date(`${date} ${time}`));
+    rest = android12h[5];
+    said = androidSender(rest);
   } else {
-    m = ANDROID_RE.exec(cleaned);
-
-    if (m) {
-      // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
-      const [day, month, year] = m[1].split('/');
-
-      wall = androidWallClock(m[1], m[2]);
-      idTime = dated(new Date(`${year}-${month}-${day}T${m[2]}:00`));
-      savedBefore = SENDER_RE.test(m[3]);
-    } else {
-      m = ANDROID_US_RE.exec(cleaned);
-
-      if (m == null) {
-        return null;
-      }
-
-      // Month first and a 12-hour clock, as on the iPhone.
-      wall = iosWallClock(m[1], m[2]);
-      idTime = dated(new Date(`${m[1]} ${m[2]}`));
-    }
-
-    said = androidSender(m[3]);
+    return null;
   }
 
   const ts = accountZone == null ? idTime : wall && wallClockToUTC(wall, accountZone);
 
   if (said == null) {
-    return { ts, idTime, sender: '', text: m[3], system: true, savedBefore };
+    // The old pattern read only day-first lines and split them at the first
+    // colon, so one of those with a colon was a message.
+    const savedBefore = android != null && SENDER_RE.test(rest);
+
+    return { ts, idTime, sender: '', text: rest, system: true, savedBefore };
   }
 
   return { ts, idTime, sender: said.sender.trim(), text: said.text };
@@ -573,6 +622,7 @@ export class WhatsAppFileImporter implements FileImporter {
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
     const conversationName =
       conversationNameFrom(chatPath) ?? (await conversationNameFromTranscript(chatPath));
+    const dayFirst12h = await androidDayFirst(chatPath);
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
@@ -611,8 +661,7 @@ export class WhatsAppFileImporter implements FileImporter {
         // message and took a number. It still takes one. The ids after it end
         // in that number: if they moved down by one, importing a chat that was
         // imported back then would save every message in it a second time.
-        // Other Android system lines were added to the message before them
-        // and took none.
+        // No other Android system line ever took one.
         if (p.system ? p.savedBefore : !LEGACY_SYSTEM_VERB_RE.test(p.text)) {
           seq++;
         }
@@ -711,7 +760,7 @@ export class WhatsAppFileImporter implements FileImporter {
     };
 
     for await (const line of rl) {
-      const parsed = parseWALine(line, params.timeZone);
+      const parsed = parseWALine(line, params.timeZone, dayFirst12h);
       if (parsed) {
         if (current) {
           flush(current);
