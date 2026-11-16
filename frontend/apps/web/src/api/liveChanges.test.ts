@@ -305,8 +305,8 @@ describe('liveChanges with the phone API key', () => {
     expect(isLiveChangesConnected()).toBe(true);
   });
 
-  // The buffered native request resolves only when the body ends, and this one
-  // never does: the stream would hang open for good, with no way to abort it.
+  // The buffered native request resolves only when the body ends. This one never
+  // does: the stream would hang open for good, with no way to abort it.
   it('asks for no buffered fallback on the phone', async () => {
     const stream = openStream();
     setLiveChangesAuth('device-key', 'apiKey');
@@ -349,7 +349,7 @@ describe('liveChanges with the phone API key', () => {
     expect(calendar).toHaveBeenCalledTimes(1);
   });
 
-  it('tries a refused key again after the wait, and catches up when it is let in', async () => {
+  it('tries a refused key again after the wait and catches up when it is let in', async () => {
     const refused = openStream(401);
     setLiveChangesAuth('device-key', 'apiKey');
     const tasks = vi.fn();
@@ -429,7 +429,7 @@ describe('liveChanges with the phone API key', () => {
     expect(isLiveChangesConnected()).toBe(true);
   });
 
-  it('replaces the open stream when the key changes, and catches up', async () => {
+  it('replaces the open stream when the key changes and catches up', async () => {
     const first = openStream();
     setLiveChangesAuth('old-key', 'apiKey');
     const tasks = vi.fn();
@@ -463,4 +463,67 @@ describe('liveChanges with the phone API key', () => {
 
     expect(isLiveChangesConnected()).toBe(false);
   });
+
+  it('books the retry again when a refused key comes back after a lapse', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    // Signed out for a moment: the retry timer goes with the stream.
+    setLiveChangesAuth(null);
+    setLiveChangesAuth('device-key', 'apiKey');
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces a stream the key opened when a bearer takes over', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    const second = openStream();
+    setLiveChangesAuth('jwt-1');
+    await second.opened;
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    const headers = mockedFetch.mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(headers).toEqual({ Accept: 'text/event-stream', Authorization: 'Bearer jwt-1' });
+  });
+
+  it('leaves the new stream alone when the old key answers after it was replaced', async () => {
+    // A fetch that does not stop on abort and answers later with a refusal.
+    let answerOld: (response: Response) => void = () => undefined;
+    mockedFetch.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          answerOld = resolve;
+        }),
+    );
+    setLiveChangesAuth('old-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await flush();
+
+    const fresh = openStream();
+    setLiveChangesAuth('new-key', 'apiKey');
+    await fresh.opened;
+
+    answerOld({ ok: false, status: 401, body: null } as unknown as Response);
+    await flush();
+
+    expect(isLiveChangesConnected()).toBe(true);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
 });
+

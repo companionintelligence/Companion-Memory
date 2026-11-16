@@ -414,7 +414,11 @@ export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): P
  * `bufferedFallback: false`. The buffered request resolves only once the body
  * is complete and takes no abort signal, so on an endless stream it would never
  * resolve and would hold a connection to the server for good. Such a caller
- * gets the webview fetch's own error, an abort included, and retries itself.
+ * gets the webview fetch's own error (an abort included) and retries itself.
+ *
+ * An aborted request is never sent again as a buffered one, whatever the caller
+ * asked. The caller wants nothing more. For a chat POST the retry would run the
+ * whole generation a second time.
  */
 export async function streamingFetch(input: string, init?: StreamingFetchInit): Promise<Response> {
   const { bufferedFallback = true, ...rest } = init ?? {};
@@ -432,7 +436,7 @@ export async function streamingFetch(input: string, init?: StreamingFetchInit): 
   try {
     return await unpatchedWebFetch()(url, next);
   } catch (error) {
-    if (!bufferedFallback) {
+    if (!bufferedFallback || rest.signal?.aborted) {
       throw error;
     }
 

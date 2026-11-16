@@ -406,6 +406,26 @@ describe('streamingFetch', () => {
     expect(webFetch.mock.calls[0]?.[1]).not.toHaveProperty('bufferedFallback');
   });
 
+  it('never sends an aborted request again as a buffered one', async () => {
+    const request = vi.fn();
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { CapacitorHttp: { request } },
+    };
+
+    setApiBaseUrl('https://memory.example.com');
+    (window as unknown as { __ciUnpatchedFetch?: typeof fetch }).__ciUnpatchedFetch = (() =>
+      Promise.reject(new DOMException('The operation was aborted.', 'AbortError'))) as typeof fetch;
+    const stop = new AbortController();
+    stop.abort();
+
+    await expect(
+      streamingFetch('/api/llm/generate', { method: 'POST', body: '{}', signal: stop.signal }),
+    ).rejects.toThrow('The operation was aborted.');
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('builds the binary fallback response for a 204 (chat cancel) without a body', async () => {
     const request = vi.fn(async () => ({ status: 204, data: '' }));
 

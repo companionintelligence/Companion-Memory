@@ -61,8 +61,9 @@ const debounces = new Map<LiveChangeTopic, ReturnType<typeof setTimeout>>();
 let token: string | null = null;
 let tokenKind: LiveChangesAuthKind = 'bearer';
 let controller: AbortController | null = null;
-/** The credential the open stream was opened with. */
+/** The credential the open stream was opened with and what kind it was. */
 let streamToken: string | null = null;
+let streamKind: LiveChangesAuthKind = 'bearer';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = RECONNECT_FLOOR_MS;
 let refusedToken: string | null = null;
@@ -182,6 +183,7 @@ async function connect(): Promise<void> {
   const usedToken = token;
   const usedKind = tokenKind;
   streamToken = usedToken;
+  streamKind = usedKind;
 
   try {
     // The key is sent as given rather than left to `streamingFetch`, which reads
@@ -195,6 +197,14 @@ async function connect(): Promise<void> {
       signal: own.signal,
       bufferedFallback: false,
     });
+
+    if (controller !== own) {
+      // Closed while the request was out (sign-out, a new key) by a fetch that
+      // answered anyway. The stream belongs to whoever replaced it, or nobody.
+      void response.body?.cancel().catch(() => undefined);
+
+      return;
+    }
 
     if (response.status === 401 || response.status === 403) {
       // This token is no good; a retry with it would be refused the same way.
@@ -276,14 +286,15 @@ function disconnect(): void {
 /**
  * The credential the next connect uses: the bearer token, or with `'apiKey'`
  * the phone's API key. A new one clears a 401 wait and reconnects at once if
- * subscribers are waiting. An open stream is left alone when a bearer merely
- * rotates, and replaced when the key changes, since a new key is a new sign-in.
+ * subscribers are waiting. A bearer that merely rotates leaves an open stream
+ * alone. A new key, or a move between a key and a bearer, is a new sign-in and
+ * replaces it.
  */
 export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKind = 'bearer'): void {
   token = next;
   tokenKind = kind;
 
-  if (next && kind === 'apiKey' && controller && streamToken !== next) {
+  if (next && controller && streamToken !== next && (kind === 'apiKey' || streamKind === 'apiKey')) {
     missedChanges = true;
     disconnect();
   }
@@ -295,6 +306,11 @@ export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKin
       clearReconnect();
       void connect();
     }
+  } else if (next && !controller && !reconnectTimer && subscriberCount() > 0) {
+    // The refused credential again with no retry booked: a lapse in between
+    // (null) disconnected and cleared it. `connect` books a key's retry for the
+    // end of its wait; a refused bearer still waits for a new token.
+    void connect();
   }
 
   if (!next) {
@@ -360,6 +376,7 @@ export function resetLiveChangesForTests(): void {
   token = null;
   tokenKind = 'bearer';
   streamToken = null;
+  streamKind = 'bearer';
   refusedToken = null;
   refusedUntil = 0;
   reconnectDelay = RECONNECT_FLOOR_MS;
