@@ -18,7 +18,6 @@ import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { isOutboundEnabled } from '@ci/common/outbound';
 import { ValidationPipe } from '@ci/common/pipes';
-import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
@@ -28,6 +27,7 @@ import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
+import { oauthCallbackUrl } from '../utils/callbackUrls';
 
 @Controller('providers')
 export class ProvidersController {
@@ -168,7 +168,7 @@ export class ProvidersController {
       throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
     }
 
-    const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+    const baseCallbackUrl = oauthCallbackUrl();
     const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
 
     const scopes = oauthClient.getScopesFromActiveEndpoints(input.endpoints);

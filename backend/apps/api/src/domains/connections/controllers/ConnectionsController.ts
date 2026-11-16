@@ -21,7 +21,6 @@ import { Context, type RequestContext, type UserServiceContext, toServiceContext
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
-import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 import { EventService } from '@ci/domains/events';
 
@@ -36,6 +35,7 @@ import {
   type CreateConnectionDto,
   type UpdateConnectionDto,
 } from '../types';
+import { oauthCallbackUrl } from '../utils/callbackUrls';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -240,7 +240,7 @@ export class ConnectionsController {
 
       // Build the callback URL from the configured OAUTH_CALLBACK_URL, embedding
       // the connectionId so we know which connection to update on return.
-      const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
+      const baseCallbackUrl = oauthCallbackUrl();
       const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
 
       const scopes = client.getScopesFromActiveEndpoints(connection.activeEndpoints);

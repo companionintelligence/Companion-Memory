@@ -87,6 +87,24 @@ services:
       # directly for a sync service on its own hostname — which then also needs
       # that origin added to the CSP.
       POWERSYNC_URL: ${POWERSYNC_URL:-${APP_BASE_URL:+${APP_BASE_URL}/powersync}}
+      # OAUTH_CALLBACK_URL is where a connected service (Google and the others)
+      # sends the person back, the address the OAuth Setup dialog asks people
+      # to register with their own OAuth app. OPENID_CALLBACK_URL is where the
+      # OpenID services (Steam) return. The gateway serves both paths on the
+      # app's own origin, so they are APP_BASE_URL plus the path. Without them
+      # the api never learned the address: the dialog and the redirect_uri sent
+      # to the provider read "undefined/oauth/callback".
+      #
+      # Built from APP_BASE_URL only, as in Memory Desktop's compose file, and
+      # deliberately not `${OAUTH_CALLBACK_URL:-...}`: `make init` copies
+      # .env.default, whose OAUTH_CALLBACK_URL is the development callback
+      # host, and that form would hand every appliance the developers'
+      # address. To use another address, set it in an override file. `:+`
+      # leaves both empty while APP_BASE_URL is unset; the api then falls back
+      # to https://<APP_PUBLIC_HOSTNAME>/..., which this file leaves at
+      # ci-server.localhost (connections/utils/callbackUrls.ts).
+      OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
+      OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
       # POWERSYNC_JWT_SECRET is deliberately absent here: it is a generated
       # secret, so it arrives from /run/secrets/.env.secrets the way
       # DATABASE_PASSWORD does. generate-secrets mints it and the powersync
@@ -152,6 +170,11 @@ services:
       CI_TELEMETRY: ${CI_TELEMETRY:-}
       CI_LOCAL_ONLY: ${CI_LOCAL_ONLY:-}
       CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
+      # The api's two callback addresses. No worker job builds one today (the
+      # dialog and the connect flow run in the api); this keeps both halves
+      # agreeing if one ever does.
+      OAUTH_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/oauth/callback}
+      OPENID_CALLBACK_URL: ${APP_BASE_URL:+${APP_BASE_URL}/openid/callback}
     networks:
       - ci
     depends_on:

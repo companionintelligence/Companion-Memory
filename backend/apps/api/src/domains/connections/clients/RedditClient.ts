@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
 
 import type { Connection } from '../entities/ConnectionEntity';
+import { oauthCallbackUrl } from '../utils/callbackUrls';
 
 import { firstAccountLabel } from './accountLabel';
 import { BaseOAuth2Client, formatTokenExchangeError } from './BaseOAuth2Client';
@@ -113,7 +113,7 @@ export class RedditClient extends BaseOAuth2Client {
 
     const tokenParams = new URLSearchParams({
       code,
-      redirect_uri: config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`,
+      redirect_uri: oauthCallbackUrl(),
       grant_type: 'authorization_code',
     });
 

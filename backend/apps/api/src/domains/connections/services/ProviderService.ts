@@ -3,9 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { type ServiceContext } from '@ci/common/context';
-import config from '@ci/configuration';
 
 import { ProviderEntity, type Provider } from '../entities/ProviderEntity';
+import { oauthCallbackUrl } from '../utils/callbackUrls';
 
 @Injectable()
 export class ProviderService {
@@ -44,10 +44,6 @@ export class ProviderService {
   }
 
   getOAuthCallbackUrl(): string {
-    return (
-      config.auth.oauth.callbackUrl ||
-      `${process.env.APP_PUBLIC_URL}/oauth/callback` ||
-      `https://${config.hostname}/oauth/callback`
-    );
+    return oauthCallbackUrl();
   }
 }
