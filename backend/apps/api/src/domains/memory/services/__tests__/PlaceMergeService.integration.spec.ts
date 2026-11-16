@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { compressPositionChunk, createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PlaceEntity } from '../../entities/PlaceEntity';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
@@ -90,6 +91,9 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
       'Place merge counts fixture',
       `place-merge.${owner.userId}@example.invalid`,
     ]);
+    // The chunks the fixes below go into, created up front: see positionChunks.ts.
+    await createPositionChunks(dataSource, owner.userId, '1985-01-15T00:00:00Z', '1985-01-15T05:00:00Z');
+    await createPositionChunks(dataSource, owner.userId, '1985-06-15T00:00:00Z', '1985-06-15T00:00:00Z');
 
     merger = new PlaceMergeService(
       {
@@ -261,7 +265,7 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
     );
     expect(chunks).toHaveLength(1);
     const [{ chunk }] = chunks;
-    await dataSource.query(`SELECT compress_chunk($1::regclass, if_not_compressed => true)`, [chunk]);
+    await compressPositionChunk(dataSource, chunk);
     expect(await uncompressedFixes(chunk)).toBe(0);
 
     // Late arrivals INTO the compressed chunk (2 at a; 1 more referencing b),

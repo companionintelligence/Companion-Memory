@@ -10,6 +10,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PositionEntity } from '../../entities/PositionEntity';
 import { PositionService } from '../PositionService';
@@ -82,6 +83,9 @@ describeWithDb(
         `INSERT INTO ci.devices (device_id, user_id, device_name, device_type) VALUES ($1, $2, 'Their phone', 'phone')`,
         [theirDevice, otherId],
       );
+      // The chunk the service writes the fixes below into, created up front:
+      // see positionChunks.ts.
+      await createPositionChunks(dataSource, ownerId, '2026-10-20T09:00:00Z', '2026-10-20T11:00:00Z');
 
       service = new PositionService(
         dataSource.getRepository(PositionEntity),

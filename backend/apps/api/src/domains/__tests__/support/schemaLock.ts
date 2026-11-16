@@ -32,6 +32,9 @@
  * time after. Neither suite is wrong on its own and both pass when run alone,
  * which is exactly why this was read as flakiness for as long as it was.
  *
+ * Creating and compressing `ci.position` chunks deadlock too. Those two are
+ * handled without this lock: see `positionChunks.ts`.
+ *
  * ## The protocol
  *
  * One advisory lock in Postgres, taken in the two modes the problem actually
