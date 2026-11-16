@@ -187,6 +187,33 @@ on:
         type: string
         default: ''
         required: false
+    # Repository secrets a caller hands over. The AZURE_* values are declared
+    # but never passed: the jobs that read them run in the production
+    # Environment, and GitHub gives a called job with `environment:` that
+    # Environment's secrets.
+    secrets:
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      AZURE_SIGNING_ENDPOINT:
+        required: false
+      AZURE_SIGNING_ACCOUNT:
+        required: false
+      AZURE_CERTIFICATE_PROFILE:
+        required: false
 
 # Read-only by default. Only `release` writes (it creates the tag and the
 # GitHub Release), so only `release` gets `contents: write`. The platform jobs

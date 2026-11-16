@@ -47,6 +47,12 @@ on:
         type: string
         default: ''
         required: false
+    # The secrets this workflow reads, so a caller hands over exactly these.
+    secrets:
+      DEV_STORE_ADMIN_API_KEY:
+        required: false
+      GHPR_READ_TOKEN:
+        required: false
 
 concurrency:
   group: publish-${{ github.ref }}

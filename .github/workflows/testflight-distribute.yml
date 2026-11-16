@@ -29,6 +29,14 @@ on:
         required: false
         default: false
         type: boolean
+    # The secrets this workflow reads.
+    secrets:
+      APPSTORE_ISSUER_ID:
+        required: false
+      APPSTORE_KEY_ID:
+        required: false
+      APPSTORE_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read

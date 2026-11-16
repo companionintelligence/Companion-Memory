@@ -27,6 +27,10 @@
 # commit. The `plan` job checks for them first, so a missing one fails in a
 # minute instead of after the images are out.
 #
+# Each lane gets only the secrets it reads, listed by name; the called workflows
+# declare the same names. Environment secrets (the Azure signing values) come
+# from the `production` Environment of the job that reads them.
+#
 # A lane that fails can be retried with "Re-run failed jobs"; the lanes that
 # passed are kept. Uploads to TestFlight and Play's internal track go to testers
 # only. These steps stay outside this run: the CI-Marketplace pin bump and its
@@ -148,7 +152,9 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
+    secrets:
+      DEV_STORE_ADMIN_API_KEY: ${{ secrets.DEV_STORE_ADMIN_API_KEY }}
+      GHPR_READ_TOKEN: ${{ secrets.GHPR_READ_TOKEN }}
     with:
       skip_test_gate: ${{ inputs.skip_test_gate }}
       bypass_reason: ${{ inputs.bypass_reason }}
@@ -197,7 +203,12 @@ jobs:
       packages: read
       actions: read
       id-token: write
-    secrets: inherit
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     with:
       version_name: ${{ needs.plan.outputs.version }}
       server_image_tag: ${{ needs.plan.outputs.version }}
@@ -212,7 +223,21 @@ jobs:
     permissions:
       contents: read
       packages: read
-    secrets: inherit
+    secrets:
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
+      CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
     with:
       dry_run: false
       version_name: ${{ needs.plan.outputs.app_version }}
@@ -225,7 +250,10 @@ jobs:
     uses: ./.github/workflows/testflight-distribute.yml
     permissions:
       contents: read
-    secrets: inherit
+    secrets:
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
     with:
       build_number: ${{ needs.phones.outputs.build_number }}
 
