@@ -153,7 +153,7 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
         userId: sessionUser(token),
         sessionId: `sid:${sessionUser(token)}`,
       }),
-      invalidateSession: async () => undefined,
+      invalidateSession: async () => true,
       issueSessionToken: async (userId: string) => ({
         sessionToken: `session:${userId}`,
         sessionId: `sid:${userId}`,

@@ -48,7 +48,7 @@ const mockAuthService = {
   rotateSessionToken: jest
     .fn()
     .mockResolvedValue({ sessionToken: 'rotated-session-token', sessionId: MOCK_SESSION_ID }),
-  invalidateSession: jest.fn().mockResolvedValue(undefined),
+  invalidateSession: jest.fn().mockResolvedValue(true),
   resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 

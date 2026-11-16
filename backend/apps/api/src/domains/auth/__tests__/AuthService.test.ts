@@ -158,9 +158,9 @@ describe('AuthService — session id binding', () => {
   });
 
   /**
-   * findSession (private, reached only via rotateSessionToken/invalidateSession)
-   * builds its `where` clause with `user: { id: userId }` alongside the
-   * token/ip/user-agent hash match. Every test above uses a `findOne` mock
+   * findLiveSession (private; rotateSessionToken reaches it through findSession
+   * with the ip/user-agent hashes, invalidateSession without them) builds its
+   * `where` clause with `user: { id: userId }` alongside the token hash match. Every test above uses a `findOne` mock
    * that ignores its `where` argument entirely (`findOneResults.shift()`),
    * so none of them can tell whether that user-scoping clause is actually
    * applied — a token-hash collision, or a bug that dropped the `user`
@@ -173,7 +173,7 @@ describe('AuthService — session id binding', () => {
    * or inverted the user-id scoping would make the "wrong owner" tests below
    * fail by matching/mutating the other user's row.
    */
-  describe('findSession user-id scoping (via rotateSessionToken / invalidateSession)', () => {
+  describe('findLiveSession user-id scoping (via rotateSessionToken / invalidateSession)', () => {
     function digest(value: string): string {
       return createHmac('sha256', config.auth.session.fieldPepper).update(value).digest('hex');
     }
@@ -270,9 +270,7 @@ describe('AuthService — session id binding', () => {
       const repo = makeScopedSessionRepository([sessionRowForUser('sess-1', 'user-1')]);
       const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
 
-      await expect(scopedService.invalidateSession('user-2', rawToken, meta)).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
+      await expect(scopedService.invalidateSession('user-2', rawToken)).resolves.toBe(false);
       // The session survives — the delete branch was never reached.
       expect(repo.delete).not.toHaveBeenCalled();
     });
@@ -281,9 +279,77 @@ describe('AuthService — session id binding', () => {
       const repo = makeScopedSessionRepository([sessionRowForUser('sess-1', 'user-1')]);
       const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
 
-      await scopedService.invalidateSession('user-1', rawToken, meta);
+      await expect(scopedService.invalidateSession('user-1', rawToken)).resolves.toBe(true);
 
       expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+    });
+
+    it('invalidateSession: does not compare the address or user agent the session was signed in from', async () => {
+      // Signed in from another address with another browser; sign-out takes no request metadata.
+      const repo = makeScopedSessionRepository([
+        {
+          ...sessionRowForUser('sess-1', 'user-1'),
+          ip: digest('10.0.0.7'),
+          user_agent: digest('Chrome/146'),
+        },
+      ]);
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await expect(scopedService.invalidateSession('user-1', rawToken)).resolves.toBe(true);
+
+      expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+      for (const call of repo.findOne.mock.calls as unknown as Array<[{ where: Record<string, unknown> }]>) {
+        expect(call[0].where).not.toHaveProperty('ip');
+        expect(call[0].where).not.toHaveProperty('user_agent');
+      }
+    });
+
+    it('invalidateSession: matches the previous token inside the grace window but not after it', async () => {
+      const rotated = (rotatedAt: Date) =>
+        makeScopedSessionRepository([
+          {
+            ...sessionRowForUser('sess-1', 'user-1'),
+            token: digest('already-rotated-token'),
+            previous_token: digest(rawToken),
+            rotated_at: rotatedAt,
+          },
+        ]);
+
+      const inside = rotated(new Date());
+      await expect(
+        new AuthService(jwtService, inside as unknown as Repository<SessionEntity>).invalidateSession(
+          'user-1',
+          rawToken,
+        ),
+      ).resolves.toBe(true);
+      expect(inside.delete).toHaveBeenCalledWith({ id: 'sess-1' });
+
+      const after = rotated(new Date(Date.now() - 24 * 60 * 60 * 1000));
+      await expect(
+        new AuthService(jwtService, after as unknown as Repository<SessionEntity>).invalidateSession(
+          'user-1',
+          rawToken,
+        ),
+      ).resolves.toBe(false);
+      expect(after.delete).not.toHaveBeenCalled();
+    });
+
+    it('invalidateSession: finds nothing to end for an expired session', async () => {
+      const repo = makeScopedSessionRepository([
+        { ...sessionRowForUser('sess-1', 'user-1'), expires_at: new Date(Date.now() - 1000) },
+      ]);
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await expect(scopedService.invalidateSession('user-1', rawToken)).resolves.toBe(false);
+      expect(repo.delete).not.toHaveBeenCalled();
+    });
+
+    it('invalidateSession: answers false when another sign-out deleted the row between lookup and delete', async () => {
+      const repo = makeScopedSessionRepository([sessionRowForUser('sess-1', 'user-1')]);
+      repo.delete.mockResolvedValueOnce({ affected: 0 });
+      const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
+
+      await expect(scopedService.invalidateSession('user-1', rawToken)).resolves.toBe(false);
     });
 
     it('rotateSessionToken: a request with no User-Agent is refused as an invalid session, not a query error', async () => {
@@ -335,13 +401,13 @@ describe('AuthService — session id binding', () => {
       });
     });
 
-    it('invalidateSession: a session signed in with no User-Agent signs out from a request with none', async () => {
+    it('invalidateSession: a session signed in with no User-Agent signs out too', async () => {
       const repo = makeScopedSessionRepository([
         { ...sessionRowForUser('sess-1', 'user-1'), user_agent: null },
       ]);
       const scopedService = new AuthService(jwtService, repo as unknown as Repository<SessionEntity>);
 
-      await scopedService.invalidateSession('user-1', rawToken, { ip: meta.ip });
+      await expect(scopedService.invalidateSession('user-1', rawToken)).resolves.toBe(true);
 
       expect(repo.delete).toHaveBeenCalledWith({ id: 'sess-1' });
     });

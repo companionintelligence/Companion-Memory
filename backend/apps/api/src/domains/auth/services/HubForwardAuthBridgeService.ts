@@ -497,7 +497,7 @@ export class HubForwardAuthBridgeService {
     }
 
     await this.spendForMint(req, res, identity, session);
-    await this.invalidate(req, session);
+    await this.invalidate(session);
 
     return this.issueSessionFor(req, res, placed.user, username, session);
   }
@@ -515,7 +515,7 @@ export class HubForwardAuthBridgeService {
 
     // Before the account is found or created, as it always was: if that throws, the
     // previous person's session is already gone.
-    await this.invalidate(req, session);
+    await this.invalidate(session);
 
     const placed = await this.ensureUser(username);
 
@@ -705,25 +705,29 @@ export class HubForwardAuthBridgeService {
     return () => (answer ??= session().then((found) => this.liveSessionUserId(found)));
   }
 
-  private async invalidate(req: Request, session: MemorySession | null): Promise<void> {
+  /**
+   * End the session this browser holds, from whatever address and browser it now has: the session
+   * being replaced must not stay refreshable. Nothing to end (expired, signed out) is fine.
+   */
+  private async invalidate(session: MemorySession | null): Promise<void> {
     if (!session) {
       return;
     }
 
     try {
-      await this.authService.invalidateSession(
-        session.userId,
-        session.token,
-        this.authService.getSessionMetadata(req),
+      await this.authService.invalidateSession(session.userId, session.token);
+    } catch (error) {
+      // Best effort: whatever replaces or clears the cookie below still wins. Nothing to end is a
+      // `false`, not a throw, so this is the database failing and the old row is still refreshable.
+      this.logger.warn(
+        `could not end the Memory session being replaced: ${error instanceof Error ? error.message : String(error)}`,
       );
-    } catch {
-      // Cookie may already be expired; whatever replaces or clears it below still wins.
     }
   }
 
   /** End whatever session this browser holds: the Hub named someone this Memory will not sign in. */
   private async signOut(req: Request, res: Response, session: MemorySession | null): Promise<void> {
-    await this.invalidate(req, session);
+    await this.invalidate(session);
     clearSessionCookie(req, res);
     clearCsrfCookie(req, res);
   }
