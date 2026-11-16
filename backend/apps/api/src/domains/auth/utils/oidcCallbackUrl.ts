@@ -1,3 +1,5 @@
+import type { IncomingHttpHeaders } from 'http';
+
 const CALLBACK_PATH = '/api/authenticate/oidc/callback';
 const INITIATE_PATH = '/api/authenticate/oidc';
 
@@ -10,6 +12,23 @@ export interface OidcCallbackRequestOrigin {
   host?: string;
   /** Whether the inbound connection itself is TLS (`req.secure`). */
   secure: boolean;
+}
+
+/**
+ * The four values the origin is worked out from, read off a request. Sign-in and the connected
+ * services' callback (connections/utils/callbackUrls.ts) both read them here, so they trust the
+ * same headers.
+ */
+export function readRequestOrigin(request: {
+  headers: IncomingHttpHeaders;
+  secure?: boolean;
+}): OidcCallbackRequestOrigin {
+  return {
+    forwardedProto: request.headers['x-forwarded-proto'],
+    forwardedHost: request.headers['x-forwarded-host'],
+    host: request.headers.host,
+    secure: request.secure === true,
+  };
 }
 
 /**
@@ -67,7 +86,20 @@ export const OIDC_ORIGIN_BOUNCE_PARAM = 'origin_bounced';
  * host the browser actually used.
  */
 function rawRequestHost(origin: OidcCallbackRequestOrigin): string {
-  return firstForwardedValue(origin.forwardedHost) || origin.host?.trim() || 'localhost';
+  return namedRequestHost(origin) || 'localhost';
+}
+
+/** The host[:port] the request names, or undefined when it carries neither header. */
+function namedRequestHost(origin: OidcCallbackRequestOrigin): string | undefined {
+  return firstForwardedValue(origin.forwardedHost) || origin.host?.trim() || undefined;
+}
+
+/**
+ * Whether the request names a host at all. Without one, {@link resolveRequestOrigin} answers
+ * "localhost", which is right for sign-in on a local install but is no address to hand a provider.
+ */
+export function requestNamesHost(origin: OidcCallbackRequestOrigin): boolean {
+  return namedRequestHost(origin) !== undefined;
 }
 
 /**
@@ -96,9 +128,11 @@ function resolveRequestHost(origin: OidcCallbackRequestOrigin, scheme: string): 
 /**
  * The full origin the browser used. Only for the no-public-base fallback, where a
  * scheme is needed to build an absolute callback; the bounce below deliberately
- * ignores the scheme (see {@link resolveOidcOriginBounce}).
+ * ignores the scheme (see {@link resolveOidcOriginBounce}). The connected services'
+ * callback (connections/utils/callbackUrls.ts) falls back to it the same way, so
+ * both trust the same headers.
  */
-function resolveRequestOrigin(origin: OidcCallbackRequestOrigin): string {
+export function resolveRequestOrigin(origin: OidcCallbackRequestOrigin): string {
   const proto = firstForwardedValue(origin.forwardedProto) || (origin.secure ? 'https' : 'http');
 
   return `${proto}://${rawRequestHost(origin)}`;

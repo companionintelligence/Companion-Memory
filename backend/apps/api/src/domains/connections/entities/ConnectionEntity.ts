@@ -66,6 +66,14 @@ export class ConnectionEntity {
   @Column({ type: 'text', nullable: true, name: 'account_label' })
   accountLabel!: string | null;
 
+  /**
+   * The redirect_uri this connection's latest OAuth authorization was sent with. The code exchange
+   * sends this one, since a provider refuses any other. Null for a connection authorized before it
+   * was kept and for one that is not OAuth.
+   */
+  @Column({ type: 'text', nullable: true, name: 'oauth_redirect_uri' })
+  oauthRedirectUri!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -90,6 +98,7 @@ export class ConnectionEntity {
       needsReauth: entity.needsReauth,
       externalId: entity.externalId,
       accountLabel: entity.accountLabel,
+      oauthRedirectUri: entity.oauthRedirectUri,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
     };
