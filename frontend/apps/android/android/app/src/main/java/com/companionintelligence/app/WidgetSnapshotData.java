@@ -89,20 +89,27 @@ final class WidgetSnapshotData {
     }
 
     /**
-     * A text field of the snapshot, or null when it is missing or a JSON null.
-     * {@code optString} hands back the text "null" for a JSON null. The snapshot
-     * writes null for a value it does not have (a task's due date, the
-     * prediction before the forecast is built).
+     * A text field of the snapshot, or null when it is missing, a JSON null or
+     * not a string. {@code optString} hands back the text "null" for a JSON null
+     * and the JSON text of a number or an object. The snapshot writes null for a
+     * value it does not have (a task's due date, the prediction before the
+     * forecast is built).
      */
     static String optText(JSONObject object, String key) {
-        if (object == null || object.isNull(key)) return null;
-        return object.optString(key, null);
+        if (object == null) return null;
+        Object value = object.opt(key);
+        return value instanceof String ? (String) value : null;
+    }
+
+    /** A text field, or {@code fallback} when it is missing, a JSON null or blank. */
+    static String optLabel(JSONObject object, String key, String fallback) {
+        String value = optText(object, key);
+        return value == null || value.trim().isEmpty() ? fallback : value;
     }
 
     static boolean hasTimestamp(JSONObject object, String key) {
-        if (object == null) return false;
-        Object value = object.opt(key);
-        return value instanceof String && !((String) value).trim().isEmpty();
+        String value = optText(object, key);
+        return value != null && !value.trim().isEmpty();
     }
 
     private static Date parseIso(String value) throws ParseException {

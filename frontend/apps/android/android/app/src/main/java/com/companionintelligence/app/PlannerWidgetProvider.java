@@ -44,7 +44,7 @@ public class PlannerWidgetProvider extends MemoryWidgetProvider {
         renderTask(context, views, tasks.optJSONObject(1), R.id.plan_task_two, R.id.plan_due_two, R.id.plan_done_two, 1);
         views.setTextViewText(
                 R.id.plan_freshness,
-                "Updated " + WidgetSnapshotData.timeAgo(plan == null ? null : plan.optString("updatedAt"))
+                "Updated " + WidgetSnapshotData.timeAgo(WidgetSnapshotData.optText(plan, "updatedAt"))
         );
     }
 
@@ -63,17 +63,15 @@ public class PlannerWidgetProvider extends MemoryWidgetProvider {
             views.setViewVisibility(doneView, View.GONE);
             return;
         }
-        String taskId = task.optString("id", "");
-        String title = task.optString("title", "Untitled task");
-        if (taskId.trim().isEmpty() || taskId.length() > 256) {
-            views.setTextViewText(titleView, title);
-            views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(WidgetSnapshotData.optText(task, "dueAt")));
+        String taskId = WidgetSnapshotData.optText(task, "id");
+        String title = WidgetSnapshotData.optLabel(task, "title", "Untitled task");
+        views.setTextViewText(titleView, title);
+        views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(WidgetSnapshotData.optText(task, "dueAt")));
+        if (taskId == null || taskId.trim().isEmpty() || taskId.length() > 256) {
             views.setViewVisibility(doneView, View.GONE);
             return;
         }
 
-        views.setTextViewText(titleView, title);
-        views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(WidgetSnapshotData.optText(task, "dueAt")));
         views.setViewVisibility(doneView, View.VISIBLE);
         views.setContentDescription(doneView, "Complete " + title);
 
