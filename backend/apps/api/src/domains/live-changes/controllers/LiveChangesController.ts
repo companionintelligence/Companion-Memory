@@ -123,6 +123,14 @@ export class LiveChangesController {
       return;
     }
 
+    // A client that left during the guard or the lookup above has already had
+    // its `close`, and the listeners below would never hear one. Without this
+    // the keep-alive and its lookups ran on until the token expired, or for
+    // good on a key.
+    if (req.destroyed || res.destroyed) {
+      return;
+    }
+
     res.socket?.setNoDelay(true);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',

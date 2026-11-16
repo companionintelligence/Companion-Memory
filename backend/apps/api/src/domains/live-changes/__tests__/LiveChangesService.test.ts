@@ -193,6 +193,23 @@ describe('LiveChangesService', () => {
         'alice',
       ]);
     });
+
+    it("counts a deleted account's keys and sessions as gone", async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValue([] as never);
+
+      await service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' });
+      await service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' });
+
+      const statements = (dataSource.query.mock.calls as unknown as Array<[string]>).map(([sql]) => sql);
+
+      expect(statements).toHaveLength(2);
+
+      for (const sql of statements) {
+        expect(sql).toMatch(/JOIN ci\.users u ON u\.id = \w\.user_id/);
+        expect(sql).toContain('u.deleted_at IS NULL');
+      }
+    });
   });
 
   describe('the listening connection', () => {

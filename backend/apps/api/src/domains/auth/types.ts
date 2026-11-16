@@ -19,7 +19,7 @@ export interface JwtPayload {
    * session tokens minted since CSRF principal-binding, and on access tokens
    * minted for a session (sign-in, sign-up, refresh). Legacy session tokens and
    * access tokens with no session behind them (the native code exchange) carry
-   * only `sub`. Optional so pre-upgrade cookies keep verifying — a sid-less
+   * only `sub`. Optional so pre-upgrade cookies keep verifying. A sid-less
    * session token resolves to the anonymous CSRF scope until its first rotation
    * embeds the claim.
    */

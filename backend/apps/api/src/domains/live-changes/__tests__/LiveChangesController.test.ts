@@ -273,6 +273,28 @@ describe('LiveChangesController', () => {
       expect(res.writeHead).not.toHaveBeenCalled();
       expect(service.subscribe).not.toHaveBeenCalled();
     });
+
+    it('opens nothing for a client that left while its session was looked up', async () => {
+      const { controller, service } = makeController();
+      const req = makeReq({
+        headers: { authorization: `Bearer ${fakeJwt({ sub: 'alice', sid: 'sess-1' })}` },
+      });
+      const res = makeRes();
+      service.isCredentialLive.mockImplementationOnce(async () => {
+        // Its `close` fires now, before the stream would have listened for it.
+        Object.assign(req, { destroyed: true });
+
+        return true;
+      });
+
+      await controller.changes({ userId: 'alice' } as RequestContext, req, res);
+      await jest.advanceTimersByTimeAsync(HEARTBEAT_MS * 2);
+
+      expect(res.writeHead).not.toHaveBeenCalled();
+      expect(service.subscribe).not.toHaveBeenCalled();
+      expect(service.subscribeRevocations).not.toHaveBeenCalled();
+      expect(service.isCredentialLive).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

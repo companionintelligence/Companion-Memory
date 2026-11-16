@@ -463,7 +463,7 @@ describe('AuthService — intents and sessions do not cross', () => {
   });
 });
 
-describe('AuthService — live-update streams', () => {
+describe('AuthService: telling open live-update streams', () => {
   const ACCESS_SECRET = config.auth.jwt.authTokenSecret;
 
   function makeService(rows: Array<Partial<SessionEntity>> = []) {
@@ -509,10 +509,18 @@ describe('AuthService — live-update streams', () => {
   });
 
   it('tells open streams once the other sessions are signed out', async () => {
-    const { service, liveChanges } = makeService();
+    const { service, liveChanges } = makeService([{ id: 'sess-2' }]);
 
     await service.invalidateOtherSessions('user-1', 'cookie-token');
 
     expect(liveChanges.publishRevoked).toHaveBeenCalledWith('user-1');
+  });
+
+  it('tells nobody when there were no other sessions to sign out', async () => {
+    const { service, liveChanges } = makeService();
+
+    await service.invalidateOtherSessions('user-1', 'cookie-token');
+
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
   });
 });

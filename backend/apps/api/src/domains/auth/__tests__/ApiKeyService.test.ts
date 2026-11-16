@@ -738,7 +738,7 @@ describe('ApiKeyService — revoking at sign-out', () => {
   });
 });
 
-describe('ApiKeyService — telling open live-update streams', () => {
+describe('ApiKeyService: telling open live-update streams', () => {
   beforeEach(() => jest.clearAllMocks());
 
   function withLiveChanges(repo: ReturnType<typeof makeRepo>) {

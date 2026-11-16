@@ -146,20 +146,7 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const payload: LiveChangePayload = { userId, topic };
-
-    try {
-      await this.dataSource.query('SELECT pg_notify($1, $2)', [
-        LIVE_CHANGES_CHANNEL,
-        JSON.stringify(payload),
-      ]);
-    } catch (error) {
-      this.logger.warn('Live change notify failed', {
-        topic,
-        userId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await this.notify({ userId, topic });
   }
 
   /**
@@ -168,16 +155,19 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
    * rather than at its next keep-alive. Called after the revoke is written.
    */
   async publishRevoked(userId: string): Promise<void> {
-    const payload: RevokedPayload = { userId, revoked: true };
+    await this.notify({ userId, revoked: true });
+  }
 
+  /** Send one payload on the channel; a failure is logged and dropped (see the class comment). */
+  private async notify(payload: LiveChangePayload | RevokedPayload): Promise<void> {
     try {
       await this.dataSource.query('SELECT pg_notify($1, $2)', [
         LIVE_CHANGES_CHANNEL,
         JSON.stringify(payload),
       ]);
     } catch (error) {
-      this.logger.warn('Live change revoke notify failed', {
-        userId,
+      this.logger.warn('Live change notify failed', {
+        ...payload,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -196,8 +186,12 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
   /**
    * Whether the credential a stream of `userId` was opened with still lets it
    * in: the key still exists and has not expired, or the session has not been
-   * signed out or run out. A token with no session to look up is good until it
-   * expires, which the stream times itself.
+   * signed out or run out, and the account is not deleted. A token with no
+   * session to look up is good until it expires, which the stream times itself.
+   *
+   * Deleting an account only stamps `ci.users.deleted_at` and leaves its keys
+   * and sessions for the purge, so the account is checked as well: the guard
+   * already refuses it, and a key never expires on its own.
    *
    * Read straight from the tables rather than through the auth services, which
    * would make this module import the auth module that publishes to it.
@@ -205,7 +199,9 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
   async isCredentialLive(userId: string, credential: LiveChangesCredential): Promise<boolean> {
     if (credential.kind === 'apiKey') {
       const rows: unknown[] = await this.dataSource.query(
-        'SELECT 1 FROM ci.api_keys WHERE id = $1 AND user_id = $2 AND (expires_at IS NULL OR expires_at > now())',
+        `SELECT 1 FROM ci.api_keys k JOIN ci.users u ON u.id = k.user_id
+          WHERE k.id = $1 AND k.user_id = $2 AND u.deleted_at IS NULL
+            AND (k.expires_at IS NULL OR k.expires_at > now())`,
         [credential.keyId, userId],
       );
 
@@ -214,7 +210,8 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
 
     if (credential.kind === 'session') {
       const rows: unknown[] = await this.dataSource.query(
-        'SELECT 1 FROM ci.sessions WHERE id = $1 AND user_id = $2 AND expires_at > now()',
+        `SELECT 1 FROM ci.sessions s JOIN ci.users u ON u.id = s.user_id
+          WHERE s.id = $1 AND s.user_id = $2 AND u.deleted_at IS NULL AND s.expires_at > now()`,
         [credential.sessionId, userId],
       );
 

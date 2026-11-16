@@ -296,11 +296,14 @@ export class AuthService {
   async invalidateOtherSessions(userId: string, currentToken: string | null | undefined): Promise<void> {
     const currentHashed = currentToken ? this.digest(currentToken) : null;
 
-    await this.sessionRepository.delete({
+    const result = await this.sessionRepository.delete({
       user: { id: userId },
       ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
-    await this.liveChanges?.publishRevoked(userId);
+
+    if ((result.affected ?? 0) > 0) {
+      await this.liveChanges?.publishRevoked(userId);
+    }
   }
 
   /**
