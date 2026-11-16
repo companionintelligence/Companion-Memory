@@ -335,6 +335,17 @@ const SYSTEM_VERB_RE =
   /^(Messages and calls are end-to-end encrypted|.+ (added|removed|left|created group|changed|deleted|updated))/i;
 
 /**
+ * The system-line pattern as it was used while the encryption notice was still
+ * saved: on the raw text, marker in front. Every marked line it missed was
+ * saved as a message and took a sequence number. `flush` reads it so such a
+ * line, dropped now, still takes that number and the ids after it stay where
+ * they were. A literal copy on purpose: when `SYSTEM_VERB_RE` learns another
+ * notice, this must not follow, or the ids would move again.
+ */
+const LEGACY_SYSTEM_VERB_RE =
+  /^(Messages and calls are end-to-end encrypted|.+ (added|removed|left|created group|changed|deleted|updated))/i;
+
+/**
  * True only for a line WhatsApp wrote itself.
  *
  * `SYSTEM_VERB_RE` alone is right-unbounded: `.+ (added|removed|left|…)` matches
@@ -351,11 +362,11 @@ const SYSTEM_VERB_RE =
  * `<attached: …>` reference, which must be kept. So both conditions are
  * required, and each covers the other's failure.
  *
- * The verb pattern reads the text after the marker. Its first alternative is
+ * The verb pattern reads the text after the marker. Its notice alternative is
  * anchored (`^Messages and calls…`), so with the marker still in front it
- * never matched, and every iPhone export saved the encryption notice as a
- * message from the other person. The `.+` alternative only worked because `.+`
- * swallowed the marker.
+ * never matched. Every iPhone export saved the encryption notice as a message
+ * from the other person, or in a group from the group. The `.+` alternative
+ * matched either way, because `.+` took the marker along with the name.
  */
 function isSystemLine(text: string): boolean {
   return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(stripLeadingInvisible(text));
@@ -530,12 +541,12 @@ export class WhatsAppFileImporter implements FileImporter {
         // its bytes with no record either.
         params.pipeline.drop?.('whatsapp_system_line');
 
-        // A line the check missed while it still read the marker (the iPhone
-        // encryption notice) was saved as a message and took a number. It
-        // still takes one: the ids after it end in that number, and if they
-        // moved down by one, importing a chat that was imported back then
-        // would save every message in it a second time.
-        if (!SYSTEM_VERB_RE.test(p.text)) {
+        // A line the old check let through (the iPhone encryption notice) was
+        // saved as a message and took a number. It still takes one. The ids
+        // after it end in that number: if they moved down by one, importing a
+        // chat that was imported back then would save every message in it a
+        // second time.
+        if (!LEGACY_SYSTEM_VERB_RE.test(p.text)) {
           seq++;
         }
 
