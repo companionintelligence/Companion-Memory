@@ -71,12 +71,18 @@ name: Mobile Release
 #                               "Release to testing tracks" permission
 #
 # A platform lane is skipped (not failed) only when *every* secret it consumes is
-# absent — that is the supported way to wire up one store before the other. When some
-# but not all of a lane's secrets are set the lane FAILS immediately and names the
-# missing ones: a half-configured lane is a configuration mistake, and letting it run
-# means dying an hour later, after an archive that has already burned a build number.
-# The Safari extension profile and source-read key are included in the iOS lane's
-# required-secret gate; both are necessary for a shippable archive.
+# absent — that is the supported way to wire up one store before the other. The
+# `version` job checks the secrets and the lane's job then shows as skipped on the run
+# page. (It used to run and skip every step, which reported a green job that built
+# nothing.) When some but not all of a lane's secrets are set the `version` job FAILS
+# immediately and names the missing ones: a half-configured lane is a configuration
+# mistake, and letting it run means dying an hour later, after an archive that has
+# already burned a build number. The Safari extension profile and source-read key are
+# included in the iOS lane's required-secret gate; both are necessary for a shippable
+# archive.
+#
+# release.yml calls this workflow (workflow_call) with dry_run=false, platform=both and
+# the server's version, so the phone apps carry the server version they were built from.
 
 # >>> ci-local:gated original triggers below, restore with `ci-local restore`
 # on:
@@ -131,6 +137,27 @@ on:
           - android
           - both
         default: ios
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+      version_name:
+        type: string
+        required: false
+      platform:
+        type: string
+        default: ios
+    outputs:
+      build_number:
+        description: 'The store build number both lanes used'
+        value: ${{ jobs.version.outputs.code }}
+      ios_ran:
+        description: "'true' when the iOS lane had its secrets and was asked for"
+        value: ${{ jobs.version.outputs.run_ios }}
+      android_ran:
+        description: "'true' when the Android lane had its secrets and was asked for"
+        value: ${{ jobs.version.outputs.run_android }}
 
 # The root install pulls the private @companionintelligence/tokens package from GitHub
 # Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
@@ -149,17 +176,20 @@ env:
   VITE_DISABLE_PWA: 'true'
   # Phone cloud-connect talks to production Portal, not the internal Hub appliance host.
   VITE_CI_CLOUD_URL: 'https://hub.ci.computer'
-  # Added to github.run_number to produce the store build number. run_number ALONE is
-  # not safe as a build number: it is a per-workflow-FILE counter, it does not advance
-  # when you re-run a run, it restarts at 1 if this file is ever renamed or recreated,
-  # and it is shared by both lanes (an iOS-only run still consumes that number for
-  # Android). Apple and Google both permanently reject a build/version code that has
-  # already been seen, so any repeat is a dead run. The offset also has to clear the
-  # numbers already consumed by hand: frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj
-  # still carries CURRENT_PROJECT_VERSION = 3 from earlier manual uploads.
-  # ONLY EVER RAISE THIS. Raise it (by a comfortable margin) if this file is renamed,
-  # if run_number is ever reset, or if a build number is burned outside this workflow.
-  BUILD_NUMBER_OFFSET: '1000'
+  # The store build number is the count of whole minutes from BUILD_NUMBER_EPOCH to the
+  # moment the `version` job runs (about 460,000 in November 2026). Apple and Google both
+  # permanently reject a build/version code they have already seen, and Play won't serve
+  # a lower code over a higher one, so the number must only ever go up, whichever
+  # workflow starts the build.
+  #
+  # It used to be github.run_number + 1000 (builds 1001 to 1026 went out that way). That
+  # stopped being safe once release.yml began calling this workflow: inside a called
+  # workflow, run_number is the CALLER's counter, so release.yml's run 1 would have built
+  # 1001 again. Minutes keep going up for dispatches and release.yml alike. Re-running
+  # failed jobs reuses the version job's number, as run_number did; and two runs started
+  # in the same minute would collide, which nobody does on purpose.
+  # NEVER MOVE THIS LATER: an epoch after this one turns the next number into a lower one.
+  BUILD_NUMBER_EPOCH: '1767225600' # 2026-01-01T00:00:00Z
 
 jobs:
   # Resolve the version once so both stores get identical numbers for the same run.
@@ -173,7 +203,60 @@ jobs:
       run_ios: ${{ steps.v.outputs.run_ios }}
       run_android: ${{ steps.v.outputs.run_android }}
     steps:
+      # Gate on EVERY secret a lane consumes, not a sample of them. The old gate checked
+      # only three of the seven secrets then required, so a run missing APPLE_TEAM_ID or
+      # APPSTORE_PRIVATE_KEY sailed through, spent ~40 minutes on install + archive, and
+      # only then died at the signing or upload step, with the build number already spent.
+      # A keystore with no ANDROID_KEY_ALIAS likewise failed deep inside `gradlew
+      # bundleRelease`. All present: the lane runs. None present: its job is skipped (wiring
+      # one store first). Some but not all: this job fails and names what is missing, but
+      # only when the run asked for that lane.
+      - name: Check signing secrets
+        id: secrets
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
+          CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -uo pipefail
+          # Writes <lane>=true|false|partial and <lane>_missing. Whether a partial lane is
+          # an error depends on whether this run asked for it, which the next step knows.
+          check_lane() {
+            local output="$1"; shift
+            local found=0 missing=""
+            for var in "$@"; do
+              if [ -n "${!var:-}" ]; then found=$((found + 1)); else missing="${missing} ${var}"; fi
+            done
+            if [ "$found" -eq "$#" ]; then state=true
+            elif [ "$found" -eq 0 ]; then state=false
+            else state=partial
+            fi
+            echo "${output}=${state}" >> "$GITHUB_OUTPUT"
+            echo "${output}_missing=${missing# }" >> "$GITHUB_OUTPUT"
+          }
+          check_lane ios APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY APPLE_TEAM_ID \
+            IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 \
+            IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 CI_BROWSER_EXTENSION_DEPLOY_KEY
+          check_lane android ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD PLAY_SERVICE_ACCOUNT_JSON
+
       - id: v
+        env:
+          IOS_SECRETS: ${{ steps.secrets.outputs.ios }}
+          IOS_MISSING: ${{ steps.secrets.outputs.ios_missing }}
+          ANDROID_SECRETS: ${{ steps.secrets.outputs.android }}
+          ANDROID_MISSING: ${{ steps.secrets.outputs.android_missing }}
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.version_name }}" ]; then
@@ -187,11 +270,9 @@ jobs:
           else
             NAME="0.1.0"
           fi
-          # The store build number is run_number + BUILD_NUMBER_OFFSET, never run_number
-          # on its own — see the offset's comment in the workflow `env` block for why
-          # (re-runs repeat it, a rename resets it, and both lanes share it, while both
-          # stores permanently reject a number they have already accepted).
-          CODE=$(( ${{ github.run_number }} + BUILD_NUMBER_OFFSET ))
+          # Minutes since BUILD_NUMBER_EPOCH; see that env entry for why it isn't
+          # run_number any more.
+          CODE=$(( ($(date -u +%s) - BUILD_NUMBER_EPOCH) / 60 ))
           echo "name=${NAME}"                        >> "$GITHUB_OUTPUT"
           echo "code=${CODE}"                        >> "$GITHUB_OUTPUT"
           # A tag *push* always submitted, back when a tag push could trigger
@@ -223,9 +304,27 @@ jobs:
               *) RUN_IOS=true ;;
             esac
           fi
+          # A lane without its secrets is skipped, not run as a job that does nothing.
+          # A half-configured lane that this run asked for stops the run here.
+          if [ "${RUN_IOS}" = true ] && [ "${IOS_SECRETS}" = partial ]; then
+            echo "::error::iOS lane is half-configured. Missing: ${IOS_MISSING}"
+            exit 1
+          fi
+          if [ "${RUN_ANDROID}" = true ] && [ "${ANDROID_SECRETS}" = partial ]; then
+            echo "::error::Android lane is half-configured. Missing: ${ANDROID_MISSING}"
+            exit 1
+          fi
+          if [ "${RUN_IOS}" = true ] && [ "${IOS_SECRETS}" != true ]; then
+            echo "::warning::iOS signing secrets not configured. The iOS job will show as skipped."
+            RUN_IOS=false
+          fi
+          if [ "${RUN_ANDROID}" = true ] && [ "${ANDROID_SECRETS}" != true ]; then
+            echo "::warning::Android signing secrets not configured. The Android job will show as skipped."
+            RUN_ANDROID=false
+          fi
           echo "run_ios=${RUN_IOS}" >> "$GITHUB_OUTPUT"
           echo "run_android=${RUN_ANDROID}" >> "$GITHUB_OUTPUT"
-          echo "Version ${NAME} (build ${CODE} = run ${{ github.run_number }} + offset ${BUILD_NUMBER_OFFSET}) ios=${RUN_IOS} android=${RUN_ANDROID}"
+          echo "Version ${NAME} (build ${CODE}, minutes since 2026-01-01 UTC) ios=${RUN_IOS} android=${RUN_ANDROID}"
 
   ios:
     name: iOS → TestFlight
@@ -239,67 +338,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Gate on EVERY secret this lane consumes, not a sample of them. The old gate
-      # checked only three of the seven secrets then required, so a run missing
-      # APPLE_TEAM_ID or APPSTORE_PRIVATE_KEY sailed through, spent ~40 minutes on install
-      # + archive, and only then died at the signing or upload step — with the build number
-      # already spent. The Safari extension profile and source-read key bring the required
-      # total to nine. All nine present → run. None present → skip green (wiring one store
-      # first).
-      # Some but not all → hard fail, naming exactly what is missing.
-      - name: Check for iOS signing secrets
-        id: secrets
-        env:
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
-          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
-          CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
-        run: |
-          set -uo pipefail
-          REQUIRED="APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY APPLE_TEAM_ID
-                    IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64
-                    IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 CI_BROWSER_EXTENSION_DEPLOY_KEY"
-          MISSING=""
-          FOUND=0
-          TOTAL=0
-          for VAR in $REQUIRED; do
-            TOTAL=$((TOTAL + 1))
-            if [ -n "${!VAR:-}" ]; then
-              FOUND=$((FOUND + 1))
-            else
-              MISSING="${MISSING} ${VAR}"
-            fi
-          done
-          if [ "$FOUND" -eq "$TOTAL" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif [ "$FOUND" -eq 0 ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::iOS signing secrets not configured — skipping the TestFlight lane."
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::error::iOS lane is half-configured (${FOUND}/${TOTAL} secrets set). Missing:${MISSING}"
-            exit 1
-          fi
-
       - name: Node.js + Corepack (Yarn 4)
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - if: steps.secrets.outputs.present == 'true'
-        run: corepack enable
+      - run: corepack enable
 
       # The iOS archive needs the private Safari extension source. The main repo's
       # GITHUB_TOKEN cannot read a second private repository, and the extension
       # release asset is not a reliable source for this build. Check out the
       # immutable source revision with a read-only deploy key and build it locally.
       - name: Checkout pinned Safari extension source
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/checkout@v7
         with:
           repository: companionintelligence/CI-Browser-Extension
@@ -309,7 +358,6 @@ jobs:
           persist-credentials: false
 
       - name: Verify pinned Safari extension source
-        if: steps.secrets.outputs.present == 'true'
         env:
           EXPECTED_EXTENSION_VERSION: ${{ env.CI_BROWSER_EXTENSION_VERSION }}
         run: |
@@ -322,23 +370,19 @@ jobs:
           echo "Verified Safari extension source version $actual."
 
       - name: Install root dependencies
-        if: steps.secrets.outputs.present == 'true'
         run: yarn install --immutable
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
-        if: steps.secrets.outputs.present == 'true'
         run: yarn workspace @ci/fe-web build
 
       - name: Install mobile dependencies
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios
         run: yarn install --immutable
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Capacitor sync (iOS)
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios
         run: yarn cap sync ios
 
@@ -346,7 +390,6 @@ jobs:
       # committed. Must run before `xcodebuild archive` or the link step fails on a
       # missing framework — and here that failure would burn a build number.
       - name: Fetch CLiteRTLM.xcframework (on-device LLM)
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios/ios/App
         run: ./Frameworks/fetch-clitertlm-xcframework.sh
 
@@ -355,7 +398,6 @@ jobs:
       # step people miss: without it codesign blocks on a UI prompt that never appears
       # and the job hangs until it times out.
       - name: Import signing certificate
-        if: steps.secrets.outputs.present == 'true'
         env:
           CERT_B64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
           CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
@@ -380,7 +422,6 @@ jobs:
       # frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj). Under manual signing
       # codesign needs a profile per identifier; the app's profile does not cover the appex.
       - name: Install provisioning profiles
-        if: steps.secrets.outputs.present == 'true'
         env:
           PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           EXTENSION_PROFILE_B64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
@@ -417,7 +458,6 @@ jobs:
           echo "Installed extension profile '$EXT_NAME' ($EXT_UUID)"
 
       - name: Verify signing certificate matches provisioning profiles
-        if: steps.secrets.outputs.present == 'true'
         env:
           SIGNING_KEYCHAIN: ${{ runner.temp }}/signing.keychain-db
         run: |
@@ -445,7 +485,6 @@ jobs:
       # signing on the command line rather than editing the pbxproj, so opening the project
       # in Xcode locally keeps working exactly as before.
       - name: Archive
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios/ios/App
         env:
           CI_BROWSER_EXTENSION_DIR: ${{ github.workspace }}/CI-Browser-Extension
@@ -491,7 +530,6 @@ jobs:
             CODE_SIGN_IDENTITY='Apple Distribution'
 
       - name: Export .ipa
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/ios/ios/App
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -526,7 +564,6 @@ jobs:
           ls -la "$RUNNER_TEMP/export"
 
       - name: Upload .ipa artifact
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           retention-days: 7
@@ -537,7 +574,6 @@ jobs:
       # Validate first: it catches the great majority of rejections (missing icons,
       # bad entitlements, an already-used build number) WITHOUT consuming the upload.
       - name: Validate with App Store Connect
-        if: steps.secrets.outputs.present == 'true'
         env:
           ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
           KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -551,7 +587,7 @@ jobs:
             --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
 
       - name: Upload to TestFlight
-        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'
+        if: needs.version.outputs.dry_run != 'true'
         env:
           ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
           KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -562,7 +598,7 @@ jobs:
             --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
 
       - name: Clean up keychain and keys
-        if: always() && steps.secrets.outputs.present == 'true'
+        if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
           rm -rf "$HOME/.appstoreconnect/private_keys" || true
@@ -577,69 +613,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Same rule as the iOS gate: check all five secrets this lane consumes, not just the
-      # keystore. A keystore with no ANDROID_KEY_ALIAS used to pass here and then fail deep
-      # inside `gradlew bundleRelease`, and a missing PLAY_SERVICE_ACCOUNT_JSON only surfaced
-      # at the upload step — after the version code had been spent on a build.
-      - name: Check for Android signing secrets
-        id: secrets
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-        run: |
-          set -uo pipefail
-          REQUIRED="ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS
-                    ANDROID_KEY_PASSWORD PLAY_SERVICE_ACCOUNT_JSON"
-          MISSING=""
-          FOUND=0
-          TOTAL=0
-          for VAR in $REQUIRED; do
-            TOTAL=$((TOTAL + 1))
-            if [ -n "${!VAR:-}" ]; then
-              FOUND=$((FOUND + 1))
-            else
-              MISSING="${MISSING} ${VAR}"
-            fi
-          done
-          if [ "$FOUND" -eq "$TOTAL" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif [ "$FOUND" -eq 0 ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Android signing secrets not configured — skipping the Play lane."
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::error::Android lane is half-configured (${FOUND}/${TOTAL} secrets set). Missing:${MISSING}"
-            exit 1
-          fi
-
       - name: Node.js + Corepack (Yarn 4)
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - if: steps.secrets.outputs.present == 'true'
-        run: corepack enable
+      - run: corepack enable
 
       - name: Install root dependencies
-        if: steps.secrets.outputs.present == 'true'
         run: yarn install --immutable
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build web bundle
-        if: steps.secrets.outputs.present == 'true'
         run: yarn workspace @ci/fe-web build
 
       - name: JDK 21 (Temurin)
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - name: Android SDK
-        if: steps.secrets.outputs.present == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           # v3 defaults `packages` to `tools platform-tools`, and Google has
@@ -653,23 +645,19 @@ jobs:
       # Keep this pair in lockstep with compileSdkVersion in
       # frontend/apps/android/android/variables.gradle.
       - name: Install SDK components
-        if: steps.secrets.outputs.present == 'true'
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install mobile dependencies
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/android
         run: yarn install --immutable
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Capacitor sync (Android)
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/android
         run: yarn cap sync android
 
       - name: Decode keystore
-        if: steps.secrets.outputs.present == 'true'
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -680,7 +668,6 @@ jobs:
       # An .aab, not an .apk: Play has required the App Bundle format for new apps
       # since August 2021.
       - name: Gradle bundleRelease
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/android/android
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -691,7 +678,6 @@ jobs:
         run: ./gradlew bundleRelease --no-daemon
 
       - name: Upload .aab artifact
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           retention-days: 7
@@ -716,7 +702,7 @@ jobs:
       # So `status: draft` is the non-publishing option available here: it exercises the
       # credentials, the package name, the edit transaction and the API-enforced
       # declaration checks, and commits the release as a draft that rolls out to nobody.
-      # Tradeoff, and the reason BUILD_NUMBER_OFFSET exists: `status` only sets the
+      # Tradeoff, and one reason BUILD_NUMBER_EPOCH only goes up: `status` only sets the
       # release status INSIDE the edit — the action calls `edits.commit` unconditionally
       # (verified in its src/edits.ts), so Play consumes the version code exactly as a
       # real submission does, and deleting the draft does not give the number back.
@@ -740,7 +726,7 @@ jobs:
       #      third option, documented as explicitly version-code-free, but it runs no
       #      declaration checks at all.
       - name: Validate against Play (draft, no rollout)
-        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run == 'true'
+        if: needs.version.outputs.dry_run == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -750,7 +736,7 @@ jobs:
           status: draft
 
       - name: Upload to Play (internal track)
-        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'
+        if: needs.version.outputs.dry_run != 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -760,5 +746,5 @@ jobs:
           status: completed
 
       - name: Clean up keystore
-        if: always() && steps.secrets.outputs.present == 'true'
+        if: always()
         run: rm -f "$RUNNER_TEMP/upload.jks" || true

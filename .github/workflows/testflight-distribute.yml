@@ -16,6 +16,19 @@ on:
         required: false
         default: false
         type: boolean
+  # release.yml calls this after mobile-release.yml uploads an iOS build.
+  workflow_call:
+    inputs:
+      build_number:
+        required: true
+        type: string
+      tester_email:
+        required: false
+        type: string
+      resend_invitation:
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read

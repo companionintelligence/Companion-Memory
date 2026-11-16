@@ -34,6 +34,19 @@ on:
         type: string
         default: ''
         required: false
+  # release.yml calls this as its first lane. A called workflow runs on the caller's ref, so the
+  # tag guard below works the same way, and the gate still looks for standalone ci.yml and
+  # migration-integrity-check.yml runs at the tagged commit.
+  workflow_call:
+    inputs:
+      skip_test_gate:
+        type: boolean
+        default: false
+        required: false
+      bypass_reason:
+        type: string
+        default: ''
+        required: false
 
 concurrency:
   group: publish-${{ github.ref }}
