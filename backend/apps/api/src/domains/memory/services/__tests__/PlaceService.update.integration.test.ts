@@ -189,4 +189,81 @@ describeWithDb(`PlaceService.update against Postgres (${availability.target})`, 
 
     expect(await row(newer)).toEqual({ name: 'Brockway', properties: {} });
   });
+
+  it('removes a city with a legacy chain of merged-away cities, every link of it', async () => {
+    // A chain from before merges kept it one hop deep: the second duplicate
+    // points at the first, not at the kept city. Deleting only the first
+    // would set the second's merged_into_entity_id to NULL, and it would then
+    // share its key with the newer unparented city.
+    const region = uuidv7();
+    const kept = uuidv7();
+    const newer = uuidv7();
+    const [first, second] = [uuidv7(), uuidv7()];
+
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, place_kind, parent_place_id)
+       VALUES ($1, 'Location', 'Remove Chain Region', '{}'::jsonb, $3, 'region', NULL),
+              ($2, 'Location', 'Ashby', '{}'::jsonb, $3, 'city', $1),
+              ($4, 'Location', 'Ashby', '{}'::jsonb, $3, 'city', NULL)`,
+      [region, kept, ownerId, newer],
+    );
+    for (const [duplicate, into] of [
+      [first, kept],
+      [second, first],
+    ]) {
+      await dataSource.query(
+        `INSERT INTO ci.entities
+                (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+         VALUES ($1, 'Location', 'Ashby', '{}'::jsonb, $2, 'city', $3, FALSE)`,
+        [duplicate, ownerId, into],
+      );
+    }
+
+    expect(await places.remove(owner, kept)).toBe(true);
+
+    for (const id of [kept, first, second]) {
+      expect(await row(id)).toBeUndefined();
+    }
+
+    expect(await row(newer)).toEqual({ name: 'Ashby', properties: {} });
+  });
+
+  it('keeps a place an older version hung under a merged-away region, moving it up to the next region', async () => {
+    // Before merged-away places left the region key, a geocode could resolve a
+    // region to one and hang a city under it. Deleting the kept region takes
+    // the merged-away one with it, and the city moves up to the country as it
+    // would from the kept region, instead of losing its parent.
+    const country = uuidv7();
+    const kept = uuidv7();
+    const mergedAway = uuidv7();
+    const city = uuidv7();
+
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, place_kind, parent_place_id)
+       VALUES ($1, 'Location', 'Remove Graft Country', '{}'::jsonb, $3, 'country', NULL),
+              ($2, 'Location', 'Remove Graft Region', '{}'::jsonb, $3, 'region', $1)`,
+      [country, kept, ownerId],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.entities
+              (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+       VALUES ($1, 'Location', 'Remove Graft Region', '{}'::jsonb, $2, 'region', $3, FALSE)`,
+      [mergedAway, ownerId, kept],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, place_kind, parent_place_id)
+       VALUES ($1, 'Location', 'Remove Graft City', '{}'::jsonb, $2, 'city', $3)`,
+      [city, ownerId, mergedAway],
+    );
+
+    expect(await places.remove(owner, kept)).toBe(true);
+
+    expect(await row(kept)).toBeUndefined();
+    expect(await row(mergedAway)).toBeUndefined();
+    const [moved]: Array<{ parent_place_id: string | null }> = await dataSource.query(
+      'SELECT parent_place_id FROM ci.entities WHERE entity_id = $1',
+      [city],
+    );
+    expect(moved.parent_place_id).toBe(country);
+  });
 });

@@ -43,6 +43,9 @@ const HOME = { ...WORK, label: 'home', street_address: null, city: 'Berkeley', i
 const CABIN = { ...HOME, label: 'cabin', city: 'Bend' };
 /** The flat keys the app writes beside the list, mirroring its primary. */
 const WORK_FLAT = { address: '1 Market St, Oakland', street_address: '1 Market St', city: 'Oakland' };
+const NEW_ROAD = { ...WORK, label: null, street_address: '3 New Rd', city: 'Eugene' };
+const NEW_ROAD_FLAT = { address: '3 New Rd, Eugene', street_address: '3 New Rd', city: 'Eugene' };
+const OAK_AVE = { ...WORK, label: null, street_address: '5 Oak Ave' };
 
 describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})`, () => {
   let dataSource: DataSource;
@@ -150,6 +153,36 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
     );
   };
 
+  /**
+   * A merge record a day ago, with the Change History row the merge wrote on
+   * its target in the same transaction (so at the same time): the bag it left.
+   */
+  const insertMergeWithHistory = async (
+    source: string,
+    target: string,
+    sourceProperties: Record<string, unknown>,
+    mergedProperties: Record<string, unknown>,
+  ): Promise<void> => {
+    await dataSource.query(
+      `WITH merge AS (
+         INSERT INTO ci.entity_merges (owner_user_id, source_entity_id, target_entity_id, entity_type, details, created_at)
+         VALUES ($1, $2, $3, 'Person', $4::jsonb, now() - interval '1 day')
+         RETURNING created_at
+       )
+       INSERT INTO ci.graph_deltas (entity_id, node_type, entity_type, change_type, changed_fields, change_source,
+                                    owner_user_id, changed_by_user_id, changed_at)
+       SELECT $3, 'entity', 'Person', 'updated', $5::jsonb, 'PersonMergeService.mergePeople', $1, $1, merge.created_at
+         FROM merge`,
+      [
+        owner,
+        source,
+        target,
+        JSON.stringify({ counts: {}, sourceProperties }),
+        JSON.stringify({ properties: { new: mergedProperties } }),
+      ],
+    );
+  };
+
   /** An edit through the app, as `PersonService` records it. */
   const insertEdit = async (personId: string, changedFields: Record<string, unknown>): Promise<void> => {
     await dataSource.query(
@@ -186,6 +219,10 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
   let hopped: string;
   let relayed: string;
   let foreign: string;
+  let ownFlat: string;
+  let mixed: string;
+  let reprimaried: string;
+  let movedOn: string;
   let result: Awaited<ReturnType<MergedAddressRepairService['repair']>>;
 
   beforeAll(async () => {
@@ -248,13 +285,87 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
       street_address: { old: '1 Market St', new: null },
     });
 
+    // 8. The kept person's own address stayed in the flat fields through the
+    // merge (its Change History row says so), and the person later moved that
+    // address to another city. The merged-in address in the old city was never
+    // shown there, so it comes back.
+    ownFlat = await insertPerson('Lena Fox', {
+      addresses: [],
+      street_address: '5 Oak Ave',
+      city: 'Berkeley',
+      user_edited_keys: ['city'],
+    });
+    const lena = { addresses: [WORK], ...WORK_FLAT };
+    await insertMergeWithHistory(await insertPerson('L. Fox', lena, ownFlat), ownFlat, lena, {
+      addresses: [],
+      street_address: '5 Oak Ave',
+      city: 'Oakland',
+    });
+    await insertEdit(ownFlat, { city: { old: 'Oakland', new: 'Berkeley' } });
+
+    // 9. A merge into a row merged on later (the cabin), then one straight into
+    // the kept person (the home). An edit on that other row took a home off its
+    // own list before the rows were merged; it says nothing about the home the
+    // second merge brought. The straight merge folds first, so its home is primary.
+    mixed = await insertPerson('Mia Park', { addresses: [] });
+    const miaOld = await insertPerson('Mia P', { addresses: [] }, mixed);
+    const miaT = { addresses: [CABIN] };
+    await insertMerge(await insertPerson('M. Park', miaT, mixed), miaOld, miaT);
+    const miaS = { addresses: [HOME] };
+    await insertMerge(await insertPerson('Mia', miaS, mixed), mixed, miaS);
+    await insertEdit(miaOld, { addresses: { old: [HOME], new: null } });
+
+    // 10. The address the merge had shown stayed on the list when the person
+    // made another one primary, so the flat fields moved off it. It is still
+    // there: the merge gives it back its label.
+    reprimaried = await insertPerson('Pia Holt', {
+      addresses: [NEW_ROAD, { ...WORK, label: null, is_primary: false }],
+      ...NEW_ROAD_FLAT,
+      user_edited_keys: ['address', 'addresses', 'city', 'street_address'],
+    });
+    const pia = { addresses: [WORK, HOME], ...WORK_FLAT };
+    await insertMergeWithHistory(await insertPerson('P. Holt', pia, reprimaried), reprimaried, pia, {
+      addresses: [],
+      ...WORK_FLAT,
+    });
+    await insertEdit(reprimaried, {
+      addresses: { old: null, new: [NEW_ROAD, { ...WORK, label: null, is_primary: false }] },
+      address: { old: '1 Market St, Oakland', new: '3 New Rd, Eugene' },
+      street_address: { old: '1 Market St', new: '3 New Rd' },
+      city: { old: 'Oakland', new: 'Eugene' },
+    });
+
+    // 11. One hop where the row merged on showed the merged-in address only in
+    // its flat fields, into a person with an address of its own that later
+    // moved city. The kept person never showed the work address, and it comes
+    // back with its label.
+    movedOn = await insertPerson('Nia Shaw', {
+      addresses: [{ ...OAK_AVE, city: 'Berkeley' }],
+      street_address: '5 Oak Ave',
+      city: 'Berkeley',
+      user_edited_keys: ['address', 'addresses', 'city'],
+    });
+    const niaT = { addresses: [], ...WORK_FLAT };
+    const niaOld = await insertPerson('Nia', niaT, movedOn);
+    const niaA = { addresses: [WORK, HOME], ...WORK_FLAT };
+    await insertMergeWithHistory(await insertPerson('N. Shaw', niaA, movedOn), niaOld, niaA, niaT);
+    await insertMergeWithHistory(niaOld, movedOn, niaT, {
+      addresses: [OAK_AVE],
+      street_address: '5 Oak Ave',
+      city: 'Oakland',
+    });
+    await insertEdit(movedOn, {
+      addresses: { old: [OAK_AVE], new: [{ ...OAK_AVE, city: 'Berkeley' }] },
+      city: { old: 'Oakland', new: 'Berkeley' },
+    });
+
     result = await repairer.repair([owner, otherOwner]);
   });
 
   it('puts back the addresses a merge dropped, as a merge folds them now, and says so in Change History', async () => {
-    // Five of this owner's merges (the sixth already folded its addresses);
-    // four people changed; three addresses left off as removed by hand.
-    expect(result).toEqual({ merges: 5, people: 4, leftOff: 3 });
+    // Eleven of this owner's merges (one more already folded its addresses);
+    // eight people changed; three addresses left off as removed by hand.
+    expect(result).toEqual({ merges: 11, people: 8, leftOff: 3 });
 
     const johnny = await propertiesOf(lost);
     expect(johnny.addresses).toEqual([
@@ -297,6 +408,57 @@ describeWithDb(`MergedAddressRepairService, in Postgres (${availability.target})
     // work address stays off the person it ended up on, the home comes back.
     expect((await propertiesOf(relayed)).addresses).toEqual([
       expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: true }),
+    ]);
+  });
+
+  it('reads a flat-field edit as a removal only of an address the merge left there, and only edits on the rows that held it', async () => {
+    // The person's own address moved city; the merged-in one in the old city comes back.
+    const lena = await propertiesOf(ownFlat);
+    expect(lena.addresses).toEqual([
+      expect.objectContaining({
+        label: null,
+        street_address: '5 Oak Ave',
+        city: 'Berkeley',
+        is_primary: true,
+      }),
+      expect.objectContaining({
+        label: 'work',
+        street_address: '1 Market St',
+        city: 'Oakland',
+        is_primary: false,
+      }),
+    ]);
+    expect(lena).toMatchObject({ street_address: '5 Oak Ave', city: 'Berkeley' });
+
+    // The other row's edit leaves the straight merge's home alone, and that
+    // merge folds before the one through the other row.
+    expect((await propertiesOf(mixed)).addresses).toEqual([
+      expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: true }),
+      expect.objectContaining({ label: 'cabin', city: 'Bend', is_primary: false }),
+    ]);
+  });
+
+  it('gives an address removed by hand its label back when the person still has it or another merge brings it', async () => {
+    expect((await propertiesOf(reprimaried)).addresses).toEqual([
+      expect.objectContaining({ label: null, street_address: '3 New Rd', is_primary: true }),
+      expect.objectContaining({ label: 'work', street_address: '1 Market St', is_primary: false }),
+      expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: false }),
+    ]);
+
+    expect((await propertiesOf(movedOn)).addresses).toEqual([
+      expect.objectContaining({
+        label: null,
+        street_address: '5 Oak Ave',
+        city: 'Berkeley',
+        is_primary: true,
+      }),
+      expect.objectContaining({
+        label: 'work',
+        street_address: '1 Market St',
+        city: 'Oakland',
+        is_primary: false,
+      }),
+      expect.objectContaining({ label: 'home', city: 'Berkeley', is_primary: false }),
     ]);
   });
 

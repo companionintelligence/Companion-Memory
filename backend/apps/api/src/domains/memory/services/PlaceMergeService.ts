@@ -94,8 +94,8 @@ interface LocationRow {
  *  4. tombstones each source (`is_active = FALSE`, `merged_into_entity_id`,
  *     no parent) and has it let go of the pin or provider place_id the target
  *     takes, each of which is unique per owner;
- *  5. folds the row — target wins every non-null scalar it already has; the
- *     point, boundary, parent and provider place_id fill from the first
+ *  5. folds the row, keeping every non-null scalar the target already has;
+ *     the point, boundary, parent and provider place_id fill from the first
  *     source that has one; properties merge target-wins; then compresses any
  *     tombstone that already pointed at a source, so the chain stays a single
  *     hop;
@@ -378,6 +378,10 @@ export class PlaceMergeService {
               counts,
               sourceName: byId.get(id)?.name ?? null,
               sourceProperties: byId.get(id)?.properties ?? {},
+              // `[lng, lat]` of the pin the source had, which the release above
+              // may have taken off it. A pin lives only in location_point, so
+              // sourceProperties does not carry it.
+              sourceCoordinates: byId.get(id)?.coordinates ?? null,
             }),
           ],
         );
