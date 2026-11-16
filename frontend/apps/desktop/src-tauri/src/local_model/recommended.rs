@@ -131,6 +131,14 @@ pub fn start(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Down
         return Err("Memory Desktop runs its own Ollama here. It already has the recommended models.".to_string());
     }
 
+    // A press while a download runs joins it. Checked before Ollama is asked:
+    // an Ollama busy writing gigabytes can miss the list's 5 s timeout, and
+    // that would turn the press into "did not answer". Checked again below,
+    // under the lock, for a press that races this one.
+    if downloader.current().is_running() {
+        return Ok(());
+    }
+
     let missing = ollama_sidecar::host_ollama_missing_models(OLLAMA_PORT).map_err(|e| {
         log::warn!("Download recommended model: could not list your Ollama's models: {e}");
         "Your Ollama did not answer. Check that it is running, then try again.".to_string()

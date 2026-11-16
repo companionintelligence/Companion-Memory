@@ -574,7 +574,7 @@ export function ModelSection() {
         </Card.Content>
       </Card>
 
-      <RecommendedModelCard canDownload={canEditEndpoint} onSwitched={refetchModels} />
+      <RecommendedModelCard endpoint={config} canDownload={canEditEndpoint} onSwitched={refetchModels} />
 
       <Card>
         <Card.Content className="space-y-6 pt-6">

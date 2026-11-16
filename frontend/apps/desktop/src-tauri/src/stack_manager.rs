@@ -361,10 +361,19 @@ const CHAT_MODEL_KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
 
 /// Points `.env` at `model` for chat and background work. Takes effect for a
 /// container only when it is recreated (see apply_env_change).
+///
+/// Written beside `.env` and renamed over it. "Download recommended model"
+/// calls this from its own thread, outside START_IN_FLIGHT, so a `compose up`
+/// from the tray or the splash can be reading `.env` at that moment. A rename
+/// gives it the old file or the new one. A truncate-and-write could give it an
+/// empty one. An `up` without CI_SERVER_IMAGE_TAG or CI_LOCAL_ONLY recreates
+/// the containers wrongly.
 pub fn set_env_chat_model(paths: &StackPaths, model: &str) -> Result<(), String> {
     let env_path = paths.compose_dir.join(".env");
+    let staged = paths.compose_dir.join(".env.next");
     let current = fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
-    fs::write(&env_path, with_chat_model(&current, model))
+    fs::write(&staged, with_chat_model(&current, model))
+        .and_then(|()| fs::rename(&staged, &env_path))
         .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))
 }
 
@@ -1462,6 +1471,10 @@ mod tests {
 
         set_env_chat_model(&paths, DEFAULT_CHAT_MODEL).unwrap();
         assert_eq!(env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+        assert!(
+            !paths.compose_dir.join(".env.next").exists(),
+            "the staged copy is renamed over .env, not left beside it"
+        );
         let mut lines_now: Vec<_> = fs::read_to_string(&env_path).unwrap().lines().map(str::to_string).collect();
         let mut lines_then: Vec<_> = as_written.lines().map(str::to_string).collect();
         lines_now.sort();

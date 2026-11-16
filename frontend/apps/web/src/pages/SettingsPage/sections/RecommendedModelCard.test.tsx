@@ -6,6 +6,9 @@ import { RecommendedModelCard } from './RecommendedModelCard';
 
 const GB = 1024 * 1024 * 1024;
 
+/** Settings > Model > Inference server as Memory Desktop sets it up: the Ollama on port 11434. */
+const OLLAMA = { backend: 'ollama', port: 11434 } as const;
+
 type Invoke = (command: string, args?: unknown) => Promise<unknown>;
 
 /** Memory Desktop's IPC as this page sees it: `window.__TAURI_INTERNALS__.invoke`. */
@@ -33,7 +36,7 @@ afterEach(() => {
 
 describe('RecommendedModelCard', () => {
   it('renders nothing outside Memory Desktop', async () => {
-    const { container } = render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    const { container } = render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(container).toBeEmptyDOMElement();
@@ -47,7 +50,27 @@ describe('RecommendedModelCard', () => {
       () => Promise.resolve(status({ missing: null })),
     ]) {
       const invoke = installDesktop(answer);
-      const { container, unmount } = render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+      const { container, unmount } = render(
+        <RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />,
+      );
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('get_recommended_model_command', undefined));
+      expect(container).toBeEmptyDOMElement();
+      unmount();
+    }
+  });
+
+  it('renders nothing when Memory uses another inference server than the Ollama on port 11434', async () => {
+    for (const endpoint of [
+      { backend: 'openai_compatible', port: 13305 },
+      { backend: 'openai_compatible', port: 11434 },
+      { backend: 'ollama', port: 11435 },
+      null,
+    ] as const) {
+      const invoke = installDesktop(async () => status());
+      const { container, unmount } = render(
+        <RecommendedModelCard endpoint={endpoint} canDownload onSwitched={vi.fn()} />,
+      );
 
       await waitFor(() => expect(invoke).toHaveBeenCalledWith('get_recommended_model_command', undefined));
       expect(container).toBeEmptyDOMElement();
@@ -74,7 +97,7 @@ describe('RecommendedModelCard', () => {
     });
     const onSwitched = vi.fn();
 
-    render(<RecommendedModelCard canDownload onSwitched={onSwitched} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={onSwitched} />);
 
     expect(
       await screen.findByText(/Memory Desktop recommends gemma4:e4b.*Memory runs on qwen3\.5:122b for now/),
@@ -105,7 +128,7 @@ describe('RecommendedModelCard', () => {
       }),
     );
 
-    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'There is not enough free disk space for gemma4:e4b. Free up some space, then try again.',
@@ -126,7 +149,7 @@ describe('RecommendedModelCard', () => {
       }),
     );
 
-    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Your Ollama stopped answering');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
@@ -138,13 +161,23 @@ describe('RecommendedModelCard', () => {
     // An Ollama with no chat model at launch leaves `.env` naming the recommended one.
     installDesktop(async () => status({ chatModel: 'gemma4:e4b', missing: ['gemma4:e4b'] }));
 
-    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     expect(
       await screen.findByText(/Memory asks for it, but your Ollama doesn.t have it yet/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/runs on gemma4:e4b for now/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Memory restarts on/)).not.toBeInTheDocument();
+  });
+
+  it('says only what it knows when Memory Desktop could not read which model Memory asks for', async () => {
+    installDesktop(async () => status({ chatModel: null }));
+
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
+
+    expect(await screen.findByText(/Your Ollama doesn.t have it\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Memory asks for it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/runs on .* for now/)).not.toBeInTheDocument();
   });
 
   it('reports a restart that failed after the switch without contradicting itself', async () => {
@@ -160,7 +193,7 @@ describe('RecommendedModelCard', () => {
       }),
     );
 
-    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Memory did not restart with it');
     expect(screen.queryByText(/still runs on/)).not.toBeInTheDocument();
@@ -176,7 +209,7 @@ describe('RecommendedModelCard', () => {
       return status();
     });
 
-    render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Download recommended model' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -187,7 +220,7 @@ describe('RecommendedModelCard', () => {
   it('offers to switch when the model arrived some other way but leaves the button to an administrator', async () => {
     installDesktop(async () => status({ missing: [] }));
 
-    const { unmount } = render(<RecommendedModelCard canDownload onSwitched={vi.fn()} />);
+    const { unmount } = render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
 
     expect(
       await screen.findByText('Your Ollama has gemma4:e4b now, but Memory still runs on qwen3.5:122b.'),
@@ -196,10 +229,21 @@ describe('RecommendedModelCard', () => {
     unmount();
 
     installDesktop(async () => status());
-    render(<RecommendedModelCard canDownload={false} onSwitched={vi.fn()} />);
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload={false} onSwitched={vi.fn()} />);
 
     expect(
       await screen.findByText('An administrator of this Companion can download it here.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('tells someone who is not an administrator that only a switch is on offer when nothing is missing', async () => {
+    installDesktop(async () => status({ missing: [] }));
+
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload={false} onSwitched={vi.fn()} />);
+
+    expect(
+      await screen.findByText('An administrator of this Companion can switch to it here.'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });

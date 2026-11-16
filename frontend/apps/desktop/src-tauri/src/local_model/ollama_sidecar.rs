@@ -233,9 +233,12 @@ pub fn ensure_available(
         return Err("The local model server did not become ready within 30s — check ollama-sidecar.log.".to_string());
     }
 
-    pull_model(OLLAMA_PORT, DEFAULT_EMBED_MODEL)?;
-    if need_chat_model {
-        pull_model(OLLAMA_PORT, DEFAULT_CHAT_MODEL)?;
+    // The same list "Download recommended model" offers a person's own Ollama,
+    // so the two cannot drift apart.
+    for model in RECOMMENDED_MODELS {
+        if need_chat_model || model != DEFAULT_CHAT_MODEL {
+            pull_model(OLLAMA_PORT, model)?;
+        }
     }
 
     // After the pulls, not before: the relay only matters to the containers,
@@ -748,6 +751,10 @@ pub fn describe_pull_failure(model: &str, detail: &str) -> String {
 
     if has(&["no space left", "disk full", "not enough space"]) {
         format!("There is not enough free disk space for {model}. Free up some space, then try again.")
+    } else if has(&["requires a newer version of ollama"]) {
+        // The registry's 412 for a model an older Ollama cannot run. A person's
+        // own Ollama is often older than the one this app ships.
+        format!("Your Ollama is too old for {model}. Update Ollama from ollama.com/download, then try again.")
     } else if has(&[
         "no such host",
         "dial tcp",
@@ -1278,6 +1285,13 @@ mod tests {
                 "{stopped}"
             );
         }
+        assert_eq!(
+            said(
+                "Pull of gemma4:e4b failed: pull model manifest: 412: \n\nThe model you are attempting to pull \
+                 requires a newer version of Ollama.\n\nPlease download the latest version at:\n\n\thttps://ollama.com/download\n\n"
+            ),
+            "Your Ollama is too old for gemma4:e4b. Update Ollama from ollama.com/download, then try again."
+        );
         assert_eq!(
             said("Pull of gemma4:e4b failed: HTTP 500 Internal Server Error: something new"),
             "Your Ollama could not download gemma4:e4b. It said: HTTP 500 Internal Server Error: something new"

@@ -9,8 +9,13 @@ import {
 import { Button, Card, Progress } from '@ci/shadcn';
 import { Download } from '@ci/shadcn/icons';
 
+import type { LlmEndpointConfig } from '@/hooks/useLlmEndpoint';
+
 /** How often a running download is asked how far it has got. */
 const POLL_MS = 1000;
+
+/** Where Ollama listens unless told otherwise, and where Memory Desktop looks for a person's own Ollama. */
+const OLLAMA_PORT = 11434;
 
 function percent(completed: number, total: number): number {
   return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
@@ -43,13 +48,20 @@ function hasSomethingToSay(status: DesktopRecommendedModel): boolean {
  * lists, which can be one far too large for background work. Memory Desktop does the download and then restarts
  * Memory on the recommended model; this page starts it and shows how it is going.
  *
- * Renders nothing in a browser, on a phone, with Memory Desktop's own Ollama, or when the person's Ollama already
- * has everything.
+ * Renders nothing in a browser, on a phone, with Memory Desktop's own Ollama, when the person's Ollama already has
+ * everything, or when Settings points Memory at another inference server.
  */
 export function RecommendedModelCard({
+  endpoint,
   canDownload,
   onSwitched,
 }: {
+  /**
+   * The inference server Memory uses (Settings > Model > Inference server). Memory Desktop pulls into the Ollama on
+   * port 11434 and restarts Memory on the recommended model. With Memory pointed anywhere else that Ollama serves
+   * nothing, and the restart would name a model the other server may not have.
+   */
+  endpoint: Pick<LlmEndpointConfig, 'backend' | 'port'> | null;
   /** An administrator: the download changes the model Memory runs on for everyone. */
   canDownload: boolean;
   /** Called once a download this page watched has finished, so the model list can be loaded again. */
@@ -117,7 +129,12 @@ export function RecommendedModelCard({
     }
   }, []);
 
-  if (!status || !hasSomethingToSay(status)) {
+  if (
+    !status ||
+    !hasSomethingToSay(status) ||
+    endpoint?.backend !== 'ollama' ||
+    endpoint.port !== OLLAMA_PORT
+  ) {
     return null;
   }
 
@@ -151,8 +168,8 @@ export function RecommendedModelCard({
   } else if (download.state === 'switching') {
     body = (
       <p className="text-sm" role="status">
-        Downloaded. Restarting Memory on {download.model}. This takes a minute or two. Memory may not answer
-        until it is done.
+        Restarting Memory on {download.model}. This takes a minute or two. Memory may not answer until it is
+        done.
       </p>
     );
   } else if (download.state === 'done') {
@@ -167,15 +184,15 @@ export function RecommendedModelCard({
 
     body = (
       <div className="space-y-3">
-        {chatMissing && runsOnOther ? (
+        {chatMissing ? (
           <p className="text-sm text-muted-foreground leading-snug">
-            Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.
-            Your Ollama doesn&apos;t have it, so Memory runs on {chatModel} for now.
-          </p>
-        ) : chatMissing ? (
-          <p className="text-sm text-muted-foreground leading-snug">
-            Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.
-            Memory asks for it, but your Ollama doesn&apos;t have it yet. Background work fails until it does.
+            Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.{' '}
+            {runsOnOther
+              ? `Your Ollama doesn't have it, so Memory runs on ${chatModel} for now.`
+              : chatModel === recommended
+                ? "Memory asks for it, but your Ollama doesn't have it yet. Background work fails until it does."
+                : // `.env` could not be read: which model Memory asks for is unknown.
+                  "Your Ollama doesn't have it."}
           </p>
         ) : nothingMissing && runsOnOther ? (
           <p className="text-sm text-muted-foreground leading-snug">
@@ -219,7 +236,7 @@ export function RecommendedModelCard({
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">
-            An administrator of this Companion can download it here.
+            An administrator of this Companion can {nothingMissing ? 'switch to it' : 'download it'} here.
           </p>
         )}
       </div>
