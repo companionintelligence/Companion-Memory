@@ -617,6 +617,21 @@ function isBlank(value: unknown): boolean {
 /** `addresses` and the flat keys that mirror its primary entry. */
 const ADDRESS_KEYS: ReadonlySet<string> = new Set(['addresses', ...PERSON_ADDRESS_MIRROR_KEYS]);
 
+/** What the scalar fill leaves alone when no one has an address: only the list. */
+const ADDRESS_LIST_KEY: ReadonlySet<string> = new Set(['addresses']);
+
+/** The keys of a stored address entry, as {@link serializePersonAddress} writes them. */
+const STORED_ADDRESS_KEYS: ReadonlySet<string> = new Set([
+  'label',
+  'street_address',
+  'street_address_2',
+  'city',
+  'region',
+  'postal_code',
+  'country',
+  'is_primary',
+]);
+
 /** Two copies of one address match whatever their label, case or spacing. */
 function addressKey(address: PersonAddress): string {
   return [
@@ -631,11 +646,36 @@ function addressKey(address: PersonAddress): string {
     .join('|');
 }
 
-/** Stored `addresses` entries that do not read as an address (another importer's shape), kept as they are. */
+/**
+ * An `addresses` entry that is another writer's data rather than a blank: not
+ * null or empty text, and not an entry in this app's own shape with no address
+ * line, which is a blank row and would otherwise come across as a second primary.
+ */
+function isForeignAddressEntry(entry: unknown): boolean {
+  if (entry == null || (typeof entry === 'string' && entry.trim() === '')) {
+    return false;
+  }
+
+  if (typeof entry !== 'object' || Array.isArray(entry)) {
+    return true;
+  }
+
+  return Object.keys(entry).some((key) => !STORED_ADDRESS_KEYS.has(key));
+}
+
+/**
+ * Stored `addresses` entries that do not read as an address (another importer's
+ * shape), kept as they are. A lone value stored in place of a list is one such
+ * entry, so the list a merge writes does not drop it.
+ */
 function unreadableAddressEntries(properties: Record<string, unknown>): unknown[] {
   const list = properties.addresses;
 
-  return Array.isArray(list) ? list.filter((entry) => readStoredPersonAddress(entry) == null) : [];
+  if (!Array.isArray(list)) {
+    return readStoredPersonAddress(list) != null || isForeignAddressEntry(list) ? [list] : [];
+  }
+
+  return list.filter((entry) => readStoredPersonAddress(entry) == null && isForeignAddressEntry(entry));
 }
 
 /**
@@ -661,55 +701,67 @@ function foldAddresses(
   givers: number[];
   ownedKeys: ReadonlySet<string>;
 } {
-  const merged = readPersonAddresses(target);
+  const own = readPersonAddresses(target);
 
-  if (merged.length === 0 && userEditedKeys(target).some((key) => ADDRESS_KEYS.has(key))) {
+  if (own.length === 0 && userEditedKeys(target).some((key) => ADDRESS_KEYS.has(key))) {
     return { list: null, first: null, firstFrom: null, givers: [], ownedKeys: ADDRESS_KEYS };
   }
 
-  const at = new Map(merged.map((address, index) => [addressKey(address), index]));
-  const unreadable = unreadableAddressEntries(target);
-  const seenUnreadable = new Set(unreadable.map((entry) => stableJson(entry)));
-  const givers: number[] = [];
-  let firstFrom: number | null = null;
+  const merged: PersonAddress[] = [];
+  const at = new Map<string, number>();
+  const unreadable: unknown[] = [];
+  const seenUnreadable = new Set<string>();
 
-  sources.forEach((source, index) => {
-    let gave = false;
+  // Adds the addresses and unreadable entries of one person that the list
+  // lacks, and labels a copy it has without one. True when the list changed.
+  const take = (properties: Record<string, unknown>, addresses: PersonAddress[]): boolean => {
+    let changed = false;
 
-    for (const address of readPersonAddresses(source)) {
+    for (const address of addresses) {
       const key = addressKey(address);
       const existing = at.get(key);
 
       if (existing === undefined) {
-        if (merged.length === 0) {
-          firstFrom = index;
-        }
-
         at.set(key, merged.length);
         merged.push({ ...address, isPrimary: false });
-        gave = true;
+        changed = true;
       } else if (merged[existing].label == null && address.label != null) {
         merged[existing] = { ...merged[existing], label: address.label };
-        gave = true;
+        changed = true;
       }
     }
 
-    for (const entry of unreadableAddressEntries(source)) {
+    for (const entry of unreadableAddressEntries(properties)) {
       const key = stableJson(entry);
 
       if (!seenUnreadable.has(key)) {
         seenUnreadable.add(key);
         unreadable.push(entry);
-        gave = true;
+        changed = true;
       }
     }
 
-    if (gave) {
+    return changed;
+  };
+
+  take(target, own);
+
+  const givers: number[] = [];
+  let firstFrom: number | null = null;
+
+  for (const [index, source] of sources.entries()) {
+    const hadAddress = merged.length > 0;
+
+    if (take(source, readPersonAddresses(source))) {
       givers.push(index);
     }
-  });
 
-  const ownedKeys: ReadonlySet<string> = merged.length > 0 ? ADDRESS_KEYS : new Set(['addresses']);
+    if (!hadAddress && merged.length > 0) {
+      firstFrom = index;
+    }
+  }
+
+  const ownedKeys = merged.length > 0 ? ADDRESS_KEYS : ADDRESS_LIST_KEY;
 
   if (givers.length === 0) {
     return { list: null, first: null, firstFrom: null, givers, ownedKeys };
@@ -717,6 +769,7 @@ function foldAddresses(
 
   // The target's primary is first in `merged` (readPersonAddresses puts it
   // there); with no address of its own, the first source's primary is.
+  // Every entry was added unflagged, so the first one becomes the primary.
   const ordered = ensureSinglePrimary(merged);
 
   return {
@@ -779,8 +832,15 @@ function foldProperties(
   if (addresses.list) {
     out.addresses = addresses.list;
 
+    // A flat key the target's person set or cleared by hand keeps the
+    // target's value, as any scalar does, even where it no longer matches the
+    // list (an edit through the flat fields leaves the list as it was).
     if (addresses.first) {
-      Object.assign(out, personAddressMirror(addresses.first));
+      for (const [key, value] of Object.entries(personAddressMirror(addresses.first))) {
+        if (!targetHandSet.has(key)) {
+          out[key] = value;
+        }
+      }
     }
 
     // As for a scalar, a key a source's person set by hand stays hand-set when
