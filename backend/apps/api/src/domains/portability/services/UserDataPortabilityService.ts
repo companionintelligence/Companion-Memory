@@ -72,6 +72,8 @@ const EXPORT_ROW_PAGE_SIZE = 500;
  * the file (see {@link FileService.openObjectWriter}).
  */
 interface PendingFileImport {
+  /** The file's id in the archive. */
+  id: string;
   /** Where the bytes land: the archive's key resolved through the import's FileKeyMap. */
   key: string;
   writer: ObjectWriter;
@@ -107,9 +109,13 @@ class FileKeyMap {
 
   constructor(private readonly ownedKeys: ReadonlySet<string>) {}
 
-  /** Whether `key` held one of this account's files before the import began. */
-  isOwned(key: string): boolean {
-    return this.ownedKeys.has(key);
+  /**
+   * Every key this import minted. Only rows the import wrote point at them,
+   * so a failed import can delete them all. Most of them hold a file it
+   * stored; deleting one that holds nothing is harmless.
+   */
+  mintedKeys(): string[] {
+    return [...this.minted.values()];
   }
 
   resolve(archivedKey: string): string {
@@ -334,11 +340,12 @@ export class UserDataPortabilityService {
     const tables = await this.discoverUserTables();
     const tableByName = new Map(tables.map((table) => [qualifiedName(table), table]));
     const touchedTables = new Set<string>();
-    const pendingFiles = new Map<string, PendingFileImport>();
-    // Objects stored under a key this import minted. No row points at them if
-    // the import fails, so they go with its rollback. A set: two files of a
-    // crafted archive can name the same key.
-    const storedNewKeys = new Set<string>();
+    // The file being written. The export writes one file's chunks before the
+    // next. Each file in progress holds a part in memory, so only one may be.
+    let current: PendingFileImport | null = null;
+    // Files already stored. The export writes each file once. A chunk for one
+    // of these would start it over from nothing.
+    const finishedFiles = new Set<string>();
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -426,32 +433,25 @@ export class UserDataPortabilityService {
           return;
         }
 
-        // Checked before a writer opens. Past the end, the file was already
-        // stored, and the chunk would start it again from nothing.
-        if (record.index >= record.total) {
+        // Checked before a writer opens, so the stored file is not started over.
+        if (finishedFiles.has(record.id)) {
           throw new BadRequestException(
-            `File chunk ${record.index} for ${record.id} is past the file's ${record.total} chunks`,
+            `File chunk ${record.index} for ${record.id} came after the file was whole`,
           );
         }
 
-        let pending = pendingFiles.get(record.id);
+        let file = current;
 
-        if (!pending) {
-          // One file at a time, as the export writes them. Each file in
-          // progress holds a part in memory, so files started side by side
-          // would bring back the memory this streaming exists to save. A new
-          // file before the last one is whole means that one is missing chunks.
-          const [unfinished] = pendingFiles;
+        // A new file before the last one is whole means that one is missing chunks.
+        if (file && file.id !== record.id) {
+          throw new BadRequestException(`Missing file chunk ${file.received} for ${file.id}`);
+        }
 
-          if (unfinished) {
-            const [unfinishedId, { received }] = unfinished;
-
-            throw new BadRequestException(`Missing file chunk ${received} for ${unfinishedId}`);
-          }
-
+        if (!file) {
           const key = keyMap.resolve(record.key);
 
-          pending = {
+          file = {
+            id: record.id,
             key,
             writer: this.fileService.openObjectWriter(
               context,
@@ -462,32 +462,44 @@ export class UserDataPortabilityService {
             total: record.total,
             received: 0,
           };
-          pendingFiles.set(record.id, pending);
+          current = file;
         }
 
-        // Counted, not kept: a chunk out of turn means the one before it is
-        // missing (or this one came twice), and the bytes already written
-        // cannot be put back in order.
-        if (record.index !== pending.received) {
+        if (record.total !== file.total) {
           throw new BadRequestException(
-            record.index < pending.received
-              ? `File chunk ${record.index} for ${record.id} arrived twice`
-              : `Missing file chunk ${pending.received} for ${record.id}`,
+            `File chunk ${record.index} for ${record.id} counts ${record.total} chunks, its first counted ${file.total}`,
           );
         }
 
-        await pending.writer.write(Buffer.from(record.data, 'base64'));
-        pending.received += 1;
+        // Counted, not kept. A chunk out of turn means the one before it is
+        // missing (or this one came twice). The bytes already written cannot
+        // be put back in order.
+        if (record.index !== file.received) {
+          throw new BadRequestException(
+            record.index < file.received
+              ? `File chunk ${record.index} for ${record.id} arrived twice`
+              : `Missing file chunk ${file.received} for ${record.id}`,
+          );
+        }
+
+        const piece = Buffer.from(record.data, 'base64');
+
+        // The export cuts files into FILE_CHUNK_BYTES pieces. The writer sizes
+        // its parts from that to stay under the store's part count.
+        if (piece.length > FILE_CHUNK_BYTES) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} holds ${piece.length} bytes, more than ${FILE_CHUNK_BYTES}`,
+          );
+        }
+
+        await file.writer.write(piece);
+        file.received += 1;
 
         // An empty file is one chunk of "", so it completes here too.
-        if (pending.received === pending.total) {
-          await pending.writer.finish();
-          pendingFiles.delete(record.id);
-
-          if (!keyMap.isOwned(pending.key)) {
-            storedNewKeys.add(pending.key);
-          }
-
+        if (file.received === file.total) {
+          await file.writer.finish();
+          current = null;
+          finishedFiles.add(record.id);
           filesRestored += 1;
         }
       });
@@ -511,7 +523,8 @@ export class UserDataPortabilityService {
         throw new BadRequestException('Archive stops before its end record: the export was cut short');
       }
 
-      if (pendingFiles.size > 0) {
+      // Cast for the same reason as the copies above.
+      if ((current as PendingFileImport | null) !== null) {
         throw new BadRequestException('Archive is missing one or more file chunks');
       }
 
@@ -528,11 +541,22 @@ export class UserDataPortabilityService {
     } catch (error) {
       await this.setReplicationRole(queryRunner, 'origin').catch(() => undefined);
 
+      // A rollback that fails (the connection is gone) must not replace the
+      // import's own error. Postgres ends a transaction whose connection drops.
       try {
         await queryRunner.rollbackTransaction();
-      } finally {
-        await this.discardStreamedFiles(pendingFiles.values(), committing ? [] : [...storedNewKeys]);
+      } catch (rollbackError) {
+        this.logger.warn('Could not roll back a failed import', {
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        });
       }
+
+      const begun = state as ImportState | null;
+
+      await this.discardStreamedFiles(
+        current as PendingFileImport | null,
+        committing || !begun ? [] : begun.keyMap.mintedKeys(),
+      );
 
       throw error;
     } finally {
@@ -549,40 +573,40 @@ export class UserDataPortabilityService {
 
   /**
    * Take back what a failed stream import put in the object store, as the
-   * rollback takes back its rows: abort the files it was partway through, so
-   * no half-written file or unfinished upload stays behind, and delete the
-   * files it stored under keys it minted, which nothing points at now.
+   * rollback takes back its rows. The file it was partway through is aborted
+   * so no half-written file or unfinished upload stays behind. The keys it
+   * minted are deleted: nothing points at them now.
    *
-   * A file restored under a key the account already owned stays: the row that
-   * points at it survives the rollback, and the archive held that same file.
+   * A file restored under a key the account already owned stays. The row that
+   * points at it survives the rollback and the archive held that same file.
    * Never throws, so the import's own error is what the caller sees.
    */
   private async discardStreamedFiles(
-    pending: Iterable<PendingFileImport>,
-    storedNewKeys: string[],
+    unfinished: PendingFileImport | null,
+    mintedKeys: string[],
   ): Promise<void> {
-    // try/catch rather than .catch(): a call that throws before it returns a
-    // promise would otherwise escape, and replace the import's own error.
-    for (const file of pending) {
+    // try/catch rather than .catch(). A call that throws before it returns a
+    // promise would otherwise escape and replace the import's own error.
+    if (unfinished) {
       try {
-        await file.writer.abort();
+        await unfinished.writer.abort();
       } catch (error) {
         this.logger.warn('Could not abort a file upload after a failed import', {
-          key: file.key,
+          key: unfinished.key,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    if (storedNewKeys.length === 0) {
+    if (mintedKeys.length === 0) {
       return;
     }
 
     try {
-      await this.fileService.deleteObjects(config.staticfiles.bucket, storedNewKeys);
+      await this.fileService.deleteObjects(config.staticfiles.bucket, mintedKeys);
     } catch (error) {
       this.logger.warn('Could not delete the files a failed import stored', {
-        files: storedNewKeys.length,
+        files: mintedKeys.length,
         error: error instanceof Error ? error.message : String(error),
       });
     }

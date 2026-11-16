@@ -81,7 +81,7 @@ export interface ObjectWriter {
 
 /**
  * Writes an object as a multipart upload, a part at a time, holding at most
- * one part. An object that never fills a part (most files, and an empty one)
+ * one part. An object that never fills a part (most files and an empty one)
  * is stored with one PutObject at the end instead, so it costs no more than
  * `putObject` did.
  */
@@ -94,7 +94,11 @@ class MultipartObjectWriter implements ObjectWriter {
 
   private readonly parts: CompletedPart[] = [];
 
-  /** Set by finish and abort. A second finish would store an empty object over the first. */
+  /**
+   * Set by finish, by abort and by a part that failed to go out. A second
+   * finish would store an empty object over the first. After a failed part
+   * its bytes are gone, so a finish would store the object without them.
+   */
   private closed = false;
 
   constructor(
@@ -110,14 +114,19 @@ class MultipartObjectWriter implements ObjectWriter {
     this.pendingBytes += piece.length;
 
     if (this.pendingBytes >= this.partBytes) {
-      await this.uploadPart();
+      try {
+        await this.uploadPart();
+      } catch (error) {
+        this.closed = true;
+        throw error;
+      }
     }
   }
 
   async finish(): Promise<void> {
     this.assertOpen();
-    // Closed before the first request: a finish that fails is followed by
-    // abort, which still works, and never by another write or finish.
+    // Closed before the first request. A finish that fails is followed by
+    // abort (which still works) but never by another write or finish.
     this.closed = true;
 
     if (this.uploadId === null) {
@@ -125,11 +134,9 @@ class MultipartObjectWriter implements ObjectWriter {
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: this.key,
-          Body: Buffer.concat(this.pending, this.pendingBytes),
+          Body: this.takePending(),
         }),
       );
-      this.pending = [];
-      this.pendingBytes = 0;
 
       return;
     }
@@ -169,7 +176,7 @@ class MultipartObjectWriter implements ObjectWriter {
 
   private assertOpen(): void {
     if (this.closed) {
-      throw new Error(`The object writer for key ${this.key} is already finished or aborted`);
+      throw new Error(`The object writer for key ${this.key} is closed: it finished, failed or was aborted`);
     }
   }
 
@@ -186,12 +193,8 @@ class MultipartObjectWriter implements ObjectWriter {
       this.uploadId = created.UploadId;
     }
 
-    const body = Buffer.concat(this.pending, this.pendingBytes);
+    const body = this.takePending();
     const partNumber = this.parts.length + 1;
-
-    this.pending = [];
-    this.pendingBytes = 0;
-
     const uploaded = await this.s3.send(
       new UploadPartCommand({
         Bucket: this.bucket,
@@ -203,6 +206,16 @@ class MultipartObjectWriter implements ObjectWriter {
     );
 
     this.parts.push({ ETag: uploaded.ETag, PartNumber: partNumber });
+  }
+
+  /** The pending pieces as one buffer, emptying them. A lone piece goes as it is, not copied. */
+  private takePending(): Buffer {
+    const body = this.pending.length === 1 ? this.pending[0] : Buffer.concat(this.pending, this.pendingBytes);
+
+    this.pending = [];
+    this.pendingBytes = 0;
+
+    return body;
   }
 }
 

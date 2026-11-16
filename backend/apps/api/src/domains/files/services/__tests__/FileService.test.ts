@@ -627,7 +627,7 @@ describe('FileService.resignLinks — a fresh link for one that expired', () => 
   });
 });
 
-describe('FileService.openObjectWriter — an object written a piece at a time', () => {
+describe('FileService.openObjectWriter writes an object a piece at a time', () => {
   const MiB = 1024 * 1024;
   const ctx = { userId: SYSTEM_USER } as unknown as UserServiceContext;
 
@@ -667,6 +667,18 @@ describe('FileService.openObjectWriter — an object written a piece at a time',
 
     expect(sent.map((command) => command.name)).toEqual(['PutObjectCommand']);
     expect((sent[0].input.Body as Buffer).toString('utf8')).toBe('hello world');
+  });
+
+  it('hands a lone piece to the store as it is, without a copy', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+    const piece = Buffer.from('one chunk');
+
+    await writer.write(piece);
+    await writer.finish();
+
+    expect(sent[0].input.Body).toBe(piece);
   });
 
   it('stores an empty object', async () => {
@@ -739,7 +751,7 @@ describe('FileService.openObjectWriter — an object written a piece at a time',
     expect(sent[2].input).toEqual({ Bucket: 'bucket', Key: 'key-1', UploadId: 'upload-1' });
   });
 
-  it('has nothing to abort before the first part, and stores nothing', async () => {
+  it('has nothing to abort before the first part and stores nothing', async () => {
     const { service, s3Send } = makeService(makeRepo());
     const sent = storeAnswering(s3Send);
     const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
@@ -758,12 +770,34 @@ describe('FileService.openObjectWriter — an object written a piece at a time',
     await writer.write(Buffer.alloc(6 * MiB));
     await writer.finish();
 
-    await expect(writer.finish()).rejects.toThrow('already finished or aborted');
-    await expect(writer.write(Buffer.from('more'))).rejects.toThrow('already finished or aborted');
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.from('more'))).rejects.toThrow('is closed');
     expect(sent.map((command) => command.name)).toEqual([
       'CreateMultipartUploadCommand',
       'UploadPartCommand',
       'CompleteMultipartUploadCommand',
+    ]);
+  });
+
+  it('closes after a part fails to go out, so a finish cannot store the object without it', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB, 1));
+    await writer.write(Buffer.alloc(3 * MiB, 2));
+    // The second part: its 6 MiB are dropped from memory before the request.
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+    await expect(writer.write(Buffer.alloc(3 * MiB, 3))).rejects.toThrow('store down');
+
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.alloc(1))).rejects.toThrow('is closed');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
     ]);
   });
 
