@@ -21,9 +21,23 @@ export type LiveChangeTopic = (typeof LIVE_CHANGE_TOPICS)[number];
 
 export type LiveChangeListener = (topic: LiveChangeTopic) => void;
 
+/**
+ * What opened a stream, for {@link LiveChangesService.isCredentialLive}: an api
+ * key, the session a bearer token was minted for, or a credential with nothing
+ * to look up (a token without a session, which ends when it expires).
+ */
+export type LiveChangesCredential =
+  { kind: 'apiKey'; keyId: string } | { kind: 'session'; sessionId: string } | { kind: 'token' };
+
 interface LiveChangePayload {
   userId: string;
   topic: LiveChangeTopic;
+}
+
+/** Sent on the same channel when a key or a session of `userId` is revoked. */
+interface RevokedPayload {
+  userId: string;
+  revoked: true;
 }
 
 const RECONNECT_FLOOR_MS = 1_000;
@@ -31,6 +45,32 @@ const RECONNECT_CEILING_MS = 30_000;
 
 function isTopic(value: unknown): value is LiveChangeTopic {
   return typeof value === 'string' && (LIVE_CHANGE_TOPICS as readonly string[]).includes(value);
+}
+
+/** Add `listener` to the set kept for `userId`. Returns the removal, which forgets an emptied user. */
+function addListener<T>(map: Map<string, Set<T>>, userId: string, listener: T): () => void {
+  let set = map.get(userId);
+
+  if (!set) {
+    set = new Set();
+    map.set(userId, set);
+  }
+
+  set.add(listener);
+
+  return () => {
+    const current = map.get(userId);
+
+    if (!current) {
+      return;
+    }
+
+    current.delete(listener);
+
+    if (current.size === 0) {
+      map.delete(userId);
+    }
+  };
 }
 
 /**
@@ -59,6 +99,8 @@ function isTopic(value: unknown): value is LiveChangeTopic {
 @Injectable()
 export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
   private readonly listeners = new Map<string, Set<LiveChangeListener>>();
+
+  private readonly revocationListeners = new Map<string, Set<() => void>>();
 
   private client: Client | null = null;
 
@@ -104,8 +146,20 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const payload: LiveChangePayload = { userId, topic };
+    await this.notify({ userId, topic });
+  }
 
+  /**
+   * Tell the open streams of `userId` that one of their keys or sessions was
+   * revoked, so each checks its own credential now ({@link isCredentialLive})
+   * rather than at its next keep-alive. Called after the revoke is written.
+   */
+  async publishRevoked(userId: string): Promise<void> {
+    await this.notify({ userId, revoked: true });
+  }
+
+  /** Send one payload on the channel; a failure is logged and dropped (see the class comment). */
+  private async notify(payload: LiveChangePayload | RevokedPayload): Promise<void> {
     try {
       await this.dataSource.query('SELECT pg_notify($1, $2)', [
         LIVE_CHANGES_CHANNEL,
@@ -113,8 +167,7 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       ]);
     } catch (error) {
       this.logger.warn('Live change notify failed', {
-        topic,
-        userId,
+        ...payload,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -122,28 +175,62 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
 
   /** Hear every change announced for one user. Returns the unsubscribe. */
   subscribe(userId: string, listener: LiveChangeListener): () => void {
-    let set = this.listeners.get(userId);
+    return addListener(this.listeners, userId, listener);
+  }
 
-    if (!set) {
-      set = new Set();
-      this.listeners.set(userId, set);
+  /** Hear every revoke announced for one user. Returns the unsubscribe. */
+  subscribeRevocations(userId: string, listener: () => void): () => void {
+    return addListener(this.revocationListeners, userId, listener);
+  }
+
+  /**
+   * Whether the credential a stream of `userId` was opened with still lets it
+   * in: the key still exists and has not expired, or the session has not been
+   * signed out or run out. The account must not be deleted either. A token with
+   * no session to look up is good until it expires, which the stream times itself.
+   *
+   * Deleting an account only stamps `ci.users.deleted_at` and leaves its keys
+   * and sessions for the purge, so the account is checked as well: the guard
+   * already refuses it. A key never expires on its own.
+   *
+   * Read straight from the tables rather than through the auth services, which
+   * would make this module import the auth module that publishes to it.
+   *
+   * A failed lookup is logged and thrown. The stream keeps going on a throw,
+   * so without the log a check that always failed would go unnoticed.
+   */
+  async isCredentialLive(userId: string, credential: LiveChangesCredential): Promise<boolean> {
+    if (credential.kind === 'token') {
+      return true;
     }
 
-    set.add(listener);
+    const [sql, id] =
+      credential.kind === 'apiKey'
+        ? [
+            `SELECT 1 FROM ci.api_keys k JOIN ci.users u ON u.id = k.user_id
+              WHERE k.id = $1 AND k.user_id = $2 AND u.deleted_at IS NULL
+                AND (k.expires_at IS NULL OR k.expires_at > now())`,
+            credential.keyId,
+          ]
+        : [
+            `SELECT 1 FROM ci.sessions s JOIN ci.users u ON u.id = s.user_id
+              WHERE s.id = $1 AND s.user_id = $2 AND u.deleted_at IS NULL AND s.expires_at > now()`,
+            credential.sessionId,
+          ];
 
-    return () => {
-      const current = this.listeners.get(userId);
+    try {
+      const rows: unknown[] = await this.dataSource.query(sql, [id, userId]);
 
-      if (!current) {
-        return;
-      }
+      return rows.length > 0;
+    } catch (error) {
+      this.logger.warn('Live change credential check failed', {
+        userId,
+        kind: credential.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
 
-      current.delete(listener);
-
-      if (current.size === 0) {
-        this.listeners.delete(userId);
-      }
-    };
+      throw error;
+    }
   }
 
   /** How many sessions are listening, across every user. Diagnostics only. */
@@ -176,7 +263,13 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const payload = parsed as Partial<LiveChangePayload> | null;
+    const payload = parsed as Partial<LiveChangePayload & RevokedPayload> | null;
+
+    if (payload && typeof payload.userId === 'string' && payload.revoked === true) {
+      this.dispatchRevoked(payload.userId);
+
+      return;
+    }
 
     if (!payload || typeof payload.userId !== 'string' || !isTopic(payload.topic)) {
       this.logger.warn('Live change payload has the wrong shape', { raw: raw.slice(0, 200) });
@@ -195,6 +288,18 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
         listener(payload.topic);
       } catch (error) {
         this.logger.warn('Live change listener threw', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private dispatchRevoked(userId: string): void {
+    for (const listener of this.revocationListeners.get(userId) ?? []) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger.warn('Live change revoke listener threw', {
           error: error instanceof Error ? error.message : String(error),
         });
       }

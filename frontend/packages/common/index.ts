@@ -277,6 +277,8 @@ export {
   claimNativeReplica,
   clearNativeReplicaSync,
   configureNativeReplicaSync,
+  downloadDesktopRecommendedModel,
+  getDesktopRecommendedModel,
   releaseNativeReplica,
   startSignificantLocationUpdates,
   closeBrowser,
@@ -309,6 +311,8 @@ export {
 } from './src/utils/nativeBridge';
 export type {
   BackgroundUploadState,
+  DesktopModelDownload,
+  DesktopRecommendedModel,
   NativeReplicaSyncOptions,
   NativeLocationError,
   BarcodeScanErrorCode,

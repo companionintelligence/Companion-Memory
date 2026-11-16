@@ -9,7 +9,7 @@ import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { FileService } from '@ci/domains/files';
+import { FileService, type ObjectWriter } from '@ci/domains/files';
 import { UserService } from '@ci/domains/user';
 
 import {
@@ -66,11 +66,23 @@ const ARCHIVE_VERSION = 1 as const;
 const FILES_TABLE = 'ci.files';
 const EXPORT_ROW_PAGE_SIZE = 500;
 
+/**
+ * A file the stream import is partway through. Its chunks go to the object
+ * store as they arrive, so only the part being filled is held in memory, not
+ * the file (see {@link FileService.openObjectWriter}).
+ */
 interface PendingFileImport {
-  /** The key the ARCHIVE names — resolved through the import's FileKeyMap at write time. */
-  archivedKey: string;
+  /** The file's id in the archive. */
+  id: string;
+  /** Where the bytes land: the archive's key resolved through the import's FileKeyMap. */
+  key: string;
+  writer: ObjectWriter;
   total: number;
-  parts: Map<number, string>;
+  /**
+   * Chunks written so far. The export writes a file's chunks one after another
+   * in index order, so this is also the index the next chunk must have.
+   */
+  received: number;
 }
 
 /**
@@ -96,6 +108,15 @@ class FileKeyMap {
   private readonly minted = new Map<string, string>();
 
   constructor(private readonly ownedKeys: ReadonlySet<string>) {}
+
+  /**
+   * Every key this import minted. Only rows the import wrote point at them,
+   * so a failed import can delete them all. Most of them hold a file it
+   * stored; deleting one that holds nothing is harmless.
+   */
+  mintedKeys(): string[] {
+    return [...this.minted.values()];
+  }
 
   resolve(archivedKey: string): string {
     if (this.ownedKeys.has(archivedKey)) {
@@ -319,7 +340,12 @@ export class UserDataPortabilityService {
     const tables = await this.discoverUserTables();
     const tableByName = new Map(tables.map((table) => [qualifiedName(table), table]));
     const touchedTables = new Set<string>();
-    const pendingFiles = new Map<string, PendingFileImport>();
+    // The file being written. The export writes one file's chunks before the
+    // next. Each file in progress holds a part in memory, so only one may be.
+    let current: PendingFileImport | null = null;
+    // Files already stored. The export writes each file once. A chunk for one
+    // of these would start it over from nothing.
+    const finishedFiles = new Set<string>();
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -331,6 +357,11 @@ export class UserDataPortabilityService {
     let state: ImportState | null = null;
     let archiveVersion: number | null = null;
     let end: { rows: number; files: number } | null = null;
+    // Set as COMMIT is sent. A COMMIT that fails may still have committed (the
+    // connection can drop after the database applied it), so the files it
+    // stored then stay: deleting them could leave committed rows pointing at
+    // nothing.
+    let committing = false;
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
@@ -402,37 +433,74 @@ export class UserDataPortabilityService {
           return;
         }
 
-        const pending =
-          pendingFiles.get(record.id) ??
-          ({
-            archivedKey: record.key,
-            total: record.total,
-            parts: new Map<number, string>(),
-          } satisfies PendingFileImport);
-
-        pending.parts.set(record.index, record.data);
-        pendingFiles.set(record.id, pending);
-
-        if (pending.parts.size === pending.total) {
-          const ordered = Array.from({ length: pending.total }, (_, index) => {
-            const part = pending.parts.get(index);
-
-            // An empty file is one chunk of "" (falsy), which is still there.
-            if (part === undefined) {
-              throw new BadRequestException(`Missing file chunk ${index} for ${record.id}`);
-            }
-
-            return part;
-          });
-
-          await this.fileService.putObject(
-            context,
-            config.staticfiles.bucket,
-            keyMap.resolve(pending.archivedKey),
-            Buffer.concat(ordered.map((part) => Buffer.from(part, 'base64'))),
+        // Checked before a writer opens, so the stored file is not started over.
+        if (finishedFiles.has(record.id)) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} came after the file was whole`,
           );
+        }
+
+        let file = current;
+
+        // A new file before the last one is whole means that one is missing chunks.
+        if (file && file.id !== record.id) {
+          throw new BadRequestException(`Missing file chunk ${file.received} for ${file.id}`);
+        }
+
+        if (!file) {
+          const key = keyMap.resolve(record.key);
+
+          file = {
+            id: record.id,
+            key,
+            writer: this.fileService.openObjectWriter(
+              context,
+              config.staticfiles.bucket,
+              key,
+              record.total * FILE_CHUNK_BYTES,
+            ),
+            total: record.total,
+            received: 0,
+          };
+          current = file;
+        }
+
+        if (record.total !== file.total) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} counts ${record.total} chunks, its first counted ${file.total}`,
+          );
+        }
+
+        // Counted, not kept. A chunk out of turn means the one before it is
+        // missing (or this one came twice). The bytes already written cannot
+        // be put back in order.
+        if (record.index !== file.received) {
+          throw new BadRequestException(
+            record.index < file.received
+              ? `File chunk ${record.index} for ${record.id} arrived twice`
+              : `Missing file chunk ${file.received} for ${record.id}`,
+          );
+        }
+
+        const piece = Buffer.from(record.data, 'base64');
+
+        // The export cuts files into FILE_CHUNK_BYTES pieces. The writer sizes
+        // its parts from that to stay under the store's part count.
+        if (piece.length > FILE_CHUNK_BYTES) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} holds ${piece.length} bytes, more than ${FILE_CHUNK_BYTES}`,
+          );
+        }
+
+        await file.writer.write(piece);
+        file.received += 1;
+
+        // An empty file is one chunk of "", so it completes here too.
+        if (file.received === file.total) {
+          await file.writer.finish();
+          current = null;
+          finishedFiles.add(record.id);
           filesRestored += 1;
-          pendingFiles.delete(record.id);
         }
       });
 
@@ -455,7 +523,8 @@ export class UserDataPortabilityService {
         throw new BadRequestException('Archive stops before its end record: the export was cut short');
       }
 
-      if (pendingFiles.size > 0) {
+      // Cast for the same reason as the copies above.
+      if ((current as PendingFileImport | null) !== null) {
         throw new BadRequestException('Archive is missing one or more file chunks');
       }
 
@@ -467,10 +536,28 @@ export class UserDataPortabilityService {
 
       rowsImported += await this.finishImport(queryRunner, context.userId, begun);
       await this.setReplicationRole(queryRunner, 'origin');
+      committing = true;
       await queryRunner.commitTransaction();
     } catch (error) {
       await this.setReplicationRole(queryRunner, 'origin').catch(() => undefined);
-      await queryRunner.rollbackTransaction();
+
+      // A rollback that fails (the connection is gone) must not replace the
+      // import's own error. Postgres ends a transaction whose connection drops.
+      try {
+        await queryRunner.rollbackTransaction();
+      } catch (rollbackError) {
+        this.logger.warn('Could not roll back a failed import', {
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        });
+      }
+
+      const begun = state as ImportState | null;
+
+      await this.discardStreamedFiles(
+        current as PendingFileImport | null,
+        committing || !begun ? [] : begun.keyMap.mintedKeys(),
+      );
+
       throw error;
     } finally {
       await queryRunner.release();
@@ -482,6 +569,47 @@ export class UserDataPortabilityService {
       filesRestored,
       format: 'ndjson',
     };
+  }
+
+  /**
+   * Take back what a failed stream import put in the object store, as the
+   * rollback takes back its rows. The file it was partway through is aborted
+   * so no half-written file or unfinished upload stays behind. The keys it
+   * minted are deleted: nothing points at them now.
+   *
+   * A file restored under a key the account already owned stays. The row that
+   * points at it survives the rollback and the archive held that same file.
+   * Never throws, so the import's own error is what the caller sees.
+   */
+  private async discardStreamedFiles(
+    unfinished: PendingFileImport | null,
+    mintedKeys: string[],
+  ): Promise<void> {
+    // try/catch rather than .catch(). A call that throws before it returns a
+    // promise would otherwise escape and replace the import's own error.
+    if (unfinished) {
+      try {
+        await unfinished.writer.abort();
+      } catch (error) {
+        this.logger.warn('Could not abort a file upload after a failed import', {
+          key: unfinished.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (mintedKeys.length === 0) {
+      return;
+    }
+
+    try {
+      await this.fileService.deleteObjects(config.staticfiles.bucket, mintedKeys);
+    } catch (error) {
+      this.logger.warn('Could not delete the files a failed import stored', {
+        files: mintedKeys.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Legacy single-json export for small accounts and tests. */

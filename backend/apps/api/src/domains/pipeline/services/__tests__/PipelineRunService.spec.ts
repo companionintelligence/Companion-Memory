@@ -1395,7 +1395,11 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
       return null;
     }
 
-    async hasLiveJob(): Promise<boolean> {
+    async hasLiveJobForUser(): Promise<boolean> {
+      return false;
+    }
+
+    async touchJob(): Promise<boolean> {
       return false;
     }
   }
@@ -1558,7 +1562,11 @@ describe('PipelineRunService replay of an event with several listener queues', (
       return null;
     }
 
-    async hasLiveJob(): Promise<boolean> {
+    async hasLiveJobForUser(): Promise<boolean> {
+      return false;
+    }
+
+    async touchJob(): Promise<boolean> {
       return false;
     }
   }

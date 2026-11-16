@@ -118,12 +118,17 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is. Options 2 and 3 are skipped, and nothing is pulled into it. If it
-   lacks the default chat model (`gemma4:e4b`, see option 3), Memory uses the
+   as-is. Options 2 and 3 are skipped. Nothing is pulled into it unasked.
+   When it has the default chat model (`gemma4:e4b`, see option 3), Memory uses
+   it wherever it sits in Ollama's list. When it lacks it, Memory uses the
    first local chat model it lists for chat and background work instead
-   (Ollama Cloud models are skipped). `desktop.log` says so along with the
-   `ollama pull` command that adds the default. Search needs `nomic-embed-text`
-   there too; the log says when it is missing. On Linux, one part of option 3
+   (Ollama Cloud models are skipped). Settings > Model in the app's window then
+   offers "Download recommended model": the app pulls the models of option 3
+   that are missing (`nomic-embed-text` for search too) into that Ollama,
+   showing progress and any failure, then points Memory at `gemma4:e4b` and
+   recreates the containers that read it, as the next launch would.
+   `desktop.log` says which model Memory runs on and how to get the default,
+   by that button or `ollama pull`. On Linux, one part of option 3
    still applies: when it answers on `127.0.0.1` only (how Ollama's own service
    binds unless you set `OLLAMA_HOST`), the containers cannot reach it, so the
    app puts the same bridge relay described under option 3 in front of it while

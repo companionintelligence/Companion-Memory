@@ -446,23 +446,28 @@ describe('PlanPage', () => {
       {
         mocks: [
           tasksMock([]),
-          badgeMock([]),
+          badgeMock(['open']),
           {
             request: { query: CREATE_TASK, variables: { input: { title: 'Badge probe' } } },
             result: { data: { createTask: { __typename: 'CreateTaskPayload', success: true, task: null } } },
           },
-          badgeMock(['open']),
+          badgeMock(['open', 'open']),
         ],
       },
     );
 
     await screen.findByLabelText(/new task title/i);
-    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('0'));
+    // The badge shows 0 while its first answer is loading, so the first answer
+    // must not be 0: waiting for "1" is what makes sure it has arrived. If the
+    // task were added before it arrived, the page's refetch would join that
+    // request still in flight and get its answer. The second one would never
+    // be asked for.
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('1'));
 
     fireEvent.change(screen.getByLabelText(/new task title/i), { target: { value: 'Badge probe' } });
     fireEvent.click(screen.getByRole('button', { name: /add/i }));
 
-    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('1'));
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('2'));
   });
 
   it('shows a Schedule button on open work', async () => {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -13,6 +13,7 @@ import {
   coerceApiKeyCapability,
 } from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
 import {
@@ -55,8 +56,16 @@ export class ApiKeyService {
     @InjectRepository(ApiKeyEntity)
     private readonly apiKeyRepository: Repository<ApiKeyEntity>,
     private readonly logger: LoggerService,
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(ApiKeyService.name);
+  }
+
+  /** Tell the user's open live-update streams to check their key now; see `LiveChangesService.publishRevoked`. */
+  private async announceRevoked(userId: string, removed: number): Promise<void> {
+    if (removed > 0) {
+      await this.liveChanges?.publishRevoked(userId);
+    }
   }
 
   async create(
@@ -163,12 +172,14 @@ export class ApiKeyService {
     name: string,
     managedBy: ApiKeyProvenance | null,
   ): Promise<void> {
-    await this.apiKeyRepository.delete({
+    const result = await this.apiKeyRepository.delete({
       user_id: userId,
       name,
       // TypeORM equality criteria never match NULL — an explicit IsNull() is required.
       managed_by: managedBy ?? IsNull(),
     });
+
+    await this.announceRevoked(userId, result.affected ?? 0);
   }
 
   /** Whether a caught error is a Postgres unique-violation (SQLSTATE 23505). */
@@ -347,6 +358,8 @@ export class ApiKeyService {
   async revokeSignInKeys(userId: string): Promise<number> {
     const result = await this.apiKeyRepository.delete({ user_id: userId, managed_by: SIGN_IN_PROVENANCE });
 
+    await this.announceRevoked(userId, result.affected ?? 0);
+
     return result.affected ?? 0;
   }
 
@@ -366,6 +379,8 @@ export class ApiKeyService {
       .andWhere('managed_by IS DISTINCT FROM :connect', { connect: CONNECT_PROVENANCE })
       .execute();
 
+    await this.announceRevoked(userId, result.affected ?? 0);
+
     return result.affected ?? 0;
   }
 
@@ -374,6 +389,11 @@ export class ApiKeyService {
       id: keyId,
       ...(context.userId !== SYSTEM_USER && { user_id: context.userId }),
     });
+
+    // A system-level revoke does not know the owner; that stream ends at its next keep-alive.
+    if (context.userId !== SYSTEM_USER) {
+      await this.announceRevoked(context.userId, result.affected ?? 0);
+    }
 
     return (result.affected ?? 0) > 0;
   }

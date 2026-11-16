@@ -465,7 +465,7 @@ describe('HubForwardAuthBridgeService', () => {
       });
       expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token', expect.any(Object));
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
-      expect(authService.issueAccessToken).toHaveBeenCalledWith('user-a');
+      expect(authService.issueAccessToken).toHaveBeenCalledWith('user-a', 'sid-2');
     });
 
     it('links an unlinked person, once, to the account their Hub username names', async () => {

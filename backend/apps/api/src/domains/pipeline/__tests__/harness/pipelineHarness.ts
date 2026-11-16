@@ -248,7 +248,11 @@ export class HarnessQueue extends EventService {
     return null;
   }
 
-  async hasLiveJob(): Promise<boolean> {
+  async hasLiveJobForUser(): Promise<boolean> {
+    return false;
+  }
+
+  async touchJob(): Promise<boolean> {
     return false;
   }
 

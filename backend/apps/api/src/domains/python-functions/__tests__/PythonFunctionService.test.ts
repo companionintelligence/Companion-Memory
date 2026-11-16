@@ -60,11 +60,51 @@ describe('PythonFunctionService', () => {
     expect(enqueued).toBe(false);
   });
 
-  it('asks the target queue whether a job with the key is still live', async () => {
-    const eventService = { hasLiveJob: jest.fn().mockResolvedValue(true) } as unknown as EventService;
+  it("does not dispatch while the user's run on the target queue is still live, whatever its key", async () => {
+    const eventService = {
+      hasLiveJobForUser: jest.fn().mockResolvedValue(true),
+      send: jest.fn().mockResolvedValue(['job-1']),
+    } as unknown as EventService;
     const service = new PythonFunctionService(eventService, logger);
 
-    await expect(service.hasLiveJob('hbpe', 'fn:nightly:user-1:manual')).resolves.toBe(true);
-    expect(eventService.hasLiveJob).toHaveBeenCalledWith('py-fn-hbpe', 'fn:nightly:user-1:manual');
+    const enqueued = await service.dispatchUnlessRunning(
+      'hbpe',
+      'nightly',
+      'user-1',
+      {},
+      {
+        singletonKey: 'fn:nightly:user-1:manual',
+      },
+    );
+
+    expect(enqueued).toBe(false);
+    expect(eventService.hasLiveJobForUser).toHaveBeenCalledWith('py-fn-hbpe', 'user-1');
+    expect(eventService.send).not.toHaveBeenCalled();
+  });
+
+  it('dispatches as usual when the user has no live run, with the heartbeat window on the job', async () => {
+    const eventService = {
+      hasLiveJobForUser: jest.fn().mockResolvedValue(false),
+      send: jest.fn().mockResolvedValue(['job-1']),
+    } as unknown as EventService;
+    const service = new PythonFunctionService(eventService, logger);
+
+    const enqueued = await service.dispatchUnlessRunning(
+      'hbpe',
+      'ensure_bootstrap',
+      'user-1',
+      {},
+      {
+        singletonKey: 'fn:hbpe:user-1:2026-11-16',
+      },
+    );
+
+    expect(enqueued).toBe(true);
+    expect(eventService.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ function: 'ensure_bootstrap', userId: 'user-1' }),
+      // Per job, so a downgrade's jobs (sent without it) are not watched.
+      { queue: 'py-fn-hbpe', singletonKey: 'fn:hbpe:user-1:2026-11-16', heartbeatSeconds: 300 },
+    );
   });
 });

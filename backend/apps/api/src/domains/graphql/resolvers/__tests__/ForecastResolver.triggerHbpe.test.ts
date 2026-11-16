@@ -7,23 +7,29 @@ import { PYTHON_FUNCTION_QUEUE_OPTIONS, PythonFunctionService } from '@ci/domain
 import { ForecastResolver } from '../ForecastResolver';
 
 /**
- * `triggerHbpe` reports `already_running` when a manual run for this user is
- * still waiting or already running. This fake `EventService` reimplements the
- * two mechanisms that decide it against an in-memory job table: pg-boss's
- * partial unique index on (queue, singleton_key) `WHERE state='created' AND
- * policy='short'`, gated on the REAL `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`,
- * and `hasLiveJob`, which also sees a job that has started. `hasLiveJob` answers
- * first, so only the simultaneous-trigger test reaches the dedup; that test is
- * the one that fails if the policy is ever removed, exactly the bug this queue
- * had.
+ * `triggerHbpe` reports `already_running` when a prediction run for this user
+ * is still waiting or already running, however it was started. This fake
+ * `EventService` reimplements the two mechanisms that decide it against an
+ * in-memory job table. One is pg-boss's partial unique index on (queue,
+ * singleton_key) `WHERE state='created' AND policy='short'`, gated on the REAL
+ * `PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe.policy`. The other is `hasLiveJobForUser`,
+ * which also sees a job that has started or carries another key. `hasLiveJobForUser`
+ * answers first, so only the simultaneous-trigger test reaches the dedup; that
+ * test is the one that fails if the policy is ever removed, exactly the bug
+ * this queue had.
  */
 function makePgBossLikeEventService() {
-  const jobs: { queue: string; key: string; state: 'created' | 'active' | 'completed' }[] = [];
+  const jobs: {
+    queue: string;
+    key: string;
+    userId: string;
+    state: 'created' | 'active' | 'completed';
+  }[] = [];
 
   const send = jest.fn(
     async (
       _name: unknown,
-      _payload: unknown,
+      payload: { userId: string },
       options?: { queue?: string; singletonKey?: string },
     ): Promise<string[]> => {
       const queue = options?.queue ?? 'default';
@@ -37,17 +43,17 @@ function makePgBossLikeEventService() {
         return [];
       }
 
-      jobs.push({ queue, key, state: 'created' });
+      jobs.push({ queue, key, userId: payload.userId, state: 'created' });
 
       return [`job-${jobs.length}`];
     },
   ) as unknown as EventService['send'];
 
-  const hasLiveJob = jest.fn(async (queue: string, key: string) =>
-    jobs.some((job) => job.queue === queue && job.key === key && job.state !== 'completed'),
+  const hasLiveJobForUser = jest.fn(async (queue: string, userId: string) =>
+    jobs.some((job) => job.queue === queue && job.userId === userId && job.state !== 'completed'),
   );
 
-  const eventService = { send, hasLiveJob } as unknown as EventService;
+  const eventService = { send, hasLiveJobForUser } as unknown as EventService;
 
   /** The worker picks every waiting job up, as pg-boss does a moment after the send. */
   const startAll = () =>
@@ -91,7 +97,7 @@ describe('ForecastResolver.triggerHbpe already_running', () => {
   });
 
   it('refuses a simultaneous second trigger through the real pg-boss dedup', async () => {
-    // Both calls pass hasLiveJob before either one sends, so only the queue's
+    // Both calls pass hasLiveJobForUser before either one sends, so only the queue's
     // `short` policy can refuse the second. This is the case that fails if that
     // policy is ever removed.
     const { eventService, jobs } = makePgBossLikeEventService();
@@ -102,7 +108,7 @@ describe('ForecastResolver.triggerHbpe already_running', () => {
     const results = await Promise.all([resolver.triggerHbpe(context), resolver.triggerHbpe(context)]);
 
     expect(results.sort()).toEqual(['already_running', 'triggered']);
-    expect(eventService.hasLiveJob).toHaveBeenCalledTimes(2);
+    expect(eventService.hasLiveJobForUser).toHaveBeenCalledTimes(2);
     expect(jobs).toHaveLength(1);
   });
 
@@ -147,4 +153,40 @@ describe('ForecastResolver.triggerHbpe already_running', () => {
 
     expect(await resolver.triggerHbpe(context)).toBe('triggered');
   });
+
+  // The 02:30 nightly and the start-up bootstrap sweep send `fn:hbpe:<user>:<day>`,
+  // which the queue never compared with Predict's `fn:nightly:<user>:manual`.
+  // Predict next to either one started a second hour-long pipeline.
+  it.each([['nightly'], ['ensure_bootstrap']])(
+    'reports already_running while the scheduled %s run is waiting or going',
+    async (functionName) => {
+      const queue = makePgBossLikeEventService();
+      const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
+      const pythonFunctionService = new PythonFunctionService(queue.eventService, logger);
+      const resolver = buildResolver(pythonFunctionService);
+      const context = { userId: 'user-1' } as RequestContext;
+
+      // As PythonFunctionCrons sends it.
+      await pythonFunctionService.dispatch(
+        'hbpe',
+        functionName,
+        'user-1',
+        {},
+        {
+          singletonKey: 'fn:hbpe:user-1:2026-11-16',
+        },
+      );
+
+      expect(await resolver.triggerHbpe(context)).toBe('already_running');
+      queue.startAll();
+      expect(await resolver.triggerHbpe(context)).toBe('already_running');
+      expect(queue.jobs).toHaveLength(1);
+
+      // Someone else's scheduled run is not this person's.
+      expect(await resolver.triggerHbpe({ userId: 'user-2' } as RequestContext)).toBe('triggered');
+
+      queue.finishAll();
+      expect(await resolver.triggerHbpe(context)).toBe('triggered');
+    },
+  );
 });

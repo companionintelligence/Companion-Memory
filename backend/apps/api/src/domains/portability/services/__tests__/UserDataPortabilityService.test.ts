@@ -31,7 +31,25 @@ describe('UserDataPortabilityService', () => {
     getFileContent: jest.fn(),
     getFileStreamWithLength: jest.fn(),
     putObject: jest.fn(),
+    openObjectWriter: jest.fn(),
+    deleteObjects: jest.fn(),
   } as unknown as FileService;
+
+  /** One object the stream import wrote, as a stand-in writer saw it. */
+  interface WrittenObject {
+    bucket: string;
+    key: string;
+    pieces: Buffer[];
+    finished: boolean;
+    aborted: boolean;
+  }
+
+  /** Every object the stream import opened, in order; reset before each test. */
+  let objects: WrittenObject[] = [];
+  /** What happened, in order, when a test needs to see writes between reads. */
+  let events: string[] = [];
+
+  const bytesOf = (object: WrittenObject | undefined) => Buffer.concat(object?.pieces ?? []).toString('utf8');
 
   const userService = {
     findById: jest.fn(),
@@ -50,6 +68,32 @@ describe('UserDataPortabilityService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     service = new UserDataPortabilityService(dataSource, fileService, userService, logger);
+
+    // Tests swap these for their own. A swap must not carry into the next test.
+    queryRunner.query = jest.fn() as unknown as QueryRunner['query'];
+    queryRunner.commitTransaction = jest.fn();
+    queryRunner.rollbackTransaction = jest.fn();
+
+    objects = [];
+    events = [];
+    fileService.openObjectWriter = jest.fn((_context: unknown, bucket: string, key: string) => {
+      const object: WrittenObject = { bucket, key, pieces: [], finished: false, aborted: false };
+      objects.push(object);
+
+      return {
+        write: async (piece: Buffer) => {
+          events.push(`write ${piece.toString('utf8')}`);
+          object.pieces.push(piece);
+        },
+        finish: async () => {
+          object.finished = true;
+        },
+        abort: async () => {
+          object.aborted = true;
+        },
+      };
+    }) as unknown as FileService['openObjectWriter'];
+    fileService.deleteObjects = jest.fn().mockResolvedValue(undefined);
   });
 
   it('exports discovered user tables and profile metadata', async () => {
@@ -608,11 +652,7 @@ describe('UserDataPortabilityService', () => {
 
       await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      const [, writtenBucket, writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-      ];
+      const { bucket: writtenBucket, key: writtenKey } = objects[0];
       expect(writtenBucket).toBe(config.staticfiles.bucket);
       expect(writtenKey).toMatch(UUID_V4);
       expect(writtenKey).not.toBe(OTHER_USERS_KEY);
@@ -638,11 +678,7 @@ describe('UserDataPortabilityService', () => {
 
       await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      const [, , writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-      ];
+      const writtenKey = objects[0].key;
       expect(writtenKey).toBe(OWNED_KEY);
       expect(inserts.find((insert) => insert.sql.includes('"files"'))?.params).toEqual([
         'f1',
@@ -766,54 +802,245 @@ describe('UserDataPortabilityService', () => {
       ).rejects.toThrow('Archive manifest must be the first record');
     });
 
-    it('reassembles a chunked file upload by index, regardless of arrival order', async () => {
+    const chunkOf = (index: number, text: string, total = 2, id = 'f1', key = 'user-1/f1') => ({
+      type: 'file-chunk',
+      id,
+      bucket: 'ci-files',
+      key,
+      index,
+      total,
+      data: Buffer.from(text).toString('base64'),
+    });
+
+    it('writes each chunk of a file to the object store before reading the next one', async () => {
       dataSource.query = jest.fn().mockResolvedValue([]);
-      fileService.putObject = jest.fn().mockResolvedValue(undefined);
 
-      const chunk0 = Buffer.from('hello ').toString('base64');
-      const chunk1 = Buffer.from('world').toString('base64');
+      const lines = [manifest(), chunkOf(0, 'hello '), chunkOf(1, 'world')];
+      // One line per read, noting each read, so the order of reads and writes shows.
+      const req = {
+        setEncoding: () => undefined,
 
-      const req = fakeRequest([
-        manifest(),
-        {
-          type: 'file-chunk',
-          id: 'f1',
-          bucket: 'ci-files',
-          key: 'user-1/f1',
-          index: 1,
-          total: 2,
-          data: chunk1,
+        [Symbol.asyncIterator]: async function* () {
+          for (const [index, line] of lines.entries()) {
+            events.push(`read ${index}`);
+            yield `${JSON.stringify(line)}\n`;
+          }
         },
-        {
-          type: 'file-chunk',
-          id: 'f1',
-          bucket: 'ci-files',
-          key: 'user-1/f1',
-          index: 0,
-          total: 2,
-          data: chunk0,
-        },
-      ]);
+      } as unknown as Request;
 
       const result = await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      expect(fileService.putObject).toHaveBeenCalledTimes(1);
-      const [, bucket, key, buffer] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-        Buffer,
-      ];
+      expect(events).toEqual(['read 0', 'read 1', 'write hello ', 'read 2', 'write world']);
+      expect(objects).toHaveLength(1);
       // Neither the bucket nor the key is the archive's: the bucket is always
       // this appliance's, and a key this account did not already own is
-      // replaced by a freshly minted one (see the "archive keys" block below).
-      expect(bucket).toBe(config.staticfiles.bucket);
-      expect(key).not.toBe('user-1/f1');
-      expect(key).toMatch(UUID_V4);
-      // Chunks arrived 1-then-0 but must reassemble in INDEX order, not
-      // arrival order — a network-level reorder must not corrupt the file.
-      expect(buffer.toString('utf8')).toBe('hello world');
+      // replaced by a freshly minted one (see the "archive keys" block above).
+      expect(objects[0].bucket).toBe(config.staticfiles.bucket);
+      expect(objects[0].key).not.toBe('user-1/f1');
+      expect(objects[0].key).toMatch(UUID_V4);
+      expect(bytesOf(objects[0])).toBe('hello world');
+      expect(objects[0].finished).toBe(true);
+      expect(fileService.openObjectWriter).toHaveBeenCalledWith(
+        expect.anything(),
+        config.staticfiles.bucket,
+        objects[0].key,
+        2 * FILE_CHUNK_BYTES,
+      );
       expect(result.filesRestored).toBe(1);
+    });
+
+    it.each([
+      [
+        'a chunk that comes before the one it follows',
+        [chunkOf(1, 'world'), chunkOf(0, 'hello ')],
+        'Missing file chunk 0 for f1',
+      ],
+      ['a gap', [chunkOf(0, 'a', 3), chunkOf(2, 'c', 3)], 'Missing file chunk 1 for f1'],
+      ['a chunk sent twice', [chunkOf(0, 'a', 3), chunkOf(0, 'a', 3)], 'File chunk 0 for f1 arrived twice'],
+      // Each file in progress holds a part in memory, so only one may be.
+      [
+        'a file started before the last one is whole',
+        [chunkOf(0, 'a', 2, 'f1'), chunkOf(0, 'b', 2, 'f2', 'user-1/f2'), chunkOf(1, 'c', 2, 'f1')],
+        'Missing file chunk 1 for f1',
+      ],
+      [
+        'a chunk that counts its file differently from the first',
+        [chunkOf(0, 'a', 3), chunkOf(1, 'b', 2)],
+        'File chunk 1 for f1 counts 2 chunks, its first counted 3',
+      ],
+      // The writer sizes its parts from the export's chunk size.
+      [
+        'a chunk larger than the export writes',
+        [{ ...chunkOf(0, '', 2), data: Buffer.alloc(FILE_CHUNK_BYTES + 1).toString('base64') }],
+        `File chunk 0 for f1 holds ${FILE_CHUNK_BYTES + 1} bytes, more than ${FILE_CHUNK_BYTES}`,
+      ],
+    ])('refuses %s, aborts the upload and rolls back', async (_, chunks, message) => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest(), ...chunks]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow(message);
+
+      expect(objects.every((object) => !object.finished)).toBe(true);
+      expect(objects.every((object) => object.aborted)).toBe(true);
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('takes back what it stored when it fails later: minted keys deleted, a file restored in place kept', async () => {
+      const OWNED_KEY = '33333333-3333-4333-8333-333333333333';
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.query = jest.fn(async (sql: string) =>
+        sql.includes('SELECT key FROM ci.files') ? [{ key: OWNED_KEY }] : undefined,
+      ) as unknown as QueryRunner['query'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([
+            manifest({ version: 2 }),
+            chunkOf(0, 'new file', 1, 'f-new', 'somebody/else'),
+            chunkOf(0, 'own file', 1, 'f-owned', OWNED_KEY),
+            chunkOf(0, 'half of a ', 2, 'f-half', 'another/key'),
+          ]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+
+      const [stored, owned, half] = objects;
+      expect(stored.finished && owned.finished).toBe(true);
+      expect(owned.key).toBe(OWNED_KEY);
+      // The file it was partway through is aborted, never stored.
+      expect(half.finished).toBe(false);
+      expect(half.aborted).toBe(true);
+      // Only keys this import minted are deleted, the aborted file's included
+      // (nothing is there). The owned key's row survives the rollback and
+      // still points at its object.
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [
+        stored.key,
+        half.key,
+      ]);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('still throws the import error when taking back its files fails', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      fileService.deleteObjects = jest.fn().mockRejectedValue(new Error('store down'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(logger.warn).toHaveBeenCalledWith('Could not delete the files a failed import stored', {
+        files: 1,
+        error: 'store down',
+      });
+    });
+
+    it('keeps the import error when a cleanup call throws before it returns a promise', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      fileService.deleteObjects = jest.fn(() => {
+        throw new TypeError('not wired');
+      }) as unknown as FileService['deleteObjects'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+    });
+
+    it('keeps the import error when the rollback fails too', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.rollbackTransaction = jest.fn().mockRejectedValue(new Error('Connection terminated'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(logger.warn).toHaveBeenCalledWith('Could not roll back a failed import', {
+        error: 'Connection terminated',
+      });
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [objects[0].key]);
+    });
+
+    it('deletes a file whose finish failed, since the store may have kept it', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      const opening = fileService.openObjectWriter;
+      fileService.openObjectWriter = jest.fn((...args: Parameters<FileService['openObjectWriter']>) => ({
+        ...opening(...args),
+        finish: async () => {
+          throw new Error('The response was lost');
+        },
+      })) as unknown as FileService['openObjectWriter'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('The response was lost');
+      expect(objects[0].aborted).toBe(true);
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [objects[0].key]);
+    });
+
+    it('keeps the files it stored when COMMIT itself fails, since the rows may have committed', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.commitTransaction = jest.fn().mockRejectedValueOnce(new Error('Connection terminated'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1), { type: 'end', rows: 0, files: 1 }]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Connection terminated');
+      expect(objects[0].finished).toBe(true);
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it('asks the store to delete nothing when the import minted no key', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 })]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['numbered past its end', chunkOf(1, 'b', 1)],
+      ['sent again from its first chunk', chunkOf(0, 'b', 1)],
+    ])('refuses a chunk %s for a stored file, instead of starting it over', async (_, again) => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest(), chunkOf(0, 'a', 1), again]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow(`File chunk ${again.index} for f1 came after the file was whole`);
+      expect(objects).toHaveLength(1);
+      expect(bytesOf(objects[0])).toBe('a');
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
     });
 
     it('rejects an archive whose file upload never completes (a chunk index never arrives)', async () => {
@@ -841,6 +1068,9 @@ describe('UserDataPortabilityService', () => {
       // it must not be left committed.
       expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      // Nor may the half-written file: its upload is aborted.
+      expect(objects[0].finished).toBe(false);
+      expect(objects[0].aborted).toBe(true);
     });
 
     describe('the end record', () => {
@@ -856,7 +1086,6 @@ describe('UserDataPortabilityService', () => {
 
       beforeEach(() => {
         dataSource.query = jest.fn().mockResolvedValue([]);
-        fileService.putObject = jest.fn().mockResolvedValue(undefined);
       });
 
       const importing = (lines: unknown[]) =>
@@ -896,12 +1125,10 @@ describe('UserDataPortabilityService', () => {
         ]);
 
         expect(result.filesRestored).toBe(1);
-        expect(fileService.putObject).toHaveBeenCalledWith(
-          expect.anything(),
-          config.staticfiles.bucket,
-          expect.any(String),
-          Buffer.alloc(0),
-        );
+        expect(objects).toHaveLength(1);
+        expect(objects[0].bucket).toBe(config.staticfiles.bucket);
+        expect(objects[0].pieces).toEqual([Buffer.alloc(0)]);
+        expect(objects[0].finished).toBe(true);
       });
 
       it('refuses an end record whose counts do not match the archive', async () => {

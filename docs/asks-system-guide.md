@@ -703,8 +703,9 @@ flowchart TD
   Conflating them would blur which side of the trust boundary each piece of data
   came from.
 - **`domains/graphql` is the local surface.** `AskResolver` is the only place
-  the local answer pipeline is assembled; `resolveTier` lives here, and it
-  returns the constant `'household'` for every local asker (see G6).
+  the local answer pipeline is assembled; `resolveTier` lives here. For a
+  local asker it returns the tier the owner set for that account, and
+  `'household'` when none is set (see G6).
 - **`domains/search-next` is the only thing that touches the archive** on an ask,
   in `mode: 'keyword'`, with `subjectIsName` as the only other input that
   crosses. Neither `asks` nor `peers` imports `@ci/domains/llm` or

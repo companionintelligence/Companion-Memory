@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { UserServiceContext } from '@ci/common/context';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PipelineStateService } from '../../services/PipelineStateService';
 import {
@@ -179,7 +180,9 @@ describeWithDb(`enrich.estimate_location v2 against Postgres (${availability.tar
       [ctx.userId, 'Estimate location spec fixture', `estimate.${ctx.userId}@example.invalid`],
     );
 
-    // The only donor any fixture can reach: a GPS fix at home.
+    // The only donor any fixture can reach: a GPS fix at home. Its chunk is
+    // created up front: see positionChunks.ts.
+    await createPositionChunks(dataSource, ctx.userId, DONOR_AT, DONOR_AT);
     await dataSource.query(
       `INSERT INTO ci.position (id, time, user_id, location, accuracy_meters, source)
        VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, 12, 'gps')`,

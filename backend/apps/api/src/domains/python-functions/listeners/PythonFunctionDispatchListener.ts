@@ -9,9 +9,11 @@ import { PythonFunctionRunEvent } from '../events';
 import { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
 import { SummaryServiceYieldGate } from '../services/SummaryServiceYieldGate';
 import {
+  PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS,
   PYTHON_FUNCTION_QUEUE_OPTIONS,
   PYTHON_FUNCTION_QUEUES,
   PYTHON_FUNCTIONS,
+  PYTHON_RUN_HEARTBEAT_SECONDS,
   type PythonFunctionRunPayload,
   type PythonFunctionTarget,
 } from '../types';
@@ -35,7 +37,9 @@ const PREFLIGHT_TIMEOUT_MS = 5_000;
  * Forwards `python.function.run` jobs to the target Python service and DEFERS
  * pg-boss completion: the job stays `active` (holding no worker slot) until the
  * Python runner reports the outcome through PythonFunctionCallbackController,
- * or the queue's expireInSeconds elapses and pg-boss retries.
+ * or the queue's expireInSeconds elapses and pg-boss retries. For a target in
+ * PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS the runner also beats while it holds
+ * the run and pg-boss fails the job sooner once the beats stop.
  *
  * Both listeners are `autoAcknowledge: false` — a failed dispatch (service
  * down, pool full → 429) calls `fail()` so pg-boss retries with backoff.
@@ -103,6 +107,11 @@ export class PythonFunctionDispatchListener {
           // unchanged — the sidecars' pytest suites pin `job_id`.
           job_id: ack.jobId,
           queue,
+          // A target whose jobs fail once their heartbeat stops asks the runner
+          // to beat while it holds the run; see PythonFunctionCallbackController.
+          ...(PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS[target]
+            ? { heartbeat_seconds: PYTHON_RUN_HEARTBEAT_SECONDS }
+            : {}),
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
       });
@@ -196,7 +205,7 @@ export class PythonFunctionDispatchListener {
         return;
       }
 
-      const body = (await response.json()) as { functions?: unknown };
+      const body = (await response.json()) as { functions?: unknown; heartbeats?: unknown };
       const served = new Set((Array.isArray(body.functions) ? body.functions : []).map(String));
       const missing = expected.filter((name) => !served.has(name));
 
@@ -206,6 +215,24 @@ export class PythonFunctionDispatchListener {
           url,
           missing,
           served: [...served],
+          version: await this.reportedVersion(baseUrl),
+        });
+
+        return;
+      }
+
+      // The same stale-image check for heartbeats. A runner that predates them
+      // ignores `heartbeat_seconds`, so every job on this target is failed
+      // ("job heartbeat timeout") a few minutes in. Each retry queues another
+      // copy of the run behind the first: up to three per job, then the job is
+      // dead-lettered and a run still going has nothing left to complete.
+      const heartbeatSeconds = PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS[target];
+
+      if (heartbeatSeconds && body.heartbeats !== true) {
+        this.logger.error('Python sidecar does not send run heartbeats; update its image to match the API', {
+          target,
+          url,
+          heartbeatSeconds,
           version: await this.reportedVersion(baseUrl),
         });
 

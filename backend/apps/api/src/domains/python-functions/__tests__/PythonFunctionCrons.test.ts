@@ -13,8 +13,16 @@ const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown a
  * @param userIds onboarded users (`SELECT id FROM ci.users …`).
  * @param usersWithSummaries users the dossier precondition query returns;
  *   defaults to every onboarded user so the un-gated crons are unaffected.
+ * @param usersWithLiveRun users with a prediction run still waiting or going.
+ *   `dispatchUnlessRunning` skips them and hands everyone else to `dispatch`,
+ *   as the real one does.
  */
-function makeCrons(userIds: string[], smartRotation = false, usersWithSummaries = userIds) {
+function makeCrons(
+  userIds: string[],
+  smartRotation = false,
+  usersWithSummaries = userIds,
+  usersWithLiveRun: string[] = [],
+) {
   const rows = (ids: string[]) => ids.map((id) => ({ id }));
   // Untyped on purpose: assertions read the bound parameters (calls[n][1]),
   // which a one-argument signature would type away.
@@ -22,8 +30,12 @@ function makeCrons(userIds: string[], smartRotation = false, usersWithSummaries 
     sql.includes('ci.summaries') ? rows(usersWithSummaries) : rows(userIds),
   );
   const dataSource = { query } as unknown as DataSource;
+  const dispatch = jest.fn().mockResolvedValue(true);
   const pythonFunctionService = {
-    dispatch: jest.fn().mockResolvedValue(true),
+    dispatch,
+    dispatchUnlessRunning: jest.fn(async (...args: unknown[]) =>
+      usersWithLiveRun.includes(args[2] as string) ? false : dispatch(...args),
+    ),
   } as unknown as PythonFunctionService;
   const featureService = {
     isFeatureEnabled: jest.fn().mockResolvedValue(smartRotation),
@@ -130,6 +142,37 @@ describe('PythonFunctionCrons', () => {
       {},
       { singletonKey: `fn:hbpe:user-1:${dayKey}` },
     );
+  });
+
+  // Predict, the 02:30 nightly and the start-up sweep each use their own key
+  // and the queue refuses only an identical one that has not started. A
+  // restart, or a Predict shortly before 02:30, queued a second whole pipeline.
+  it.each([['hbpeNightly'], ['hbpeBootstrapSweep']] as const)(
+    '%s skips a user whose prediction run is still waiting or going',
+    async (method) => {
+      const { crons, pythonFunctionService } = makeCrons(['user-1', 'user-2'], false, undefined, ['user-1']);
+
+      await crons[method]();
+
+      expect(pythonFunctionService.dispatchUnlessRunning).toHaveBeenCalledTimes(2);
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+        'hbpe',
+        expect.any(String),
+        'user-2',
+        {},
+        expect.anything(),
+      );
+    },
+  );
+
+  it('leaves the summary crons on plain dispatch', async () => {
+    const { crons, pythonFunctionService } = makeCrons(['user-1'], false, undefined, ['user-1']);
+
+    await crons.dailySummaries();
+
+    expect(pythonFunctionService.dispatchUnlessRunning).not.toHaveBeenCalled();
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps fanning out when one user fails to enqueue', async () => {

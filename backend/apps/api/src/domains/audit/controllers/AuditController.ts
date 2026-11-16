@@ -8,6 +8,7 @@ import { HubForwardAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { NodeService } from '@ci/domains/graph';
 
+import type { Delta } from '../entities/DeltaEntity';
 import { DeltaService } from '../services/DeltaService';
 
 // Exported for `__tests__/cliWireContract.test.ts`: zod drops unknown keys, so a
@@ -22,6 +23,38 @@ export const getDeltasSchema = z.object({
 });
 
 type GetDeltasDto = z.infer<typeof getDeltasSchema>;
+
+/**
+ * The entity a delta points at: a relationship's far end, or for a record merged
+ * into another one, the record it was merged into (`merged_into_entity_id` in
+ * its changed fields), so Change History can name it rather than show its id.
+ */
+function toEntityIdOf(delta: Delta): string | null {
+  if (delta.toEntityId) {
+    return delta.toEntityId;
+  }
+
+  const mergedInto = delta.changeType === 'merged' ? delta.changedFields?.merged_into_entity_id?.new : null;
+
+  return typeof mergedInto === 'string' ? mergedInto : null;
+}
+
+/**
+ * The entity a delta comes from: a relationship's near end, or for the record
+ * a merge kept, the first record merged into it (`merged_from_entity_ids` in its
+ * changed fields), so Change History can say whom it took in. The list's length
+ * says how many others came with it.
+ */
+function fromEntityIdOf(delta: Delta): string | null {
+  if (delta.fromEntityId) {
+    return delta.fromEntityId;
+  }
+
+  const mergedFrom = delta.changeType === 'merged' ? delta.changedFields?.merged_from_entity_ids?.new : null;
+  const first: unknown = Array.isArray(mergedFrom) ? mergedFrom[0] : null;
+
+  return typeof first === 'string' ? first : null;
+}
 
 @Controller('audit')
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -74,18 +107,22 @@ export class AuditController {
       until: query.until,
     });
 
+    const fromEntityIds = deltas.map(fromEntityIdOf);
+    const toEntityIds = deltas.map(toEntityIdOf);
     const relatedEntityIds = new Set<string>();
-    for (const delta of deltas) {
+    for (const [index, delta] of deltas.entries()) {
       if (delta.entityId) {
         relatedEntityIds.add(delta.entityId);
       }
 
-      if (delta.fromEntityId) {
-        relatedEntityIds.add(delta.fromEntityId);
+      const fromEntityId = fromEntityIds[index];
+      if (fromEntityId) {
+        relatedEntityIds.add(fromEntityId);
       }
 
-      if (delta.toEntityId) {
-        relatedEntityIds.add(delta.toEntityId);
+      const toEntityId = toEntityIds[index];
+      if (toEntityId) {
+        relatedEntityIds.add(toEntityId);
       }
     }
 
@@ -103,10 +140,12 @@ export class AuditController {
       }),
     );
 
-    const mappedDeltas = deltas.map((delta) => {
+    const mappedDeltas = deltas.map((delta, index) => {
       const entityNode = delta.entityId ? nodeById.get(delta.entityId) : null;
-      const fromEntityNode = delta.fromEntityId ? nodeById.get(delta.fromEntityId) : null;
-      const toEntityNode = delta.toEntityId ? nodeById.get(delta.toEntityId) : null;
+      const fromEntityId = fromEntityIds[index];
+      const fromEntityNode = fromEntityId ? nodeById.get(fromEntityId) : null;
+      const toEntityId = toEntityIds[index];
+      const toEntityNode = toEntityId ? nodeById.get(toEntityId) : null;
 
       const fieldChanges = Object.entries(delta.changedFields ?? {}).map(([field, value]) => ({
         field,
@@ -135,16 +174,16 @@ export class AuditController {
               name: entityNode?.name ?? null,
             }
           : null,
-        fromEntity: delta.fromEntityId
+        fromEntity: fromEntityId
           ? {
-              entityId: delta.fromEntityId,
+              entityId: fromEntityId,
               entityType: fromEntityNode?.entityType ?? null,
               name: fromEntityNode?.name ?? null,
             }
           : null,
-        toEntity: delta.toEntityId
+        toEntity: toEntityId
           ? {
-              entityId: delta.toEntityId,
+              entityId: toEntityId,
               entityType: toEntityNode?.entityType ?? null,
               name: toEntityNode?.name ?? null,
             }

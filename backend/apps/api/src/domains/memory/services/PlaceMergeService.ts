@@ -10,7 +10,7 @@ import { PlaceUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Place, PlaceEntity } from '../entities/PlaceEntity';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, mergeDeltaInputs } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
 
 /** Per-table re-point counts recorded in the `ci.entity_merges` audit row. */
@@ -55,9 +55,16 @@ interface LocationRow {
   description: string | null;
   properties: Record<string, unknown>;
   merged_into_entity_id: string | null;
+  is_active: boolean | null;
   parent_place_id: string | null;
   place_kind: string | null;
-  has_point: boolean;
+  /** `[lng, lat]` of `location_point`, as PlaceService.update records it; null without a point. */
+  coordinates: number[] | null;
+  /**
+   * `location_point` as text (hex EWKB), null without a point, so the target
+   * can take it after the source lets go of it.
+   */
+  point: string | null;
   has_boundary: boolean;
 }
 
@@ -84,12 +91,14 @@ interface LocationRow {
  *     sweeps what that left behind — moving, not dropping, any edge a
  *     concurrent writer committed to a source after the re-point's snapshot (see
  *     {@link sweepLeftoverEdges});
- *  4. folds the row — target wins every non-null scalar it already has; the
+ *  4. tombstones each source (`is_active = FALSE`, `merged_into_entity_id`,
+ *     no parent) and has it let go of the pin or provider place_id the target
+ *     takes, each of which is unique per owner;
+ *  5. folds the row — target wins every non-null scalar it already has; the
  *     point, boundary, parent and provider place_id fill from the first
- *     source that has one; properties merge target-wins;
- *  5. tombstones each source (`is_active = FALSE`, `merged_into_entity_id`)
- *     and compresses any tombstone that already pointed at one, so the chain
- *     stays a single hop;
+ *     source that has one; properties merge target-wins; then compresses any
+ *     tombstone that already pointed at a source, so the chain stays a single
+ *     hop;
  *  6. deletes the sources' search rows and moves their tag links;
  *  7. writes one `ci.entity_merges` audit row per source.
  *
@@ -122,9 +131,10 @@ export class PlaceMergeService {
 
     const counts = await manager.transaction(async (em) => {
       const rows: LocationRow[] = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id,
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active,
                 parent_place_id, place_kind,
-                location_point IS NOT NULL AS has_point,
+                ST_AsGeoJSON(location_point)::jsonb -> 'coordinates' AS coordinates,
+                location_point::text AS point,
                 location_boundary IS NOT NULL AS has_boundary
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
@@ -191,17 +201,51 @@ export class PlaceMergeService {
         target.properties ?? {},
         sourceRows.map((row) => row.properties ?? {}),
       );
-      const pointDonor = target.has_point
-        ? null
-        : (sourceRows.find((row) => row.has_point)?.entity_id ?? null);
+      const pointDonor = target.point == null ? (sourceRows.find((row) => row.point != null) ?? null) : null;
       const boundaryDonor = target.has_boundary
         ? null
         : (sourceRows.find((row) => row.has_boundary)?.entity_id ?? null);
+      // Never a source: one source nested under another would hand the target a
+      // parent that is about to become a tombstone. Never a place under the
+      // target either, which a source's parent can be (a child of the target,
+      // or a child of another source that the re-point above just moved under
+      // the target): taking it would close a parent loop.
+      const parentCandidates = target.parent_place_id
+        ? []
+        : sourceRows
+            .map((row) => row.parent_place_id)
+            .filter((id): id is string => id != null && id !== targetId && !sources.includes(id));
+      const underTarget = await this.placesUnder(em, ownerUserId, targetId, parentCandidates);
       const parentDonor =
-        target.parent_place_id ??
-        sourceRows.map((row) => row.parent_place_id).find((id) => id != null && id !== targetId) ??
-        null;
+        target.parent_place_id ?? parentCandidates.find((id) => !underTarget.has(id)) ?? null;
       const mergedKind = target.place_kind ?? sourceRows.find((row) => row.place_kind)?.place_kind ?? null;
+      // The source holding the provider place_id the fold hands the target.
+      const placeIdDonor =
+        target.properties?.place_id == null && mergedProperties.place_id != null
+          ? (sourceRows.find((row) => row.properties?.place_id === mergedProperties.place_id)?.entity_id ??
+            null)
+          : null;
+
+      // Tombstone the sources before the fold. The target's pin and provider
+      // place_id are each a key that is unique per owner, merged-away places
+      // included (entities_location_snap_dedup_uniq and
+      // entities_place_provider_id_uniq), so a source still holding the one the
+      // target takes failed the fold. The source the target takes them from lets
+      // go of them here (the place_id stays in the ci.entity_merges row's
+      // sourceProperties). A city's (kind, name, parent) key
+      // (entities_admin_place_uniq) leaves merged-away places out, so marking
+      // a source merged frees its key for the target's new parent.
+      await em.query(
+        `UPDATE ci.entities
+            SET merged_into_entity_id = $3,
+                is_active = FALSE,
+                parent_place_id = NULL,
+                location_point = CASE WHEN entity_id = $4::uuid THEN NULL ELSE location_point END,
+                properties = CASE WHEN entity_id = $5::uuid THEN properties - 'place_id' ELSE properties END,
+                updated_at = now()
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
+        [ownerUserId, sources, targetId, pointDonor?.entity_id ?? null, placeIdDonor],
+      );
 
       await em.query(
         `UPDATE ci.entities t
@@ -210,8 +254,7 @@ export class PlaceMergeService {
                 properties = $5::jsonb,
                 place_kind = $6,
                 parent_place_id = $7,
-                location_point = COALESCE(t.location_point,
-                  (SELECT d.location_point FROM ci.entities d WHERE d.entity_id = $8::uuid)),
+                location_point = COALESCE(t.location_point, $8::geography),
                 location_boundary = COALESCE(t.location_boundary,
                   (SELECT d.location_boundary FROM ci.entities d WHERE d.entity_id = $9::uuid)),
                 updated_at = now()
@@ -224,48 +267,41 @@ export class PlaceMergeService {
           JSON.stringify(mergedProperties),
           mergedKind,
           parentDonor,
-          pointDonor,
+          pointDonor?.point ?? null,
           boundaryDonor,
         ],
       );
 
-      await em.query(
-        `UPDATE ci.entities
-            SET merged_into_entity_id = $3, is_active = FALSE, parent_place_id = NULL, updated_at = now()
-          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])`,
-        [ownerUserId, sources, targetId],
-      );
-
+      // A point the target gains from a source is a change too, recorded as
+      // `coordinates` the way PlaceService.update records it.
       await this.graphDeltaWriter.recordMany(
-        [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: LOCATION_ENTITY_TYPE,
-            ownerUserId,
-            changeSource: 'PlaceMergeService.mergePlaces',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
+        mergeDeltaInputs({
+          entityType: LOCATION_ENTITY_TYPE,
+          ownerUserId,
+          changeSource: 'PlaceMergeService.mergePlaces',
+          targetId,
+          columns: {
+            before: {
+              name: target.name,
+              description: target.description,
+              place_kind: target.place_kind,
+              parent_place_id: target.parent_place_id,
+              coordinates: target.coordinates,
+            },
+            after: {
+              name: mergedName,
+              description: mergedDescription,
+              place_kind: mergedKind,
+              parent_place_id: parentDonor,
+              coordinates: pointDonor ? pointDonor.coordinates : target.coordinates,
             },
           },
-          ...sources.map((sourceId) => ({
-            nodeType: 'entity' as const,
-            changeType: 'merged' as const,
+          properties: { before: target.properties ?? {}, after: mergedProperties },
+          sources: sources.map((sourceId) => ({
             entityId: sourceId,
-            entityType: LOCATION_ENTITY_TYPE,
-            ownerUserId,
-            changeSource: 'PlaceMergeService.mergePlaces',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            isActive: byId.get(sourceId)?.is_active,
           })),
-        ],
+        }),
         em,
       );
 
@@ -364,6 +400,36 @@ export class PlaceMergeService {
     }
 
     return { target: PlaceEntity.toEgressType(entity), counts };
+  }
+
+  /**
+   * Which of `placeIds` sit anywhere below `targetId`, walking each one's
+   * parent chain up (bounded, like the ancestor check in {@link mergePlaces}).
+   */
+  private async placesUnder(
+    em: EntityManager,
+    ownerUserId: string,
+    targetId: string,
+    placeIds: string[],
+  ): Promise<Set<string>> {
+    if (placeIds.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ place_id: string }> = await em.query(
+      `WITH RECURSIVE climb AS (
+         SELECT entity_id AS place_id, parent_place_id AS entity_id, 1 AS depth
+           FROM ci.entities WHERE owner_user_id = $1 AND entity_id = ANY($3::uuid[])
+         UNION ALL
+         SELECT climb.place_id, e.parent_place_id, climb.depth + 1
+           FROM ci.entities e JOIN climb ON e.entity_id = climb.entity_id
+          WHERE e.parent_place_id IS NOT NULL AND climb.depth < 32
+       )
+       SELECT DISTINCT place_id FROM climb WHERE entity_id = $2`,
+      [ownerUserId, targetId, placeIds],
+    );
+
+    return new Set(rows.map((row) => row.place_id));
   }
 
   /**

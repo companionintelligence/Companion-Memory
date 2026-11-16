@@ -5,7 +5,11 @@
 > Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12) `VtcModule` is
 > registered with Nest. That pull request added `POST /vtc/verify`, and Companion-Memory#3443 (merged
 > 2026-11-13 UTC) added `POST /vtc/status-list/evaluate` and the checks on caller-presented status lists
-> in `/vtc/verify`. Neither is in a release yet. Both routes answer `404` unless `vtc.credentials`
+> in `/vtc/verify`. Neither is in a release yet. Companion-Memory#3442 (merged 2026-11-13 UTC, also in no
+> release) changed `/vtc/verify` too: it refuses an array credential and checks `validFrom` and
+> `validUntil`. None of #3439, #3442 and #3443 records a review, so the Hub security review that
+> [ADR-0017](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0017-openvtc-verifiable-trust-community-alongside-keri.md)
+> asks for before anything here is wired to a route is still to do. Both routes answer `404` unless `vtc.credentials`
 > (`ENABLE_VTC_CREDENTIALS`, default false) is on. They check a credential and a status list that the caller
 > presents, accept proofs from `did:key` issuers only (configuration pins no community), make no
 > outbound request and write **no database rows**; nothing else in the API calls the module. It has **not been run against
@@ -217,9 +221,11 @@ upstream. That is a deliberate decision, not a bug fix, and it is not made here.
 ## How it is meant to be wired
 
 1. A `VtcModule` that provides a recognizer built from configuration (the list of recognised
-   communities and their pinned keys), registered behind a feature flag that defaults off. The module
-   and its flag (`vtc.credentials`) landed in Companion-Memory#3439; the recognizer built from
-   configuration did not, so its routes pin no community and verify `did:key` issuers only.
+   communities and their pinned keys), registered behind a feature flag that defaults off; Hub security
+   review before any route (ADR-0017 Decision 6(e)). The module and its flag (`vtc.credentials`) landed
+   in Companion-Memory#3439; the recognizer built from configuration did not, so its routes pin no
+   community and verify `did:key` issuers only. None of #3439, #3442 and #3443 records a review, so the
+   Hub security review is still to do.
 2. A `fetchStatusList` built on the existing peer egress, with a size cap and a cache that honours
    the list's `ttl` when it has one (OpenVTC's lists have none and are served `no-store`).
 3. `StatusSlots` and issued credentials persisted in `ci.*` tables, behind a service that serializes

@@ -1,9 +1,15 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql';
+import { Args, Context as GraphQLContext, ID, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql';
+import type { Request } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { ClientFactory, ProviderKeyService, ProviderService } from '@ci/domains/connections';
+import {
+  callbackRequestOrigin,
+  ClientFactory,
+  ProviderKeyService,
+  ProviderService,
+} from '@ci/domains/connections';
 
 import { ProviderKeyLoader } from '../loaders/ProviderKeyLoader';
 import { GlobalUID } from '../types/GlobalUID';
@@ -68,8 +74,8 @@ export class ProviderResolver {
   }
 
   @Query(() => String)
-  oAuthCallbackUrl(): string {
-    return this.providerService.getOAuthCallbackUrl();
+  oAuthCallbackUrl(@GraphQLContext('req') req?: Request): string {
+    return this.providerService.getOAuthCallbackUrl(callbackRequestOrigin(req));
   }
 
   @ResolveField(() => ProviderKeyType, { nullable: true })

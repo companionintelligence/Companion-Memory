@@ -75,6 +75,12 @@ pub const DEFAULT_CHAT_MODEL: &str = "gemma4:e4b";
 /// only; FoundationModels has no embeddings API — see mod.rs).
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
+/// The models this app pulls into an Ollama it runs itself, in the order
+/// ensure_available pulls them. A user's own Ollama gets none of them pulled
+/// unasked: Settings > Model offers "Download recommended model" for the ones
+/// it lacks (see local_model::recommended).
+pub const RECOMMENDED_MODELS: [&str; 2] = [DEFAULT_EMBED_MODEL, DEFAULT_CHAT_MODEL];
+
 const OLLAMA_VERSION: &str = "v0.32.15";
 
 struct ReleaseAsset {
@@ -227,9 +233,12 @@ pub fn ensure_available(
         return Err("The local model server did not become ready within 30s — check ollama-sidecar.log.".to_string());
     }
 
-    pull_model(OLLAMA_PORT, DEFAULT_EMBED_MODEL)?;
-    if need_chat_model {
-        pull_model(OLLAMA_PORT, DEFAULT_CHAT_MODEL)?;
+    // The same list "Download recommended model" offers a person's own Ollama,
+    // so the two cannot drift apart.
+    for model in RECOMMENDED_MODELS {
+        if need_chat_model || model != DEFAULT_CHAT_MODEL {
+            pull_model(OLLAMA_PORT, model)?;
+        }
     }
 
     // After the pulls, not before: the relay only matters to the containers,
@@ -615,9 +624,30 @@ fn wait_until_ready(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// One line of Ollama's `/api/pull` progress stream. Every field is optional:
+/// the stream mixes `{"status":"pulling manifest"}`, per-layer
+/// `{"status":"pulling <digest>","digest":…,"total":…,"completed":…}` records
+/// and, when the pull fails after it has started, `{"error":"…"}` with no
+/// status at all (the HTTP status is already 200 by then).
 #[derive(Debug, Deserialize)]
 struct PullProgressLine {
-    status: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+    #[serde(default)]
+    total: Option<u64>,
+    #[serde(default)]
+    completed: Option<u64>,
+}
+
+/// How far a pull has got, over every layer Ollama has reported so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PullProgress {
+    pub completed_bytes: u64,
+    pub total_bytes: u64,
 }
 
 /// Blocks until the pull completes (or errors) — this can take a while on a
@@ -626,8 +656,20 @@ struct PullProgressLine {
 /// async executor via spawn_blocking, matching stack_manager's own
 /// docker-compose calls.
 fn pull_model(port: u16, model: &str) -> Result<(), String> {
+    pull_model_reporting(port, model, |_| {})
+}
+
+/// [`pull_model`], calling `on_progress` whenever a layer's byte count moves.
+///
+/// Only Ollama's closing `{"status":"success"}` counts as done. A stream that
+/// ends without it (Ollama stopped, the connection dropped) or that carries an
+/// `{"error":…}` line is a failed pull. Both used to read as finished: an error
+/// line has no `status`, so it was skipped as progress noise.
+pub fn pull_model_reporting(port: u16, model: &str, mut on_progress: impl FnMut(PullProgress)) -> Result<(), String> {
+    // No proxy: this is the host's own Ollama on loopback (see is_running_on).
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 60))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
@@ -638,9 +680,18 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to request pull of {model}: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Pull of {model} failed: HTTP {}", response.status()));
+        let status = response.status();
+        let said = response
+            .json::<PullProgressLine>()
+            .ok()
+            .and_then(|line| line.error)
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default();
+        return Err(format!("Pull of {model} failed: HTTP {status}{said}"));
     }
 
+    let mut layers: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    let mut finished = false;
     let mut reader = std::io::BufReader::new(response);
     let mut line = String::new();
     loop {
@@ -655,14 +706,72 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(progress) = serde_json::from_str::<PullProgressLine>(trimmed) {
-            log::info!("ollama pull {model}: {}", progress.status);
-            if progress.status.eq_ignore_ascii_case("error") {
-                return Err(format!("Pull of {model} reported an error"));
+        let Ok(progress) = serde_json::from_str::<PullProgressLine>(trimmed) else {
+            continue;
+        };
+        if let Some(error) = progress.error {
+            return Err(format!("Pull of {model} failed: {error}"));
+        }
+        let status = progress.status.unwrap_or_default();
+        if status.eq_ignore_ascii_case("error") {
+            return Err(format!("Pull of {model} reported an error"));
+        }
+        if let (Some(digest), Some(total)) = (progress.digest, progress.total) {
+            let entry = layers.entry(digest).or_default();
+            let next = (progress.completed.unwrap_or(entry.0), total);
+            if *entry != next {
+                *entry = next;
+                on_progress(PullProgress {
+                    completed_bytes: layers.values().map(|(completed, _)| completed).sum(),
+                    total_bytes: layers.values().map(|(_, total)| total).sum(),
+                });
             }
+            continue;
+        }
+        if !status.is_empty() {
+            log::info!("ollama pull {model}: {status}");
+        }
+        if status.eq_ignore_ascii_case("success") {
+            finished = true;
         }
     }
+
+    if !finished {
+        return Err(format!("Pull of {model} stopped before it finished"));
+    }
     Ok(())
+}
+
+/// A failed pull in words the person who pressed "Download recommended model"
+/// can act on. `detail` is what pull_model_reporting returned; it still goes
+/// to the log as it is.
+pub fn describe_pull_failure(model: &str, detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+
+    if has(&["no space left", "disk full", "not enough space"]) {
+        format!("There is not enough free disk space for {model}. Free up some space, then try again.")
+    } else if has(&["requires a newer version of ollama"]) {
+        // The registry's 412 for a model an older Ollama cannot run. A person's
+        // own Ollama is often older than the one this app ships.
+        format!("Your Ollama is too old for {model}. Update Ollama from ollama.com/download, then try again.")
+    } else if has(&[
+        "no such host",
+        "dial tcp",
+        "i/o timeout",
+        "tls handshake",
+        "registry.ollama.ai",
+        "network is unreachable",
+    ]) {
+        format!("Your Ollama could not reach ollama.com to download {model}. Check your internet connection, then try again.")
+    } else if has(&["failed to request pull", "failed to read pull progress", "stopped before it finished"]) {
+        format!("Your Ollama stopped answering while it was downloading {model}. Check that Ollama is running, then try again.")
+    } else if has(&["file does not exist", "manifest unknown"]) {
+        format!("Ollama's library has no model called {model}.")
+    } else {
+        let said = detail.strip_prefix(&format!("Pull of {model} failed: ")).unwrap_or(detail);
+        format!("Your Ollama could not download {model}. It said: {said}")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -697,8 +806,10 @@ impl TagsModel {
 /// The models an Ollama runs locally, in the order `/api/tags` lists them.
 /// Cloud models are left out; see TagsModel::is_local.
 fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    // No proxy, for the same reason as pull_model_reporting.
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
     let response = client
@@ -740,6 +851,10 @@ fn is_chat_model_name(name: &str) -> bool {
 /// or serves no local chat model at all (nothing better to name). Otherwise
 /// the first local chat model it lists, so chat and background work end up
 /// on the same model the user already has on disk.
+///
+/// The default wins wherever it sits in the list. `/api/tags` lists the most
+/// recently pulled model first, which on a machine that also runs large models
+/// is often one far too slow for background work.
 fn choose_host_chat_model(served: &[String]) -> Option<String> {
     if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
         return None;
@@ -748,14 +863,29 @@ fn choose_host_chat_model(served: &[String]) -> Option<String> {
     served.iter().find(|name| is_chat_model_name(name)).cloned()
 }
 
+/// The models of RECOMMENDED_MODELS that `served` lacks, in that order.
+fn missing_recommended_models(served: &[String]) -> Vec<String> {
+    RECOMMENDED_MODELS
+        .iter()
+        .filter(|wanted| !served.iter().any(|name| same_model(name, wanted)))
+        .map(|wanted| wanted.to_string())
+        .collect()
+}
+
+/// The recommended models a user's own Ollama on `port` does not have.
+pub fn host_ollama_missing_models(port: u16) -> Result<Vec<String>, String> {
+    served_model_names(port).map(|served| missing_recommended_models(&served))
+}
+
 /// What to write as the chat model when reusing the user's own Ollama.
 ///
-/// This app pulls nothing into an Ollama it does not own. It used to name
-/// DEFAULT_CHAT_MODEL regardless, so where that Ollama lacked it chat quietly
-/// ran on whatever it listed first while every background job failed with
-/// "Invalid model specified: gemma4:e4b". Logged either way, with the command
-/// that gets the default model. The embedding model search needs is logged
-/// the same way and has no substitute: the index is built with it.
+/// This app pulls nothing into an Ollama it does not own unless the person
+/// asks for it in Settings > Model. It used to name DEFAULT_CHAT_MODEL
+/// regardless, so where that Ollama lacked it chat quietly ran on whatever it
+/// listed first while every background job failed with "Invalid model
+/// specified: gemma4:e4b". Logged either way, with where to get the default
+/// model. The embedding model search needs is logged the same way and has no
+/// substitute: the index is built with it.
 pub fn host_ollama_chat_model(port: u16) -> Option<String> {
     let served = match served_model_names(port) {
         Ok(served) => served,
@@ -768,23 +898,25 @@ pub fn host_ollama_chat_model(port: u16) -> Option<String> {
     if !served.iter().any(|name| same_model(name, DEFAULT_EMBED_MODEL)) {
         log::warn!(
             "Your Ollama does not have {DEFAULT_EMBED_MODEL}, which search needs. \
-             Run `ollama pull {DEFAULT_EMBED_MODEL}` to add it."
+             Download it with \"Download recommended model\" in Settings > Model, \
+             or run `ollama pull {DEFAULT_EMBED_MODEL}`."
         );
-    }
-
-    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
-        return None;
     }
 
     let chosen = choose_host_chat_model(&served);
     match &chosen {
+        None if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) => log::info!(
+            "Your Ollama has {DEFAULT_CHAT_MODEL}, the recommended model; chat and background work use it."
+        ),
         Some(model) => log::warn!(
             "Your Ollama does not have {DEFAULT_CHAT_MODEL}; chat and background work will use {model}, \
-             the first local chat model it lists. Run `ollama pull {DEFAULT_CHAT_MODEL}` to use the default."
+             the first local chat model it lists. Download the recommended model with \
+             \"Download recommended model\" in Settings > Model, or run `ollama pull {DEFAULT_CHAT_MODEL}`."
         ),
         None => log::warn!(
             "Your Ollama has no local chat model; background work will fail until it has one. \
-             Run `ollama pull {DEFAULT_CHAT_MODEL}` to add the default."
+             Download the recommended model with \"Download recommended model\" in Settings > Model, \
+             or run `ollama pull {DEFAULT_CHAT_MODEL}`."
         ),
     }
 
@@ -940,6 +1072,30 @@ mod tests {
         assert!(!is_chat_model_name("kokoro-tts:latest"));
     }
 
+    /// `/api/tags` lists the newest model first. A person who pulled a 122B
+    /// model after the recommended one still gets the recommended one, and
+    /// Settings > Model offers only the models that are missing.
+    #[test]
+    fn the_recommended_model_wins_wherever_it_is_listed_and_only_missing_ones_are_offered() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        let has_both = names(&["qwen3.5:122b", "qwen3.6:35b", "nomic-embed-text:latest", DEFAULT_CHAT_MODEL]);
+        assert_eq!(choose_host_chat_model(&has_both), None);
+        assert!(missing_recommended_models(&has_both).is_empty());
+
+        let no_chat = names(&["qwen3.5:122b", "nomic-embed-text:latest"]);
+        assert_eq!(choose_host_chat_model(&no_chat), Some("qwen3.5:122b".to_string()));
+        assert_eq!(missing_recommended_models(&no_chat), vec![DEFAULT_CHAT_MODEL.to_string()]);
+
+        let neither = names(&["qwen3.5:122b"]);
+        assert_eq!(
+            missing_recommended_models(&neither),
+            vec![DEFAULT_EMBED_MODEL.to_string(), DEFAULT_CHAT_MODEL.to_string()],
+            "in the order the app pulls them into its own Ollama"
+        );
+        assert_eq!(missing_recommended_models(&names(&["gemma4:e4b", "nomic-embed-text"])), Vec::<String>::new());
+    }
+
     /// The model list comes from Ollama's own `/api/tags` (every model on
     /// disk, not `/api/ps`'s loaded few), in its order. Cloud models are left
     /// out: the app runs with CI_LOCAL_ONLY=true, so naming one would send
@@ -1037,6 +1193,109 @@ mod tests {
         });
         let err = pull_model(failing, DEFAULT_EMBED_MODEL).expect_err("an error status must fail the pull");
         assert!(err.contains("reported an error"), "{err}");
+    }
+
+    /// What Settings > Model's progress bar is built from: every layer's bytes
+    /// added up, reported as they move. Ollama sends the layer list a piece at
+    /// a time, so the total grows as layers appear.
+    #[test]
+    fn a_pull_reports_its_bytes_over_every_layer() {
+        let port = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling manifest\"}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":400}\n\
+                 {\"status\":\"pulling bbb\",\"digest\":\"sha256:bbb\",\"total\":10,\"completed\":10}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":1000}\n\
+                 {\"status\":\"verifying sha256 digest\"}\n\
+                 {\"status\":\"success\"}\n",
+            )
+        });
+        let mut seen = Vec::new();
+
+        pull_model_reporting(port, DEFAULT_CHAT_MODEL, |progress| seen.push(progress)).expect("a finished pull");
+
+        let at = |completed_bytes, total_bytes| PullProgress {
+            completed_bytes,
+            total_bytes,
+        };
+        assert_eq!(seen, vec![at(0, 1000), at(400, 1000), at(410, 1010), at(1010, 1010)]);
+    }
+
+    /// Ollama reports a pull that fails once it has started as an `error` line
+    /// in a 200 stream. A pull cut short (Ollama stopped) just ends. Both
+    /// used to read as a finished download: the error line has no `status`, so
+    /// it was skipped like progress noise.
+    #[test]
+    fn a_pull_that_errors_or_stops_part_way_is_not_a_finished_one() {
+        let erroring = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling manifest\"}\n\
+                 {\"error\":\"write /models/blobs/sha256-aaa-partial: no space left on device\"}\n",
+            )
+        });
+        let err = pull_model(erroring, DEFAULT_CHAT_MODEL).expect_err("an error line fails the pull");
+        assert!(err.contains("no space left on device"), "Ollama's own words reach the log: {err}");
+
+        let cut_short = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":400}\n",
+            )
+        });
+        let err = pull_model(cut_short, DEFAULT_CHAT_MODEL).expect_err("no success line, no finished pull");
+        assert!(err.contains("stopped before it finished"), "{err}");
+
+        let refused = serve(|request| respond(request, 500, r#"{"error":"pull model manifest: file does not exist"}"#));
+        let err = pull_model(refused, DEFAULT_CHAT_MODEL).expect_err("HTTP 500");
+        assert!(err.contains("500") && err.contains("file does not exist"), "{err}");
+    }
+
+    /// The person who pressed "Download recommended model" reads these, not the
+    /// log. Each says what happened and what to do, without Ollama's internals.
+    #[test]
+    fn a_failed_pull_is_described_in_plain_words() {
+        let model = DEFAULT_CHAT_MODEL;
+        let said = |detail: &str| describe_pull_failure(model, detail);
+
+        assert_eq!(
+            said("Pull of gemma4:e4b failed: write /x-partial: no space left on device"),
+            "There is not enough free disk space for gemma4:e4b. Free up some space, then try again."
+        );
+        assert_eq!(
+            said(
+                "Pull of gemma4:e4b failed: pull model manifest: Get \"https://registry.ollama.ai/v2/library/gemma4/manifests/e4b\": \
+                 dial tcp: lookup registry.ollama.ai: no such host"
+            ),
+            "Your Ollama could not reach ollama.com to download gemma4:e4b. Check your internet connection, then try again."
+        );
+        for stopped in [
+            "Pull of gemma4:e4b stopped before it finished",
+            "Failed to read pull progress for gemma4:e4b: connection reset by peer",
+            "Failed to request pull of gemma4:e4b: error sending request: Connection refused",
+        ] {
+            assert_eq!(
+                said(stopped),
+                "Your Ollama stopped answering while it was downloading gemma4:e4b. Check that Ollama is running, then try again.",
+                "{stopped}"
+            );
+        }
+        assert_eq!(
+            said(
+                "Pull of gemma4:e4b failed: pull model manifest: 412: \n\nThe model you are attempting to pull \
+                 requires a newer version of Ollama.\n\nPlease download the latest version at:\n\n\thttps://ollama.com/download\n\n"
+            ),
+            "Your Ollama is too old for gemma4:e4b. Update Ollama from ollama.com/download, then try again."
+        );
+        assert_eq!(
+            said("Pull of gemma4:e4b failed: HTTP 500 Internal Server Error: something new"),
+            "Your Ollama could not download gemma4:e4b. It said: HTTP 500 Internal Server Error: something new"
+        );
     }
 
     /// Which decompressor runs is chosen purely from the asset filename, and

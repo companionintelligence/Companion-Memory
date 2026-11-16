@@ -5,6 +5,7 @@ import { EventService } from '@ci/domains/events';
 
 import { PythonFunctionRunEvent } from '../events';
 import {
+  PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS,
   PYTHON_FUNCTION_QUEUES,
   PYTHON_FUNCTIONS,
   type PythonFunctionDispatchOptions,
@@ -46,6 +47,7 @@ export class PythonFunctionService {
       );
     }
 
+    const heartbeatSeconds = PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS[target];
     const jobIds = await this.eventService.send(
       PythonFunctionRunEvent,
       {
@@ -58,6 +60,8 @@ export class PythonFunctionService {
         queue: PYTHON_FUNCTION_QUEUES[target],
         ...(options.singletonKey ? { singletonKey: options.singletonKey } : {}),
         ...(options.priority !== undefined ? { priority: options.priority } : {}),
+        // On the job, not the queue; see PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS.
+        ...(heartbeatSeconds !== undefined ? { heartbeatSeconds } : {}),
       },
     );
 
@@ -71,12 +75,32 @@ export class PythonFunctionService {
   }
 
   /**
-   * Whether a job with this singletonKey is still waiting, retrying or running
-   * on `target`'s queue. `dispatch` alone cannot say: the queues' `short` policy
-   * refuses a duplicate only while the first copy is still waiting, so once it
-   * is running a second dispatch is accepted and both run side by side.
+   * `dispatch`, unless a run for this user is already waiting, retrying or
+   * running on `target`'s queue, whatever key it was sent with.
+   *
+   * `dispatch` alone cannot say. The queues' `short` policy refuses a duplicate
+   * only while the first copy is still waiting and only one with the same key:
+   * Predict (`fn:nightly:<user>:manual`), the 02:30 nightly and the start-up
+   * bootstrap sweep (`fn:hbpe:<user>:<day>`) each use their own, so any of them
+   * started a second hour-long pipeline beside a running one.
+   *
+   * Two calls in the same moment can both pass the check. The `short` policy
+   * still refuses the second while the first is waiting, when they share a key.
+   *
+   * @returns true when a job was enqueued; false when a run was already live
+   *   or the queue refused the key.
    */
-  async hasLiveJob(target: PythonFunctionTarget, singletonKey: string): Promise<boolean> {
-    return this.eventService.hasLiveJob(PYTHON_FUNCTION_QUEUES[target], singletonKey);
+  async dispatchUnlessRunning(
+    target: PythonFunctionTarget,
+    functionName: string,
+    userId: string,
+    args: Record<string, unknown> = {},
+    options: PythonFunctionDispatchOptions = {},
+  ): Promise<boolean> {
+    if (await this.eventService.hasLiveJobForUser(PYTHON_FUNCTION_QUEUES[target], userId)) {
+      return false;
+    }
+
+    return this.dispatch(target, functionName, userId, args, options);
   }
 }

@@ -752,7 +752,7 @@ export class HubForwardAuthBridgeService {
     return {
       username,
       replaced: true,
-      accessToken: this.authService.issueAccessToken(user.id),
+      accessToken: this.authService.issueAccessToken(user.id, sessionId),
     };
   }
 

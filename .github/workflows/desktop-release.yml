@@ -34,12 +34,20 @@
 # and operated the same way. If publish.yml's gate gains an accountability
 # requirement, this one is expected to gain it too.
 #
-# The desktop marketing version (desktop-v0.1.0 → 0.1.0) versions the APP
-# only. The SERVER images the bundled compose file pulls are tagged
-# independently (date-shaped release tags like 2026.9.5) and are resolved
-# ONCE, in the `version` job, by
-# frontend/apps/desktop/scripts/sync-compose-resources.cjs; use the
-# `server_image_tag` dispatch input if one must be pinned by hand.
+# ── Version ─────────────────────────────────────────────────────────────
+# release.yml calls this workflow (workflow_call) with version_name and
+# server_image_tag both set to the server release, so the app carries the
+# server's version: Memory Desktop 2026.11.17 runs server 2026.11.17 and its
+# Release is tagged desktop-v2026.11.17. The `version` job
+# turns version_name into what each installer accepts, through
+# scripts/release/release-plan.mjs: Tauri gets at most three numbers
+# (2026.11.17.1 builds as 2026.11.17), and the Windows MSI, which caps the
+# first two numbers at 255, gets 26.11.17 (26.11.17.1 for that re-cut).
+# Older desktop-v0.1.x tags keep working unchanged.
+#
+# The SERVER images the bundled compose file pulls are resolved ONCE, in the
+# `version` job, by frontend/apps/desktop/scripts/sync-compose-resources.cjs;
+# server_image_tag pins them, and release.yml always sets it.
 #
 # ── Required secrets ────────────────────────────────────────────────────
 # macOS (Developer ID signing + notarization — names match what CI-Hub's own
@@ -59,8 +67,9 @@
 #
 # The six Azure values are configured on the `production` Environment. The
 # four macOS-specific values still need repository secrets; APPLE_TEAM_ID is
-# shared with the iOS lane. A lane skips when none of its platform-specific
-# signing values are configured and fails early on a partial configuration.
+# shared with the iOS lane. The `signing` job checks both sets. A lane whose
+# platform-specific signing values are all missing shows as skipped on the run
+# page; a partial configuration fails the `signing` job, and with it the run.
 # The Linux lane always runs unsigned — no signing convention exists for
 # .deb/.rpm in this codebase.
 name: Desktop Release
@@ -112,6 +121,49 @@ name: Desktop Release
 #         type: string
 #         default: ''
 #         required: false
+#   workflow_call:
+#     inputs:
+#       version_name:
+#         type: string
+#         required: false
+#       server_image_tag:
+#         type: string
+#         required: false
+#       skip_test_gate:
+#         type: boolean
+#         default: false
+#         required: false
+#       bypass_reason:
+#         type: string
+#         default: ''
+#         required: false
+#     # Repository secrets a caller hands over. The AZURE_* values are declared
+#     # but never passed: the jobs that read them run in the production
+#     # Environment, and GitHub gives a called job with `environment:` that
+#     # Environment's secrets.
+#     secrets:
+#       APPLE_CERTIFICATE:
+#         required: false
+#       APPLE_CERTIFICATE_PASSWORD:
+#         required: false
+#       APPLE_ID:
+#         required: false
+#       APPLE_PASSWORD:
+#         required: false
+#       APPLE_TEAM_ID:
+#         required: false
+#       AZURE_TENANT_ID:
+#         required: false
+#       AZURE_CLIENT_ID:
+#         required: false
+#       AZURE_SUBSCRIPTION_ID:
+#         required: false
+#       AZURE_SIGNING_ENDPOINT:
+#         required: false
+#       AZURE_SIGNING_ACCOUNT:
+#         required: false
+#       AZURE_CERTIFICATE_PROFILE:
+#         required: false
 # <<< ci-local:gated
 on:
   workflow_dispatch:
@@ -158,6 +210,52 @@ on:
           expires.
         type: string
         default: ''
+        required: false
+  # release.yml calls this after publishing the server images. A called workflow
+  # runs on the caller's ref (the server tag), so the test gate below still finds
+  # the desktop-build.yml run dispatched on that commit before it was tagged.
+  workflow_call:
+    inputs:
+      version_name:
+        type: string
+        required: false
+      server_image_tag:
+        type: string
+        required: false
+      skip_test_gate:
+        type: boolean
+        default: false
+        required: false
+      bypass_reason:
+        type: string
+        default: ''
+        required: false
+    # Repository secrets a caller hands over. The AZURE_* values are declared
+    # but never passed: the jobs that read them run in the production
+    # Environment, and GitHub gives a called job with `environment:` that
+    # Environment's secrets.
+    secrets:
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      AZURE_SIGNING_ENDPOINT:
+        required: false
+      AZURE_SIGNING_ACCOUNT:
+        required: false
+      AZURE_CERTIFICATE_PROFILE:
         required: false
 
 # Read-only by default. Only `release` writes (it creates the tag and the
@@ -271,7 +369,10 @@ jobs:
     needs: verify-desktop-build-passed
     runs-on: ubuntu-latest
     outputs:
+      version: ${{ steps.v.outputs.version }}
       name: ${{ steps.v.outputs.name }}
+      tag: ${{ steps.v.outputs.tag }}
+      windows_version: ${{ steps.v.outputs.windows_version }}
       server_image_tag: ${{ steps.image.outputs.tag }}
     steps:
       # Full history + tags: sync-compose-resources.cjs resolves the image tag
@@ -284,23 +385,27 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # name: what Tauri builds with; tag: the Release's tag; windows_version:
+      # the MSI version when `name` doesn't fit one (empty otherwise). See the
+      # Version section of this file's header.
       - id: v
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version_name }}" ]; then
-            NAME="${{ inputs.version_name }}"
+          if [ -n "${VERSION_NAME}" ]; then
+            NAME="${VERSION_NAME}"
           elif [[ "${GITHUB_REF}" == refs/tags/desktop-v* ]]; then
             NAME="${GITHUB_REF#refs/tags/desktop-v}"
           else
             NAME="0.1.0"
           fi
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "Version ${NAME}"
-
-      - name: Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '22'
+          node scripts/release/release-plan.mjs desktop "${NAME}" | tee -a "$GITHUB_OUTPUT"
 
       # THE SERVER IMAGE TAG IS RESOLVED HERE, ONCE, AND ONLY HERE.
       #
@@ -343,13 +448,79 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Bundling ghcr.io/companionintelligence/companion/*:$tag"
 
+  # Which signed lanes can run. A lane with none of its platform-specific
+  # signing secrets is skipped at the job level, so the run page shows it as
+  # skipped. (The macOS and Windows jobs used to run, skip every step and report
+  # success, which looked like a release that had built them.) A partial set
+  # fails here, before any 60-minute build. This job runs in the `production`
+  # Environment because the Azure values live there; the macOS values are
+  # repository secrets, which every job can read.
+  signing:
+    name: Check signing secrets
+    needs: verify-desktop-build-passed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    outputs:
+      macos: ${{ steps.check.outputs.macos }}
+      windows: ${{ steps.check.outputs.windows }}
+    steps:
+      - name: Check the macOS and Windows signing secrets
+        id: check
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+        run: |
+          set -uo pipefail
+          status=0
+          # check_lane <name> <output> <shared secret> <secrets...>. A shared
+          # secret (APPLE_TEAM_ID, which the iOS lane also uses) alone doesn't
+          # count as the lane being configured.
+          check_lane() {
+            local lane="$1" output="$2" shared="$3"; shift 3
+            local found=0 own=0 missing=""
+            for var in "$@"; do
+              if [ -n "${!var:-}" ]; then
+                found=$((found + 1))
+                if [ "$var" != "$shared" ]; then own=$((own + 1)); fi
+              else
+                missing="${missing} ${var}"
+              fi
+            done
+            if [ "$found" -eq "$#" ]; then
+              echo "${output}=true" >> "$GITHUB_OUTPUT"
+            elif [ "$own" -eq 0 ]; then
+              echo "${output}=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::${lane} signing secrets not configured. The ${lane} job will show as skipped."
+            else
+              echo "::error::${lane} lane is partially configured. Missing:${missing}"
+              status=1
+            fi
+          }
+          check_lane macOS macos APPLE_TEAM_ID \
+            APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          check_lane Windows windows '' \
+            AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_SUBSCRIPTION_ID \
+            AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE
+          exit "$status"
+
   macos:
     name: macOS (signed, notarized)
     # The gate is listed explicitly as well as `version` — `version` already
     # needs it, so this is redundant for ordering, and that is the point: a
     # later edit that drops or reorders `version` cannot silently release an
     # untested commit from this lane. Same on the windows and linux jobs.
-    needs: [verify-desktop-build-passed, version]
+    needs: [verify-desktop-build-passed, version, signing]
+    if: needs.signing.outputs.macos == 'true'
     # The Apple on-device bridge uses Swift tools 6.2 and the macOS 26 SDK;
     # macos-15 currently ships Swift 6.1 and fails before the signed build.
     runs-on: macos-26
@@ -361,45 +532,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Check for macOS signing secrets
-        id: secrets
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -uo pipefail
-          REQUIRED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
-          MISSING=""
-          FOUND=0
-          PLATFORM_FOUND=0
-          TOTAL=0
-          for VAR in $REQUIRED; do
-            TOTAL=$((TOTAL + 1))
-            if [ -n "${!VAR:-}" ]; then
-              FOUND=$((FOUND + 1))
-              if [ "$VAR" != "APPLE_TEAM_ID" ]; then
-                PLATFORM_FOUND=$((PLATFORM_FOUND + 1))
-              fi
-            else
-              MISSING="${MISSING} ${VAR}"
-            fi
-          done
-          if [ "$FOUND" -eq "$TOTAL" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif [ "$PLATFORM_FOUND" -eq 0 ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::macOS signing secrets not configured — skipping the signed macOS build."
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::error::macOS lane is partially configured. Missing:${MISSING}"
-            exit 1
-          fi
-
       - name: Rust toolchain
-        if: steps.secrets.outputs.present == 'true'
         # Pinned to a master commit with the toolchain named explicitly: the
         # `stable` branch is regenerated from master, so a commit on it can
         # stop being reachable.
@@ -409,7 +542,6 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Node.js
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -419,7 +551,6 @@ jobs:
       # on npm at build time. This job has the Developer ID identity unlocked
       # while the CLI runs, so the CLI must not change underneath it.
       - name: Install the locked Tauri CLI
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         run: |
           set -euo pipefail
@@ -464,7 +595,6 @@ jobs:
       # first-launch `docker compose pull` 404 months later. Fail the lane
       # here instead — a red release is recoverable, a shipped bad pin is not.
       - name: Sync compose resources
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         shell: bash
         run: |
@@ -478,7 +608,6 @@ jobs:
           CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.server_image_tag }}
 
       - name: Bump version
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop/src-tauri
         run: |
           set -euo pipefail
@@ -499,7 +628,6 @@ jobs:
       # see mobile-release.yml's iOS lane for the same pattern and the
       # set-key-partition-list gotcha it documents.
       - name: Import signing certificate
-        if: steps.secrets.outputs.present == 'true'
         env:
           CERT_B64: ${{ secrets.APPLE_CERTIFICATE }}
           CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -527,7 +655,6 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build (universal, signed)
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -538,7 +665,6 @@ jobs:
             -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Notarize and staple
-        if: steps.secrets.outputs.present == 'true'
         env:
           APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -573,7 +699,6 @@ jobs:
           xcrun stapler validate "$DMG"
 
       - name: Upload macOS artifact
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           retention-days: 7
@@ -582,13 +707,14 @@ jobs:
           if-no-files-found: error
 
       - name: Clean up keychain
-        if: always() && steps.secrets.outputs.present == 'true'
+        if: always()
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
   windows:
     name: Windows (signed)
     # See the macOS job for why the gate is named explicitly alongside version.
-    needs: [verify-desktop-build-passed, version]
+    needs: [verify-desktop-build-passed, version, signing]
+    if: needs.signing.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     # Azure's OIDC subject is environment:production, so the Azure secrets live
@@ -605,50 +731,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Check for Windows signing secrets
-        id: secrets
-        shell: bash
-        env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
-        run: |
-          set -uo pipefail
-          REQUIRED="AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_SUBSCRIPTION_ID AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE"
-          MISSING=""
-          FOUND=0
-          TOTAL=0
-          for VAR in $REQUIRED; do
-            TOTAL=$((TOTAL + 1))
-            if [ -n "${!VAR:-}" ]; then
-              FOUND=$((FOUND + 1))
-            else
-              MISSING="${MISSING} ${VAR}"
-            fi
-          done
-          if [ "$FOUND" -eq "$TOTAL" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif [ "$FOUND" -eq 0 ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Windows signing secrets not configured — skipping the signed Windows build."
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::error::Windows lane is partially configured. Missing:${MISSING}"
-            exit 1
-          fi
-
       - name: Rust toolchain
-        if: steps.secrets.outputs.present == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Node.js
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -656,7 +745,6 @@ jobs:
       # See the macOS job: the locked CLI, because this job can mint the
       # production OIDC token that Azure Artifact Signing trusts.
       - name: Install the locked Tauri CLI
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         shell: bash
         run: |
@@ -675,7 +763,6 @@ jobs:
       # `shell: bash` because windows-latest defaults to pwsh, where none of
       # this is valid syntax.
       - name: Sync compose resources
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         shell: bash
         run: |
@@ -695,7 +782,6 @@ jobs:
       # pwsh; git-bash ships GNU sed, so `-i` takes NO backup-suffix argument
       # (the macOS lane's `-i ''` would be parsed as the sed script here).
       - name: Bump version
-        if: steps.secrets.outputs.present == 'true'
         shell: bash
         working-directory: frontend/apps/desktop/src-tauri
         run: |
@@ -709,18 +795,25 @@ jobs:
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       - name: Build
-        if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         # bash, not the windows-latest default pwsh: pwsh strips the inner quotes of
         # an escaped-JSON argument, so Tauri received `{\` as its --config and the
         # build failed. The Windows lane had never run before (it skips without
         # signing secrets), which is why this was never seen.
         shell: bash
+        env:
+          # Set when the app version doesn't fit an MSI version (2026.11.17
+          # becomes 26.11.17); see the Version section of this file's header.
+          WINDOWS_VERSION: ${{ needs.version.outputs.windows_version }}
         run: |
-          yarn tauri build --target x86_64-pc-windows-msvc -c '{"bundle":{"createUpdaterArtifacts":false}}'
+          set -euo pipefail
+          CONFIG='{"bundle":{"createUpdaterArtifacts":false}}'
+          if [ -n "${WINDOWS_VERSION}" ]; then
+            CONFIG="{\"bundle\":{\"createUpdaterArtifacts\":false,\"windows\":{\"wix\":{\"version\":\"${WINDOWS_VERSION}\"}}}}"
+          fi
+          yarn tauri build --target x86_64-pc-windows-msvc -c "${CONFIG}"
 
       - name: Azure login for Artifact Signing
-        if: steps.secrets.outputs.present == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -728,7 +821,6 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign artifacts
-        if: steps.secrets.outputs.present == 'true'
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
@@ -748,7 +840,6 @@ jobs:
           exclude-visual-studio-credential: true
 
       - name: Upload Windows artifact
-        if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           retention-days: 7
@@ -869,7 +960,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [verify-desktop-build-passed, version, macos, windows, linux]
+    needs: [verify-desktop-build-passed, version, signing, macos, windows, linux]
     # The old gate was `always() && needs.linux.result == 'success'` alone,
     # which published a release even when macOS or Windows genuinely FAILED
     # (compile error, signing failure, notarization rejection). Nothing else
@@ -877,16 +968,17 @@ jobs:
     # release action does not fail on unmatched files by default, so a broken
     # platform silently became "a release without that platform".
     #
-    # Note what the documented "no signing secrets" case actually looks like
-    # here: macos/windows carry no job-level `if:` — only their steps do — so
-    # those jobs RUN, skip everything after the secret check, and report
-    # 'success', NOT 'skipped'. It therefore passes this gate on the
-    # `!= 'failure'` clauses, and only a real failure blocks the release.
-    # `always()` is kept because a genuinely skipped `needs` (a job-level
-    # `if:` added later, or `version` failing) would otherwise skip this job
-    # before any clause below is evaluated. A cancelled run reports
-    # 'cancelled', which is likewise not 'failure' — deliberate: a cancel is
-    # an operator action, not a broken build.
+    # The documented "no signing secrets" case reaches this gate as 'skipped':
+    # the `signing` job turns macos/windows off at the job level. That passes
+    # the `!= 'failure'` clauses, so only a real failure blocks the release.
+    # `always()` is what lets this job run at all when a `needs` job was
+    # skipped; without it, a skipped macOS lane would skip the release too. A
+    # cancelled run reports 'cancelled', which is likewise not 'failure' —
+    # deliberate: a cancel is an operator action, not a broken build.
+    #
+    # `signing` must have succeeded: when it fails (a half-configured lane),
+    # macos/windows are skipped as its dependents, and without this clause the
+    # release would go out with Linux alone.
     #
     # The test gate is asserted HERE too, not merely inherited: `always()`
     # makes this job run even when everything it needs was skipped, so the
@@ -897,6 +989,7 @@ jobs:
     if: >-
       always()
       && needs.verify-desktop-build-passed.result == 'success'
+      && needs.signing.result == 'success'
       && needs.linux.result == 'success'
       && needs.macos.result != 'failure'
       && needs.windows.result != 'failure'
@@ -917,19 +1010,13 @@ jobs:
       # be PRESENTED as a complete one — someone downloading "Desktop 0.1.0"
       # has to see, without opening the assets list, which platforms are in it.
       #
-      # Ground truth is the DOWNLOADED ARTIFACT, deliberately NOT
-      # needs.<job>.result. The macos/windows jobs carry no job-level `if:` —
-      # only their individual steps do (`steps.secrets.outputs.present ==
-      # 'true'`) — so with signing secrets absent those jobs still RUN, skip
-      # every step after the secret check, and report **success**, never
-      # 'skipped'. Keying off that result would have advertised "macOS —
-      # signed, notarized .dmg" on exactly the releases that ship no .dmg at
-      # all, i.e. every release cut today, which is the mis-presentation this
-      # step exists to prevent. artifacts/release-<platform>/ exists iff that
-      # job's upload-artifact step actually ran, so it answers the only
-      # question the release notes are making a claim about. The job result is
-      # still printed, because it is what tells a reader WHY a platform is
-      # absent.
+      # Ground truth is the DOWNLOADED ARTIFACT, not needs.<job>.result.
+      # artifacts/release-<platform>/ exists iff that job's upload-artifact
+      # step ran, so it answers the only question the release notes make a
+      # claim about. (Before the `signing` job, a lane without secrets reported
+      # 'success' while building nothing, and keying off the result would have
+      # advertised a .dmg that wasn't there.) The job result is still printed,
+      # because it is what tells a reader WHY a platform is absent.
       - name: Describe included platforms
         id: platforms
         env:
@@ -942,13 +1029,13 @@ jobs:
             NAMES="macOS"
             LINES="- macOS — signed, notarized universal .dmg"
           else
-            LINES="- macOS — NOT INCLUDED (no release-macos artifact; macOS job result: ${MACOS_RESULT}. Usual cause: the APPLE_* signing secrets are unprovisioned, which makes every build/sign/notarize step skip.)"
+            LINES="- macOS — NOT INCLUDED (no release-macos artifact; macOS job result: ${MACOS_RESULT}. A skipped job means the APPLE_* signing secrets are unprovisioned.)"
           fi
           if [ -d artifacts/release-windows ]; then
             NAMES="${NAMES:+$NAMES, }Windows"
             LINES="${LINES}"$'\n'"- Windows — signed .msi and setup .exe"
           else
-            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the AZURE_* signing secrets on the production Environment are unprovisioned, which makes every build/sign step skip.)"
+            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. A skipped job means the AZURE_* signing secrets on the production Environment are unprovisioned.)"
           fi
           # Linux is unconditional here: the job gate above already required
           # needs.linux.result == 'success'.
@@ -966,8 +1053,12 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
-          tag_name: desktop-v${{ needs.version.outputs.name }}
-          name: Desktop ${{ needs.version.outputs.name }} (${{ steps.platforms.outputs.names }})
+          tag_name: ${{ needs.version.outputs.tag }}
+          # Called from release.yml, the tag doesn't exist yet. Without this the
+          # action would create it on the default branch's head, not on the
+          # commit these installers were built from.
+          target_commitish: ${{ github.sha }}
+          name: Desktop ${{ needs.version.outputs.version }} (${{ steps.platforms.outputs.names }})
           # GitHub appends the generated notes AFTER this body, so the platform
           # inventory stays at the top where it is actually read.
           body: ${{ steps.platforms.outputs.body }}

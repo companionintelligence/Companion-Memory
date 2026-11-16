@@ -77,6 +77,70 @@ that directory to `PATH`.
 > `ci.yml` was red. `v2026.9.10` was the first release since 2026-08-19 to pass
 > the gate on its own merits.
 
+### Release in one run: `release.yml`
+
+`release.yml` ships a server release to every place it goes, in one run: the
+images (`publish.yml`), the GitHub Release, Memory Desktop
+(`desktop-release.yml`), the phone apps (`mobile-release.yml`, then
+`testflight-distribute.yml` for the iOS testers) and, last, a check of every
+platform. It calls the same workflows you can still dispatch one at a time.
+
+```bash
+# 1. Test the commit you will tag and wait for all three to pass. The gates
+#    match runs by commit, so main works as long as it hasn't moved.
+gh workflow run ci.yml --repo companionintelligence/CI-Server --ref main
+gh workflow run migration-integrity-check.yml --repo companionintelligence/CI-Server --ref main
+gh workflow run desktop-build.yml --repo companionintelligence/CI-Server --ref main
+# 2. Tag that commit, then run the release on the tag.
+git tag v2026.11.17 <sha> && git push origin v2026.11.17
+gh workflow run release.yml --repo companionintelligence/CI-Server --ref v2026.11.17
+```
+
+Its first job looks for those three runs and stops in a minute if one is
+missing. If a lane fails, "Re-run failed jobs" retries it and keeps the lanes
+that passed.
+
+**Version numbers.** The desktop and phone apps take the server's version.
+Server 2026.11.17 ships Memory Desktop 2026.11.17 (Release
+`desktop-v2026.11.17`) and phone apps 2026.11.17, so an app's number says
+which server it was built from. A re-cut such as 2026.11.17.1 ships apps
+numbered 2026.11.17, because Apple allows three numbers at most; its desktop
+Release is still tagged `desktop-v2026.11.17.1`. Windows installers can't hold
+2026 (MSI caps the first two numbers at 255), so the MSI version is 26.11.17,
+or 26.11.17.1 for that re-cut. Phone build numbers are the minutes since
+2026-01-01 UTC. The stores never take a lower version, so the move from the
+old 0.1.x desktop and 1.0.x phone numbers can't be undone.
+`scripts/release/release-plan.mjs` holds these rules and
+`scripts/release-plan.test.ts` tests them.
+
+**Phone apps rebuild only when they would change.** They bundle the web build,
+so on the default `phones=auto` the run builds them only when
+`frontend/apps/web`, `frontend/packages`, `frontend/apps/android`,
+`frontend/apps/ios` or `mobile-release.yml` changed since the last phone
+release. Each phone release tags its commit `mobile-v<server version>`, which
+is what the next run compares against. `phones=always` and `phones=skip`
+override it. The desktop app has no such shortcut: it runs the server images
+it was built with, so it needs a build for every server release.
+
+**Not in the run:** the CI-Marketplace pin bump and its `deploy.yml` per
+environment (another repository), the Homebrew cask and Scoop manifest for the
+desktop app (updated by hand in `homebrew-tap` and `scoop-bucket`), the
+ci.computer download page, App Store review and Play's production track. The
+last job's table shows which of these still have an older version.
+
+**Checking a release by hand.** `node scripts/release/release-check.mjs` asks
+each of those places which version it has and prints one table; add
+`--version 2026.11.17` for an older release and `PLAY_KEY_FILE=<key.json>` for
+the Play rows. Run it from a checkout with tags fetched. In the workflow the
+CI-Marketplace rows show SKIP, because a workflow token can't read another
+private repository; locally `gh` can.
+
+**A lane without its signing secrets shows as skipped.** The macOS and Windows
+desktop jobs and the iOS and Android phone jobs used to run, skip every step
+and report success. A `signing` job (desktop) and the `version` job (phones)
+now check the secrets first; a lane with none of its secrets is skipped at the
+job level, and a half-configured lane fails the run.
+
 ### `pr-gate.yml` is gone — the repo is fully manual again (2026-09-17)
 
 From 2026-09-08 to 2026-09-17 this repo had one deliberate exception to full
