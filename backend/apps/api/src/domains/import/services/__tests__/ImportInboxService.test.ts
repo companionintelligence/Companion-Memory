@@ -1,9 +1,9 @@
-import { chmod, mkdtemp, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { ImportInboxService, MAX_INBOX_BATCH_UNITS, SCAN_RECOGNITION_TIMING } from '../ImportInboxService';
 
 /**
@@ -102,9 +102,13 @@ async function withInbox<T>(userDir: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
+// Two minutes for the cleanup, not jest's 5-second default: the large-directory case writes 25,000
+// files. On a slow or busy disk removing them can take longer than that.
+const { make: tempDir, removeAfterTest } = tempDirsRemovedAfterEach(120_000);
+
 /** A fresh shared root with the caller's subtree already in it. */
 async function freshInbox(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+  const root = await tempDir('ci-inbox-scan-');
   const dir = path.join(root, USER_FOLDER);
 
   await mkdir(dir);
@@ -188,7 +192,7 @@ describe('ImportInboxService.scan', () => {
     // The api container runs as root: without the chmod the folder lands on
     // the host root-owned 755 and the desktop user cannot move archives in —
     // which is the entire point of the folder.
-    const parent = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const parent = await tempDir('ci-inbox-scan-');
     const inbox = path.join(parent, USER_FOLDER);
     const { service } = build();
 
@@ -300,7 +304,7 @@ describe('ImportInboxService.scan', () => {
 
   it('never follows symlinks, and counts what it skipped', async () => {
     const inbox = await freshInbox();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'ci-outside-'));
+    const outside = await tempDir('ci-outside-');
 
     await writeFile(path.join(outside, 'secret.zip'), 'secret');
     await symlink(path.join(outside, 'secret.zip'), path.join(inbox, 'link.zip'));
@@ -339,10 +343,11 @@ describe('ImportInboxService.scan', () => {
     // a run records the path the resolver produced — a realpath — so a lookup
     // spelled the configured way matches nothing once the inbox crosses a
     // symlink, and a unit another run is already importing reads as free.
-    const real = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-real-'));
+    const real = await tempDir('ci-inbox-real-');
     const linkRoot = `${real}-link`;
 
     await symlink(real, linkRoot);
+    removeAfterTest(linkRoot);
     await mkdir(path.join(real, USER_FOLDER), { recursive: true });
     await writeFile(path.join(real, USER_FOLDER, 'export.zip'), 'bytes');
 
@@ -651,9 +656,10 @@ describe('service drop folders', () => {
     //
     // macOS hides this in plain sight (/tmp and /var are symlinks to /private),
     // and any bind-mounted appliance data dir does the same.
-    const real = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-real-'));
+    const real = await tempDir('ci-inbox-real-');
     const linkRoot = `${real}-link`;
     await symlink(real, linkRoot);
+    removeAfterTest(linkRoot);
 
     const userDirReal = path.join(real, USER_FOLDER);
     await mkdir(path.join(userDirReal, 'reddit'), { recursive: true });
@@ -702,7 +708,7 @@ describe('ImportInboxService.onModuleInit', () => {
     // The folders are drop targets for files moved in BEFORE the app is ever
     // opened, so boot — not the first scan — must be what creates them, for
     // every account the appliance already has.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const root = await tempDir('ci-inbox-scan-');
     const inbox = path.join(root, USER_FOLDER);
     const { service, users } = build();
 
@@ -716,7 +722,7 @@ describe('ImportInboxService.onModuleInit', () => {
   });
 
   it('boots quietly when the inbox cannot be prepared', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const dir = await tempDir('ci-inbox-scan-');
     const notADir = path.join(dir, 'inbox');
 
     await writeFile(notADir, 'a file where the inbox root should be');
@@ -731,7 +737,7 @@ describe('ImportInboxService.onModuleInit', () => {
   it('provisions a single new account without touching boot', async () => {
     // The onboarding path: a user row was just created, and their folders
     // must exist without a restart or a first visit to the Inbox panel.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const root = await tempDir('ci-inbox-scan-');
     const inbox = path.join(root, USER_FOLDER);
     const { service } = build();
 
@@ -748,7 +754,7 @@ describe('inbox folder migration at boot', () => {
   const USER_ID = ctx.userId;
 
   it('moves an account from its old email-named folder onto its id, keeping the contents', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     // The old layout: a folder named after the sanitized, lowercased email.
     const oldDir = path.join(root, 'tester_example.com');
     await mkdir(path.join(oldDir, 'reddit'), { recursive: true });
@@ -770,7 +776,7 @@ describe('inbox folder migration at boot', () => {
     // A run that claimed `reddit/export.zip` before the upgrade recorded the old
     // folder's real path. Its unpack stage moves exactly that path, so the
     // claim has to follow the folder or the run fails to find its unit.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     const oldDir = path.join(root, 'tester_example.com');
     await mkdir(path.join(oldDir, 'reddit'), { recursive: true });
     await writeFile(path.join(oldDir, 'reddit', 'export.zip'), 'owner bytes');
@@ -794,7 +800,7 @@ describe('inbox folder migration at boot', () => {
   it('still moves the folder and provisions it when the claim rewrite fails', async () => {
     // The rewrite is best-effort like the rest of boot provisioning. The
     // folder has already moved, so the account's inbox must be ready anyway.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     const oldDir = path.join(root, 'tester_example.com');
     await mkdir(oldDir, { recursive: true });
     await writeFile(path.join(oldDir, 'export.zip'), 'owner bytes');
@@ -818,7 +824,7 @@ describe('inbox folder migration at boot', () => {
   });
 
   it('leaves a folder two accounts map to in place, for an administrator to split', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     // `a+b@example.com` and `a_b@example.com` both sanitize to `a_b_example.com`.
     const shared = path.join(root, 'a_b_example.com');
     await mkdir(shared, { recursive: true });
@@ -849,7 +855,7 @@ describe('inbox folder migration at boot', () => {
     // ambiguous, so the old one is left for an administrator. The target is
     // EMPTY on purpose: `rename` onto a non-empty directory fails anyway, so
     // only the empty case proves the guard is doing the refusing.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     const oldDir = path.join(root, 'tester_example.com');
     const newDir = path.join(root, USER_ID);
     await mkdir(oldDir, { recursive: true });
@@ -870,7 +876,7 @@ describe('inbox folder migration at boot', () => {
   it('leaves a plain file at the old name alone and still provisions the id folder', async () => {
     // Only a directory is an old inbox folder. Moving a file onto the id path
     // would leave the account a file where its drop folder belongs.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const root = await tempDir('ci-inbox-migrate-');
     const oldPath = path.join(root, 'tester_example.com');
     await writeFile(oldPath, 'not a folder');
 

@@ -1045,3 +1045,21 @@ test('every variable ci.yml sets for the backend job is one testDb.ts also sets'
     'ci.yml should set every jest-read variable test-db sets (MACOS_ is pytest-only and needs an empty database, which ci.yml does not run)',
   );
 });
+
+test('test-strategy.md names exactly the variables in TEST_DATABASE_URL_VARS', () => {
+  const doc = fs.readFileSync(path.join(process.cwd(), 'docs/architecture/test-strategy.md'), 'utf8');
+  const start = doc.indexOf('Each domain has a variable of its own');
+  const end = doc.indexOf('Naming one per suite', start);
+
+  assert.ok(start >= 0 && end > start, 'found the paragraph that lists the per-suite variables');
+
+  const named = [...doc.slice(start, end).matchAll(/`([A-Z][A-Z_]*_)`/g)].map(
+    (m) => `${m[1]}TEST_DATABASE_URL`,
+  );
+
+  assert.deepEqual(
+    [...named].sort(),
+    [...TEST_DATABASE_URL_VARS].sort(),
+    'docs/architecture/test-strategy.md lists a different set of <DOMAIN>_TEST_DATABASE_URL variables than testDb.ts sets',
+  );
+});

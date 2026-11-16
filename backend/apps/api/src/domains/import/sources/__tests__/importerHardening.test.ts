@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import '../../datasources';
 import type { EmittedGraph } from '../../datasources/__tests__/support/emitted';
 import { allDataSources } from '../../datasources/registry';
@@ -38,9 +38,10 @@ const READY_IMPORTERS = Array.from(
   .filter((name) => !EXCLUDED.has(name))
   .sort();
 
+const { makeSync: tempDir } = tempDirsRemovedAfterEach();
+
 function tempFile(contents: string | Buffer, name = 'garbage'): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-harden-'));
-  const filePath = path.join(dir, name);
+  const filePath = path.join(tempDir('ci-harden-'), name);
 
   fs.writeFileSync(filePath, contents);
 

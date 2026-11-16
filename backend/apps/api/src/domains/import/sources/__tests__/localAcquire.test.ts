@@ -1,22 +1,20 @@
 import {
   chmod,
   link,
-  mkdtemp,
   mkdir,
   readdir,
   readFile,
   realpath,
   rename,
-  rm,
   stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { PathOutsideImportRootsError } from '../importRoots';
 import {
   acquireLocalUnit,
@@ -45,8 +43,10 @@ async function withInbox<T>(dir: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
+const { make: tempDir } = tempDirsRemovedAfterEach();
+
 async function fixture(): Promise<{ inbox: string; scratch: string }> {
-  const parent = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ci-acquire-')));
+  const parent = await realpath(await tempDir('ci-acquire-'));
   const inbox = path.join(parent, 'inbox');
   const scratch = path.join(parent, 'scratch');
 
@@ -227,7 +227,7 @@ describe('acquireLocalUnit', () => {
     // point elsewhere must be refused HERE, where the moving and deleting
     // happens — and refused before anything is touched.
     const { inbox, scratch } = await fixture();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'ci-outside-'));
+    const outside = await tempDir('ci-outside-');
     const victim = path.join(outside, 'passwd');
 
     await writeFile(victim, 'root:x:0:0');
@@ -240,8 +240,6 @@ describe('acquireLocalUnit', () => {
       // Untouched.
       expect(await readFile(victim, 'utf8')).toBe('root:x:0:0');
     });
-
-    await rm(outside, { recursive: true, force: true });
   });
 });
 
@@ -334,7 +332,7 @@ describe('returnInboxUnit', () => {
 
   it('refuses a parent folder that is a symlink out of the inbox', async () => {
     const { inbox, scratch } = await fixture();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'ci-acquire-outside-'));
+    const outside = await tempDir('ci-acquire-outside-');
 
     await symlink(outside, path.join(inbox, 'linked'));
     await writeFile(path.join(scratch, 'export.zip'), 'bytes');
@@ -349,13 +347,11 @@ describe('returnInboxUnit', () => {
     ).rejects.toBeInstanceOf(PathOutsideImportRootsError);
     expect(await readdir(outside)).toEqual([]);
     expect(await readFile(path.join(scratch, 'export.zip'), 'utf8')).toBe('bytes');
-
-    await rm(outside, { recursive: true, force: true });
   });
 
   it('makes no folder through such a symlink on the way to a deeper path', async () => {
     const { inbox, scratch } = await fixture();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'ci-acquire-outside-'));
+    const outside = await tempDir('ci-acquire-outside-');
 
     await symlink(outside, path.join(inbox, 'linked'));
     await writeFile(path.join(scratch, 'export.zip'), 'bytes');
@@ -369,8 +365,6 @@ describe('returnInboxUnit', () => {
       }),
     ).rejects.toBeInstanceOf(PathOutsideImportRootsError);
     expect(await readdir(outside)).toEqual([]);
-
-    await rm(outside, { recursive: true, force: true });
   });
 
   it('never replaces a file that takes the name while it runs', async () => {
