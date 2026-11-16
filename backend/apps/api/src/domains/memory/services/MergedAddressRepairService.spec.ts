@@ -1,6 +1,16 @@
 import { readPersonAddresses } from '../types';
 
-import { offeredAddresses, removedByHand } from './MergedAddressRepairService';
+import {
+  type AddressEdit,
+  editsSinceMerge,
+  offeredAddresses,
+  removedByHand,
+  shownByMerge,
+} from './MergedAddressRepairService';
+
+const KEPT = '00000000-0000-0000-0000-0000000000c1';
+const HOP = '00000000-0000-0000-0000-0000000000c2';
+const OTHER_HOP = '00000000-0000-0000-0000-0000000000c3';
 
 const WORK = {
   label: 'work',
@@ -16,8 +26,13 @@ const HOME = { ...WORK, label: 'home', street_address: null, city: 'Bend', is_pr
 
 const [work, home] = readPersonAddresses({ addresses: [WORK, HOME] });
 
-const edit = (changedFields: Record<string, { old?: unknown; new?: unknown }>) => ({
-  changed_at: new Date('2026-11-16T12:00:00Z'),
+const edit = (
+  changedFields: Record<string, { old?: unknown; new?: unknown }>,
+  on = KEPT,
+  at = '2026-11-16T12:00:00Z',
+): AddressEdit => ({
+  entity_id: on,
+  changed_at: new Date(at),
   changed_fields: changedFields,
 });
 
@@ -65,6 +80,64 @@ describe('removedByHand', () => {
 
     expect(removed(work)).toBe(false);
     expect(removed(home)).toBe(false);
+  });
+
+  it('matches a flat part whatever its case or spacing, as addressKey does', () => {
+    const removed = removedByHand([edit({ street_address: { old: '9  ELM st ', new: null } })], work);
+
+    expect(removed(work)).toBe(true);
+  });
+});
+
+describe('editsSinceMerge', () => {
+  const merged = new Date('2026-11-10T12:00:00Z');
+
+  it('reads only the edits on the person the merge went into, after it', () => {
+    const before = edit({ city: { old: 'Portland', new: null } }, KEPT, '2026-11-09T12:00:00Z');
+    const after = edit({ city: { old: 'Portland', new: null } }, KEPT, '2026-11-11T12:00:00Z');
+    const onAnotherRow = edit({ city: { old: 'Portland', new: null } }, OTHER_HOP, '2026-11-11T12:00:00Z');
+
+    expect(
+      editsSinceMerge([before, after, onAnotherRow], { target_id: KEPT, created_at: merged }, KEPT, null),
+    ).toEqual([after]);
+  });
+
+  it('reads the hop row from the merge on, and the kept person only once the hop row joined it', () => {
+    const onHop = edit({ city: { old: 'Portland', new: null } }, HOP, '2026-11-11T12:00:00Z');
+    const onKeptBeforeHop = edit({ city: { old: 'Portland', new: null } }, KEPT, '2026-11-12T12:00:00Z');
+    const onKeptAfterHop = edit({ city: { old: 'Portland', new: null } }, KEPT, '2026-11-14T12:00:00Z');
+    const edits = [onHop, onKeptBeforeHop, onKeptAfterHop];
+    const merge = { target_id: HOP, created_at: merged };
+
+    expect(editsSinceMerge(edits, merge, KEPT, new Date('2026-11-13T12:00:00Z'))).toEqual([
+      onHop,
+      onKeptAfterHop,
+    ]);
+    // With no record of when the hop row was merged in, every edit since the merge counts.
+    expect(editsSinceMerge(edits, merge, KEPT, null)).toEqual(edits);
+  });
+});
+
+describe('shownByMerge', () => {
+  const source = { addresses: [WORK, HOME], street_address: '9 Elm St', city: 'Portland' };
+  const flatWork = expect.objectContaining({ label: null, streetAddress: '9 Elm St', city: 'Portland' });
+
+  it("is the source's flat address when the merge left it in the flat fields", () => {
+    expect(shownByMerge(source, { addresses: [], street_address: '9 Elm St', city: 'portland ' })).toEqual(
+      flatWork,
+    );
+  });
+
+  it("is nothing when the merge's flat fields show another address", () => {
+    // The kept person's own address, or a mix of its city and the source's street.
+    expect(shownByMerge(source, { street_address: '5 Oak Ave', city: 'Portland' })).toBeNull();
+    expect(shownByMerge(source, { street_address: '9 Elm St', city: 'Salem' })).toBeNull();
+    expect(shownByMerge(source, { addresses: [] })).toBeNull();
+  });
+
+  it("takes the source's flat address as shown when the merge recorded no bag", () => {
+    expect(shownByMerge(source, null)).toEqual(flatWork);
+    expect(shownByMerge({ addresses: [HOME] }, null)).toBeNull();
   });
 });
 

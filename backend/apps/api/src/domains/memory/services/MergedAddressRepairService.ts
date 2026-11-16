@@ -12,22 +12,25 @@ import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 import {
   type PersonAddress,
   PERSON_ADDRESS_MIRROR_KEYS,
+  personAddressMirror,
   readPersonAddresses,
   readStoredPersonAddress,
 } from '../types';
 
 import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
-import { ADDRESS_KEYS, ADDRESSES_FOLDED, addressKey, withFoldedAddresses } from './PersonMergeService';
+import {
+  ADDRESS_KEYS,
+  ADDRESSES_FOLDED,
+  addressKey,
+  addressPartKey,
+  withFoldedAddresses,
+} from './PersonMergeService';
 
-/** How the flat keys of an edit name an address's parts. */
-const FLAT_ADDRESS_PARTS: ReadonlyArray<readonly [string, keyof PersonAddress]> = [
-  ['street_address', 'streetAddress'],
-  ['street_address_2', 'streetAddress2'],
-  ['city', 'city'],
-  ['region', 'region'],
-  ['postal_code', 'postalCode'],
-  ['country', 'country'],
-];
+/** The flat keys that hold an address's parts: the mirror keys less the one-line `address`. */
+const FLAT_ADDRESS_PARTS: readonly string[] = PERSON_ADDRESS_MIRROR_KEYS.filter((key) => key !== 'address');
+
+/** The `change_source` of the Change History row a person merge writes on the person it went into. */
+const MERGE_CHANGE_SOURCE = 'PersonMergeService.mergePeople';
 
 /** Long enough for pg-boss and the pool to settle after a deploy, as the boot sweeps elsewhere wait. */
 const BOOT_DELAY_MS = 30_000;
@@ -42,17 +45,24 @@ interface StandingMerge {
   created_at: Date;
 }
 
-/** The two bags one merge's addresses are read from, loaded under the survivor's lock. */
+/** The bags one merge's addresses are read from, loaded under the survivor's lock. */
 interface MergeBags {
   merge_id: string;
   /** `ci.entity_merges.details.sourceProperties`: the source's bag at merge time. */
   snapshot: Record<string, unknown>;
   /** The source's tombstone bag today. */
   tombstone: Record<string, unknown> | null;
+  /**
+   * The bag the merge wrote on the person it went into, from the merge's own
+   * Change History row; null for a merge from before merges recorded one.
+   */
+  merged: unknown;
 }
 
-/** An app edit of the survivor's addresses after a merge, as `ci.graph_deltas` holds it. */
+/** An app edit of an address on the survivor, or on a row merged into it, as `ci.graph_deltas` holds it. */
 export interface AddressEdit {
+  /** The person the edit was made on. */
+  entity_id: string;
   changed_at: Date;
   changed_fields: Record<string, { old?: unknown; new?: unknown }>;
 }
@@ -89,13 +99,24 @@ export interface MergedAddressRepairResult {
  * hand after the merge stays off: an edit through the app writes a
  * `PersonService` row into `ci.graph_deltas` with the old and new address list,
  * or the old and new flat fields, and an address on the old side and not on the
- * new is left out. An address removed any other way (an import that rewrote the
- * bag, a direct database edit) leaves no such trace and comes back.
+ * new is left out. Only edits on the row the merge went into count, and on the
+ * survivor once that row was merged into it: an edit on another person, before
+ * the two were merged, removed nothing this merge brought. A flat-field edit
+ * counts only against the source's flat address, and only when the merge's own
+ * Change History row shows the merge left that address in the flat fields. An
+ * address removed any other way (an import that rewrote the bag, a direct
+ * database edit) leaves no such trace and comes back.
+ *
+ * Merges into the survivor itself are folded first, oldest first, then those
+ * reached through a hop, which is the order the merges put the addresses
+ * together: a hop's row brought its own merges' addresses along when it was
+ * merged in.
  *
  * Each merge read is flagged `addressesFolded` in its `details`, whether
  * anything changed or not, so the repair runs once per merge: a second run
  * reads nothing, and an address the person removes after the repair stays
- * removed. Merges from #3551 on set the flag themselves.
+ * removed. A merge whose source had no address key at all is not read, as it
+ * has nothing to put back. Merges from #3551 on set the flag themselves.
  *
  * It runs once after each start of a worker process, 30 seconds in, and logs
  * what it did.
@@ -153,9 +174,11 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
           AND COALESCE(survivor.is_active, TRUE)
           AND source.entity_type = 'Person'
           AND source.merged_into_entity_id = survivor.entity_id
+          AND (m.details -> 'sourceProperties') ?| $3::text[]
           AND ($2::uuid[] IS NULL OR m.owner_user_id = ANY($2::uuid[]))
-        ORDER BY m.owner_user_id, survivor.entity_id, m.created_at, m.merge_id`,
-      [ADDRESSES_FOLDED, ownerUserIds ?? null],
+        ORDER BY m.owner_user_id, survivor.entity_id,
+                 m.target_entity_id <> survivor.entity_id, m.created_at, m.merge_id`,
+      [ADDRESSES_FOLDED, ownerUserIds ?? null, [...ADDRESS_KEYS]],
     );
 
     const bySurvivor = new Map<string, StandingMerge[]>();
@@ -196,7 +219,7 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
     return result;
   }
 
-  /** Folds every standing merge into one person, in one transaction, oldest merge first. */
+  /** Folds every standing merge into one person, in one transaction, in the order `repair` read them. */
   private async repairPerson(
     merges: StandingMerge[],
   ): Promise<{ changed: boolean; leftOff: number; flagged: number }> {
@@ -232,24 +255,43 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
       }
 
       // Read here, not with the merges: one person's bags in memory at a time,
-      // and each tombstone as it stands now rather than at the first read.
+      // and each tombstone as it stands now rather than at the first read. A
+      // merge another run flagged since the first read (it waited on the same
+      // lock) is not read again. The merge's own Change History row shares its
+      // transaction, so its `changed_at` is the merge's `created_at`.
       const bags: MergeBags[] = await em.query(
         `SELECT m.merge_id,
                 m.details -> 'sourceProperties' AS snapshot,
-                source.properties               AS tombstone
+                source.properties               AS tombstone,
+                merged.properties               AS merged
            FROM ci.entity_merges m
            JOIN ci.entities source
              ON source.entity_id = m.source_entity_id
             AND source.owner_user_id = m.owner_user_id
-          WHERE m.owner_user_id = $1 AND m.merge_id = ANY($2::uuid[])`,
-        [ownerUserId, merges.map((merge) => merge.merge_id)],
+           LEFT JOIN LATERAL (
+             SELECT d.changed_fields -> 'properties' -> 'new' AS properties
+               FROM ci.graph_deltas d
+              WHERE d.entity_id = m.target_entity_id
+                AND d.owner_user_id = m.owner_user_id
+                AND d.node_type = 'entity'
+                AND d.change_type = 'updated'
+                AND d.change_source = $4
+                AND d.changed_at = m.created_at
+              LIMIT 1
+           ) merged ON TRUE
+          WHERE m.owner_user_id = $1 AND m.merge_id = ANY($2::uuid[])
+            AND NOT (m.details ? $3)`,
+        [ownerUserId, merges.map((merge) => merge.merge_id), ADDRESSES_FOLDED, MERGE_CHANGE_SOURCE],
       );
       const bagsOf = new Map(bags.map((bag) => [bag.merge_id, bag]));
 
       // A merge reached through a hop went into a row that was itself merged
       // in later, and an address removed by hand on that row is as removed.
       const people = [...new Set([personId, ...merges.map((merge) => merge.target_id)])];
-      const edits = await this.addressEdits(em, ownerUserId, people, merges[0].created_at);
+      const hopRows = people.filter((id) => id !== personId);
+      const hoppedAt = hopRows.length > 0 ? await this.mergedAwayAt(em, ownerUserId, hopRows) : new Map();
+      const since = new Date(Math.min(...merges.map((merge) => merge.created_at.getTime())));
+      const edits = await this.addressEdits(em, ownerUserId, people, since);
       let leftOff = 0;
 
       const sources = merges.map((merge) => {
@@ -260,8 +302,8 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
         }
 
         const removed = removedByHand(
-          edits.filter((edit) => edit.changed_at > merge.created_at),
-          flatAddressOf(bag.snapshot),
+          editsSinceMerge(edits, merge, personId, hoppedAt.get(merge.target_id) ?? null),
+          shownByMerge(bag.snapshot, bag.merged),
         );
         const offered = offeredAddresses(bag.snapshot, bag.tombstone ?? {}, removed);
         leftOff += offered.leftOff;
@@ -334,6 +376,27 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
     return { ...outcome, flagged: merges.length };
   }
 
+  /**
+   * When each of `rowIds`, rows a merge went into that were merged on later,
+   * stopped being a person of its own: its own merge's time. A row tombstoned
+   * without a merge record has none.
+   */
+  private async mergedAwayAt(
+    em: EntityManager,
+    ownerUserId: string,
+    rowIds: string[],
+  ): Promise<Map<string, Date>> {
+    const rows: Array<{ entity_id: string; merged_at: Date }> = await em.query(
+      `SELECT source_entity_id AS entity_id, max(created_at) AS merged_at
+         FROM ci.entity_merges
+        WHERE owner_user_id = $1 AND source_entity_id = ANY($2::uuid[])
+        GROUP BY source_entity_id`,
+      [ownerUserId, rowIds],
+    );
+
+    return new Map(rows.map((row) => [row.entity_id, row.merged_at]));
+  }
+
   /** The address edits in the app of any of `personIds` since `since`, oldest first. */
   private async addressEdits(
     em: EntityManager,
@@ -342,7 +405,7 @@ export class MergedAddressRepairService implements OnApplicationBootstrap {
     since: Date,
   ): Promise<AddressEdit[]> {
     return em.query(
-      `SELECT changed_at, changed_fields
+      `SELECT entity_id, changed_at, changed_fields
          FROM ci.graph_deltas
         WHERE owner_user_id = $1
           AND entity_id = ANY($2::uuid[])
@@ -369,7 +432,7 @@ export function removedByHand(
   shown: PersonAddress | null = null,
 ): (address: PersonAddress) => boolean {
   const removedKeys = new Set<string>();
-  const flatEdits: Array<Array<readonly [keyof PersonAddress, string | null]>> = [];
+  const flatEdits: Array<Array<readonly [string, unknown]>> = [];
 
   for (const { changed_fields: fields } of edits) {
     const list = fields.addresses;
@@ -382,23 +445,72 @@ export function removedByHand(
       }
     }
 
-    const parts = FLAT_ADDRESS_PARTS.filter(([key]) => fields[key] != null).map(
-      ([key, part]) =>
-        [part, typeof fields[key]?.old === 'string' ? (fields[key].old as string) : null] as const,
+    const parts = FLAT_ADDRESS_PARTS.filter((key) => fields[key] != null).map(
+      (key) => [key, fields[key]?.old] as const,
     );
-    if (parts.some(([, old]) => old != null && old.trim() !== '')) {
+    if (parts.some(([, old]) => addressPartKey(old) !== '')) {
       flatEdits.push(parts);
     }
   }
 
-  const same = (a: unknown, b: string | null) =>
-    (typeof a === 'string' ? a : '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+  if (shown != null) {
+    // The flat keys as `shown` fills them, compared part by part as addressKey compares.
+    const mirror: Record<string, string | null> = personAddressMirror(shown);
 
-  if (shown != null && flatEdits.some((parts) => parts.every(([part, old]) => same(shown[part], old)))) {
-    removedKeys.add(addressKey(shown));
+    if (
+      flatEdits.some((parts) =>
+        parts.every(([key, old]) => addressPartKey(mirror[key]) === addressPartKey(old)),
+      )
+    ) {
+      removedKeys.add(addressKey(shown));
+    }
   }
 
   return (address) => removedKeys.has(addressKey(address));
+}
+
+/**
+ * The edits that can have removed an address `merge` brought: those on the row
+ * it went into after the merge, and, when that row was merged on into
+ * `personId` later (at `hoppedAt`, when known), those on `personId` from then
+ * on. An edit on another row merged into the person, or on `personId` while the
+ * merge's row was still a person of its own, is about addresses this merge
+ * never put there.
+ */
+export function editsSinceMerge(
+  edits: AddressEdit[],
+  merge: { target_id: string; created_at: Date },
+  personId: string,
+  hoppedAt: Date | null,
+): AddressEdit[] {
+  const joined = hoppedAt != null && hoppedAt > merge.created_at ? hoppedAt : merge.created_at;
+
+  return edits.filter((edit) =>
+    edit.entity_id === merge.target_id
+      ? edit.changed_at > merge.created_at
+      : edit.entity_id === personId && edit.changed_at > joined,
+  );
+}
+
+/**
+ * The address the person could have removed through the flat fields after a
+ * merge: the source's flat address, when the merge left it there. `merged` is
+ * the bag the merge wrote, from its own Change History row. When that bag's
+ * flat fields show another address (the kept person's own, another source's,
+ * or a mix of parts), the source's address was never there to remove. With no
+ * such row the source's flat address is taken as shown, which leaves it off
+ * rather than bring back one the person may have removed.
+ */
+export function shownByMerge(snapshot: Record<string, unknown>, merged: unknown): PersonAddress | null {
+  const flat = flatAddressOf(snapshot);
+
+  if (flat == null || merged == null || typeof merged !== 'object' || Array.isArray(merged)) {
+    return flat;
+  }
+
+  const left = flatAddressOf(merged as Record<string, unknown>);
+
+  return left != null && addressKey(left) === addressKey(flat) ? flat : null;
 }
 
 /** The address a person's flat address keys describe, as an older merge copied them across. */

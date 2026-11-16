@@ -640,6 +640,11 @@ const STORED_ADDRESS_KEYS: ReadonlySet<string> = new Set([
   'is_primary',
 ]);
 
+/** One part of an address as {@link addressKey} compares it: case and spacing aside, a non-string as blank. */
+export function addressPartKey(part: unknown): string {
+  return (typeof part === 'string' ? part : '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /** Two copies of one address match whatever their label, case or spacing. */
 export function addressKey(address: PersonAddress): string {
   return [
@@ -650,7 +655,7 @@ export function addressKey(address: PersonAddress): string {
     address.postalCode,
     address.country,
   ]
-    .map((part) => (part ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .map(addressPartKey)
     .join('|');
 }
 
