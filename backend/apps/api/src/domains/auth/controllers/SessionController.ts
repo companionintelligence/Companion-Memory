@@ -254,7 +254,10 @@ export class SessionController {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    await this.authService.invalidateSession(userId, token, this.authService.getSessionMetadata(req));
+    // Ends the session whatever address or browser this request comes from; only refresh compares
+    // those. A session that is already gone leaves nothing to end. The answer is the same 204:
+    // signing out twice, or after a password change signed this browser out, is not an error.
+    await this.authService.invalidateSession(userId, token);
   }
 
   private getSessionToken(req: Request) {

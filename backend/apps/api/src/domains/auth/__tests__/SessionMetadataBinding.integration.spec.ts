@@ -12,7 +12,7 @@ import { AuthService } from '../services/AuthService';
 /**
  * A session's client binding, against real Postgres.
  *
- * Refresh and logout find a session by its token AND the hashed address and user agent it was issued
+ * Refresh finds a session by its token AND the hashed address and user agent it was issued
  * for. A request can arrive without one of those (no User-Agent header, say), and TypeORM 1.x refuses
  * an undefined where-value outright, so `findSession` asks for IS NULL instead: such a request matches
  * only a session issued without the value. What the unit tests cannot show is that the SQL TypeORM

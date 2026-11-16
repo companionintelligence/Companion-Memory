@@ -89,7 +89,7 @@ function makeService() {
     validateSessionToken: jest.fn(),
     // The browser's session row is live unless a case says otherwise.
     resolveLiveSession: jest.fn().mockResolvedValue({ userId: 'user-a', sessionId: 'sid-old' }),
-    invalidateSession: jest.fn().mockResolvedValue(undefined),
+    invalidateSession: jest.fn().mockResolvedValue(true),
     issueSessionToken: jest.fn().mockResolvedValue({ sessionToken: 'new-sess', sessionId: 'sid-2' }),
     issueAccessToken: jest.fn().mockReturnValue('access-hello'),
     getSessionMetadata: jest.fn().mockReturnValue({ ip: '127.0.0.1', userAgent: 'jest' }),
@@ -321,8 +321,22 @@ describe('HubForwardAuthBridgeService', () => {
         replaced: true,
         accessToken: 'access-hello',
       });
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
+    });
+
+    it('logs a failure to end the old session and still replaces the cookie', async () => {
+      const { service, userService, authService, logger } = makeService();
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      authService.resolveLiveSession.mockResolvedValue(null);
+      authService.invalidateSession.mockRejectedValue(new Error('db down'));
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('hello@lifescope.io')), response()),
+      ).resolves.toMatchObject({ replaced: true });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('db down'));
     });
 
     it('replaces a stale Memory session and JIT-creates the Hub person', async () => {
@@ -339,7 +353,7 @@ describe('HubForwardAuthBridgeService', () => {
         replaced: true,
         accessToken: 'access-hello',
       });
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
@@ -381,7 +395,7 @@ describe('HubForwardAuthBridgeService', () => {
       });
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
       expect(userService.create).not.toHaveBeenCalled();
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token');
       expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
     });
 
@@ -405,7 +419,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(
         service.alignSession(requestWith(signedHeaders('hello@lifescope.io')), response()),
       ).rejects.toThrow('db down');
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
     });
   });
 
@@ -444,7 +458,7 @@ describe('HubForwardAuthBridgeService', () => {
         replaced: true,
         accessToken: 'access-hello',
       });
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
     });
 
@@ -463,7 +477,7 @@ describe('HubForwardAuthBridgeService', () => {
         replaced: true,
         accessToken: 'access-hello',
       });
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token');
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
       expect(authService.issueAccessToken).toHaveBeenCalledWith('user-a', 'sid-2');
     });
@@ -532,7 +546,7 @@ describe('HubForwardAuthBridgeService', () => {
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
       expect(userService.create).not.toHaveBeenCalled();
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
     });
 
@@ -711,7 +725,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(
         service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), res),
       ).rejects.toThrow('db down');
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token', expect.any(Object));
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token');
       expect(res.clearCookie).toHaveBeenCalled();
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
     });
@@ -1118,7 +1132,7 @@ describe('HubForwardAuthBridgeService', () => {
         service.alignSession(requestWith(boundHeaders('hello@lifescope.io')), res),
       ).rejects.toThrow(ServiceUnavailableException);
       // Left standing, the SPA would refresh user-a's session under user-b's Hub sign-in.
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.anything());
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(res.clearCookie).toHaveBeenCalled();
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
     });
@@ -1307,7 +1321,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(
         service.alignSession(requestWith(signedHeaders('second@lifescope.io')), res),
       ).resolves.toEqual({ username: null, replaced: false, refused: 'identity_unverified' });
-      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.anything());
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token');
       expect(res.clearCookie).toHaveBeenCalled();
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('do not verify'));

@@ -194,7 +194,7 @@ describeWithDatabase(`Live-update stream revoke check, against real Postgres (${
     expect(await liveChanges.isCredentialLive(other, credential)).toBe(false);
 
     const heard = nextRevoke(liveChanges, owner);
-    await authService.invalidateSession(owner, sessionToken, META);
+    await authService.invalidateSession(owner, sessionToken);
     await heard;
 
     expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);

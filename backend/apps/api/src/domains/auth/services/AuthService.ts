@@ -5,7 +5,7 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import parseDuration from 'parse-duration';
-import { IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { type FindOptionsWhere, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
@@ -163,26 +163,9 @@ export class AuthService {
       return null;
     }
 
-    const now = new Date();
-    const hashedToken = this.digest(token);
-    const user = { id: userId };
+    const match = await this.findLiveSession(userId, token);
 
-    const session =
-      (await this.sessionRepository.findOne({
-        where: { token: hashedToken, expires_at: MoreThan(now), user },
-      })) ??
-      (REFRESH_GRACE_PERIOD > 0
-        ? await this.sessionRepository.findOne({
-            where: {
-              previous_token: hashedToken,
-              rotated_at: MoreThan(new Date(now.getTime() - REFRESH_GRACE_PERIOD)),
-              expires_at: MoreThan(now),
-              user,
-            },
-          })
-        : null);
-
-    return session ? { userId, sessionId: session.id } : null;
+    return match ? { userId, sessionId: match.session.id } : null;
   }
 
   /**
@@ -275,14 +258,38 @@ export class AuthService {
     };
   }
 
-  async invalidateSession(userId: string, token: string, meta: SessionMetadata): Promise<void> {
-    const { session } = await this.findSession(userId, token, meta);
+  /**
+   * End the session `token` belongs to, for sign-out and for the Hub bridge replacing a session.
+   * True when a session was ended. False when none was left to end: signed out already, signed out
+   * by a password change on another device, expired or ended by a concurrent sign-out between the
+   * lookup and the delete.
+   *
+   * Matched like {@link resolveLiveSession}: the token's hash (or the previous hash inside the
+   * rotation grace window) together with the user the token names. Not the address and user agent
+   * the session was signed in from, which only refresh compares. A browser that updated, or a laptop
+   * that moved to another network, must still be able to end its own session: matching them here
+   * answered that sign-out with 401 and left the session refreshable for the rest of its week.
+   */
+  async invalidateSession(userId: string, token: string): Promise<boolean> {
+    const match = await this.findLiveSession(userId, token);
 
-    await this.sessionRepository.delete({
-      id: session.id,
+    if (!match) {
+      return false;
+    }
+
+    const { affected } = await this.sessionRepository.delete({
+      id: match.session.id,
     });
-    // Its open live-update streams end now, not at their next keep-alive.
-    await this.liveChanges?.publishRevoked(userId);
+
+    // Postgres always reports the count; a driver that reports none is taken at its word that it ran.
+    const ended = affected !== 0;
+
+    if (ended) {
+      // Its open live-update streams end now, not at their next keep-alive.
+      await this.liveChanges?.publishRevoked(userId);
+    }
+
+    return ended;
   }
 
   /**
@@ -344,67 +351,63 @@ export class AuthService {
     };
   }
 
+  /**
+   * The unexpired session of `userId` whose current token is `token`, or whose previous token it is
+   * inside the rotation grace window (`graceMatch`). `binding` adds conditions to both lookups: refresh
+   * passes the client address and user agent ({@link findSession}); sign-out and
+   * {@link resolveLiveSession} pass nothing.
+   */
+  private async findLiveSession(
+    userId: string,
+    token: string,
+    binding: FindOptionsWhere<SessionEntity> = {},
+  ): Promise<{ session: SessionEntity; graceMatch: boolean } | null> {
+    const now = new Date();
+    const hashedToken = this.digest(token);
+    const live = { ...binding, expires_at: MoreThan(now), user: { id: userId } };
+
+    const current = await this.sessionRepository.findOne({ where: { ...live, token: hashedToken } });
+
+    if (current) {
+      return { session: current, graceMatch: false };
+    }
+
+    if (REFRESH_GRACE_PERIOD <= 0) {
+      return null;
+    }
+
+    const previous = await this.sessionRepository.findOne({
+      where: {
+        ...live,
+        previous_token: hashedToken,
+        rotated_at: MoreThan(new Date(now.getTime() - REFRESH_GRACE_PERIOD)),
+      },
+    });
+
+    return previous ? { session: previous, graceMatch: true } : null;
+  }
+
+  /** {@link findLiveSession} bound to the client address and user agent, for refresh. Throws when none matches. */
   private async findSession(
     userId: string,
     token: string,
     data: SessionMetadata,
   ): Promise<{ session: SessionEntity; graceMatch: boolean }> {
-    const now = new Date();
     // A request with no User-Agent header (or no address) has nothing to digest.
     // issueSessionToken stores NULL for it, so that is what to match: a session bound
     // to a User-Agent still needs that one; one bound to none needs none. TypeORM
     // refuses an `undefined` where value outright ("Undefined value encountered in
     // property 'SessionEntity.user_agent'"), which answered 500.
-    const hashedIp = this.digest(data.ip) ?? IsNull();
-    const hashedUserAgent = this.digest(data.userAgent) ?? IsNull();
-    const hashedToken = this.digest(token);
-
-    const match = await this.sessionRepository.findOne({
-      where: {
-        token: hashedToken,
-        ip: hashedIp,
-        user_agent: hashedUserAgent,
-        expires_at: MoreThan(now),
-        user: {
-          id: userId,
-        },
-      },
+    const match = await this.findLiveSession(userId, token, {
+      ip: this.digest(data.ip) ?? IsNull(),
+      user_agent: this.digest(data.userAgent) ?? IsNull(),
     });
 
-    if (match) {
-      return {
-        session: match,
-        graceMatch: false,
-      };
+    if (!match) {
+      throw new UnauthorizedException('Invalid session');
     }
 
-    // Check for a grace-period match where the token matches the previous hash
-    // and the rotation happened within the configurable grace window.
-    if (REFRESH_GRACE_PERIOD > 0) {
-      const graceDeadline = new Date(now.getTime() - REFRESH_GRACE_PERIOD);
-
-      const graceMatch = await this.sessionRepository.findOne({
-        where: {
-          previous_token: hashedToken,
-          rotated_at: MoreThan(graceDeadline),
-          ip: hashedIp,
-          user_agent: hashedUserAgent,
-          expires_at: MoreThan(now),
-          user: {
-            id: userId,
-          },
-        },
-      });
-
-      if (graceMatch) {
-        return {
-          session: graceMatch,
-          graceMatch: true,
-        };
-      }
-    }
-
-    throw new UnauthorizedException('Invalid session');
+    return match;
   }
 
   /**

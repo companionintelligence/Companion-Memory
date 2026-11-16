@@ -39,7 +39,7 @@ const mockAuthService = {
   rotateSessionToken: jest
     .fn()
     .mockResolvedValue({ sessionToken: 'rotated-session-token', sessionId: MOCK_SESSION_ID }),
-  invalidateSession: jest.fn().mockResolvedValue(undefined),
+  invalidateSession: jest.fn().mockResolvedValue(true),
   resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 
@@ -408,11 +408,26 @@ describe('SessionController', () => {
         .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(204);
 
-      expect(mockAuthService.invalidateSession).toHaveBeenCalledWith(
-        'user-1',
-        'session-token-value',
-        expect.any(Object),
-      );
+      // The token and the user only: no address or user agent, which a browser that updated or a
+      // laptop on another network no longer matches.
+      expect(mockAuthService.invalidateSession).toHaveBeenCalledWith('user-1', 'session-token-value');
+    });
+
+    it('should answer 204 and clear both cookies when the session is already gone', async () => {
+      // Signed out before, or signed out by a password change on another device.
+      mockAuthService.invalidateSession.mockResolvedValueOnce(false);
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/logout')
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(204);
+
+      const cookies = parseCookies(response);
+      for (const name of [COOKIE_NAME, CSRF_COOKIE_NAME]) {
+        expect(cookies[name]).toBeDefined();
+        expect(cookies[name].value === '' || cookies[name].expires?.getTime() === 0).toBe(true);
+      }
     });
 
     it('should return 400 when no session cookie is present', async () => {
