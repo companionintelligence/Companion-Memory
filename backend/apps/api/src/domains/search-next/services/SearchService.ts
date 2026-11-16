@@ -183,6 +183,13 @@ export type SemanticSearchScope = {
    */
   showAgentTurnsFrom?: readonly string[];
   /**
+   * Keep only the communications of these kinds (`email`, `sms`, `chat`, ...); other entity types
+   * pass untouched. Emails, texts and chats are all one entity type, so without it "my latest
+   * email" can only ask for every communication. Written into the text, never a parameter, so no
+   * caller's numbering moves; anything not a {@link COMMUNICATION_TYPES} value is dropped.
+   */
+  communicationTypes?: readonly CommunicationKind[];
+  /**
    * Cosine-distance floor, overriding {@link SEMANTIC_DISTANCE_THRESHOLD}.
    * Smaller = stricter. Callers that need a tighter relevance bar than plain
    * search (evidence retrieval, where a merely-word-adjacent row is worse than
@@ -254,6 +261,8 @@ type BaseSearchOptions = {
   mediaContentOnly?: boolean;
   /** See {@link SemanticSearchScope.showAgentTurnsFrom}. */
   showAgentTurnsFrom?: readonly string[];
+  /** See {@link SemanticSearchScope.communicationTypes}. */
+  communicationTypes?: readonly CommunicationKind[];
   /**
    * `keyword` mode only: also match the query's last word as the START of a
    * word, so "Jor" finds Jordan. For menus that search as you type, such as a
@@ -437,7 +446,7 @@ const ONE_MATCH_PER_PHOTO_SQL = `WHERE NOT (
       )`;
 
 /** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
-export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
+export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid' | 'recent';
 
 /**
  * What {@link SearchService.searchPage} returns: the page AND how big the
@@ -472,6 +481,12 @@ export interface SearchPage {
 }
 
 /**
+ * Options for {@link SearchService.recentPage}: the scope and window of a keyword page. `query`
+ * is ignored; there is no text to match.
+ */
+export type RecentPageOptions = CountOptions & { maxResults?: number };
+
+/**
  * Options for {@link SearchService.count}: the lexical `WHERE` of a keyword
  * search and nothing else. No mode, because only the lexical predicate has a
  * countable match set; no `maxResults`, because a count is the one thing a cap
@@ -488,6 +503,7 @@ type CountOptions = {
   until?: Date;
   mediaContentOnly?: boolean;
   showAgentTurnsFrom?: readonly string[];
+  communicationTypes?: readonly CommunicationKind[];
 } & (
   | { includeTypes: IndexableEntity[]; excludeTypes?: never }
   | { excludeTypes: IndexableEntity[]; includeTypes?: never }
@@ -763,13 +779,106 @@ export class SearchService {
     return totalMatches;
   }
 
+  /**
+   * The newest entries in scope by each one's own time, with no text to match: "my most recent
+   * email", "what did I do yesterday". Entries with no time at all (an undated photo, an index
+   * row whose record is gone) are left out, since they cannot be newer or older than anything.
+   * Scope it: unscoped, a calendar entry next year is "newest".
+   *
+   * `searchPage` needs a term, so an agent asked for the newest email had to guess a word every
+   * email contains. Seen 2026-11-16: Hermes searched "email" and answered with the newest email
+   * that happened to contain the word (2026-09-22) while 2026-11-13 mail sat in the index, then
+   * tried "the", "your" and "I", which the index drops, and read their empty pages as "nothing
+   * newer". `totalMatches` is the whole scope's dated size.
+   */
+  async recentPage(context: UserServiceContext, options: RecentPageOptions): Promise<SearchPage> {
+    const { maxResults = DEFAULT_MAX_RESULTS } = options;
+    const resolvedOptions = this.applyDefaultTypeExclusions({ ...options, query: '' });
+    const startedAt = Date.now();
+
+    const typeFilter = this.buildTypeFilter(resolvedOptions, 2, 'v');
+    const params: (string | string[])[] = [context.userId];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    const window: string[] = [];
+
+    if (options.since) {
+      params.push(options.since.toISOString());
+      window.push(`AND dated.t >= $${params.length}::timestamptz`);
+    }
+
+    if (options.until) {
+      params.push(options.until.toISOString());
+      window.push(`AND dated.t <= $${params.length}::timestamptz`);
+    }
+
+    // Each row's time is computed once, in the inner query, and both filtered and ordered on.
+    const sql = `
+      SELECT dated.entity_id, dated.entity_type, count(*) OVER () AS total_matches
+      FROM (
+        SELECT v.entity_id, v.entity_type, ${entityTimeSql('v')} AS t
+        FROM ci_search.vectors v
+        WHERE v.user_id = $1
+          ${typeFilter.clause}
+      ) dated
+      WHERE dated.t IS NOT NULL
+        ${window.join('\n        ')}
+      ORDER BY dated.t DESC, dated.entity_id
+      LIMIT ${maxResults}
+    `;
+
+    const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
+    const totalMatches = totalMatchesOf(rows);
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search',
+      modeTaken: 'recent',
+      queryTokenCount: 0,
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: rows.length,
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      items: rows.map((row) => ({ id: row.entity_id, type: row.entity_type as IndexableEntity })),
+      totalMatches,
+      truncated: totalMatches > rows.length,
+      limit: maxResults,
+      modeTaken: 'recent',
+    };
+  }
+
+  /**
+   * Whether `query` leaves anything for the keyword index to match. The index drops common words
+   * ("the", "your", "I"), so a query of only those matches nothing, and an empty page from it
+   * says nothing about what is in Memory.
+   */
+  async hasSearchTerms(query: string): Promise<boolean> {
+    if (query.trim().length === 0) {
+      return false;
+    }
+
+    const rows: { has_terms: boolean }[] = await this.dataSource.query(
+      `SELECT (${KEYWORD_TSQUERY_SQL.replace('$2', '$1')}) <> ''::tsquery AS has_terms`,
+      [query],
+    );
+
+    return rows[0]?.has_terms === true;
+  }
+
   /** `count(*)` of the rows in scope that match `query` lexically — the page's own predicate, uncapped. */
   private buildKeywordCountPlan(
     userId: string,
     query: string,
     scope: Pick<
       SemanticSearchScope,
-      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
     >,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
@@ -807,7 +916,7 @@ export class SearchService {
     userId: string,
     scope: Pick<
       SemanticSearchScope,
-      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
     >,
     window: { since?: Date; until?: Date } = {},
   ): { sql: string; params: (string | string[])[] } {
@@ -1780,7 +1889,7 @@ export class SearchService {
   private buildTypeFilter(
     options: Pick<
       SemanticSearchScope,
-      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom'
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
     >,
     paramOffset: number,
     tableAlias?: string,
@@ -1790,6 +1899,9 @@ export class SearchService {
       (options.mediaContentOnly ? `\n        ${mediaContentClause(tableAlias)}` : '') +
       (options.showAgentTurnsFrom && tableAlias
         ? `\n        ${agentTurnClause(tableAlias, options.showAgentTurnsFrom)}`
+        : '') +
+      (options.communicationTypes && tableAlias
+        ? `\n        ${communicationTypeClause(tableAlias, options.communicationTypes)}`
         : '');
 
     if (options.includeTypes && options.includeTypes.length > 0) {
@@ -1862,6 +1974,41 @@ export function agentTurnClause(alias: string, showFrom: readonly string[]): str
     `AND (${alias}.entity_type <> 'communication' OR NOT EXISTS (` +
     `SELECT 1 FROM ci.communications agent_turn WHERE agent_turn.id = ${alias}.entity_id ` +
     `AND agent_turn.category = '${AGENT_TURN_CATEGORY}'${kept}))`
+  );
+}
+
+/**
+ * The kinds a communication row can be (`ci.communication_type`). `CommunicationType` from
+ * `@ci/domains/memory`, repeated because memory imports this domain; a test pins the two together.
+ */
+export const COMMUNICATION_TYPES = [
+  'email',
+  'sms',
+  'call',
+  'chat',
+  'video_call',
+  'voice_note',
+  'post',
+] as const;
+
+export type CommunicationKind = (typeof COMMUNICATION_TYPES)[number];
+
+/**
+ * {@link SemanticSearchScope.communicationTypes} as SQL: a communication hit stays only when it is
+ * one of the kinds listed; any other entity type passes. A primary-key probe per communication
+ * hit, like {@link agentTurnClause}. Only {@link COMMUNICATION_TYPES} values are written into the
+ * text; a list with none of them keeps no communication at all.
+ */
+export function communicationTypeClause(alias: string, kinds: readonly string[]): string {
+  const known = kinds.filter((kind): kind is CommunicationKind =>
+    (COMMUNICATION_TYPES as readonly string[]).includes(kind),
+  );
+  const list = known.length > 0 ? known.map((kind) => `'${kind}'`).join(', ') : 'NULL';
+
+  return (
+    `AND (${alias}.entity_type <> 'communication' OR EXISTS (` +
+    `SELECT 1 FROM ci.communications comm_kind WHERE comm_kind.id = ${alias}.entity_id ` +
+    `AND comm_kind.communication_type::text IN (${list})))`
   );
 }
 

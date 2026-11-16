@@ -44,7 +44,7 @@ function fileServiceOf(options: { files?: File[]; coverage?: { images: number; d
 }
 
 function makeTool(options: {
-  search: Partial<Pick<SearchService, 'searchPage' | 'count'>>;
+  search: Partial<Pick<SearchService, 'searchPage' | 'count' | 'recentPage' | 'hasSearchTerms'>>;
   file?: ReturnType<typeof fileServiceOf>;
 }) {
   const noop = emptyResolver();
@@ -72,6 +72,10 @@ function makeTool(options: {
   );
 
   return { tool, file };
+}
+
+function emptyPage(modeTaken: SearchPage['modeTaken']): SearchPage {
+  return { items: [], totalMatches: 0, truncated: false, limit: 25, modeTaken };
 }
 
 /** A PlaceService with no place the query names, so media.findPhotos searches text as before. */
@@ -198,15 +202,109 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(searchPage.mock.calls[1][1]).not.toHaveProperty('showAgentTurnsFrom');
   });
 
-  it('a page still requires a query — there is nothing to rank without one', async () => {
+  it('a page with no query lists the newest entries in scope instead of refusing', async () => {
+    // "Most recent email" has no word in it. Required, the agent guessed "email" and answered with
+    // the newest email that happened to contain the word (Hermes, 2026-11-16).
     const searchPage = jest.fn();
-    const { tool } = makeTool({ search: { searchPage } });
+    const recentPage = jest.fn().mockResolvedValue(emptyPage('recent'));
+    const { tool } = makeTool({ search: { searchPage, recentPage } });
 
-    const result = await tool.execute(CONTEXT, { entityTypes: ['file'] });
+    const result = await tool.execute(CONTEXT, { entityTypes: ['file'], sort: 'recent' });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.mode).toBe('recent');
+    expect(searchPage).not.toHaveBeenCalled();
+    expect(recentPage).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      { includeTypes: ['file'], showAgentTurnsFrom: [], maxResults: undefined },
+    );
+  });
+
+  it('communicationTypes scopes to communications of those kinds, on a page and on a count', async () => {
+    const recentPage = jest.fn().mockResolvedValue(emptyPage('recent'));
+    const count = jest.fn().mockResolvedValue(4);
+    const { tool } = makeTool({ search: { recentPage, count } });
+
+    await tool.execute(CONTEXT, { communicationTypes: ['email'], since: '2026-11-01' });
+    await tool.execute(CONTEXT, { communicationTypes: ['email'], countOnly: true });
+
+    expect(recentPage).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      {
+        includeTypes: ['communication'],
+        showAgentTurnsFrom: [],
+        communicationTypes: ['email'],
+        maxResults: undefined,
+        since: new Date('2026-11-01'),
+      },
+    );
+    expect(count).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      {
+        query: undefined,
+        includeTypes: ['communication'],
+        showAgentTurnsFrom: [],
+        communicationTypes: ['email'],
+      },
+    );
+  });
+
+  it('refuses a communication kind that does not exist', async () => {
+    const { tool } = makeTool({ search: {} });
+
+    const result = await tool.execute(CONTEXT, { communicationTypes: ['letter'] });
 
     expect(result.success).toBe(false);
-    expect(result.error?.message).toMatch(/query is required unless countOnly is true/);
-    expect(searchPage).not.toHaveBeenCalled();
+  });
+
+  it('a query of only common words lists the newest entries and says why, instead of an empty page', async () => {
+    // "the", "your", "I" match nothing in the index; Hermes read those empty pages as "no mail".
+    const searchPage = jest.fn().mockResolvedValue(emptyPage('keyword'));
+    const hasSearchTerms = jest.fn().mockResolvedValue(false);
+    const recentPage = jest.fn().mockResolvedValue({ ...emptyPage('recent'), totalMatches: 0 });
+    const { tool } = makeTool({ search: { searchPage, hasSearchTerms, recentPage } });
+
+    const result = await tool.execute(CONTEXT, {
+      query: 'the',
+      entityTypes: ['communication'],
+      sort: 'recent',
+    });
+
+    expect(hasSearchTerms).toHaveBeenCalledWith('the');
+    expect(recentPage).toHaveBeenCalledTimes(1);
+    expect(result.data?.mode).toBe('recent');
+    expect(result.data?.summary).toContain('"the" has only common words the search index ignores');
+  });
+
+  it('a real word that matched nothing stays an honest empty page', async () => {
+    const searchPage = jest.fn().mockResolvedValue(emptyPage('keyword'));
+    const hasSearchTerms = jest.fn().mockResolvedValue(true);
+    const recentPage = jest.fn();
+    const { tool } = makeTool({ search: { searchPage, hasSearchTerms, recentPage } });
+
+    const result = await tool.execute(CONTEXT, { query: 'zebra', sort: 'recent' });
+
+    expect(result.data?.totalMatches).toBe(0);
+    expect(recentPage).not.toHaveBeenCalled();
+  });
+
+  it('a count of only common words counts the scope and says why', async () => {
+    const count = jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(79);
+    const hasSearchTerms = jest.fn().mockResolvedValue(false);
+    const { tool } = makeTool({ search: { count, hasSearchTerms } });
+
+    const result = await tool.execute(CONTEXT, {
+      query: 'your',
+      entityTypes: ['communication'],
+      countOnly: true,
+    });
+
+    expect(count).toHaveBeenLastCalledWith(
+      { userId: CONTEXT.userId },
+      { query: undefined, includeTypes: ['communication'], showAgentTurnsFrom: [] },
+    );
+    expect(result.data?.totalMatches).toBe(79);
+    expect(result.data?.summary).toContain('"your" has only common words');
   });
 
   it('accepts countOnly as the string "true" — the spelling the local model actually sends', async () => {
@@ -235,7 +333,8 @@ describe('DatabaseSearchTool — honest counts', () => {
     };
     const count = jest.fn();
     const searchPage = jest.fn().mockResolvedValue(page);
-    const { tool } = makeTool({ search: { count, searchPage } });
+    const hasSearchTerms = jest.fn().mockResolvedValue(true);
+    const { tool } = makeTool({ search: { count, searchPage, hasSearchTerms } });
 
     const result = await tool.execute(CONTEXT, { query: 'rabbit', countOnly: 'false' });
 
